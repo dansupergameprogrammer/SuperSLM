@@ -289,6 +289,20 @@ class TokenizerTables:
         golden = {"unicode_version": self.u.version, "count": len(records),
                   "ids_hash": h.hexdigest(), "records": records}
         Path(out_path).write_text(json.dumps(golden, ensure_ascii=False), encoding="utf-8")
+        # Binary golden for the C++ gate (no JSON parser in the std-lib-only tests):
+        #   'GLD1', u32 record_count, u8[32] ids_hash,
+        #   per record: u32 text_len, text utf-8, u32 id_count, i32[id_count] ids
+        bin_path = Path(out_path).with_suffix(".gld")
+        b = bytearray(b"GLD1")
+        b += struct.pack("<I", len(records))
+        b += bytes.fromhex(golden["ids_hash"])
+        for r in records:
+            t = r["text"].encode("utf-8")
+            b += struct.pack("<I", len(t)) + t
+            b += struct.pack("<I", len(r["ids"]))
+            for i in r["ids"]:
+                b += struct.pack("<i", i)
+        bin_path.write_bytes(bytes(b))
         return golden["ids_hash"], len(records)
 
 

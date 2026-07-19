@@ -12,6 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(superslm STATIC
 	src/artifact.cpp
 	src/sha256.cpp
+	src/tokenizer.cpp
 )
 target_include_directories(superslm PUBLIC include)
 
