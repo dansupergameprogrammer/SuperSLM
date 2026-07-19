@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <unordered_set>
 
 namespace superslm {
@@ -26,6 +27,12 @@ uint32_t RdU32(const uint8_t* p) noexcept {
 uint64_t RdU64(const uint8_t* p) noexcept {
 	uint64_t v = 0;
 	for (int i = 0; i < 8; ++i) v |= uint64_t(p[i]) << (8 * i);
+	return v;
+}
+double RdF64(const uint8_t* p) noexcept {
+	uint64_t bits = RdU64(p);
+	double v;
+	std::memcpy(&v, &bits, sizeof(v));
 	return v;
 }
 
@@ -350,11 +357,63 @@ int64_t SslmKeyedConstants::Value(const SslmConstantEntry& entry, uint32_t w) no
 	return static_cast<int64_t>(v);
 }
 
-// STUB (S2.0b, red-first): not implemented. Leaves `out` at defaults and reports Ok so
-// the CFG1 red suite fails until the parse is built.
-SslmModelStatus ParseConfig(const SslmSectionView& /*section*/, SslmModelConfig& out,
-                            std::string* /*err*/) {
+SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out,
+                            std::string* err) {
 	out = SslmModelConfig{};
+	if (err) err->clear();
+
+	const uint8_t* base = section.data;
+
+	// A fixed 84-byte struct: the exact-size check is the entire bounds surface and gates
+	// every field read below.
+	if (base == nullptr || section.byte_size != kConfigBytes)
+		return Reject(SslmModelStatus::BadConfigSize, err, "Config section is not exactly kConfigBytes");
+
+	for (int i = 0; i < 4; ++i) {
+		if (base[i] != kConfigMagic[i])
+			return Reject(SslmModelStatus::BadConfigMagic, err, "Config magic is not 'CFG1'");
+	}
+	if (RdU32(base + 4) != kManifestVersion)
+		return Reject(SslmModelStatus::UnsupportedConfigVersion, err, "unsupported CFG1 version");
+
+	SslmModelConfig c;
+	c.hidden_size = RdU32(base + 8);
+	c.num_hidden_layers = RdU32(base + 12);
+	c.num_attention_heads = RdU32(base + 16);
+	c.num_key_value_heads = RdU32(base + 20);
+	c.head_dim = RdU32(base + 24);
+	c.intermediate_size = RdU32(base + 28);
+	c.vocab_size = RdU32(base + 32);
+	c.context_cap = RdU32(base + 36);
+	const uint32_t tie = RdU32(base + 40);
+	const uint32_t kvp = RdU32(base + 44);
+	c.kv_block_size = RdU32(base + 48);
+	c.unicode_major = RdU32(base + 52);
+	c.unicode_minor = RdU32(base + 56);
+	c.unicode_patch = RdU32(base + 60);
+	const uint32_t reserved = RdU32(base + 64);
+	c.rope_theta = RdF64(base + 68);
+	c.rms_norm_eps = RdF64(base + 76);
+
+	if (reserved != 0)
+		return Reject(SslmModelStatus::BadConfigReserved, err, "CFG1 reserved field != 0");
+
+	// §11 reject-over-degrade: a zero dimension produces a model that loads, runs, and is
+	// not the source model. Every dimension must be present.
+	if (c.hidden_size == 0 || c.num_hidden_layers == 0 || c.num_attention_heads == 0 ||
+	    c.num_key_value_heads == 0 || c.head_dim == 0 || c.intermediate_size == 0 ||
+	    c.vocab_size == 0 || c.context_cap == 0)
+		return Reject(SslmModelStatus::BadConfigDim, err, "a required dimension field is 0");
+
+	if (tie > 1)
+		return Reject(SslmModelStatus::BadConfigBool, err, "tie_word_embeddings not in {0,1}");
+	if (kvp > 1)
+		return Reject(SslmModelStatus::BadKvPrecision, err, "kv_precision not in {0,1}");
+
+	c.tie_word_embeddings = (tie == 1);
+	c.kv_precision = (kvp == 1) ? SslmKvPrecision::Int16 : SslmKvPrecision::Int8;
+
+	out = c;
 	return SslmModelStatus::Ok;
 }
 
