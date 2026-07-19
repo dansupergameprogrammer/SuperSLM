@@ -58,6 +58,7 @@ const char* SslmStatusName(SslmStatus s) noexcept {
 		case SslmStatus::SectionOutOfBounds: return "SectionOutOfBounds";
 		case SslmStatus::SectionOverlap: return "SectionOverlap";
 		case SslmStatus::BadDtype: return "BadDtype";
+		case SslmStatus::SectionDtypeMismatch: return "SectionDtypeMismatch";
 		case SslmStatus::SizeMismatch: return "SizeMismatch";
 		case SslmStatus::UnknownSection: return "UnknownSection";
 		case SslmStatus::DuplicateSection: return "DuplicateSection";

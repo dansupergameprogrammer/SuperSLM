@@ -81,6 +81,7 @@ enum class SslmStatus {
 	SectionOutOfBounds,  // a section range exceeds the file (or overflows)
 	SectionOverlap,      // a section overlaps the header/table or another section
 	BadDtype,            // a section dtype is unknown
+	SectionDtypeMismatch, // a known dtype, but not the one this section type requires
 	SizeMismatch,        // byte_size != elem_count * dtype_size
 	UnknownSection,      // a section type outside the v1 set
 	DuplicateSection,    // the same section type appears twice

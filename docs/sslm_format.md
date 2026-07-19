@@ -37,6 +37,12 @@ These are the decisions a builder must not make silently. Each is fixed for v1:
 5. **Unknown section type is rejected in v1.** Forward-compatible section-skipping
    (optional sections a newer reader may ignore) is deferred to a later version with
    an explicit rule; v1's known set is closed and anything outside it is a rejection.
+6. **A section's dtype is fixed by its type and is validated.** Each known section
+   type carries exactly one dtype (the "dtype" column of the section-types table
+   below is normative, not documentation). A section whose type is known but whose
+   dtype is not the one that type requires is rejected (`SectionDtypeMismatch`) — the
+   reject-over-degrade law (§11) applied to the descriptor, so a consumer that reads
+   a section by type can trust its element width without re-checking.
 
 ## Byte layout
 
