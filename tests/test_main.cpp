@@ -13,6 +13,7 @@
 #include "superslm/sha256.h"
 #include "superslm/tokenizer.h"
 #include "sslm_fixtures.h"
+#include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
@@ -1764,6 +1765,307 @@ static void TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds() {
 	                        "WGT1 tensor[0] (t0) shape [70000,70000] product 4.9B overflows 32 bits, correct in 64-bit");
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input red suite
+// (SuperSLM_Plan.md S2.0b; docs/sslm_format.md "Keyed numeric-constant blob —
+// KVC1"). SslmKeyedConstants::Parse parses one keyed-constant section's
+// self-contained KVC1 table AFTER SslmArtifact has verified whole-file
+// structure and integrity — a crafted integrity-valid artifact can still
+// carry a malformed KVC1 blob inside a validated section, so this sub-parse
+// is its own hostile-input trust boundary, held to the same T-129 bar as
+// TOK1/UNI1 and WGT1/BIA1/ROP1. src/model.cpp is currently a RED-FIRST STUB:
+// Parse() leaves `out` empty and reports Ok unconditionally, so every cell
+// below is red until the parse is built.
+//
+// Every cell starts from a small spec-faithful KVC1 blob (sslm_kvc1_hostile_
+// fixtures.h), mutates exactly one header or descriptor field, and asserts
+// Parse returns the ONE SslmModelStatus its mutation should trigger — every
+// non-Ok KVC1-specific SslmModelStatus value is covered by at least one
+// cell. CompositionConstants (value_words 2) carries every magic-agnostic
+// structural/entry-level cell; KvLandingScales and KvLandingReciprocals
+// each carry one BadValueWords cell so all three section types are
+// exercised (docs/sslm_format.md's KVC1 table).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared assertion for every KVC1 hostile cell below: Parse must reject with
+// the cell's one named status, leave `out` empty, and not crash.
+void AssertKvc1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmSectionType type, SslmModelStatus want,
+                         const char* why) {
+	SslmSectionView view = MakeConstantsSectionView(type, mutated_bytes);
+	SslmKeyedConstants out;
+	std::string err;
+	SslmModelStatus status = SslmKeyedConstants::Parse(view, out, &err);
+	CHECK_MSG(status == want, "%s: got %s, want %s", why, SslmModelStatusName(status), SslmModelStatusName(want));
+	CHECK_MSG(out.Entries().empty(), "%s: KVC1 table left %zu entr(y/ies) on a rejected parse", why,
+	          out.Entries().size());
+}
+
+}  // namespace
+
+// --- The feature oracles: the minimal fixture each value_words shape's
+//     hostile cells mutate from is itself spec-faithful — it parses to Ok
+//     and every entry's name/value_words/values matches what was declared,
+//     including a negative value and a large-magnitude value (pins the
+//     little-endian SIGNED int64 read: a naive unsigned or truncated read
+//     would corrupt either). These two cells (one per value_words shape)
+//     prove the baseline isn't rejecting -- or silently misreading -- for
+//     some unrelated reason before any hostile cell attributes a rejection
+//     to its one named mutation. ---
+
+static void TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips() {
+	auto m = MakeMinimalValidKvc1(/*value_words=*/2);
+	SslmSectionView view = MakeConstantsSectionView(SslmSectionType::CompositionConstants, m.bytes);
+
+	SslmKeyedConstants table;
+	std::string err;
+	SslmModelStatus status = SslmKeyedConstants::Parse(view, table, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "CompositionConstants minimal KVC1 failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(table.Entries().size() == 3);
+
+	const SslmConstantEntry* alpha = table.Entry("alpha");
+	CHECK_MSG(alpha != nullptr, "Entry(\"alpha\") missing");
+	if (alpha) {
+		CHECK(alpha->name == "alpha");
+		CHECK(alpha->value_words == 2);
+		CHECK_MSG(SslmKeyedConstants::Value(*alpha, 0) == 7, "alpha[0] != 7");
+		CHECK_MSG(SslmKeyedConstants::Value(*alpha, 1) == -3, "alpha[1] != -3");
+	}
+
+	const SslmConstantEntry* beta = table.Entry("beta");
+	CHECK_MSG(beta != nullptr, "Entry(\"beta\") missing");
+	if (beta) {
+		CHECK(beta->value_words == 2);
+		CHECK_MSG(SslmKeyedConstants::Value(*beta, 0) == -1000000, "beta[0] != -1000000");
+		CHECK_MSG(SslmKeyedConstants::Value(*beta, 1) == 42, "beta[1] != 42");
+	}
+
+	const SslmConstantEntry* gamma = table.Entry("gamma");
+	CHECK_MSG(gamma != nullptr, "Entry(\"gamma\") missing");
+	if (gamma) {
+		CHECK(gamma->value_words == 2);
+		CHECK_MSG(SslmKeyedConstants::Value(*gamma, 0) == 4611686018427387903LL,
+		          "gamma[0] != large positive magnitude");
+		CHECK_MSG(SslmKeyedConstants::Value(*gamma, 1) == -4611686018427387904LL,
+		          "gamma[1] != large negative magnitude");
+	}
+
+	CHECK_MSG(table.Entry("does-not-exist") == nullptr, "Entry() lookup miss did not return nullptr");
+}
+
+static void TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips() {
+	auto m = MakeMinimalValidKvc1(/*value_words=*/3);
+	SslmSectionView view = MakeConstantsSectionView(SslmSectionType::KvLandingReciprocals, m.bytes);
+
+	SslmKeyedConstants table;
+	std::string err;
+	SslmModelStatus status = SslmKeyedConstants::Parse(view, table, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "KvLandingReciprocals minimal KVC1 failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(table.Entries().size() == 3);
+
+	const SslmConstantEntry* alpha = table.Entry("alpha");
+	CHECK_MSG(alpha != nullptr, "Entry(\"alpha\") missing");
+	if (alpha) {
+		CHECK(alpha->value_words == 3);
+		CHECK_MSG(SslmKeyedConstants::Value(*alpha, 0) == 7, "alpha[0] != 7");
+		CHECK_MSG(SslmKeyedConstants::Value(*alpha, 1) == -3, "alpha[1] != -3");
+		CHECK_MSG(SslmKeyedConstants::Value(*alpha, 2) == 1000, "alpha[2] != 1000");
+	}
+
+	const SslmConstantEntry* gamma = table.Entry("gamma");
+	CHECK_MSG(gamma != nullptr, "Entry(\"gamma\") missing");
+	if (gamma) {
+		CHECK(gamma->value_words == 3);
+		CHECK_MSG(SslmKeyedConstants::Value(*gamma, 0) == 4611686018427387903LL,
+		          "gamma[0] != large positive magnitude");
+		CHECK_MSG(SslmKeyedConstants::Value(*gamma, 1) == -4611686018427387904LL,
+		          "gamma[1] != large negative magnitude");
+		CHECK_MSG(SslmKeyedConstants::Value(*gamma, 2) == 9223372036854775807LL, "gamma[2] != INT64_MAX");
+	}
+
+	CHECK_MSG(table.Entry("does-not-exist") == nullptr, "Entry() lookup miss did not return nullptr");
+}
+
+// --- Section-level / header cells. CompositionConstants (value_words 2) is
+//     used throughout: KVC1's magic/version/reserved/entry_count fields are
+//     validated identically across all three section types (unlike
+//     WGT1/BIA1/ROP1, KVC1 shares ONE magic across every type, so there is
+//     no per-type BadConstantsMagic split to make). ---
+
+static void TestKvc1RejectsSectionTooShort() {
+	std::vector<uint8_t> bytes(20, 0);  // < kConstantHeaderBytes (24)
+	bytes[0] = 'K';
+	bytes[1] = 'V';
+	bytes[2] = 'C';
+	bytes[3] = '1';
+	AssertKvc1Rejected(bytes, SslmSectionType::CompositionConstants, SslmModelStatus::SectionTooShort,
+	                    "KVC1 section too short (20 bytes < 24)");
+}
+
+static void TestKvc1RejectsBadMagic() {
+	auto m = MakeMinimalValidKvc1(2);
+	m.bytes[0] = 'X';  // was 'K' of "KVC1"
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadConstantsMagic,
+	                    "KVC1 bad magic");
+}
+
+static void TestKvc1RejectsUnsupportedVersion() {
+	auto m = MakeMinimalValidKvc1(2);
+	PutU32(m.bytes, kConstantsVersionOff, 2);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::UnsupportedConstantsVersion,
+	                    "KVC1 version == 2");
+}
+
+static void TestKvc1RejectsTooManyEntries() {
+	// A complete, valid 24-byte header declaring an entry_count far beyond
+	// kMaxConstantEntries (1048576) and no following bytes -- TooManyConstant
+	// Entries must be checked (and must reject) before any attempt to read a
+	// descriptor table this large, so no real descriptor/value/name bytes are
+	// needed here (mirrors WGT1's TestManifestRejectsTooManyTensors).
+	std::vector<uint8_t> bytes;
+	bytes.insert(bytes.end(), superslm::kConstantsMagic, superslm::kConstantsMagic + 4);
+	WriteU32LE(bytes, kManifestVersion);
+	WriteU32LE(bytes, kMaxConstantEntries + 1);  // entry_count
+	WriteU32LE(bytes, 2);                        // value_words
+	WriteU32LE(bytes, 0);                        // name_blob_len
+	WriteU32LE(bytes, 0);                         // reserved
+	AssertKvc1Rejected(bytes, SslmSectionType::CompositionConstants, SslmModelStatus::TooManyConstantEntries,
+	                    "KVC1 entry_count == kMaxConstantEntries+1");
+}
+
+static void TestKvc1RejectsBadReserved() {
+	auto m = MakeMinimalValidKvc1(2);
+	PutU32(m.bytes, kConstantsReservedOff, 1);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadConstantsReserved,
+	                    "KVC1 header reserved == 1");
+}
+
+// --- ConstantsOutOfBounds cells. KVC1 has three variable-length regions
+//     after the fixed header (descriptors, values, name_blob, in that
+//     order) -- one truncation cell per region, plus a fourth that exploits
+//     the format's one genuinely unbounded field (name_blob_len, a u32 not
+//     capped by kMaxConstantEntries the way entry_count is) to force the
+//     header+descriptors+values+name_blob SUM past 2^32, proving the sum is
+//     computed 64-bit-safe. See the test-design record §4.4 for why the
+//     commission's literally-described "entry_count * value_words * 8
+//     overflows 32-bit" scenario is unreachable given kMaxConstantEntries,
+//     and why this cell is the faithful adaptation. ---
+
+static void TestKvc1RejectsOutOfBoundsTruncatedDescriptors() {
+	auto m = MakeMinimalValidKvc1(2);  // 3 entries
+	// Cut the buffer to strictly inside the descriptor table: one full
+	// descriptor plus half of a second, while entry_count (3) still declares
+	// a full three-descriptor table the truncated buffer no longer holds.
+	m.bytes.resize(m.descriptors_off + superslm::kConstantDescBytes + superslm::kConstantDescBytes / 2);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::ConstantsOutOfBounds,
+	                    "KVC1 truncated mid-descriptor-table");
+}
+
+static void TestKvc1RejectsOutOfBoundsTruncatedValues() {
+	auto m = MakeMinimalValidKvc1(2);  // 3 entries * 2 words * 8 bytes == 48 value bytes
+	// The full descriptor table is present, but not all of the declared
+	// entry_count*value_words int64s after it -- cut one byte short of the
+	// value array.
+	m.bytes.resize(m.values_off + static_cast<size_t>(m.entry_count) * m.value_words * 8 - 1);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::ConstantsOutOfBounds,
+	                    "KVC1 truncated mid-value-array");
+}
+
+static void TestKvc1RejectsOutOfBoundsTruncatedNameBlob() {
+	auto m = MakeMinimalValidKvc1(2);
+	// The full descriptor table and value array are present, but not all of
+	// the declared name_blob_len bytes after them -- cut one byte short of
+	// the name blob.
+	m.bytes.resize(m.name_blob_off + m.name_blob_len - 1);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::ConstantsOutOfBounds,
+	                    "KVC1 truncated mid-name-blob");
+}
+
+static void TestKvc1RejectsNameBlobLenSumOverflow32Bit() {
+	// entry_count is capped at kMaxConstantEntries (1048576), so entry_count *
+	// value_words * 8 tops out around 25M -- nowhere near overflowing a
+	// 32-bit product on its own (see the test-design record §4.4). name_blob_
+	// len, however, is an independent u32 with no such cap: declaring it near
+	// UINT32_MAX pushes the header+descriptors+values+name_blob SUM itself
+	// past 2^32. A 32-bit-wrapped sum would land on a small value (here, 56)
+	// that a tiny real byte_size (74) would wrongly satisfy as "in bounds";
+	// only a 64-bit-safe sum correctly sees the true (multi-gigabyte) required
+	// size exceeds the section's real, tiny byte_size and rejects.
+	std::vector<Kvc1EntrySpec> entries = {{"a", {1, 2}}, {"b", {3, 4}}};
+	auto m = BuildKvc1(2, entries);
+	CHECK_MSG(m.bytes.size() == 74, "fixture precondition: expected a 74-byte real buffer, got %zu",
+	          m.bytes.size());
+	PutU32(m.bytes, kConstantsNameBlobLenOff, 0xFFFFFFF0u);  // 4,294,967,280
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::ConstantsOutOfBounds,
+	                    "KVC1 name_blob_len == 0xFFFFFFF0, header+descriptors+values+name_blob sum overflows 32-bit");
+}
+
+// --- Per-entry cells. Each isolates exactly one deviation from
+//     docs/sslm_format.md's EntryDesc field table in the minimal valid
+//     blob. ---
+
+static void TestKvc1RejectsBadEntryNameOutOfRange() {
+	auto m = MakeMinimalValidKvc1(2);
+	PutU32(m.bytes, ConstantsDescNameLenOff(0), m.name_blob_len + 50);  // alpha's name now runs past the blob
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadEntryName,
+	                    "KVC1 entry[0] (alpha) name range exceeds name_blob_len");
+}
+
+static void TestKvc1RejectsEmptyEntryName() {
+	auto m = MakeMinimalValidKvc1(2);
+	PutU32(m.bytes, ConstantsDescNameLenOff(0), 0);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::EmptyEntryName,
+	                    "KVC1 entry[0] (alpha) name_len == 0");
+}
+
+static void TestKvc1RejectsDuplicateEntryName() {
+	auto m = MakeMinimalValidKvc1(2);
+	// Point entry[1] ("beta") at the exact same name-blob range as entry[0]
+	// ("alpha") -- both descriptors now name the same entry.
+	const uint32_t alpha_name_off = GetU32(m.bytes, ConstantsDescNameOffOff(0));
+	const uint32_t alpha_name_len = GetU32(m.bytes, ConstantsDescNameLenOff(0));
+	PutU32(m.bytes, ConstantsDescNameOffOff(1), alpha_name_off);
+	PutU32(m.bytes, ConstantsDescNameLenOff(1), alpha_name_len);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::DuplicateEntryName,
+	                    "KVC1 entry[1] (beta) name duplicates entry[0]'s (alpha)");
+}
+
+// --- BadValueWords cells: (a) a value not in {2,3} at all, and (b) a value
+//     in range but wrong for the section type -- tested in both directions
+//     (2-required-but-declares-3, and 3-required-but-declares-2) so all
+//     three KVC1 section types are exercised somewhere in this suite (the
+//     two feature oracles above cover CompositionConstants and
+//     KvLandingReciprocals; these three cells add KvLandingScales and
+//     re-exercise the other two from the opposite direction). ---
+
+static void TestKvc1RejectsValueWordsOutOfRange() {
+	auto m = MakeMinimalValidKvc1(2);  // KvLandingScales also requires 2
+	PutU32(m.bytes, kConstantsValueWordsOff, 5);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::KvLandingScales, SslmModelStatus::BadValueWords,
+	                    "KVC1 (KvLandingScales) value_words == 5, not in {2,3}");
+}
+
+static void TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree() {
+	auto m = MakeMinimalValidKvc1(2);  // CompositionConstants requires 2
+	PutU32(m.bytes, kConstantsValueWordsOff, 3);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadValueWords,
+	                    "KVC1 (CompositionConstants, requires 2) value_words == 3");
+}
+
+static void TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo() {
+	auto m = MakeMinimalValidKvc1(3);  // KvLandingReciprocals requires 3
+	PutU32(m.bytes, kConstantsValueWordsOff, 2);
+	AssertKvc1Rejected(m.bytes, SslmSectionType::KvLandingReciprocals, SslmModelStatus::BadValueWords,
+	                    "KVC1 (KvLandingReciprocals, requires 3) value_words == 2");
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -1885,6 +2187,27 @@ int main() {
 	TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia();
 	TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop();
 	TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds();
+
+	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite
+	//     (red-first; src/model.cpp's SslmKeyedConstants::Parse is currently a
+	//     stub). ---
+	TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips();
+	TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips();
+	TestKvc1RejectsSectionTooShort();
+	TestKvc1RejectsBadMagic();
+	TestKvc1RejectsUnsupportedVersion();
+	TestKvc1RejectsTooManyEntries();
+	TestKvc1RejectsBadReserved();
+	TestKvc1RejectsOutOfBoundsTruncatedDescriptors();
+	TestKvc1RejectsOutOfBoundsTruncatedValues();
+	TestKvc1RejectsOutOfBoundsTruncatedNameBlob();
+	TestKvc1RejectsNameBlobLenSumOverflow32Bit();
+	TestKvc1RejectsBadEntryNameOutOfRange();
+	TestKvc1RejectsEmptyEntryName();
+	TestKvc1RejectsDuplicateEntryName();
+	TestKvc1RejectsValueWordsOutOfRange();
+	TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree();
+	TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
