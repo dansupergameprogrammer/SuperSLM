@@ -11,5 +11,5 @@ out-clang/
 __pycache__/
 
 # generated verification corpora
-tools/_stress_corpus.txt
+tools/_*corpus*.txt
 tools/_out/
