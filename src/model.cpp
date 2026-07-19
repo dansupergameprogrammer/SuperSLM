@@ -67,8 +67,37 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::TensorOutOfBounds: return "TensorOutOfBounds";
 		case SslmModelStatus::TensorOverlap: return "TensorOverlap";
 		case SslmModelStatus::BadDescriptorReserved: return "BadDescriptorReserved";
+		case SslmModelStatus::BadConstantsMagic: return "BadConstantsMagic";
+		case SslmModelStatus::UnsupportedConstantsVersion: return "UnsupportedConstantsVersion";
+		case SslmModelStatus::TooManyConstantEntries: return "TooManyConstantEntries";
+		case SslmModelStatus::BadValueWords: return "BadValueWords";
+		case SslmModelStatus::ConstantsOutOfBounds: return "ConstantsOutOfBounds";
+		case SslmModelStatus::BadEntryName: return "BadEntryName";
+		case SslmModelStatus::EmptyEntryName: return "EmptyEntryName";
+		case SslmModelStatus::DuplicateEntryName: return "DuplicateEntryName";
+		case SslmModelStatus::BadConstantsReserved: return "BadConstantsReserved";
 	}
 	return "Unknown";
+}
+
+const uint8_t* ConstantsMagicFor(SslmSectionType type) noexcept {
+	switch (type) {
+		case SslmSectionType::CompositionConstants:
+		case SslmSectionType::KvLandingScales:
+		case SslmSectionType::KvLandingReciprocals:
+			return kConstantsMagic;
+		default:
+			return nullptr;
+	}
+}
+
+uint32_t ExpectedValueWords(SslmSectionType type) noexcept {
+	switch (type) {
+		case SslmSectionType::CompositionConstants: return 2;  // (m, e)
+		case SslmSectionType::KvLandingScales: return 2;       // (m, e)
+		case SslmSectionType::KvLandingReciprocals: return 3;  // (m, e, R)
+		default: return 0;
+	}
 }
 
 const uint8_t* ManifestMagicFor(SslmSectionType type) noexcept {
@@ -219,6 +248,28 @@ const SslmTensorView* SslmTensorManifest::Tensor(std::string_view name) const no
 		if (t.name == name) return &t;
 	}
 	return nullptr;
+}
+
+// STUB (S2.0b, red-first): not implemented. Leaves `out` empty and reports Ok so the
+// KVC1 red suite fails until the parse is built.
+SslmModelStatus SslmKeyedConstants::Parse(const SslmSectionView& /*section*/,
+                                          SslmKeyedConstants& out, std::string* /*err*/) {
+	out.entries_.clear();
+	return SslmModelStatus::Ok;
+}
+
+const SslmConstantEntry* SslmKeyedConstants::Entry(std::string_view name) const noexcept {
+	for (const auto& e : entries_) {
+		if (e.name == name) return &e;
+	}
+	return nullptr;
+}
+
+int64_t SslmKeyedConstants::Value(const SslmConstantEntry& entry, uint32_t w) noexcept {
+	const uint8_t* p = entry.values + static_cast<size_t>(w) * 8;
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= uint64_t(p[i]) << (8 * i);
+	return static_cast<int64_t>(v);
 }
 
 } // namespace superslm

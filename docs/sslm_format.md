@@ -223,6 +223,49 @@ converter packs them contiguously in descriptor order; the loader validates non-
 
 `kMaxTensors` and `kMaxTensorRank` are declared in `include/superslm/model.h`.
 
+### Keyed numeric-constant blob — `KVC1`
+
+The pinned integer composition constants (§6.8 C23–C30) live in three keyed sections, each
+mapping a string key to a fixed-width tuple of integers. They share one self-contained binary
+sub-format, `KVC1`, parsed by `ModelView` as a hostile-input trust boundary (the same bar as
+`WGT1`). Only the **magic is shared** (`'KVC1'`); the section type fixes how many integers each
+entry carries (`value_words`), and the blob restates it so the parse can reject a mismatch:
+
+| Section (type)                | `value_words` | Tuple |
+|-------------------------------|:-------------:|-------|
+| `CompositionConstants` (7)    | 2 | `(m, e)` — canonical carried scale (C26) |
+| `KvLandingScales` (8)         | 2 | `(m, e)` — per-head K/V landing target (C27) |
+| `KvLandingReciprocals` (9)    | 3 | `(m, e, R)` — the landing composite's offline reciprocal (C27/D-SLM58) |
+
+Every value is stored as a little-endian **`int64`**, including `e` (a small exponent that fits
+trivially) — one uniform layout serves both the 2-word and 3-word sections. All offsets are from
+the start of the section.
+
+| Field | Type | Notes |
+|---|---|---|
+| magic | `u8[4]` | `'KVC1'` |
+| version | `u32` | `1` |
+| entry_count | `u32` | `<= kMaxConstantEntries` (1048576) |
+| value_words | `u32` | `2` or `3`, and **must equal** the section type's required count |
+| name_blob_len | `u32` | byte length of the name blob |
+| reserved | `u32` | `== 0` |
+| descriptors | `EntryDesc[entry_count]` | fixed **8 bytes** each: `name_off u32`, `name_len u32` |
+| values | `int64[entry_count * value_words]` | entry `i`'s tuple at `[i*value_words, (i+1)*value_words)`, row-major |
+| name_blob | `u8[name_blob_len]` | UTF-8 keys, concatenated (not NUL-terminated) |
+
+The `ModelView` sub-parse rejects (fails closed) on: a short section (`byte_size < 24`, the fixed
+header); a wrong magic or version; `entry_count > kMaxConstantEntries`; a `value_words` not in
+`{2,3}` or not the value the section type requires; the header + descriptor table + value array +
+name blob exceeding `byte_size` (computed in 64-bit — `entry_count * value_words * 8` is the
+overflow-prone product and is guarded); for **any** entry — a name range outside the name blob, a
+zero-length name, a duplicate name, or a nonzero-reserved header. The integer values themselves are
+not range-checked here (a corrupt-but-readable value is the kernel's C29 input-domain concern, not
+the structural parse's); the parse guarantees only that `entry_count` tuples of `value_words`
+`int64`s and their keys are safely readable. `int64`s are read by explicit little-endian byte
+assembly, so the value array needs no alignment.
+
+`kMaxConstantEntries` is declared in `include/superslm/model.h`.
+
 ## Versioning
 
 `format_version` is a single integer. A reader that does not recognize the version
