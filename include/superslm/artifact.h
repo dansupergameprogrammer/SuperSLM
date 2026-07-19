@@ -44,11 +44,11 @@ enum class SslmSectionType : uint32_t {
 	KvLandingReciprocals = 9,
 	Calibration = 10,
 	GoldenHashes = 11,
-	// Reserved — introduced at later slots; a v1 artifact may carry them but the
-	// loader does not yet interpret their contents.
-	Tokenizer = 20,   // S1
-	ChatTemplate = 21, // S1
-	SchemaMasks = 30,  // S5
+	Tokenizer = 20,     // S1: byte-BPE vocab + merges + special tokens
+	ChatTemplate = 21,  // S1: chat template + special-token metadata (JSON)
+	UnicodeTables = 22, // S1: pinned NFC + \p{L}/\p{N}/\s tables
+	// Reserved — introduced at a later slot.
+	SchemaMasks = 30,   // S5
 };
 
 enum class SslmDtype : uint32_t {

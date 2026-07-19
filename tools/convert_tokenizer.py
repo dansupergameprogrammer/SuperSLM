@@ -25,6 +25,7 @@ import unicodedata
 from pathlib import Path
 
 import sslm_format as F
+from unicode_tables import Unicode
 
 # The pattern this converter and the runtime implement (documented, pinned for v1).
 PRETOK_PATTERN = (
@@ -73,6 +74,7 @@ def is_space(ch):
 # --- The tokenizer tables extracted from an HF checkpoint -----------------------
 class TokenizerTables:
     def __init__(self, ckpt_dir):
+        self.ckpt = ckpt_dir
         tj = json.loads((Path(ckpt_dir) / "tokenizer.json").read_text(encoding="utf-8"))
         cfg = json.loads((Path(ckpt_dir) / "tokenizer_config.json").read_text(encoding="utf-8"))
         model = tj["model"]
@@ -84,7 +86,11 @@ class TokenizerTables:
         self.merges = [m.split(" ") for m in model["merges"]]  # [ [a,b], ... ] rank order
         self.added = tj.get("added_tokens", [])
         self.chat_template = cfg.get("chat_template")
-        self.unicode_version = unicodedata.unidata_version
+        # All NFC + \p{L}/\p{N}/\s classification runs through the table-driven Unicode
+        # (proven == unicodedata by unicode_tables.self_test) — never unicodedata in the
+        # tokenizer path, so the runtime and this reference share one source of truth.
+        self.u = Unicode.build()
+        self.unicode_version = self.u.version
 
         # base byte -> id
         self.byte_to_id = [self.vocab[BYTE_ENCODER[b]] for b in range(256)]
@@ -109,6 +115,10 @@ class TokenizerTables:
 
     # --- pre-tokenization: the fixed pattern, hand-scanned deterministically -----
     def _pretokenize(self, text):
+        # table-driven classification (identical to what the C++ TokenizerView uses)
+        is_letter = lambda cp: self.u.is_letter(cp)
+        is_number = lambda cp: self.u.is_number(cp)
+        is_space = lambda ch: self.u.is_space(ord(ch))
         pieces = []
         i, n = 0, len(text)
         contractions = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"]
@@ -195,7 +205,7 @@ class TokenizerTables:
             if is_special:
                 out.append(self.special_ids[s])
                 continue
-            norm = unicodedata.normalize("NFC", s)
+            norm = self.u.nfc(s)
             for piece in self._pretokenize(norm):
                 out.extend(self._bpe(piece.encode("utf-8")))
         return out
@@ -221,6 +231,65 @@ class TokenizerTables:
 
     def decode(self, ids):
         return b"".join(self.id_to_bytes[i] for i in ids).decode("utf-8", errors="replace")
+
+    # --- serialization: the .sslm TOKENIZER blob (parsed by the C++ TokenizerView) ---
+    def serialize_tokenizer(self):
+        b = bytearray()
+        b += b"TOK1"
+        vocab_count = len(self.id_to_bytes)
+        b += struct.pack("<IIIII", 1, vocab_count, len(self.merge_triples), len(self.specials), 0)
+        for i in range(256):
+            b += struct.pack("<I", self.byte_to_id[i])
+        # id -> raw bytes: offset table then blob
+        offs, blob = [0], bytearray()
+        for by in self.id_to_bytes:
+            blob += by; offs.append(len(blob))
+        for o in offs:
+            b += struct.pack("<I", o)
+        b += struct.pack("<I", len(blob)); b += blob
+        # merges (rank order)
+        for a, bb, m in self.merge_triples:
+            b += struct.pack("<III", a, bb, m)
+        # specials (longest-content-first, for greedy encode matching)
+        s_offs, s_blob = [0], bytearray()
+        for content, _id in self.specials:
+            s_blob += content.encode("utf-8"); s_offs.append(len(s_blob))
+        for _content, _id in self.specials:
+            b += struct.pack("<I", _id)
+        for o in s_offs:
+            b += struct.pack("<I", o)
+        b += struct.pack("<I", len(s_blob)); b += s_blob
+        return bytes(b)
+
+    def emit_artifact(self, out_path):
+        config = {"model": "qwen2.5-1.5b-instruct", "tokenizer": "byte-bpe",
+                  "unicode_version": self.u.version, "pretok": "qwen-gpt-v1"}
+        sections = [
+            F.Section(F.SectionType.CONFIG, json.dumps(config, sort_keys=True).encode("utf-8")),
+            F.Section(F.SectionType.TOKENIZER, self.serialize_tokenizer()),
+            F.Section(F.SectionType.UNICODE_TABLES, self.u.serialize()),
+            F.Section(F.SectionType.CHAT_TEMPLATE,
+                      json.dumps({"chat_template": self.chat_template}, sort_keys=True).encode("utf-8")),
+        ]
+        return F.write_artifact(out_path, sections)
+
+    def emit_golden(self, corpus_path, out_path):
+        """Golden reference pack: the upstream HF ids for a corpus + a hash. The C++
+        tokenizer must reproduce every record's ids and the same hash (§10 gate)."""
+        from transformers import AutoTokenizer
+        hf = AutoTokenizer.from_pretrained(self.ckpt)
+        lines = [ln for ln in Path(corpus_path).read_text(encoding="utf-8").splitlines() if ln]
+        records, h = [], hashlib.sha256()
+        for text in lines:
+            ids = hf.encode(text, add_special_tokens=False)
+            records.append({"text": text, "ids": ids})
+            h.update(text.encode("utf-8")); h.update(b"\x00")
+            for i in ids:
+                h.update(struct.pack("<I", i))
+        golden = {"unicode_version": self.u.version, "count": len(records),
+                  "ids_hash": h.hexdigest(), "records": records}
+        Path(out_path).write_text(json.dumps(golden, ensure_ascii=False), encoding="utf-8")
+        return golden["ids_hash"], len(records)
 
 
 # --- Unicode table generation (pinned version) ----------------------------------
@@ -264,8 +333,20 @@ if __name__ == "__main__":
     ap.add_argument("--ckpt", required=True, help="HF checkpoint dir with tokenizer.json")
     ap.add_argument("--verify", help="corpus file to check ref_encode vs HF")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--emit", help="output .sslm path (tokenizer + unicode + chat sections)")
+    ap.add_argument("--golden", nargs=2, metavar=("CORPUS", "OUT_JSON"),
+                    help="emit the golden reference pack for a corpus")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     if args.verify:
         sys.exit(1 if verify(args.ckpt, args.verify, args.limit) else 0)
-    print("use --verify <corpus> for now; artifact emission lands next")
+    if args.emit or args.golden:
+        tables = TokenizerTables(args.ckpt)
+        if args.emit:
+            fp = tables.emit_artifact(args.emit)
+            print(f"wrote {args.emit}  fingerprint {fp}")
+        if args.golden:
+            ids_hash, n = tables.emit_golden(args.golden[0], args.golden[1])
+            print(f"wrote {args.golden[1]}  {n} records  ids_hash {ids_hash}")
+        sys.exit(0)
+    print("use --verify <corpus>, --emit <out.sslm>, or --golden <corpus> <out.json>")

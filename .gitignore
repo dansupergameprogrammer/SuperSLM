@@ -12,3 +12,4 @@ __pycache__/
 
 # generated verification corpora
 tools/_stress_corpus.txt
+tools/_out/

@@ -96,13 +96,14 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |     9 | `KvLandingReciprocals`  | `Json`       | S0   | per-head KV landing reciprocals (C27)              |
 |    10 | `Calibration`           | `Json`       | S0   | calibration record                                 |
 |    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (§11 golden pack)            |
-|    20 | `Tokenizer`             | `Raw`        | S1   | reserved — introduced at S1                        |
-|    21 | `ChatTemplate`          | `Json`       | S1   | reserved — role markers / special-token ids (F-W3) |
+|    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
+|    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
+|    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
 |    30 | `SchemaMasks`           | `Raw`        | S5   | reserved — compiled DFA mask pages                 |
 
-The S1/S5 types are **reserved, not yet emitted**: a v1 artifact that carries them
-is still parsed structurally, but the loader does not yet interpret their contents.
-Types outside this table are rejected.
+The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
+**reserved for S5** — a v1 artifact may carry it and it is parsed structurally, but the
+runtime does not yet interpret it. Types outside this table are rejected.
 
 ## Dtypes (`SslmDtype`)
 

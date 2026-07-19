@@ -38,6 +38,7 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 		case SslmSectionType::GoldenHashes:
 		case SslmSectionType::Tokenizer:
 		case SslmSectionType::ChatTemplate:
+		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
 			return true;
 	}
@@ -61,6 +62,7 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 		case SslmSectionType::GoldenHashes:
 		case SslmSectionType::Tokenizer:
 		case SslmSectionType::ChatTemplate:
+		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
 			return SslmDtype::Raw;
 	}
