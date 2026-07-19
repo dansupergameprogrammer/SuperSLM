@@ -9,3 +9,6 @@ out-clang/
 .vs/
 .idea/
 __pycache__/
+
+# generated verification corpora
+tools/_stress_corpus.txt
