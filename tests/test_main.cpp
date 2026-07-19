@@ -10,7 +10,9 @@
 
 #include "superslm/artifact.h"
 #include "superslm/sha256.h"
+#include "superslm/tokenizer.h"
 #include "sslm_fixtures.h"
+#include "sslm_tokenizer_fixtures.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -687,6 +689,237 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S1 tokenizer red suite (SuperSLM_Plan.md §10; Claude/Curie/
+// SuperSLM_S1_Tokenizer_TestDesign-2026-07-19.md). The runtime byte-level BPE
+// algorithm is already proven bit-for-bit against the upstream HF tokenizer by
+// the Python reference (tools/convert_tokenizer.py, 0 mismatch over 2000+
+// adversarial+multilingual lines) — this suite is the C++ gate that proves the
+// ported TokenizerView reproduces those upstream ids. At S1.3 TokenizerView is
+// an unbuilt stub (src/tokenizer.cpp): Open always returns false, Encode/Decode
+// always return empty — every cell below fails red for that one reason: the
+// golden ids never match empty output, and every cell that depends on a
+// successfully-opened view fails its explicit `view_ok` assertion. Once Brunel
+// builds the tokenizer, each cell fails red for its own reason (if any) until
+// implemented correctly, then goes green.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct FixtureTokenizer {
+	SslmArtifact artifact;
+	TokenizerView view;
+	bool artifact_ok = false;
+	bool view_ok = false;
+	std::string artifact_error;
+	std::string view_error;
+};
+
+FixtureTokenizer OpenFixtureTokenizer() {
+	FixtureTokenizer ft;
+	std::string path = ResolveFixturePath("qwen2.5-1.5b.tok.sslm");
+	if (path.empty()) {
+		ft.artifact_error =
+		    "fixture qwen2.5-1.5b.tok.sslm not found under tests/fixtures (searched CWD, .., ../..)";
+		return ft;
+	}
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromFile(path.c_str(), ft.artifact, &aerr);
+	ft.artifact_ok = (status == SslmStatus::Ok);
+	if (!ft.artifact_ok) {
+		ft.artifact_error = std::string(SslmStatusName(status)) + ": " + aerr.message;
+		return ft;
+	}
+	std::string terr;
+	ft.view_ok = TokenizerView::Open(ft.artifact, ft.view, &terr);
+	ft.view_error = terr;
+	return ft;
+}
+
+}  // namespace
+
+// --- The golden gate (dim 10 — the load-bearing feature oracle): Encode()
+//     executed against the real Qwen2.5-1.5B artifact must reproduce the
+//     upstream HF tokenizer's ids, not merely agree with itself. ---
+
+static void TestTokenizerGoldenEncodeMatchesUpstreamIds() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+
+	std::string golden_path = ResolveFixturePath("qwen_tok_golden.gld");
+	CHECK_MSG(!golden_path.empty(), "golden pack qwen_tok_golden.gld not found under tests/fixtures");
+	if (golden_path.empty()) return;
+	GoldenPack golden = LoadGoldenPack(golden_path);
+	CHECK_MSG(golden.ok, "golden pack failed to parse: %s", golden.error.c_str());
+	if (!golden.ok) return;
+	CHECK(golden.record_count == golden.records.size());
+
+	for (size_t i = 0; i < golden.records.size(); ++i) {
+		const auto& rec = golden.records[i];
+		std::vector<int32_t> got = ft.view.Encode(rec.text);
+		CHECK_MSG(got == rec.ids,
+		          "record %zu \"%s\": Encode produced %zu ids, golden (upstream HF) has %zu",
+		          i, rec.text.c_str(), got.size(), rec.ids.size());
+	}
+}
+
+static void TestTokenizerGoldenIdsHashMatchesConverter() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+
+	std::string golden_path = ResolveFixturePath("qwen_tok_golden.gld");
+	CHECK_MSG(!golden_path.empty(), "golden pack qwen_tok_golden.gld not found under tests/fixtures");
+	if (golden_path.empty()) return;
+	GoldenPack golden = LoadGoldenPack(golden_path);
+	CHECK_MSG(golden.ok, "golden pack failed to parse: %s", golden.error.c_str());
+	if (!golden.ok) return;
+
+	// Recomputes tools/convert_tokenizer.py's emit_golden() hash, but over THIS
+	// tokenizer's Encode() output rather than the golden file's own stored ids —
+	// a feature oracle (does Encode() reproduce the hash an independent, correct
+	// upstream run produced), not a self-consistency check against the fixture's
+	// own bytes.
+	Sha256 hasher;
+	for (const auto& rec : golden.records) {
+		std::vector<int32_t> ids = ft.view.Encode(rec.text);
+		hasher.Update(reinterpret_cast<const uint8_t*>(rec.text.data()), rec.text.size());
+		const uint8_t zero = 0;
+		hasher.Update(&zero, 1);
+		for (int32_t id : ids) {
+			const uint32_t u = static_cast<uint32_t>(id);
+			const uint8_t le[4] = {static_cast<uint8_t>(u & 0xFF), static_cast<uint8_t>((u >> 8) & 0xFF),
+			                       static_cast<uint8_t>((u >> 16) & 0xFF), static_cast<uint8_t>((u >> 24) & 0xFF)};
+			hasher.Update(le, 4);
+		}
+	}
+	uint8_t digest[32];
+	hasher.Final(digest);
+	CHECK_MSG(std::memcmp(digest, golden.ids_hash.data(), 32) == 0,
+	          "Encode()-derived ids_hash %s does not match the converter's stored ids_hash %s",
+	          ToHex(digest).c_str(), ToHex(golden.ids_hash.data()).c_str());
+}
+
+// --- Decode round-trip: Encode NFC-normalizes, so Decode(golden.ids) equals the
+//     NFC form of the line. ASCII lines assert the exact match (NFC is a no-op);
+//     the rest assert the idempotent Decode(Encode(t)) == Decode(golden.ids)
+//     round-trip, avoiding the need for an NFC oracle in C++. ---
+
+static void TestTokenizerDecodeRoundTrip() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+
+	std::string golden_path = ResolveFixturePath("qwen_tok_golden.gld");
+	CHECK_MSG(!golden_path.empty(), "golden pack qwen_tok_golden.gld not found under tests/fixtures");
+	if (golden_path.empty()) return;
+	GoldenPack golden = LoadGoldenPack(golden_path);
+	CHECK_MSG(golden.ok, "golden pack failed to parse: %s", golden.error.c_str());
+	if (!golden.ok) return;
+
+	for (size_t i = 0; i < golden.records.size(); ++i) {
+		const auto& rec = golden.records[i];
+		std::string decoded_golden = ft.view.Decode(rec.ids);
+		if (IsAsciiOnly(rec.text)) {
+			CHECK_MSG(decoded_golden == rec.text,
+			          "record %zu (ASCII) \"%s\": Decode(golden.ids) == \"%s\", want an exact match",
+			          i, rec.text.c_str(), decoded_golden.c_str());
+		} else {
+			std::string decoded_roundtrip = ft.view.Decode(ft.view.Encode(rec.text));
+			CHECK_MSG(decoded_roundtrip == decoded_golden,
+			          "record %zu (non-ASCII) \"%s\": Decode(Encode(t)) != Decode(golden.ids)", i,
+			          rec.text.c_str());
+		}
+	}
+}
+
+// --- Targeted edges: no HF reference needed. ---
+
+static void TestTokenizerOpensFixtureArtifact() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+	CHECK(ft.view.Ok());
+	CHECK(ft.view.VocabSize() > 0);
+}
+
+static void TestTokenizerEncodeEmptyStringYieldsEmptyIds() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+	CHECK(ft.view.Encode("").empty());
+}
+
+static void TestTokenizerSpecialTokenIdMatchesArtifactDeclaration() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	if (!ft.artifact_ok) return;
+
+	const SslmSectionView* tok_section = ft.artifact.Section(SslmSectionType::Tokenizer);
+	CHECK_MSG(tok_section != nullptr, "artifact has no Tokenizer section");
+	if (!tok_section) return;
+	TokBlobInfo blob = ParseTokenizerBlob(tok_section->data, static_cast<size_t>(tok_section->byte_size));
+	CHECK_MSG(blob.ok, "TOK1 blob failed to parse: %s", blob.error.c_str());
+	if (!blob.ok) return;
+
+	const char* kSpecial = "<|im_start|>";
+	const TokBlobSpecial* declared = nullptr;
+	for (const auto& sp : blob.specials) {
+		if (sp.content == kSpecial) {
+			declared = &sp;
+			break;
+		}
+	}
+	CHECK_MSG(declared != nullptr, "artifact's Tokenizer section does not declare %s among its %u specials",
+	          kSpecial, blob.special_count);
+	// Independently confirmed against this exact fixture file (Claude/Curie/
+	// SuperSLM_S1_Tokenizer_TestDesign-2026-07-19.md §2): guards a bug in
+	// ParseTokenizerBlob from masquerading as a tokenizer defect below.
+	if (declared) CHECK(declared->id == 151644u);
+
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+	std::vector<int32_t> ids = ft.view.Encode(kSpecial);
+	CHECK_MSG(ids.size() == 1, "Encode(%s) produced %zu ids, want exactly 1", kSpecial, ids.size());
+	if (declared && ids.size() == 1) {
+		CHECK_MSG(ids[0] == static_cast<int32_t>(declared->id),
+		          "Encode(%s) == %d, artifact declares id %u", kSpecial, ids[0], declared->id);
+	}
+	CHECK(ft.view.Decode(ids) == kSpecial);
+}
+
+static void TestTokenizerVocabSizeMatchesArtifactDeclaration() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	if (!ft.artifact_ok) return;
+
+	const SslmSectionView* tok_section = ft.artifact.Section(SslmSectionType::Tokenizer);
+	CHECK_MSG(tok_section != nullptr, "artifact has no Tokenizer section");
+	if (!tok_section) return;
+	TokBlobInfo blob = ParseTokenizerBlob(tok_section->data, static_cast<size_t>(tok_section->byte_size));
+	CHECK_MSG(blob.ok, "TOK1 blob failed to parse: %s", blob.error.c_str());
+	if (!blob.ok) return;
+
+	// Independently confirmed against this exact fixture file (Claude/Curie/
+	// SuperSLM_S1_Tokenizer_TestDesign-2026-07-19.md §2): guards a bug in
+	// ParseTokenizerBlob from masquerading as a tokenizer defect below.
+	CHECK_MSG(blob.vocab_count == 151665u,
+	          "TOK1 blob parse produced vocab_count %u, this fixture is known to declare 151665",
+	          blob.vocab_count);
+
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+	CHECK_MSG(ft.view.VocabSize() == static_cast<int32_t>(blob.vocab_count),
+	          "VocabSize() == %d, artifact declares vocab_count %u", ft.view.VocabSize(), blob.vocab_count);
+}
+
+static void TestTokenizerAsciiStringRoundTrips() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
+	const std::string text = "The quick brown fox jumps over 42 lazy dogs!";
+	CHECK(ft.view.Decode(ft.view.Encode(text)) == text);
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -724,6 +957,16 @@ int main() {
 	TestOpenFromFileLoadsValidArtifact();
 	TestOpenFromFileMissingFileReturnsIoError();
 	TestValidArtifactLoadsToExpectedEndState();
+
+	// --- Curie's S1 tokenizer red suite (red-first). ---
+	TestTokenizerOpensFixtureArtifact();
+	TestTokenizerGoldenEncodeMatchesUpstreamIds();
+	TestTokenizerGoldenIdsHashMatchesConverter();
+	TestTokenizerDecodeRoundTrip();
+	TestTokenizerEncodeEmptyStringYieldsEmptyIds();
+	TestTokenizerSpecialTokenIdMatchesArtifactDeclaration();
+	TestTokenizerVocabSizeMatchesArtifactDeclaration();
+	TestTokenizerAsciiStringRoundTrips();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
