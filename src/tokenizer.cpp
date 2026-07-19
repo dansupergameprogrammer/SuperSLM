@@ -315,7 +315,9 @@ namespace {
 // magic or a length that would overrun the section.
 bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string* err) {
 	auto fail = [&](const char* m) { if (err) *err = m; return false; };
-	auto need = [&](size_t off, size_t len) { return off + len <= sz; };
+	// 64-bit length math throughout: counts are attacker-controlled u32, so a u32
+	// `count + 1` or `count * k` must not wrap before the bound check (Poirot S1-2).
+	auto need = [&](uint64_t off, uint64_t len) { return off + len <= uint64_t(sz); };
 	if (!need(0, 24) || std::memcmp(d, "TOK1", 4) != 0) return fail("Tokenizer: bad TOK1 header");
 	uint32_t vocab = Rd32(d + 8), merge = Rd32(d + 12), special = Rd32(d + 16);
 	im.vocab_count = vocab;
@@ -323,14 +325,26 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	if (!need(pos, 256 * 4)) return fail("Tokenizer: truncated byte_to_id");
 	for (int b = 0; b < 256; ++b) im.byte_to_id[b] = Rd32(d + pos + size_t(b) * 4);
 	pos += 256 * 4;
-	if (!need(pos, size_t(vocab + 1) * 4)) return fail("Tokenizer: truncated vocab offsets");
+	if (!need(pos, (uint64_t(vocab) + 1) * 4)) return fail("Tokenizer: truncated vocab offsets");
 	im.vocab_offsets = d + pos;
-	pos += size_t(vocab + 1) * 4;
+	pos += (uint64_t(vocab) + 1) * 4;
 	if (!need(pos, 4)) return fail("Tokenizer: truncated vocab blob_len");
 	uint32_t vblob = Rd32(d + pos); pos += 4;
 	if (!need(pos, vblob)) return fail("Tokenizer: truncated vocab blob");
 	im.vocab_blob = d + pos;
 	pos += vblob;
+	// Validate the vocab offset table (Poirot S1-1): it indexes vocab_blob and is read
+	// unchecked by Decode, so — like the special and decomp tables — every offset must
+	// be non-decreasing and within the blob, or a crafted artifact makes Decode read
+	// out of bounds. Monotonic + last <= vblob ⇒ every [off[i], off[i+1]) is in range.
+	{
+		uint32_t prev = 0;
+		for (uint64_t i = 0; i <= vocab; ++i) {
+			uint32_t o = Rd32(im.vocab_offsets + i * 4);
+			if (o < prev || o > vblob) return fail("Tokenizer: vocab offset out of range");
+			prev = o;
+		}
+	}
 	if (!need(pos, size_t(merge) * 12)) return fail("Tokenizer: truncated merges");
 	im.merges.reserve(merge);
 	for (uint32_t r = 0; r < merge; ++r) {
@@ -338,10 +352,10 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 		im.merges.emplace((uint64_t(a) << 32) | b, std::make_pair(int32_t(r), int32_t(m)));
 		pos += 12;
 	}
-	if (!need(pos, size_t(special) * 4)) return fail("Tokenizer: truncated special ids");
+	if (!need(pos, uint64_t(special) * 4)) return fail("Tokenizer: truncated special ids");
 	std::vector<uint32_t> sids(special);
 	for (uint32_t i = 0; i < special; ++i) { sids[i] = Rd32(d + pos); pos += 4; }
-	if (!need(pos, size_t(special + 1) * 4)) return fail("Tokenizer: truncated special offsets");
+	if (!need(pos, (uint64_t(special) + 1) * 4)) return fail("Tokenizer: truncated special offsets");
 	std::vector<uint32_t> soff(special + 1);
 	for (uint32_t i = 0; i <= special; ++i) { soff[i] = Rd32(d + pos); pos += 4; }
 	if (!need(pos, 4)) return fail("Tokenizer: truncated special blob_len");
@@ -385,7 +399,7 @@ bool ParseUni(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	if (pos + size_t(dn) * 4 > sz) return fail("UnicodeTables: truncated decomp cps");
 	std::vector<uint32_t> dcps(dn);
 	for (uint32_t i = 0; i < dn; ++i) { dcps[i] = Rd32(d + pos); pos += 4; }
-	if (pos + size_t(dn + 1) * 4 > sz) return fail("UnicodeTables: truncated decomp offsets");
+	if (uint64_t(pos) + (uint64_t(dn) + 1) * 4 > uint64_t(sz)) return fail("UnicodeTables: truncated decomp offsets");
 	std::vector<uint32_t> doff(dn + 1);
 	for (uint32_t i = 0; i <= dn; ++i) { doff[i] = Rd32(d + pos); pos += 4; }
 	if (pos + 4 > sz) return fail("UnicodeTables: truncated decomp seq_len");

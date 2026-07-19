@@ -21,7 +21,6 @@ import hashlib
 import json
 import struct
 import sys
-import unicodedata
 from pathlib import Path
 
 import sslm_format as F
@@ -54,21 +53,6 @@ def bytes_to_unicode():
 
 BYTE_ENCODER = bytes_to_unicode()
 BYTE_DECODER = {c: b for b, c in BYTE_ENCODER.items()}
-
-
-# --- Unicode classification, from the pinned unicodedata version ----------------
-def is_letter(cp):
-    return unicodedata.category(chr(cp))[0] == "L"
-
-
-def is_number(cp):
-    return unicodedata.category(chr(cp))[0] == "N"
-
-
-def is_space(ch):
-    # Python's \s over Unicode: whitespace per the Unicode property, matching the
-    # `regex`/onig \s the reference tokenizer uses.
-    return ch.isspace() or ch in "\x1c\x1d\x1e\x1f\x85"
 
 
 # --- The tokenizer tables extracted from an HF checkpoint -----------------------
