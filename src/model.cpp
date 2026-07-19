@@ -10,7 +10,9 @@
 // silent partial view. Standard library only (D-SLM13).
 #include "superslm/model.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <unordered_set>
 
 namespace superslm {
 
@@ -122,9 +124,12 @@ SslmModelStatus SslmTensorManifest::Parse(const SslmSectionView& section,
 	// --- Descriptors (all descriptor bytes are now known in-bounds) ---
 	std::vector<SslmTensorView> tensors;
 	tensors.reserve(tensor_count);
-	// Accepted tensors' byte ranges [start, end), for the overlap check.
+	// Accepted tensors' byte ranges [start, end), for the post-loop overlap check.
 	std::vector<std::pair<uint64_t, uint64_t>> ranges;
 	ranges.reserve(tensor_count);
+	// Names seen so far, for O(1) duplicate detection (S2a-1: was an O(n^2) scan).
+	std::unordered_set<std::string_view> seen_names;
+	seen_names.reserve(tensor_count);
 
 	for (uint32_t i = 0; i < tensor_count; ++i) {
 		const uint8_t* d = base + kManifestHeaderBytes + uint64_t(i) * kTensorDescBytes;
@@ -143,10 +148,8 @@ SslmModelStatus SslmTensorManifest::Parse(const SslmSectionView& section,
 		if (uint64_t(name_off) + name_len > name_blob_len)
 			return Reject(SslmModelStatus::BadTensorName, err, "tensor name range outside the name blob");
 		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
-		for (const auto& t : tensors) {
-			if (t.name == name)
-				return Reject(SslmModelStatus::DuplicateTensorName, err, "duplicate tensor name");
-		}
+		if (!seen_names.insert(name).second)
+			return Reject(SslmModelStatus::DuplicateTensorName, err, "duplicate tensor name");
 
 		// Rank.
 		if (rank == 0 || rank > kMaxTensorRank)
@@ -184,14 +187,9 @@ SslmModelStatus SslmTensorManifest::Parse(const SslmSectionView& section,
 		if (data_off > size || nbytes > size - data_off)
 			return Reject(SslmModelStatus::TensorOutOfBounds, err, "tensor data range exceeds the section");
 
-		// Overlap against every earlier tensor (half-open ranges; nbytes >= 1 always,
-		// since rank >= 1 forces product >= 1 and element_size >= 1).
-		const uint64_t start = data_off, end = data_off + nbytes;
-		for (const auto& r : ranges) {
-			if (start < r.second && r.first < end)
-				return Reject(SslmModelStatus::TensorOverlap, err, "tensor data range overlaps another tensor");
-		}
-		ranges.emplace_back(start, end);
+		// Record this tensor's byte range for the post-loop overlap check (half-open;
+		// nbytes >= 1 always, since rank >= 1 forces product >= 1 and element_size >= 1).
+		ranges.emplace_back(data_off, data_off + nbytes);
 
 		SslmTensorView tv;
 		tv.name = name;
@@ -201,6 +199,15 @@ SslmModelStatus SslmTensorManifest::Parse(const SslmSectionView& section,
 		tv.data = base + data_off;
 		tv.elem_count = elem_count;
 		tensors.push_back(tv);
+	}
+
+	// No two tensors' data ranges may overlap. Sorting by start reduces this from an
+	// O(n^2) pairwise scan to O(n log n): once sorted, a range can only overlap its
+	// immediate predecessor, so a single adjacent pass detects any overlap (S2a-1).
+	std::sort(ranges.begin(), ranges.end());
+	for (size_t i = 1; i < ranges.size(); ++i) {
+		if (ranges[i].first < ranges[i - 1].second)
+			return Reject(SslmModelStatus::TensorOverlap, err, "tensor data range overlaps another tensor");
 	}
 
 	out.tensors_ = std::move(tensors);
