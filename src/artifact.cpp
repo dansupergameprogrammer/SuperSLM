@@ -49,12 +49,13 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 	switch (static_cast<SslmSectionType>(type)) {
 		case SslmSectionType::Weights: return SslmDtype::Int8;
 		case SslmSectionType::Biases: return SslmDtype::Int32;
+		// WeightScales is a WSC1 tensor manifest of int32 (identity,mult,shift) fold ops.
+		case SslmSectionType::WeightScales: return SslmDtype::Int32;
 		case SslmSectionType::RopeTables: return SslmDtype::Int64;
-		// All JSON / opaque-byte sections are Raw.
+		// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON).
 		case SslmSectionType::Config:
 		case SslmSectionType::Provenance:
 		case SslmSectionType::Scales:
-		case SslmSectionType::WeightScales:
 		case SslmSectionType::CompositionConstants:
 		case SslmSectionType::KvLandingScales:
 		case SslmSectionType::KvLandingReciprocals:

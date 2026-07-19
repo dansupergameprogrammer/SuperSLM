@@ -33,6 +33,8 @@ inline constexpr uint32_t kManifestVersion = 1;
 inline constexpr uint8_t kWeightsMagic[4] = {'W', 'G', 'T', '1'};
 inline constexpr uint8_t kBiasesMagic[4] = {'B', 'I', 'A', '1'};
 inline constexpr uint8_t kRopeMagic[4] = {'R', 'O', 'P', '1'};
+// WeightScales is a tensor manifest too (int32 (identity,mult,shift) fold ops); its magic.
+inline constexpr uint8_t kWeightScalesMagic[4] = {'W', 'S', 'C', '1'};
 
 // Keyed numeric-constant geometry (v1). See docs/sslm_format.md "Keyed numeric-constant
 // blob — KVC1". The three keyed integer-constant sections (CompositionConstants,
@@ -42,6 +44,37 @@ inline constexpr uint32_t kMaxConstantEntries = 1048576;
 inline constexpr uint32_t kConstantHeaderBytes = 24;  // magic+version+count+value_words+name_blob_len+reserved
 inline constexpr uint32_t kConstantDescBytes = 8;     // name_off + name_len
 inline constexpr uint8_t kConstantsMagic[4] = {'K', 'V', 'C', '1'};
+
+// Config blob (v1). A fixed 84-byte CFG1 struct. See docs/sslm_format.md "Config blob".
+inline constexpr uint32_t kConfigBytes = 84;
+inline constexpr uint8_t kConfigMagic[4] = {'C', 'F', 'G', '1'};
+
+// KV quantization width (Config.kv_precision).
+enum class SslmKvPrecision : uint32_t {
+	Int8 = 0,
+	Int16 = 1,
+};
+
+// The model's architecture, parsed from the CFG1 Config section. The eight dimension
+// fields are guaranteed nonzero; enum/bool fields are guaranteed in range.
+struct SslmModelConfig {
+	uint32_t hidden_size = 0;
+	uint32_t num_hidden_layers = 0;
+	uint32_t num_attention_heads = 0;
+	uint32_t num_key_value_heads = 0;
+	uint32_t head_dim = 0;
+	uint32_t intermediate_size = 0;
+	uint32_t vocab_size = 0;
+	uint32_t context_cap = 0;
+	bool tie_word_embeddings = false;
+	SslmKvPrecision kv_precision = SslmKvPrecision::Int8;
+	uint32_t kv_block_size = 0;
+	uint32_t unicode_major = 0;
+	uint32_t unicode_minor = 0;
+	uint32_t unicode_patch = 0;
+	double rope_theta = 0.0;   // recorded; not read by a kernel (offline RoPE-table input)
+	double rms_norm_eps = 0.0; // recorded; the integer RMSNorm carries no eps term
+};
 
 // A validated view of one tensor packed in an array section's manifest. `data` points
 // into the artifact's owned buffer and is valid for the artifact's lifetime; `name`
@@ -84,6 +117,14 @@ enum class SslmModelStatus {
 	EmptyEntryName,             // an entry's name_len == 0
 	DuplicateEntryName,         // two entries carry the same name
 	BadConstantsReserved,       // the KVC1 header reserved field != 0
+	// --- CFG1 config sub-parse ---
+	BadConfigSize,              // Config section byte_size != kConfigBytes
+	BadConfigMagic,             // first four bytes are not 'CFG1'
+	UnsupportedConfigVersion,   // CFG1 version != kManifestVersion
+	BadConfigDim,               // a required dimension field is 0
+	BadKvPrecision,             // kv_precision not in {0,1}
+	BadConfigBool,              // tie_word_embeddings not in {0,1}
+	BadConfigReserved,          // the CFG1 reserved field != 0
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -160,6 +201,12 @@ public:
 private:
 	std::vector<SslmConstantEntry> entries_;
 };
+
+// Parse the CFG1 Config section into `out`. The section must already be validated by
+// SslmArtifact. Rejects (fails closed, `out` left default) on a wrong size/magic/version,
+// a zero dimension, an out-of-range enum/bool, or a nonzero reserved field — the §11
+// reject-over-degrade law for config. Never throws.
+SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out, std::string* err);
 
 } // namespace superslm
 

@@ -54,6 +54,7 @@ class Dtype:
 EXPECTED_DTYPE = {
     SectionType.WEIGHTS: Dtype.INT8,
     SectionType.BIASES: Dtype.INT32,
+    SectionType.WEIGHT_SCALES: Dtype.INT32,  # WSC1 tensor manifest of (identity,mult,shift) fold ops
     SectionType.ROPE_TABLES: Dtype.INT64,
 }  # everything else -> RAW
 

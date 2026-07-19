@@ -84,13 +84,13 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 
 | Value | Name                    | dtype        | Slot | Notes                                              |
 |------:|-------------------------|--------------|------|----------------------------------------------------|
-|     0 | `Config`                | `Json`       | S0   | model config, read from `config.json` (§11); **required** |
+|     0 | `Config`                | `Raw`        | S0   | model config — a fixed `CFG1` binary struct (§ "Config blob"); **required** |
 |     1 | `Provenance`            | `Json`       | S0   | checkpoint name, license id, source hash (§11)     |
 |     2 | `Weights`               | `Int8`       | S0   | quantized weight blocks                            |
 |     3 | `Biases`                | `Int32`      | S0   | quantized biases                                   |
 |     4 | `RopeTables`            | `Int64`      | S0   | RoPE tables (§6.4)                                 |
 |     5 | `Scales`                | `Json`       | S0   | `StaticScales` (requant / rescale / nonlinear)     |
-|     6 | `WeightScales`          | `Json`       | S0   | per-block weight scales                            |
+|     6 | `WeightScales`          | `Int32`      | S0   | per-channel C24/C25 fold ops — a `WSC1` tensor manifest (§ "Weight-scale fold blob") |
 |     7 | `CompositionConstants`  | `Json`       | S0   | pinned composition constants (§6.8)                |
 |     8 | `KvLandingScales`       | `Json`       | S0   | per-head KV landing scales (C27)                   |
 |     9 | `KvLandingReciprocals`  | `Json`       | S0   | per-head KV landing reciprocals (C27)              |
@@ -265,6 +265,54 @@ the structural parse's); the parse guarantees only that `entry_count` tuples of 
 assembly, so the value array needs no alignment.
 
 `kMaxConstantEntries` is declared in `include/superslm/model.h`.
+
+### Config blob — `CFG1`
+
+The `Config` section (type 0, **required**) is a single fixed-layout binary struct — the model's
+architecture, read once at load into typed fields. Fixed rather than keyed because the field set is
+closed for v1, and a fixed struct needs no name table or bounds arithmetic. The runtime integer
+fields drive the forward; `rope_theta`/`rms_norm_eps` are recorded for reproducibility (the RoPE
+tables are precomputed offline from θ, and the integer RMSNorm carries no eps term — neither is read
+by a kernel). All little-endian; the total is exactly **84 bytes**.
+
+| Offset | Type | Field | Constraint |
+|-------:|------|-------|------------|
+| 0  | `u8[4]` | magic | `'CFG1'` |
+| 4  | `u32` | version | `1` |
+| 8  | `u32` | hidden_size | `> 0` |
+| 12 | `u32` | num_hidden_layers | `> 0` |
+| 16 | `u32` | num_attention_heads | `> 0` |
+| 20 | `u32` | num_key_value_heads | `> 0` |
+| 24 | `u32` | head_dim | `> 0` |
+| 28 | `u32` | intermediate_size | `> 0` |
+| 32 | `u32` | vocab_size | `> 0` |
+| 36 | `u32` | context_cap | `> 0` |
+| 40 | `u32` | tie_word_embeddings | `0` or `1` |
+| 44 | `u32` | kv_precision | `0` (int8) or `1` (int16) |
+| 48 | `u32` | kv_block_size | `> 0` |
+| 52 | `u32` | unicode_major | (recorded; the tokenizer's pinned Unicode version) |
+| 56 | `u32` | unicode_minor | |
+| 60 | `u32` | unicode_patch | |
+| 64 | `u32` | reserved | `== 0` |
+| 68 | `f64` | rope_theta | recorded (offline RoPE-table input; not read at runtime) |
+| 76 | `f64` | rms_norm_eps | recorded (the integer RMSNorm carries no eps term) |
+
+`ModelView` config parse rejects on: `byte_size != 84`; a wrong magic or version; any of the eight
+dimension fields `== 0`; `tie_word_embeddings`/`kv_precision` outside their allowed set; a nonzero
+`reserved`. This is the §11 reject-over-degrade law applied to config — a zero dimension or a
+defaulted field produces "a model that loads, runs, generates fluent text, and is not the source
+model" (§6.8 C15), so it is rejected, never repaired.
+
+### Weight-scale fold blob — `WSC1` (reuses the tensor manifest)
+
+`WeightScales` (type 6, dtype **`Int32`**) does not need a new sub-format: each projection's
+per-output-channel C24/C25 fold ops are `(identity, mult, shift)` int32 triples, i.e. a named
+`int32` tensor of shape `[num_channels, 3]`. So `WeightScales` is a **tensor manifest** exactly like
+`Weights`/`Biases`/`RopeTables`, with its own magic `'WSC1'` and element type `int32`; it is parsed
+by the same `SslmTensorManifest::Parse` (already certified, S2.0a). Column 0 of each row is the
+identity flag (`0`/`1`), column 1 the `mult`, column 2 the `shift`. The attention-context per-head
+fold (C27/D-SLM57) rides the same section under `{prefix}.ctx_fold_head{h}` keys. No parse code is
+added — only the magic and the `int32` element type, per the tensor-manifest rules above.
 
 ## Versioning
 

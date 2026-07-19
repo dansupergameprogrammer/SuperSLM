@@ -76,6 +76,13 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::EmptyEntryName: return "EmptyEntryName";
 		case SslmModelStatus::DuplicateEntryName: return "DuplicateEntryName";
 		case SslmModelStatus::BadConstantsReserved: return "BadConstantsReserved";
+		case SslmModelStatus::BadConfigSize: return "BadConfigSize";
+		case SslmModelStatus::BadConfigMagic: return "BadConfigMagic";
+		case SslmModelStatus::UnsupportedConfigVersion: return "UnsupportedConfigVersion";
+		case SslmModelStatus::BadConfigDim: return "BadConfigDim";
+		case SslmModelStatus::BadKvPrecision: return "BadKvPrecision";
+		case SslmModelStatus::BadConfigBool: return "BadConfigBool";
+		case SslmModelStatus::BadConfigReserved: return "BadConfigReserved";
 	}
 	return "Unknown";
 }
@@ -105,6 +112,7 @@ const uint8_t* ManifestMagicFor(SslmSectionType type) noexcept {
 		case SslmSectionType::Weights: return kWeightsMagic;
 		case SslmSectionType::Biases: return kBiasesMagic;
 		case SslmSectionType::RopeTables: return kRopeMagic;
+		case SslmSectionType::WeightScales: return kWeightScalesMagic;
 		default: return nullptr;
 	}
 }
@@ -340,6 +348,14 @@ int64_t SslmKeyedConstants::Value(const SslmConstantEntry& entry, uint32_t w) no
 	uint64_t v = 0;
 	for (int i = 0; i < 8; ++i) v |= uint64_t(p[i]) << (8 * i);
 	return static_cast<int64_t>(v);
+}
+
+// STUB (S2.0b, red-first): not implemented. Leaves `out` at defaults and reports Ok so
+// the CFG1 red suite fails until the parse is built.
+SslmModelStatus ParseConfig(const SslmSectionView& /*section*/, SslmModelConfig& out,
+                            std::string* /*err*/) {
+	out = SslmModelConfig{};
+	return SslmModelStatus::Ok;
 }
 
 } // namespace superslm
