@@ -1,0 +1,14 @@
+# Any file whose bytes are hashed as an input to conversion, calibration, or a
+# determinism gate MUST carry an explicit eol=lf attribute. A bare `text=auto`
+# checks out CRLF on Windows and LF on Linux, so a SHA-256 over the file differs
+# by platform — a hash that certifies nothing in a formula whose entire job is
+# cross-platform identity. (SuperSLM_Plan.md §11, bench 2026-07-14.)
+*.jsonl text eol=lf
+*.json  text eol=lf
+tests/golden/**  -text
+*.sslm  binary
+
+# Source: normalized to LF in the repo, tool-native on checkout.
+*.h    text
+*.cpp  text
+*.md   text

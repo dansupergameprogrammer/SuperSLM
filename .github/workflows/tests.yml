@@ -1,0 +1,44 @@
+name: tests
+
+on: [push, pull_request]
+
+# S0 gate (SuperSLM_Plan.md §19): the loader coverage suite green on the full
+# matrix. The determinism cross-device hash gate over the kernel path arrives with
+# S2/S3; at S0 the matrix proves the artifact loader + format validation build and
+# pass identically on every toolchain.
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build
+      - run: cmake --build build --config Release
+      - shell: pwsh
+        run: |
+          $out = & build/Release/superslm_tests.exe
+          Write-Output $out
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: ./build/superslm_tests
+
+  linux-x64-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
+      - run: cmake --build build
+      - run: ./build/superslm_tests
+
+  macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build
+      - run: ./build/superslm_tests

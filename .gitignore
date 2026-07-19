@@ -1,0 +1,11 @@
+build/
+out/
+out-clang/
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.lib
+.vs/
+.idea/
+__pycache__/

@@ -1,0 +1,155 @@
+// SuperSLM artifact format (`.sslm`) — version 1.
+//
+// The runtime C++ loader for a converted, quantized model. This header is the
+// machine-readable contract for the format specified in docs/sslm_format.md; the
+// two must agree byte-for-byte. Standard library only — Layer 1 is independently
+// embeddable, no third-party runtime dependency (DecisionLog D-SLM13).
+//
+// The loader is a trust boundary (SuperSLM_Plan.md §17 dim 2): every field of the
+// file is treated as hostile input and validated against declared bounds before any
+// section byte is read. Deviation is rejection with a versioned diagnostic, never a
+// silent partial load (§11, reject-over-degrade).
+#ifndef SUPERSLM_ARTIFACT_H
+#define SUPERSLM_ARTIFACT_H
+
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace superslm {
+
+// Bumped on any field-layout change, new required section, or integrity-hash change.
+inline constexpr uint32_t kArtifactFormatVersion = 1;
+
+// Header/table geometry (v1). See docs/sslm_format.md "Byte layout".
+inline constexpr uint32_t kHeaderBytes = 64;
+inline constexpr uint32_t kSectionDescBytes = 40;
+inline constexpr uint32_t kMaxSections = 4096;
+inline constexpr uint32_t kIntegrityHashOffset = 32; // where integrity_sha256 begins
+inline constexpr uint32_t kIntegrityHashBytes = 32;
+inline constexpr uint8_t kMagic[4] = {'S', 'S', 'L', 'M'};
+
+enum class SslmSectionType : uint32_t {
+	Config = 0,
+	Provenance = 1,
+	Weights = 2,
+	Biases = 3,
+	RopeTables = 4,
+	Scales = 5,
+	WeightScales = 6,
+	CompositionConstants = 7,
+	KvLandingScales = 8,
+	KvLandingReciprocals = 9,
+	Calibration = 10,
+	GoldenHashes = 11,
+	// Reserved — introduced at later slots; a v1 artifact may carry them but the
+	// loader does not yet interpret their contents.
+	Tokenizer = 20,   // S1
+	ChatTemplate = 21, // S1
+	SchemaMasks = 30,  // S5
+};
+
+enum class SslmDtype : uint32_t {
+	Raw = 0,     // byte stream (JSON sections use this)
+	Int8 = 1,
+	Int32 = 2,
+	Int64 = 3,
+	Uint8 = 4,
+	Float32 = 5,
+	Float64 = 6,
+};
+
+// Byte width of a dtype element; 0 for an unknown dtype value.
+uint32_t DtypeSize(uint32_t dtype) noexcept;
+
+// True if the value names a section type the v1 loader recognizes.
+bool IsKnownSectionType(uint32_t type) noexcept;
+
+// Every way a `.sslm` can be rejected. `Ok` is the only non-error value.
+enum class SslmStatus {
+	Ok = 0,
+	Truncated,           // file smaller than the header/table it declares
+	BadMagic,            // first four bytes are not "SSLM"
+	UnsupportedVersion,  // format_version != kArtifactFormatVersion
+	BadHeader,           // header_bytes wrong, or a reserved field nonzero
+	TooManySections,     // section_count > kMaxSections
+	FileSizeMismatch,    // header file_bytes != actual size
+	BadAlignment,        // a section alignment is not a power of two in [8,4096]
+	Misaligned,          // a section offset is not a multiple of its alignment
+	SectionOutOfBounds,  // a section range exceeds the file (or overflows)
+	SectionOverlap,      // a section overlaps the header/table or another section
+	BadDtype,            // a section dtype is unknown
+	SizeMismatch,        // byte_size != elem_count * dtype_size
+	UnknownSection,      // a section type outside the v1 set
+	DuplicateSection,    // the same section type appears twice
+	MissingSection,      // a required section (Config) is absent
+	IntegrityMismatch,   // recomputed SHA-256 != stored integrity hash
+	IoError,             // the file could not be read (OpenFromFile only)
+};
+
+// Human-readable name for a status, for diagnostics and test messages.
+const char* SslmStatusName(SslmStatus s) noexcept;
+
+inline constexpr uint32_t kNoSection = 0xFFFFFFFFu;
+
+// A rejection: the code, which section tripped it (or kNoSection), and a message
+// carrying the offending values.
+struct SslmError {
+	SslmStatus code = SslmStatus::Ok;
+	uint32_t section_index = kNoSection;
+	std::string message;
+};
+
+// A validated, in-place view of one section's bytes. `data` points into the
+// artifact's owned buffer and is valid for the artifact's lifetime.
+struct SslmSectionView {
+	SslmSectionType type{};
+	SslmDtype dtype{};
+	const uint8_t* data = nullptr;
+	uint64_t byte_size = 0;
+	uint64_t elem_count = 0;
+	uint32_t alignment = 0;
+};
+
+// A loaded, fully validated `.sslm`. Constructed only through Open*; a default
+// instance is empty and Ok()==false.
+class SslmArtifact {
+public:
+	SslmArtifact() = default;
+
+	// Validate `size` bytes at `data` as a v1 `.sslm`. On Ok, `out` owns a copy of
+	// the bytes and exposes the header + sections. On any error, `out` is left empty
+	// and `err` (if non-null) carries the diagnostic. Never throws; never reads a
+	// section byte before the file passes every structural check.
+	static SslmStatus OpenFromMemory(const uint8_t* data, size_t size,
+	                                 SslmArtifact& out, SslmError* err);
+
+	// Read the file at `path`, then OpenFromMemory. IoError if the file is unreadable.
+	static SslmStatus OpenFromFile(const char* path, SslmArtifact& out, SslmError* err);
+
+	bool Ok() const noexcept { return ok_; }
+	uint32_t FormatVersion() const noexcept { return format_version_; }
+	uint64_t FileBytes() const noexcept { return file_bytes_; }
+
+	// Lowercase hex of the stored integrity hash (the artifact's fingerprint).
+	std::string FingerprintHex() const;
+
+	const std::vector<SslmSectionView>& Sections() const noexcept { return sections_; }
+
+	// The section of the given type, or nullptr if absent.
+	const SslmSectionView* Section(SslmSectionType type) const noexcept;
+
+private:
+	bool ok_ = false;
+	uint32_t format_version_ = 0;
+	uint64_t file_bytes_ = 0;
+	uint8_t integrity_[kIntegrityHashBytes] = {};
+	std::vector<uint8_t> bytes_;              // owned copy of the whole file
+	std::vector<SslmSectionView> sections_;   // views into bytes_
+};
+
+} // namespace superslm
+
+#endif // SUPERSLM_ARTIFACT_H
