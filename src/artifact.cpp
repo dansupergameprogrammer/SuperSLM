@@ -48,7 +48,8 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 SslmDtype ExpectedDtype(uint32_t type) noexcept {
 	switch (static_cast<SslmSectionType>(type)) {
 		case SslmSectionType::Weights: return SslmDtype::Int8;
-		case SslmSectionType::Biases: return SslmDtype::Int32;
+		// Biases carries the C28 dynamic-bias codes (int64 — they reach ~10^14 at q_b=30).
+		case SslmSectionType::Biases: return SslmDtype::Int64;
 		// WeightScales is a WSC1 tensor manifest of int32 (identity,mult,shift) fold ops.
 		case SslmSectionType::WeightScales: return SslmDtype::Int32;
 		case SslmSectionType::RopeTables: return SslmDtype::Int64;

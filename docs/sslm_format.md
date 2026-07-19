@@ -87,7 +87,7 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |     0 | `Config`                | `Raw`        | S0   | model config — a fixed `CFG1` binary struct (§ "Config blob"); **required** |
 |     1 | `Provenance`            | `Json`       | S0   | checkpoint name, license id, source hash (§11)     |
 |     2 | `Weights`               | `Int8`       | S0   | quantized weight blocks                            |
-|     3 | `Biases`                | `Int32`      | S0   | quantized biases                                   |
+|     3 | `Biases`                | `Int64`      | S0   | C28 dynamic-bias codes — a `BIA1` int64 tensor manifest (codes reach ~10¹⁴ at q_b=30) |
 |     4 | `RopeTables`            | `Int64`      | S0   | RoPE tables (§6.4)                                 |
 |     5 | `Scales`                | `Json`       | S0   | `StaticScales` (requant / rescale / nonlinear)     |
 |     6 | `WeightScales`          | `Int32`      | S0   | per-channel C24/C25 fold ops — a `WSC1` tensor manifest (§ "Weight-scale fold blob") |
@@ -178,8 +178,9 @@ element width; the manifest names and shapes the tensors packed into the section
 | Section (type)         | Magic    | Element  |
 |------------------------|----------|----------|
 | `Weights` (2)          | `'WGT1'` | `int8`   |
-| `Biases` (3)           | `'BIA1'` | `int32`  |
+| `Biases` (3)           | `'BIA1'` | `int64`  |
 | `RopeTables` (4)       | `'ROP1'` | `int64`  |
+| `WeightScales` (6)     | `'WSC1'` | `int32`  |
 
 ### Tensor-manifest blob — `WGT1` / `BIA1` / `ROP1`
 

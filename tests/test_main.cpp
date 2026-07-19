@@ -424,8 +424,8 @@ static void TestRejectsSectionDtypeMismatch() {
 
 static void TestRejectsSizeMismatch() {
 	FixtureSection biases =
-	    MakeSection(SslmSectionType::Biases, SslmDtype::Int32, EncodeInt32LE({1, 2, 3, 4}));  // 16 bytes, 4 elems
-	biases.elem_count_override = 3;  // 16 != 3 * 4
+	    MakeSection(SslmSectionType::Biases, SslmDtype::Int64, EncodeInt64LE({1, 2, 3, 4}));  // 32 bytes, 4 elems
+	biases.elem_count_override = 3;  // 32 != 3 * 8
 	auto built = BuildArtifact({MakeConfigSection(), biases});
 
 	SslmArtifact out;
@@ -639,8 +639,8 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	    MakeSection(SslmSectionType::Weights, SslmDtype::Int8,
 	                EncodeInt8({-5, 0, 7, 127, -128, 3, 3, 3}), /*alignment=*/64);
 	FixtureSection biases =
-	    MakeSection(SslmSectionType::Biases, SslmDtype::Int32,
-	                EncodeInt32LE({1000, -2000, 0, 123456}), /*alignment=*/64);
+	    MakeSection(SslmSectionType::Biases, SslmDtype::Int64,
+	                EncodeInt64LE({1000, -2000, 0, 123456}), /*alignment=*/64);
 	FixtureSection rope =
 	    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64,
 	                EncodeInt64LE({1, -1, 123456789012LL, 0}), /*alignment=*/64);
@@ -678,7 +678,7 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	const Expected expected[] = {
 	    {SslmSectionType::Config, SslmDtype::Raw, &config.data, config.data.size(), 64},
 	    {SslmSectionType::Weights, SslmDtype::Int8, &weights.data, 8, 64},
-	    {SslmSectionType::Biases, SslmDtype::Int32, &biases.data, 4, 64},
+	    {SslmSectionType::Biases, SslmDtype::Int64, &biases.data, 4, 64},
 	    {SslmSectionType::RopeTables, SslmDtype::Int64, &rope.data, 4, 64},
 	};
 	for (const auto& e : expected) {

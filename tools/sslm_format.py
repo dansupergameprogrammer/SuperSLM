@@ -53,7 +53,7 @@ class Dtype:
 # the loader rejects a mismatch with SectionDtypeMismatch).
 EXPECTED_DTYPE = {
     SectionType.WEIGHTS: Dtype.INT8,
-    SectionType.BIASES: Dtype.INT32,
+    SectionType.BIASES: Dtype.INT64,  # BIA1: C28 dynamic-bias codes reach ~10^14 at q_b=30
     SectionType.WEIGHT_SCALES: Dtype.INT32,  # WSC1 tensor manifest of (identity,mult,shift) fold ops
     SectionType.ROPE_TABLES: Dtype.INT64,
 }  # everything else -> RAW
