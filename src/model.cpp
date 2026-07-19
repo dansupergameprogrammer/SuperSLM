@@ -250,11 +250,81 @@ const SslmTensorView* SslmTensorManifest::Tensor(std::string_view name) const no
 	return nullptr;
 }
 
-// STUB (S2.0b, red-first): not implemented. Leaves `out` empty and reports Ok so the
-// KVC1 red suite fails until the parse is built.
-SslmModelStatus SslmKeyedConstants::Parse(const SslmSectionView& /*section*/,
-                                          SslmKeyedConstants& out, std::string* /*err*/) {
+SslmModelStatus SslmKeyedConstants::Parse(const SslmSectionView& section,
+                                          SslmKeyedConstants& out, std::string* err) {
 	out.entries_.clear();
+	if (err) err->clear();
+
+	const uint8_t* base = section.data;
+	const uint64_t size = section.byte_size;
+
+	// --- Header ---
+	if (base == nullptr || size < kConstantHeaderBytes)
+		return Reject(SslmModelStatus::SectionTooShort, err, "section smaller than the KVC1 header");
+
+	const uint8_t* magic = ConstantsMagicFor(section.type);
+	if (magic == nullptr)
+		return Reject(SslmModelStatus::BadConstantsMagic, err, "section type carries no keyed-constant table");
+	for (int i = 0; i < 4; ++i) {
+		if (base[i] != magic[i])
+			return Reject(SslmModelStatus::BadConstantsMagic, err, "KVC1 magic mismatch");
+	}
+
+	if (RdU32(base + 4) != kManifestVersion)
+		return Reject(SslmModelStatus::UnsupportedConstantsVersion, err, "unsupported KVC1 version");
+
+	const uint32_t entry_count = RdU32(base + 8);
+	if (entry_count > kMaxConstantEntries)
+		return Reject(SslmModelStatus::TooManyConstantEntries, err, "entry_count exceeds kMaxConstantEntries");
+
+	// value_words is validated before it is used in the size computation below.
+	const uint32_t value_words = RdU32(base + 12);
+	if (value_words != ExpectedValueWords(section.type))
+		return Reject(SslmModelStatus::BadValueWords, err, "value_words is not the section type's required count");
+
+	if (RdU32(base + 20) != 0)
+		return Reject(SslmModelStatus::BadConstantsReserved, err, "KVC1 header reserved field != 0");
+
+	const uint32_t name_blob_len = RdU32(base + 16);
+
+	// Total size in 64-bit: name_blob_len is an uncapped u32, so header + descriptors +
+	// values + name blob can exceed 2^32 (a 32-bit sum would wrap and wrongly accept).
+	// entry_count <= kMaxConstantEntries (2^20) and value_words <= 3, so the descriptor
+	// and value products cannot themselves overflow u64.
+	const uint64_t values_off = uint64_t(kConstantHeaderBytes) + uint64_t(entry_count) * kConstantDescBytes;
+	const uint64_t name_blob_off = values_off + uint64_t(entry_count) * value_words * 8;
+	const uint64_t total = name_blob_off + name_blob_len;
+	if (total > size)
+		return Reject(SslmModelStatus::ConstantsOutOfBounds, err,
+		              "header + descriptors + values + name blob exceed the section");
+
+	// --- Entries (all descriptor/value/name bytes are now known in-bounds) ---
+	std::vector<SslmConstantEntry> entries;
+	entries.reserve(entry_count);
+	std::unordered_set<std::string_view> seen_names;
+	seen_names.reserve(entry_count);
+
+	for (uint32_t i = 0; i < entry_count; ++i) {
+		const uint8_t* d = base + kConstantHeaderBytes + uint64_t(i) * kConstantDescBytes;
+		const uint32_t name_off = RdU32(d + 0);
+		const uint32_t name_len = RdU32(d + 4);
+
+		if (name_len == 0)
+			return Reject(SslmModelStatus::EmptyEntryName, err, "entry name is empty");
+		if (uint64_t(name_off) + name_len > name_blob_len)
+			return Reject(SslmModelStatus::BadEntryName, err, "entry name range outside the name blob");
+		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
+		if (!seen_names.insert(name).second)
+			return Reject(SslmModelStatus::DuplicateEntryName, err, "duplicate entry name");
+
+		SslmConstantEntry e;
+		e.name = name;
+		e.values = base + values_off + uint64_t(i) * value_words * 8;
+		e.value_words = value_words;
+		entries.push_back(e);
+	}
+
+	out.entries_ = std::move(entries);
 	return SslmModelStatus::Ok;
 }
 
