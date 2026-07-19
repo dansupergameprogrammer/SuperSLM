@@ -10,7 +10,7 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -B build
       - run: cmake --build build --config Release
       - shell: pwsh
@@ -22,7 +22,7 @@ jobs:
   linux-x64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -30,7 +30,7 @@ jobs:
   linux-x64-asan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -38,7 +38,7 @@ jobs:
   macos-arm64:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
