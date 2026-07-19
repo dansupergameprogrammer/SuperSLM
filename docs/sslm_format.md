@@ -160,6 +160,69 @@ Pinned Unicode data (version recorded in the `Config` section) for NFC and the
 | decomp | `u32 count`, `u32 cp[count]`, `u32 off[count+1]`, `u32 seq_len`, `u32 seq[seq_len]` | full canonical decomposition (Hangul is algorithmic, not tabled) |
 | compose | `u32 count`, `(u32 a, u32 b, u32 c)[count]` | primary composites `(a,b)→c` |
 
+## Model sub-formats (S2)
+
+The array-bearing model sections carry a self-contained binary **tensor manifest** with
+their concatenated tensor data, parsed by the runtime `ModelView` **after** the loader
+has verified whole-file integrity. Like the tokenizer blobs (`TOK1`/`UNI1`), the parse
+then trusts the bytes are intact but still **fails closed** on a bad marker, an
+out-of-bounds range, or a descriptor that disagrees with its declared shape — the same
+hostile-input trust boundary the loader itself is (§17 dim 2), certified to the T-129 bar.
+All fields are little-endian and read by explicit byte assembly (never a struct cast over
+untrusted bytes). The converter that writes them is `tools/convert_model.py`.
+
+The three array sections share **one manifest layout**; only the magic and the element
+type differ. The section's declared dtype (the section-types table) already fixes the
+element width; the manifest names and shapes the tensors packed into the section's data.
+
+| Section (type)         | Magic    | Element  |
+|------------------------|----------|----------|
+| `Weights` (2)          | `'WGT1'` | `int8`   |
+| `Biases` (3)           | `'BIA1'` | `int32`  |
+| `RopeTables` (4)       | `'ROP1'` | `int64`  |
+
+### Tensor-manifest blob — `WGT1` / `BIA1` / `ROP1`
+
+All byte offsets below are **from the start of the section** (the magic byte).
+
+| Field | Type | Notes |
+|---|---|---|
+| magic | `u8[4]` | `'WGT1'` \| `'BIA1'` \| `'ROP1'`, matching the section type |
+| version | `u32` | `1` |
+| tensor_count | `u32` | `<= kMaxTensors` (65536) |
+| name_blob_len | `u32` | byte length of the name blob |
+| descriptors | `TensorDesc[tensor_count]` | fixed **48 bytes** each (below) |
+| name_blob | `u8[name_blob_len]` | UTF-8 tensor names, concatenated (not NUL-terminated) |
+| data | `<element>[...]` | concatenated tensor data; each tensor at its `data_off` |
+
+`TensorDesc` — 48 bytes, fixed:
+
+| Offset | Type | Field | Constraint |
+|-------:|------|-------|------------|
+| 0 | `u32` | `name_off` | `name_off + name_len <= name_blob_len` |
+| 4 | `u32` | `name_len` | `> 0`; the name is unique across the manifest |
+| 8 | `u32` | `rank` | `1 <= rank <= kMaxTensorRank` (4) |
+| 12 | `u32[4]` | `shape` | `shape[i] > 0` for `i < rank`; `shape[i] == 0` for `i >= rank` |
+| 28 | `u64` | `data_off` | multiple of the element size; `>=` end of the name blob; in bounds |
+| 36 | `u64` | `elem_count` | `== product(shape[0..rank))` (64-bit, overflow-checked) |
+| 44 | `u32` | `reserved` | `== 0` |
+
+The name blob begins at `16 + tensor_count*48`; the data region begins at
+`16 + tensor_count*48 + name_blob_len`, rounded up to the element size. A tensor's bytes
+span `[data_off, data_off + elem_count * element_size)`.
+
+The `ModelView` sub-parse rejects (fails closed, never a partial view) on any of: a short
+section (`byte_size < 16`); a wrong magic or version; `tensor_count > kMaxTensors`; the
+fixed header + descriptor table + name blob exceeding `byte_size` (computed in 64-bit — a
+32-bit product is the T-129 defect class); for **any** descriptor — a name range outside
+the name blob, a duplicate name, `rank` outside `[1,4]`, a `shape` entry nonzero at or past
+`rank` or zero before it, an `elem_count` disagreeing with `product(shape)`, a `data_off`
+not element-aligned or below the data region, a data range exceeding `byte_size` or
+overflowing, a nonzero `reserved`; or **any two tensors whose data ranges overlap** (the
+converter packs them contiguously in descriptor order; the loader validates non-overlap).
+
+`kMaxTensors` and `kMaxTensorRank` are declared in `include/superslm/model.h`.
+
 ## Versioning
 
 `format_version` is a single integer. A reader that does not recognize the version

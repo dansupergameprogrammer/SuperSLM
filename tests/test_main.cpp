@@ -9,9 +9,11 @@
 // (SuperSLM_Plan.md §15; §17 Coverage Model) and appended here.
 
 #include "superslm/artifact.h"
+#include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/tokenizer.h"
 #include "sslm_fixtures.h"
+#include "sslm_model_hostile_fixtures.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 
@@ -1319,6 +1321,449 @@ static void TestUni1RejectsComposeCountOverflow() {
 	AssertUni1Rejected(uni1.bytes, "UNI1 compose count == 0xFFFFFFFF");
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input red suite
+// (SuperSLM_Plan.md S2.0a; docs/sslm_format.md "Model sub-formats").
+// SslmTensorManifest::Parse parses one array section's self-contained tensor
+// manifest AFTER SslmArtifact has verified whole-file structure and integrity
+// — a crafted integrity-valid artifact can still carry a malformed manifest
+// inside a validated section, so this sub-parse is its own hostile-input
+// trust boundary, held to the same T-129 bar. src/model.cpp is currently a
+// RED-FIRST STUB: Parse() leaves `out` empty and reports Ok unconditionally,
+// so every cell below is red until the parse is built.
+//
+// Every cell starts from a small spec-faithful manifest (sslm_model_hostile_
+// fixtures.h), mutates exactly one descriptor or header field, and asserts
+// Parse returns the ONE SslmModelStatus its mutation should trigger (not
+// merely "some non-Ok status") — every non-Ok SslmModelStatus value is
+// covered by at least one cell. WGT1 (int8, element_size 1) carries every
+// magic-agnostic structural/per-descriptor cell; BIA1 (int32) and ROP1
+// (int64) carry the element-size-DEPENDENT cells (TensorMisaligned; the
+// elem_count * element_size 32-bit-overflow class), which are unreachable at
+// int8's element_size of 1.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared assertion for every WGT1/BIA1/ROP1 hostile cell below: Parse must
+// reject with the cell's one named status, leave `out` empty, and not crash.
+void AssertManifestRejected(const std::vector<uint8_t>& mutated_bytes, SslmSectionType type, SslmDtype dtype,
+                             SslmModelStatus want, const char* why) {
+	SslmSectionView view = MakeManifestSectionView(type, dtype, mutated_bytes);
+	SslmTensorManifest out;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, out, &err);
+	CHECK_MSG(status == want, "%s: got %s, want %s", why, SslmModelStatusName(status), SslmModelStatusName(want));
+	CHECK_MSG(out.Tensors().empty(), "%s: manifest left %zu tensor(s) on a rejected parse", why,
+	          out.Tensors().size());
+}
+
+}  // namespace
+
+// --- The feature oracles: the minimal fixture each magic's hostile cells
+//     mutate from is itself spec-faithful — it parses to Ok and every tensor's
+//     name/rank/shape/elem_count/dtype/data matches what was declared. Every
+//     hostile cell below attributes a rejection to its one named mutation;
+//     these three cells (one per magic) are what prove the baseline isn't
+//     rejecting -- or silently misreading -- for some unrelated reason. ---
+
+static void TestWgtMinimalManifestParsesAndRoundTrips() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, /*element_size=*/1);
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Weights, SslmDtype::Int8, m.bytes);
+
+	SslmTensorManifest manifest;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, manifest, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WGT1 minimal manifest failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(manifest.Tensors().size() == 4);
+
+	const SslmTensorView* t1 = manifest.Tensor("t1");
+	CHECK_MSG(t1 != nullptr, "Tensor(\"t1\") missing");
+	if (t1) {
+		CHECK(t1->name == "t1");
+		CHECK(t1->dtype == SslmDtype::Int8);
+		CHECK(t1->rank == 1);
+		CHECK(t1->shape[0] == 3);
+		CHECK(t1->elem_count == 3);
+		CHECK_MSG(t1->data == view.data + m.tensor_data_off[0], "t1.data does not point at its declared data_off");
+		CHECK_MSG(t1->data[0] == static_cast<uint8_t>((0 * 31 + 0 * 7 + 11) & 0xFF),
+		          "t1's first data byte does not match the fixture's deterministic pattern");
+	}
+
+	const SslmTensorView* t2 = manifest.Tensor("t2");
+	CHECK_MSG(t2 != nullptr, "Tensor(\"t2\") missing");
+	if (t2) {
+		CHECK(t2->rank == 2);
+		CHECK(t2->shape[0] == 2 && t2->shape[1] == 2);
+		CHECK(t2->elem_count == 4);
+	}
+
+	const SslmTensorView* t3 = manifest.Tensor("t3");
+	CHECK_MSG(t3 != nullptr, "Tensor(\"t3\") missing");
+	if (t3) {
+		CHECK(t3->rank == 3);
+		CHECK(t3->shape[0] == 2 && t3->shape[1] == 1 && t3->shape[2] == 2);
+		CHECK(t3->elem_count == 4);
+	}
+
+	const SslmTensorView* t4 = manifest.Tensor("t4");
+	CHECK_MSG(t4 != nullptr, "Tensor(\"t4\") missing");
+	if (t4) {
+		CHECK(t4->rank == 4);
+		CHECK(t4->shape[0] == 1 && t4->shape[1] == 1 && t4->shape[2] == 1 && t4->shape[3] == 2);
+		CHECK(t4->elem_count == 2);
+		CHECK_MSG(t4->data[1] == static_cast<uint8_t>((3 * 31 + 1 * 7 + 11) & 0xFF),
+		          "t4's second data byte does not match the fixture's deterministic pattern");
+	}
+
+	CHECK_MSG(manifest.Tensor("does-not-exist") == nullptr, "Tensor() lookup miss did not return nullptr");
+}
+
+static void TestBiaMinimalManifestParsesAndRoundTrips() {
+	auto m = MakeMinimalValidManifest(kBiasesMagic, /*element_size=*/4);
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Biases, SslmDtype::Int32, m.bytes);
+
+	SslmTensorManifest manifest;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, manifest, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "BIA1 minimal manifest failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(manifest.Tensors().size() == 4);
+
+	const SslmTensorView* t1 = manifest.Tensor("t1");
+	CHECK_MSG(t1 != nullptr, "Tensor(\"t1\") missing");
+	if (t1) {
+		CHECK(t1->dtype == SslmDtype::Int32);
+		CHECK(t1->rank == 1);
+		CHECK(t1->shape[0] == 3);
+		CHECK(t1->elem_count == 3);
+		CHECK_MSG(t1->data == view.data + m.tensor_data_off[0], "t1.data does not point at its declared data_off");
+		CHECK_MSG(t1->data[0] == static_cast<uint8_t>((0 * 31 + 0 * 7 + 11) & 0xFF),
+		          "t1's first data byte does not match the fixture's deterministic pattern");
+	}
+
+	const SslmTensorView* t4 = manifest.Tensor("t4");
+	CHECK_MSG(t4 != nullptr, "Tensor(\"t4\") missing");
+	if (t4) {
+		CHECK(t4->rank == 4);
+		CHECK(t4->shape[0] == 1 && t4->shape[1] == 1 && t4->shape[2] == 1 && t4->shape[3] == 2);
+		CHECK(t4->elem_count == 2);
+		CHECK_MSG(t4->data == view.data + m.tensor_data_off[3], "t4.data does not point at its declared data_off");
+	}
+
+	CHECK_MSG(manifest.Tensor("does-not-exist") == nullptr, "Tensor() lookup miss did not return nullptr");
+}
+
+static void TestRopMinimalManifestParsesAndRoundTrips() {
+	auto m = MakeMinimalValidManifest(kRopeMagic, /*element_size=*/8);
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::RopeTables, SslmDtype::Int64, m.bytes);
+
+	SslmTensorManifest manifest;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, manifest, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "ROP1 minimal manifest failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(manifest.Tensors().size() == 4);
+
+	const SslmTensorView* t1 = manifest.Tensor("t1");
+	CHECK_MSG(t1 != nullptr, "Tensor(\"t1\") missing");
+	if (t1) {
+		CHECK(t1->dtype == SslmDtype::Int64);
+		CHECK(t1->rank == 1);
+		CHECK(t1->shape[0] == 3);
+		CHECK(t1->elem_count == 3);
+		CHECK_MSG(t1->data == view.data + m.tensor_data_off[0], "t1.data does not point at its declared data_off");
+		CHECK_MSG(t1->data[0] == static_cast<uint8_t>((0 * 31 + 0 * 7 + 11) & 0xFF),
+		          "t1's first data byte does not match the fixture's deterministic pattern");
+	}
+
+	const SslmTensorView* t4 = manifest.Tensor("t4");
+	CHECK_MSG(t4 != nullptr, "Tensor(\"t4\") missing");
+	if (t4) {
+		CHECK(t4->rank == 4);
+		CHECK(t4->shape[0] == 1 && t4->shape[1] == 1 && t4->shape[2] == 1 && t4->shape[3] == 2);
+		CHECK(t4->elem_count == 2);
+		CHECK_MSG(t4->data == view.data + m.tensor_data_off[3], "t4.data does not point at its declared data_off");
+	}
+
+	CHECK_MSG(manifest.Tensor("does-not-exist") == nullptr, "Tensor() lookup miss did not return nullptr");
+}
+
+// --- Section-level / header cells. ---
+
+static void TestManifestRejectsSectionTooShort() {
+	std::vector<uint8_t> bytes(10, 0);  // < kManifestHeaderBytes (16)
+	bytes[0] = 'W';
+	bytes[1] = 'G';
+	bytes[2] = 'T';
+	bytes[3] = '1';
+	AssertManifestRejected(bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::SectionTooShort,
+	                        "WGT1 section too short (10 bytes < 16)");
+}
+
+static void TestManifestRejectsBadMagicWgt() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	m.bytes[0] = 'X';  // was 'W' of "WGT1"
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadManifestMagic,
+	                        "WGT1 bad magic");
+}
+
+static void TestManifestRejectsBadMagicBia() {
+	auto m = MakeMinimalValidManifest(kBiasesMagic, 4);
+	m.bytes[0] = 'X';  // was 'B' of "BIA1"
+	AssertManifestRejected(m.bytes, SslmSectionType::Biases, SslmDtype::Int32, SslmModelStatus::BadManifestMagic,
+	                        "BIA1 bad magic");
+}
+
+static void TestManifestRejectsBadMagicRop() {
+	auto m = MakeMinimalValidManifest(kRopeMagic, 8);
+	m.bytes[0] = 'X';  // was 'R' of "ROP1"
+	AssertManifestRejected(m.bytes, SslmSectionType::RopeTables, SslmDtype::Int64, SslmModelStatus::BadManifestMagic,
+	                        "ROP1 bad magic");
+}
+
+static void TestManifestRejectsUnsupportedVersion() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, kManifestVersionOff, 2);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8,
+	                        SslmModelStatus::UnsupportedManifestVersion, "WGT1 version == 2");
+}
+
+static void TestManifestRejectsTooManyTensors() {
+	// A complete, valid 16-byte header declaring a tensor_count far beyond
+	// kMaxTensors (65536) and no following bytes -- TooManyTensors must be
+	// checked (and must reject) before any attempt to read a descriptor table
+	// this large, so no real descriptor/name/data bytes are needed here.
+	std::vector<uint8_t> bytes;
+	bytes.insert(bytes.end(), kWeightsMagic, kWeightsMagic + 4);
+	WriteU32LE(bytes, kManifestVersion);
+	WriteU32LE(bytes, 0xFFFFFFFFu);  // tensor_count
+	WriteU32LE(bytes, 0);            // name_blob_len
+	AssertManifestRejected(bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::TooManyTensors,
+	                        "WGT1 tensor_count == 0xFFFFFFFF");
+}
+
+static void TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// Cut the buffer to strictly inside the descriptor table: one full
+	// descriptor plus half of a second, while tensor_count (4) still declares
+	// a full four-descriptor table the truncated buffer no longer holds.
+	m.bytes.resize(kManifestHeaderBytes + kTensorDescBytes + kTensorDescBytes / 2);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::ManifestOutOfBounds,
+	                        "WGT1 truncated mid-descriptor-table");
+}
+
+static void TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// The full descriptor table is present, but not all of the declared
+	// name_blob_len bytes after it -- cut one byte short of the name blob.
+	m.bytes.resize(m.name_blob_off + m.name_blob_len - 1);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::ManifestOutOfBounds,
+	                        "WGT1 truncated mid-name-blob");
+}
+
+// --- Per-descriptor cells. Each isolates exactly one deviation from
+//     docs/sslm_format.md's TensorDesc field table in the minimal valid
+//     manifest, tested once (on WGT1) for every magic-agnostic field --
+//     magic/element-size only change which magic reads the manifest, never
+//     how a descriptor field is validated. ---
+
+static void TestManifestRejectsBadTensorNameOutOfRange() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, ManifestDescNameLenOff(0), m.name_blob_len + 50);  // t1's name now runs past the blob
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorName,
+	                        "WGT1 tensor[0] (t1) name range exceeds name_blob_len");
+}
+
+static void TestManifestRejectsEmptyTensorName() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, ManifestDescNameLenOff(0), 0);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::EmptyTensorName,
+	                        "WGT1 tensor[0] (t1) name_len == 0");
+}
+
+static void TestManifestRejectsDuplicateTensorName() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// Point tensor[1] ("t2") at the exact same name-blob range as tensor[0]
+	// ("t1") -- both descriptors now name the same tensor.
+	const uint32_t t1_name_off = GetU32(m.bytes, ManifestDescNameOffOff(0));
+	const uint32_t t1_name_len = GetU32(m.bytes, ManifestDescNameLenOff(0));
+	PutU32(m.bytes, ManifestDescNameOffOff(1), t1_name_off);
+	PutU32(m.bytes, ManifestDescNameLenOff(1), t1_name_len);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::DuplicateTensorName,
+	                        "WGT1 tensor[1] (t2) name duplicates tensor[0]'s (t1)");
+}
+
+static void TestManifestRejectsBadTensorRankZero() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, ManifestDescRankOff(0), 0);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorRank,
+	                        "WGT1 tensor[0] (t1) rank == 0");
+}
+
+static void TestManifestRejectsBadTensorRankTooLarge() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, ManifestDescRankOff(0), kMaxTensorRank + 1);  // 5
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorRank,
+	                        "WGT1 tensor[0] (t1) rank == kMaxTensorRank+1 (5)");
+}
+
+static void TestManifestRejectsBadTensorShapeZeroDim() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// t2 (tensor[1]) is rank 2, shape [2,2]; zero its first dimension -- still
+	// "declared" by rank (2) but no longer > 0 as required for i < rank. The
+	// elem_count field is patched to match the now-invalid product (0) too, so
+	// this cell isolates BadTensorShape alone, not a coincidental
+	// ShapeCountMismatch riding along with it.
+	PutU32(m.bytes, ManifestDescShapeOff(1, 0), 0);
+	PutU64(m.bytes, ManifestDescElemCountOff(1), 0);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorShape,
+	                        "WGT1 tensor[1] (t2) shape[0] == 0 within rank");
+}
+
+static void TestManifestRejectsBadTensorShapeNonzeroPastRank() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// t1 (tensor[0]) is rank 1, shape [3,0,0,0]; set shape[1] (past rank)
+	// nonzero. elem_count (3, the product over shape[0..rank)) is unaffected.
+	PutU32(m.bytes, ManifestDescShapeOff(0, 1), 5);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorShape,
+	                        "WGT1 tensor[0] (t1) shape[1] != 0 past rank 1");
+}
+
+static void TestManifestRejectsShapeCountMismatch() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// t3 (tensor[2]) is rank 3, shape [2,1,2] -> product 4; declare 999.
+	PutU64(m.bytes, ManifestDescElemCountOff(2), 999);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::ShapeCountMismatch,
+	                        "WGT1 tensor[2] (t3) elem_count 999 != product(shape) 4");
+}
+
+static void TestManifestRejectsTensorOutOfBoundsDataExceedsSection() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// Push t4's (tensor[3]) data_off to one byte before the end of the buffer;
+	// its declared elem_count (2) then needs 2 bytes there, exceeding
+	// byte_size by 1. t4 is the last tensor packed, so this cannot also
+	// overlap t1/t2/t3's earlier ranges.
+	PutU64(m.bytes, ManifestDescDataOffOff(3), m.bytes.size() - 1);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::TensorOutOfBounds,
+	                        "WGT1 tensor[3] (t4) data range exceeds byte_size by 1");
+}
+
+static void TestManifestRejectsTensorOverlap() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	// Point t2's (tensor[1]) data_off at t1's (tensor[0]) -- both then claim
+	// overlapping byte ranges, while the claimed range still fits comfortably
+	// inside byte_size (so TensorOutOfBounds cannot also fire).
+	PutU64(m.bytes, ManifestDescDataOffOff(1), m.tensor_data_off[0]);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::TensorOverlap,
+	                        "WGT1 tensor[1] (t2) data_off == tensor[0]'s (t1)");
+}
+
+static void TestManifestRejectsBadDescriptorReserved() {
+	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
+	PutU32(m.bytes, ManifestDescReservedOff(0), 1);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadDescriptorReserved,
+	                        "WGT1 tensor[0] (t1) reserved == 1");
+}
+
+static void TestManifestRejectsDataOffBelowDataRegion() {
+	// docs/sslm_format.md's TensorDesc table states data_off must be "multiple
+	// of the element size; >= end of the name blob; in bounds" -- three
+	// sub-constraints on one field. This cell violates only the middle one:
+	// data_off points at the manifest's own magic bytes (well inside the
+	// header/descriptor/name-blob region, not past the end of the buffer, and
+	// -- at element_size 1 -- trivially "aligned"). There is no dedicated
+	// SslmModelStatus for this sub-constraint; TensorOutOfBounds ("a tensor's
+	// data range exceeds byte_size or overflows") is the only code whose text
+	// plausibly covers a data_off that has strayed outside its VALID region in
+	// either direction, so that is what this cell asserts -- flagged in the
+	// test-design record as an inference, not a literal spec mapping, for
+	// Brunel/Dan to confirm against the implementation.
+	auto m = MakeSingleTensorManifest(kWeightsMagic, 1, {3});
+	PutU64(m.bytes, ManifestDescDataOffOff(0), 0);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::TensorOutOfBounds,
+	                        "WGT1 tensor[0] (t0) data_off == 0, below the data region (into header/descriptors)");
+}
+
+// --- Element-size-DEPENDENT cells. TensorMisaligned and the elem_count *
+//     element_size 32-bit-overflow class cannot be reached at WGT1's
+//     element_size of 1 (any offset is trivially "aligned"; elem_count * 1
+//     never differs from elem_count itself) -- these are only reachable at
+//     BIA1 (int32, element_size 4) and ROP1 (int64, element_size 8). Each
+//     cell uses a single-tensor manifest so an alignment/offset shift on the
+//     one tensor present cannot also read as TensorOverlap. ---
+
+static void TestManifestRejectsTensorMisalignedBia() {
+	auto m = MakeSingleTensorManifest(kBiasesMagic, 4, {4});
+	m.bytes.resize(m.bytes.size() + 64, 0);  // headroom: isolate misalignment from bounds
+	PutU64(m.bytes, ManifestDescDataOffOff(0), m.tensor_data_off[0] + 1);  // +1: not a multiple of 4
+	AssertManifestRejected(m.bytes, SslmSectionType::Biases, SslmDtype::Int32, SslmModelStatus::TensorMisaligned,
+	                        "BIA1 tensor[0] (t0) data_off + 1 (not a multiple of element_size 4)");
+}
+
+static void TestManifestRejectsTensorMisalignedRop() {
+	auto m = MakeSingleTensorManifest(kRopeMagic, 8, {4});
+	m.bytes.resize(m.bytes.size() + 64, 0);  // headroom: isolate misalignment from bounds
+	PutU64(m.bytes, ManifestDescDataOffOff(0), m.tensor_data_off[0] + 4);  // +4: not a multiple of 8
+	AssertManifestRejected(m.bytes, SslmSectionType::RopeTables, SslmDtype::Int64, SslmModelStatus::TensorMisaligned,
+	                        "ROP1 tensor[0] (t0) data_off + 4 (not a multiple of element_size 8)");
+}
+
+static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia() {
+	auto m = MakeSingleTensorManifest(kBiasesMagic, 4, {1});
+	// A single-dim shape/elem_count of 1,200,000,000 is well under 2^32
+	// (4,294,967,295), so the elem_count field itself does not overflow --
+	// but elem_count * element_size (4) == 4,800,000,000 overflows a 32-bit
+	// product while fitting trivially in 64-bit. The section's real byte_size
+	// is tiny (no data was actually materialized for 1.2B elements), so a
+	// correct 64-bit bounds check must reject with TensorOutOfBounds; a
+	// 32-bit-wrapped computation could instead land on a small, in-bounds-
+	// looking range and wrongly ACCEPT -- the T-129 defect class, one
+	// multiplication further in than the section-table-size check it was
+	// originally found in.
+	PutU32(m.bytes, ManifestDescShapeOff(0, 0), 1200000000u);
+	PutU64(m.bytes, ManifestDescElemCountOff(0), 1200000000ull);
+	AssertManifestRejected(m.bytes, SslmSectionType::Biases, SslmDtype::Int32, SslmModelStatus::TensorOutOfBounds,
+	                        "BIA1 tensor[0] (t0) elem_count(1.2B) * element_size(4) overflows 32 bits");
+}
+
+static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop() {
+	auto m = MakeSingleTensorManifest(kRopeMagic, 8, {1});
+	// element_size 8 needs a smaller elem_count to overflow 32 bits at the
+	// second multiplication: 600,000,000 * 8 == 4,800,000,000.
+	PutU32(m.bytes, ManifestDescShapeOff(0, 0), 600000000u);
+	PutU64(m.bytes, ManifestDescElemCountOff(0), 600000000ull);
+	AssertManifestRejected(m.bytes, SslmSectionType::RopeTables, SslmDtype::Int64, SslmModelStatus::TensorOutOfBounds,
+	                        "ROP1 tensor[0] (t0) elem_count(600M) * element_size(8) overflows 32 bits");
+}
+
+static void TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds() {
+	auto m = MakeSingleTensorManifest(kWeightsMagic, 1, {1, 1});
+	// shape [70000,70000]: product 4,900,000,000 overflows a 32-bit
+	// multiplication (2^32 == 4,294,967,296) but is exactly representable and
+	// computable in 64-bit. BOTH the shape and elem_count are set to the
+	// correct 64-bit product, so ShapeCountMismatch must NOT fire -- only the
+	// bounds check against the section's real (tiny) byte_size should, proving
+	// the product itself is computed 64-bit-safe rather than silently
+	// wrapping to a smaller value a naive comparison could accept. This is
+	// the element-size-independent sibling of the two cells above: it isolates
+	// the FIRST multiplication (the shape product itself), tested at WGT1
+	// (element_size 1) where the second multiplication (elem_count *
+	// element_size) can never itself be the cause.
+	PutU32(m.bytes, ManifestDescShapeOff(0, 0), 70000u);
+	PutU32(m.bytes, ManifestDescShapeOff(0, 1), 70000u);
+	PutU64(m.bytes, ManifestDescElemCountOff(0), 4900000000ull);
+	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::TensorOutOfBounds,
+	                        "WGT1 tensor[0] (t0) shape [70000,70000] product 4.9B overflows 32 bits, correct in 64-bit");
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -1409,6 +1854,37 @@ int main() {
 	TestUni1RejectsDecompSeqTruncated();
 	TestUni1RejectsComposeTruncated();
 	TestUni1RejectsComposeCountOverflow();
+
+	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite
+	//     (red-first; src/model.cpp is currently a stub). ---
+	TestWgtMinimalManifestParsesAndRoundTrips();
+	TestBiaMinimalManifestParsesAndRoundTrips();
+	TestRopMinimalManifestParsesAndRoundTrips();
+	TestManifestRejectsSectionTooShort();
+	TestManifestRejectsBadMagicWgt();
+	TestManifestRejectsBadMagicBia();
+	TestManifestRejectsBadMagicRop();
+	TestManifestRejectsUnsupportedVersion();
+	TestManifestRejectsTooManyTensors();
+	TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors();
+	TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob();
+	TestManifestRejectsBadTensorNameOutOfRange();
+	TestManifestRejectsEmptyTensorName();
+	TestManifestRejectsDuplicateTensorName();
+	TestManifestRejectsBadTensorRankZero();
+	TestManifestRejectsBadTensorRankTooLarge();
+	TestManifestRejectsBadTensorShapeZeroDim();
+	TestManifestRejectsBadTensorShapeNonzeroPastRank();
+	TestManifestRejectsShapeCountMismatch();
+	TestManifestRejectsTensorOutOfBoundsDataExceedsSection();
+	TestManifestRejectsTensorOverlap();
+	TestManifestRejectsBadDescriptorReserved();
+	TestManifestRejectsDataOffBelowDataRegion();
+	TestManifestRejectsTensorMisalignedBia();
+	TestManifestRejectsTensorMisalignedRop();
+	TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia();
+	TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop();
+	TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
