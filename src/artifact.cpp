@@ -44,6 +44,29 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 	return false;
 }
 
+SslmDtype ExpectedDtype(uint32_t type) noexcept {
+	switch (static_cast<SslmSectionType>(type)) {
+		case SslmSectionType::Weights: return SslmDtype::Int8;
+		case SslmSectionType::Biases: return SslmDtype::Int32;
+		case SslmSectionType::RopeTables: return SslmDtype::Int64;
+		// All JSON / opaque-byte sections are Raw.
+		case SslmSectionType::Config:
+		case SslmSectionType::Provenance:
+		case SslmSectionType::Scales:
+		case SslmSectionType::WeightScales:
+		case SslmSectionType::CompositionConstants:
+		case SslmSectionType::KvLandingScales:
+		case SslmSectionType::KvLandingReciprocals:
+		case SslmSectionType::Calibration:
+		case SslmSectionType::GoldenHashes:
+		case SslmSectionType::Tokenizer:
+		case SslmSectionType::ChatTemplate:
+		case SslmSectionType::SchemaMasks:
+			return SslmDtype::Raw;
+	}
+	return SslmDtype::Raw; // unknown type — callers gate on IsKnownSectionType first
+}
+
 const char* SslmStatusName(SslmStatus s) noexcept {
 	switch (s) {
 		case SslmStatus::Ok: return "Ok";
@@ -229,6 +252,13 @@ SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
 		}
 		if (!IsKnownSectionType(type)) {
 			return Reject(err, SslmStatus::UnknownSection, i, "unknown section type " + std::to_string(type));
+		}
+		// type and dtype are each known here; the pairing is normative (choice 6).
+		if (static_cast<SslmDtype>(dtype) != ExpectedDtype(type)) {
+			return Reject(err, SslmStatus::SectionDtypeMismatch, i,
+			              "section type " + std::to_string(type) + " requires dtype " +
+			                  std::to_string(static_cast<uint32_t>(ExpectedDtype(type))) +
+			                  ", got " + std::to_string(dtype));
 		}
 		placed.push_back(Placed{type, dtype, offset, byte_size, elem_count, alignment});
 	}

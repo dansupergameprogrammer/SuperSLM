@@ -67,6 +67,11 @@ uint32_t DtypeSize(uint32_t dtype) noexcept;
 // True if the value names a section type the v1 loader recognizes.
 bool IsKnownSectionType(uint32_t type) noexcept;
 
+// The dtype every section of a given known type must carry (docs/sslm_format.md
+// section-types table — normative). Only meaningful once IsKnownSectionType(type)
+// holds; returns SslmDtype::Raw for anything else.
+SslmDtype ExpectedDtype(uint32_t type) noexcept;
+
 // Every way a `.sslm` can be rejected. `Ok` is the only non-error value.
 enum class SslmStatus {
 	Ok = 0,
