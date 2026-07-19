@@ -119,6 +119,15 @@ class SslmArtifact {
 public:
 	SslmArtifact() = default;
 
+	// Owns a copy of the artifact bytes; section views point into that buffer. A
+	// copy would deep-copy the bytes to a new address while the views still pointed
+	// at the source, so copy is deleted. Move transfers the vector's buffer (its
+	// address is preserved), so the views stay valid across a move.
+	SslmArtifact(const SslmArtifact&) = delete;
+	SslmArtifact& operator=(const SslmArtifact&) = delete;
+	SslmArtifact(SslmArtifact&&) = default;
+	SslmArtifact& operator=(SslmArtifact&&) = default;
+
 	// Validate `size` bytes at `data` as a v1 `.sslm`. On Ok, `out` owns a copy of
 	// the bytes and exposes the header + sections. On any error, `out` is left empty
 	// and `err` (if non-null) carries the diagnostic. Never throws; never reads a
