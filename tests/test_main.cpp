@@ -396,6 +396,25 @@ static void TestRejectsBadDtype() {
 	CHECK(err.section_index == 1);
 }
 
+static void TestRejectsSectionDtypeMismatch() {
+	// docs/sslm_format.md load-bearing choice 6: Weights requires Int8. Declare it
+	// Int32 instead — a known dtype, just not the one Weights requires. byte_size /
+	// elem_count stay consistent for the DECLARED (wrong) dtype (4 elements @ size
+	// 4 = 16 bytes) so SizeMismatch cannot also fire and mask this cell; BadDtype
+	// cannot fire either, since Int32 is itself a known SslmDtype value. The only
+	// defect is the type/dtype pairing itself.
+	FixtureSection weights =
+	    MakeSection(SslmSectionType::Weights, SslmDtype::Int32, EncodeInt32LE({1, 2, 3, 4}));
+	auto built = BuildArtifact({MakeConfigSection(), weights});
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::SectionDtypeMismatch, "got %s", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::SectionDtypeMismatch);
+	CHECK(err.section_index == 1);
+}
+
 static void TestRejectsSizeMismatch() {
 	FixtureSection biases =
 	    MakeSection(SslmSectionType::Biases, SslmDtype::Int32, EncodeInt32LE({1, 2, 3, 4}));  // 16 bytes, 4 elems
@@ -692,6 +711,7 @@ int main() {
 	TestRejectsSectionOverlapWithHeader();
 	TestRejectsSectionOverlapWithSection();
 	TestRejectsBadDtype();
+	TestRejectsSectionDtypeMismatch();
 	TestRejectsSizeMismatch();
 	TestRejectsUnknownSectionType();
 	TestRejectsDuplicateSection();
