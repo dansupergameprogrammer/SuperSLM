@@ -119,6 +119,47 @@ runtime does not yet interpret it. Types outside this table are rejected.
 
 `Json` sections use dtype `Raw` (UTF-8 bytes).
 
+## Tokenizer sub-formats (S1)
+
+The `Tokenizer` (20) and `UnicodeTables` (22) sections carry self-contained blobs with
+their own internal layout, parsed by the runtime `TokenizerView` after the loader has
+verified whole-file integrity (so the parse trusts the bytes; it only fails closed on a
+bad marker or a length that overruns the section). Both are little-endian. The converter
+that writes them is `tools/convert_tokenizer.py` / `tools/unicode_tables.py`.
+
+### `Tokenizer` blob — `TOK1`
+
+| Field | Type | Notes |
+|---|---|---|
+| magic | `u8[4]` | `'TOK1'` |
+| version | `u32` | `1` |
+| vocab_count | `u32` | number of ids in the id→bytes table |
+| merge_count | `u32` | number of BPE merges |
+| special_count | `u32` | number of special tokens |
+| reserved | `u32` | `0` |
+| byte_to_id | `u32[256]` | base byte b → its single-byte token id |
+| vocab_offsets | `u32[vocab_count+1]` | offsets into vocab_blob; id i → `[off[i], off[i+1])` |
+| vocab_blob_len | `u32` | |
+| vocab_blob | `u8[vocab_blob_len]` | id → the raw UTF-8 bytes it decodes to |
+| merges | `(u32 a, u32 b, u32 merged)[merge_count]` | **rank = array index**; merging ids `(a,b)` yields `merged` |
+| special_ids | `u32[special_count]` | |
+| special_offsets | `u32[special_count+1]` | offsets into special_blob |
+| special_blob_len | `u32` | |
+| special_blob | `u8[special_blob_len]` | special-token contents, **longest-content-first** (greedy match order) |
+
+### `UnicodeTables` blob — `UNI1`
+
+Pinned Unicode data (version recorded in the `Config` section) for NFC and the
+`\p{L}`/`\p{N}`/`\s` classes. A range is an inclusive `(lo, hi)` codepoint pair.
+
+| Field | Type | Notes |
+|---|---|---|
+| magic + version | `u8[4]='UNI1'`, `u32=1` | |
+| letter / number / space | each: `u32 count`, `(u32 lo, u32 hi)[count]` | `\p{L}` / `\p{N}` / `\s` ranges |
+| ccc | `u32 count`, `(u32 cp, u32 class)[count]` | nonzero canonical combining classes |
+| decomp | `u32 count`, `u32 cp[count]`, `u32 off[count+1]`, `u32 seq_len`, `u32 seq[seq_len]` | full canonical decomposition (Hangul is algorithmic, not tabled) |
+| compose | `u32 count`, `(u32 a, u32 b, u32 c)[count]` | primary composites `(a,b)→c` |
+
 ## Versioning
 
 `format_version` is a single integer. A reader that does not recognize the version

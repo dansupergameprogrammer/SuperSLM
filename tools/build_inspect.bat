@@ -9,6 +9,10 @@ if not exist out mkdir out
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\artifact.cpp src\sha256.cpp tools\sslm_inspect.cpp ^
 	/Fo:out\ /Fe:out\sslm_inspect.exe
+if errorlevel 1 (popd & exit /b 1)
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp tools\tok_verify.cpp ^
+	/Fo:out\ /Fe:out\tok_verify.exe
 set ec=%errorlevel%
 popd
 exit /b %ec%

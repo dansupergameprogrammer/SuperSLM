@@ -11,6 +11,7 @@
 #include "superslm/artifact.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,16 +20,22 @@ namespace superslm {
 
 class TokenizerView {
 public:
-	TokenizerView() = default;
+	TokenizerView();
+	~TokenizerView();
+	TokenizerView(TokenizerView&&) noexcept;
+	TokenizerView& operator=(TokenizerView&&) noexcept;
+	TokenizerView(const TokenizerView&) = delete;
+	TokenizerView& operator=(const TokenizerView&) = delete;
 
 	// Bind to a loaded artifact by parsing its Tokenizer + UnicodeTables sections.
 	// Returns false (and sets *err, if non-null) when either section is absent or
 	// malformed; the artifact's integrity is already verified by the loader, so this
-	// parse trusts the bytes and only sanity-checks structure.
+	// parse trusts the bytes and only sanity-checks structure. The artifact must
+	// outlive the view — table pointers reference its bytes.
 	static bool Open(const SslmArtifact& artifact, TokenizerView& out, std::string* err);
 
-	bool Ok() const noexcept { return ok_; }
-	int32_t VocabSize() const noexcept { return vocab_count_; }
+	bool Ok() const noexcept;
+	int32_t VocabSize() const noexcept;
 
 	// text -> token ids. A special-token's content appearing in the text is matched
 	// (longest first) and emitted as its id; every other span is NFC-normalized,
@@ -40,11 +47,12 @@ public:
 	// interpreted as UTF-8 (invalid sequences pass through as replacement chars).
 	std::string Decode(const std::vector<int32_t>& ids) const;
 
+	// Opaque; defined in tokenizer.cpp. Public only so the .cpp's parse helpers can
+	// name it — it is incomplete here, so callers cannot touch it.
+	struct Impl;
+
 private:
-	bool ok_ = false;
-	int32_t vocab_count_ = 0;
-	const SslmArtifact* artifact_ = nullptr; // sections are views into it; must outlive
-	// Parsed table views are filled in by Open when the tokenizer is built.
+	std::unique_ptr<Impl> impl_;
 };
 
 } // namespace superslm
