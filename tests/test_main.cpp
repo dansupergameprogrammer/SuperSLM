@@ -2228,6 +2228,13 @@ static void TestCfg1RejectsZeroContextCap() {
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 context_cap == 0");
 }
 
+// kv_block_size is a required-nonzero field too (docs "Config blob"; Poirot C-1).
+static void TestCfg1RejectsZeroKvBlockSize() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1KvBlockSizeOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 kv_block_size == 0");
+}
+
 static void TestCfg1RejectsBadKvPrecision() {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1KvPrecisionOff, 2);  // only 0 (Int8) or 1 (Int16) are valid
@@ -2473,6 +2480,7 @@ int main() {
 	TestCfg1RejectsZeroIntermediateSize();
 	TestCfg1RejectsZeroVocabSize();
 	TestCfg1RejectsZeroContextCap();
+	TestCfg1RejectsZeroKvBlockSize();
 	TestCfg1RejectsBadKvPrecision();
 	TestCfg1RejectsBadConfigBool();
 	TestCfg1RejectsBadConfigReserved();

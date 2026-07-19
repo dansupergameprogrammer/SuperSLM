@@ -91,9 +91,9 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |     4 | `RopeTables`            | `Int64`      | S0   | RoPE tables (§6.4)                                 |
 |     5 | `Scales`                | `Json`       | S0   | `StaticScales` (requant / rescale / nonlinear)     |
 |     6 | `WeightScales`          | `Int32`      | S0   | per-channel C24/C25 fold ops — a `WSC1` tensor manifest (§ "Weight-scale fold blob") |
-|     7 | `CompositionConstants`  | `Json`       | S0   | pinned composition constants (§6.8)                |
-|     8 | `KvLandingScales`       | `Json`       | S0   | per-head KV landing scales (C27)                   |
-|     9 | `KvLandingReciprocals`  | `Json`       | S0   | per-head KV landing reciprocals (C27)              |
+|     7 | `CompositionConstants`  | `Raw`        | S0   | pinned composition constants (§6.8) — a `KVC1` keyed blob |
+|     8 | `KvLandingScales`       | `Raw`        | S0   | per-head KV landing scales (C27) — a `KVC1` keyed blob    |
+|     9 | `KvLandingReciprocals`  | `Raw`        | S0   | per-head KV landing reciprocals (C27) — a `KVC1` keyed blob |
 |    10 | `Calibration`           | `Json`       | S0   | calibration record                                 |
 |    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (§11 golden pack)            |
 |    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
@@ -299,8 +299,8 @@ by a kernel). All little-endian; the total is exactly **84 bytes**.
 | 76 | `f64` | rms_norm_eps | recorded (the integer RMSNorm carries no eps term) |
 
 `ModelView` config parse rejects on: `byte_size != 84`; a wrong magic or version; any of the eight
-dimension fields `== 0`; `tie_word_embeddings`/`kv_precision` outside their allowed set; a nonzero
-`reserved`. This is the §11 reject-over-degrade law applied to config — a zero dimension or a
+dimension fields **or `kv_block_size`** `== 0`; `tie_word_embeddings`/`kv_precision` outside their
+allowed set; a nonzero `reserved`. This is the §11 reject-over-degrade law applied to config — a zero dimension or a
 defaulted field produces "a model that loads, runs, generates fluent text, and is not the source
 model" (§6.8 C15), so it is rejected, never repaired.
 

@@ -402,7 +402,7 @@ SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out
 	// not the source model. Every dimension must be present.
 	if (c.hidden_size == 0 || c.num_hidden_layers == 0 || c.num_attention_heads == 0 ||
 	    c.num_key_value_heads == 0 || c.head_dim == 0 || c.intermediate_size == 0 ||
-	    c.vocab_size == 0 || c.context_cap == 0)
+	    c.vocab_size == 0 || c.context_cap == 0 || c.kv_block_size == 0)
 		return Reject(SslmModelStatus::BadConfigDim, err, "a required dimension field is 0");
 
 	if (tie > 1)
