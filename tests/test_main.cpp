@@ -12,6 +12,7 @@
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/tokenizer.h"
+#include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
@@ -2066,6 +2067,254 @@ static void TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo() {
 	                    "KVC1 (KvLandingReciprocals, requires 3) value_words == 2");
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.0b CFG1 config sub-parse hostile-input red suite (SuperSLM_Plan.md
+// S2.0b; docs/sslm_format.md "Config blob — CFG1"). `ParseConfig` parses the
+// `Config` section's self-contained fixed 84-byte `CFG1` struct AFTER
+// `SslmArtifact::OpenFromMemory` has verified whole-file structure and
+// integrity — a crafted integrity-valid artifact can still carry a malformed
+// or degraded Config section, so this sub-parse is its own hostile-input
+// trust boundary AND the §11 reject-over-degrade gate applied to config: a
+// zero dimension or a defaulted field is "a model that loads, runs, generates
+// fluent text, and is not the source model" (§6.8 C15) and must be rejected,
+// never repaired. src/model.cpp's ParseConfig is currently a RED-FIRST STUB:
+// it leaves `out` at SslmModelConfig{} defaults and reports Ok unconditionally,
+// so every hostile cell below is red until the parse is built.
+//
+// Every cell asserts the SPECIFIC SslmModelStatus its one named mutation
+// should trigger. CFG1 is a single fixed-layout struct (no variable-length
+// regions), so BadConfigSize is the entire bounds surface (both directions —
+// too short AND too long, since the parse must reject any byte_size != 84,
+// not merely byte_size < 84); the eight dimension fields each get their own
+// cell so a parse that only guards some of them is caught.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared assertion for every CFG1 hostile cell below: ParseConfig must reject
+// with the cell's one named status and leave `out` at SslmModelConfig{}
+// defaults (never a partial or repaired config) — the reject-over-degrade law.
+void AssertCfg1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmModelStatus want, const char* why) {
+	SslmSectionView view = MakeConfigSectionView(mutated_bytes);
+	SslmModelConfig out;
+	std::string err;
+	SslmModelStatus status = ParseConfig(view, out, &err);
+	CHECK_MSG(status == want, "%s: got %s, want %s", why, SslmModelStatusName(status), SslmModelStatusName(want));
+	CHECK_MSG(out.hidden_size == 0 && out.num_hidden_layers == 0 && out.num_attention_heads == 0 &&
+	              out.num_key_value_heads == 0 && out.head_dim == 0 && out.intermediate_size == 0 &&
+	              out.vocab_size == 0 && out.context_cap == 0 && out.tie_word_embeddings == false &&
+	              out.kv_precision == SslmKvPrecision::Int8 && out.kv_block_size == 0 && out.unicode_major == 0 &&
+	              out.unicode_minor == 0 && out.unicode_patch == 0 && out.rope_theta == 0.0 &&
+	              out.rms_norm_eps == 0.0,
+	          "%s: SslmModelConfig not left at defaults on a rejected parse", why);
+}
+
+}  // namespace
+
+// --- The feature oracle: the minimal fixture every hostile cell mutates from
+//     is itself spec-faithful — it parses to Ok and every typed field equals
+//     what was baked in, including the true-case bool, the Int16 kv_precision
+//     (pinning the enum mapping, not just the zero default), and two
+//     distinctive non-round f64s (pinning the little-endian f64 read). This
+//     proves the baseline isn't rejecting -- or silently misreading -- before
+//     any hostile cell attributes a rejection to its one named mutation. ---
+
+static void TestMinimalCfg1ParsesAndMatchesEveryField() {
+	Cfg1Spec spec;  // defaults: see sslm_cfg1_hostile_fixtures.h
+	auto bytes = BuildCfg1(spec);
+	SslmSectionView view = MakeConfigSectionView(bytes);
+
+	SslmModelConfig out;
+	std::string err;
+	SslmModelStatus status = ParseConfig(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "minimal CFG1 failed to parse: got %s: %s", SslmModelStatusName(status),
+	          err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(out.hidden_size == spec.hidden_size);
+	CHECK(out.num_hidden_layers == spec.num_hidden_layers);
+	CHECK(out.num_attention_heads == spec.num_attention_heads);
+	CHECK(out.num_key_value_heads == spec.num_key_value_heads);
+	CHECK(out.head_dim == spec.head_dim);
+	CHECK(out.intermediate_size == spec.intermediate_size);
+	CHECK(out.vocab_size == spec.vocab_size);
+	CHECK(out.context_cap == spec.context_cap);
+	CHECK_MSG(out.tie_word_embeddings == true, "tie_word_embeddings (baked in as 1) did not read back true");
+	CHECK_MSG(out.kv_precision == SslmKvPrecision::Int16,
+	          "kv_precision (baked in as 1) did not read back SslmKvPrecision::Int16");
+	CHECK(out.kv_block_size == spec.kv_block_size);
+	CHECK(out.unicode_major == spec.unicode_major);
+	CHECK(out.unicode_minor == spec.unicode_minor);
+	CHECK(out.unicode_patch == spec.unicode_patch);
+	CHECK_MSG(out.rope_theta == spec.rope_theta, "rope_theta round-trip mismatch (little-endian f64 read)");
+	CHECK_MSG(out.rms_norm_eps == spec.rms_norm_eps, "rms_norm_eps round-trip mismatch (little-endian f64 read)");
+}
+
+// --- BadConfigSize — both directions, since the parse must reject ANY
+//     byte_size != 84, not merely a too-short buffer. ---
+
+static void TestCfg1RejectsSizeTooShort() {
+	auto bytes = MakeMinimalValidCfg1();
+	bytes.pop_back();  // 83 bytes, < kConfigBytes (84)
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigSize, "CFG1 byte_size == 83 (< 84)");
+}
+
+static void TestCfg1RejectsSizeTooLong() {
+	auto bytes = MakeMinimalValidCfg1();
+	bytes.push_back(0);  // 85 bytes, > kConfigBytes (84)
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigSize, "CFG1 byte_size == 85 (> 84)");
+}
+
+static void TestCfg1RejectsBadMagic() {
+	auto bytes = MakeMinimalValidCfg1();
+	bytes[0] = 'X';  // was 'C' of "CFG1"
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigMagic, "CFG1 bad magic");
+}
+
+static void TestCfg1RejectsUnsupportedVersion() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1VersionOff, 2);
+	AssertCfg1Rejected(bytes, SslmModelStatus::UnsupportedConfigVersion, "CFG1 version == 2");
+}
+
+// --- BadConfigDim — all eight dimension fields, each its own cell (a parse
+//     that wrongly guards only some of them is caught). ---
+
+static void TestCfg1RejectsZeroHiddenSize() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1HiddenSizeOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 hidden_size == 0");
+}
+
+static void TestCfg1RejectsZeroNumHiddenLayers() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1NumHiddenLayersOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_hidden_layers == 0");
+}
+
+static void TestCfg1RejectsZeroNumAttentionHeads() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1NumAttentionHeadsOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_attention_heads == 0");
+}
+
+static void TestCfg1RejectsZeroNumKeyValueHeads() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1NumKeyValueHeadsOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_key_value_heads == 0");
+}
+
+static void TestCfg1RejectsZeroHeadDim() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1HeadDimOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 head_dim == 0");
+}
+
+static void TestCfg1RejectsZeroIntermediateSize() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1IntermediateSizeOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 intermediate_size == 0");
+}
+
+static void TestCfg1RejectsZeroVocabSize() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1VocabSizeOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 vocab_size == 0");
+}
+
+static void TestCfg1RejectsZeroContextCap() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1ContextCapOff, 0);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 context_cap == 0");
+}
+
+static void TestCfg1RejectsBadKvPrecision() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1KvPrecisionOff, 2);  // only 0 (Int8) or 1 (Int16) are valid
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadKvPrecision, "CFG1 kv_precision == 2");
+}
+
+static void TestCfg1RejectsBadConfigBool() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1TieWordEmbeddingsOff, 2);  // only 0 or 1 are valid
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigBool, "CFG1 tie_word_embeddings == 2");
+}
+
+static void TestCfg1RejectsBadConfigReserved() {
+	auto bytes = MakeMinimalValidCfg1();
+	PutU32(bytes, kCfg1ReservedOff, 1);
+	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigReserved, "CFG1 reserved == 1");
+}
+
+// ---------------------------------------------------------------------------
+// Curie's S2.0b WeightScales manifest-reuse oracle (SuperSLM_Plan.md S2.0b;
+// docs/sslm_format.md "Weight-scale fold blob — WSC1"). `WeightScales` (type 6,
+// dtype Int32) is now an int32 WSC1 tensor manifest parsed by the ALREADY-
+// CERTIFIED `SslmTensorManifest::Parse` (S2.0a) — no new parse code, only the
+// magic (kWeightScalesMagic, 'WSC1') and the int32 element type per the
+// tensor-manifest rules. This is a confirmation that the new magic + dtype
+// wiring routes a WeightScales section through the shipped manifest parse
+// correctly, NOT a re-sweep of the manifest parse itself (already hostile-
+// swept in S2.0a's WGT1/BIA1/ROP1 suite above) — a small oracle plus one
+// wiring-discrimination negative cell suffices.
+//
+// Unlike every CFG1 cell above, this feature oracle is expected to PASS at
+// authoring time: it exercises SslmTensorManifest::Parse, which S2.0a already
+// built to green, not src/model.cpp's still-stubbed ParseConfig.
+// ---------------------------------------------------------------------------
+
+static void TestWeightScalesMinimalManifestParsesAndRoundTrips() {
+	// Column 0 = identity flag (0/1), column 1 = mult, column 2 = shift — one
+	// C24/C25 fold-op triple per output channel (docs/sslm_format.md
+	// "Weight-scale fold blob — WSC1"). Two channels ("layer0.q_proj",
+	// "layer0.k_proj"), shape [2,3], distinctive int32 values per column so a
+	// column-order bug (e.g. mult/shift swapped) would be caught by the
+	// spot-check below.
+	auto m = MakeMinimalValidManifest(kWeightScalesMagic, /*element_size=*/4);
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::WeightScales, SslmDtype::Int32, m.bytes);
+
+	SslmTensorManifest manifest;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, manifest, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WSC1 minimal manifest (via WeightScales wiring) failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(manifest.Tensors().size() == 4);  // MakeMinimalValidManifest's fixed t1..t4 fixture
+
+	const SslmTensorView* t2 = manifest.Tensor("t2");
+	CHECK_MSG(t2 != nullptr, "Tensor(\"t2\") missing (WeightScales-routed WSC1 manifest)");
+	if (t2) {
+		CHECK(t2->name == "t2");
+		CHECK(t2->dtype == SslmDtype::Int32);
+		CHECK(t2->rank == 2);
+		CHECK(t2->shape[0] == 2 && t2->shape[1] == 2);
+		CHECK(t2->elem_count == 4);
+		CHECK_MSG(t2->data == view.data + m.tensor_data_off[1],
+		          "t2.data does not point at its declared data_off (WeightScales wiring)");
+		CHECK_MSG(t2->data[0] == static_cast<uint8_t>((1 * 31 + 0 * 7 + 11) & 0xFF),
+		          "t2's first data byte does not match the fixture's deterministic pattern (WeightScales wiring)");
+	}
+}
+
+static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
+	// A WGT1-magic'd blob handed to a WeightScales section: confirms the
+	// per-type magic actually discriminates — WeightScales requires 'WSC1',
+	// not 'WGT1', even though both are int8/int32-element tensor manifests of
+	// the identical structural shape.
+	auto m = MakeMinimalValidManifest(kWeightsMagic, /*element_size=*/4);
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::WeightScales, SslmDtype::Int32, m.bytes);
+
+	SslmTensorManifest manifest;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, manifest, &err);
+	CHECK_MSG(status == SslmModelStatus::BadManifestMagic,
+	          "WGT1-magic'd blob handed to a WeightScales section: got %s, want BadManifestMagic",
+	          SslmModelStatusName(status));
+	CHECK_MSG(manifest.Tensors().empty(), "manifest left %zu tensor(s) on a rejected parse",
+	          manifest.Tensors().size());
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -2208,6 +2457,31 @@ int main() {
 	TestKvc1RejectsValueWordsOutOfRange();
 	TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree();
 	TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo();
+
+	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite (red-first;
+	//     src/model.cpp's ParseConfig is currently a stub). ---
+	TestMinimalCfg1ParsesAndMatchesEveryField();
+	TestCfg1RejectsSizeTooShort();
+	TestCfg1RejectsSizeTooLong();
+	TestCfg1RejectsBadMagic();
+	TestCfg1RejectsUnsupportedVersion();
+	TestCfg1RejectsZeroHiddenSize();
+	TestCfg1RejectsZeroNumHiddenLayers();
+	TestCfg1RejectsZeroNumAttentionHeads();
+	TestCfg1RejectsZeroNumKeyValueHeads();
+	TestCfg1RejectsZeroHeadDim();
+	TestCfg1RejectsZeroIntermediateSize();
+	TestCfg1RejectsZeroVocabSize();
+	TestCfg1RejectsZeroContextCap();
+	TestCfg1RejectsBadKvPrecision();
+	TestCfg1RejectsBadConfigBool();
+	TestCfg1RejectsBadConfigReserved();
+
+	// --- Curie's S2.0b WeightScales manifest-reuse oracle (WSC1 routes through
+	//     the already-certified S2.0a SslmTensorManifest::Parse — expected
+	//     green at authoring time). ---
+	TestWeightScalesMinimalManifestParsesAndRoundTrips();
+	TestWeightScalesRejectsWrongMagicDiscriminatesPerType();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
