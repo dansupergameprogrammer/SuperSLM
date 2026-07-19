@@ -335,8 +335,14 @@ static void TestRejectsSectionOffsetOverflow() {
 }
 
 static void TestRejectsSectionOverlapWithHeader() {
+	// Empty (byte_size 0) so BuildArtifact writes no bytes at offset 0 — a non-empty
+	// section here would memcpy over the magic and the loader would (correctly)
+	// reject BadMagic first, not reach the overlap check at all (F-3, coordinator
+	// 2026-07-19). The loader's overlap-with-header/table check is unconditional on
+	// the declared offset alone (fires even for a zero-byte section), so this cell
+	// isolates it without corrupting anything else.
 	FixtureSection provenance =
-	    MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4}, /*alignment=*/8);
+	    MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {}, /*alignment=*/8);
 	provenance.offset_override = 0;  // inside the header; 0 % 8 == 0, alignment 8 is valid
 	auto built = BuildArtifact({MakeConfigSection(), provenance});
 
