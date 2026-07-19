@@ -13,6 +13,7 @@
 #include "superslm/tokenizer.h"
 #include "sslm_fixtures.h"
 #include "sslm_tokenizer_fixtures.h"
+#include "sslm_tokenizer_hostile_fixtures.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -920,6 +921,404 @@ static void TestTokenizerAsciiStringRoundTrips() {
 	CHECK(ft.view.Decode(ft.view.Encode(text)) == text);
 }
 
+// ---------------------------------------------------------------------------
+// Curie's T-129 TOK1/UNI1 sub-parse hostile-input suite (DecisionLog D-SLM62).
+// TokenizerView::Open parses the TOK1 (Tokenizer section) and UNI1 (UnicodeTables
+// section) blobs AFTER the loader (SslmArtifact::OpenFromMemory) has verified
+// whole-file integrity — a malicious artifact can carry a valid self-hash re-
+// stamped over a tampered sub-blob, so this sub-parse is its own hostile-input
+// trust boundary, independent of the outer loader's. This suite is the systematic
+// sweep of that boundary: every cell below starts from the minimal valid TOK1/UNI1
+// blobs in sslm_tokenizer_hostile_fixtures.h, mutates exactly one field, rebuilds
+// the artifact (which re-stamps the whole-file integrity hash over the mutated
+// bytes, so the OUTER loader always still accepts it), and asserts
+// TokenizerView::Open returns false, Ok() is false, and nothing crashes.
+//
+// Poirot found two OOB defects in this parse (unchecked vocab offsets; a u32
+// length-math overflow) that Brunel fixed at 1bb19a6. A cell already defended by
+// that fix passes GREEN here — that is the certification this suite exists to
+// produce. A cell that still accepts the malformed input, or crashes, fails RED —
+// a finding for Brunel.
+// ---------------------------------------------------------------------------
+
+// --- The feature oracle: the minimal fixture this suite mutates from is itself
+//     spec-faithful — it Opens and Encode/Decode round-trip correctly. Every
+//     hostile cell below attributes a rejection to its one named mutation; this
+//     cell is what proves the baseline isn't rejecting (or wrongly accepting) for
+//     some unrelated reason of its own. ---
+
+static void TestMinimalTokenizerArtifactOpensAndRoundTrips() {
+	auto tok1 = MakeMinimalValidTok1();
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "minimal fixture's outer artifact failed to load: got %s: %s",
+	          SslmStatusName(status), aerr.message.c_str());
+	if (status != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(opened, "TokenizerView::Open failed on the minimal valid fixture: %s", terr.c_str());
+	if (!opened) return;
+	CHECK(view.Ok());
+	CHECK(view.VocabSize() == 4);
+
+	// "cat": pretokenizes as one word piece (all ASCII letters); byte-level ids
+	// [byte_to_id['c'],['a'],['t']] = [0,1,2]; the one merge (0,1)->3 fires once at
+	// the head -> [3,2]. Decode: id3 -> "ca", id2 -> "t" -> "cat".
+	std::vector<int32_t> ids = view.Encode("cat");
+	std::vector<int32_t> want_ids = {3, 2};
+	CHECK_MSG(ids == want_ids, "Encode(\"cat\") produced %zu id(s), want [3,2]", ids.size());
+	CHECK(view.Decode(ids) == "cat");
+
+	// The special token matches the whole input and emits its declared id, not a
+	// byte-level encoding of its text.
+	std::vector<int32_t> special_ids = view.Encode("<eos>");
+	CHECK_MSG(special_ids.size() == 1 && special_ids[0] == 1000,
+	          "Encode(\"<eos>\") produced %zu id(s), want exactly [1000]", special_ids.size());
+}
+
+// --- Structural: TokenizerView::Open requires both sections outright. ---
+
+static void TestOpenRejectsArtifactMissingTokenizerSection() {
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildArtifactMissingTokenizer(uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "outer artifact (no Tokenizer section) must still load: got %s",
+	          SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(!opened, "TokenizerView::Open accepted an artifact with no Tokenizer section");
+	CHECK(!view.Ok());
+}
+
+static void TestOpenRejectsArtifactMissingUnicodeTablesSection() {
+	auto tok1 = MakeMinimalValidTok1();
+	auto built = BuildArtifactMissingUnicodeTables(tok1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "outer artifact (no UnicodeTables section) must still load: got %s",
+	          SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(!opened, "TokenizerView::Open accepted an artifact with no UnicodeTables section");
+	CHECK(!view.Ok());
+}
+
+namespace {
+
+// Shared assertion for every TOK1/UNI1 hostile cell below: the mutation lives
+// entirely inside the named sub-blob, so BuildTokenizerArtifact's fresh integrity
+// stamp always makes the OUTER artifact load Ok — a cell where it does not is a
+// bug in the cell, not a finding — and then TokenizerView::Open on that outer
+// artifact must return false, with Ok() left false.
+void AssertTok1Rejected(const std::vector<uint8_t>& mutated_tok1, const char* why) {
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifact(mutated_tok1, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "%s: outer artifact failed to load (mutation should be TOK1-internal) — got %s",
+	          why, SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(!opened, "%s: TokenizerView::Open ACCEPTED a malformed TOK1 blob (gap)", why);
+	CHECK(!view.Ok());
+}
+
+void AssertUni1Rejected(const std::vector<uint8_t>& mutated_uni1, const char* why) {
+	auto tok1 = MakeMinimalValidTok1();
+	auto built = BuildTokenizerArtifact(tok1.bytes, mutated_uni1);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "%s: outer artifact failed to load (mutation should be UNI1-internal) — got %s",
+	          why, SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(!opened, "%s: TokenizerView::Open ACCEPTED a malformed UNI1 blob (gap)", why);
+	CHECK(!view.Ok());
+}
+
+}  // namespace
+
+// --- TOK1 cells. Each isolates exactly one deviation from docs/sslm_format.md's
+//     "Tokenizer blob — TOK1" layout in the minimal valid blob. ---
+
+static void TestTok1RejectsBadMagic() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes[0] = 'X';  // was 'T' of "TOK1", offset 0
+	AssertTok1Rejected(tok1.bytes, "TOK1 bad magic");
+}
+
+static void TestTok1RejectsTruncatedHeader() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(10);  // shorter than the 24-byte fixed TOK1 header
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated header");
+}
+
+static void TestTok1RejectsVocabCountOverflow() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0xFFFFFFFFu);
+	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == 0xFFFFFFFF");
+}
+
+static void TestTok1RejectsMergeCountOverflow() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.merge_count_off, 0xFFFFFFFFu);
+	AssertTok1Rejected(tok1.bytes, "TOK1 merge_count == 0xFFFFFFFF");
+}
+
+static void TestTok1RejectsSpecialCountOverflow() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.special_count_off, 0xFFFFFFFFu);
+	AssertTok1Rejected(tok1.bytes, "TOK1 special_count == 0xFFFFFFFF");
+}
+
+static void TestTok1RejectsTruncatedByteToId() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.byte_to_id_off + 100);  // 100 of the required 1024 bytes
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated byte_to_id");
+}
+
+static void TestTok1RejectsTruncatedVocabOffsets() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.vocab_offsets_off + 4);  // 1 of the required vocab_count+1=5 entries
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_offsets");
+}
+
+static void TestTok1RejectsTruncatedVocabBlobLen() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.vocab_blob_len_off + 2);  // half of the 4-byte length field
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_blob_len");
+}
+
+static void TestTok1RejectsTruncatedVocabBlob() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.vocab_blob_off + tok1.layout.vocab_blob_len - 1);  // one byte short
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_blob");
+}
+
+static void TestTok1RejectsVocabOffsetNonMonotonic() {
+	auto tok1 = MakeMinimalValidTok1();
+	// Baseline vocab_offsets [0,1,2,3,5] (vblob=5). Bump index 2 from 2 to 4 (still
+	// <= vblob): index 3's value (3) is now smaller than its predecessor (4) — a
+	// pure non-monotonic violation, no offset exceeds vblob.
+	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, 4);
+	AssertTok1Rejected(tok1.bytes, "TOK1 vocab offset non-monotonic");
+}
+
+static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
+	auto tok1 = MakeMinimalValidTok1();
+	// Index 4 (vocab_count) is the terminal offset; baseline value 5 == vblob.
+	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 4 * 4, tok1.layout.vocab_blob_len + 50);
+	AssertTok1Rejected(tok1.bytes, "TOK1 last vocab offset > vblob");
+}
+
+static void TestTok1RejectsMiddleVocabOffsetExceedsBlob() {
+	auto tok1 = MakeMinimalValidTok1();
+	// Index 2 is not the terminal offset (index 4 is); baseline value 2.
+	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, tok1.layout.vocab_blob_len + 50);
+	AssertTok1Rejected(tok1.bytes, "TOK1 middle (non-terminal) vocab offset > vblob");
+}
+
+static void TestTok1RejectsTruncatedMerges() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.merges_off + 6);  // half of the one 12-byte merge record
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated merges");
+}
+
+static void TestTok1RejectsTruncatedSpecialIds() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.special_ids_off + 2);  // half of the one 4-byte special id
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special-id table");
+}
+
+static void TestTok1RejectsTruncatedSpecialOffsets() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.special_offsets_off + 4);  // 1 of the required special_count+1=2 entries
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special-offset table");
+}
+
+static void TestTok1RejectsTruncatedSpecialBlobLen() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.special_blob_len_off + 2);  // half of the 4-byte length field
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special_blob_len");
+}
+
+static void TestTok1RejectsTruncatedSpecialBlob() {
+	auto tok1 = MakeMinimalValidTok1();
+	tok1.bytes.resize(tok1.layout.special_blob_off + tok1.layout.special_blob_len - 1);  // one byte short
+	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special_blob");
+}
+
+static void TestTok1RejectsSpecialOffsetNonMonotonic() {
+	auto tok1 = MakeMinimalValidTok1();
+	// Baseline special_offsets [0,5] (sblob=5). Set index 0 to 6 (> index 1's 5) —
+	// non-monotonic; index 1 (5) does not itself exceed sblob (5), so the range
+	// branch cannot also fire.
+	PutU32(tok1.bytes, tok1.layout.special_offsets_off + 0 * 4, 6);
+	AssertTok1Rejected(tok1.bytes, "TOK1 special offset non-monotonic");
+}
+
+static void TestTok1RejectsSpecialOffsetOutOfRange() {
+	auto tok1 = MakeMinimalValidTok1();
+	// Leave the (monotonic) offsets [0,5] untouched; lie about special_blob_len
+	// instead (5 -> 3), so the terminal offset (5) now exceeds the declared length
+	// — a pure range violation, isolated from the monotonic check.
+	PutU32(tok1.bytes, tok1.layout.special_blob_len_off, tok1.layout.special_blob_len - 2);
+	AssertTok1Rejected(tok1.bytes, "TOK1 special offset out of range (special_blob_len understated)");
+}
+
+// --- UNI1 cells. Each isolates exactly one deviation from docs/sslm_format.md's
+//     "UnicodeTables blob — UNI1" layout in the minimal valid blob. letter/
+//     number/space share one ReadRanges() implementation in src/tokenizer.cpp;
+//     the count-field-truncation sub-case is exercised once (on letter, the first
+//     call) rather than duplicated three times — the other two axes (range-data
+//     truncation, count overflow) are exercised per table, since those are the
+//     axes a per-call regression could plausibly differ on. ---
+
+static void TestUni1RejectsBadMagic() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes[0] = 'X';  // was 'U' of "UNI1", offset 0
+	AssertUni1Rejected(uni1.bytes, "UNI1 bad magic");
+}
+
+static void TestUni1RejectsTruncatedHeader() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(5);  // shorter than the 8-byte magic+version header
+	AssertUni1Rejected(uni1.bytes, "UNI1 truncated header");
+}
+
+static void TestUni1RejectsLetterCountFieldTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.letter_count_off + 2);  // half of the 4-byte count field
+	AssertUni1Rejected(uni1.bytes, "UNI1 letter range-table count field truncated");
+}
+
+static void TestUni1RejectsLetterRangesTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.letter_data_off + 4);  // 4 of the required 16 bytes (2 ranges)
+	AssertUni1Rejected(uni1.bytes, "UNI1 letter ranges truncated");
+}
+
+static void TestUni1RejectsLetterCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.letter_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 letter range count == 0xFFFFFFFF");
+}
+
+static void TestUni1RejectsNumberRangesTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.number_data_off + 4);  // 4 of the required 8 bytes (1 range)
+	AssertUni1Rejected(uni1.bytes, "UNI1 number ranges truncated");
+}
+
+static void TestUni1RejectsNumberCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.number_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 number range count == 0xFFFFFFFF");
+}
+
+static void TestUni1RejectsSpaceRangesTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.space_data_off + 8);  // 8 of the required 16 bytes (2 ranges)
+	AssertUni1Rejected(uni1.bytes, "UNI1 space ranges truncated");
+}
+
+static void TestUni1RejectsSpaceCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.space_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 space range count == 0xFFFFFFFF");
+}
+
+static void TestUni1RejectsCccTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.ccc_data_off + 4);  // 4 of the required 8 bytes (1 entry)
+	AssertUni1Rejected(uni1.bytes, "UNI1 ccc table truncated");
+}
+
+static void TestUni1RejectsCccCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.ccc_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 ccc count == 0xFFFFFFFF");
+}
+
+static void TestUni1RejectsDecompCpsTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.decomp_cps_off + 2);  // half of the required 4 bytes (1 cp)
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp cps truncated");
+}
+
+static void TestUni1RejectsDecompCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.decomp_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp count == 0xFFFFFFFF");
+}
+
+static void TestUni1RejectsDecompOffsetsTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.decomp_offsets_off + 4);  // 1 of the required decomp_count+1=2 entries
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offsets truncated");
+}
+
+static void TestUni1RejectsDecompOffsetOutOfRange() {
+	auto uni1 = MakeMinimalValidUni1();
+	// Baseline decomp offsets [0,2] (seq_len=2). Bump the terminal offset (index 1)
+	// past seq_len while keeping it >= its predecessor — a pure range violation.
+	PutU32(uni1.bytes, uni1.layout.decomp_offsets_off + 1 * 4, uni1.layout.seq_len + 97);
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offset out of range");
+}
+
+static void TestUni1RejectsDecompOffsetNonMonotonic() {
+	auto uni1 = MakeMinimalValidUni1();
+	// Baseline decomp offsets [0,2]. Set index 0 to 3 (> index 1's 2) — non-
+	// monotonic; index 1 (2) does not itself exceed seq_len (2).
+	PutU32(uni1.bytes, uni1.layout.decomp_offsets_off + 0 * 4, 3);
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offset non-monotonic");
+}
+
+static void TestUni1RejectsDecompSeqTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.decomp_seq_off + 4);  // half of the required 8 bytes (seq_len=2)
+	AssertUni1Rejected(uni1.bytes, "UNI1 decomp seq truncated");
+}
+
+static void TestUni1RejectsComposeTruncated() {
+	auto uni1 = MakeMinimalValidUni1();
+	uni1.bytes.resize(uni1.layout.compose_data_off + 6);  // half of the required 12 bytes (1 entry)
+	AssertUni1Rejected(uni1.bytes, "UNI1 compose table truncated");
+}
+
+static void TestUni1RejectsComposeCountOverflow() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.compose_count_off, 0xFFFFFFFFu);
+	AssertUni1Rejected(uni1.bytes, "UNI1 compose count == 0xFFFFFFFF");
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -967,6 +1366,49 @@ int main() {
 	TestTokenizerSpecialTokenIdMatchesArtifactDeclaration();
 	TestTokenizerVocabSizeMatchesArtifactDeclaration();
 	TestTokenizerAsciiStringRoundTrips();
+
+	// --- Curie's T-129 TOK1/UNI1 sub-parse hostile-input suite (red-first). ---
+	TestMinimalTokenizerArtifactOpensAndRoundTrips();
+	TestOpenRejectsArtifactMissingTokenizerSection();
+	TestOpenRejectsArtifactMissingUnicodeTablesSection();
+	TestTok1RejectsBadMagic();
+	TestTok1RejectsTruncatedHeader();
+	TestTok1RejectsVocabCountOverflow();
+	TestTok1RejectsMergeCountOverflow();
+	TestTok1RejectsSpecialCountOverflow();
+	TestTok1RejectsTruncatedByteToId();
+	TestTok1RejectsTruncatedVocabOffsets();
+	TestTok1RejectsTruncatedVocabBlobLen();
+	TestTok1RejectsTruncatedVocabBlob();
+	TestTok1RejectsVocabOffsetNonMonotonic();
+	TestTok1RejectsLastVocabOffsetExceedsBlob();
+	TestTok1RejectsMiddleVocabOffsetExceedsBlob();
+	TestTok1RejectsTruncatedMerges();
+	TestTok1RejectsTruncatedSpecialIds();
+	TestTok1RejectsTruncatedSpecialOffsets();
+	TestTok1RejectsTruncatedSpecialBlobLen();
+	TestTok1RejectsTruncatedSpecialBlob();
+	TestTok1RejectsSpecialOffsetNonMonotonic();
+	TestTok1RejectsSpecialOffsetOutOfRange();
+	TestUni1RejectsBadMagic();
+	TestUni1RejectsTruncatedHeader();
+	TestUni1RejectsLetterCountFieldTruncated();
+	TestUni1RejectsLetterRangesTruncated();
+	TestUni1RejectsLetterCountOverflow();
+	TestUni1RejectsNumberRangesTruncated();
+	TestUni1RejectsNumberCountOverflow();
+	TestUni1RejectsSpaceRangesTruncated();
+	TestUni1RejectsSpaceCountOverflow();
+	TestUni1RejectsCccTruncated();
+	TestUni1RejectsCccCountOverflow();
+	TestUni1RejectsDecompCpsTruncated();
+	TestUni1RejectsDecompCountOverflow();
+	TestUni1RejectsDecompOffsetsTruncated();
+	TestUni1RejectsDecompOffsetOutOfRange();
+	TestUni1RejectsDecompOffsetNonMonotonic();
+	TestUni1RejectsDecompSeqTruncated();
+	TestUni1RejectsComposeTruncated();
+	TestUni1RejectsComposeCountOverflow();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
