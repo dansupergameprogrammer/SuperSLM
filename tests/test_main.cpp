@@ -3223,19 +3223,35 @@ static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
 
 // ---------------------------------------------------------------------------
 // Downstream int8-code-agreement (§9 step 5, §10 item 5, §12 dim 7/10 -- the
-// feature oracle's intermediate achievement claim). REFERENCE/EXACT-VALUE
-// oracle: reproduces the Laplace C10 solve's own measurement EXACTLY --
-// 319 of 2,007,040 codes differ (0.0159%), max |code delta| = 1 -- because
-// this cell runs the IDENTICAL subset (Claude/Laplace/harness/silu_lut/
-// experiment.py's "Q2" selection: first 8 tokens of every layer, 28 layers x
-// 8 = 224 rows x 8960 elements, committed at tests/fixtures/
-// silu_lut_real_vectors.bin) through the SAME already-shipped C19-C22 requant
-// primitives (S2.1: MaxAbsReduce/NormalizeScale/DynamicScaleReciprocal/
-// RequantTokenCode) the harness's Python port of intmath.py also calls,
-// against the SAME construction (LUT N=1024 X=16 Q12 sub-node index). Any
-// deviation from the exact measured counts is a real regression, not sampling
-// noise, since the subset and construction are byte-for-byte the ones the
-// C10 solve's decisive metric was measured on.
+// feature oracle's intermediate achievement claim). Runs the IDENTICAL subset
+// (Claude/Laplace/harness/silu_lut/experiment.py's "Q2" selection: first 8
+// tokens of every layer, 28 layers x 8 = 224 rows x 8960 elements, committed
+// at tests/fixtures/silu_lut_real_vectors.bin) through the SAME
+// already-shipped C19-C22 requant primitives (S2.1) the harness's Python
+// port of intmath.py also calls.
+//
+// The primary acceptance is BAND reproduction, not the harness's exact diff
+// count, per the design's own boundary: §10 item 2 states the harness's
+// float64 model "is not the golden source for this comparison -- it
+// establishes quality, not bits"; §14 amendment 3 / §10 item 4 name the root
+// cause directly -- the harness's B_sigmoid TRUNCATES the sub-node position
+// (`experiment.py`'s `frac_bits` port), while this construction's runtime
+// (§5) ROUNDS it (C3, RoundingDivideByPOT) -- a different decomposition that
+// can flip which borderline int8 codes land on which side of a boundary,
+// changing the exact diff count while preserving the statistic. §10 item 5
+// states the acceptance explicitly: the re-measurement "reproduces its
+// 0.016-0.021% band ... not a new number" -- band, not count. Oracle kind:
+// REFERENCE/EXACT-VALUE against the band + the max-delta bound (both from
+// the design's own acceptance criteria), not a self-consistency check.
+//
+// (2026-07-19 correction, folded from Brunel's flag on greening this cell:
+// the initial authoring over-specified the oracle by asserting the harness's
+// own exact count (319) as bit-golden for a construction the design itself
+// says produces a different decomposition. Brunel's build measured 338 diffs
+// (0.0168%), max |code delta| = 1 -- inside the cited band, consistent with
+// the op-level <=1-ULP parity cell (§3.7) passing at 0 over-bound on the same
+// vectors -- so this is an oracle fix, not a defect in §5/§6. The exact count
+// is now an informational comment only, not asserted.)
 // ---------------------------------------------------------------------------
 
 static void TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand() {
@@ -3308,16 +3324,19 @@ static void TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand() {
 
 	CHECK_MSG(total_codes == 2007040, "total_codes == %llu, want 2007040",
 	          static_cast<unsigned long long>(total_codes));
-	// The Laplace C10 solve's own measured downstream figure on this exact
-	// subset (result_packet.json "downstream" key, B_champ N1024_X16_Q12idx):
-	// 319 diffs of 2,007,040 (0.0159%), max |code delta| = 1.
-	CHECK_MSG(diff_count == 319, "diff_count == %llu, want 319 (the Laplace-measured count)",
-	          static_cast<unsigned long long>(diff_count));
-	CHECK_MSG(max_delta <= 1, "max |code delta| == %d, want <= 1", max_delta);
+	// Informational only, not asserted: the Laplace C10 solve's own harness
+	// measured 319 diffs of 2,007,040 (0.0159%) on this exact subset
+	// (result_packet.json "downstream" key, B_champ N1024_X16_Q12idx) using
+	// its truncating sub-node index port. This construction rounds instead
+	// (C3), so its exact count is expected to differ -- see the comment
+	// above this function. `diff_count` and the derived `pct` are printed via
+	// CHECK_MSG's failure path only if the band check below fails, so a
+	// regression names its own actual numbers.
 	const double pct = 100.0 * static_cast<double>(diff_count) / static_cast<double>(total_codes);
-	CHECK_MSG(pct >= 0.010 && pct <= 0.030, "downstream int8-agreement %.4f%% outside the measured 0.016-0.021%% "
-	                                        "band (loose corroboration of the exact-count check above)",
-	          pct);
+	CHECK_MSG(pct >= 0.016 && pct <= 0.021,
+	          "downstream int8-agreement %.4f%% (%llu/%llu diffs) outside the design's cited 0.016-0.021%% band",
+	          pct, static_cast<unsigned long long>(diff_count), static_cast<unsigned long long>(total_codes));
+	CHECK_MSG(max_delta <= 1, "max |code delta| == %d, want <= 1", max_delta);
 }
 
 // ---------------------------------------------------------------------------
