@@ -312,11 +312,29 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
-// --- §6.4 RoPE rotation — STUB (S2.3 red-phase) -------------------------------
-// Deliberately-wrong sentinel so Curie's S2.3 red suite compiles+links+fails.
+// --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
 
-RopePair RopeApplyPair(int32_t, int32_t, int32_t, int32_t) {
-	return RopePair{-1, -1};  // stub
+namespace {
+// The §6.2 RoundingDivideByPOT primitive at int64 width — identical semantics to the int32
+// `RoundingDivideByPOT` (ties away from zero, C3), generalized so RoPE's ~2^62 rotation
+// intermediate does not truncate through the int32 overload. exponent in [0, 63].
+int64_t RoundingDivideByPOTWide(int64_t x, int exponent) {
+	uint64_t mask = (uint64_t{1} << exponent) - 1u;
+	uint64_t remainder = static_cast<uint64_t>(x) & mask;
+	uint64_t threshold = (mask >> 1) + (x < 0 ? 1u : 0u);
+	return (x >> exponent) + (remainder > threshold ? 1 : 0);
+}
+}  // namespace
+
+RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
+	// (x·cos − y·sin, x·sin + y·cos) combined at full int64 width (each product ≤ 2^61, each
+	// sum ≤ 2^62 — no int64 overflow), then rounded ONCE at ROPE_FRAC_BITS. Unclamped: the exact
+	// single-rounded rotation, which can reach ~sqrt(2)·|input| (2^32 at the corners); the caller
+	// clamps to the activation format.
+	int64_t xr = static_cast<int64_t>(x) * cos_q30 - static_cast<int64_t>(y) * sin_q30;
+	int64_t yr = static_cast<int64_t>(x) * sin_q30 + static_cast<int64_t>(y) * cos_q30;
+	return RopePair{RoundingDivideByPOTWide(xr, ROPE_FRAC_BITS),
+	                RoundingDivideByPOTWide(yr, ROPE_FRAC_BITS)};
 }
 
 }  // namespace superslm
