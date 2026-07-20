@@ -39,6 +39,7 @@ inline uint64_t UShrToU64(U128 v, int k) { return static_cast<uint64_t>(v >> k);
 
 inline S128 SFromI64(int64_t v) { return static_cast<S128>(v); }
 inline S128 SMul(int64_t a, int64_t b) { return static_cast<S128>(a) * static_cast<S128>(b); }
+inline S128 SAdd(S128 a, S128 b) { return a + b; }
 inline S128 SSub(S128 a, S128 b) { return a - b; }
 inline S128 STwice(S128 a) { return a << 1; }
 inline bool SGe(S128 a, S128 b) { return a >= b; }
@@ -238,24 +239,68 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
-// --- §6.3 nonlinear scalar primitives — STUB (S2.2 red-phase) -----------------
-// Deliberately-wrong sentinel bodies so Curie's S2.2 red suite compiles+links+fails.
-// Brunel replaces each with the bit-exact port in the S2.2 green phase.
+// --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------
 
-int64_t ISqrt(int64_t) {
-	return -1;  // stub
+namespace {
+// The root after each of the exactly-I_SQRT_ITERATIONS digit steps (restoring
+// shift-and-subtract). Compare / subtract / shift — no division (keeps i-sqrt off §18's
+// int64-division GPU-semantics row). All 32 iterations run UNCONDITIONALLY: skipping leading
+// zero digits (the `while bit > n` prologue) would make the op count a function of the
+// radicand, which §14 forbids — below the leading digit the comparison simply takes the else
+// branch. No overflow: remainder <= n < 2^63; trial = root + bit <= 2^31 + 2^62 < 2^63.
+void ISqrtIterates(int64_t n, int64_t out[I_SQRT_ITERATIONS]) {
+	int64_t remainder = n;
+	int64_t root = 0;
+	int64_t bit = int64_t{1} << 62;  // C6: the first digit's weight, 4^31
+	for (int i = 0; i < I_SQRT_ITERATIONS; ++i) {
+		int64_t trial = root + bit;
+		if (remainder >= trial) {
+			remainder -= trial;
+			root = (root >> 1) + bit;
+		} else {
+			root >>= 1;
+		}
+		bit >>= 2;
+		out[i] = root;
+	}
+}
+}  // namespace
+
+int64_t ISqrt(int64_t n) {
+	int64_t it[I_SQRT_ITERATIONS];
+	ISqrtIterates(n, it);
+	return it[I_SQRT_ITERATIONS - 1];
 }
 
-void ISqrtTrace(int64_t, int64_t out_iterates[I_SQRT_ITERATIONS]) {
-	for (int i = 0; i < I_SQRT_ITERATIONS; ++i) out_iterates[i] = -1;  // stub
+void ISqrtTrace(int64_t n, int64_t out_iterates[I_SQRT_ITERATIONS]) {
+	ISqrtIterates(n, out_iterates);
 }
 
-void ShiftByMax(const int64_t*, size_t n, int64_t* out) {
-	for (size_t i = 0; i < n; ++i) out[i] = -1;  // stub
+void ShiftByMax(const int64_t* logits, size_t n, int64_t* out) {
+	// Puts the maximum at 0 (so every result is <= 0, i-exp's domain). Inputs are int64 so
+	// the difference cannot overflow for int32-range logits widened by the caller. n >= 1.
+	int64_t peak = logits[0];
+	for (size_t i = 1; i < n; ++i) {
+		if (logits[i] > peak) peak = logits[i];
+	}
+	for (size_t i = 0; i < n; ++i) out[i] = logits[i] - peak;
 }
 
-int64_t IExpFromConstants(int64_t, int64_t, int64_t, int64_t) {
-	return -1;  // stub
+int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
+	// I-BERT integer polynomial core. q is a max-shifted logit (q <= 0) and q_ln2 >= 1 by
+	// contract, so z >= 0 and the final shift is well defined (no negative shift).
+	//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2
+	//   return ((q_p + q_b)^2 + q_c) >> z
+	int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
+	int64_t clipped = q < clip_lo ? clip_lo : q;
+	int64_t z = (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative floor division
+	int64_t q_p = clipped + z * q_ln2;  // in (−q_ln2, 0]
+	int64_t base = q_p + q_b;
+	// (base^2 + q_c) >> z in 128-bit: base^2 reaches ~2^62 and q_c ~2^62 in the realistic
+	// domain (near 0.5·INT64_MAX), and C30's per-token constants may push wider — so carry it
+	// wide and take an arithmetic (floor) shift to match the reference's big-integer `>>`.
+	S128 v = SAdd(SMul(base, base), SFromI64(q_c));
+	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
 }  // namespace superslm
