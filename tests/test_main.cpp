@@ -9,11 +9,13 @@
 // (SuperSLM_Plan.md §15; §17 Coverage Model) and appended here.
 
 #include "superslm/artifact.h"
+#include "superslm/intmath.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/tokenizer.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
+#include "sslm_intmath_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -2322,6 +2324,182 @@ static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
 	          manifest.Tensors().size());
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.1 intmath red suite (SuperSLM_Plan.md S2.1; §6.8 C1/C2/C3 +
+// C19-C22; Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md).
+// Every golden value in sslm_intmath_fixtures.h is computed by CALLING
+// Tools/superslm_spike/intmath.py (D-SLM52, the pinned reference) via
+// tests/gen_intmath_fixtures.py — never hand-computed. src/intmath.cpp is
+// currently a red-first stub (deliberately-wrong sentinel bodies): every
+// cell below fails red against those sentinels for its own documented
+// reason. Once Brunel ports the real bodies, each cell either passes or
+// fails for its own reason until the port is bit-exact against the pinned
+// reference, then goes green.
+// ---------------------------------------------------------------------------
+
+static void TestC2SaturatingRoundingDoublingHighMul() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kC2CasesCount; ++i) {
+		const C2Case& c = kC2Cases[i];
+		int32_t got = superslm::SaturatingRoundingDoublingHighMul(c.a, c.b);
+		CHECK_MSG(got == c.expected, "%s: SaturatingRoundingDoublingHighMul(%d, %d) == %d, want %d",
+		          c.label, c.a, c.b, got, c.expected);
+	}
+}
+
+static void TestC1C3RoundingDivideByPOT() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kC1C3CasesCount; ++i) {
+		const C1C3Case& c = kC1C3Cases[i];
+		int32_t got = superslm::RoundingDivideByPOT(c.x, c.exponent);
+		CHECK_MSG(got == c.expected, "%s: RoundingDivideByPOT(%d, %d) == %d, want %d",
+		          c.label, c.x, c.exponent, got, c.expected);
+	}
+}
+
+static void TestMultiplyByQuantizedMultiplier() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kMbqmCasesCount; ++i) {
+		const MbqmCase& c = kMbqmCases[i];
+		int32_t got = superslm::MultiplyByQuantizedMultiplier(c.x, c.multiplier, c.shift);
+		CHECK_MSG(got == c.expected, "%s: MultiplyByQuantizedMultiplier(%d, %d, %d) == %d, want %d",
+		          c.label, c.x, c.multiplier, c.shift, got, c.expected);
+	}
+}
+
+static void TestClz64() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kClz64CasesCount; ++i) {
+		const Clz64Case& c = kClz64Cases[i];
+		int got = superslm::Clz64(c.n);
+		CHECK_MSG(got == c.expected, "%s: Clz64(%llu) == %d, want %d", c.label,
+		          static_cast<unsigned long long>(c.n), got, c.expected);
+	}
+}
+
+static void TestMaxAbsReduce() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kMaxAbsCasesCount; ++i) {
+		const MaxAbsCase& c = kMaxAbsCases[i];
+		int64_t got = superslm::MaxAbsReduce(c.data, c.n);
+		CHECK_MSG(got == c.expected, "%s: MaxAbsReduce(n=%zu) == %lld, want %lld", c.label, c.n,
+		          static_cast<long long>(got), static_cast<long long>(c.expected));
+	}
+
+	// Order-independence, checked directly rather than only via matching
+	// expected values: the three "order_perm_*" fixture cases are the same
+	// multiset under three different orderings, so their live results must
+	// agree with each other, not merely each with its own precomputed golden.
+	int64_t perm_a = superslm::MaxAbsReduce(kMaxAbsData8, 5);
+	int64_t perm_b = superslm::MaxAbsReduce(kMaxAbsData9, 5);
+	int64_t perm_c = superslm::MaxAbsReduce(kMaxAbsData10, 5);
+	CHECK_MSG(perm_a == perm_b && perm_b == perm_c,
+	          "MaxAbsReduce is not order-independent: perm_a=%lld perm_b=%lld perm_c=%lld",
+	          static_cast<long long>(perm_a), static_cast<long long>(perm_b),
+	          static_cast<long long>(perm_c));
+}
+
+static void TestNormalizeScale() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kNormalizeScaleCasesCount; ++i) {
+		const NormalizeScaleCase& c = kNormalizeScaleCases[i];
+		superslm::NormalizedScale got = superslm::NormalizeScale(c.d_prime);
+		CHECK_MSG(got.dn == c.expected_dn, "%s: NormalizeScale(%lld).dn == %lld, want %lld", c.label,
+		          static_cast<long long>(c.d_prime), static_cast<long long>(got.dn),
+		          static_cast<long long>(c.expected_dn));
+		CHECK_MSG(got.s == c.expected_s, "%s: NormalizeScale(%lld).s == %d, want %d", c.label,
+		          static_cast<long long>(c.d_prime), got.s, c.expected_s);
+		// Postcondition (C21): 2^30 <= Dn < 2^31 must hold on every case,
+		// independent of whether it matches the golden — a bug that produces
+		// a wrong-but-still-in-range Dn should not also silently violate the
+		// documented contract.
+		CHECK_MSG(got.dn >= (INT64_C(1) << 30) && got.dn < (INT64_C(1) << 31),
+		          "%s: NormalizeScale(%lld).dn == %lld violates the C21 postcondition [2^30, 2^31)",
+		          c.label, static_cast<long long>(c.d_prime), static_cast<long long>(got.dn));
+	}
+}
+
+static void TestDynamicScaleReciprocalNamed() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kDynRecipNamedCasesCount; ++i) {
+		const DynRecipNamedCase& c = kDynRecipNamedCases[i];
+		int64_t got = superslm::DynamicScaleReciprocal(c.dn);
+		CHECK_MSG(got == c.expected_r, "%s: DynamicScaleReciprocal(%lld) == %lld, want %lld", c.label,
+		          static_cast<long long>(c.dn), static_cast<long long>(got),
+		          static_cast<long long>(c.expected_r));
+	}
+}
+
+static void TestDynamicScaleReciprocalDenseSample() {
+	using namespace superslm_test;
+	size_t mismatches = 0;
+	for (size_t i = 0; i < kDynRecipDenseCasesCount; ++i) {
+		const DynRecipDenseCase& c = kDynRecipDenseCases[i];
+		int64_t got = superslm::DynamicScaleReciprocal(c.dn);
+		++GChecks;
+		if (got != c.expected_r) {
+			++GFailures;
+			++mismatches;
+			if (mismatches <= 20) {
+				std::printf("FAIL %s:%d: DynamicScaleReciprocal(%lld) == %lld, want %lld (dense sample)\n",
+				            __FILE__, __LINE__, static_cast<long long>(c.dn), static_cast<long long>(got),
+				            static_cast<long long>(c.expected_r));
+			}
+		}
+	}
+	if (mismatches > 20) {
+		std::printf("... %zu additional DynamicScaleReciprocal dense-sample mismatches suppressed\n",
+		            mismatches - 20);
+	}
+}
+
+static void TestRequantTokenCode() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kRequantCasesCount; ++i) {
+		const RequantCase& c = kRequantCases[i];
+		int8_t got = superslm::RequantTokenCode(c.x_i, c.r, c.s);
+		CHECK_MSG(got == c.expected, "%s: RequantTokenCode(%d, %lld, %d) == %d, want %d", c.label,
+		          c.x_i, static_cast<long long>(c.r), c.s, static_cast<int>(got),
+		          static_cast<int>(c.expected));
+		CHECK_MSG(got >= -127 && got <= 127, "%s: RequantTokenCode(%d, %lld, %d) == %d, out of [-127, 127]",
+		          c.label, c.x_i, static_cast<long long>(c.r), c.s, static_cast<int>(got));
+	}
+}
+
+static void TestIntmathPipelineComposition() {
+	// The feature oracle (dim 10) for the C19-C22 chain: MaxAbsReduce ->
+	// NormalizeScale -> DynamicScaleReciprocal -> RequantTokenCode composed
+	// exactly as the runtime rung-1 per-token quantizer composes them,
+	// asserted against intmath.py's own end-to-end composition rather than
+	// against each primitive's isolated golden alone — proves the four
+	// C++ ports agree with each other's outputs in sequence, not merely
+	// each in isolation.
+	using namespace superslm_test;
+	for (size_t i = 0; i < kPipelineCasesCount; ++i) {
+		const PipelineCase& c = kPipelineCases[i];
+		int64_t d_prime = superslm::MaxAbsReduce(c.xs, c.n);
+		CHECK_MSG(d_prime == c.expected_d_prime, "%s: pipeline MaxAbsReduce == %lld, want %lld", c.label,
+		          static_cast<long long>(d_prime), static_cast<long long>(c.expected_d_prime));
+
+		superslm::NormalizedScale ns = superslm::NormalizeScale(d_prime);
+		CHECK_MSG(ns.dn == c.expected_dn, "%s: pipeline NormalizeScale(D').dn == %lld, want %lld", c.label,
+		          static_cast<long long>(ns.dn), static_cast<long long>(c.expected_dn));
+		CHECK_MSG(ns.s == c.expected_s, "%s: pipeline NormalizeScale(D').s == %d, want %d", c.label, ns.s,
+		          c.expected_s);
+
+		int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+		CHECK_MSG(r == c.expected_r, "%s: pipeline DynamicScaleReciprocal(Dn) == %lld, want %lld", c.label,
+		          static_cast<long long>(r), static_cast<long long>(c.expected_r));
+
+		for (size_t j = 0; j < c.n; ++j) {
+			int8_t code = superslm::RequantTokenCode(c.xs[j], r, ns.s);
+			CHECK_MSG(code == c.expected_codes[j],
+			          "%s: pipeline RequantTokenCode(x[%zu]=%d, R, s) == %d, want %d", c.label, j, c.xs[j],
+			          static_cast<int>(code), static_cast<int>(c.expected_codes[j]));
+		}
+	}
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -2490,6 +2668,19 @@ int main() {
 	//     green at authoring time). ---
 	TestWeightScalesMinimalManifestParsesAndRoundTrips();
 	TestWeightScalesRejectsWrongMagicDiscriminatesPerType();
+
+	// --- Curie's S2.1 intmath red suite (red-first; src/intmath.cpp is
+	//     currently deliberately-wrong stub bodies). ---
+	TestC2SaturatingRoundingDoublingHighMul();
+	TestC1C3RoundingDivideByPOT();
+	TestMultiplyByQuantizedMultiplier();
+	TestClz64();
+	TestMaxAbsReduce();
+	TestNormalizeScale();
+	TestDynamicScaleReciprocalNamed();
+	TestDynamicScaleReciprocalDenseSample();
+	TestRequantTokenCode();
+	TestIntmathPipelineComposition();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
