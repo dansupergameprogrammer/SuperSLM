@@ -16,6 +16,7 @@ add_library(superslm STATIC
 	src/model.cpp
 	src/intmath.cpp
 	src/silu_lut.cpp
+	src/matmul.cpp
 )
 target_include_directories(superslm PUBLIC include)
 
