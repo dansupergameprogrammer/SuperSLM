@@ -12,21 +12,27 @@
 #include "superslm/intmath.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
+#include "superslm/silu_lut.h"
 #include "superslm/tokenizer.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
 #include "sslm_intmath_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
+#include "sslm_sil1_hostile_fixtures.h"
+#include "sslm_silu_lut_real_vectors_fixtures.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 
+#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace superslm;
@@ -2742,6 +2748,655 @@ static void TestRopeApplyPairTieRoundsAwayFromZero() {
 	CHECK_MSG(checked == 6, "expected 6 tie fixture cells, found %d", checked);
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.4 SiLU sigmoid-LUT red suite (SuperSLM_S2.4_SiLU_LUT_Design;
+// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both red-first stubs:
+//   - `superslm::ParseSigmoidLut` (src/model.cpp) — the SIL1 fixed-layout
+//     hostile sub-parse, currently accepts everything and exposes nothing
+//     (§8, §12 dim 2/5/9).
+//   - `superslm::SiluSigmoidQ15` (src/silu_lut.cpp) — the runtime index
+//     derivation + interpolation, currently returns the sentinel INT32_MIN
+//     unconditionally (§5, §6, §12 dim 4/6/7/10).
+//
+// Every cell states, in its own comment, which §12 Coverage Model dimension /
+// §10 acceptance item it proves and its oracle kind. Per §12's own discipline:
+// the op-level parity cell is a CONSISTENCY oracle (LUT vs an independently
+// computed float reference) — blind to a value that is wrong but deterministic
+// — so the saturation, interior-interpolation, and downstream int8-agreement
+// cells are the REFERENCE/EXACT-VALUE oracles that catch what parity alone
+// cannot. Every expected numeric constant below is derived from scratch
+// against the §4/§5/§6 formulas (independently re-derived and cross-checked
+// against a standalone Python re-implementation of the same formulas before
+// authoring), never by calling `SiluSigmoidQ15` itself.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared assertion for every SIL1 hostile cell below: ParseSigmoidLut must
+// reject with the cell's one named status and leave `out` at
+// SslmSigmoidLut{} defaults (never a partial or repaired view) — the
+// reject-over-degrade law, mirroring AssertCfg1Rejected.
+void AssertSil1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmModelStatus want, const char* why) {
+	SslmSectionView view = MakeSigmoidLutSectionView(mutated_bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == want, "%s: got %s, want %s", why, SslmModelStatusName(status), SslmModelStatusName(want));
+	CHECK_MSG(out.values == nullptr && out.entry_count == 0,
+	          "%s: SslmSigmoidLut not left at defaults on a rejected parse", why);
+}
+
+}  // namespace
+
+// --- SIL1 sub-parse: the feature oracle (dim 10) + lifetime/reuse (dim 1) +
+//     the payload round-trip (dim 9's third clause). The minimal fixture every
+//     hostile cell mutates from is itself spec-faithful: it parses to Ok and
+//     every one of the 1025 nodes reads back exactly what the independent
+//     reference table computed (BuildReferenceSigmoidLutQ15 — a from-scratch
+//     double-precision computation, not a read of any code under test),
+//     including the two extreme nodes (table[0], table[N]) whose exact values
+//     the domain-clamp cells below also depend on. ---
+
+static void TestMinimalSil1ParsesAndReadsBackAllNodes() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	CHECK_MSG(ref.size() == kSigmoidLutEntries, "reference table has %zu entries, want %u", ref.size(),
+	          kSigmoidLutEntries);
+
+	auto bytes = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "minimal SIL1 failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK_MSG(out.entry_count == kSigmoidLutEntries, "entry_count == %u, want %u", out.entry_count,
+	          kSigmoidLutEntries);
+	// The red-first stub reports Ok while leaving `out` at SslmSigmoidLut{}
+	// defaults (values == nullptr): SigmoidLutValue's contract is undefined
+	// for i >= entry_count, so guard against reading through a null/empty
+	// view rather than let the stub's false "Ok" crash this cell.
+	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse (red-first stub)");
+	if (out.entry_count != kSigmoidLutEntries || out.values == nullptr) return;
+	int mismatches = 0;
+	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) {
+		int32_t got = SigmoidLutValue(out, i);
+		if (got != ref[i]) ++mismatches;
+	}
+	CHECK_MSG(mismatches == 0, "%d of %u nodes did not read back the reference table's value", mismatches,
+	          kSigmoidLutEntries);
+	// The two extreme nodes, named explicitly: the domain-clamp saturation
+	// cells below assert against these same two values.
+	CHECK_MSG(SigmoidLutValue(out, 0) == ref[0], "table[0] == %d, want %d", SigmoidLutValue(out, 0), ref[0]);
+	CHECK_MSG(SigmoidLutValue(out, kSiluLutN) == ref[static_cast<size_t>(kSiluLutN)], "table[N] == %d, want %d",
+	          SigmoidLutValue(out, kSiluLutN), ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+// dim 1 — lifetime and reuse: the same parsed SslmSigmoidLut, read many times
+// (standing in for "across many tokens"), must never drift — every repeated
+// read of the same node returns the identical value a fresh read would.
+static void TestSil1WarmObjectRepeatedReadsShowNoDrift() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "warm-object fixture failed to parse: got %s",
+	          SslmModelStatusName(status));
+	if (status != SslmModelStatus::Ok) return;
+	// Guard against the red-first stub's false "Ok" over a null/empty view
+	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
+	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
+
+	const int32_t first_read_node0 = SigmoidLutValue(out, 0);
+	const int32_t first_read_mid = SigmoidLutValue(out, kSiluLutN / 2);
+	const int32_t first_read_n = SigmoidLutValue(out, kSiluLutN);
+	int drift = 0;
+	for (int pass = 0; pass < 1000; ++pass) {
+		if (SigmoidLutValue(out, 0) != first_read_node0) ++drift;
+		if (SigmoidLutValue(out, kSiluLutN / 2) != first_read_mid) ++drift;
+		if (SigmoidLutValue(out, kSiluLutN) != first_read_n) ++drift;
+	}
+	CHECK_MSG(drift == 0, "%d of 3000 repeated reads drifted from the first read (no re-derivation expected)",
+	          drift);
+}
+
+// dim 9 (third clause) — SIL1's payload plus its internal magic+version pair
+// round-trips bit-exactly after parse + read-back + re-encode.
+static void TestSil1RoundTripReencodeMatchesOriginalBytes() {
+	using namespace superslm_test;
+	auto original = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(original);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "round-trip fixture failed to parse: got %s",
+	          SslmModelStatusName(status));
+	if (status != SslmModelStatus::Ok) return;
+	// Guard against the red-first stub's false "Ok" over a null/empty view
+	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
+	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
+
+	std::vector<int32_t> readback(kSigmoidLutEntries);
+	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) readback[i] = SigmoidLutValue(out, i);
+	auto reencoded = BuildSil1(readback, kManifestVersion, kSigmoidLutEntries, /*reserved=*/0);
+	CHECK_MSG(reencoded.size() == original.size(), "re-encoded size %zu != original size %zu", reencoded.size(),
+	          original.size());
+	CHECK_MSG(reencoded == original, "re-encoded SIL1 bytes (magic+version+entry_count+reserved+payload) "
+	                                  "do not match the original bytes exactly");
+}
+
+// --- SIL1 hostile rejection cells (dim 2/5). SIL1 is a single FIXED-layout
+//     struct — no variable-length region — so BadSigmoidLutSize (byte_size !=
+//     4116) is the entire bounds surface, both directions. ---
+
+static void TestSil1RejectsSizeTooShort() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes.pop_back();  // 4115 bytes, < kSigmoidLutBytes (4116)
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4115 (< 4116)");
+}
+
+static void TestSil1RejectsSizeTooLong() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes.push_back(0);  // 4117 bytes, > kSigmoidLutBytes (4116)
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4117 (> 4116)");
+}
+
+static void TestSil1RejectsBadMagic() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes[kSil1MagicOff] = 'X';  // was 'S' of "SIL1"
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutMagic, "SIL1 bad magic");
+}
+
+static void TestSil1RejectsUnsupportedVersion() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1VersionOff, 2);  // only 1 is valid (kManifestVersion)
+	AssertSil1Rejected(bytes, SslmModelStatus::UnsupportedSigmoidLutVersion, "SIL1 version == 2");
+}
+
+// entry_count is a distinct field from byte_size: this cell holds byte_size at
+// exactly 4116 (so BadSigmoidLutSize's check would pass) and mutates only the
+// header's declared entry_count, isolating BadSigmoidLutCount from the size
+// check above.
+static void TestSil1RejectsBadEntryCount() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1EntryCountOff, kSigmoidLutEntries - 1);  // 1024, byte_size unchanged at 4116
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutCount, "SIL1 entry_count == 1024 (!= 1025)");
+}
+
+static void TestSil1RejectsBadReserved() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1ReservedOff, 1);
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutReserved, "SIL1 reserved == 1");
+}
+
+// ---------------------------------------------------------------------------
+// dim 9 — version evolution / mutual rejection. Only the CURRENT (v2) loader
+// is compiled into this binary, so only one of the design's two named
+// directions is executable here: a new-version loader rejecting a
+// pre-SigmoidLut (v1-shaped) artifact under the old format_version. The
+// reverse direction (an old-version loader rejecting a v2 artifact) is the
+// SAME single-field check (format_version != the reader's own compiled-in
+// constant) applied symmetrically, and has no independent v1-loader binary to
+// execute against in this repository — named here rather than silently
+// assumed, mirroring TestRejectsUnsupportedVersion's own one-direction scope
+// for the "too new" case (test_main.cpp line ~128).
+// ---------------------------------------------------------------------------
+
+static void TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader() {
+	using namespace superslm_test;
+	// A v1-shaped artifact: Config only, no SigmoidLut section, format_version
+	// one less than the compiled-in v2 constant — the exact "pre-SIL1 artifact
+	// under the old format_version" scenario §12 dim 9 names.
+	auto built = BuildArtifact({MakeConfigSection()});
+	PutU32(built.bytes, 4, kArtifactFormatVersion - 1);  // format_version, offset 4
+	RecomputeIntegrityHash(built.bytes);
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::UnsupportedVersion, "got %s, want UnsupportedVersion",
+	          SslmStatusName(status));
+	CHECK(err.code == SslmStatus::UnsupportedVersion);
+	CHECK(!out.Ok());
+}
+
+static void TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	FixtureSection config = MakeConfigSection();
+	FixtureSection sigmoid_lut =
+	    MakeSection(SslmSectionType::SigmoidLut, SslmDtype::Int32, BuildSil1(ref), /*alignment=*/64);
+	auto built = BuildArtifact({config, sigmoid_lut});  // format_version defaults to kArtifactFormatVersion (2)
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::Ok, "got %s, want Ok", SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+	CHECK(out.FormatVersion() == kArtifactFormatVersion);
+
+	const SslmSectionView* section = out.Section(SslmSectionType::SigmoidLut);
+	CHECK_MSG(section != nullptr, "loaded v2 artifact has no SigmoidLut section");
+	if (section == nullptr) return;
+	CHECK(section->dtype == SslmDtype::Int32);
+	CHECK(section->byte_size == kSigmoidLutBytes);
+	// The OUTER artifact-level elem_count is byte_size / dtype_size (the
+	// artifact loader's generic per-section bookkeeping — it has no notion of
+	// SIL1's internal 16-byte header), NOT the SIL1 sub-parse's own
+	// kSigmoidLutEntries (1025 nodes): 4116 bytes / 4-byte Int32 = 1029.
+	CHECK(section->elem_count == kSigmoidLutBytes / 4);
+
+	SslmSigmoidLut lut;
+	std::string parse_err;
+	SslmModelStatus pstatus = ParseSigmoidLut(*section, lut, &parse_err);
+	CHECK_MSG(pstatus == SslmModelStatus::Ok, "ParseSigmoidLut on the loaded section: got %s: %s",
+	          SslmModelStatusName(pstatus), parse_err.c_str());
+	if (pstatus != SslmModelStatus::Ok) return;
+	// Guard against the red-first stub's false "Ok" over a null/empty view
+	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	CHECK_MSG(lut.values != nullptr && lut.entry_count == kSigmoidLutEntries,
+	          "lut is not a populated view on a status==Ok parse (red-first stub)");
+	if (lut.values == nullptr || lut.entry_count != kSigmoidLutEntries) return;
+	CHECK(SigmoidLutValue(lut, 0) == ref[0]);
+	CHECK(SigmoidLutValue(lut, kSiluLutN) == ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+// ---------------------------------------------------------------------------
+// SiluSigmoidQ15 domain-clamp saturation (§12 dim 4a, §10 item 8). Every cell
+// forces `pos_fixed` to its clamped extreme (N<<Q_idx or 0) and asserts the
+// EXACT extreme node — table[N] or table[0] — never the off-by-one
+// table[N-1] the pre-correction defect produced (SuperSLM_S2.4_SiLU_LUT_Design
+// §14 amendment 4). Oracle: reference-implementation/exact-value (the
+// independent reference table), never a self-consistency check against
+// SiluSigmoidQ15's own output. Both the shift<0 (realistic) and shift>=0
+// (structurally reachable but never hit by the current calibrated artifact)
+// branches are crossed, at both domain extremes, plus a real-corpus deep
+// -saturation pair (row from Claude/Laplace/harness/silu_lut/real_rows.npz,
+// m=1898583166, e=-32 — the corpus's largest measured realscale, ~0.442,
+// which drives x to ~±56 at code=±127, four times past the ±16 table domain).
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// code=127, m=1500000000, e=-30 -> shift = e+k+Q_idx = -30+5+12 = -13 < 0
+	// (the RoundingDivideByPOT branch). realscale = m*2^e ~= 1.396, x ~= 177,
+	// eleven times past +X=16 -- deep into saturation.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/127, /*m=*/1500000000, /*e=*/-30);
+	CHECK_MSG(got == ref[static_cast<size_t>(kSiluLutN)],
+	          "SiluSigmoidQ15 saturated-high (shift<0) == %d, want table[N] == %d", got,
+	          ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+static void TestSiluSigmoidQ15SaturatesLowDomainShiftNegativeBranch() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1500000000, /*e=*/-30);
+	CHECK_MSG(got == ref[0], "SiluSigmoidQ15 saturated-low (shift<0) == %d, want table[0] == %d", got, ref[0]);
+}
+
+static void TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// e=-17 -> shift = -17+5+12 = 0 exactly (the left-shift branch, term<<0):
+	// this is the shift>=0 branch the current calibrated artifact never
+	// reaches, forced here so it is not silently dead code. m at its
+	// canonical-format floor (2^30) still saturates at any nonzero code,
+	// which is structurally forced (§14's own worked derivation): with
+	// shift=0 the position contribution equals `code*m` directly, and
+	// |code*m| >= 2^30 for any nonzero code given m's floor -- vastly beyond
+	// the ~2^22 table domain -- so the shift>=0 branch is exercised here at
+	// the one code magnitude (extremes) it can ever produce a defined
+	// (saturated) result for; an interior, non-saturated shift>=0 cell is not
+	// constructible under the canonical scale format's own m >= 2^30 floor.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/127, /*m=*/1073741824 /*2^30*/, /*e=*/-17);
+	CHECK_MSG(got == ref[static_cast<size_t>(kSiluLutN)],
+	          "SiluSigmoidQ15 saturated-high (shift==0) == %d, want table[N] == %d", got,
+	          ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+static void TestSiluSigmoidQ15SaturatesLowDomainShiftNonNegativeBranch() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1073741824, /*e=*/-17);
+	CHECK_MSG(got == ref[0], "SiluSigmoidQ15 saturated-low (shift==0) == %d, want table[0] == %d", got, ref[0]);
+}
+
+static void TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// The largest realscale in the measurement corpus (Claude/Laplace/harness/
+	// silu_lut/real_rows.npz, row 456): m=1898583166, e=-32, realscale ~=
+	// 0.442. At code=127, x ~= 56.1 -- 3.5x past the domain -- a regime the
+	// calibrated artifact actually reaches at code extremes, not only a
+	// synthetic construction.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/127, /*m=*/1898583166, /*e=*/-32);
+	CHECK_MSG(got == ref[static_cast<size_t>(kSiluLutN)],
+	          "SiluSigmoidQ15 real-corpus deep saturation (high) == %d, want table[N] == %d", got,
+	          ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+static void TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1898583166, /*e=*/-32);
+	CHECK_MSG(got == ref[0], "SiluSigmoidQ15 real-corpus deep saturation (low) == %d, want table[0] == %d", got,
+	          ref[0]);
+}
+
+// ---------------------------------------------------------------------------
+// SiluSigmoidQ15 interior sub-node interpolation (§12 dim 4b), away from the
+// boundary, at i0=600 (well interior of [0, N-1]). Both cells use the
+// shift<0 branch (e=-29, shift=-12 -- the realistic regime every real
+// calibrated (m,e) pair in the corpus lands in). `m` is chosen so the
+// RoundingDivideByPOT division is EXACT (no tie ambiguity): m is constructed
+// as an exact multiple of 2^12 so `code*m >> 12` (rounded) equals the target
+// contribution precisely, isolating the interpolation arithmetic from any
+// rounding-direction question. Oracle: reference/exact-value, against the
+// independent reference table's table[600]/table[601] and the interpolation
+// formula worked by hand (comments below), never SiluSigmoidQ15 called twice.
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15InteriorInterpolationFracZero() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// code=1, m=1,476,395,008, e=-29 -> shift=-12; term=1*m=1,476,395,008,
+	// which is an exact multiple of 4096 (m = 360,448 * 2^12), so
+	// RoundingDivideByPOT(term, 12) = 360,448 exactly (no rounding applied).
+	// pos_fixed = 360,448 + (N<<Q_idx)/2 = 360,448 + 2,097,152 = 2,457,600
+	//           = 600 << 12 exactly -> i0=600, frac=0.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/1, /*m=*/1476395008, /*e=*/-29);
+	CHECK_MSG(got == ref[600], "SiluSigmoidQ15 interior frac=0 (i0=600) == %d, want table[600] == %d", got,
+	          ref[600]);
+}
+
+static void TestSiluSigmoidQ15InteriorInterpolationFracMax() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// Same i0=600, same shift=-12; m=1,493,168,128 = 364,543 * 2^12 (also an
+	// exact multiple of 4096), so RoundingDivideByPOT(term,12) = 364,543
+	// exactly. pos_fixed = 364,543 + 2,097,152 = 2,461,695 = (600<<12) + 4095
+	// -> i0=600, frac=4095 (2^Q_idx - 1, the ordinary-case ceiling, distinct
+	// from the saturated frac=2^Q_idx of the domain-clamp cells above).
+	// diff = table[601]-table[600] = 30856-30799 = 57; product=4095*57=
+	// 233,415; RoundingDivideByPOT(233415,12): 233415/4096 ~= 56.986, rounds
+	// to 57 (not a tie) -> expected = table[600] + 57 = table[601] exactly.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/1, /*m=*/1493168128, /*e=*/-29);
+	CHECK_MSG(got == ref[601],
+	          "SiluSigmoidQ15 interior frac=4095 (i0=600) == %d, want table[600]+round(57*4095/4096) == "
+	          "table[601] == %d",
+	          got, ref[601]);
+}
+
+// ---------------------------------------------------------------------------
+// SiluSigmoidQ15 code=0 extreme, crossed with the shift>=0 branch at two
+// distinct shift magnitudes (dim 4b's "cross code extremes ... and the scale
+// range's both branches"): with code=0, term=0 regardless of m or the shift
+// value, so pos_fixed lands EXACTLY at the table's own midpoint constant
+// (N<<Q_idx)/2 = 512<<12, i.e. i0=512, frac=0 -> table[512] -- proving the
+// additive midpoint offset and the clamp/index arithmetic are correct along
+// the shift>=0 branch specifically (distinct from the code=+-127 saturation
+// cells above, which also use shift>=0 but only exercise the clamped path).
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// e=-17 -> shift = -17+5+12 = 0 exactly.
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/0, /*m=*/1500000000, /*e=*/-17);
+	CHECK_MSG(got == ref[512], "SiluSigmoidQ15 code=0, shift==0 == %d, want table[512] == %d", got, ref[512]);
+}
+
+static void TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly() {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	// e=0 -> shift = 0+5+12 = 17 (strictly positive, the left-shift branch at
+	// a nontrivial shift magnitude, not merely the shift==0 identity case).
+	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/0, /*m=*/1500000000, /*e=*/0);
+	CHECK_MSG(got == ref[512], "SiluSigmoidQ15 code=0, shift==17 == %d, want table[512] == %d", got, ref[512]);
+}
+
+// ---------------------------------------------------------------------------
+// Op-level parity vs an independent float reference, within 1 ULP (§10 item 4,
+// §12 dim 7/10). CONSISTENCY oracle by construction (LUT vs a reference
+// computation of the SAME defined quantity) -- named explicitly per §12's own
+// discipline, because a consistency oracle alone cannot see a value that is
+// wrong but deterministic; the saturation and interior-interpolation cells
+// above, and the downstream int8-agreement cell below, are what catch that
+// class of error here. Swept over the full real-vector fixture's (m,e) pairs
+// crossed with every code in [-127,127] (224 rows x 255 codes = 57,120
+// comparisons), not merely the synthetic single-point cells above.
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
+	using namespace superslm_test;
+	std::string path = ResolveFixturePath("silu_lut_real_vectors.bin");
+	CHECK_MSG(!path.empty(), "silu_lut_real_vectors.bin not found under tests/fixtures");
+	if (path.empty()) return;
+	SiluLutRealVectors vecs = LoadSiluLutRealVectors(path);
+	CHECK_MSG(vecs.ok, "silu_lut_real_vectors.bin failed to parse: %s", vecs.error.c_str());
+	if (!vecs.ok) return;
+
+	std::vector<int32_t> table = BuildReferenceSigmoidLutQ15();
+	int over_bound = 0;
+	int64_t worst = 0;
+	for (uint32_t r = 0; r < vecs.row_count; ++r) {
+		const double realscale = static_cast<double>(vecs.m[r]) * std::pow(2.0, vecs.e[r]);
+		for (int code = -127; code <= 127; ++code) {
+			const int32_t lut = SiluSigmoidQ15(table.data(), static_cast<int8_t>(code), vecs.m[r], vecs.e[r]);
+			// Fresh independent computation grounded in the definition
+			// (sigmoid(x)*2^15), NOT a read of the LUT and NOT a call into
+			// any code under test.
+			const double x = static_cast<double>(code) * realscale;
+			const double xc = x < -static_cast<double>(kSiluLutX)   ? -static_cast<double>(kSiluLutX)
+			                   : x > static_cast<double>(kSiluLutX) ? static_cast<double>(kSiluLutX)
+			                                                        : x;
+			const double sig = 1.0 / (1.0 + std::exp(-xc));
+			const int32_t ref_q15 = static_cast<int32_t>(std::nearbyint(sig * 32768.0));
+			// Widen to int64 before subtracting: `lut` can be the stub's
+			// INT32_MIN sentinel, and `ref_q15 - lut` in 32-bit arithmetic
+			// would itself overflow (signed UB) rather than report a large
+			// delta.
+			const int64_t delta = lut > ref_q15 ? static_cast<int64_t>(lut) - ref_q15
+			                                     : static_cast<int64_t>(ref_q15) - lut;
+			if (delta > 1) ++over_bound;
+			if (delta > worst) worst = delta;
+		}
+	}
+	CHECK_MSG(over_bound == 0, "%d of %u comparisons exceeded the 1-ULP bound (worst delta = %lld)", over_bound,
+	          vecs.row_count * 255u, static_cast<long long>(worst));
+}
+
+// ---------------------------------------------------------------------------
+// Downstream int8-code-agreement (§9 step 5, §10 item 5, §12 dim 7/10 -- the
+// feature oracle's intermediate achievement claim). REFERENCE/EXACT-VALUE
+// oracle: reproduces the Laplace C10 solve's own measurement EXACTLY --
+// 319 of 2,007,040 codes differ (0.0159%), max |code delta| = 1 -- because
+// this cell runs the IDENTICAL subset (Claude/Laplace/harness/silu_lut/
+// experiment.py's "Q2" selection: first 8 tokens of every layer, 28 layers x
+// 8 = 224 rows x 8960 elements, committed at tests/fixtures/
+// silu_lut_real_vectors.bin) through the SAME already-shipped C19-C22 requant
+// primitives (S2.1: MaxAbsReduce/NormalizeScale/DynamicScaleReciprocal/
+// RequantTokenCode) the harness's Python port of intmath.py also calls,
+// against the SAME construction (LUT N=1024 X=16 Q12 sub-node index). Any
+// deviation from the exact measured counts is a real regression, not sampling
+// noise, since the subset and construction are byte-for-byte the ones the
+// C10 solve's decisive metric was measured on.
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand() {
+	using namespace superslm_test;
+	std::string path = ResolveFixturePath("silu_lut_real_vectors.bin");
+	CHECK_MSG(!path.empty(), "silu_lut_real_vectors.bin not found under tests/fixtures");
+	if (path.empty()) return;
+	SiluLutRealVectors vecs = LoadSiluLutRealVectors(path);
+	CHECK_MSG(vecs.ok, "silu_lut_real_vectors.bin failed to parse: %s", vecs.error.c_str());
+	if (!vecs.ok) return;
+	CHECK_MSG(vecs.row_count == 224, "fixture row_count == %u, want 224 (the Q2 subset)", vecs.row_count);
+	CHECK_MSG(vecs.width == 8960, "fixture width == %u, want 8960", vecs.width);
+
+	std::vector<int32_t> table = BuildReferenceSigmoidLutQ15();
+	uint64_t total_codes = 0;
+	uint64_t diff_count = 0;
+	int32_t max_delta = 0;
+
+	std::vector<int32_t> wide_lut(vecs.width);
+	std::vector<int32_t> wide_ref(vecs.width);
+
+	for (uint32_t r = 0; r < vecs.row_count; ++r) {
+		const double realscale = static_cast<double>(vecs.m[r]) * std::pow(2.0, vecs.e[r]);
+		// Sigmoid(code) depends only on the code value and this row's scale,
+		// not on element position -- computed once per distinct code,
+		// applied across the row (matching the construction's own contract:
+		// SiluSigmoidQ15 is a pure function of (code, m, e)).
+		int32_t lut_by_code[255];    // index [code+127]
+		int32_t ref_by_code[255];
+		for (int code = -127; code <= 127; ++code) {
+			lut_by_code[code + 127] =
+			    SiluSigmoidQ15(table.data(), static_cast<int8_t>(code), vecs.m[r], vecs.e[r]);
+			const double x = static_cast<double>(code) * realscale;
+			const double xc = x < -static_cast<double>(kSiluLutX)   ? -static_cast<double>(kSiluLutX)
+			                   : x > static_cast<double>(kSiluLutX) ? static_cast<double>(kSiluLutX)
+			                                                        : x;
+			const double sig = 1.0 / (1.0 + std::exp(-xc));
+			ref_by_code[code + 127] = static_cast<int32_t>(std::nearbyint(sig * 32768.0));
+		}
+
+		const size_t base = static_cast<size_t>(r) * vecs.width;
+		for (uint32_t i = 0; i < vecs.width; ++i) {
+			const int g = vecs.g_codes[base + i];
+			const int u = vecs.u_codes[base + i];
+			wide_lut[i] = g * lut_by_code[g + 127] * u;
+			wide_ref[i] = g * ref_by_code[g + 127] * u;
+		}
+
+		// The exact C19-C22 per-token requant chain (S2.1, already shipped
+		// and certified) -- one dynamic scale derived per row, exactly as
+		// experiment.py's requant_row_int8 does.
+		const int64_t d_lut = MaxAbsReduce(wide_lut.data(), vecs.width);
+		const NormalizedScale n_lut = NormalizeScale(d_lut);
+		const int64_t r_lut = DynamicScaleReciprocal(n_lut.dn);
+		const int64_t d_ref = MaxAbsReduce(wide_ref.data(), vecs.width);
+		const NormalizedScale n_ref = NormalizeScale(d_ref);
+		const int64_t r_ref = DynamicScaleReciprocal(n_ref.dn);
+
+		for (uint32_t i = 0; i < vecs.width; ++i) {
+			const int8_t code_lut = RequantTokenCode(wide_lut[i], r_lut, n_lut.s);
+			const int8_t code_ref = RequantTokenCode(wide_ref[i], r_ref, n_ref.s);
+			++total_codes;
+			if (code_lut != code_ref) {
+				++diff_count;
+				const int32_t delta = code_lut > code_ref ? code_lut - code_ref : code_ref - code_lut;
+				if (delta > max_delta) max_delta = delta;
+			}
+		}
+	}
+
+	CHECK_MSG(total_codes == 2007040, "total_codes == %llu, want 2007040",
+	          static_cast<unsigned long long>(total_codes));
+	// The Laplace C10 solve's own measured downstream figure on this exact
+	// subset (result_packet.json "downstream" key, B_champ N1024_X16_Q12idx):
+	// 319 diffs of 2,007,040 (0.0159%), max |code delta| = 1.
+	CHECK_MSG(diff_count == 319, "diff_count == %llu, want 319 (the Laplace-measured count)",
+	          static_cast<unsigned long long>(diff_count));
+	CHECK_MSG(max_delta <= 1, "max |code delta| == %d, want <= 1", max_delta);
+	const double pct = 100.0 * static_cast<double>(diff_count) / static_cast<double>(total_codes);
+	CHECK_MSG(pct >= 0.010 && pct <= 0.030, "downstream int8-agreement %.4f%% outside the measured 0.016-0.021%% "
+	                                        "band (loose corroboration of the exact-count check above)",
+	          pct);
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency (§12 dim 3): 8 reader threads x >=10,000 lookups each, spanning
+// index values across [0, N] (interior and both saturated regions), every
+// threaded read asserted byte-identical to a single-threaded read of the same
+// (code, m, e). The table has no mutable state once loaded -- a structural
+// argument -- backed here by the executed stress this dimension's catalog
+// entry requires. Runs as a plain stress under the local MSVC build
+// (build.bat); the project's ThreadSanitizer leg is the separate CI clang
+// build, not this binary -- no sanitizer is invoked here. CHECK/CHECK_MSG
+// touch non-atomic global counters (GChecks/GFailures) and are NOT
+// thread-safe, so every thread body accumulates its own local mismatch count
+// and only the joining main thread calls CHECK.
+// ---------------------------------------------------------------------------
+
+static void TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded() {
+	using namespace superslm_test;
+	std::vector<int32_t> table = BuildReferenceSigmoidLutQ15();
+
+	// One realistic interior/saturating scale (m=1,500,000,000, e=-32;
+	// realscale ~= 0.349, so code in [-127,127] maps x across
+	// [-44.3, 44.3] -- comfortably spanning the interior AND both saturated
+	// ends of the [-16,16] domain), crossed with every code, repeated 40x:
+	// 255 * 40 = 10,200 lookups per thread, each an independent call.
+	constexpr int64_t kM = 1500000000;
+	constexpr int kE = -32;
+	constexpr int kSweeps = 40;
+	constexpr int kCodesPerSweep = 255;
+	constexpr int kLookupsPerThread = kSweeps * kCodesPerSweep;  // 10,200 >= 10,000
+	constexpr int kThreads = 8;
+
+	std::vector<int32_t> baseline(kLookupsPerThread);
+	for (int sweep = 0; sweep < kSweeps; ++sweep) {
+		for (int code = -127; code <= 127; ++code) {
+			baseline[static_cast<size_t>(sweep * kCodesPerSweep + (code + 127))] =
+			    SiluSigmoidQ15(table.data(), static_cast<int8_t>(code), kM, kE);
+		}
+	}
+
+	std::vector<int> per_thread_mismatches(kThreads, 0);
+	std::vector<std::thread> threads;
+	threads.reserve(kThreads);
+	for (int t = 0; t < kThreads; ++t) {
+		threads.emplace_back([&table, &baseline, &per_thread_mismatches, t]() {
+			int mismatches = 0;
+			for (int sweep = 0; sweep < kSweeps; ++sweep) {
+				for (int code = -127; code <= 127; ++code) {
+					const int32_t got = SiluSigmoidQ15(table.data(), static_cast<int8_t>(code), kM, kE);
+					const size_t idx = static_cast<size_t>(sweep * kCodesPerSweep + (code + 127));
+					if (got != baseline[idx]) ++mismatches;
+				}
+			}
+			per_thread_mismatches[static_cast<size_t>(t)] = mismatches;
+		});
+	}
+	for (auto& th : threads) th.join();
+
+	int total_mismatches = 0;
+	for (int m : per_thread_mismatches) total_mismatches += m;
+	CHECK_MSG(total_mismatches == 0,
+	          "%d of %d concurrent reads (8 threads x %d lookups) did not match the single-threaded baseline",
+	          total_mismatches, kThreads * kLookupsPerThread, kLookupsPerThread);
+}
+
+// ---------------------------------------------------------------------------
+// Division-free hot path (§12 dim 7, low priority per the commission brief).
+// Not an executed probe: SiluSigmoidQ15's contract (include/superslm/
+// silu_lut.h) states the runtime path is division-free, composed only of
+// RoundingDivideByPOT (a shift-and-round primitive, not `/`), multiply, add,
+// and clamp/min. A source-text scan for `/` or `%` would be a brittle,
+// easily-defeated proxy (a comment or an unrelated helper could trip it, or a
+// real division could be hidden behind a macro), so this claim is left a
+// structural, source-inspection claim rather than a fabricated executed cell
+// -- named here, not silently assumed, per the brief's explicit "low
+// priority, do not block" scoping. Poirot's code review is the structural
+// check that reads src/silu_lut.cpp against this claim once Brunel greens it.
+// ---------------------------------------------------------------------------
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -2941,6 +3596,34 @@ int main() {
 	TestRopeApplyPairQuarterTurnIsExact();
 	TestRopeApplyPairWideInputExceedsInt32Range();
 	TestRopeApplyPairTieRoundsAwayFromZero();
+
+	// --- Curie's S2.4 SiLU sigmoid-LUT red suite (red-first; src/model.cpp's
+	//     ParseSigmoidLut and src/silu_lut.cpp's SiluSigmoidQ15 are currently
+	//     deliberately-wrong stubs). ---
+	TestMinimalSil1ParsesAndReadsBackAllNodes();
+	TestSil1WarmObjectRepeatedReadsShowNoDrift();
+	TestSil1RoundTripReencodeMatchesOriginalBytes();
+	TestSil1RejectsSizeTooShort();
+	TestSil1RejectsSizeTooLong();
+	TestSil1RejectsBadMagic();
+	TestSil1RejectsUnsupportedVersion();
+	TestSil1RejectsBadEntryCount();
+	TestSil1RejectsBadReserved();
+	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
+	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
+	TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch();
+	TestSiluSigmoidQ15SaturatesLowDomainShiftNegativeBranch();
+	TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch();
+	TestSiluSigmoidQ15SaturatesLowDomainShiftNonNegativeBranch();
+	TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode();
+	TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode();
+	TestSiluSigmoidQ15InteriorInterpolationFracZero();
+	TestSiluSigmoidQ15InteriorInterpolationFracMax();
+	TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly();
+	TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly();
+	TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors();
+	TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand();
+	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
