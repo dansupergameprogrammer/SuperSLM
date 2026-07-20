@@ -10,7 +10,7 @@ call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0
 if not exist out mkdir out
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
-	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp ^
 	tests\test_main.cpp /Fo:out\ /Fe:out\superslm_tests.exe
 if errorlevel 1 (popd & exit /b 1)
 out\superslm_tests.exe
