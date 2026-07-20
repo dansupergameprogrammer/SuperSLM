@@ -223,8 +223,8 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	// q_i = clamp(round_half_away_from_zero((x_i·127·R) / 2^(62−s)), −127, 127).
 	// R > 0 and 127 > 0, so the composite's sign is x_i's; work in magnitude, apply the
 	// away-from-zero rule (C3), then the sign and clamp. |x_i·127·R| reaches ~2^70.
-	if (x_i == 0) return 0;
-
+	// No x_i==0 early exit: the general path yields 0 for x_i==0 (magnitude 0 → q 0), so
+	// the op count stays data-independent (§14) rather than branching on the input.
 	int exponent = 62 - s;  // in [32, 63]
 	uint64_t abs_x = x_i < 0 ? (~static_cast<uint64_t>(x_i) + 1u) : static_cast<uint64_t>(x_i);
 
