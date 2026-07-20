@@ -238,4 +238,24 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
+// --- §6.3 nonlinear scalar primitives — STUB (S2.2 red-phase) -----------------
+// Deliberately-wrong sentinel bodies so Curie's S2.2 red suite compiles+links+fails.
+// Brunel replaces each with the bit-exact port in the S2.2 green phase.
+
+int64_t ISqrt(int64_t) {
+	return -1;  // stub
+}
+
+void ISqrtTrace(int64_t, int64_t out_iterates[I_SQRT_ITERATIONS]) {
+	for (int i = 0; i < I_SQRT_ITERATIONS; ++i) out_iterates[i] = -1;  // stub
+}
+
+void ShiftByMax(const int64_t*, size_t n, int64_t* out) {
+	for (size_t i = 0; i < n; ++i) out[i] = -1;  // stub
+}
+
+int64_t IExpFromConstants(int64_t, int64_t, int64_t, int64_t) {
+	return -1;  // stub
+}
+
 }  // namespace superslm

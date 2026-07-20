@@ -112,6 +112,52 @@ int64_t DynamicScaleReciprocal(int64_t dn);
 // Returns the int8 code in [−127, 127].
 int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 
+// --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) -------
+//
+// The reproducible-path integer cores only. The float-taking offline derivations
+// (`intmath.py`'s `i_exp(q, scale)`, `iexp_scale_constants` / C30, `i_exp_ln2_quantum`)
+// are NOT ported here — those live in the converter (offline) or ride the site-composition
+// slot (C23–C30). Here: `IExpFromConstants` consumes constants already derived to integers.
+
+// C5 — one restoring digit-recurrence iteration per base-4 digit of an int64 radicand: the
+// count follows from the type, so it CANNOT be data-dependent (§14, §17 "the cell determinism
+// is blind to"). Exactly 32, unconditional; no `while bit > n` prologue (that would make the
+// op count a function of the radicand). C6 — the first digit's weight is 1 << 62.
+inline constexpr int I_SQRT_ITERATIONS = 32;
+
+// C8 — the i-exp exponent decomposition's clip: I-BERT clamps the shifted logit at
+// -I_EXP_CLIP_N · q_ln2, making the far tail total (the clip point's result, not a divergent
+// shift). 30 is the I-BERT construction's value.
+inline constexpr int I_EXP_CLIP_N = 30;
+
+// C4/C5/C6 — floor(sqrt(n)) over [0, 2^63 − 1] by restoring shift-and-subtract (compare,
+// subtract, shift — no division, so i-sqrt stays off §18's int64-division GPU-semantics row).
+// Domain n >= 0; n < 0 is out of contract (i-sqrt is defined on non-negative sums). n == 0
+// needs no guard (every digit decision takes the else branch, root stays 0).
+int64_t ISqrt(int64_t n);
+
+// C4/C5 — the root after each of the exactly-I_SQRT_ITERATIONS digit steps, written into
+// `out_iterates` (which must hold I_SQRT_ITERATIONS entries). The trace makes the pinned
+// op count falsifiable at runtime: it is I_SQRT_ITERATIONS for every input, so a
+// data-dependent trip count is a test failure rather than a reading of the source (§17).
+void ISqrtTrace(int64_t n, int64_t out_iterates[I_SQRT_ITERATIONS]);
+
+// C9 — softmax max-subtraction: out[i] = logits[i] − max_j(logits[j]), an integer op that
+// puts the maximum at 0 (so every result is <= 0, the domain i-exp requires). Inputs widened
+// to int64 so the difference cannot overflow. Undefined on an empty sequence (n >= 1).
+void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
+
+// C7/C8 — the I-BERT second-order integer polynomial core, exp(q·scale) in fixed point, from
+// PRE-DERIVED positive integer constants (q_ln2, q_b, q_c) — the caller supplies them (offline
+// or C30). Same decomposition as intmath.py's `i_exp_from_constants`:
+//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2;
+//   return ((q_p + q_b)^2 + q_c) >> z.
+// `q` is a max-shifted logit (q <= 0; a positive q is rejected rather than shifted the wrong
+// way); q_ln2 >= 1 (a coarser scale has no decomposition to state). The coefficient integers
+// are positive (C7 N2-5). `out_scale` is never computed at runtime (C30: the nonlinear
+// consumers are same-scale ratios and it cancels).
+int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_INTMATH_H
