@@ -20,12 +20,17 @@ int32_t SiluSigmoidQ15(const int32_t* table, int8_t code, int64_t m, int e) {
 	const int64_t term = static_cast<int64_t>(code) * m;  // exact int64: |term| < 127·2^31 < 2^39
 	const int shift = e + kSiluLutLog2K + kSiluLutQIdx;    // e + 5 + 12
 
-	// Place the sub-node position. shift >= 0 is the exact left-shift branch; shift < 0 rounds
-	// under C3 via the int64 RoundingDivideByPOT (the S2.4 prep overload). Precondition (§10 item
-	// 3, caller-ensures like the other kernels): e is within the build-time-swept scale range, so
-	// the left-shift is exact (no overflow) — for real calibrated (m,e) the branch is always
-	// shift < 0 (§7); the only shift >= 0 inputs are code == 0 (term 0) or code extremes that
-	// saturate below.
+	// Place the sub-node position. The branch is chosen by shift's sign: shift >= 0 (i.e.
+	// e >= -(k+Q_idx) = -17) is the exact left-shift; shift < 0 rounds under C3 via the int64
+	// RoundingDivideByPOT (the S2.4 prep overload). Two-sided caller-ensures precondition (§10
+	// item 3), the same convention the other kernels use — a scale outside the swept range is a
+	// site-level rejection (C29), not this leaf's guard: on the left branch `shift < 24` keeps
+	// `term << shift` exact within int64 (|term| < 2^38, so |result| < 2^62); on the right branch
+	// `-shift <= 63` stays in RoundingDivideByPOT's exponent domain. For every real calibrated
+	// (m,e) the branch is shift < 0 with -shift in [14,18] (§7); the only shift >= 0 inputs are
+	// code == 0 (term 0, no shift magnitude at all) or code extremes that saturate below. The
+	// exhaustive build-time width sweep (§10 item 3) is the standing gate that proves the whole
+	// calibrated corpus stays inside this window before any golden is generated.
 	int64_t pos_fixed = shift >= 0 ? (term << shift) : RoundingDivideByPOT(term, -shift);
 
 	// + N/2 (in Q(kSiluLutQIdx)), then saturate to the table domain [0, N<<Q_idx] BEFORE the split.

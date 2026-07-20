@@ -50,7 +50,7 @@ All integers little-endian. Offsets are absolute from the start of the file.
 
 ### Header — 64 bytes, at offset 0
 
-| Offset | Type       | Field              | Constraint (v1)                             |
+| Offset | Type       | Field              | Constraint (v2)                             |
 |-------:|------------|--------------------|---------------------------------------------|
 |      0 | `u8[4]`    | `magic`            | `'S','S','L','M'` (0x53 0x53 0x4C 0x4D)     |
 |      4 | `u32`      | `format_version`   | `== 2`                                      |
@@ -63,7 +63,7 @@ All integers little-endian. Offsets are absolute from the start of the file.
 
 ### Section table — `section_count` × 40 bytes, at offset 64
 
-| Offset | Type  | Field        | Constraint (v1)                                              |
+| Offset | Type  | Field        | Constraint (v2)                                              |
 |-------:|-------|--------------|-------------------------------------------------------------|
 |      0 | `u32` | `type`       | a known `SslmSectionType`; no duplicates                    |
 |      4 | `u32` | `dtype`      | a known `SslmDtype`                                          |
