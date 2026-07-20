@@ -20,6 +20,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace superslm {
 namespace {
@@ -150,13 +151,24 @@ int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b) {
 	return result > kInt32Max ? kInt32Max : static_cast<int32_t>(result);
 }
 
-int32_t RoundingDivideByPOT(int32_t x, int exponent) {
-	// x / 2^exponent, ties away from zero. exponent in [0, 31]; the +1 on the negative
-	// branch of the threshold turns the floor shift's half-up into half-away-from-zero.
-	uint32_t mask = (uint32_t{1} << exponent) - 1u;  // exponent 0 → mask 0 (identity)
-	uint32_t remainder = static_cast<uint32_t>(x) & mask;
-	uint32_t threshold = (mask >> 1) + (x < 0 ? 1u : 0u);
+namespace {
+// The single source of the C1/C3 RoundingDivideByPOT rule (ties away from zero), width-generic
+// so the int32 requant primitive and RoPE's int64 rotation intermediate share ONE tie rule — a
+// future change to C3 touches exactly one place. x / 2^exponent; the `+1` on the negative branch
+// of the threshold turns the floor shift's half-up into half-away-from-zero. exponent in
+// [0, bits(T)-1]; exponent 0 → mask 0 (identity).
+template <typename T>
+T RoundingDivideByPOTImpl(T x, int exponent) {
+	using U = std::make_unsigned_t<T>;
+	U mask = (static_cast<U>(1) << exponent) - 1u;
+	U remainder = static_cast<U>(x) & mask;
+	U threshold = (mask >> 1) + (x < 0 ? U{1} : U{0});
 	return (x >> exponent) + (remainder > threshold ? 1 : 0);
+}
+}  // namespace
+
+int32_t RoundingDivideByPOT(int32_t x, int exponent) {
+	return RoundingDivideByPOTImpl<int32_t>(x, exponent);
 }
 
 int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, int shift) {
@@ -314,27 +326,16 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
 
-namespace {
-// The §6.2 RoundingDivideByPOT primitive at int64 width — identical semantics to the int32
-// `RoundingDivideByPOT` (ties away from zero, C3), generalized so RoPE's ~2^62 rotation
-// intermediate does not truncate through the int32 overload. exponent in [0, 63].
-int64_t RoundingDivideByPOTWide(int64_t x, int exponent) {
-	uint64_t mask = (uint64_t{1} << exponent) - 1u;
-	uint64_t remainder = static_cast<uint64_t>(x) & mask;
-	uint64_t threshold = (mask >> 1) + (x < 0 ? 1u : 0u);
-	return (x >> exponent) + (remainder > threshold ? 1 : 0);
-}
-}  // namespace
-
 RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 	// (x·cos − y·sin, x·sin + y·cos) combined at full int64 width (each product ≤ 2^61, each
-	// sum ≤ 2^62 — no int64 overflow), then rounded ONCE at ROPE_FRAC_BITS. Unclamped: the exact
-	// single-rounded rotation, which can reach ~sqrt(2)·|input| (2^32 at the corners); the caller
-	// clamps to the activation format.
+	// sum ≤ 2^62 — no int64 overflow), then rounded ONCE at ROPE_FRAC_BITS through the SAME C1/C3
+	// rounding rule as the int32 requant primitive (RoundingDivideByPOTImpl<int64_t>, so the
+	// ~2^62 intermediate does not truncate). Unclamped: the exact single-rounded rotation, which
+	// can reach ~sqrt(2)·|input| (2^32 at the corners); the caller clamps to the activation format.
 	int64_t xr = static_cast<int64_t>(x) * cos_q30 - static_cast<int64_t>(y) * sin_q30;
 	int64_t yr = static_cast<int64_t>(x) * sin_q30 + static_cast<int64_t>(y) * cos_q30;
-	return RopePair{RoundingDivideByPOTWide(xr, ROPE_FRAC_BITS),
-	                RoundingDivideByPOTWide(yr, ROPE_FRAC_BITS)};
+	return RopePair{RoundingDivideByPOTImpl<int64_t>(xr, ROPE_FRAC_BITS),
+	                RoundingDivideByPOTImpl<int64_t>(yr, ROPE_FRAC_BITS)};
 }
 
 }  // namespace superslm
