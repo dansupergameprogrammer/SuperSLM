@@ -119,6 +119,14 @@ inline int64_t DotRow(const int8_t* activations, const int8_t* weights, size_t i
 
 }  // namespace
 
+int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t in_channels) {
+	// Test-reachable wrapper around the anonymous-namespace scalar reference (design
+	// §5) -- see matmul.h's declaration. Calls the exact same construction DotRow falls
+	// back to on non-x64 builds; does not participate in DotRow's dispatch, so the
+	// shipping SSE2 selection above is unchanged.
+	return DotRowScalar(activations, weights, in_channels);
+}
+
 void GemmInt8AccumulateRow(const int8_t* activations, const int8_t* weights,
                             size_t in_channels, size_t out_channels, int64_t* out_acc) {
 	assert(in_channels > 0 && "GemmInt8AccumulateRow: in_channels below the architectural floor "

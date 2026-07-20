@@ -72,6 +72,17 @@ void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32)
 // not built by this sub-slot (design §13).
 enum class MatmulAccumWidth : int32_t { Int32 = 0, Int64 = 1 };
 
+// design §5 -- the scalar reference construction, exposed for verification only. The
+// shipping dispatch (matmul.cpp's internal DotRow) never calls this on an x64 build --
+// it unconditionally selects the SSE2 specialization there, since every x64 chip has
+// SSE2 and no runtime CPUID dispatch is needed. This declaration makes the normative
+// scalar path reachable from a test so scalar == SIMD == oracle can be asserted
+// directly (design §11 item 4) instead of only transitively through GemmInt8Accumulate.
+// Same contract as the row dot product inside GemmInt8AccumulateRow: `activations` and
+// `weights` each have `in_channels` elements; every intermediate is int64, both int8
+// factors widened to int64 before the multiply, no saturation, no rounding.
+int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t in_channels);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_MATMUL_H
