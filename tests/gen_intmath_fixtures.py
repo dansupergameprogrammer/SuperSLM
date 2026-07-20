@@ -6,11 +6,15 @@ Tools/superslm_spike/intmath.py — never hand-computed, never copied from any
 C++ implementation. Re-running this script must reproduce
 sslm_intmath_fixtures.h byte-for-byte (Poirot's reproducibility check).
 
-Test-design record: Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md
+Test-design records:
+Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md (C1/C2/C3, C19-C22)
+Claude/Curie/superslm-s2.2-nonlinear-test-design-2026-07-19.md (ISqrt/ISqrtTrace,
+ShiftByMax, IExpFromConstants)
 """
 
 from __future__ import annotations
 
+import math
 import os
 import random
 import sys
@@ -362,6 +366,166 @@ add_pipeline("all_zero", [0, 0, 0, 0, 0])
 add_pipeline("wide_spread", [1, -1, 1000000, -1000000, INT32_MAX // 4, INT32_MIN // 4])
 
 # --------------------------------------------------------------------------
+# S2.2 — ISqrt / ISqrtTrace (C4/C5/C6)
+# --------------------------------------------------------------------------
+
+isqrt_cases: list[tuple[str, int, int, list[int]]] = []  # label, n, expected_root, expected_iterates
+
+
+def add_isqrt(label: str, n: int) -> None:
+    root = im.i_sqrt(n)
+    trace = im.i_sqrt_trace(n)
+    assert len(trace) == im.I_SQRT_ITERATIONS, "trace must be exactly I_SQRT_ITERATIONS long"
+    assert trace[-1] == root, "trace's last iterate must equal i_sqrt's returned root"
+    # Independent oracle: Python's own math.isqrt, double-sourcing the golden
+    # against a floor-sqrt implementation that is not intmath.py's own.
+    assert root == math.isqrt(n), f"i_sqrt disagrees with math.isqrt at n={n}"
+    isqrt_cases.append((label, n, root, trace))
+
+
+add_isqrt("zero", 0)
+add_isqrt("one", 1)
+
+for k in (2, 3, 7, 10, 1000, 1_000_000, 3_037_000_499):
+    add_isqrt(f"perfect_square_k{k}", k * k)
+    add_isqrt(f"just_below_square_k{k}", k * k - 1)
+    if k * k + 1 <= (1 << 63) - 1:
+        add_isqrt(f"just_above_square_k{k}", k * k + 1)
+
+for n in (2, 3, 5, 10, 99, 123_456_789, 10 ** 12 + 7):
+    add_isqrt(f"non_square_{n}", n)
+
+add_isqrt("boundary_2_pow_62", 1 << 62)
+add_isqrt("boundary_int64_max", (1 << 63) - 1)
+
+# Every base-4 digit boundary the 32-iteration recurrence steps through.
+for m in range(0, 32):
+    add_isqrt(f"power_of_4_m{m}", 4 ** m)
+
+# --------------------------------------------------------------------------
+# S2.2 — ShiftByMax (C9)
+# --------------------------------------------------------------------------
+
+shiftmax_cases: list[tuple[str, list[int], list[int]]] = []
+
+
+def add_shiftmax(label: str, logits: list[int]) -> None:
+    out = im.shift_by_max(logits)
+    shiftmax_cases.append((label, logits, out))
+
+
+add_shiftmax("typical", [5, 3, 8, 1])
+add_shiftmax("single_element", [42])
+add_shiftmax("all_equal", [7, 7, 7, 7])
+add_shiftmax("max_at_first", [10, 1, 2, 3])
+add_shiftmax("max_at_last", [1, 2, 3, 10])
+add_shiftmax("negative_logits", [-5, -10, -1, -20])
+add_shiftmax("max_already_zero", [0, -5, -10])
+
+_wide_spread = [3_000_000_000, -3_000_000_000, 0]
+assert max(_wide_spread) - min(_wide_spread) > (1 << 32) - 1, (
+    "wide_spread_exceeds_int32 must exceed int32's representable span to prove "
+    "int64 widening is load-bearing"
+)
+add_shiftmax("wide_spread_exceeds_int32", _wide_spread)
+
+# --------------------------------------------------------------------------
+# S2.2 — IExpFromConstants (C7/C8). Constants are derived OFFLINE, in this
+# generator ONLY, by reproducing i_exp's internal (q_ln2, q_b, q_c)
+# derivation for a chosen float `scale` — the C++ under test consumes these
+# as opaque pre-derived integers and never performs this float division
+# itself (that derivation is out of scope for this slot per the commission).
+# --------------------------------------------------------------------------
+
+_POLY_A = im._POLY_A
+_POLY_B = im._POLY_B
+_POLY_C = im._POLY_C
+_INT64_MAX = (1 << 63) - 1
+
+
+def derive_constants(scale: float) -> tuple[int, int, int]:
+    """Reproduces `i_exp`'s internal (q_ln2, q_b, q_c) derivation for `scale`."""
+    q_ln2 = im.i_exp_ln2_quantum(scale)
+    q_b = math.floor(_POLY_B / scale)
+    q_c = math.floor(_POLY_C / (_POLY_A * scale ** 2))
+    return q_ln2, q_b, q_c
+
+
+iexp_cases: list[tuple[str, int, int, int, int, int]] = []  # label, q, q_ln2, q_b, q_c, expected
+
+
+def add_iexp(label: str, q: int, q_ln2: int, q_b: int, q_c: int) -> None:
+    r = im.i_exp_from_constants(q, q_ln2, q_b, q_c)
+    assert -_INT64_MAX - 1 <= r <= _INT64_MAX, f"golden for {label} does not fit int64_t: {r}"
+    iexp_cases.append((label, q, q_ln2, q_b, q_c, r))
+
+
+# Realistic constant triples across plausible per-token activation scales.
+_realistic_scales = [0.1, 0.05, 0.02, 0.005, 1.0 / 127.0]
+for idx, scale in enumerate(_realistic_scales):
+    q_ln2, q_b, q_c = derive_constants(scale)
+    assert q_ln2 >= 1
+
+    # Cross-check against i_exp(q, scale) itself — D-SLM52's other, float-entry
+    # code path through the SAME decomposition — at q=0, double-sourcing this
+    # triple's golden against an independent call into the reference rather
+    # than only i_exp_from_constants agreeing with itself.
+    cross_q_out, _ = im.i_exp(0, scale)
+    assert im.i_exp_from_constants(0, q_ln2, q_b, q_c) == cross_q_out, (
+        "i_exp_from_constants(0, ...) must match i_exp(0, scale)'s own derivation"
+    )
+
+    add_iexp(f"realistic_s{idx}_q_max_element", 0, q_ln2, q_b, q_c)
+    add_iexp(f"realistic_s{idx}_q_neg1", -1, q_ln2, q_b, q_c)
+    add_iexp(f"realistic_s{idx}_q_neg_one_ln2_step", -q_ln2, q_ln2, q_b, q_c)
+    add_iexp(f"realistic_s{idx}_q_neg_five_ln2_steps", -5 * q_ln2, q_ln2, q_b, q_c)
+
+    clip_q = -im.I_EXP_CLIP_N * q_ln2
+    add_iexp(f"realistic_s{idx}_clip_boundary", clip_q, q_ln2, q_b, q_c)
+    beyond_clip_q = clip_q - q_ln2
+    r_clip = im.i_exp_from_constants(clip_q, q_ln2, q_b, q_c)
+    r_beyond = im.i_exp_from_constants(beyond_clip_q, q_ln2, q_b, q_c)
+    assert r_clip == r_beyond, "an input past the clip must clamp to the clip point's result"
+    add_iexp(f"realistic_s{idx}_beyond_clip", beyond_clip_q, q_ln2, q_b, q_c)
+
+# q_ln2 == 1, the minimum: scale chosen so floor(ln2/scale) == 1.
+_scale_qln2_1 = 0.5
+_q_ln2_min, _q_b_min, _q_c_min = derive_constants(_scale_qln2_1)
+assert _q_ln2_min == 1, "scale must be chosen so the ln2 quantum is exactly 1"
+add_iexp("qln2_min_q0", 0, _q_ln2_min, _q_b_min, _q_c_min)
+add_iexp("qln2_min_q_neg1", -1, _q_ln2_min, _q_b_min, _q_c_min)
+add_iexp("qln2_min_clip_boundary", -im.I_EXP_CLIP_N, _q_ln2_min, _q_b_min, _q_c_min)
+add_iexp("qln2_min_beyond_clip", -im.I_EXP_CLIP_N - 5, _q_ln2_min, _q_b_min, _q_c_min)
+
+# Width probe: the widest intermediate the reference's domain permits, found
+# by shrinking `scale` until q_c (the dominant term, since it scales as
+# 1/scale**2) approaches INT64_MAX while the FULL (q_p + q_b)**2 + q_c result
+# still fits a signed 64-bit golden -- a wider intermediate could not be
+# stored as the expected int64_t at all, so this is the largest value this
+# fixture format can even express. Deterministic closed-form estimate plus a
+# fixed refinement loop; no randomness.
+_width_target = _INT64_MAX // 2  # headroom under the exact bound for rounding slop
+_width_scale = math.sqrt(_POLY_C / (_POLY_A * _width_target))
+
+
+def _width_probe_constants(scale: float) -> tuple[int, int, int, int]:
+    q_ln2, q_b, q_c = derive_constants(scale)
+    val = q_b * q_b + q_c  # the q=0 (z=0, no shift) result -- the widest point in this family
+    return q_ln2, q_b, q_c, val
+
+
+_wp_q_ln2, _wp_q_b, _wp_q_c, _wp_val = _width_probe_constants(_width_scale)
+while _wp_val >= _width_target or _wp_q_ln2 < 1:
+    _width_scale *= 1.01
+    _wp_q_ln2, _wp_q_b, _wp_q_c, _wp_val = _width_probe_constants(_width_scale)
+assert 0 < _wp_val < _INT64_MAX
+
+add_iexp("width_probe_q0_max_element", 0, _wp_q_ln2, _wp_q_b, _wp_q_c)
+add_iexp("width_probe_q_neg_one_ln2_step", -_wp_q_ln2, _wp_q_ln2, _wp_q_b, _wp_q_c)
+
+WIDTH_PROBE_MAGNITUDE = _wp_val
+
+# --------------------------------------------------------------------------
 # Emit the C++ header.
 # --------------------------------------------------------------------------
 
@@ -599,6 +763,78 @@ emit("};")
 emit(f"inline constexpr size_t kPipelineCasesCount = {len(pipeline_cases)};")
 emit("")
 
+# --- S2.2: ISqrt / ISqrtTrace (C4/C5/C6) ---
+emit("// --- C4/C5/C6: ISqrt / ISqrtTrace -----------------------------------------------")
+emit("")
+for idx, (label, n, root, trace) in enumerate(isqrt_cases):
+    arr = ", ".join(cxx_i64(v) for v in trace)
+    emit(f"inline constexpr int64_t kISqrtIterates{idx}[] = {{{arr}}};  // {label}")
+emit("")
+emit("struct ISqrtCase {")
+emit("\tconst char* label;")
+emit("\tint64_t n;")
+emit("\tint64_t expected_root;")
+emit("\tconst int64_t* expected_iterates;  // I_SQRT_ITERATIONS entries")
+emit("};")
+emit("")
+emit("inline constexpr ISqrtCase kISqrtCases[] = {")
+for idx, (label, n, root, trace) in enumerate(isqrt_cases):
+    emit(f"\t{{{cxx_str(label)}, {cxx_i64(n)}, {cxx_i64(root)}, kISqrtIterates{idx}}},")
+emit("};")
+emit(f"inline constexpr size_t kISqrtCasesCount = {len(isqrt_cases)};")
+emit("")
+
+# --- S2.2: ShiftByMax (C9) ---
+emit("// --- C9: ShiftByMax --------------------------------------------------------------")
+emit("")
+for idx, (label, logits, expected) in enumerate(shiftmax_cases):
+    larr = ", ".join(cxx_i64(v) for v in logits)
+    earr = ", ".join(cxx_i64(v) for v in expected)
+    emit(f"inline constexpr int64_t kShiftMaxLogits{idx}[] = {{{larr}}};  // {label}")
+    emit(f"inline constexpr int64_t kShiftMaxExpected{idx}[] = {{{earr}}};")
+emit("")
+emit("struct ShiftByMaxCase {")
+emit("\tconst char* label;")
+emit("\tconst int64_t* logits;")
+emit("\tconst int64_t* expected;")
+emit("\tsize_t n;")
+emit("};")
+emit("")
+emit("inline constexpr ShiftByMaxCase kShiftByMaxCases[] = {")
+for idx, (label, logits, expected) in enumerate(shiftmax_cases):
+    emit(
+        f"\t{{{cxx_str(label)}, kShiftMaxLogits{idx}, kShiftMaxExpected{idx}, {len(logits)}}},"
+    )
+emit("};")
+emit(f"inline constexpr size_t kShiftByMaxCasesCount = {len(shiftmax_cases)};")
+emit("")
+
+# --- S2.2: IExpFromConstants (C7/C8) ---
+emit("// --- C7/C8: IExpFromConstants ------------------------------------------------------")
+emit("")
+emit(f"// Width probe: the widest intermediate constructed in this suite is")
+emit(f"// {WIDTH_PROBE_MAGNITUDE} (case \"width_probe_q0_max_element\") -- flagged for the")
+emit("// green-phase implementation's intermediate width (int64 vs a wider type).")
+emit("")
+emit("struct IExpCase {")
+emit("\tconst char* label;")
+emit("\tint64_t q;")
+emit("\tint64_t q_ln2;")
+emit("\tint64_t q_b;")
+emit("\tint64_t q_c;")
+emit("\tint64_t expected;")
+emit("};")
+emit("")
+emit("inline constexpr IExpCase kIExpCases[] = {")
+for label, q, q_ln2, q_b, q_c, r in iexp_cases:
+    emit(
+        f"\t{{{cxx_str(label)}, {cxx_i64(q)}, {cxx_i64(q_ln2)}, {cxx_i64(q_b)}, "
+        f"{cxx_i64(q_c)}, {cxx_i64(r)}}},"
+    )
+emit("};")
+emit(f"inline constexpr size_t kIExpCasesCount = {len(iexp_cases)};")
+emit("")
+
 emit("}  // namespace superslm_test")
 emit("")
 emit("#endif  // SUPERSLM_TESTS_SSLM_INTMATH_FIXTURES_H")
@@ -618,3 +854,7 @@ print(f"DynamicScaleReciprocal named: {len(dynrecip_named_cases)} cases")
 print(f"DynamicScaleReciprocal dense: {len(dynrecip_dense)} cases")
 print(f"RequantTokenCode: {len(requant_cases)} cases")
 print(f"Pipeline: {len(pipeline_cases)} cases")
+print(f"ISqrt/ISqrtTrace: {len(isqrt_cases)} cases")
+print(f"ShiftByMax: {len(shiftmax_cases)} cases")
+print(f"IExpFromConstants: {len(iexp_cases)} cases")
+print(f"IExpFromConstants width probe magnitude: {WIDTH_PROBE_MAGNITUDE}")

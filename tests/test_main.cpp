@@ -2500,6 +2500,119 @@ static void TestIntmathPipelineComposition() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.2 nonlinear scalar primitives red suite (red-first; src/intmath.cpp's
+// ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants bodies are currently
+// deliberately-wrong stub sentinels — every cell below fails red for that one
+// reason until Brunel's port lands. Test-design record: Claude/Curie/
+// superslm-s2.2-nonlinear-test-design-2026-07-19.md.
+// ---------------------------------------------------------------------------
+
+static void TestISqrt() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kISqrtCasesCount; ++i) {
+		const ISqrtCase& c = kISqrtCases[i];
+		int64_t got = superslm::ISqrt(c.n);
+		CHECK_MSG(got == c.expected_root, "%s: ISqrt(%lld) == %lld, want %lld", c.label,
+		          static_cast<long long>(c.n), static_cast<long long>(got),
+		          static_cast<long long>(c.expected_root));
+	}
+}
+
+static void TestISqrtTrace() {
+	// The §17 blind cell: the fixed 32-iteration recurrence. Every case asserts
+	// BOTH that the trace is exactly I_SQRT_ITERATIONS entries long AND that
+	// EVERY iterate matches the reference's i_sqrt_trace(n)[k] individually —
+	// not only the final root — so a data-dependent early exit (the `while bit
+	// > n` prologue intmath.py's docstring explicitly forbids) is caught even
+	// if it happens to still land on the correct final root.
+	using namespace superslm_test;
+	for (size_t i = 0; i < kISqrtCasesCount; ++i) {
+		const ISqrtCase& c = kISqrtCases[i];
+		int64_t got_iterates[superslm::I_SQRT_ITERATIONS];
+		// Poison the buffer so an implementation that writes fewer than
+		// I_SQRT_ITERATIONS entries is caught by the per-iterate comparison
+		// below rather than silently reading stale/uninitialized data as a
+		// coincidental pass.
+		for (int k = 0; k < superslm::I_SQRT_ITERATIONS; ++k) got_iterates[k] = INT64_C(-777777777);
+		superslm::ISqrtTrace(c.n, got_iterates);
+		for (int k = 0; k < superslm::I_SQRT_ITERATIONS; ++k) {
+			CHECK_MSG(got_iterates[k] == c.expected_iterates[k],
+			          "%s: ISqrtTrace(%lld)[%d] == %lld, want %lld (i_sqrt_trace reference iterate)",
+			          c.label, static_cast<long long>(c.n), k, static_cast<long long>(got_iterates[k]),
+			          static_cast<long long>(c.expected_iterates[k]));
+		}
+		CHECK_MSG(got_iterates[superslm::I_SQRT_ITERATIONS - 1] == c.expected_root,
+		          "%s: ISqrtTrace(%lld)'s last iterate == %lld, want the ISqrt root %lld", c.label,
+		          static_cast<long long>(c.n), static_cast<long long>(got_iterates[superslm::I_SQRT_ITERATIONS - 1]),
+		          static_cast<long long>(c.expected_root));
+	}
+}
+
+static void TestShiftByMax() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kShiftByMaxCasesCount; ++i) {
+		const ShiftByMaxCase& c = kShiftByMaxCases[i];
+		std::vector<int64_t> got(c.n, INT64_C(-777777777));
+		superslm::ShiftByMax(c.logits, c.n, got.data());
+		for (size_t j = 0; j < c.n; ++j) {
+			CHECK_MSG(got[j] == c.expected[j], "%s: ShiftByMax(...)[%zu] == %lld, want %lld", c.label, j,
+			          static_cast<long long>(got[j]), static_cast<long long>(c.expected[j]));
+		}
+		// The feature claim itself (C9): the maximum is at 0 and every result
+		// is <= 0 — i-exp's domain requirement — checked live against this
+		// call's own output, not only against the precomputed golden array.
+		int64_t max_out = got.empty() ? 0 : got[0];
+		for (size_t j = 0; j < c.n; ++j) {
+			if (got[j] > max_out) max_out = got[j];
+			CHECK_MSG(got[j] <= 0, "%s: ShiftByMax(...)[%zu] == %lld, want <= 0", c.label, j,
+			          static_cast<long long>(got[j]));
+		}
+		CHECK_MSG(max_out == 0, "%s: ShiftByMax(...)'s maximum output == %lld, want exactly 0", c.label,
+		          static_cast<long long>(max_out));
+	}
+}
+
+static void TestIExpFromConstants() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kIExpCasesCount; ++i) {
+		const IExpCase& c = kIExpCases[i];
+		int64_t got = superslm::IExpFromConstants(c.q, c.q_ln2, c.q_b, c.q_c);
+		CHECK_MSG(got == c.expected, "%s: IExpFromConstants(q=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) == %lld, want %lld",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), static_cast<long long>(got),
+		          static_cast<long long>(c.expected));
+	}
+}
+
+static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
+	// C8's clip claim, checked live across every "realistic_s*"/"qln2_min"
+	// family in the fixture set: the clip-boundary input and the beyond-clip
+	// input for the SAME (q_ln2, q_b, q_c) triple must produce the SAME
+	// result, executed here rather than only asserted equal inside the
+	// generator that produced the golden values.
+	using namespace superslm_test;
+	size_t pairs_checked = 0;
+	for (size_t i = 0; i + 1 < kIExpCasesCount; ++i) {
+		const IExpCase& clip = kIExpCases[i];
+		const IExpCase& beyond = kIExpCases[i + 1];
+		std::string clip_label(clip.label);
+		std::string beyond_label(beyond.label);
+		bool is_clip_pair = clip_label.find("clip_boundary") != std::string::npos &&
+		                     beyond_label.find("beyond_clip") != std::string::npos &&
+		                     clip.q_ln2 == beyond.q_ln2 && clip.q_b == beyond.q_b && clip.q_c == beyond.q_c;
+		if (!is_clip_pair) continue;
+		++pairs_checked;
+		int64_t got_clip = superslm::IExpFromConstants(clip.q, clip.q_ln2, clip.q_b, clip.q_c);
+		int64_t got_beyond = superslm::IExpFromConstants(beyond.q, beyond.q_ln2, beyond.q_b, beyond.q_c);
+		CHECK_MSG(got_clip == got_beyond,
+		          "%s/%s: clip-boundary result %lld != beyond-clip result %lld for the same constants",
+		          clip.label, beyond.label, static_cast<long long>(got_clip), static_cast<long long>(got_beyond));
+	}
+	CHECK_MSG(pairs_checked == 6, "expected 6 clip/beyond-clip fixture pairs (5 realistic + 1 qln2_min), found %zu",
+	          pairs_checked);
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -2681,6 +2794,15 @@ int main() {
 	TestDynamicScaleReciprocalDenseSample();
 	TestRequantTokenCode();
 	TestIntmathPipelineComposition();
+
+	// --- Curie's S2.2 nonlinear scalar primitives red suite (red-first;
+	//     src/intmath.cpp's ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants
+	//     bodies are currently deliberately-wrong stub sentinels). ---
+	TestISqrt();
+	TestISqrtTrace();
+	TestShiftByMax();
+	TestIExpFromConstants();
+	TestIExpFromConstantsClipClampsIdenticallyAcrossFamily();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
