@@ -27,10 +27,11 @@ int32_t SiluSigmoidQ15(const int32_t* table, int8_t code, int64_t m, int e) {
 	// site-level rejection (C29), not this leaf's guard: on the left branch `shift < 24` keeps
 	// `term << shift` exact within int64 (|term| < 2^38, so |result| < 2^62); on the right branch
 	// `-shift <= 63` stays in RoundingDivideByPOT's exponent domain. For every real calibrated
-	// (m,e) the branch is shift < 0 with -shift in [14,18] (§7); the only shift >= 0 inputs are
-	// code == 0 (term 0, no shift magnitude at all) or code extremes that saturate below. The
-	// exhaustive build-time width sweep (§10 item 3) is the standing gate that proves the whole
-	// calibrated corpus stays inside this window before any golden is generated.
+	// (m,e) the branch is shift < 0, with -shift measured in [15,19] over the full calibrated
+	// corpus (§10 item 3 width sweep, 28 layers x 2 forwards); the only shift >= 0 inputs are
+	// code == 0 (term 0) or code extremes that saturate below. The real compiled kernel overflows
+	// the left branch at shift == 26 and hits the RoundingDivideByPOT domain limit at -shift == 64,
+	// both far outside the corpus range (margin >= 2 shifts to the left edge, >= 44 to the right).
 	int64_t pos_fixed = shift >= 0 ? (term << shift) : RoundingDivideByPOT(term, -shift);
 
 	// + N/2 (in Q(kSiluLutQIdx)), then saturate to the table domain [0, N<<Q_idx] BEFORE the split.
