@@ -422,15 +422,34 @@ SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out
 	return SslmModelStatus::Ok;
 }
 
-// --- SIL1 sigmoid-LUT sub-parse — STUB (S2.4 red-phase) -----------------------
-// Deliberately-wrong sentinel (accepts everything, exposes nothing) so Curie's S2.4 hostile
-// red suite compiles+links+fails: reject cells get Ok instead of a reject code, and the
-// valid-readback cell gets entry_count 0. Brunel greens with the real fixed-layout parse.
-SslmModelStatus ParseSigmoidLut(const SslmSectionView& /*section*/, SslmSigmoidLut& out,
+// --- SIL1 sigmoid-LUT sub-parse -----------------------------------------------
+// A fixed-layout section (like CFG1): the exact-size check is the entire bounds surface and
+// gates every field read below. Every deviation is a rejection with a status, never a repaired
+// or partial view (§11 reject-over-degrade; docs/sslm_format.md "Sigmoid-LUT blob — SIL1").
+SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& out,
                                 std::string* err) {
 	out = SslmSigmoidLut{};
 	if (err) err->clear();
-	return SslmModelStatus::Ok;  // stub
+
+	const uint8_t* base = section.data;
+
+	if (base == nullptr || section.byte_size != kSigmoidLutBytes)
+		return Reject(SslmModelStatus::BadSigmoidLutSize, err, "SIL1 section is not exactly kSigmoidLutBytes");
+
+	for (int i = 0; i < 4; ++i) {
+		if (base[i] != kSigmoidLutMagic[i])
+			return Reject(SslmModelStatus::BadSigmoidLutMagic, err, "SIL1 magic is not 'SIL1'");
+	}
+	if (RdU32(base + 4) != kManifestVersion)
+		return Reject(SslmModelStatus::UnsupportedSigmoidLutVersion, err, "unsupported SIL1 version");
+	if (RdU32(base + 8) != kSigmoidLutEntries)
+		return Reject(SslmModelStatus::BadSigmoidLutCount, err, "SIL1 entry_count != kSigmoidLutEntries");
+	if (RdU32(base + 12) != 0)
+		return Reject(SslmModelStatus::BadSigmoidLutReserved, err, "SIL1 reserved field != 0");
+
+	out.values = base + kSigmoidLutHeaderBytes;  // the 1025 int32 Q15 nodes, read via SigmoidLutValue
+	out.entry_count = kSigmoidLutEntries;
+	return SslmModelStatus::Ok;
 }
 
 int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept {
