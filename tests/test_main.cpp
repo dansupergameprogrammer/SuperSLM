@@ -2613,6 +2613,135 @@ static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
 	          pairs_checked);
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
+// RopeApplyPair body is currently the deliberately-wrong stub sentinel
+// {-1, -1} — every cell below fails red for that one reason until Brunel's
+// port lands. Test-design record: Claude/Curie/
+// superslm-s2.3-rope-test-design-2026-07-19.md.
+// ---------------------------------------------------------------------------
+
+static void TestRopeApplyPair() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kRopeCasesCount; ++i) {
+		const RopeCase& c = kRopeCases[i];
+		superslm::RopePair got = superslm::RopeApplyPair(c.x, c.y, c.cos_q30, c.sin_q30);
+		CHECK_MSG(got.x == c.expected_x,
+		          "%s: RopeApplyPair(x=%d, y=%d, cos=%d, sin=%d).x == %lld, want %lld", c.label, c.x, c.y,
+		          c.cos_q30, c.sin_q30, static_cast<long long>(got.x), static_cast<long long>(c.expected_x));
+		CHECK_MSG(got.y == c.expected_y,
+		          "%s: RopeApplyPair(x=%d, y=%d, cos=%d, sin=%d).y == %lld, want %lld", c.label, c.x, c.y,
+		          c.cos_q30, c.sin_q30, static_cast<long long>(got.y), static_cast<long long>(c.expected_y));
+	}
+}
+
+static void TestRopeApplyPairIdentityIsExact() {
+	// The identity/passthrough claim (dimension 10, feature oracle): rotating by
+	// angle 0 (cos=ROPE_ONE, sin=0) must reproduce (x, y) EXACTLY — the
+	// x*ROPE_ONE / ROPE_ONE division has zero remainder, so no rounding may
+	// perturb the result. Checked live against the executed call, not only
+	// against the precomputed golden in kRopeCases.
+	using namespace superslm_test;
+	const int32_t kOne = superslm::ROPE_ONE;
+	const int32_t xs[] = {0, 12345, -12345, superslm::kInt32Max, superslm::kInt32Min};
+	for (int32_t x : xs) {
+		superslm::RopePair got = superslm::RopeApplyPair(x, x, kOne, 0);
+		CHECK_MSG(got.x == static_cast<int64_t>(x), "identity x=%d: RopeApplyPair(...).x == %lld, want %d", x,
+		          static_cast<long long>(got.x), x);
+		CHECK_MSG(got.y == static_cast<int64_t>(x), "identity x=%d: RopeApplyPair(...).y == %lld, want %d", x,
+		          static_cast<long long>(got.y), x);
+	}
+}
+
+static void TestRopeApplyPairQuarterTurnIsExact() {
+	// The quarter-turn claim, executed live: cos=0 isolates the pure-sin
+	// rotation, and (-y, x) / (y, -x) must hold exactly for every (x, y) in
+	// this suite's kRopeCases quarter-turn cells (found by label prefix).
+	using namespace superslm_test;
+	size_t checked = 0;
+	for (size_t i = 0; i < kRopeCasesCount; ++i) {
+		const RopeCase& c = kRopeCases[i];
+		std::string label(c.label);
+		if (label.rfind("quarter_pos_sin_", 0) == 0) {
+			superslm::RopePair got = superslm::RopeApplyPair(c.x, c.y, 0, superslm::ROPE_ONE);
+			CHECK_MSG(got.x == -static_cast<int64_t>(c.y) && got.y == static_cast<int64_t>(c.x),
+			          "%s: cos=0,sin=ROPE_ONE must give (-y, x) == (%lld, %lld), got (%lld, %lld)", c.label,
+			          static_cast<long long>(-c.y), static_cast<long long>(c.x), static_cast<long long>(got.x),
+			          static_cast<long long>(got.y));
+			++checked;
+		} else if (label.rfind("quarter_neg_sin_", 0) == 0) {
+			superslm::RopePair got = superslm::RopeApplyPair(c.x, c.y, 0, -superslm::ROPE_ONE);
+			CHECK_MSG(got.x == static_cast<int64_t>(c.y) && got.y == -static_cast<int64_t>(c.x),
+			          "%s: cos=0,sin=-ROPE_ONE must give (y, -x) == (%lld, %lld), got (%lld, %lld)", c.label,
+			          static_cast<long long>(c.y), static_cast<long long>(-c.x), static_cast<long long>(got.x),
+			          static_cast<long long>(got.y));
+			++checked;
+		}
+	}
+	CHECK_MSG(checked == 8, "expected 8 quarter-turn fixture cells (4 pos-sin + 4 neg-sin), found %zu", checked);
+}
+
+static void TestRopeApplyPairWideInputExceedsInt32Range() {
+	// The int64-return-type claim (dimension 10, load-bearing): at least one
+	// wide-input cell's result must exceed INT32_MAX in magnitude, checked live
+	// against this suite's own executed calls — not only asserted true of the
+	// precomputed golden inside the generator. A RopePair whose fields were
+	// silently truncated to int32 would fail this even if the C++ under test
+	// otherwise computed the right 64-bit value internally.
+	using namespace superslm_test;
+	int wide_exceeding = 0;
+	int64_t largest_magnitude = 0;
+	for (size_t i = 0; i < kRopeCasesCount; ++i) {
+		const RopeCase& c = kRopeCases[i];
+		std::string label(c.label);
+		if (label.rfind("wide_", 0) != 0) continue;
+		superslm::RopePair got = superslm::RopeApplyPair(c.x, c.y, c.cos_q30, c.sin_q30);
+		int64_t mag_x = got.x < 0 ? -got.x : got.x;
+		int64_t mag_y = got.y < 0 ? -got.y : got.y;
+		if (mag_x > largest_magnitude) largest_magnitude = mag_x;
+		if (mag_y > largest_magnitude) largest_magnitude = mag_y;
+		if (mag_x > superslm::kInt32Max || mag_y > superslm::kInt32Max) ++wide_exceeding;
+	}
+	CHECK_MSG(wide_exceeding >= 1,
+	          "at least one wide-input case must produce a result exceeding INT32_MAX in magnitude "
+	          "(the int64 return type is load-bearing); found %d",
+	          wide_exceeding);
+	CHECK_MSG(largest_magnitude > superslm::kInt32Max,
+	          "largest constructed magnitude %lld must exceed INT32_MAX (%d)",
+	          static_cast<long long>(largest_magnitude), superslm::kInt32Max);
+}
+
+static void TestRopeApplyPairTieRoundsAwayFromZero() {
+	// The tie-inheritance claim, executed live: RopeApplyPair's rounding must
+	// move strictly off zero on an exact-half input, on both signs, for the
+	// x-component alone, the y-component alone, and both simultaneously —
+	// proving RoundingDivideByPOT's away-from-zero rule (C3) is inherited
+	// correctly rather than merely matching a precomputed golden that happened
+	// to be produced the same (wrong) way.
+	using namespace superslm_test;
+	const char* kTieLabels[] = {"tie_x_pos",  "tie_x_neg",   "tie_y_pos",
+	                             "tie_y_neg",  "tie_both_pos", "tie_both_neg"};
+	int checked = 0;
+	for (const char* want_label : kTieLabels) {
+		bool found = false;
+		for (size_t i = 0; i < kRopeCasesCount; ++i) {
+			const RopeCase& c = kRopeCases[i];
+			if (std::strcmp(c.label, want_label) != 0) continue;
+			found = true;
+			++checked;
+			superslm::RopePair got = superslm::RopeApplyPair(c.x, c.y, c.cos_q30, c.sin_q30);
+			CHECK_MSG(got.x == c.expected_x, "%s: RopeApplyPair(...).x == %lld, want %lld (away-from-zero tie)",
+			          c.label, static_cast<long long>(got.x), static_cast<long long>(c.expected_x));
+			CHECK_MSG(got.y == c.expected_y, "%s: RopeApplyPair(...).y == %lld, want %lld (away-from-zero tie)",
+			          c.label, static_cast<long long>(got.y), static_cast<long long>(c.expected_y));
+			bool moved_off_zero = (got.x != 0) || (got.y != 0);
+			CHECK_MSG(moved_off_zero, "%s: an exact-half tie must round strictly off zero", c.label);
+		}
+		CHECK_MSG(found, "expected a fixture cell labeled \"%s\"", want_label);
+	}
+	CHECK_MSG(checked == 6, "expected 6 tie fixture cells, found %d", checked);
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -2803,6 +2932,15 @@ int main() {
 	TestShiftByMax();
 	TestIExpFromConstants();
 	TestIExpFromConstantsClipClampsIdenticallyAcrossFamily();
+
+	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
+	//     RopeApplyPair body is currently the deliberately-wrong stub sentinel
+	//     {-1, -1}). ---
+	TestRopeApplyPair();
+	TestRopeApplyPairIdentityIsExact();
+	TestRopeApplyPairQuarterTurnIsExact();
+	TestRopeApplyPairWideInputExceedsInt32Range();
+	TestRopeApplyPairTieRoundsAwayFromZero();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

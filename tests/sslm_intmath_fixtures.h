@@ -3597,6 +3597,88 @@ inline constexpr IExpCase kIExpCases[] = {
 };
 inline constexpr size_t kIExpCasesCount = 36;
 
+// --- C11/C13: RopeApplyPair -----------------------------------------------------
+
+// Widest magnitude constructed by the wide-input class: 4294967296
+// (exceeds INT32_MAX -- the int64 return type is load-bearing).
+
+struct RopeCase {
+	const char* label;
+	int32_t x;
+	int32_t y;
+	int32_t cos_q30;
+	int32_t sin_q30;
+	int64_t expected_x;
+	int64_t expected_y;
+};
+
+inline constexpr RopeCase kRopeCases[] = {
+	{"identity_zero", INT32_C(0), INT32_C(0), INT32_C(1073741824), INT32_C(0), INT64_C(0), INT64_C(0)},
+	{"identity_pos", INT32_C(12345), INT32_C(6789), INT32_C(1073741824), INT32_C(0), INT64_C(12345), INT64_C(6789)},
+	{"identity_neg", INT32_C(-12345), INT32_C(-6789), INT32_C(1073741824), INT32_C(0), INT64_C(-12345), INT64_C(-6789)},
+	{"identity_max", superslm::kInt32Max, superslm::kInt32Max, INT32_C(1073741824), INT32_C(0), INT64_C(2147483647), INT64_C(2147483647)},
+	{"identity_min", superslm::kInt32Min, superslm::kInt32Min, INT32_C(1073741824), INT32_C(0), INT64_C(-2147483648), INT64_C(-2147483648)},
+	{"identity_mixed_sign", superslm::kInt32Max, superslm::kInt32Min, INT32_C(1073741824), INT32_C(0), INT64_C(2147483647), INT64_C(-2147483648)},
+	{"quarter_pos_sin_typical", INT32_C(100), INT32_C(200), INT32_C(0), INT32_C(1073741824), INT64_C(-200), INT64_C(100)},
+	{"quarter_neg_sin_typical", INT32_C(100), INT32_C(200), INT32_C(0), INT32_C(-1073741824), INT64_C(200), INT64_C(-100)},
+	{"quarter_pos_sin_zero", INT32_C(0), INT32_C(0), INT32_C(0), INT32_C(1073741824), INT64_C(0), INT64_C(0)},
+	{"quarter_neg_sin_zero", INT32_C(0), INT32_C(0), INT32_C(0), INT32_C(-1073741824), INT64_C(0), INT64_C(0)},
+	{"quarter_pos_sin_negative", INT32_C(-300), INT32_C(450), INT32_C(0), INT32_C(1073741824), INT64_C(-450), INT64_C(-300)},
+	{"quarter_neg_sin_negative", INT32_C(-300), INT32_C(450), INT32_C(0), INT32_C(-1073741824), INT64_C(450), INT64_C(300)},
+	{"quarter_pos_sin_extreme", superslm::kInt32Max, superslm::kInt32Min, INT32_C(0), INT32_C(1073741824), INT64_C(2147483648), INT64_C(2147483647)},
+	{"quarter_neg_sin_extreme", superslm::kInt32Max, superslm::kInt32Min, INT32_C(0), INT32_C(-1073741824), INT64_C(-2147483648), INT64_C(-2147483647)},
+	{"edge_cos_neg_one_sin_zero", INT32_C(777), INT32_C(-333), INT32_C(-1073741824), INT32_C(0), INT64_C(-777), INT64_C(333)},
+	{"edge_cos_zero_sin_zero", INT32_C(555), INT32_C(-222), INT32_C(0), INT32_C(0), INT64_C(0), INT64_C(0)},
+	{"edge_cos_one_sin_one_typical", INT32_C(100), INT32_C(-50), INT32_C(1073741824), INT32_C(1073741824), INT64_C(150), INT64_C(50)},
+	{"edge_cos_negone_sin_negone_typical", INT32_C(100), INT32_C(-50), INT32_C(-1073741824), INT32_C(-1073741824), INT64_C(-150), INT64_C(-50)},
+	{"general_pos0_pair0", INT32_C(37), INT32_C(-58), INT32_C(1073741824), INT32_C(0), INT64_C(37), INT64_C(-58)},
+	{"general_pos0_pair5", INT32_C(0), INT32_C(0), INT32_C(1073741824), INT32_C(0), INT64_C(0), INT64_C(0)},
+	{"general_pos0_pair15", INT32_C(-1000), INT32_C(2000), INT32_C(1073741824), INT32_C(0), INT64_C(-1000), INT64_C(2000)},
+	{"general_pos0_pair31", INT32_C(536870911), INT32_C(-536870911), INT32_C(1073741824), INT32_C(0), INT64_C(536870911), INT64_C(-536870911)},
+	{"general_pos0_pair63", INT32_C(-777), INT32_C(-777), INT32_C(1073741824), INT32_C(0), INT64_C(-777), INT64_C(-777)},
+	{"general_pos1_pair0", INT32_C(999999), INT32_C(1), INT32_C(580145183), INT32_C(903522590), INT64_C(540301), INT64_C(841471)},
+	{"general_pos1_pair5", INT32_C(37), INT32_C(-58), INT32_C(1012339254), INT32_C(357897666), INT64_C(54), INT64_C(-42)},
+	{"general_pos1_pair15", INT32_C(0), INT32_C(0), INT32_C(1072915188), INT32_C(42124853), INT64_C(0), INT64_C(0)},
+	{"general_pos1_pair31", INT32_C(-1000), INT32_C(2000), INT32_C(1073740997), INT32_C(1332446), INT64_C(-1002), INT64_C(1999)},
+	{"general_pos1_pair63", INT32_C(536870911), INT32_C(-536870911), INT32_C(1073741824), INT32_C(1332), INT64_C(536871577), INT64_C(-536870245)},
+	{"general_pos7_pair0", INT32_C(-777), INT32_C(-777), INT32_C(809496382), INT32_C(705433989), INT64_C(-75), INT64_C(-1096)},
+	{"general_pos7_pair5", INT32_C(999999), INT32_C(1), INT32_C(-776177726), INT32_C(741936413), INT64_C(-722872), INT64_C(690981)},
+	{"general_pos7_pair15", INT32_C(37), INT32_C(-58), INT32_C(1033485568), INT32_C(291254330), INT64_C(51), INT64_C(-46)},
+	{"general_pos7_pair31", INT32_C(0), INT32_C(0), INT32_C(1073701314), INT32_C(9327010), INT64_C(0), INT64_C(0)},
+	{"general_pos7_pair63", INT32_C(-1000), INT32_C(2000), INT32_C(1073741824), INT32_C(9327), INT64_C(-1000), INT64_C(2000)},
+	{"general_pos63_pair0", INT32_C(536870911), INT32_C(-536870911), INT32_C(1058598394), INT32_C(179696815), INT64_C(619147603), INT64_C(-439450789)},
+	{"general_pos63_pair5", INT32_C(-777), INT32_C(-777), INT32_C(-896708777), INT32_C(590622447), INT64_C(1076), INT64_C(221)},
+	{"general_pos63_pair15", INT32_C(999999), INT32_C(1), INT32_C(-842053264), INT32_C(666234046), INT64_C(-784223), INT64_C(620477)},
+	{"general_pos63_pair31", INT32_C(37), INT32_C(-58), INT32_C(1070462157), INT32_C(83858662), INT64_C(41), INT64_C(-55)},
+	{"general_pos63_pair63", INT32_C(0), INT32_C(0), INT32_C(1073741821), INT32_C(83944), INT64_C(0), INT64_C(0)},
+	{"general_pos127_pair0", INT32_C(-1000), INT32_C(2000), INT32_C(249493686), INT32_C(1044353582), INT64_C(-2178), INT64_C(-508)},
+	{"general_pos127_pair5", INT32_C(536870911), INT32_C(-536870911), INT32_C(728554475), INT32_C(-788752104), INT64_C(-30098814), INT64_C(-758653288)},
+	{"general_pos127_pair15", INT32_C(-777), INT32_C(-777), INT32_C(287778867), INT32_C(-1034458713), INT64_C(-957), INT64_C(540)},
+	{"general_pos127_pair31", INT32_C(999999), INT32_C(1), INT32_C(1060434883), INT32_C(168521107), INT64_C(987606), INT64_C(156948)},
+	{"general_pos127_pair63", INT32_C(37), INT32_C(-58), INT32_C(1073741811), INT32_C(169221), INT64_C(37), INT64_C(-58)},
+	{"negative_sin_from_table", INT32_C(4096), INT32_C(-8192), INT32_C(-701844494), INT32_C(-812610492), INT64_C(-8877), INT64_C(2255)},
+	{"negative_cos_from_table", INT32_C(-8192), INT32_C(4096), INT32_C(-446834263), INT32_C(976350678), INT64_C(-315), INT64_C(-9154)},
+	{"quadrant_pos_pos", INT32_C(500), INT32_C(300), INT32_C(534081996), INT32_C(-931492312), INT64_C(509), INT64_C(-285)},
+	{"quadrant_neg_pos", INT32_C(-500), INT32_C(300), INT32_C(534081996), INT32_C(-931492312), INT64_C(12), INT64_C(583)},
+	{"quadrant_pos_neg", INT32_C(500), INT32_C(-300), INT32_C(534081996), INT32_C(-931492312), INT64_C(-12), INT64_C(-583)},
+	{"quadrant_neg_neg", INT32_C(-500), INT32_C(-300), INT32_C(534081996), INT32_C(-931492312), INT64_C(-509), INT64_C(285)},
+	{"wide_max_min_cos1_sin1", superslm::kInt32Max, superslm::kInt32Min, INT32_C(1073741824), INT32_C(1073741824), INT64_C(4294967295), INT64_C(-1)},
+	{"wide_min_max_cos1_sin1", superslm::kInt32Min, superslm::kInt32Max, INT32_C(1073741824), INT32_C(1073741824), INT64_C(-4294967295), INT64_C(-1)},
+	{"wide_max_max_cos1_negsin1", superslm::kInt32Max, superslm::kInt32Max, INT32_C(1073741824), INT32_C(-1073741824), INT64_C(4294967294), INT64_C(0)},
+	{"wide_min_min_cos1_negsin1", superslm::kInt32Min, superslm::kInt32Min, INT32_C(1073741824), INT32_C(-1073741824), INT64_C(-4294967296), INT64_C(0)},
+	{"wide_max_min_negcos1_sin1", superslm::kInt32Max, superslm::kInt32Min, INT32_C(-1073741824), INT32_C(1073741824), INT64_C(1), INT64_C(4294967295)},
+	{"wide_min_max_negcos1_negsin1", superslm::kInt32Min, superslm::kInt32Max, INT32_C(-1073741824), INT32_C(-1073741824), INT64_C(4294967295), INT64_C(1)},
+	{"wide_min_min_negcos1_sin1", superslm::kInt32Min, superslm::kInt32Min, INT32_C(-1073741824), INT32_C(1073741824), INT64_C(4294967296), INT64_C(0)},
+	{"wide_max_max_negcos1_negsin1", superslm::kInt32Max, superslm::kInt32Max, INT32_C(-1073741824), INT32_C(-1073741824), INT64_C(0), INT64_C(-4294967294)},
+	{"tie_x_pos", INT32_C(1), INT32_C(0), INT32_C(536870912), INT32_C(0), INT64_C(1), INT64_C(0)},
+	{"tie_x_neg", INT32_C(-1), INT32_C(0), INT32_C(536870912), INT32_C(0), INT64_C(-1), INT64_C(0)},
+	{"tie_y_pos", INT32_C(0), INT32_C(1), INT32_C(536870912), INT32_C(0), INT64_C(0), INT64_C(1)},
+	{"tie_y_neg", INT32_C(0), INT32_C(-1), INT32_C(536870912), INT32_C(0), INT64_C(0), INT64_C(-1)},
+	{"tie_both_pos", INT32_C(1), INT32_C(1), INT32_C(536870912), INT32_C(0), INT64_C(1), INT64_C(1)},
+	{"tie_both_neg", INT32_C(-1), INT32_C(-1), INT32_C(536870912), INT32_C(0), INT64_C(-1), INT64_C(-1)},
+};
+inline constexpr size_t kRopeCasesCount = 63;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SSLM_INTMATH_FIXTURES_H

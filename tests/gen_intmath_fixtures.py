@@ -10,6 +10,7 @@ Test-design records:
 Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md (C1/C2/C3, C19-C22)
 Claude/Curie/superslm-s2.2-nonlinear-test-design-2026-07-19.md (ISqrt/ISqrtTrace,
 ShiftByMax, IExpFromConstants)
+Claude/Curie/superslm-s2.3-rope-test-design-2026-07-19.md (RopeApplyPair)
 """
 
 from __future__ import annotations
@@ -25,9 +26,12 @@ _SPIKE_DIR = os.path.normpath(
     os.path.join(_THIS_DIR, "..", "..", "Wizard", ".claude", "worktrees",
                  "superslm-dev-continue-d0b08e", "Tools", "superslm_spike")
 )
+_TOOLS_DIR = os.path.dirname(_SPIKE_DIR)
 sys.path.insert(0, _SPIKE_DIR)
+sys.path.insert(0, _TOOLS_DIR)
 
 import intmath as im  # noqa: E402
+import superslm_spike.rope as rope  # noqa: E402
 
 INT32_MIN = im.INT32_MIN
 INT32_MAX = im.INT32_MAX
@@ -526,6 +530,190 @@ add_iexp("width_probe_q_neg_one_ln2_step", -_wp_q_ln2, _wp_q_ln2, _wp_q_b, _wp_q
 WIDTH_PROBE_MAGNITUDE = _wp_val
 
 # --------------------------------------------------------------------------
+# S2.3 — RopeApplyPair (C11/C13)
+# --------------------------------------------------------------------------
+
+_INT64_MIN = -(1 << 63)
+_INT64_MAX_ROPE = (1 << 63) - 1
+
+rope_cases: list[tuple[str, int, int, int, int, int, int]] = []
+# label, x, y, cos_q30, sin_q30, expected_x, expected_y
+
+
+def add_rope(label: str, x: int, y: int, cos_q30: int, sin_q30: int) -> None:
+    ex, ey = rope.rope_apply_pair(x, y, cos_q30, sin_q30)
+    assert _INT64_MIN <= ex <= _INT64_MAX_ROPE and _INT64_MIN <= ey <= _INT64_MAX_ROPE, (
+        f"{label}: golden ({ex}, {ey}) does not fit int64_t"
+    )
+    rope_cases.append((label, x, y, cos_q30, sin_q30, ex, ey))
+
+
+ROPE_ONE = rope.ROPE_ONE
+ROPE_FRAC_BITS = rope.ROPE_FRAC_BITS
+
+# --- Identity / passthrough: angle 0 (cos=ROPE_ONE, sin=0) -> exact (x, y),
+#     verified programmatically (the x*ROPE_ONE / ROPE_ONE division has zero
+#     remainder, so no rounding fires). ---
+for label, x, y in [
+    ("identity_zero", 0, 0),
+    ("identity_pos", 12345, 6789),
+    ("identity_neg", -12345, -6789),
+    ("identity_max", INT32_MAX, INT32_MAX),
+    ("identity_min", INT32_MIN, INT32_MIN),
+    ("identity_mixed_sign", INT32_MAX, INT32_MIN),
+]:
+    add_rope(label, x, y, ROPE_ONE, 0)
+    ex, ey = rope_cases[-1][5], rope_cases[-1][6]
+    assert (ex, ey) == (x, y), f"{label}: identity rotation must reproduce (x, y) exactly, got ({ex}, {ey})"
+
+# --- Quarter turns: cos=0 isolates the pure-sin rotation. ---
+for label, x, y in [
+    ("typical", 100, 200),
+    ("zero", 0, 0),
+    ("negative", -300, 450),
+    ("extreme", INT32_MAX, INT32_MIN),
+]:
+    add_rope(f"quarter_pos_sin_{label}", x, y, 0, ROPE_ONE)
+    ex, ey = rope_cases[-1][5], rope_cases[-1][6]
+    assert (ex, ey) == (-y, x), f"quarter_pos_sin_{label}: expected (-y, x) == ({-y}, {x}), got ({ex}, {ey})"
+
+    add_rope(f"quarter_neg_sin_{label}", x, y, 0, -ROPE_ONE)
+    ex, ey = rope_cases[-1][5], rope_cases[-1][6]
+    assert (ex, ey) == (y, -x), f"quarter_neg_sin_{label}: expected (y, -x) == ({y}, {-x}), got ({ex}, {ey})"
+
+# --- cos/sin edge corners not already covered by identity/quarter-turn. ---
+add_rope("edge_cos_neg_one_sin_zero", 777, -333, -ROPE_ONE, 0)
+_ex, _ey = rope_cases[-1][5], rope_cases[-1][6]
+assert (_ex, _ey) == (-777, 333), "180-degree turn (cos=-1, sin=0) must give (-x, -y) exactly"
+
+add_rope("edge_cos_zero_sin_zero", 555, -222, 0, 0)
+_ex, _ey = rope_cases[-1][5], rope_cases[-1][6]
+assert (_ex, _ey) == (0, 0), "degenerate cos=sin=0 must give (0, 0)"
+
+add_rope("edge_cos_one_sin_one_typical", 100, -50, ROPE_ONE, ROPE_ONE)
+add_rope("edge_cos_negone_sin_negone_typical", 100, -50, -ROPE_ONE, -ROPE_ONE)
+
+# --- General angles: real Q2.30 rows from rope_tables (a Qwen2.5-1.5B-shaped
+#     RoPE configuration: head_dim=128, so 64 pairs; context_cap=128;
+#     theta=1000000.0), sampled across positions and pair indices, each row
+#     paired with a rotating set of representative (x, y) activation values so
+#     the general-angle class also exercises sign and magnitude diversity. ---
+_ROPE_HEAD_DIM = 128
+_ROPE_CONTEXT_CAP = 128
+_ROPE_THETA = 1000000.0
+_cos_table, _sin_table = rope.rope_tables(_ROPE_HEAD_DIM, _ROPE_CONTEXT_CAP, _ROPE_THETA)
+_general_xy = [(37, -58), (0, 0), (-1000, 2000), (INT32_MAX // 4, -(INT32_MAX // 4)), (-777, -777), (999999, 1)]
+
+_general_idx = 0
+for _pos in (0, 1, 7, 63, 127):
+    for _pair in (0, 5, 15, 31, 63):
+        _x, _y = _general_xy[_general_idx % len(_general_xy)]
+        _general_idx += 1
+        _cos = _cos_table[_pos][_pair]
+        _sin = _sin_table[_pos][_pair]
+        add_rope(f"general_pos{_pos}_pair{_pair}", _x, _y, _cos, _sin)
+
+# A row whose sin_q30 is negative and one whose cos_q30 is negative, found by
+# scanning the same realistic table — proves the primitive on genuinely
+# negative table entries, not only hand-picked ±ROPE_ONE/0 edges.
+_neg_sin_row = None
+_neg_cos_row = None
+for _pos in range(_ROPE_CONTEXT_CAP):
+    for _pair in range(_ROPE_HEAD_DIM // 2):
+        if _neg_sin_row is None and _sin_table[_pos][_pair] < 0:
+            _neg_sin_row = (_pos, _pair)
+        if _neg_cos_row is None and _cos_table[_pos][_pair] < 0:
+            _neg_cos_row = (_pos, _pair)
+    if _neg_sin_row is not None and _neg_cos_row is not None:
+        break
+assert _neg_sin_row is not None, "expected at least one table row with sin_q30 < 0 across this domain"
+assert _neg_cos_row is not None, "expected at least one table row with cos_q30 < 0 across this domain"
+
+_p, _q = _neg_sin_row
+add_rope("negative_sin_from_table", 4096, -8192, _cos_table[_p][_q], _sin_table[_p][_q])
+assert rope_cases[-1][4] < 0, "negative_sin_from_table must carry sin_q30 < 0"
+
+_p, _q = _neg_cos_row
+add_rope("negative_cos_from_table", -8192, 4096, _cos_table[_p][_q], _sin_table[_p][_q])
+assert rope_cases[-1][3] < 0, "negative_cos_from_table must carry cos_q30 < 0"
+
+# --- Sign coverage: all four (x, y) quadrants against one fixed, realistic,
+#     non-trivial table row. ---
+_quad_cos, _quad_sin = _cos_table[10][3], _sin_table[10][3]
+for label, x, y in [
+    ("quadrant_pos_pos", 500, 300),
+    ("quadrant_neg_pos", -500, 300),
+    ("quadrant_pos_neg", 500, -300),
+    ("quadrant_neg_neg", -500, -300),
+]:
+    add_rope(label, x, y, _quad_cos, _quad_sin)
+
+# --- Wide inputs: x, y near INT32_MAX/INT32_MIN with cos/sin near +/-ROPE_ONE —
+#     proves the int64 intermediate (~2^61) does not overflow AND that the
+#     result can exceed int32 range (the int64 return type is load-bearing). ---
+_wide_specs = [
+    ("wide_max_min_cos1_sin1", INT32_MAX, INT32_MIN, ROPE_ONE, ROPE_ONE),
+    ("wide_min_max_cos1_sin1", INT32_MIN, INT32_MAX, ROPE_ONE, ROPE_ONE),
+    ("wide_max_max_cos1_negsin1", INT32_MAX, INT32_MAX, ROPE_ONE, -ROPE_ONE),
+    ("wide_min_min_cos1_negsin1", INT32_MIN, INT32_MIN, ROPE_ONE, -ROPE_ONE),
+    ("wide_max_min_negcos1_sin1", INT32_MAX, INT32_MIN, -ROPE_ONE, ROPE_ONE),
+    ("wide_min_max_negcos1_negsin1", INT32_MIN, INT32_MAX, -ROPE_ONE, -ROPE_ONE),
+    ("wide_min_min_negcos1_sin1", INT32_MIN, INT32_MIN, -ROPE_ONE, ROPE_ONE),
+    ("wide_max_max_negcos1_negsin1", INT32_MAX, INT32_MAX, -ROPE_ONE, -ROPE_ONE),
+]
+_wide_exceeds_int32 = 0
+for label, x, y, cos_q30, sin_q30 in _wide_specs:
+    add_rope(label, x, y, cos_q30, sin_q30)
+    ex, ey = rope_cases[-1][5], rope_cases[-1][6]
+    if abs(ex) > INT32_MAX or abs(ey) > INT32_MAX:
+        _wide_exceeds_int32 += 1
+assert _wide_exceeds_int32 >= 1, (
+    "the wide-input class must include at least one case whose result exceeds int32 range, "
+    f"proving the int64 return type is load-bearing; found {_wide_exceeds_int32}"
+)
+WIDE_LARGEST_MAGNITUDE = max(
+    max(abs(c[5]), abs(c[6])) for c in rope_cases if c[0].startswith("wide_")
+)
+
+# --- Tie behavior: construct inputs where x*cos - y*sin (and/or x*sin + y*cos)
+#     is an exact half at 2^30 (a value == 2^29 mod 2^30), on both signs —
+#     proving RoundingDivideByPOT's away-from-zero tie is inherited correctly.
+#     Verified programmatically via Fraction, independent of rope_apply_pair's
+#     own arithmetic. ---
+_ROPE_HALF = 1 << (ROPE_FRAC_BITS - 1)  # 2**29
+
+
+def _assert_exact_half(value: int, what: str) -> None:
+    frac = Fraction(value, 1 << ROPE_FRAC_BITS)
+    floor_v = value >> ROPE_FRAC_BITS
+    assert frac - floor_v == Fraction(1, 2), f"{what} == {value} is not an exact half point at 2^{ROPE_FRAC_BITS}"
+
+
+# x-component ties: y=0, sin_q30=0 isolates x*cos_q30 as the rounded term.
+_assert_exact_half(_ROPE_HALF, "tie_x_pos target")
+add_rope("tie_x_pos", 1, 0, _ROPE_HALF, 0)
+_assert_exact_half(-_ROPE_HALF, "tie_x_neg target")
+add_rope("tie_x_neg", -1, 0, _ROPE_HALF, 0)
+
+# y-component ties: x=0, sin_q30=0 isolates y*cos_q30 as the rounded term of
+# the y-output (x*sin + y*cos).
+add_rope("tie_y_pos", 0, 1, _ROPE_HALF, 0)
+add_rope("tie_y_neg", 0, -1, _ROPE_HALF, 0)
+
+# Both components tie simultaneously in the same call: x=y=+/-1, cos_q30 =
+# 2**29, sin_q30 = 0 -> x_out's rounded term is x*cos - y*sin = 2^29 (exact
+# half) and y_out's rounded term is x*sin + y*cos = 2^29 (exact half) too.
+add_rope("tie_both_pos", 1, 1, _ROPE_HALF, 0)
+add_rope("tie_both_neg", -1, -1, _ROPE_HALF, 0)
+for _tp, _tn in (("tie_x_pos", "tie_x_neg"), ("tie_y_pos", "tie_y_neg"), ("tie_both_pos", "tie_both_neg")):
+    _pos_case = next(c for c in rope_cases if c[0] == _tp)
+    _neg_case = next(c for c in rope_cases if c[0] == _tn)
+    # Away-from-zero: the positive tie rounds UP (away from 0), the negative
+    # tie rounds DOWN (away from 0) — never toward zero on either side.
+    assert abs(_pos_case[5]) >= 1 or abs(_pos_case[6]) >= 1, f"{_tp}: away-from-zero rounding must move off 0"
+    assert abs(_neg_case[5]) >= 1 or abs(_neg_case[6]) >= 1, f"{_tn}: away-from-zero rounding must move off 0"
+
+# --------------------------------------------------------------------------
 # Emit the C++ header.
 # --------------------------------------------------------------------------
 
@@ -835,6 +1023,32 @@ emit("};")
 emit(f"inline constexpr size_t kIExpCasesCount = {len(iexp_cases)};")
 emit("")
 
+# --- S2.3: RopeApplyPair (C11/C13) ---
+emit("// --- C11/C13: RopeApplyPair -----------------------------------------------------")
+emit("")
+emit(f"// Widest magnitude constructed by the wide-input class: {WIDE_LARGEST_MAGNITUDE}")
+emit("// (exceeds INT32_MAX -- the int64 return type is load-bearing).")
+emit("")
+emit("struct RopeCase {")
+emit("\tconst char* label;")
+emit("\tint32_t x;")
+emit("\tint32_t y;")
+emit("\tint32_t cos_q30;")
+emit("\tint32_t sin_q30;")
+emit("\tint64_t expected_x;")
+emit("\tint64_t expected_y;")
+emit("};")
+emit("")
+emit("inline constexpr RopeCase kRopeCases[] = {")
+for label, x, y, cos_q30, sin_q30, ex, ey in rope_cases:
+    emit(
+        f"\t{{{cxx_str(label)}, {cxx_i32(x)}, {cxx_i32(y)}, {cxx_i32(cos_q30)}, {cxx_i32(sin_q30)}, "
+        f"{cxx_i64(ex)}, {cxx_i64(ey)}}},"
+    )
+emit("};")
+emit(f"inline constexpr size_t kRopeCasesCount = {len(rope_cases)};")
+emit("")
+
 emit("}  // namespace superslm_test")
 emit("")
 emit("#endif  // SUPERSLM_TESTS_SSLM_INTMATH_FIXTURES_H")
@@ -858,3 +1072,5 @@ print(f"ISqrt/ISqrtTrace: {len(isqrt_cases)} cases")
 print(f"ShiftByMax: {len(shiftmax_cases)} cases")
 print(f"IExpFromConstants: {len(iexp_cases)} cases")
 print(f"IExpFromConstants width probe magnitude: {WIDTH_PROBE_MAGNITUDE}")
+print(f"RopeApplyPair: {len(rope_cases)} cases")
+print(f"RopeApplyPair widest constructed magnitude: {WIDE_LARGEST_MAGNITUDE}")
