@@ -89,6 +89,12 @@ struct NormalizedScale {
 // no rounding. Exactly one bit-scan + one shift + one branch-free select.
 NormalizedScale NormalizeScale(int64_t d_prime);
 
+// C19 — the reciprocal's pinned, data-INDEPENDENT op counts (§14): exactly 3 Newton
+// iterations then exactly 2 branch-free correction steps. Bare fixed-count Newton is
+// deterministically wrong on 54–62% of the domain; the corrections close it.
+inline constexpr int DYNAMIC_RECIPROCAL_NEWTON_ITERATIONS = 3;
+inline constexpr int DYNAMIC_RECIPROCAL_CORRECTION_STEPS = 2;
+
 // C19 — fixed-point reciprocal: R = round_half_up(2^62 / Dn) for Dn in [2^30, 2^31),
 // computed DIVISION-FREE via corrected Newton — exactly 3 Newton iterations then exactly
 // 2 unconditional branch-free correction steps. Bare fixed-count Newton is deterministically
