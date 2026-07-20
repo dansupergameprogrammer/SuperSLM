@@ -21,6 +21,7 @@
 #include "sslm_model_hostile_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_silu_lut_real_vectors_fixtures.h"
+#include "silu_lut_golden_table.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 
@@ -3416,6 +3417,54 @@ static void TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded() {
 // check that reads src/silu_lut.cpp against this claim once Brunel greens it.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// S2.4 golden hash (§10 item 6): a pinned SHA-256 over SiluSigmoidQ15's outputs
+// across a canonical, safe-window input set. This is the cross-ISA/toolchain
+// determinism gate — every platform in the CI matrix (and, via the run-only GPU
+// package, every vendor) must reproduce this exact hash bit-for-bit. The table is
+// the PINNED converter table (silu_lut_golden_table.h), never a std::exp
+// regeneration, so the hash isolates the integer runtime path from libm. Every
+// (code, m, e) below lies inside the width-sweep-proven safe window (shift = e+17
+// in [-23, 23]; no int64 overflow), so the golden exercises the construction,
+// never UB. e crosses both branches (shift>=0 and <0) and the saturation regime;
+// m spans the [2^30, 2^31) mantissa domain incl. both ends and the real-corpus max.
+// ---------------------------------------------------------------------------
+static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
+	using superslm::SiluSigmoidQ15;
+	static constexpr int kEs[] = {6, 0, -15, -17, -19, -25, -32, -40};  // shift = e+17
+	static constexpr int64_t kMs[] = {1073741824LL, 1073741831LL, 1500000000LL, 1898583166LL, 2147483647LL};
+
+	std::vector<uint8_t> bytes;
+	bytes.reserve(8u * 5u * 255u * 4u);
+	for (int e : kEs) {
+		for (int64_t m : kMs) {
+			for (int code = -127; code <= 127; ++code) {
+				const int32_t out = SiluSigmoidQ15(superslm_test::kSiluLutGoldenTable,
+				                                   static_cast<int8_t>(code), m, e);
+				const uint32_t u = static_cast<uint32_t>(out);  // little-endian, host-independent
+				bytes.push_back(static_cast<uint8_t>(u & 0xFFu));
+				bytes.push_back(static_cast<uint8_t>((u >> 8) & 0xFFu));
+				bytes.push_back(static_cast<uint8_t>((u >> 16) & 0xFFu));
+				bytes.push_back(static_cast<uint8_t>((u >> 24) & 0xFFu));
+			}
+		}
+	}
+	uint8_t digest[32];
+	superslm::Sha256Hash(bytes.data(), bytes.size(), digest);
+	const std::string hex = superslm::ToHex(digest);
+
+	// PINNED golden. A mismatch is a cross-platform determinism break — OR an intended
+	// construction change, in which case regenerate this constant deliberately.
+	static const char* const kSiluLutGoldenHash =
+	    "587576aba105a73a74b0dc75763259fb3e24ba170977caaf511440513b1fa5c6";  // pinned 2026-07-20 (MSVC x64)
+	std::printf("S2.4 SiLU-LUT golden hash: %s (%zu inputs, %zu bytes)\n",
+	            hex.c_str(), bytes.size() / 4, bytes.size());
+	CHECK_MSG(hex == kSiluLutGoldenHash,
+	          "SiluSigmoidQ15 golden hash %s != pinned %s (cross-platform determinism break, or the pin "
+	          "needs regenerating for an intended construction change)",
+	          hex.c_str(), kSiluLutGoldenHash);
+}
+
 int main() {
 	TestSha256KnownVectors();
 	TestDtypeSizes();
@@ -3643,6 +3692,7 @@ int main() {
 	TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors();
 	TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand();
 	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
+	TestSiluSigmoidQ15GoldenHashCrossPlatform();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
