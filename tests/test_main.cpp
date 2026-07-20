@@ -10,6 +10,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/intmath.h"
+#include "superslm/matmul.h"
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
@@ -18,6 +19,7 @@
 #include "sslm_fixtures.h"
 #include "sslm_intmath_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
+#include "sslm_matmul_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_silu_lut_real_vectors_fixtures.h"
@@ -29,6 +31,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -3465,7 +3468,562 @@ static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
 	          hex.c_str(), kSiluLutGoldenHash);
 }
 
-int main() {
+// ---------------------------------------------------------------------------
+// S2.5 matmul red suite (Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md;
+// design: SuperSLM_matmul_subslot_design-2026-07-20.md). src/matmul.cpp is currently
+// a red-phase stub: every one of GemmInt8AccumulateRow / GemmInt8Accumulate /
+// NarrowAccumulatorToI32 unconditionally asserts(false) on entry
+// (include/superslm/matmul.h), before examining any argument. Every cell below
+// therefore fails red for the SAME reason today -- the implementation is absent --
+// which is verified structurally (the stub body never reaches its arguments) and
+// empirically (build+run; see the test-design record's red-confirmation section).
+// Once Brunel builds the scalar reference (design S5), each cell fails red for its
+// own reason (if any) until implemented correctly, then goes green.
+//
+// Goldens: tests/gen_matmul_fixtures.py, an arbitrary-precision (Python native int)
+// oracle independent of any C++ implementation (design S5). Composition-regression
+// goldens additionally cross the pinned Python intmath.py reference used by
+// gen_intmath_fixtures.py.
+// ---------------------------------------------------------------------------
+
+static std::string GSelfPath;  // argv[0], captured in main() for the death-test probe below
+
+// --- S12 dim 5 / the design's debug-assert-fire smoke check: a caller-contract
+//     violation (in_channels == 0 -- below the architectural floor of 1, design S12
+//     dim 4) must abort a debug build (the caller-ensures convention MaxAbsReduce/
+//     IExpFromConstants already use). assert()'s abort() would take down this
+//     ENTIRE process -- and every check after it -- if the violating call ran
+//     in-process, so it runs in an isolated child process instead; the parent only
+//     observes whether the child terminated abnormally. This is new infrastructure:
+//     no death-test convention existed anywhere in this suite before S2.5 (confirmed
+//     by inspection before authoring this cell) -- documented in the test-design
+//     record, not silently introduced. Verified empirically (see the record) that
+//     an MSVC assert() failure under build.bat's flags exits promptly with a
+//     nonzero abnormal-termination code and does NOT block on a dialog. ---
+
+static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_tail) {
+	std::filesystem::path out_path =
+	    std::filesystem::temp_directory_path() /
+	    (std::string("superslm_crash_probe_") + probe_name + ".txt");
+	std::error_code rm_ec;
+	std::filesystem::remove(out_path, rm_ec);
+
+	std::string cmd = "\"" + GSelfPath + "\" --crash-probe=" + probe_name +
+	                   " > \"" + out_path.string() + "\" 2>&1";
+	// system() on Windows invokes `cmd.exe /c <cmd>`; when <cmd> itself begins with a
+	// quoted executable path, cmd.exe's first/last-quote-stripping parser misreads the
+	// nested quotes (a well-known cmd.exe quirk) unless the WHOLE string is wrapped in
+	// one more outer quote pair -- that outer pair is what cmd strips, leaving the
+	// interior correctly quoted.
+	std::string wrapped_cmd = "\"" + cmd + "\"";
+	int rc = std::system(wrapped_cmd.c_str());
+
+	std::string content;
+	{
+		std::ifstream f(out_path, std::ios::binary);
+		content.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+	}
+	if (out_tail) *out_tail = content;
+	std::filesystem::remove(out_path, rm_ec);
+
+	// A clean, non-crashing exit (the probe function returned normally and printed
+	// "PROBE DID NOT CRASH") is the one outcome that reads as "did not crash" --
+	// every other outcome (SIGABRT/abort, an unhandled SEH exception, the CRT
+	// assert handler's own nonzero exit) reads as crashed.
+	return rc != 0;
+}
+
+// Dispatched from main() when argv[1] == "--crash-probe=<name>": runs exactly one
+// contract-violating call in isolation. Returns normally (exit 0) ONLY if the call
+// failed to crash -- a suite defect this cell exists to catch, not the expected
+// outcome.
+static int RunCrashProbe(const std::string& name) {
+	if (name == "matmul_zero_in_channels") {
+		int8_t act[1] = {0};
+		int8_t wgt[1] = {0};
+		int64_t out_acc[1] = {0};
+		std::printf("crash-probe matmul_zero_in_channels: calling GemmInt8AccumulateRow "
+		            "with in_channels=0 (below the architectural floor, design S12 dim 4)\n");
+		std::fflush(stdout);
+		GemmInt8AccumulateRow(act, wgt, /*in_channels=*/0, /*out_channels=*/1, out_acc);
+		std::printf("PROBE DID NOT CRASH\n");
+		return 0;
+	}
+	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
+	return 0;
+}
+
+static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() {
+	std::string tail;
+	bool crashed = RunsCrashProbeAndCrashes("matmul_zero_in_channels", &tail);
+	CHECK_MSG(crashed,
+	          "GemmInt8AccumulateRow(in_channels=0) must abort a debug build (contract "
+	          "violation, design S12 dim 4/5) -- child output was: %s",
+	          tail.c_str());
+}
+
+// --- S12 dim 1/6, S11 item 1: exactness against the arbitrary-precision oracle over
+//     small vectors, int8 extremes on both operands, and the architectural floor
+//     (in_channels == out_channels == 1). ---
+
+static void TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kRowCasesCount; ++i) {
+		const RowCase& c = kRowCases[i];
+		std::vector<int64_t> out_acc(c.out_channels, 0);
+		GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels,
+		                       out_acc.data());
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			CHECK_MSG(out_acc[j] == c.expected[j],
+			          "%s: out_acc[%zu] == %lld, oracle expects %lld", c.label, j,
+			          static_cast<long long>(out_acc[j]), static_cast<long long>(c.expected[j]));
+		}
+	}
+}
+
+// --- S12 dim 4: int32-safe regime on real S16-candidate hidden_size (1536, 960);
+//     tail-length shape matrix -- real intermediate_size (8960, 2560, defensive,
+//     block-aligned) AND deliberately non-block-aligned synthetic lengths (777,
+//     4095 -- the load-bearing tail forcer). Also proves NarrowAccumulatorToI32
+//     bit-exact against the independently-constructed golden int32 row. ---
+
+static void TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
+		const CompositionCase& c = kCompositionCases[i];
+		std::vector<int64_t> wide(c.out_channels, 0);
+		GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels,
+		                       wide.data());
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			CHECK_MSG(wide[j] == static_cast<int64_t>(c.golden_i32[j]),
+			          "%s: wide[%zu] == %lld, oracle expects %d", c.label, j,
+			          static_cast<long long>(wide[j]), c.golden_i32[j]);
+		}
+		std::vector<int32_t> narrowed(c.out_channels, 0);
+		NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			CHECK_MSG(narrowed[j] == c.golden_i32[j],
+			          "%s: NarrowAccumulatorToI32 row[%zu] == %d, oracle expects %d", c.label,
+			          j, narrowed[j], c.golden_i32[j]);
+		}
+	}
+}
+
+// --- S8/S11 item 2/S12 dim 4/6: the accumulator-overflow boundary, forced at the
+//     ATTAINABLE transition (132,104 last-safe / 132,105 first-overflow) with the
+//     jointly-attainable worst-case input, both sign directions -- NOT at the
+//     conservative width-selection number 131,072 (which does not wrap under valid
+//     inputs and would be silently too weak, design S11 item 2). Also carries the
+//     deep-int64 and SIMD-saturation-hazard uniform cases (same case shape). For
+//     every case that DOES overflow int32, the wrapped-int32 value is asserted to
+//     DIFFER from the true sum (proving the boundary genuinely forces a wrap, not
+//     merely a large-but-safe sum); for the width-selection documentation case and
+//     every safe case, wrapped == true (proving no wrap there). The kernel itself is
+//     asserted against the TRUE unwrapped int64 value only -- the wrapped value is
+//     never a golden. ---
+
+static void TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kUniformCasesCount; ++i) {
+		const UniformCase& c = kUniformCases[i];
+		std::vector<int8_t> acts(c.in_channels, c.act_value);
+		std::vector<int8_t> wgts(c.in_channels, c.wgt_value);
+		int64_t out_acc = 0;
+		GemmInt8AccumulateRow(acts.data(), wgts.data(), c.in_channels, /*out_channels=*/1,
+		                       &out_acc);
+		CHECK_MSG(out_acc == c.expected,
+		          "%s (in_channels=%zu): out_acc == %lld, oracle expects %lld (the TRUE, "
+		          "unwrapped int64 sum)",
+		          c.label, c.in_channels, static_cast<long long>(out_acc),
+		          static_cast<long long>(c.expected));
+		if (c.overflows_i32) {
+			CHECK_MSG(c.wrapped_i32 != c.expected,
+			          "%s: this case is marked overflows_i32 but its wrapped-int32 value "
+			          "equals the true sum -- it does not actually force a wrap and is "
+			          "silently too weak (the exact hole design S11 item 2 names)",
+			          c.label);
+		} else {
+			CHECK_MSG(static_cast<int64_t>(c.wrapped_i32) == c.expected,
+			          "%s: this case is marked int32-safe but a naive int32 accumulator "
+			          "would produce a DIFFERENT value than the true sum -- the fixture's "
+			          "own overflow classification is wrong",
+			          c.label);
+		}
+	}
+}
+
+// --- S12 dim 4: SIMD alignment hazard -- distinct from tail length. Buffers
+//     deliberately started at addresses not aligned to common SIMD widths
+//     (offsets 1/3/5/7/15/31/63 bytes into a padded allocation), reusing an
+//     already-exact composition case's data. ---
+
+static void TestGemmInt8AccumulateRowUnalignedBufferPointers() {
+	using namespace superslm_test;
+	const CompositionCase& c = kCompositionCases[0];  // hidden_size_1536_qwen2_5_1_5b
+	static constexpr size_t kOffsets[] = {1, 3, 5, 7, 15, 31, 63};
+	for (size_t off : kOffsets) {
+		std::vector<int8_t> act_buf(off + c.in_channels, 0);
+		std::vector<int8_t> wgt_buf(off + c.out_channels * c.in_channels, 0);
+		std::memcpy(act_buf.data() + off, c.activations, c.in_channels);
+		std::memcpy(wgt_buf.data() + off, c.weights, c.out_channels * c.in_channels);
+
+		std::vector<int64_t> out_acc(c.out_channels, 0);
+		GemmInt8AccumulateRow(act_buf.data() + off, wgt_buf.data() + off, c.in_channels,
+		                       c.out_channels, out_acc.data());
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			CHECK_MSG(out_acc[j] == static_cast<int64_t>(c.golden_i32[j]),
+			          "unaligned pointer offset %zu: out_acc[%zu] == %lld, oracle expects %d",
+			          off, j, static_cast<long long>(out_acc[j]), c.golden_i32[j]);
+		}
+	}
+}
+
+// --- S12 dim 7 contract claim: "the reduction is exactly associative -- any lane
+//     order/regrouping is safe" (design S4). Re-labels k alongside its paired
+//     weight (a genuine reordering of the same dot product, not a different
+//     computation) and asserts the bit-identical sum. ---
+
+static void TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity() {
+	using namespace superslm_test;
+	int64_t original = 0;
+	GemmInt8AccumulateRow(kPermActs, kPermWgts, kPermInChannels, /*out_channels=*/1, &original);
+	CHECK_MSG(original == kPermExpected, "original order: out_acc == %lld, oracle expects %lld",
+	          static_cast<long long>(original), static_cast<long long>(kPermExpected));
+
+	std::vector<int8_t> reordered_acts(kPermInChannels);
+	std::vector<int8_t> reordered_wgts(kPermInChannels);
+	for (size_t k = 0; k < kPermInChannels; ++k) {
+		reordered_acts[k] = kPermActs[kPermIndex[k]];
+		reordered_wgts[k] = kPermWgts[kPermIndex[k]];
+	}
+	int64_t reordered = 0;
+	GemmInt8AccumulateRow(reordered_acts.data(), reordered_wgts.data(), kPermInChannels,
+	                       /*out_channels=*/1, &reordered);
+	CHECK_MSG(reordered == kPermExpected,
+	          "lane-regrouped order: out_acc == %lld, oracle expects %lld (same value as the "
+	          "original order -- the reduction must be order-independent)",
+	          static_cast<long long>(reordered), static_cast<long long>(kPermExpected));
+}
+
+// --- S12 dim 7: "no cross-row reduction -- rows are independent" (design S3), the
+//     discrimination cell (Mendeleev gap 4). Mutating row 2's activations must leave
+//     every OTHER row's output byte-unchanged; GemmInt8Accumulate over num_tokens
+//     rows must be bit-identical to num_tokens independent GemmInt8AccumulateRow
+//     calls stacked row-major [num_tokens, out_channels] (design S3). ---
+
+static void TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence() {
+	using namespace superslm_test;
+	const MultiRowCase& base = kMultiRowCases[0];      // row_independence_base
+	const MultiRowCase& mutated = kMultiRowCases[1];    // row_independence_row2_mutated
+	CHECK(base.num_tokens == mutated.num_tokens);
+	CHECK(base.out_channels == mutated.out_channels);
+
+	std::vector<int64_t> out_base(base.num_tokens * base.out_channels, 0);
+	GemmInt8Accumulate(base.activations, base.weights, base.num_tokens, base.in_channels,
+	                    base.out_channels, out_base.data());
+	for (size_t i = 0; i < base.num_tokens * base.out_channels; ++i) {
+		CHECK_MSG(out_base[i] == base.expected[i], "%s: out_acc[%zu] == %lld, oracle expects %lld",
+		          base.label, i, static_cast<long long>(out_base[i]),
+		          static_cast<long long>(base.expected[i]));
+	}
+
+	std::vector<int64_t> out_mutated(mutated.num_tokens * mutated.out_channels, 0);
+	GemmInt8Accumulate(mutated.activations, mutated.weights, mutated.num_tokens,
+	                    mutated.in_channels, mutated.out_channels, out_mutated.data());
+	for (size_t i = 0; i < mutated.num_tokens * mutated.out_channels; ++i) {
+		CHECK_MSG(out_mutated[i] == mutated.expected[i],
+		          "%s: out_acc[%zu] == %lld, oracle expects %lld", mutated.label, i,
+		          static_cast<long long>(out_mutated[i]), static_cast<long long>(mutated.expected[i]));
+	}
+
+	// Discrimination: rows 0,1,3 must be byte-identical between base and mutated
+	// (only row 2's activations differ); row 2 must differ.
+	for (size_t t = 0; t < base.num_tokens; ++t) {
+		bool row_matches = true;
+		for (size_t j = 0; j < base.out_channels; ++j) {
+			if (out_base[t * base.out_channels + j] != out_mutated[t * base.out_channels + j]) {
+				row_matches = false;
+				break;
+			}
+		}
+		if (t == 2) {
+			CHECK_MSG(!row_matches,
+			          "row 2 (the mutated row) must differ between base and mutated calls -- "
+			          "identical output would mean the mutation had no effect on the row it "
+			          "targeted");
+		} else {
+			CHECK_MSG(row_matches,
+			          "row %zu must be byte-identical between base and mutated calls -- a "
+			          "difference here means row 2's mutation leaked into another row (cross-row "
+			          "state)",
+			          t);
+		}
+	}
+
+	// Stacking equivalence: GemmInt8Accumulate(num_tokens) == num_tokens independent
+	// GemmInt8AccumulateRow calls, row-major [num_tokens, out_channels] (design S3).
+	std::vector<int64_t> stacked(base.num_tokens * base.out_channels, 0);
+	for (size_t t = 0; t < base.num_tokens; ++t) {
+		GemmInt8AccumulateRow(base.activations + t * base.in_channels, base.weights,
+		                       base.in_channels, base.out_channels,
+		                       stacked.data() + t * base.out_channels);
+	}
+	for (size_t i = 0; i < base.num_tokens * base.out_channels; ++i) {
+		CHECK_MSG(stacked[i] == out_base[i],
+		          "%s: stacked single-row call [%zu] == %lld, GemmInt8Accumulate produced %lld "
+		          "-- multi-row must be bit-identical to independently-stacked single-row calls",
+		          base.label, i, static_cast<long long>(stacked[i]), static_cast<long long>(out_base[i]));
+	}
+}
+
+// --- S12 dim 1: warm-object -- the SAME loaded weight buffer read correctly across
+//     many independent activation rows (simulating many tokens/resets against a
+//     loaded artifact), not only a fresh-load test. ---
+
+static void TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights() {
+	using namespace superslm_test;
+	for (size_t r = 0; r < kWarmObjectRowCount; ++r) {
+		std::vector<int64_t> out_acc(kWarmObjectOutChannels, 0);
+		GemmInt8AccumulateRow(kWarmObjectActRows[r], kWarmObjectWeights, kWarmObjectInChannels,
+		                       kWarmObjectOutChannels, out_acc.data());
+		for (size_t j = 0; j < kWarmObjectOutChannels; ++j) {
+			CHECK_MSG(out_acc[j] == kWarmObjectExpectedRows[r][j],
+			          "warm-object row %zu: out_acc[%zu] == %lld, oracle expects %lld", r, j,
+			          static_cast<long long>(out_acc[j]),
+			          static_cast<long long>(kWarmObjectExpectedRows[r][j]));
+		}
+	}
+}
+
+// --- S12 dim 1: scratch-buffer reuse across a shape change (prefill then decode, or
+//     decode after a shape change) -- the out_acc buffer is reused WITHOUT clearing
+//     between calls, and the used portion of a smaller subsequent call must be fully
+//     overwritten with fresh data, never stale bytes from a larger prior call (the
+//     v2.1-v2.2 workspace-reuse stride bug the catalog names directly). ---
+
+static void TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange() {
+	using namespace superslm_test;
+	const MultiRowCase& call1 = kMultiRowCases[2];  // scratch_reuse_call1_num_tokens_6
+	const MultiRowCase& call2 = kMultiRowCases[3];  // scratch_reuse_call2_num_tokens_2
+	CHECK(call1.in_channels == call2.in_channels);
+	CHECK(call1.out_channels == call2.out_channels);
+	CHECK(call1.num_tokens > call2.num_tokens);
+
+	// One buffer sized for the LARGER call, reused (not reallocated, not cleared)
+	// for the smaller call.
+	std::vector<int64_t> out_acc(call1.num_tokens * call1.out_channels, 0);
+
+	GemmInt8Accumulate(call1.activations, call1.weights, call1.num_tokens, call1.in_channels,
+	                    call1.out_channels, out_acc.data());
+	for (size_t i = 0; i < call1.num_tokens * call1.out_channels; ++i) {
+		CHECK_MSG(out_acc[i] == call1.expected[i], "%s: out_acc[%zu] == %lld, oracle expects %lld",
+		          call1.label, i, static_cast<long long>(out_acc[i]),
+		          static_cast<long long>(call1.expected[i]));
+	}
+
+	// Reuse the SAME buffer for the smaller call -- no clear, no reallocation.
+	GemmInt8Accumulate(call2.activations, call2.weights, call2.num_tokens, call2.in_channels,
+	                    call2.out_channels, out_acc.data());
+	const size_t used = call2.num_tokens * call2.out_channels;
+	for (size_t i = 0; i < used; ++i) {
+		CHECK_MSG(out_acc[i] == call2.expected[i],
+		          "%s: out_acc[%zu] == %lld after reuse, oracle expects %lld -- a mismatch here "
+		          "(especially one equal to call1's earlier value) is stale-byte carryover from "
+		          "the larger prior call",
+		          call2.label, i, static_cast<long long>(out_acc[i]),
+		          static_cast<long long>(call2.expected[i]));
+		CHECK_MSG(out_acc[i] != call1.expected[i] || call1.expected[i] == call2.expected[i],
+		          "%s: out_acc[%zu] == %lld still equals call1's value for this slot -- this is "
+		          "the specific stale-byte-carryover signature (fixtures were constructed so "
+		          "call1 and call2 differ at rows 0/1)",
+		          call2.label, i, static_cast<long long>(out_acc[i]));
+	}
+}
+
+// --- S12 dim 3: 8 reader threads x >=10,000 calls each against the SAME loaded
+//     weight tensor, every threaded result asserted byte-identical to a
+//     single-threaded baseline (mirrors TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded's
+//     shape exactly). Runs as a plain stress under build.bat; the project's
+//     ThreadSanitizer leg is the separate CI clang build, not this binary -- no
+//     sanitizer is invoked here. CHECK/CHECK_MSG are not thread-safe, so each thread
+//     accumulates a local mismatch count and only the joining main thread calls
+//     CHECK. ---
+
+static void TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded() {
+	using namespace superslm_test;
+	constexpr int kThreads = 8;
+	constexpr size_t kSweeps = 501;  // 501 * 20 rows == 10,020 calls/thread >= 10,000
+	const size_t rows_per_sweep = kWarmObjectRowCount;
+	const size_t calls_per_thread = kSweeps * rows_per_sweep;
+
+	std::vector<std::vector<int64_t>> baseline(rows_per_sweep);
+	for (size_t r = 0; r < rows_per_sweep; ++r) {
+		baseline[r].assign(kWarmObjectOutChannels, 0);
+		GemmInt8AccumulateRow(kWarmObjectActRows[r], kWarmObjectWeights, kWarmObjectInChannels,
+		                       kWarmObjectOutChannels, baseline[r].data());
+	}
+
+	std::vector<int> per_thread_mismatches(kThreads, 0);
+	std::vector<std::thread> threads;
+	threads.reserve(kThreads);
+	for (int t = 0; t < kThreads; ++t) {
+		threads.emplace_back([&baseline, &per_thread_mismatches, t, rows_per_sweep]() {
+			int mismatches = 0;
+			for (size_t sweep = 0; sweep < kSweeps; ++sweep) {
+				for (size_t r = 0; r < rows_per_sweep; ++r) {
+					std::vector<int64_t> out_acc(kWarmObjectOutChannels, 0);
+					GemmInt8AccumulateRow(kWarmObjectActRows[r], kWarmObjectWeights,
+					                       kWarmObjectInChannels, kWarmObjectOutChannels,
+					                       out_acc.data());
+					if (out_acc != baseline[r]) ++mismatches;
+				}
+			}
+			per_thread_mismatches[static_cast<size_t>(t)] = mismatches;
+		});
+	}
+	for (auto& th : threads) th.join();
+
+	int total_mismatches = 0;
+	for (int m : per_thread_mismatches) total_mismatches += m;
+	CHECK_MSG(total_mismatches == 0,
+	          "%d of %d concurrent reads (8 threads x %zu calls) did not match the "
+	          "single-threaded baseline",
+	          total_mismatches, kThreads * static_cast<int>(calls_per_thread), calls_per_thread);
+}
+
+// --- S12 dim 8, S11 item 3: composition regression. NarrowAccumulatorToI32's output,
+//     fed into the already-shipped MaxAbsReduce/NormalizeScale/DynamicScaleReciprocal/
+//     RequantTokenCode chain, must be bit-identical to feeding an INDEPENDENTLY-
+//     CONSTRUCTED equivalent int32_t[] row through the SAME already-certified chain
+//     directly -- proving the matmul kernel introduces no divergence at the seam.
+//     Cross-checked a second way against the pinned Python intmath.py pipeline
+//     oracle (the same reference gen_intmath_fixtures.py's pipeline cases use). ---
+
+static void TestGemmInt8AccumulateComposesWithShippedRequantChain() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
+		const CompositionCase& c = kCompositionCases[i];
+
+		// Path A: real matmul -> narrow -> chain.
+		std::vector<int64_t> wide(c.out_channels, 0);
+		GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels,
+		                       wide.data());
+		std::vector<int32_t> narrowed(c.out_channels, 0);
+		NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+
+		int64_t d_prime_a = MaxAbsReduce(narrowed.data(), c.out_channels);
+		NormalizedScale ns_a = NormalizeScale(d_prime_a);
+		int64_t r_a = DynamicScaleReciprocal(ns_a.dn);
+		std::vector<int8_t> codes_a(c.out_channels);
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			codes_a[j] = RequantTokenCode(narrowed[j], r_a, ns_a.s);
+		}
+
+		// Path B: the SAME chain, fed the independently-constructed golden int32 row
+		// directly -- never derived from calling NarrowAccumulatorToI32.
+		int64_t d_prime_b = MaxAbsReduce(c.golden_i32, c.out_channels);
+		NormalizedScale ns_b = NormalizeScale(d_prime_b);
+		int64_t r_b = DynamicScaleReciprocal(ns_b.dn);
+		std::vector<int8_t> codes_b(c.out_channels);
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			codes_b[j] = RequantTokenCode(c.golden_i32[j], r_b, ns_b.s);
+		}
+
+		CHECK_MSG(d_prime_a == d_prime_b && d_prime_a == c.expected_d_prime,
+		          "%s: composition seam d_prime mismatch (matmul-path %lld, golden-path %lld, "
+		          "oracle %lld)",
+		          c.label, static_cast<long long>(d_prime_a), static_cast<long long>(d_prime_b),
+		          static_cast<long long>(c.expected_d_prime));
+		CHECK_MSG(ns_a.dn == ns_b.dn && ns_a.dn == c.expected_dn && ns_a.s == ns_b.s &&
+		              ns_a.s == c.expected_s,
+		          "%s: composition seam NormalizeScale mismatch", c.label);
+		CHECK_MSG(r_a == r_b && r_a == c.expected_r,
+		          "%s: composition seam DynamicScaleReciprocal mismatch (matmul-path %lld, "
+		          "golden-path %lld, oracle %lld)",
+		          c.label, static_cast<long long>(r_a), static_cast<long long>(r_b),
+		          static_cast<long long>(c.expected_r));
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			CHECK_MSG(codes_a[j] == codes_b[j],
+			          "%s: composition seam codes[%zu] diverge -- matmul-path %d, golden-path %d "
+			          "(the matmul kernel perturbs the already-certified C19-C22 chain)",
+			          c.label, j, codes_a[j], codes_b[j]);
+			CHECK_MSG(codes_a[j] == c.expected_codes[j],
+			          "%s: codes[%zu] == %d, independent Python intmath.py pipeline oracle "
+			          "expects %d",
+			          c.label, j, codes_a[j], c.expected_codes[j]);
+		}
+	}
+}
+
+// --- S12 dim 10, S11 item 5: op-level parity -- dequantized int8 output vs a
+//     float32 reference matmul of the dequantized inputs (NOT raw-accumulator vs
+//     float32; the int64 accumulate is exact ground truth, proven by item 1). The
+//     reference is the UNSCALED, code-level matmul (the C24/C25 weight-scale fold is
+//     out of scope, design S9): both operands are used as their raw int8 numeric
+//     value in float32, matching this component's own scope boundary. The
+//     TOLERANCE is an owed build-time measurement (design S11 item 5) -- this
+//     harness computes and prints the error statistics; the CHECK below is a
+//     generous smoke bound catching a gross divergence, not the acceptance
+//     tolerance, which is Brunel's to measure and pin. ---
+
+static void TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference() {
+	using namespace superslm_test;
+	const CompositionCase& c = kCompositionCases[0];  // hidden_size_1536_qwen2_5_1_5b
+
+	std::vector<int64_t> wide(c.out_channels, 0);
+	GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels, wide.data());
+	std::vector<int32_t> narrowed(c.out_channels, 0);
+	NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+
+	int64_t d_prime = MaxAbsReduce(narrowed.data(), c.out_channels);
+	NormalizedScale ns = NormalizeScale(d_prime);
+	int64_t r = DynamicScaleReciprocal(ns.dn);
+	std::vector<int8_t> codes(c.out_channels);
+	for (size_t j = 0; j < c.out_channels; ++j) codes[j] = RequantTokenCode(narrowed[j], r, ns.s);
+
+	const float output_scale = static_cast<float>(d_prime) / 127.0f;
+	double max_abs_error = 0.0;
+	double sum_abs_error = 0.0;
+	for (size_t j = 0; j < c.out_channels; ++j) {
+		float float_ref = 0.0f;  // unscaled, code-level float32 matmul (design S9/S11 item 5)
+		for (size_t k = 0; k < c.in_channels; ++k) {
+			float_ref += static_cast<float>(c.activations[k]) *
+			              static_cast<float>(c.weights[j * c.in_channels + k]);
+		}
+		const float dequant_output = static_cast<float>(codes[j]) * output_scale;
+		const double err = std::fabs(static_cast<double>(dequant_output) - static_cast<double>(float_ref));
+		max_abs_error = std::max(max_abs_error, err);
+		sum_abs_error += err;
+	}
+	const double mean_abs_error = sum_abs_error / static_cast<double>(c.out_channels);
+	std::printf(
+	    "S2.5 op-level dequant parity (%s): max |error| = %.6f, mean |error| = %.6f, "
+	    "output_scale = %.6f (D'=%lld) -- tolerance is an owed build-time measurement, not "
+	    "asserted here (design S11 item 5)\n",
+	    c.label, max_abs_error, mean_abs_error, static_cast<double>(output_scale),
+	    static_cast<long long>(d_prime));
+	// Provisional smoke bound only (catches a gross divergence, e.g. a scale or sign
+	// error): the true magnitude a per-token dynamic-scale requant can be off by is
+	// bounded by roughly one quantization step, output_scale/2, times some small
+	// constant for cross-channel accumulation slack -- generous by design.
+	const double smoke_bound = static_cast<double>(output_scale) * 4.0 + 1.0;
+	CHECK_MSG(max_abs_error <= smoke_bound,
+	          "%s: max |dequant - float32 reference| = %.6f exceeds the provisional smoke bound "
+	          "%.6f -- this is not the acceptance tolerance (owed, build-time measured, design "
+	          "S11 item 5), but this magnitude suggests a gross defect (scale or sign error), "
+	          "not ordinary quantization error",
+	          c.label, max_abs_error, smoke_bound);
+}
+
+int main(int argc, char** argv) {
+	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
+	if (argc > 1) {
+		const std::string arg1 = argv[1];
+		const std::string prefix = "--crash-probe=";
+		if (arg1.rfind(prefix, 0) == 0) {
+			return RunCrashProbe(arg1.substr(prefix.size()));
+		}
+	}
 	TestSha256KnownVectors();
 	TestDtypeSizes();
 	TestKnownSectionTypes();
@@ -3693,6 +4251,25 @@ int main() {
 	TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand();
 	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
 	TestSiluSigmoidQ15GoldenHashCrossPlatform();
+
+	// --- Curie's S2.5 matmul red suite (red-first; src/matmul.cpp's
+	//     GemmInt8AccumulateRow/GemmInt8Accumulate/NarrowAccumulatorToI32 are
+	//     currently stubs that unconditionally assert(false) on entry). Every
+	//     cell below that calls into matmul.cpp directly will abort this process
+	//     until Brunel implements the scalar reference -- this is the expected,
+	//     documented RED state (see the test-design record), not a suite defect. ---
+	TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation();
+	TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases();
+	TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases();
+	TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle();
+	TestGemmInt8AccumulateRowUnalignedBufferPointers();
+	TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity();
+	TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence();
+	TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights();
+	TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange();
+	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
+	TestGemmInt8AccumulateComposesWithShippedRequantChain();
+	TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
