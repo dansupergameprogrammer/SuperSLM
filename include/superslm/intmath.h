@@ -162,6 +162,31 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // computed at runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
+// --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
+//
+// Runtime primitive only. The Q2.30 sin/cos TABLES (C12) are generated OFFLINE in double
+// precision — the one place double runs (§6.4) — by the converter, and carried in the
+// artifact's ROP1 section (S2.0a). They are NOT ported here; the runtime reads those integer
+// tables and applies the rotation with a single pinned rounding.
+inline constexpr int ROPE_FRAC_BITS = 30;                 // Q2.30 fixed point
+inline constexpr int32_t ROPE_ONE = 1 << ROPE_FRAC_BITS;  // 1.0 in Q2.30 (2^30)
+
+// The rotated pair, EXACT and UNCLAMPED (see RopeApplyPair). int64 because a rotation can reach
+// ~sqrt(2)·|input|, which exceeds int32 for wide inputs.
+struct RopePair {
+	int64_t x;
+	int64_t y;
+};
+
+// C11/C13 — rotate one pair: (x·cos − y·sin, x·sin + y·cos). Each component is combined at full
+// int64 width, then rounded ONCE by the §6.2 RoundingDivideByPOT primitive at ROPE_FRAC_BITS
+// (C13 — ties away from zero, C3; §6.4 pins "exactly one rounding" and defers the scheme to the
+// §6.2 primitive rather than a second rounding). `cos_q30`/`sin_q30` are Q2.30 table entries
+// (|·| ≤ ROPE_ONE). The result is the exact single-rounded rotation, **UNCLAMPED** — clamping to
+// the activation format is the caller's (site composition), exactly as the reference forward does
+// it (`dynamic_engine.py`: rotate at width, then clamp to int8).
+RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_INTMATH_H

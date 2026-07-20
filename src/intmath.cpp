@@ -312,4 +312,11 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
+// --- §6.4 RoPE rotation — STUB (S2.3 red-phase) -------------------------------
+// Deliberately-wrong sentinel so Curie's S2.3 red suite compiles+links+fails.
+
+RopePair RopeApplyPair(int32_t, int32_t, int32_t, int32_t) {
+	return RopePair{-1, -1};  // stub
+}
+
 }  // namespace superslm
