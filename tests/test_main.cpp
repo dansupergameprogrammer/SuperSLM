@@ -4015,6 +4015,80 @@ static void TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference() {
 	          c.label, max_abs_error, smoke_bound);
 }
 
+// --- S11 item 4 addendum -- closes Poirot's S2.5 review finding: the normative
+//     scalar reference (design S5) had zero committed exercise on x64 (DotRow
+//     dispatches unconditionally to SSE2 there, so DotRowScalarRef was reachable
+//     only from uncommitted scratch). This cell drives DotRowScalarRef and the
+//     shipping SSE2 path (GemmInt8AccumulateRow, which resolves to DotRowSse2 on
+//     this platform) as two INDEPENDENT calls against the SAME inputs, both
+//     asserted bit-for-bit equal to the arbitrary-precision oracle -- discharging
+//     design S11 item 4's "SIMD == scalar bit-equal" claim directly, not only
+//     transitively through the row/composition/uniform cells above. Spread: the
+//     full existing row/composition/uniform fixture corpus (small random, int8
+//     extremes, the architectural floor, real hidden_size/intermediate_size
+//     shapes, the non-block-aligned lengths 777/4095, the overflow boundary,
+//     deep int64 exactness, the SIMD-saturation hazard) PLUS a dedicated
+//     in_channels=1..80 tail-length sweep with both sign extremes on both
+//     operands at every length (tests/gen_matmul_fixtures.py, kTailSweepCases). ---
+
+static void TestDotRowScalarRefMatchesShippingSse2PathAndOracle() {
+	using namespace superslm_test;
+
+	auto check_one = [](const char* label, const int8_t* acts, const int8_t* wgts,
+	                     size_t in_channels, int64_t oracle) {
+		const int64_t scalar = DotRowScalarRef(acts, wgts, in_channels);
+		int64_t simd = 0;
+		GemmInt8AccumulateRow(acts, wgts, in_channels, /*out_channels=*/1, &simd);
+		CHECK_MSG(scalar == oracle,
+		          "%s (in_channels=%zu): DotRowScalarRef == %lld, oracle expects %lld", label,
+		          in_channels, static_cast<long long>(scalar), static_cast<long long>(oracle));
+		CHECK_MSG(simd == oracle,
+		          "%s (in_channels=%zu): shipping SSE2 path (GemmInt8AccumulateRow) == %lld, "
+		          "oracle expects %lld",
+		          label, in_channels, static_cast<long long>(simd), static_cast<long long>(oracle));
+		CHECK_MSG(scalar == simd,
+		          "%s (in_channels=%zu): scalar reference (%lld) != shipping SSE2 path (%lld) -- "
+		          "design S11 item 4's SIMD == scalar bit-equal claim violated",
+		          label, in_channels, static_cast<long long>(scalar), static_cast<long long>(simd));
+	};
+
+	// Existing row corpus -- small random, int8 extremes crossed, architectural floor.
+	for (size_t i = 0; i < kRowCasesCount; ++i) {
+		const RowCase& c = kRowCases[i];
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			check_one(c.label, c.activations, c.weights + j * c.in_channels, c.in_channels,
+			          c.expected[j]);
+		}
+	}
+
+	// Existing composition corpus -- real hidden_size/intermediate_size shapes,
+	// including the load-bearing non-block-aligned lengths 777 and 4095.
+	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
+		const CompositionCase& c = kCompositionCases[i];
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			check_one(c.label, c.activations, c.weights + j * c.in_channels, c.in_channels,
+			          static_cast<int64_t>(c.golden_i32[j]));
+		}
+	}
+
+	// Existing uniform corpus -- overflow boundary (both attainable-transition
+	// lengths, both sign directions), deep int64 exactness, SIMD-saturation hazard.
+	for (size_t i = 0; i < kUniformCasesCount; ++i) {
+		const UniformCase& c = kUniformCases[i];
+		std::vector<int8_t> acts(c.in_channels, c.act_value);
+		std::vector<int8_t> wgts(c.in_channels, c.wgt_value);
+		check_one(c.label, acts.data(), wgts.data(), c.in_channels, c.expected);
+	}
+
+	// Dedicated tail-length sweep, in_channels 1..80, both sign extremes on both
+	// operands at every length (the fixture this cell adds).
+	for (size_t i = 0; i < kTailSweepCasesCount; ++i) {
+		const RowCase& c = kTailSweepCases[i];
+		CHECK(c.out_channels == 1);
+		check_one(c.label, c.activations, c.weights, c.in_channels, c.expected[0]);
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -4270,6 +4344,7 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
 	TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference();
+	TestDotRowScalarRefMatchesShippingSse2PathAndOracle();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

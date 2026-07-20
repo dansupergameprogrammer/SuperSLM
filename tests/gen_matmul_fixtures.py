@@ -324,6 +324,39 @@ assert _perm_expected == _perm_expected_reordered, (
 )
 
 # ---------------------------------------------------------------------------
+# K — tail-length sweep, in_channels 1..80, both sign extremes on both
+#     operands at every length (activations alternate +127/-127, weights
+#     alternate +127/-128 -- both extremes present from length 2 up). Closes
+#     the S2.5 coverage gap Poirot found: DotRowScalarRef (design S5's scalar
+#     reference) had zero committed exercise on x64, since DotRow dispatches
+#     unconditionally to SSE2 there. This sweep, plus the composition_cases'
+#     already-present non-block-aligned lengths (777, 4095), is what the new
+#     committed cell (test-design addendum, S2.5) drives through
+#     DotRowScalarRef directly AND through the shipping SSE2 path
+#     (GemmInt8AccumulateRow), asserting both equal this oracle bit-for-bit.
+# ---------------------------------------------------------------------------
+
+tail_sweep_cases: list[dict] = []
+
+
+def add_tail_sweep_case(label: str, in_channels: int, activations: list[int],
+                         weights: list[int]) -> dict:
+    expected = oracle_row(activations, weights, in_channels, 1)[0]
+    assert fits_int64(expected), f"{label}: oracle sum {expected} does not fit int64"
+    case = {
+        "label": label, "in_channels": in_channels,
+        "activations": activations, "weights": weights, "expected": expected,
+    }
+    tail_sweep_cases.append(case)
+    return case
+
+
+for _L in range(1, 81):
+    _acts = [127 if _k % 2 == 0 else -127 for _k in range(_L)]
+    _wgts = [127 if _k % 2 == 0 else -128 for _k in range(_L)]
+    add_tail_sweep_case(f"tail_sweep_len_{_L}", _L, _acts, _wgts)
+
+# ---------------------------------------------------------------------------
 # Emit the C++ header.
 # ---------------------------------------------------------------------------
 
@@ -395,6 +428,27 @@ for idx, c in enumerate(row_cases):
          f"kRowActs{idx}, kRowWgts{idx}, kRowExpected{idx}}},")
 emit("};")
 emit(f"inline constexpr size_t kRowCasesCount = {len(row_cases)};")
+emit("")
+
+# --- Tail-length sweep cases (S11 item 4 addendum -- closes Poirot's S2.5 finding) ---
+emit("// --- Tail-length sweep, in_channels 1..80, both sign extremes on both operands")
+emit("//     at every length (RowCase shape, out_channels always 1). Drives")
+emit("//     DotRowScalarRef directly against the shipping SSE2 path and this oracle --")
+emit("//     see the S2.5 test-design record's addendum. ---")
+emit("")
+for idx, c in enumerate(tail_sweep_cases):
+    aarr = ", ".join(cxx_i8(v) for v in c["activations"])
+    warr = ", ".join(cxx_i8(v) for v in c["weights"])
+    emit(f"inline constexpr int8_t kTailSweepActs{idx}[] = {{{aarr}}};  // {c['label']}")
+    emit(f"inline constexpr int8_t kTailSweepWgts{idx}[] = {{{warr}}};")
+    emit(f"inline constexpr int64_t kTailSweepExpected{idx}[] = {{{cxx_i64(c['expected'])}}};")
+emit("")
+emit("inline constexpr RowCase kTailSweepCases[] = {")
+for idx, c in enumerate(tail_sweep_cases):
+    emit(f"\t{{{cxx_str(c['label'])}, {c['in_channels']}, 1, "
+         f"kTailSweepActs{idx}, kTailSweepWgts{idx}, kTailSweepExpected{idx}}},")
+emit("};")
+emit(f"inline constexpr size_t kTailSweepCasesCount = {len(tail_sweep_cases)};")
 emit("")
 
 # --- Composition cases ---
