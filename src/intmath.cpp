@@ -17,6 +17,7 @@
 #include "superslm/intmath.h"
 
 #include <bit>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 
@@ -247,7 +248,8 @@ namespace {
 // int64-division GPU-semantics row). All 32 iterations run UNCONDITIONALLY: skipping leading
 // zero digits (the `while bit > n` prologue) would make the op count a function of the
 // radicand, which §14 forbids — below the leading digit the comparison simply takes the else
-// branch. No overflow: remainder <= n < 2^63; trial = root + bit <= 2^31 + 2^62 < 2^63.
+// branch. No overflow: remainder <= n < 2^63; root reaches 2^62 and bit 2^62, so
+// trial = root + bit reaches ~2^62 + 2^60 < 2^63 (the leading iterations dominate).
 void ISqrtIterates(int64_t n, int64_t out[I_SQRT_ITERATIONS]) {
 	int64_t remainder = n;
 	int64_t root = 0;
@@ -287,6 +289,13 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out) {
 }
 
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
+	// Preconditions (caller-ensured; the reference raises on violation): q <= 0 keeps z >= 0 so
+	// the final shift is never negative, and q_ln2 >= 1 keeps the division well defined. The
+	// assert is the no-exceptions runtime equivalent of the reference's raise; out of domain the
+	// body is UB (negative shift / divide-by-zero), the same caller-ensures convention as
+	// MaxAbsReduce/ShiftByMax. In the live pipeline both hold structurally (ShiftByMax → q <= 0;
+	// C30 fine-scale rejection → q_ln2 >= 1).
+	assert(q <= 0 && q_ln2 >= 1);
 	// I-BERT integer polynomial core. q is a max-shifted logit (q <= 0) and q_ln2 >= 1 by
 	// contract, so z >= 0 and the final shift is well defined (no negative shift).
 	//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2

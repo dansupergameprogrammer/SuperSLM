@@ -152,10 +152,14 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // or C30). Same decomposition as intmath.py's `i_exp_from_constants`:
 //   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2;
 //   return ((q_p + q_b)^2 + q_c) >> z.
-// `q` is a max-shifted logit (q <= 0; a positive q is rejected rather than shifted the wrong
-// way); q_ln2 >= 1 (a coarser scale has no decomposition to state). The coefficient integers
-// are positive (C7 N2-5). `out_scale` is never computed at runtime (C30: the nonlinear
-// consumers are same-scale ratios and it cancels).
+// **Preconditions the caller ensures** (structurally upstream — `ShiftByMax` gives q <= 0, and
+// C30's fine-scale rejection gives q_ln2 >= 1): `q` is a max-shifted logit (q <= 0; a positive q
+// has no valid decomposition — it would drive z negative) and q_ln2 >= 1 (a coarser scale has no
+// decomposition to state, and q_ln2 == 0 would divide by zero). The reference `i_exp_from_constants`
+// RAISES on either violation; this primitive asserts them (the no-exceptions runtime equivalent) and
+// is otherwise UB out of domain — the same caller-ensures convention as `MaxAbsReduce`/`ShiftByMax`,
+// not a runtime rejection. The coefficient integers are positive (C7 N2-5). `out_scale` is never
+// computed at runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 }  // namespace superslm
