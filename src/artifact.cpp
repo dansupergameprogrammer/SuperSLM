@@ -36,6 +36,7 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 		case SslmSectionType::KvLandingReciprocals:
 		case SslmSectionType::Calibration:
 		case SslmSectionType::GoldenHashes:
+		case SslmSectionType::SigmoidLut:
 		case SslmSectionType::Tokenizer:
 		case SslmSectionType::ChatTemplate:
 		case SslmSectionType::UnicodeTables:
@@ -52,6 +53,9 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 		case SslmSectionType::Biases: return SslmDtype::Int64;
 		// WeightScales is a WSC1 tensor manifest of int32 (identity,mult,shift) fold ops.
 		case SslmSectionType::WeightScales: return SslmDtype::Int32;
+		// SigmoidLut is a SIL1 fixed table of int32 Q15 nodes (int16 unsafe: sigmoid(16)*2^15
+		// = 32768 exceeds INT16_MAX; SuperSLM_S2.4_SiLU_LUT_Design §8).
+		case SslmSectionType::SigmoidLut: return SslmDtype::Int32;
 		case SslmSectionType::RopeTables: return SslmDtype::Int64;
 		// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON).
 		case SslmSectionType::Config:

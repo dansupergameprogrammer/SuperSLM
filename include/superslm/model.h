@@ -49,6 +49,17 @@ inline constexpr uint8_t kConstantsMagic[4] = {'K', 'V', 'C', '1'};
 inline constexpr uint32_t kConfigBytes = 84;
 inline constexpr uint8_t kConfigMagic[4] = {'C', 'F', 'G', '1'};
 
+// Sigmoid-LUT blob (SIL1, v2). A fixed-layout section (like CFG1 — the table geometry is a
+// pinned build-time constant, not per-artifact): a 16-byte header then kSigmoidLutEntries
+// little-endian int32 Q15 nodes. N, X, Q_idx are compile-time constants of the construction,
+// NOT carried in the section. See docs/sslm_format.md "Sigmoid-LUT blob — SIL1" and
+// SuperSLM_S2.4_SiLU_LUT_Design §4, §8.
+inline constexpr uint32_t kSigmoidLutNodes = 1024;                        // N (x in [-X, X])
+inline constexpr uint32_t kSigmoidLutEntries = kSigmoidLutNodes + 1;      // N+1 = 1025 table entries
+inline constexpr uint32_t kSigmoidLutHeaderBytes = 16;                    // magic+version+entry_count+reserved
+inline constexpr uint32_t kSigmoidLutBytes = kSigmoidLutHeaderBytes + kSigmoidLutEntries * 4;  // int32 payload
+inline constexpr uint8_t kSigmoidLutMagic[4] = {'S', 'I', 'L', '1'};
+
 // KV quantization width (Config.kv_precision).
 enum class SslmKvPrecision : uint32_t {
 	Int8 = 0,
@@ -125,6 +136,12 @@ enum class SslmModelStatus {
 	BadKvPrecision,             // kv_precision not in {0,1}
 	BadConfigBool,              // tie_word_embeddings not in {0,1}
 	BadConfigReserved,          // the CFG1 reserved field != 0
+	// --- SIL1 sigmoid-LUT sub-parse ---
+	BadSigmoidLutSize,          // SIL1 section byte_size != kSigmoidLutBytes
+	BadSigmoidLutMagic,         // first four bytes are not 'SIL1'
+	UnsupportedSigmoidLutVersion, // SIL1 version != kManifestVersion
+	BadSigmoidLutCount,         // entry_count != kSigmoidLutEntries
+	BadSigmoidLutReserved,      // the SIL1 reserved field != 0
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -207,6 +224,24 @@ private:
 // a zero dimension, an out-of-range enum/bool, or a nonzero reserved field — the §11
 // reject-over-degrade law for config. Never throws.
 SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out, std::string* err);
+
+// A validated view of the SIL1 sigmoid LUT: kSigmoidLutEntries Q15 nodes. `values` points
+// into the artifact's owned buffer (valid for its lifetime). Read a node with SigmoidLutValue
+// (little-endian byte assembly — the payload is not guaranteed int32-aligned).
+struct SslmSigmoidLut {
+	const uint8_t* values = nullptr;   // kSigmoidLutEntries * 4 bytes, little-endian int32 Q15
+	uint32_t entry_count = 0;          // == kSigmoidLutEntries on Ok
+};
+
+// Parse the SIL1 Sigmoid-LUT section (whose geometry is fixed by kSigmoidLut* constants). The
+// section must already be validated by SslmArtifact. Fixed-layout like CFG1: the exact-size
+// check gates every read. Rejects (fails closed, `out` left default) on a wrong size/magic/
+// version/entry_count or a nonzero reserved field — the §11 reject-over-degrade law. Never throws.
+SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& out, std::string* err);
+
+// Read Q15 node `i` (< entry_count) of `lut` as a signed int32 (little-endian byte assembly).
+// Behavior is undefined if `i >= entry_count`.
+int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept;
 
 } // namespace superslm
 

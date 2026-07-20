@@ -17,7 +17,14 @@ ROP1 = b"ROP1"
 WSC1 = b"WSC1"
 KVC1 = b"KVC1"
 CFG1 = b"CFG1"
+SIL1 = b"SIL1"
 MANIFEST_VERSION = 1
+
+# Sigmoid-LUT geometry (mirror include/superslm/model.h + silu_lut.h). Pinned, not per-artifact.
+SIGMOID_LUT_NODES = 1024        # N, x in [-X, X]
+SIGMOID_LUT_ENTRIES = SIGMOID_LUT_NODES + 1  # N+1 = 1025
+SIGMOID_LUT_X = 16.0            # domain half-width X
+SIGMOID_FRAC_BITS = 15          # Q15
 MAX_TENSOR_RANK = 4
 KV_PRECISION_INT8 = 0
 KV_PRECISION_INT16 = 1
@@ -117,4 +124,37 @@ def write_cfg1(*, hidden_size, num_hidden_layers, num_attention_heads, num_key_v
     )
     buf += struct.pack("<dd", float(rope_theta), float(rms_norm_eps))
     assert len(buf) == 84, f"CFG1 must be 84 bytes, got {len(buf)}"
+    return bytes(buf)
+
+
+def build_sigmoid_lut(nodes=SIGMOID_LUT_NODES, x_half=SIGMOID_LUT_X):
+    """The offline Q15 sigmoid table (double precision, round-half-to-even) — the one place
+    double runs (SuperSLM_S2.4_SiLU_LUT_Design §4). Entry i, for i in [0, N], holds
+    round_half_even(sigmoid(-X + i*(2X/N)) * 2^15) as int32. Round-half-to-even is the pinned
+    tie rule for this offline-derived table (C14 precedent, §6.8); it is NOT C3 — C3 governs the
+    runtime rounding (§5/§6). Returns an int32 numpy array of N+1 entries. int32, not int16:
+    sigmoid(X)*2^15 rounds to 32768, which exceeds INT16_MAX (§8).
+    """
+    i = np.arange(nodes + 1, dtype=np.float64)
+    x = -x_half + i * (2.0 * x_half / nodes)
+    sig = 1.0 / (1.0 + np.exp(-x))              # float64 sigmoid
+    entries = np.rint(sig * (1 << SIGMOID_FRAC_BITS))  # np.rint = round-half-to-even
+    return entries.astype(np.int32)
+
+
+def write_sil1(table=None):
+    """A SIL1 sigmoid-LUT blob: a fixed 16-byte header (magic + version + entry_count +
+    reserved) then N+1 little-endian int32 Q15 nodes. Mirrors ParseSigmoidLut / docs
+    "Sigmoid-LUT blob — SIL1". `table` defaults to build_sigmoid_lut().
+    """
+    if table is None:
+        table = build_sigmoid_lut()
+    table = np.ascontiguousarray(table, dtype=np.int32)
+    if table.size != SIGMOID_LUT_ENTRIES:
+        raise ValueError(f"SIL1 table must have {SIGMOID_LUT_ENTRIES} entries, got {table.size}")
+    buf = bytearray()
+    buf += SIL1
+    buf += struct.pack("<III", MANIFEST_VERSION, int(table.size), 0)  # version, entry_count, reserved
+    buf += table.tobytes()  # little-endian int32 on x86/ARM; matches the C++ LE read
+    assert len(buf) == 16 + SIGMOID_LUT_ENTRIES * 4, f"SIL1 size {len(buf)} != expected"
     return bytes(buf)

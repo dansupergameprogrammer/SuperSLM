@@ -171,6 +171,13 @@ int32_t RoundingDivideByPOT(int32_t x, int exponent) {
 	return RoundingDivideByPOTImpl<int32_t>(x, exponent);
 }
 
+int64_t RoundingDivideByPOT(int64_t x, int exponent) {
+	// Same tie rule (C3, away from zero), int64 width — the sibling S2.4's SiLU-LUT index
+	// derivation needs. Delegates to the one width-generic template (S23-1) that RopeApplyPair
+	// already instantiates at int64, so C3 lives in exactly one place across both widths.
+	return RoundingDivideByPOTImpl<int64_t>(x, exponent);
+}
+
 int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, int shift) {
 	return RoundingDivideByPOT(
 	    SaturatingRoundingDoublingHighMul(x, quantized_multiplier), shift);

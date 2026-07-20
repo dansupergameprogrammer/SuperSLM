@@ -11,7 +11,9 @@ import hashlib
 import struct
 from dataclasses import dataclass, field
 
-ARTIFACT_FORMAT_VERSION = 1
+# v2 (S2.4): adds the required SigmoidLut (SIL1) section — no i-exp-sigmoid fallback once
+# C10 is the LUT (D-SLM68), so v1 and v2 artifacts are mutually rejected by the version check.
+ARTIFACT_FORMAT_VERSION = 2
 HEADER_BYTES = 64
 SECTION_DESC_BYTES = 40
 MAX_SECTIONS = 4096
@@ -33,6 +35,7 @@ class SectionType:
     KV_LANDING_RECIPROCALS = 9
     CALIBRATION = 10
     GOLDEN_HASHES = 11
+    SIGMOID_LUT = 12    # S2: fixed-point SiLU sigmoid LUT (SIL1 fixed table); required from v2
     TOKENIZER = 20      # S1: byte-BPE vocab + merges + special tokens (self-contained blob)
     CHAT_TEMPLATE = 21  # S1: chat template + special-token metadata (JSON)
     UNICODE_TABLES = 22 # S1: pinned NFC + property-class tables (self-contained blob)
@@ -55,6 +58,7 @@ EXPECTED_DTYPE = {
     SectionType.WEIGHTS: Dtype.INT8,
     SectionType.BIASES: Dtype.INT64,  # BIA1: C28 dynamic-bias codes reach ~10^14 at q_b=30
     SectionType.WEIGHT_SCALES: Dtype.INT32,  # WSC1 tensor manifest of (identity,mult,shift) fold ops
+    SectionType.SIGMOID_LUT: Dtype.INT32,    # SIL1 fixed table of int32 Q15 nodes (int16 unsafe: 32768 > INT16_MAX)
     SectionType.ROPE_TABLES: Dtype.INT64,
 }  # everything else -> RAW
 

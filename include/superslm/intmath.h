@@ -55,6 +55,13 @@ int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b);
 // into half-away-from-zero.
 int32_t RoundingDivideByPOT(int32_t x, int exponent);
 
+// C3 — the int64-domain sibling of RoundingDivideByPOT: x / 2^exponent, ties AWAY FROM
+// ZERO, for exponent in [0, 63]. Delegates to the SAME width-generic rounding template S2.3
+// already instantiates at int64 for RopeApplyPair (S23-1's unification) — one tie rule, no
+// duplication. Exposed publicly so S2.4's SiLU-LUT index derivation can round its int64
+// sub-node position (SuperSLM_S2.4_SiLU_LUT_Design §5, §9).
+int64_t RoundingDivideByPOT(int64_t x, int exponent);
+
 // C1 — the two primitives composed in order, both roundings applied:
 // `RoundingDivideByPOT(SaturatingRoundingDoublingHighMul(x, m), shift)`.
 int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, int shift);

@@ -1,4 +1,4 @@
-# The `.sslm` artifact format — version 1
+# The `.sslm` artifact format — version 2
 
 A `.sslm` file is a converted, quantized SuperSLM model: a versioned header, a
 section table, and a sequence of aligned sections. It is the boundary between the
@@ -53,7 +53,7 @@ All integers little-endian. Offsets are absolute from the start of the file.
 | Offset | Type       | Field              | Constraint (v1)                             |
 |-------:|------------|--------------------|---------------------------------------------|
 |      0 | `u8[4]`    | `magic`            | `'S','S','L','M'` (0x53 0x53 0x4C 0x4D)     |
-|      4 | `u32`      | `format_version`   | `== 1`                                      |
+|      4 | `u32`      | `format_version`   | `== 2`                                      |
 |      8 | `u32`      | `header_bytes`     | `== 64`                                     |
 |     12 | `u32`      | `section_count`    | `<= 4096`                                   |
 |     16 | `u32`      | `flags`            | `== 0` (reserved)                           |
@@ -96,6 +96,7 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |     9 | `KvLandingReciprocals`  | `Raw`        | S0   | per-head KV landing reciprocals (C27) — a `KVC1` keyed blob |
 |    10 | `Calibration`           | `Json`       | S0   | calibration record                                 |
 |    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (§11 golden pack)            |
+|    12 | `SigmoidLut`            | `Int32`      | S2   | fixed-point SiLU sigmoid LUT — a `SIL1` fixed table (§ "Sigmoid-LUT blob"); **required from v2** (C10, D-SLM68) |
 |    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
 |    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
@@ -315,10 +316,41 @@ identity flag (`0`/`1`), column 1 the `mult`, column 2 the `shift`. The attentio
 fold (C27/D-SLM57) rides the same section under `{prefix}.ctx_fold_head{h}` keys. No parse code is
 added — only the magic and the `int32` element type, per the tensor-manifest rules above.
 
+### Sigmoid-LUT blob — `SIL1`
+
+The `SigmoidLut` section (type 12, dtype **`Int32`**, **required from v2**) carries the
+fixed-point SiLU sigmoid lookup table (C10, D-SLM68). Like `CFG1` it is a **fixed-layout**
+section — the table geometry (`N` nodes over `x ∈ [-X, X]`, and the runtime sub-node index
+resolution) is a pinned build-time constant of the construction, **not** carried per-artifact —
+so the exact-size check gates every read. `N = 1024`, so the table has `N+1 = 1025` entries; the
+payload is `1025` little-endian **signed `int32`** Q15 nodes (`int16` is unsafe: `sigmoid(X)·2¹⁵`
+rounds to `32768`, one past `INT16_MAX`). Entry `i` is `round_half_even(sigmoid(-X + i·(2X/N))·2¹⁵)`,
+generated offline in double precision by the converter (`tools/sslm_model_writer.py::build_sigmoid_lut`).
+All little-endian; total is exactly **`16 + 1025·4 = 4116` bytes**.
+
+| Offset | Type | Field | Constraint |
+|-------:|------|-------|------------|
+| 0  | `u8[4]` | magic | `'SIL1'` |
+| 4  | `u32` | version | `1` |
+| 8  | `u32` | entry_count | `== 1025` (`N+1`) |
+| 12 | `u32` | reserved | `== 0` |
+| 16 | `int32[1025]` | nodes | Q15 sigmoid values, little-endian |
+
+`ModelView` SIL1 parse (`ParseSigmoidLut`) rejects (fails closed) on: `byte_size != 4116`
+(`BadSigmoidLutSize`); a wrong magic (`BadSigmoidLutMagic`) or version (`UnsupportedSigmoidLutVersion`);
+`entry_count != 1025` (`BadSigmoidLutCount`); a nonzero reserved field (`BadSigmoidLutReserved`) — the
+§11 reject-over-degrade law. Nodes are read with the byte-assembly reader (`SigmoidLutValue`), never a
+cast (the payload is not guaranteed `int32`-aligned). The runtime lookup over the table lives in
+`include/superslm/silu_lut.h` (index derivation + interpolation, division-free), not in the parse.
+
 ## Versioning
 
 `format_version` is a single integer. A reader that does not recognize the version
 rejects with a versioned diagnostic (`UnsupportedVersion`) — it never attempts a
-best-effort load. `ARTIFACT_FORMAT_VERSION` is currently **1** and matches the spike
-(`artifact_cache.py`). A change to any field layout, a new required section, or a
-change to the integrity-hash construction bumps this number.
+best-effort load. `ARTIFACT_FORMAT_VERSION` is currently **2**. A change to any field
+layout, a new required section, or a change to the integrity-hash construction bumps this
+number. **v1 → v2 (S2.4):** the required `SigmoidLut` (`SIL1`) section was added — once C10 is
+the LUT (D-SLM68) the forward has no i-exp-sigmoid fallback, so `SIL1` is a required section and
+the bump follows the "new required section" rule. v1 and v2 artifacts are therefore mutually
+incompatible by the version check: a v2 loader rejects a v1 artifact (missing the required table),
+and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a silent degrade.

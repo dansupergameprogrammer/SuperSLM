@@ -91,7 +91,7 @@ static void TestKnownSectionTypes() {
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Config)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Weights)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::GoldenHashes)));
-	CHECK(!IsKnownSectionType(12u));   // gap in the enum
+	CHECK(!IsKnownSectionType(13u));   // gap in the enum (12 is now SigmoidLut, v2)
 	CHECK(!IsKnownSectionType(9999u)); // outside the set
 }
 

@@ -21,7 +21,10 @@
 namespace superslm {
 
 // Bumped on any field-layout change, new required section, or integrity-hash change.
-inline constexpr uint32_t kArtifactFormatVersion = 1;
+// v2 (S2.4): adds the required SigmoidLut (SIL1) section — the forward has no i-exp-sigmoid
+// fallback once C10 is the LUT (D-SLM68), so a v1 artifact lacks a required section and a v2
+// loader rejects it (UnsupportedVersion), never a silent degrade (docs/sslm_format.md Versioning).
+inline constexpr uint32_t kArtifactFormatVersion = 2;
 
 // Header/table geometry (v1). See docs/sslm_format.md "Byte layout".
 inline constexpr uint32_t kHeaderBytes = 64;
@@ -44,6 +47,7 @@ enum class SslmSectionType : uint32_t {
 	KvLandingReciprocals = 9,
 	Calibration = 10,
 	GoldenHashes = 11,
+	SigmoidLut = 12,    // S2: fixed-point SiLU sigmoid LUT (SIL1); required from v2 (C10, D-SLM68)
 	Tokenizer = 20,     // S1: byte-BPE vocab + merges + special tokens
 	ChatTemplate = 21,  // S1: chat template + special-token metadata (JSON)
 	UnicodeTables = 22, // S1: pinned NFC + \p{L}/\p{N}/\s tables

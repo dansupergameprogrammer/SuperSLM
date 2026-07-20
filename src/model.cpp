@@ -90,6 +90,11 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::BadKvPrecision: return "BadKvPrecision";
 		case SslmModelStatus::BadConfigBool: return "BadConfigBool";
 		case SslmModelStatus::BadConfigReserved: return "BadConfigReserved";
+		case SslmModelStatus::BadSigmoidLutSize: return "BadSigmoidLutSize";
+		case SslmModelStatus::BadSigmoidLutMagic: return "BadSigmoidLutMagic";
+		case SslmModelStatus::UnsupportedSigmoidLutVersion: return "UnsupportedSigmoidLutVersion";
+		case SslmModelStatus::BadSigmoidLutCount: return "BadSigmoidLutCount";
+		case SslmModelStatus::BadSigmoidLutReserved: return "BadSigmoidLutReserved";
 	}
 	return "Unknown";
 }
@@ -415,6 +420,25 @@ SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out
 
 	out = c;
 	return SslmModelStatus::Ok;
+}
+
+// --- SIL1 sigmoid-LUT sub-parse — STUB (S2.4 red-phase) -----------------------
+// Deliberately-wrong sentinel (accepts everything, exposes nothing) so Curie's S2.4 hostile
+// red suite compiles+links+fails: reject cells get Ok instead of a reject code, and the
+// valid-readback cell gets entry_count 0. Brunel greens with the real fixed-layout parse.
+SslmModelStatus ParseSigmoidLut(const SslmSectionView& /*section*/, SslmSigmoidLut& out,
+                                std::string* err) {
+	out = SslmSigmoidLut{};
+	if (err) err->clear();
+	return SslmModelStatus::Ok;  // stub
+}
+
+int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept {
+	// Real accessor (not the construction): little-endian int32 byte assembly, matching the
+	// loader's read discipline (never a cast over unaligned/untrusted bytes).
+	const uint8_t* p = lut.values + static_cast<size_t>(i) * 4;
+	uint32_t v = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+	return static_cast<int32_t>(v);
 }
 
 } // namespace superslm

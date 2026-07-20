@@ -15,6 +15,7 @@ add_library(superslm STATIC
 	src/tokenizer.cpp
 	src/model.cpp
 	src/intmath.cpp
+	src/silu_lut.cpp
 )
 target_include_directories(superslm PUBLIC include)
 
