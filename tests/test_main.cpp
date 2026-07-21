@@ -3511,12 +3511,21 @@ static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_ta
 
 	std::string cmd = "\"" + GSelfPath + "\" --crash-probe=" + probe_name +
 	                   " > \"" + out_path.string() + "\" 2>&1";
+#ifdef _WIN32
 	// system() on Windows invokes `cmd.exe /c <cmd>`; when <cmd> itself begins with a
 	// quoted executable path, cmd.exe's first/last-quote-stripping parser misreads the
 	// nested quotes (a well-known cmd.exe quirk) unless the WHOLE string is wrapped in
 	// one more outer quote pair -- that outer pair is what cmd strips, leaving the
-	// interior correctly quoted.
+	// interior correctly quoted. This wrap is a cmd.exe-only workaround: std::system on
+	// POSIX invokes `/bin/sh -c <cmd>`, which has no equivalent quote-stripping step, so
+	// the same outer wrap there collapses the whole command into one (nonexistent)
+	// command word -- verified by execution: sh exits 127 and the child never runs, which
+	// a naive `rc != 0` read misreports as "crashed" (Claude/Brunel/
+	// superslm-s2.5-finding-for-curie-crash-probe-2026-07-20.md).
 	std::string wrapped_cmd = "\"" + cmd + "\"";
+#else
+	const std::string& wrapped_cmd = cmd;
+#endif
 	int rc = std::system(wrapped_cmd.c_str());
 
 	std::string content;
@@ -3557,10 +3566,30 @@ static int RunCrashProbe(const std::string& name) {
 static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() {
 	std::string tail;
 	bool crashed = RunsCrashProbeAndCrashes("matmul_zero_in_channels", &tail);
+#ifdef NDEBUG
+	// assert() is a no-op whenever NDEBUG is defined, which every current CI job
+	// defines (windows-x64/linux-x64 build Release, linux-x64-asan builds
+	// RelWithDebInfo, macos-arm64 builds Release -- all four map NDEBUG onto the
+	// child, since it is the same binary re-invoked). The design's caller-ensures
+	// convention (S12 dim 2/5) makes this contract violation UB in a configuration
+	// where the assert is compiled out, not a runtime-rejected hostile input -- so no
+	// abort is the correct, documented outcome here, and the cell's claim in this
+	// configuration is exactly that: the child completes without abnormal
+	// termination. The abort-on-violation claim itself (design S12 dim 5, "must abort
+	// a debug build") is proved by the non-NDEBUG default build (build.bat), where
+	// the assert is compiled in -- see the #else branch below.
+	CHECK_MSG(!crashed,
+	          "GemmInt8AccumulateRow(in_channels=0) under NDEBUG: assert is compiled "
+	          "out, so the child must complete without abnormal termination (caller- "
+	          "ensures UB in this configuration, design S12 dim 2/5) -- child output "
+	          "was: %s",
+	          tail.c_str());
+#else
 	CHECK_MSG(crashed,
 	          "GemmInt8AccumulateRow(in_channels=0) must abort a debug build (contract "
 	          "violation, design S12 dim 4/5) -- child output was: %s",
 	          tail.c_str());
+#endif
 }
 
 // --- S12 dim 1/6, S11 item 1: exactness against the arbitrary-precision oracle over
