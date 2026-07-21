@@ -174,8 +174,14 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 // caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`); the parent calls
 // these, so they are the same values it uses, not a parallel derivation.
 //
-// `IExpShift` returns `z` — the number of ln2 steps the clip/divide yields, always in
-// `[0, I_EXP_CLIP_N]`. `IExpBase` returns `q_p + q_b`, the value the parent squares.
+// `IExpShift` returns `z` — the number of ln2 steps the clip/divide yields. `IExpBase`
+// returns `q_p + q_b`, the value the parent squares.
+//
+// **`z` lies in `[0, I_EXP_CLIP_N]` only while `q_ln2 <= INT64_MAX / I_EXP_CLIP_N`.** Above
+// that the clip bound `−I_EXP_CLIP_N · q_ln2` overflows int64 and the decomposition is
+// meaningless — the executed witness is `z = −29` at a contract-legal `q_ln2`. `q_ln2` has
+// no documented upper bound, so this is a real reachable region; `IExpConstantsInDomain`
+// answers `false` throughout it, which is the guard a caller should be relying on.
 int64_t IExpShift(int64_t q, int64_t q_ln2);
 int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
 
@@ -199,10 +205,17 @@ int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
 // Same caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`) — this predicate
 // answers the width question only, and does not validate those.
 //
-// **Cost note (D-SLM83):** the result depends on `q` only through `z`, and `q = 0` (`z = 0`)
-// is the worst case for a given `(q_ln2, q_b, q_c)` triple. A caller deriving one constant
-// triple per query discharges the whole row's obligation with a single `q = 0` call — this
-// is not a per-element runtime guard.
+// **Cost note (D-SLM83) — read the condition, it is load-bearing.** `base = q_p + q_b`
+// varies with `q` even at a fixed `z`, so this predicate is **not** `q`-invariant in
+// general: at `q_ln2 = 4000000000, q_b = 1, q_c = 0`, `q = 0` answers `true` while
+// `q = −3999999999` — same triple, same `z = 0` — answers `false`.
+//
+// The one-call-per-triple shortcut holds **only where C30 derives the constants**, because
+// there `q_b / q_ln2` is fixed at ≈1.952, which keeps `base` positive across the row and
+// maximal at `q = 0`. A caller in that regime discharges the whole row's obligation with a
+// single `q = 0` call, and this is not a per-element runtime guard. **A caller supplying
+// constants from anywhere else does not get that shortcut** and must either establish the
+// same property for its own constants or check the row's extremes.
 bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------

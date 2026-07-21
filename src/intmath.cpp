@@ -337,24 +337,46 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
-int64_t IExpShift(int64_t q, int64_t q_ln2) {
-	assert(q <= 0 && q_ln2 >= 1);
+namespace {
+
+// The clip/divide, in ONE place. IExpShift and IExpBase both project from this rather
+// than each re-deriving it: two private copies of the same four lines is how they drift
+// apart under a later edit (Poirot review of 7b668b2, Minor).
+struct IExpDecomp {
+	int64_t z;
+	int64_t q_p;
+};
+
+inline IExpDecomp IExpDecompose(int64_t q, int64_t q_ln2) {
 	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
 	const int64_t clipped = q < clip_lo ? clip_lo : q;
-	return (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative floor division
+	const int64_t z = (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative
+	return {z, clipped + z * q_ln2};       // q_p in (−q_ln2, 0]
+}
+
+// `clip_lo` above is `−I_EXP_CLIP_N · q_ln2`, which overflows int64 once q_ln2 exceeds
+// this. Beyond it the decomposition is meaningless — the executed witness is z = −29 at
+// a contract-legal q_ln2 — so IExpConstantsInDomain answers false there rather than
+// blessing it. This is a SECOND axis from the width question: q_ln2 has no documented
+// upper bound either, the same gap that produced the original strike on q_c.
+constexpr int64_t kIExpMaxQLn2 = INT64_MAX / static_cast<int64_t>(I_EXP_CLIP_N);
+
+}  // namespace
+
+int64_t IExpShift(int64_t q, int64_t q_ln2) {
+	assert(q <= 0 && q_ln2 >= 1);
+	return IExpDecompose(q, q_ln2).z;
 }
 
 int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b) {
 	assert(q <= 0 && q_ln2 >= 1);
-	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
-	const int64_t clipped = q < clip_lo ? clip_lo : q;
-	const int64_t z = (-clipped) / q_ln2;
-	const int64_t q_p = clipped + z * q_ln2;  // in (−q_ln2, 0]
-	return q_p + q_b;
+	return IExpDecompose(q, q_ln2).q_p + q_b;
 }
 
 bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	assert(q <= 0 && q_ln2 >= 1);
+	// The decomposition must itself be sound before its width can be judged.
+	if (q_ln2 > kIExpMaxQLn2) return false;
 	const int64_t z = IExpShift(q, q_ln2);
 	const int64_t base = IExpBase(q, q_ln2, q_b);
 	const S128 v = SAdd(SMul(base, base), SFromI64(q_c));
