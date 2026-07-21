@@ -391,6 +391,20 @@ bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 
 	const S128 upper = SSub(limit, SFromI64(1));      //  2^63·2^z − 1
 	const S128 lower = SSub(SFromI64(0), limit);      // −2^63·2^z
+
+	// The lower test is UNREACHABLE-AS-FALSE for this signature, and that is deliberate.
+	// `base²` is non-negative and `q_c >= INT64_MIN` by its own type, so the smallest `v`
+	// any int64 pair can produce is `INT64_MIN` — which is exactly `lower` at `z = 0` and
+	// strictly inside it at every `z > 0`. No representable input can make it reject, so no
+	// test can kill it by deletion (Poirot's M4 mutation is executed-identical to this code;
+	// his M1, `lower = 0`, IS caught by the committed cells).
+	//
+	// It stays because it states the predicate the function CLAIMS — "representable in
+	// int64" — rather than the narrower one today's argument types happen to guarantee.
+	// Delete it and the function is correct only by accident of the signature: widen `q_c`,
+	// or admit a negative `base²` term, and the guarantee silently disappears with nothing
+	// failing. Keeping it costs one comparison and is the difference between correct by
+	// construction and correct by coincidence.
 	return SGe(upper, v) && SGe(v, lower);
 }
 

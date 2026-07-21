@@ -84,5 +84,9 @@ jobs:
       - run: pip install numpy
       - run: python tools/gen_matmul_golden.py
       - run: python tools/gen_silu_lut_golden.py
+      # Imports nothing outside the standard library, so unlike gen_intmath_fixtures.py and
+      # gen_matmul_fixtures.py (which import an out-of-repo spike directory) it runs on a
+      # bare checkout. Resolves its output path from __file__, so the cwd does not matter.
+      - run: python tests/gen_iexp_domain_fixtures.py
       - name: Fail if regenerating changed any tracked file
-        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h
+        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h tests/sslm_iexp_domain_fixtures.h
