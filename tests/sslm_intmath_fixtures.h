@@ -287,7 +287,7 @@ struct DynRecipDenseCase {
 	int64_t expected_r;
 };
 
-// Dense sampled subset across [2**30, 2**31) — 3000 points, seeded
+// Dense sampled subset across [2**30, 2**31) -- 3000 points, seeded
 // deterministically (Python random.Random(20260719)). This is the G-8
 // ongoing-CI sample; the exhaustive full-domain proof is Brunel's separate
 // certifier, not this suite.

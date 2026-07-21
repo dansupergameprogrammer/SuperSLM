@@ -40,6 +40,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>  // _getpid
+#else
+#include <unistd.h>  // getpid
+#endif
+
 using namespace superslm;
 using namespace superslm_test;
 
@@ -3535,10 +3541,65 @@ static bool EnvVarIsSet(const char* name) {
 #endif
 }
 
-static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_tail) {
+// Portable current-process-id read, used only to keep each crash-probe child's capture
+// file distinct from every other configuration's (see kCrashProbeChildEnvVar's sibling
+// note below): two configurations of this binary (e.g. a debug and an NDEBUG build) run
+// concurrently on one machine and, before this, wrote and read the same fixed path in the
+// shared system temp directory -- a race that turned a lost capture file from a degraded
+// diagnostic message into an outright cell failure once the began-marker check started
+// depending on that file's contents.
+static long CurrentProcessId() {
+#ifdef _WIN32
+	return static_cast<long>(_getpid());
+#else
+	return static_cast<long>(getpid());
+#endif
+}
+
+// The single verdict RunsCrashProbeAndCrashes returns. A plain bool cannot represent
+// "the probe never ran" without collapsing it onto one of the other two answers -- which
+// is exactly the shape of the finding this type exists to close (Claude/Poirot/
+// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 3, and the residual it
+// names in the same entry). kDidNotRun is a third state a caller must handle explicitly;
+// there is no bool-shaped shortcut back to "crashed" or "did not crash" for it.
+enum class CrashProbeOutcome {
+	kDidNotRun,      // the began-marker for the requested probe never appeared in the
+	                 // child's captured output -- the contract-violating call was never
+	                 // dispatched (probe name mismatch, broken dispatch, the child exited
+	                 // before reaching it, or an unrecognized probe name). Neither
+	                 // "crashed" nor "did not crash" is a meaningful answer for this
+	                 // outcome.
+	kRanNoCrash,     // the marker is present (the probe genuinely ran) and the child
+	                 // completed without abnormal termination.
+	kRanAndCrashed,  // the marker is present (the probe genuinely ran) and the child
+	                 // terminated abnormally.
+};
+
+static const char* CrashProbeOutcomeName(CrashProbeOutcome outcome) {
+	switch (outcome) {
+		case CrashProbeOutcome::kDidNotRun:
+			return "did-not-run";
+		case CrashProbeOutcome::kRanNoCrash:
+			return "ran-no-crash";
+		case CrashProbeOutcome::kRanAndCrashed:
+			return "ran-and-crashed";
+	}
+	return "(unknown CrashProbeOutcome)";
+}
+
+// Runs the named crash probe in a child process and returns a single verdict that already
+// accounts for whether the probe genuinely ran -- a caller cannot obtain kRanNoCrash or
+// kRanAndCrashed without the began-marker check below having passed first, because the
+// CHECK_MSG that enforces it, and the early return past it, both live here rather than at
+// each call site. A future second death-test cell built on this helper inherits that
+// enforcement by construction: there is no code path through this function that hands back
+// a crashed/did-not-crash answer for a probe that never ran, so there is nothing for a new
+// caller to forget to repeat.
+static CrashProbeOutcome RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_tail) {
 	std::filesystem::path out_path =
 	    std::filesystem::temp_directory_path() /
-	    (std::string("superslm_crash_probe_") + probe_name + ".txt");
+	    (std::string("superslm_crash_probe_") + probe_name + "_" +
+	     std::to_string(CurrentProcessId()) + ".txt");
 	std::error_code rm_ec;
 	std::filesystem::remove(out_path, rm_ec);
 
@@ -3562,6 +3623,16 @@ static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_ta
 	setenv(kCrashProbeChildEnvVar, "1", /*overwrite=*/1);
 #endif
 	int rc = std::system(wrapped_cmd.c_str());
+#ifdef _WIN32
+	// _putenv_s with an empty value removes the variable (documented behavior). Set only
+	// for the duration of spawning this one child; a variable left set in the parent's own
+	// environment would be inherited by any later child this process spawns, which would
+	// misread as "I am a crash-probe child" and refuse to run (Claude/Poirot/
+	// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 4).
+	_putenv_s(kCrashProbeChildEnvVar, "");
+#else
+	unsetenv(kCrashProbeChildEnvVar);
+#endif
 
 	std::string content;
 	{
@@ -3571,15 +3642,30 @@ static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_ta
 	if (out_tail) *out_tail = content;
 	std::filesystem::remove(out_path, rm_ec);
 
-	// A clean, non-crashing exit (the probe function returned normally and printed
-	// "PROBE DID NOT CRASH") is the one outcome that reads as "did not crash" --
-	// every other outcome (SIGABRT/abort, an unhandled SEH exception, the CRT
-	// assert handler's own nonzero exit) reads as crashed. This is necessary but
-	// NOT sufficient evidence the probe ran (see the caller's use of
-	// CrashProbeBeganMarker) -- an unrecognized probe name also exits nonzero
-	// under this helper's own dispatch (RunCrashProbe returns 2), and must not be
-	// mistaken for a crash of the intended call.
-	return rc != 0;
+	// The began-marker check that used to live in the caller (Claude/Poirot/
+	// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 3): the contract-
+	// violating call must have been genuinely dispatched before "crashed" or "did not
+	// crash" means anything. Folded in here, this CHECK_MSG fires for every caller of this
+	// helper, present and future, not only for the one call site that remembers to repeat
+	// it.
+	bool began = content.find(CrashProbeBeganMarker(probe_name)) != std::string::npos;
+	CHECK_MSG(began,
+	          "the child's captured output never contains the began-marker for probe "
+	          "'%s' -- the contract-violating call was never dispatched (probe name "
+	          "mismatch, broken dispatch, or the child exited before reaching it), so no "
+	          "crashed/did-not-crash outcome can be trusted for it -- child output was: %s",
+	          probe_name, content.c_str());
+	if (!began) return CrashProbeOutcome::kDidNotRun;
+
+	// Reachable only once the marker has proven the probe genuinely ran. RunCrashProbe's
+	// unrecognized-name sentinel (return code 2) cannot occur on this path: it returns 2
+	// only on the branch that never prints the marker, so `began` would have been false
+	// and the function would already have returned above. rc's only remaining meanings are
+	// therefore "completed normally" (0) or "terminated abnormally" (nonzero) -- the
+	// residual the reviewer named (RunCrashProbe's code 2 satisfying `rc != 0` for a probe
+	// that never ran) closes by construction, not by exclusion, because the sentinel and a
+	// present marker cannot occur together.
+	return (rc != 0) ? CrashProbeOutcome::kRanAndCrashed : CrashProbeOutcome::kRanNoCrash;
 }
 
 // Dispatched from main() when argv[1] == "--crash-probe=<name>": runs exactly one
@@ -3611,21 +3697,12 @@ static int RunCrashProbe(const std::string& name) {
 static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() {
 	static const char* kProbeName = "matmul_zero_in_channels";
 	std::string tail;
-	bool crashed = RunsCrashProbeAndCrashes(kProbeName, &tail);
-	// Necessary regardless of configuration: the child must have actually reached
-	// and dispatched the named contract-violating call. Without this, a child
-	// that exits 0 for any other reason -- the probe name typo'd at the call
-	// site, the dispatch broken by a refactor, the probe never invoked at all --
-	// satisfies "!crashed" under NDEBUG and is indistinguishable from a probe
-	// that ran and correctly completed without crashing (Claude/Poirot/
-	// 2fdaf49-s2.5-golden-hash-review-2026-07-20.md finding 3).
-	bool probe_began = tail.find(CrashProbeBeganMarker(kProbeName)) != std::string::npos;
-	CHECK_MSG(probe_began,
-	          "the child's captured output never contains the began-marker for probe "
-	          "'%s' -- the contract-violating call was never dispatched (probe name "
-	          "mismatch, broken dispatch, or the child exited before reaching it), so "
-	          "the crash/no-crash outcome below proves nothing -- child output was: %s",
-	          kProbeName, tail.c_str());
+	// The began-marker check is enforced inside RunsCrashProbeAndCrashes itself (it fires
+	// its own CHECK_MSG and returns kDidNotRun) -- this call site does not repeat it. That
+	// is the fix to Claude/Poirot/7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md
+	// finding 3: the marker check used to live only here, so a second cell built on the
+	// same helper without also remembering to check it would have reinherited the finding.
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
 #ifdef NDEBUG
 	// assert() is a no-op whenever NDEBUG is defined, which every current CI job
 	// defines (windows-x64/linux-x64 build Release, linux-x64-asan builds
@@ -3637,18 +3714,20 @@ static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() 
 	// configuration is exactly that: the child completes without abnormal
 	// termination. The abort-on-violation claim itself (design S12 dim 5, "must abort
 	// a debug build") is proved by the non-NDEBUG default build (build.bat), where
-	// the assert is compiled in -- see the #else branch below.
-	CHECK_MSG(!crashed,
+	// the assert is compiled in -- see the #else branch below. A probe that never ran
+	// (kDidNotRun) satisfies neither this check nor the debug-branch one below --
+	// there is no bool-shaped path by which it could pass either.
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
 	          "GemmInt8AccumulateRow(in_channels=0) under NDEBUG: assert is compiled "
 	          "out, so the child must complete without abnormal termination (caller- "
-	          "ensures UB in this configuration, design S12 dim 2/5) -- child output "
-	          "was: %s",
-	          tail.c_str());
+	          "ensures UB in this configuration, design S12 dim 2/5) -- outcome was "
+	          "%s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 #else
-	CHECK_MSG(crashed,
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
 	          "GemmInt8AccumulateRow(in_channels=0) must abort a debug build (contract "
-	          "violation, design S12 dim 4/5) -- child output was: %s",
-	          tail.c_str());
+	          "violation, design S12 dim 4/5) -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 #endif
 }
 

@@ -585,8 +585,18 @@ emit("")
 emit("#endif  // SUPERSLM_TESTS_SSLM_MATMUL_FIXTURES_H")
 emit("")
 
-with open(OUT_PATH, "w", newline="\n") as f:
-    f.write("\n".join(lines))
+text = "\n".join(lines)
+# Pure ASCII, written as UTF-8 with an explicit newline. Both halves are load-bearing for
+# the byte-for-byte reproducibility this fixture header depends on: open(..., "w") with no
+# encoding= uses the platform's locale encoding, so a single non-ASCII character (e.g. an
+# em dash in a comment) would serialize to different bytes on a Windows host (cp1252) than
+# on a Linux one (UTF-8) for an unchanged fixture set, and would raise outright under a
+# C/POSIX locale. Asserting ASCII here means the property cannot lapse by someone adding a
+# typographic character to a comment above. (Same defect and same fix as
+# tools/gen_matmul_golden.py and tools/gen_silu_lut_golden.py.)
+text.encode("ascii")  # raises UnicodeEncodeError if a non-ASCII character crept in
+with open(OUT_PATH, "w", newline="\n", encoding="utf-8") as f:
+    f.write(text)
 
 print(f"Wrote {OUT_PATH}")
 print(f"Row cases: {len(row_cases)}")
