@@ -2721,6 +2721,101 @@ static void TestIExpConstantsInDomainRejectsStrikeExactInput() {
 	          "(Claude/Loki/softmax-s2.6-strike-2026-07-21.md)");
 }
 
+namespace {
+
+// The header's claimed sufficient-AND-necessary condition for
+// IExpConstantsInDomain's one-call-per-triple shortcut (include/superslm/
+// intmath.h, corrected at c33843d: "The one-call-per-triple shortcut holds
+// iff 2*q_b >= q_ln2 - 1"). This is prose about how a CALLER may use the
+// primitive, not behavior the primitive itself performs, so nothing in
+// src/intmath.cpp encodes it; TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim
+// below is the only place that does, and is therefore the only place a wrong
+// version of this claim (Claude/Poirot/93622d3-s2.2-iexp-amendment-close-
+// round-review-2026-07-21.md, finding N7) can be caught by the suite rather
+// than by a reviewer re-deriving it by hand.
+bool IExpShortcutHolds(int64_t q_ln2, int64_t q_b) { return 2 * q_b >= q_ln2 - 1; }
+
+}  // namespace
+
+static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
+	// Four scenarios authored in tests/gen_iexp_domain_fixtures.py at
+	// q_ln2 = 3,000,000,000 (labels "shortcut_*_q0" / "shortcut_*_far_end" in
+	// kIExpDomainCases), each placing q_c so one end of the row -- q=0 or the
+	// far end q=-(q_ln2-1) -- sits exactly at its own in-domain boundary:
+	//
+	//   A (q_b=1,800,000,000): condition HOLDS.       q0=false, far=true.
+	//   B (q_b=1,000,000,000): condition FAILS.       q0=true,  far=false.
+	//   C (q_b=1,500,000,000, the least satisfying):  condition HOLDS.  q0=true,  far=true.
+	//   D (q_b=1,499,999,999, one less than C):       condition FAILS.  q0=true,  far=false.
+	//
+	// For every scenario this test (a) pins IExpShortcutHolds's own return
+	// value against the scenario's independently-known intent, and (b) checks
+	// that the REAL primitive's behavior at q=0 and at the row's other
+	// extreme is consistent with that claim: where the shortcut holds, a
+	// caller who discharges the row at q=0 alone can never get a false
+	// all-clear (q0=true implies far=true); where it fails, this suite
+	// constructed an actual witness of exactly that false all-clear
+	// (q0=true, far=false) -- proving the condition is not merely sufficient
+	// but tight, i.e. genuinely necessary at these constants.
+	using namespace superslm_test;
+
+	struct Scenario {
+		const char* q0_label;
+		const char* far_label;
+		int64_t q_ln2;
+		int64_t q_b;
+		bool expected_holds;
+	};
+	static const Scenario kScenarios[] = {
+	    {"shortcut_holds_interior_A_q0", "shortcut_holds_interior_A_far_end", INT64_C(3000000000),
+	     INT64_C(1800000000), true},
+	    {"shortcut_fails_interior_B_q0", "shortcut_fails_interior_B_far_end", INT64_C(3000000000),
+	     INT64_C(1000000000), false},
+	    {"shortcut_boundary_holds_C_q0", "shortcut_boundary_holds_C_far_end", INT64_C(3000000000),
+	     INT64_C(1500000000), true},
+	    {"shortcut_boundary_fails_D_q0", "shortcut_boundary_fails_D_far_end", INT64_C(3000000000),
+	     INT64_C(1499999999), false},
+	};
+
+	for (const Scenario& s : kScenarios) {
+		bool computed_holds = IExpShortcutHolds(s.q_ln2, s.q_b);
+		CHECK_MSG(computed_holds == s.expected_holds,
+		          "IExpShortcutHolds(q_ln2=%lld, q_b=%lld) == %s, want %s (%s) -- the header's condition "
+		          "no longer matches this scenario's known intent",
+		          static_cast<long long>(s.q_ln2), static_cast<long long>(s.q_b), computed_holds ? "true" : "false",
+		          s.expected_holds ? "true" : "false", s.q0_label);
+
+		const IExpDomainCase* q0_case = nullptr;
+		const IExpDomainCase* far_case = nullptr;
+		for (size_t i = 0; i < kIExpDomainCasesCount; ++i) {
+			const IExpDomainCase& c = kIExpDomainCases[i];
+			if (std::strcmp(c.label, s.q0_label) == 0) q0_case = &c;
+			if (std::strcmp(c.label, s.far_label) == 0) far_case = &c;
+		}
+		CHECK_MSG(q0_case != nullptr, "fixture label not found: %s", s.q0_label);
+		CHECK_MSG(far_case != nullptr, "fixture label not found: %s", s.far_label);
+		if (q0_case == nullptr || far_case == nullptr) continue;
+
+		bool got_q0 = superslm::IExpConstantsInDomain(q0_case->q, q0_case->q_ln2, q0_case->q_b, q0_case->q_c);
+		bool got_far = superslm::IExpConstantsInDomain(far_case->q, far_case->q_ln2, far_case->q_b, far_case->q_c);
+
+		if (computed_holds) {
+			CHECK_MSG(!(got_q0 && !got_far),
+			          "%s: shortcut claimed to hold (q_ln2=%lld, q_b=%lld) but q=0 answered true while the far "
+			          "end answered false -- discharging at q=0 alone is unsound here, contradicting the header's "
+			          "claim",
+			          s.q0_label, static_cast<long long>(s.q_ln2), static_cast<long long>(s.q_b));
+		} else {
+			CHECK_MSG(got_q0 && !got_far,
+			          "%s: this scenario's witness (q_ln2=%lld, q_b=%lld) no longer demonstrates q=0-alone "
+			          "unsoundness (got_q0=%s, got_far=%s) -- the constructed q_c must produce true at q=0 and "
+			          "false at the far end to prove the shortcut genuinely fails here",
+			          s.q0_label, static_cast<long long>(s.q_ln2), static_cast<long long>(s.q_b),
+			          got_q0 ? "true" : "false", got_far ? "true" : "false");
+		}
+	}
+}
+
 // D-SLM79 part 2's internal domain assert on IExpFromConstants is exercised by
 // TestIExpFromConstantsAssertsOnOutOfDomainConstants, defined further below in
 // this file (S2.5's crash-probe section) once RunsCrashProbeAndCrashes /
@@ -4771,6 +4866,7 @@ int main(int argc, char** argv) {
 	TestIExpBaseMatchesIndependentlyDerivedBase();
 	TestIExpConstantsInDomainAcrossCorpus();
 	TestIExpConstantsInDomainRejectsStrikeExactInput();
+	TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim();
 	TestIExpFromConstantsAssertsOnOutOfDomainConstants();
 
 	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's

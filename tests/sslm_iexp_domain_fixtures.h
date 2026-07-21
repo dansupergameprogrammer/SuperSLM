@@ -107,6 +107,14 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 	{"z_at_clip_ceiling_lower_bound_slack_qc_min", INT64_C(-210), INT64_C(7), INT64_C(0), INT64_MIN, true},
 	{"typical_small_in_domain", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), true},
 	{"realistic_operating_scale_0p01_in_domain", INT64_C(0), INT64_C(69), INT64_C(135), INT64_C(9595), true},
+	{"shortcut_holds_interior_A_q0", INT64_C(0), INT64_C(3000000000), INT64_C(1800000000), INT64_C(7783372039254775806), false},
+	{"shortcut_holds_interior_A_far_end", INT64_C(-2999999999), INT64_C(3000000000), INT64_C(1800000000), INT64_C(7783372039254775806), true},
+	{"shortcut_fails_interior_B_q0", INT64_C(0), INT64_C(3000000000), INT64_C(1000000000), INT64_C(8223372036854775807), true},
+	{"shortcut_fails_interior_B_far_end", INT64_C(-2999999999), INT64_C(3000000000), INT64_C(1000000000), INT64_C(8223372036854775807), false},
+	{"shortcut_boundary_holds_C_q0", INT64_C(0), INT64_C(3000000000), INT64_C(1500000000), INT64_C(6973372036854775807), true},
+	{"shortcut_boundary_holds_C_far_end", INT64_C(-2999999999), INT64_C(3000000000), INT64_C(1500000000), INT64_C(6973372036854775807), true},
+	{"shortcut_boundary_fails_D_q0", INT64_C(0), INT64_C(3000000000), INT64_C(1499999999), INT64_C(6973372039854775806), true},
+	{"shortcut_boundary_fails_D_far_end", INT64_C(-2999999999), INT64_C(3000000000), INT64_C(1499999999), INT64_C(6973372039854775806), false},
 	{"existing_fixture_realistic_s0_q_max_element", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), true},
 	{"existing_fixture_realistic_s0_q_neg1", INT64_C(-1), INT64_C(6), INT64_C(13), INT64_C(95), true},
 	{"existing_fixture_realistic_s0_q_neg_one_ln2_step", INT64_C(-6), INT64_C(6), INT64_C(13), INT64_C(95), true},
@@ -144,7 +152,7 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 	{"existing_fixture_width_probe_q0_max_element", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(1574531533020431360), true},
 	{"existing_fixture_width_probe_q_neg_one_ln2_step", INT64_C(-887904998), INT64_C(887904998), INT64_C(1733160715), INT64_C(1574531533020431360), true},
 };
-inline constexpr size_t kIExpDomainCasesCount = 54;
+inline constexpr size_t kIExpDomainCasesCount = 62;
 
 }  // namespace superslm_test
 

@@ -297,6 +297,78 @@ add_domain("typical_small_in_domain", 0, 6, 13, 95)
 add_domain("realistic_operating_scale_0p01_in_domain", 0, 69, 135, 9595)
 
 # ---------------------------------------------------------------------------
+# The one-call-per-triple SHORTCUT CONDITION (IExpConstantsInDomain's cost
+# note, include/superslm/intmath.h -- corrected at c33843d after two prior
+# false versions of this paragraph; Claude/Poirot/93622d3-s2.2-iexp-amendment-
+# close-round-review-2026-07-21.md, finding N7). The header claims the
+# shortcut -- discharging an entire row with a single
+# IExpConstantsInDomain(q=0, ...) call -- holds IFF `2*q_b >= q_ln2 - 1`.
+# Over a row (z=0, q_p ranging across (-q_ln2, 0]) the two candidate worst
+# points are q_p=0 (q=0, base=q_b) and q_p=-(q_ln2-1) (q=-(q_ln2-1),
+# base=q_b-q_ln2+1); the claim is exactly that the first end's |base| is
+# `>=` the second's.
+#
+# Four scenarios at q_ln2 = 3,000,000,000, each with q_c placed via
+# INT64_MAX - dominant_base**2 so one end sits exactly at its own in-domain
+# boundary -- forcing the OTHER end's status to be the genuine, executed
+# evidence for whether the header's claim is right at that q_b, not an
+# assumption:
+#
+#   A -- q_b = 1,800,000,000 (condition HOLDS, interior of the region):
+#        q_c placed at the far end's own boundary; q=0 -- the dominant end
+#        under the claim -- then answers FALSE (the row's true, tighter
+#        answer) while the far end answers TRUE. This is the exact witness
+#        Poirot's N7 review executed (93622d3-....md sec. 5.4): discharging
+#        at q=0 is sound here, and checking only the far end would be a
+#        false all-clear.
+#   B -- q_b = 1,000,000,000 (condition FAILS, interior of the region):
+#        q_c placed at q=0's own boundary; q=0 answers TRUE while the far
+#        end -- the row's true worst point when the condition fails --
+#        answers FALSE. Discharging at q=0 alone is UNSOUND here.
+#   C -- q_b = 1,500,000,000, the LEAST q_b for which the condition holds at
+#        this q_ln2 (2*q_b == q_ln2 - 1 + 1; confirmed by binary search
+#        against the shipped IExpBase, same review). q_c placed at q=0's own
+#        boundary; both ends answer TRUE -- the satisfying side of the
+#        boundary, forced exactly.
+#   D -- q_b = 1,499,999,999, one less than C: the condition fails by the
+#        single integer separating it from C. Same q_c construction; q=0
+#        answers TRUE, the far end answers FALSE -- the failing side of the
+#        SAME boundary, forced exactly, one q_b away from C.
+#
+# These eight points are also swept generically by
+# TestIExpConstantsInDomainAcrossCorpus below. The dedicated cross-check that
+# ties them to the header's claimed condition --  and that fails if the
+# claimed condition is replaced by the wrong, stronger one this amendment
+# removed (`q_b >= q_ln2`) -- is
+# TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim in
+# test_main.cpp, which looks these exact labels up by name.
+# ---------------------------------------------------------------------------
+QLN2_SHORTCUT = 3_000_000_000
+_far_q_shortcut = -(QLN2_SHORTCUT - 1)
+
+
+def _shortcut_witness(label: str, q_b: int, qc_from_q0: bool) -> None:
+    base0 = q_b
+    base_far = q_b - QLN2_SHORTCUT + 1
+    dominant_base = base0 if qc_from_q0 else base_far
+    q_c = INT64_MAX - dominant_base * dominant_base
+    assert 0 <= q_c <= INT64_MAX, f"{label}: constructed q_c must itself be a valid int64_t"
+    add_domain(f"shortcut_{label}_q0", 0, QLN2_SHORTCUT, q_b, q_c)
+    add_domain(f"shortcut_{label}_far_end", _far_q_shortcut, QLN2_SHORTCUT, q_b, q_c)
+
+
+assert 2 * 1_800_000_000 >= QLN2_SHORTCUT - 1, "scenario A must satisfy the header's condition"
+_shortcut_witness("holds_interior_A", 1_800_000_000, qc_from_q0=False)
+
+assert not (2 * 1_000_000_000 >= QLN2_SHORTCUT - 1), "scenario B must fail the header's condition"
+_shortcut_witness("fails_interior_B", 1_000_000_000, qc_from_q0=True)
+
+assert 2 * 1_500_000_000 >= QLN2_SHORTCUT - 1, "scenario C (least satisfying q_b) must satisfy the condition"
+assert not (2 * 1_499_999_999 >= QLN2_SHORTCUT - 1), "one less than C must fail the condition"
+_shortcut_witness("boundary_holds_C", 1_500_000_000, qc_from_q0=True)
+_shortcut_witness("boundary_fails_D", 1_499_999_999, qc_from_q0=True)
+
+# ---------------------------------------------------------------------------
 # Cross-check every case already shipped in sslm_intmath_fixtures.h's
 # kIExpCases: every one of those 36 fixtures produced a golden that already
 # fits int64_t (by construction of gen_intmath_fixtures.py's own width-probe
