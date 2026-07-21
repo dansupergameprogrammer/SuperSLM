@@ -217,18 +217,19 @@ int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
 // general: at `q_ln2 = 4000000000, q_b = 1, q_c = 0`, `q = 0` answers `true` while
 // `q = −3999999999` — same triple, same `z = 0` — answers `false`.
 //
-// The one-call-per-triple shortcut holds **only where `q_b >= q_ln2`** — which is what C30's
-// derivation gives, fixing `q_b / q_ln2` at ≈1.952. That condition keeps `base` positive
-// across the row and maximal at `q_p = 0`, which is also the element where the bound
-// `2^63·2^z − 1` is tightest, so the largest numerator and the tightest bound coincide there
-// and one `q = 0` call discharges the row. This is not a per-element runtime guard.
+// The one-call-per-triple shortcut holds **iff `2·q_b >= q_ln2 − 1`.** `q_p` ranges over
+// `(−q_ln2, 0]`, so `|base| = |q_p + q_b|` peaks at one of the two ends: `q_b` at `q_p = 0`,
+// or `q_ln2 − 1 − q_b` at `q_p = −(q_ln2 − 1)`. The first dominates exactly under that
+// inequality, and it is also the element where the bound `2^63·2^z − 1` is tightest (`z = 0`
+// there), so largest numerator and tightest bound coincide and one `q = 0` call discharges
+// the row. C30's derivation satisfies it comfortably — it fixes `q_b / q_ln2` at ≈1.952 —
+// so a C30-fed caller always gets the shortcut. This is not a per-element runtime guard.
 //
-// **A caller whose constants do not satisfy `q_b >= q_ln2` gets no shortcut, and must call
-// this per element.** In particular, do NOT substitute "check the row's extremes": when
-// `q_b < q_ln2` the worst element is INTERIOR, at `q_p = −(q_ln2 − 1)`, so both endpoints can
-// answer `true` while an element between them answers `false` (executed witness:
-// `q_ln2 = 4000000000, q_b = 1, q_c = 0`, row `q ∈ [−8e9, 0]` — endpoints in domain,
-// `q = −3999999999` not).
+// **A caller whose constants fail `2·q_b >= q_ln2 − 1` must check BOTH ends** — `q_p = 0`
+// and `q_p = −(q_ln2 − 1)` — or simply call this per element. Checking only the far end is a
+// false all-clear: at `q_ln2 = 3e9, q_b = 1.8e9, q_c = 7783372039254775806` the element at
+// `q_p = −(q_ln2 − 1)` answers `true` while `q_p = 0` answers `false`, and `q_p = 0` is the
+// one that makes the parent return a wrapped negative under `NDEBUG`.
 bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
