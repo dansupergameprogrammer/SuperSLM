@@ -17,6 +17,7 @@
 #include "superslm/tokenizer.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
+#include "sslm_iexp_domain_fixtures.h"
 #include "sslm_intmath_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_matmul_fixtures.h"
@@ -2631,6 +2632,101 @@ static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
 }
 
 // ---------------------------------------------------------------------------
+// Curie's S2.6-amendment red suite for IExpShift / IExpBase / IExpConstantsInDomain
+// (D-SLM78/79/81; Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
+// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). These three
+// primitives, and IExpFromConstants's new internal domain assert, do not exist in
+// src/intmath.cpp / include/superslm/intmath.h yet -- every cell below fails to
+// compile (IExpShift/IExpBase/IExpConstantsInDomain are undeclared) until Brunel
+// lands the extraction. That is the expected, documented RED state.
+//
+// Every expected value in sslm_iexp_domain_fixtures.h is computed by
+// tests/gen_iexp_domain_fixtures.py, transcribing IExpFromConstants's documented
+// five-line decomposition directly in Python arbitrary precision -- never by
+// calling the primitives under test (which do not exist) and never by
+// re-deriving the bound in fixed-width int64 (the exact shape of the D-SLM81
+// defect this amendment fixes).
+// ---------------------------------------------------------------------------
+
+static void TestIExpShiftMatchesIndependentlyDerivedZ() {
+	// IExpShift's z, checked against a value computed in Python arbitrary precision
+	// from the documented formula -- NOT against IExpFromConstants's own behavior
+	// (which would be a self-consistent oracle proving nothing once the parent is
+	// refactored to call this same accessor internally). Also checks live the
+	// postcondition IExpShift's own contract states: z in [0, I_EXP_CLIP_N].
+	using namespace superslm_test;
+	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
+		const IExpAccessorCase& c = kIExpAccessorCases[i];
+		int64_t got = superslm::IExpShift(c.q, c.q_ln2);
+		CHECK_MSG(got == c.expected_z, "%s: IExpShift(q=%lld, q_ln2=%lld) == %lld, want %lld (independently derived)",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(got), static_cast<long long>(c.expected_z));
+		CHECK_MSG(got >= 0 && got <= superslm::I_EXP_CLIP_N,
+		          "%s: IExpShift(q=%lld, q_ln2=%lld) == %lld, outside documented [0, %d]", c.label,
+		          static_cast<long long>(c.q), static_cast<long long>(c.q_ln2), static_cast<long long>(got),
+		          superslm::I_EXP_CLIP_N);
+	}
+}
+
+static void TestIExpBaseMatchesIndependentlyDerivedBase() {
+	// IExpBase's base, checked against the same independently-derived (Python
+	// arbitrary precision) expectation as IExpShift above -- not against
+	// IExpFromConstants's own output.
+	using namespace superslm_test;
+	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
+		const IExpAccessorCase& c = kIExpAccessorCases[i];
+		int64_t got = superslm::IExpBase(c.q, c.q_ln2, c.q_b);
+		CHECK_MSG(got == c.expected_base,
+		          "%s: IExpBase(q=%lld, q_ln2=%lld, q_b=%lld) == %lld, want %lld (independently derived)", c.label,
+		          static_cast<long long>(c.q), static_cast<long long>(c.q_ln2), static_cast<long long>(c.q_b),
+		          static_cast<long long>(got), static_cast<long long>(c.expected_base));
+	}
+}
+
+static void TestIExpConstantsInDomainAcrossCorpus() {
+	// The full domain-predicate corpus: the strike's exact input, both the z=0 and
+	// the z>=1 in-domain/out-of-domain boundaries forced EXACTLY on both sides (a
+	// boundary is only authored where a valid int64_t q_c actually sits on the
+	// transition -- see gen_iexp_domain_fixtures.py's note on the rejected
+	// 1733160715-base z=1/z=30 construction, which forces nothing because the
+	// theoretical boundary q_c there does not fit int64_t), the q_b-alone overflow
+	// axis (large q_b, q_c=1, distinct from the strike's q_c-dominated overflow),
+	// a realistic operating-scale positive case, and every one of the 36 fixtures
+	// already shipped in sslm_intmath_fixtures.h's kIExpCases (each must be
+	// in-domain, since each already produced a golden that fits int64_t).
+	using namespace superslm_test;
+	for (size_t i = 0; i < kIExpDomainCasesCount; ++i) {
+		const IExpDomainCase& c = kIExpDomainCases[i];
+		bool got = superslm::IExpConstantsInDomain(c.q, c.q_ln2, c.q_b, c.q_c);
+		CHECK_MSG(got == c.expected_in_domain,
+		          "%s: IExpConstantsInDomain(q=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) == %s, want %s", c.label,
+		          static_cast<long long>(c.q), static_cast<long long>(c.q_ln2), static_cast<long long>(c.q_b),
+		          static_cast<long long>(c.q_c), got ? "true" : "false", c.expected_in_domain ? "true" : "false");
+	}
+}
+
+static void TestIExpConstantsInDomainRejectsStrikeExactInput() {
+	// Standalone, individually diagnosable regression cell for the defect itself
+	// (Claude/Loki/softmax-s2.6-strike-2026-07-21.md): this exact call is
+	// contract-legal under every documented LOWER-bound precondition (q<=0,
+	// q_ln2>=1) and yet base^2+q_c = 12,227,218,100,874,087,032 exceeds INT64_MAX.
+	// Redundant with one row of TestIExpConstantsInDomainAcrossCorpus by design --
+	// this is the one cell this whole amendment exists to force, and it must be
+	// able to fail on its own without scanning a table's output to find it.
+	bool in_domain = superslm::IExpConstantsInDomain(INT64_C(0), INT64_C(887904998), INT64_C(1733160715),
+	                                                  INT64_C(9223372036854775807));
+	CHECK_MSG(!in_domain,
+	          "IExpConstantsInDomain(0, 887904998, 1733160715, 2^63-1) == true, want false -- this is the "
+	          "strike's exact contract-legal input for which IExpFromConstants returns a NEGATIVE value "
+	          "(Claude/Loki/softmax-s2.6-strike-2026-07-21.md)");
+}
+
+// D-SLM79 part 2's internal domain assert on IExpFromConstants is exercised by
+// TestIExpFromConstantsAssertsOnOutOfDomainConstants, defined further below in
+// this file (S2.5's crash-probe section) once RunsCrashProbeAndCrashes /
+// RunCrashProbe exist to isolate the abort()-capable call in a child process.
+
+// ---------------------------------------------------------------------------
 // Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
 // RopeApplyPair body is currently the deliberately-wrong stub sentinel
 // {-1, -1} — every cell below fails red for that one reason until Brunel's
@@ -3678,6 +3774,17 @@ static CrashProbeOutcome RunsCrashProbeAndCrashes(const char* probe_name, std::s
 // is not a recognized probe -- this must read as "the probe did not run" to
 // every caller, never as "the probe ran and did not crash".
 static int RunCrashProbe(const std::string& name) {
+	if (name == "iexp_out_of_domain_constants") {
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe iexp_out_of_domain_constants: calling IExpFromConstants with the "
+		            "strike's exact out-of-domain constants (Claude/Loki/"
+		            "softmax-s2.6-strike-2026-07-21.md)\n");
+		std::fflush(stdout);
+		int64_t got = IExpFromConstants(INT64_C(0), INT64_C(887904998), INT64_C(1733160715),
+		                                 INT64_C(9223372036854775807));
+		std::printf("RETURNED %lld\n", static_cast<long long>(got));
+		return 0;
+	}
 	if (name == "matmul_zero_in_channels") {
 		int8_t act[1] = {0};
 		int8_t wgt[1] = {0};
@@ -3727,6 +3834,42 @@ static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() 
 	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
 	          "GemmInt8AccumulateRow(in_channels=0) must abort a debug build (contract "
 	          "violation, design S12 dim 4/5) -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+#endif
+}
+
+// --- D-SLM79 part 2's internal domain assert on IExpFromConstants (S2.6-amendment
+//     red suite; Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
+//     superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). Isolated in a
+//     child process via the same crash-probe infrastructure as the matmul cell
+//     above -- a contract-violating call whose assert may abort() would take down
+//     this entire process, and every check after it, if run in-process. ---
+
+static void TestIExpFromConstantsAssertsOnOutOfDomainConstants() {
+	static const char* kProbeName = "iexp_out_of_domain_constants";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+#ifdef NDEBUG
+	// assert() is compiled out under NDEBUG. D-SLM80: the extraction is
+	// behaviour-preserving by construction, so under NDEBUG the primitive must
+	// still return the SAME wrapped value the strike observed -- proving the
+	// amendment does not silently change release-mode output, only adds a
+	// debug-only guard plus the caller-facing predicate (IExpConstantsInDomain)
+	// that lets a caller avoid this input in the first place.
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "IExpFromConstants(strike's out-of-domain constants) under NDEBUG: assert is "
+	          "compiled out, so the child must complete without abnormal termination -- "
+	          "outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+	CHECK_MSG(tail.find("RETURNED -6219525972835464584") != std::string::npos,
+	          "IExpFromConstants(strike's out-of-domain constants) under NDEBUG must still return "
+	          "the exact wrapped value the strike observed (-6219525972835464584, "
+	          "Claude/Loki/softmax-s2.6-strike-2026-07-21.md) -- child output was: %s",
+	          tail.c_str());
+#else
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
+	          "IExpFromConstants(strike's out-of-domain constants) must abort a debug build "
+	          "(D-SLM79 part 2's internal domain assert) -- outcome was %s, child output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
 #endif
 }
@@ -4620,6 +4763,15 @@ int main(int argc, char** argv) {
 	TestShiftByMax();
 	TestIExpFromConstants();
 	TestIExpFromConstantsClipClampsIdenticallyAcrossFamily();
+
+	// --- Curie's S2.6-amendment red suite for IExpShift/IExpBase/
+	//     IExpConstantsInDomain (red-first; these primitives and IExpFromConstants's
+	//     new internal domain assert do not exist yet -- D-SLM78/79/81). ---
+	TestIExpShiftMatchesIndependentlyDerivedZ();
+	TestIExpBaseMatchesIndependentlyDerivedBase();
+	TestIExpConstantsInDomainAcrossCorpus();
+	TestIExpConstantsInDomainRejectsStrikeExactInput();
+	TestIExpFromConstantsAssertsOnOutOfDomainConstants();
 
 	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
 	//     RopeApplyPair body is currently the deliberately-wrong stub sentinel
