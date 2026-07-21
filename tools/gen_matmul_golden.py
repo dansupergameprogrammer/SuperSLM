@@ -107,8 +107,10 @@ CASES = [
 
 # The two single-signed deep cases are the ONLY ones whose sums leave int32:
 # 132,105 x 16,256 = 2,147,498,880, which is 15,233 past INT32_MAX and 15,232 past
-# INT32_MIN in the other direction. main() asserts this rather than trusting the
-# arithmetic here, so the property cannot silently lapse if a length is edited.
+# INT32_MIN in the other direction. This set is a DECLARATION, and main() checks it against
+# the accumulators it actually computes -- per case (each named case must really escape) and
+# over the whole set (at least one case must really escape, read from the computed values
+# and never from this literal, which is always truthy and would guard nothing).
 _I32_ESCAPE_CASES = {"deep_beyond_i32_neg", "deep_beyond_i32_pos"}
 
 
@@ -150,6 +152,7 @@ def main() -> None:
     h = hashlib.sha256()
     total = 0
     per_case = []
+    escaped = []  # labels whose computed accumulators actually left int32
     for label, seed, in_ch, out_ch, tokens, kind, int32_safe in CASES:
         acts, wgts = build_inputs(seed, in_ch, out_ch, tokens, kind)
         blob = bytearray()
@@ -170,21 +173,30 @@ def main() -> None:
                     f"{label}: accumulator {v} does not fit int32 — the case is mislabelled "
                     f"int32_safe and NarrowAccumulatorToI32 would be UB")
                 blob += i32_le(v)
-        # The int64-range property, asserted rather than trusted: a golden whose every
-        # accumulator fits int32 is reproduced bit-for-bit by a kernel that narrows
-        # mid-reduction, so it certifies nothing about the int64 accumulate. Checking it
-        # here means a future edit to a length or a fill cannot silently take it away.
+        # The int64-range property, measured from the accumulators actually computed above.
+        # A golden whose every accumulator fits int32 is reproduced bit-for-bit by a kernel
+        # that narrows mid-reduction, so it certifies nothing about the int64 accumulate.
+        case_escapes_i32 = any(v > (1 << 31) - 1 or v < -(1 << 31) for v in wide_row0)
+        if case_escapes_i32:
+            escaped.append(label)
         if label in _I32_ESCAPE_CASES:
-            assert any(v > (1 << 31) - 1 or v < -(1 << 31) for v in wide_row0), (
+            assert case_escapes_i32, (
                 f"{label}: every accumulator fits int32, so this case no longer proves the "
                 f"int64 range it exists to prove")
         h.update(blob)
         total += len(blob)
         per_case.append((label, len(blob)))
 
-    # The same property stated over the whole set: at least one case must leave int32,
-    # or the golden as a whole is passed by a wrapping-int32 accumulator.
-    assert _I32_ESCAPE_CASES, "the canonical set has no case that leaves int32"
+    # The same property over the whole set, read from `escaped` — which holds the labels of
+    # the cases whose computed accumulators actually left int32, NOT the labels someone
+    # declared ought to. Asserting the declaration instead (`assert _I32_ESCAPE_CASES`, a
+    # module-level set literal that is always truthy) is a guard that cannot fail: deleting
+    # both escape cases from CASES left it passing while the pin reverted to one a
+    # wrapping-int32 accumulator reproduces. Measured, not declared.
+    assert escaped, (
+        "no case in the canonical set produces an accumulator outside int32, so the golden "
+        "is reproduced bit-for-bit by a kernel that narrows mid-reduction and certifies "
+        "nothing about the int64 accumulate")
 
     digest = h.hexdigest()
 
