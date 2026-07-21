@@ -24,6 +24,7 @@
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_silu_lut_real_vectors_fixtures.h"
 #include "silu_lut_golden_table.h"
+#include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 
@@ -4089,6 +4090,141 @@ static void TestDotRowScalarRefMatchesShippingSse2PathAndOracle() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// S2.5 golden hash (design §10 step 5 / §11 item 6): a pinned SHA-256 over the
+// matmul kernel's outputs across a canonical input set. This is the cross-
+// platform/toolchain/ISA determinism gate — every platform in the CI matrix must
+// reproduce this exact hash bit-for-bit. macos-arm64 is the load-bearing member:
+// src/matmul.cpp's SSE2 specialization is x64-only, so that runner exercises the
+// scalar reference while the others exercise SSE2, and a matching hash across the
+// matrix IS the scalar ≡ SIMD cross-ISA proof rather than a repeated x64 result.
+//
+// The pinned hash is computed by tools/gen_matmul_golden.py in arbitrary-precision
+// Python integer arithmetic reproducing the design's §5 scalar reference — not by
+// recording what a C++ build printed — so agreement here is agreement with an
+// independent computation. The inputs are produced by a pinned 64-bit LCG (pure
+// uint64 arithmetic, exactly defined on every toolchain, calling nothing), mirrored
+// bit-for-bit from that generator; kMatmulGoldenLcgProbe pins the LCG's own first
+// bytes so a drift in this mirror fails as its own named check instead of
+// masquerading as a kernel determinism break. See the generator's header comment for
+// why matmul generates its inputs where S2.4 pinned its LUT table as data.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Mirror of tools/gen_matmul_golden.py's Lcg. PCG's multiplier/increment; bytes taken
+// from the HIGH end of the state, since an LCG's low bits have short periods.
+struct MatmulGoldenLcg {
+	uint64_t x;
+	explicit MatmulGoldenLcg(uint64_t seed) : x(seed) {}
+	uint8_t NextByte() {
+		x = x * 6364136223846793005ull + 1442695040888963407ull;
+		return static_cast<uint8_t>((x >> 56) & 0xFFu);
+	}
+};
+
+// int8 activation code in [-127, 127] — C22's RequantTokenCode never emits -128 and
+// matmul.h's contract states that range, so the golden must not feed a code the
+// runtime cannot produce. Weights carry no such exclusion and use full [-128, 127].
+inline int8_t MatmulGoldenActCode(uint8_t b) {
+	return static_cast<int8_t>(static_cast<int>(b % 255u) - 127);
+}
+inline int8_t MatmulGoldenWgtCode(uint8_t b) {
+	return static_cast<int8_t>(static_cast<int>(b) - 128);
+}
+
+inline void AppendI64Le(std::vector<uint8_t>& out, int64_t v) {
+	const uint64_t u = static_cast<uint64_t>(v);
+	for (int i = 0; i < 8; ++i) out.push_back(static_cast<uint8_t>((u >> (8 * i)) & 0xFFu));
+}
+inline void AppendI32Le(std::vector<uint8_t>& out, int32_t v) {
+	const uint32_t u = static_cast<uint32_t>(v);
+	for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>((u >> (8 * i)) & 0xFFu));
+}
+
+}  // namespace
+
+static void TestMatmulGoldenHashCrossPlatform() {
+	using namespace superslm_test;
+	using superslm::DotRowScalarRef;
+	using superslm::GemmInt8Accumulate;
+	using superslm::NarrowAccumulatorToI32;
+
+	// The LCG mirror itself, checked before anything depends on it.
+	{
+		MatmulGoldenLcg probe(1ull);
+		for (size_t i = 0; i < sizeof(kMatmulGoldenLcgProbe); ++i) {
+			const uint8_t got = probe.NextByte();
+			CHECK_MSG(got == kMatmulGoldenLcgProbe[i],
+			          "matmul golden LCG mirror diverged at byte %zu: produced %u, generator "
+			          "pinned %u -- the C++ mirror no longer matches tools/gen_matmul_golden.py "
+			          "(this is a generator-mirror drift, NOT a kernel determinism break)",
+			          i, static_cast<unsigned>(got),
+			          static_cast<unsigned>(kMatmulGoldenLcgProbe[i]));
+		}
+	}
+
+	std::vector<uint8_t> bytes;
+	bytes.reserve(kMatmulGoldenTotalBytes);
+
+	for (const MatmulGoldenCase& c : kMatmulGoldenCases) {
+		std::vector<int8_t> acts(c.num_tokens * c.in_channels);
+		std::vector<int8_t> wgts(c.out_channels * c.in_channels);
+		if (c.kind == 1) {  // int8-extremes pattern
+			for (size_t t = 0; t < c.num_tokens; ++t) {
+				for (size_t k = 0; k < c.in_channels; ++k) {
+					acts[t * c.in_channels + k] = static_cast<int8_t>((k % 2 == 0) ? 127 : -127);
+				}
+			}
+			for (size_t j = 0; j < c.out_channels; ++j) {
+				for (size_t k = 0; k < c.in_channels; ++k) {
+					wgts[j * c.in_channels + k] = static_cast<int8_t>(((j + k) % 2 == 0) ? 127 : -128);
+				}
+			}
+		} else {  // pinned-LCG fill; activation rows first, then weight rows, one stream
+			MatmulGoldenLcg g(c.seed);
+			for (size_t i = 0; i < acts.size(); ++i) acts[i] = MatmulGoldenActCode(g.NextByte());
+			for (size_t i = 0; i < wgts.size(); ++i) wgts[i] = MatmulGoldenWgtCode(g.NextByte());
+		}
+
+		// 1. Every int64 accumulator the shipping dispatch produces, row-major
+		//    [num_tokens, out_channels] -- SSE2 on x64, the scalar reference on arm64.
+		std::vector<int64_t> wide(c.num_tokens * c.out_channels);
+		GemmInt8Accumulate(acts.data(), wgts.data(), c.num_tokens, c.in_channels, c.out_channels,
+		                   wide.data());
+		for (int64_t v : wide) AppendI64Le(bytes, v);
+
+		// 2. The normative §5 scalar construction on row 0 / output channel 0, so it is
+		//    inside the golden even on x64, where DotRow never dispatches to it.
+		AppendI64Le(bytes, DotRowScalarRef(acts.data(), wgts.data(), c.in_channels));
+
+		// 3. The narrowed int32 row 0, for the cases §8's 131,071 bound declares Int32.
+		//    The deep case is deliberately excluded: at 132,105 the declared width is
+		//    Int64, and narrowing there would be the caller-contract UB matmul.h names.
+		if (c.int32_safe) {
+			std::vector<int32_t> narrowed(c.out_channels);
+			NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+			for (int32_t v : narrowed) AppendI32Le(bytes, v);
+		}
+	}
+
+	CHECK_MSG(bytes.size() == kMatmulGoldenTotalBytes,
+	          "matmul golden byte stream is %zu bytes, generator pinned %zu -- the C++ and Python "
+	          "canonical sets have diverged in shape, so the hash comparison below would be "
+	          "meaningless",
+	          bytes.size(), kMatmulGoldenTotalBytes);
+
+	uint8_t digest[32];
+	superslm::Sha256Hash(bytes.data(), bytes.size(), digest);
+	const std::string hex = superslm::ToHex(digest);
+	std::printf("S2.5 matmul golden hash: %s (%zu cases, %zu bytes)\n", hex.c_str(),
+	            sizeof(kMatmulGoldenCases) / sizeof(kMatmulGoldenCases[0]), bytes.size());
+	CHECK_MSG(hex == std::string(kMatmulGoldenHash),
+	          "matmul golden hash %s != pinned %s (cross-platform/toolchain/ISA determinism break, "
+	          "or the pin needs regenerating for an intended construction change -- re-run "
+	          "tools/gen_matmul_golden.py deliberately)",
+	          hex.c_str(), kMatmulGoldenHash);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -4345,6 +4481,7 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
 	TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference();
 	TestDotRowScalarRefMatchesShippingSse2PathAndOracle();
+	TestMatmulGoldenHashCrossPlatform();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
