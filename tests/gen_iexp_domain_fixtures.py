@@ -11,7 +11,17 @@ IExpFromConstants documents in src/intmath.cpp / include/superslm/intmath.h --
     z       = (-clipped) // q_ln2          (floor; clipped <= 0, q_ln2 >= 1)
     q_p     = clipped + z * q_ln2
     base    = q_p + q_b
-    in_domain(q_c) iff INT64_MIN <= (base**2 + q_c) >> z <= INT64_MAX
+    in_domain(q_c) iff q_ln2 <= INT64_MAX // I_EXP_CLIP_N
+                       AND INT64_MIN <= (base**2 + q_c) >> z <= INT64_MAX
+
+The first clause is `IExpConstantsInDomain`'s own first line (src/intmath.cpp:379,
+`if (q_ln2 > kIExpMaxQLn2) return false;`, added to close Poirot's `7b668b2` review
+finding 2): above that ceiling the clip bound `-I_EXP_CLIP_N * q_ln2` overflows int64
+in C++ and the five-line decomposition below is meaningless, so the oracle rejects on
+that clause alone, before evaluating the decomposition, exactly as the implementation
+does -- rather than computing the decomposition anyway in Python's unbounded integers
+(which would silently disagree with the implementation about which inputs are in
+domain).
 
 -- using Python's arbitrary-precision integers, NEVER by calling the C++ primitives
 under test (which do not exist yet) and never by re-deriving the bound in fixed-width
@@ -34,6 +44,12 @@ INT64_MIN = -(1 << 63)
 INT64_MAX = (1 << 63) - 1
 I_EXP_CLIP_N = 30  # must equal superslm::I_EXP_CLIP_N (include/superslm/intmath.h)
 
+# Matches src/intmath.cpp:362, kIExpMaxQLn2 = INT64_MAX / I_EXP_CLIP_N -- both operands
+# positive, so C++ truncating division and Python floor division agree. Above this
+# ceiling, IExpConstantsInDomain's first line rejects before evaluating the
+# decomposition (Poirot's 7b668b2 review, finding 2; closed at a0e4850).
+kIExpMaxQLn2 = INT64_MAX // I_EXP_CLIP_N
+
 OUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sslm_iexp_domain_fixtures.h")
 
 
@@ -48,7 +64,7 @@ def derive(q: int, q_ln2: int, q_b: int) -> tuple[int, int, int, int]:
     return clipped, z, q_p, base
 
 
-def in_domain(q: int, q_ln2: int, q_b: int, q_c: int) -> tuple[bool, int, int, int]:
+def in_domain(q: int, q_ln2: int, q_b: int, q_c: int) -> tuple[bool, int | None, int | None, int | None]:
     """Returns (is_in_domain, exact_shifted_value, z, base). exact_shifted_value is the
     true mathematical (base**2 + q_c) >> z, unbounded -- NOT narrowed to int64. base**2
     is always >= 0, but q_c is accepted here as a full int64_t (IExpConstantsInDomain's
@@ -57,7 +73,16 @@ def in_domain(q: int, q_ln2: int, q_b: int, q_c: int) -> tuple[bool, int, int, i
     asserted precondition of this predicate), so val can be negative. Python's `>>` on an
     arbitrary-precision int is already an arithmetic (floor) shift for negative operands,
     the same convention SShrToI64 implements in C++, so no non-negativity assumption is
-    needed for this formula to apply."""
+    needed for this formula to apply.
+
+    Above kIExpMaxQLn2, `IExpConstantsInDomain` (src/intmath.cpp:379) rejects before ever
+    computing the decomposition -- the clip bound `-I_EXP_CLIP_N * q_ln2` would overflow
+    int64 there, so the decomposition is meaningless in the implementation even though
+    Python's unbounded integers can compute it without overflowing. This oracle mirrors
+    that short-circuit exactly: q_ln2, z, and base are not meaningful for the rejected
+    region and are returned as None rather than a value the implementation never reaches."""
+    if q_ln2 > kIExpMaxQLn2:
+        return False, None, None, None
     _, z, _, base = derive(q, q_ln2, q_b)
     val = base * base + q_c
     shifted = val >> z
@@ -119,6 +144,44 @@ assert _z30 == I_EXP_CLIP_N
 # int64_t. At the widest shift the primitive ever performs, EVERY valid int64_t
 # q_c (up to INT64_MAX itself, exercised above) stays in domain for this base --
 # an unconditional result over the whole valid q_c range, not a forced boundary.
+
+# ---------------------------------------------------------------------------
+# The q_ln2 CEILING (Poirot's 7b668b2 review, finding 2; closed at a0e4850 by
+# `if (q_ln2 > kIExpMaxQLn2) return false;`, src/intmath.cpp:379). Above
+# kIExpMaxQLn2 the clip bound `-I_EXP_CLIP_N * q_ln2` overflows int64 in the
+# implementation and the decomposition is meaningless -- before the guard
+# existed, the predicate answered a false all-clear (`true`) at contract-legal
+# q_ln2 the guard now rejects outright. This axis is independent of q_b/q_c
+# (q_b=1, q_c=0, the review's own witness constants, isolate it).
+#
+# The generator's own `in_domain` mirrors the guard's short-circuit (added
+# above): without that clause, Python's unbounded integers would compute the
+# decomposition anyway and could disagree with the implementation about which
+# side of the ceiling an input falls on. The cells below are only meaningful
+# because the oracle now implements the same first-line rejection the code
+# does -- this is the fixture-side half of closing N2; the second half is
+# that this guard's own removal (not merely a shifted value) must make one of
+# these cells fail, which is verified as a mutation at review/audit time and
+# is not repeatable from this generator alone.
+# ---------------------------------------------------------------------------
+QB_CEILING_WITNESS = 1  # Poirot's 7b668b2/e6db8ea witness constants (q_b=1, q_c=0)
+QC_CEILING_WITNESS = 0
+
+add_domain("q_ln2_ceiling_last_in_domain", 0, kIExpMaxQLn2, QB_CEILING_WITNESS, QC_CEILING_WITNESS)
+add_domain("q_ln2_ceiling_first_out_of_domain", 0, kIExpMaxQLn2 + 1, QB_CEILING_WITNESS, QC_CEILING_WITNESS)
+
+# These two are the ones that actually force the guard: at the boundary cell
+# above, the overflowing decomposition happens to also land out of int64
+# range (z=-29), so a version of the predicate with the guard deleted would
+# still answer false there BY COINCIDENCE and the cell would not detect the
+# guard's removal. Further above the ceiling the overflow wraps differently
+# and the pre-guard predicate answered true (a false all-clear) -- executed
+# and recorded in Claude/Poirot/7b668b2-s2.2-iexp-domain-amendment-review-
+# 2026-07-21.md sec. 3 and Claude/Poirot/e6db8ea-s2.2-iexp-amendment-fix-
+# round-review-2026-07-21.md sec. 5.1. These are the cells a guard-removal
+# mutation must fail.
+add_domain("q_ln2_beyond_ceiling_2pow60_was_false_all_clear", 0, 1 << 60, QB_CEILING_WITNESS, QC_CEILING_WITNESS)
+add_domain("q_ln2_beyond_ceiling_int64_max_was_false_all_clear", 0, INT64_MAX, QB_CEILING_WITNESS, QC_CEILING_WITNESS)
 
 # ---------------------------------------------------------------------------
 # A second, larger-magnitude base family: q_b = 3,500,000,000, deliberately
@@ -298,10 +361,25 @@ for label, q, q_ln2, q_b, q_c, expected in _existing_iexp_cases:
     add_domain(f"existing_fixture_{label}", q, q_ln2, q_b, q_c)
 
 # ---------------------------------------------------------------------------
-# IExpShift postcondition: z is always in [0, I_EXP_CLIP_N] over every case
-# constructed above (accessor_cases + the hand-built domain cases' own
-# (q, q_ln2) pairs) -- checked here so the generator itself cannot silently
-# emit a fixture that violates the documented postcondition.
+# IExpShift postcondition: z is always in [0, I_EXP_CLIP_N] over accessor_cases
+# -- checked here so the generator itself cannot silently emit an accessor
+# fixture that violates the documented postcondition.
+#
+# This sweeps accessor_cases only, deliberately not domain_cases. The
+# postcondition itself is conditional on q_ln2 <= kIExpMaxQLn2 (the header,
+# include/superslm/intmath.h:187: "z lies in [0, I_EXP_CLIP_N] only while
+# q_ln2 <= INT64_MAX / I_EXP_CLIP_N"), and domain_cases now deliberately
+# includes q_ln2 above that ceiling (the q_ln2_ceiling_* and
+# q_ln2_beyond_ceiling_* cells above) specifically to force
+# IExpConstantsInDomain's rejection of that region. Calling derive() on those
+# rows to extract a z would either divide by the same overflow the cells
+# exist to name, or (for the cells kept in Python's unbounded arithmetic
+# on purpose) compute a z the postcondition never claimed to bound in the
+# first place -- so widening this loop to include domain_cases would assert
+# a postcondition against inputs the header excludes from it, not close a
+# real gap. accessor_cases carries no such input (every accessor fixture is a
+# kIExpCases row already proven in range), so this sweep is exactly the set
+# for which the postcondition is a claim at all.
 # ---------------------------------------------------------------------------
 for label, q, q_ln2, q_b, z, base, expected in accessor_cases:
     assert 0 <= z <= I_EXP_CLIP_N, f"{label}: z={z} outside documented [0, {I_EXP_CLIP_N}]"

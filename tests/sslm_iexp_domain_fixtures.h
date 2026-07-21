@@ -94,6 +94,10 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 	{"z0_boundary_first_out_of_domain", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464583), false},
 	{"z1_same_qc_as_strike_recovers_in_domain", INT64_C(-887904998), INT64_C(887904998), INT64_C(1733160715), INT64_C(9223372036854775807), true},
 	{"z_at_clip_ceiling_strike_qc_in_domain", INT64_C(-26637149940), INT64_C(887904998), INT64_C(1733160715), INT64_C(9223372036854775807), true},
+	{"q_ln2_ceiling_last_in_domain", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), true},
+	{"q_ln2_ceiling_first_out_of_domain", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), false},
+	{"q_ln2_beyond_ceiling_2pow60_was_false_all_clear", INT64_C(0), INT64_C(1152921504606846976), INT64_C(1), INT64_C(0), false},
+	{"q_ln2_beyond_ceiling_int64_max_was_false_all_clear", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), false},
 	{"z0_base_squared_alone_exceeds_domain_even_at_qc_one", INT64_C(0), INT64_C(887904998), INT64_C(3500000000), INT64_C(1), false},
 	{"z1_boundary_last_in_domain_large_base", INT64_C(-887904998), INT64_C(887904998), INT64_C(3500000000), INT64_C(6196744073709551615), true},
 	{"z1_boundary_first_out_of_domain_large_base", INT64_C(-887904998), INT64_C(887904998), INT64_C(3500000000), INT64_C(6196744073709551616), false},
@@ -140,7 +144,7 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 	{"existing_fixture_width_probe_q0_max_element", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(1574531533020431360), true},
 	{"existing_fixture_width_probe_q_neg_one_ln2_step", INT64_C(-887904998), INT64_C(887904998), INT64_C(1733160715), INT64_C(1574531533020431360), true},
 };
-inline constexpr size_t kIExpDomainCasesCount = 50;
+inline constexpr size_t kIExpDomainCasesCount = 54;
 
 }  // namespace superslm_test
 
