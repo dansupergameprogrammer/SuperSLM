@@ -3502,6 +3502,39 @@ static std::string GSelfPath;  // argv[0], captured in main() for the death-test
 //     an MSVC assert() failure under build.bat's flags exits promptly with a
 //     nonzero abnormal-termination code and does NOT block on a dialog. ---
 
+// Printed by RunCrashProbe to the child's stdout, immediately before the
+// contract-violating call, so the parent can prove the named probe was actually
+// dispatched and reached the call -- not merely that the child exited some way.
+// The marker is probe-name-qualified so a stale or mismatched name cannot be
+// mistaken for the one under test.
+static std::string CrashProbeBeganMarker(const std::string& probe_name) {
+	return "CRASH_PROBE_BEGAN:" + probe_name;
+}
+
+// Environment variable set by RunsCrashProbeAndCrashes before spawning the child,
+// and inherited by it. Its presence lets main() recognize "this process is a
+// crash-probe child" independently of argv parsing, so a future change that
+// breaks the "--crash-probe=<name>" prefix match cannot make the child silently
+// fall through to running the full suite -- which would itself spawn another
+// crash-probe child, recursively (design/finding: pre-existing fork-bomb risk,
+// Claude/Poirot/2fdaf49-s2.5-golden-hash-review-2026-07-20.md finding 8).
+static const char* kCrashProbeChildEnvVar = "SUPERSLM_CRASH_PROBE_CHILD";
+
+// std::getenv is the portable read; MSVC's /W4 flags it as deprecated in favor of
+// _dupenv_s. This process only checks presence, never reads a value into a fixed
+// buffer, so the deprecation does not apply -- silenced locally rather than
+// project-wide.
+static bool EnvVarIsSet(const char* name) {
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4996)
+#endif
+	return std::getenv(name) != nullptr;
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
+}
+
 static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_tail) {
 	std::filesystem::path out_path =
 	    std::filesystem::temp_directory_path() /
@@ -3523,8 +3556,10 @@ static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_ta
 	// a naive `rc != 0` read misreports as "crashed" (Claude/Brunel/
 	// superslm-s2.5-finding-for-curie-crash-probe-2026-07-20.md).
 	std::string wrapped_cmd = "\"" + cmd + "\"";
+	_putenv_s(kCrashProbeChildEnvVar, "1");
 #else
 	const std::string& wrapped_cmd = cmd;
+	setenv(kCrashProbeChildEnvVar, "1", /*overwrite=*/1);
 #endif
 	int rc = std::system(wrapped_cmd.c_str());
 
@@ -3539,19 +3574,29 @@ static bool RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_ta
 	// A clean, non-crashing exit (the probe function returned normally and printed
 	// "PROBE DID NOT CRASH") is the one outcome that reads as "did not crash" --
 	// every other outcome (SIGABRT/abort, an unhandled SEH exception, the CRT
-	// assert handler's own nonzero exit) reads as crashed.
+	// assert handler's own nonzero exit) reads as crashed. This is necessary but
+	// NOT sufficient evidence the probe ran (see the caller's use of
+	// CrashProbeBeganMarker) -- an unrecognized probe name also exits nonzero
+	// under this helper's own dispatch (RunCrashProbe returns 2), and must not be
+	// mistaken for a crash of the intended call.
 	return rc != 0;
 }
 
 // Dispatched from main() when argv[1] == "--crash-probe=<name>": runs exactly one
-// contract-violating call in isolation. Returns normally (exit 0) ONLY if the call
-// failed to crash -- a suite defect this cell exists to catch, not the expected
-// outcome.
+// contract-violating call in isolation. Prints CrashProbeBeganMarker(name)
+// immediately before making the call and flushes it, so the marker reaches the
+// parent's captured output even if the call crashes the process outright.
+// Returns 0 ONLY if the named, recognized call ran to completion without
+// crashing -- a suite defect this cell exists to catch, not the expected
+// outcome. Returns 2, without printing the began-marker for `name`, if `name`
+// is not a recognized probe -- this must read as "the probe did not run" to
+// every caller, never as "the probe ran and did not crash".
 static int RunCrashProbe(const std::string& name) {
 	if (name == "matmul_zero_in_channels") {
 		int8_t act[1] = {0};
 		int8_t wgt[1] = {0};
 		int64_t out_acc[1] = {0};
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
 		std::printf("crash-probe matmul_zero_in_channels: calling GemmInt8AccumulateRow "
 		            "with in_channels=0 (below the architectural floor, design S12 dim 4)\n");
 		std::fflush(stdout);
@@ -3560,12 +3605,27 @@ static int RunCrashProbe(const std::string& name) {
 		return 0;
 	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
-	return 0;
+	return 2;
 }
 
 static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() {
+	static const char* kProbeName = "matmul_zero_in_channels";
 	std::string tail;
-	bool crashed = RunsCrashProbeAndCrashes("matmul_zero_in_channels", &tail);
+	bool crashed = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	// Necessary regardless of configuration: the child must have actually reached
+	// and dispatched the named contract-violating call. Without this, a child
+	// that exits 0 for any other reason -- the probe name typo'd at the call
+	// site, the dispatch broken by a refactor, the probe never invoked at all --
+	// satisfies "!crashed" under NDEBUG and is indistinguishable from a probe
+	// that ran and correctly completed without crashing (Claude/Poirot/
+	// 2fdaf49-s2.5-golden-hash-review-2026-07-20.md finding 3).
+	bool probe_began = tail.find(CrashProbeBeganMarker(kProbeName)) != std::string::npos;
+	CHECK_MSG(probe_began,
+	          "the child's captured output never contains the began-marker for probe "
+	          "'%s' -- the contract-violating call was never dispatched (probe name "
+	          "mismatch, broken dispatch, or the child exited before reaching it), so "
+	          "the crash/no-crash outcome below proves nothing -- child output was: %s",
+	          kProbeName, tail.c_str());
 #ifdef NDEBUG
 	// assert() is a no-op whenever NDEBUG is defined, which every current CI job
 	// defines (windows-x64/linux-x64 build Release, linux-x64-asan builds
@@ -4271,6 +4331,26 @@ int main(int argc, char** argv) {
 		if (arg1.rfind(prefix, 0) == 0) {
 			return RunCrashProbe(arg1.substr(prefix.size()));
 		}
+	}
+	// Defense-in-depth against unbounded recursive self-spawning: a crash-probe
+	// child is marked by kCrashProbeChildEnvVar (set by the parent, inherited
+	// automatically). If this process IS such a child but its argv did not match
+	// the "--crash-probe=<name>" dispatch above -- which should never happen
+	// given RunsCrashProbeAndCrashes always constructs that exact argument, but
+	// would happen if a future change to either side broke the match -- falling
+	// through to the full suite below would run
+	// TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation again,
+	// which spawns another mismatched child, recursively, without bound. Refuse
+	// instead of recursing (pre-existing risk at commit 464c522; Claude/Poirot/
+	// 2fdaf49-s2.5-golden-hash-review-2026-07-20.md finding 8).
+	if (EnvVarIsSet(kCrashProbeChildEnvVar)) {
+		std::fprintf(stderr,
+		             "superslm_tests: this process was spawned as a crash-probe child "
+		             "(%s is set) but argv did not match \"--crash-probe=<name>\" -- "
+		             "refusing to run the full suite to avoid recursive self-spawning. "
+		             "argv[1] was: %s\n",
+		             kCrashProbeChildEnvVar, argc > 1 ? argv[1] : "(none)");
+		return 3;
 	}
 	TestSha256KnownVectors();
 	TestDtypeSizes();
