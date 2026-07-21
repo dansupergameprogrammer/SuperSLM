@@ -11,7 +11,7 @@ IExpFromConstants documents in src/intmath.cpp / include/superslm/intmath.h --
     z       = (-clipped) // q_ln2          (floor; clipped <= 0, q_ln2 >= 1)
     q_p     = clipped + z * q_ln2
     base    = q_p + q_b
-    in_domain(q_c) iff 0 <= (base**2 + q_c) >> z <= INT64_MAX
+    in_domain(q_c) iff INT64_MIN <= (base**2 + q_c) >> z <= INT64_MAX
 
 -- using Python's arbitrary-precision integers, NEVER by calling the C++ primitives
 under test (which do not exist yet) and never by re-deriving the bound in fixed-width
@@ -51,11 +51,15 @@ def derive(q: int, q_ln2: int, q_b: int) -> tuple[int, int, int, int]:
 def in_domain(q: int, q_ln2: int, q_b: int, q_c: int) -> tuple[bool, int, int, int]:
     """Returns (is_in_domain, exact_shifted_value, z, base). exact_shifted_value is the
     true mathematical (base**2 + q_c) >> z, unbounded -- NOT narrowed to int64. base**2
-    + q_c is always >= 0 here (base**2 >= 0; q_c is documented positive), so the floor
-    right-shift never needs a negative-value convention."""
+    is always >= 0, but q_c is accepted here as a full int64_t (IExpConstantsInDomain's
+    own contract validates only q<=0/q_ln2>=1 -- see Poirot's 7b668b2 review, finding 3 --
+    coefficient positivity is a property of how C30/offline derive q_b/q_c, not an
+    asserted precondition of this predicate), so val can be negative. Python's `>>` on an
+    arbitrary-precision int is already an arithmetic (floor) shift for negative operands,
+    the same convention SShrToI64 implements in C++, so no non-negativity assumption is
+    needed for this formula to apply."""
     _, z, _, base = derive(q, q_ln2, q_b)
     val = base * base + q_c
-    assert val >= 0, "base**2 + q_c must be non-negative for this domain formula to apply"
     shifted = val >> z
     return (INT64_MIN <= shifted <= INT64_MAX), shifted, z, base
 
@@ -151,6 +155,64 @@ add_domain("z1_boundary_first_out_of_domain_large_base", -QLN2, QLN2, QB_LARGE, 
 _clip_q_large = -I_EXP_CLIP_N * QLN2
 add_domain("z_at_clip_ceiling_always_in_domain_large_base", _clip_q_large, QLN2, QB_LARGE, INT64_MAX)
 
+# ---------------------------------------------------------------------------
+# The predicate's LOWER bound (Poirot's 7b668b2 review, finding 3): replacing
+# `lower` with 0, or deleting the lower check entirely, left the suite green
+# at 7435/0 -- this generator's own `in_domain` used to assert val >= 0,
+# which made a negative-q_c fixture impossible to construct here in the first
+# place. IExpConstantsInDomain's own documented preconditions are only q<=0
+# and q_ln2>=1 (include/superslm/intmath.h: "this predicate answers the width
+# question only, and does not validate those" -- it does not validate q_b/q_c's
+# sign); coefficient positivity is a property of how C30/offline derive
+# q_b/q_c (SuperSLM_Plan.md C7, "second-pass N2-5"), not an asserted
+# precondition of this function. A negative q_c is therefore a legitimate
+# call this predicate must still answer correctly, and this generator's own
+# `assert val >= 0` was the reason no cell here could ever construct one.
+#
+# base**2 >= 0 always, and q_c >= INT64_MIN by its own type, so the smallest
+# value the predicate can ever see is base**2 + INT64_MIN >= INT64_MIN (at
+# base=0). The predicate's own lower bound at z=0 is exactly -2**63 ==
+# INT64_MIN, and at z>0 it is -2**63 * 2**z -- strictly MORE negative. So the
+# predicate's minimum reachable value (INT64_MIN) sits AT the z=0 lower bound
+# and strictly ABOVE it for every z>0: no int64_t (base, q_c) pair can ever
+# push the predicate's lower-bound check to reject, for any z. That is a
+# consequence of q_c's own type, independent of whether it happens to be
+# contract-typical (positive) or not.
+#
+# The three cells below sit at that exact, tightest reachable point (base=0,
+# q_c=INT64_MIN, so val == INT64_MIN exactly) at z=0, z=1, and z=I_EXP_CLIP_N
+# -- confirmed IN domain at every one. This forces the predicate's
+# lower-bound comparison to be evaluated at genuine equality (z=0) and with
+# growing slack (z=1, z=30) rather than never being reached, and catches a
+# mutation that replaces the lower bound with a wrong value (e.g. 0): such a
+# mutation answers OUT-of-domain at all three, where the real predicate
+# (correctly) does not.
+#
+# Confirmed against a standalone compiled reproduction of the MSVC
+# struct-S128 path (scratch-only, not part of this repository, deleted after
+# use): the real predicate returns true at these cells and at every z in
+# [0, 30] built the same way; a `lower = 0` mutation returns false at all of
+# them (caught); a mutation that deletes the lower check entirely returns
+# true at all of them, UNCHANGED from the real predicate -- because the
+# check is never the reason a valid int64_t call is accepted or rejected.
+# No cell, however constructed, can force that deletion to differ from the
+# correct implementation; the cells below are the strongest assertion this
+# predicate's lower bound admits. Routed to the builder/planner as a finding:
+# the lower-bound branch is provably unreachable-as-false for any int64_t
+# input, not merely untested by this suite's prior fixtures.
+# ---------------------------------------------------------------------------
+_, _z0_lb_check, _, _base0_lb_check = derive(0, 1, 0)
+assert _z0_lb_check == 0 and _base0_lb_check == 0
+add_domain("z0_lower_bound_equality_qc_min", 0, 1, 0, INT64_MIN)
+
+_, _z1_lb_check, _, _base1_lb_check = derive(-7, 7, 0)
+assert _z1_lb_check == 1 and _base1_lb_check == 0
+add_domain("z1_lower_bound_slack_qc_min", -7, 7, 0, INT64_MIN)
+
+_, _z30_lb_check, _, _base30_lb_check = derive(-I_EXP_CLIP_N * 7, 7, 0)
+assert _z30_lb_check == I_EXP_CLIP_N and _base30_lb_check == 0
+add_domain("z_at_clip_ceiling_lower_bound_slack_qc_min", -I_EXP_CLIP_N * 7, 7, 0, INT64_MIN)
+
 # --- Typical small-magnitude in-domain case (realistic_s0 family shape, from
 #     sslm_intmath_fixtures.h) -- confirms the predicate says yes on the
 #     ordinary, non-adversarial path, not only at forced boundaries. ---
@@ -158,13 +220,17 @@ add_domain("typical_small_in_domain", 0, 6, 13, 95)
 
 # --- A realistic operating-scale positive cell: (q_ln2, q_b, q_c) as
 #     Tools/superslm_spike/intmath.py's own i_exp actually derives them for
-#     scale=0.01 (a plausible per-token softmax activation scale), reproduced
-#     here by reading that pinned reference directly --
+#     scale=0.01 (a plausible per-token softmax activation scale) --
 #     q_b = floor(_POLY_B / scale), q_c = floor(_POLY_C / (_POLY_A * scale**2))
-#     (intmath.py lines 203-204). This proves the predicate does not
-#     over-reject the range real calls actually use -- the adversarial cells
-#     above prove rejection; this proves the predicate is not simply "always
-#     false near any large constant." ---
+#     (intmath.py lines 203-204). This script imports nothing outside the
+#     standard library (see the module docstring), so the three values below
+#     are computed from that formula by hand and hardcoded here as literal
+#     integers, not read from the reference at generation time; they were
+#     checked against Tools/superslm_spike/intmath.py directly at scale=0.01
+#     (q_ln2=69, q_b=135, q_c=9595) before being hardcoded. This proves the
+#     predicate does not over-reject the range real calls actually use -- the
+#     adversarial cells above prove rejection; this proves the predicate is
+#     not simply "always false near any large constant." ---
 add_domain("realistic_operating_scale_0p01_in_domain", 0, 69, 135, 9595)
 
 # ---------------------------------------------------------------------------
@@ -249,6 +315,13 @@ emit = lines.append
 
 
 def cxx_i64(v: int) -> str:
+    # INT64_MIN's magnitude (9223372036854775808) exceeds INT64_MAX as a positive
+    # literal, so INT64_C(-9223372036854775808) parses the digits as unsigned first and
+    # then negates them (MSVC C4146) -- correct in value but a build warning. Emit the
+    # standard-library constant directly for that one value; every other value round-trips
+    # through INT64_C unchanged.
+    if v == INT64_MIN:
+        return "INT64_MIN"
     return f"INT64_C({v})"
 
 
