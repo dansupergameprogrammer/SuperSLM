@@ -24,9 +24,24 @@ Both real hidden_size values (1536, 960) and both real intermediate_size values 
 2560) — all block-aligned at the common SIMD widths, so on their own they never exercise a
 remainder — plus two deliberately non-block-aligned synthetic lengths (tails of 5 and 7),
 the int8-extremes row at both operands' limits, the in_channels=1 architectural floor, and
-one 132,105-deep case. The deep case is the only one that drives the SSE2 accumulator flush
-window (src/matmul.cpp's kFlushBlocks trips at 131,072 elements) and the only one carrying
-sums outside int32, so without it the golden would certify neither.
+THREE 132,105-deep cases.
+
+All three deep cases drive the SSE2 accumulator flush window (src/matmul.cpp's kFlushBlocks
+trips at 131,072 elements). Only the two single-signed ones — deep_beyond_i32_neg and
+deep_beyond_i32_pos — carry sums outside int32. deep_flush_lcg_132105 does NOT: an LCG
+fill's mixed signs cancel and its largest accumulator is 3,027,949, comfortably inside
+int32.
+
+That distinction is the whole point of this set and was got wrong once already. The first
+version of this golden had a single LCG-filled deep case and claimed it carried sums outside
+int32. It did not, every case fit int32, and a review proved that substituting a
+wrapping-int32 accumulator reproduced the pinned hash bit-for-bit — the gate would have
+passed a kernel that narrowed mid-reduction, on every platform. Reaching the int64 range
+requires SINGLE-SIGNED products at the maximal attainable magnitude (±127 against -128), and
+that is why design §8 names the length 132,105.
+
+Do not trim the two single-signed cases. main() asserts, from the accumulators it actually
+computes, that at least one case leaves int32; that guard fires if they go.
 
 The hash covers, per case: every int64 accumulator GemmInt8Accumulate produces (the shipping
 dispatch — SSE2 on x64, the scalar reference on arm64), the DotRowScalarRef value for row 0
@@ -187,12 +202,24 @@ def main() -> None:
         total += len(blob)
         per_case.append((label, len(blob)))
 
-    # The same property over the whole set, read from `escaped` — which holds the labels of
-    # the cases whose computed accumulators actually left int32, NOT the labels someone
-    # declared ought to. Asserting the declaration instead (`assert _I32_ESCAPE_CASES`, a
-    # module-level set literal that is always truthy) is a guard that cannot fail: deleting
-    # both escape cases from CASES left it passing while the pin reverted to one a
-    # wrapping-int32 accumulator reproduces. Measured, not declared.
+    # The declaration is reconciled against the case list in BOTH directions. The per-case
+    # loop above covers one way: a case NAMED as an escape must really escape. This covers
+    # the other: a name in the declaration must correspond to a case that exists. Without it
+    # the reconciliation is one-way, and renaming both escape cases leaves the declaration
+    # pointing at two absent labels with no assert firing anywhere — the per-case guard goes
+    # inert because its `label in _I32_ESCAPE_CASES` test never matches again.
+    declared_but_absent = _I32_ESCAPE_CASES - {c[0] for c in CASES}
+    assert not declared_but_absent, (
+        f"_I32_ESCAPE_CASES names cases that are not in CASES: {sorted(declared_but_absent)} "
+        f"— the declaration is stale, so the per-case int32-escape guard silently matches "
+        f"nothing")
+
+    # The property over the whole set, read from `escaped` — which holds the labels of the
+    # cases whose computed accumulators actually left int32, NOT the labels someone declared
+    # ought to. Asserting the declaration instead (`assert _I32_ESCAPE_CASES`, a module-level
+    # set literal that is always truthy) is a guard that cannot fail: deleting both escape
+    # cases from CASES left it passing while the pin reverted to one a wrapping-int32
+    # accumulator reproduces. Measured, not declared.
     assert escaped, (
         "no case in the canonical set produces an accumulator outside int32, so the golden "
         "is reproduced bit-for-bit by a kernel that narrows mid-reduction and certifies "
