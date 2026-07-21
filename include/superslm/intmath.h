@@ -169,6 +169,42 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // computed at runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
+// C7/C8 — `IExpFromConstants`'s internal decomposition, exposed so a caller can EVALUATE
+// the domain requirement below instead of re-deriving it (D-SLM79/D-SLM81). Same
+// caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`); the parent calls
+// these, so they are the same values it uses, not a parallel derivation.
+//
+// `IExpShift` returns `z` — the number of ln2 steps the clip/divide yields, always in
+// `[0, I_EXP_CLIP_N]`. `IExpBase` returns `q_p + q_b`, the value the parent squares.
+int64_t IExpShift(int64_t q, int64_t q_ln2);
+int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
+
+// C7/C8 — **the domain predicate. Call this before `IExpFromConstants` on any constants
+// not already proven in range.** Returns whether `(base² + q_c) >> z` — the value the
+// parent returns — is representable in `int64_t`.
+//
+// **Why this exists as a function rather than a documented inequality.** Every other
+// precondition this header states is a LOWER bound; there was no upper bound on `q_b` or
+// `q_c`, and `IExpFromConstants` narrows its 128-bit intermediate with an unchecked shift.
+// A blind adversary strike produced contract-legal constants (`q = 0`, `q_ln2 = 887904998`,
+// `q_b = 1733160715`, `q_c = 2^63−1`) for which the parent returns a NEGATIVE exponential:
+// `base² + q_c` exceeds `INT64_MAX` and the low 64 bits are kept. With `q = 0` the shift is
+// 0, so nothing shifts the overflow away.
+//
+// The test is performed in the 128-bit domain internally **because a caller cannot safely
+// perform it**: the obvious check, `IExpBase(...)² + q_c <= INT64_MAX`, squares `base` in
+// int64 and itself overflows once `q_b` exceeds ~3.04e9 — reproducing the defect in the
+// guard (D-SLM81). Callers therefore use this predicate; they do not re-derive it.
+//
+// Same caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`) — this predicate
+// answers the width question only, and does not validate those.
+//
+// **Cost note (D-SLM83):** the result depends on `q` only through `z`, and `q = 0` (`z = 0`)
+// is the worst case for a given `(q_ln2, q_b, q_c)` triple. A caller deriving one constant
+// triple per query discharges the whole row's obligation with a single `q = 0` call — this
+// is not a per-element runtime guard.
+bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
+
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
 //
 // Runtime primitive only. The Q2.30 sin/cos TABLES (C12) are generated OFFLINE in double

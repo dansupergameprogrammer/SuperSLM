@@ -319,16 +319,57 @@ int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	// contract, so z >= 0 and the final shift is well defined (no negative shift).
 	//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2
 	//   return ((q_p + q_b)^2 + q_c) >> z
-	int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
-	int64_t clipped = q < clip_lo ? clip_lo : q;
-	int64_t z = (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative floor division
-	int64_t q_p = clipped + z * q_ln2;  // in (−q_ln2, 0]
-	int64_t base = q_p + q_b;
+	const int64_t z = IExpShift(q, q_ln2);
+	const int64_t base = IExpBase(q, q_ln2, q_b);
 	// (base^2 + q_c) >> z in 128-bit: base^2 reaches ~2^62 and q_c ~2^62 in the realistic
 	// domain (near 0.5·INT64_MAX), and C30's per-token constants may push wider — so carry it
 	// wide and take an arithmetic (floor) shift to match the reference's big-integer `>>`.
+	//
+	// The narrowing below is unchecked, so the shifted value must be representable. That is a
+	// caller-ensures precondition (IExpConstantsInDomain), asserted here as the no-exceptions
+	// equivalent of the reference's raise — the same convention as the two above. Out of
+	// domain the low 64 bits are kept and the result can be NEGATIVE; a blind strike produced
+	// contract-legal constants that did exactly that (D-SLM78). Under NDEBUG this assert is
+	// compiled out and the wrapped value is returned unchanged, which is what makes the
+	// extraction behaviour-preserving (D-SLM80).
+	assert(IExpConstantsInDomain(q, q_ln2, q_b, q_c));
 	S128 v = SAdd(SMul(base, base), SFromI64(q_c));
 	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
+}
+
+int64_t IExpShift(int64_t q, int64_t q_ln2) {
+	assert(q <= 0 && q_ln2 >= 1);
+	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
+	const int64_t clipped = q < clip_lo ? clip_lo : q;
+	return (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative floor division
+}
+
+int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b) {
+	assert(q <= 0 && q_ln2 >= 1);
+	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
+	const int64_t clipped = q < clip_lo ? clip_lo : q;
+	const int64_t z = (-clipped) / q_ln2;
+	const int64_t q_p = clipped + z * q_ln2;  // in (−q_ln2, 0]
+	return q_p + q_b;
+}
+
+bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
+	assert(q <= 0 && q_ln2 >= 1);
+	const int64_t z = IExpShift(q, q_ln2);
+	const int64_t base = IExpBase(q, q_ln2, q_b);
+	const S128 v = SAdd(SMul(base, base), SFromI64(q_c));
+
+	// `(v >> z)` is an arithmetic (floor) shift, so it is representable in int64 exactly
+	// when `-2^63 · 2^z <= v <= 2^63 · 2^z - 1`. Both bounds are built by doubling rather
+	// than by a 128-bit left shift so this uses only the wide facility both toolchain paths
+	// already provide (no `__int128` dependency on MSVC). `z <= I_EXP_CLIP_N` (30), so the
+	// bound peaks at 2^93 — far inside S128.
+	S128 limit = STwice(SFromI64(INT64_C(1) << 62));  // 2^63
+	for (int64_t i = 0; i < z; ++i) limit = STwice(limit);
+
+	const S128 upper = SSub(limit, SFromI64(1));      //  2^63·2^z − 1
+	const S128 lower = SSub(SFromI64(0), limit);      // −2^63·2^z
+	return SGe(upper, v) && SGe(v, lower);
 }
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
