@@ -35,7 +35,16 @@ def main():
     for i in range(0, len(vals), 16):
         lines.append("\t" + ", ".join(vals[i:i + 16]) + ",")
     lines += ["};", "}  // namespace superslm_test", "#endif"]
-    OUT.write_text("\n".join(lines) + "\n", newline="\n")
+    text = "\n".join(lines) + "\n"
+    # Pure ASCII, written as UTF-8 with an explicit newline. Both halves are load-bearing
+    # for the byte-for-byte reproducibility this pinned table depends on: write_text with no
+    # encoding= uses the platform's locale encoding, so a single non-ASCII character would
+    # serialize to different bytes on a Windows host (cp1252) than on a Linux one (UTF-8)
+    # for an unchanged table, and would raise outright under a C/POSIX locale. Asserting
+    # ASCII here means the property cannot lapse by someone adding a typographic character
+    # to a comment above. (Same defect and same fix as tools/gen_matmul_golden.py.)
+    text.encode("ascii")  # raises UnicodeEncodeError if a non-ASCII character crept in
+    OUT.write_text(text, newline="\n", encoding="utf-8")
     print(f"wrote {OUT} (1025 entries; table[0]={t[0]}, table[512]={t[512]}, table[1024]={t[1024]})")
 
 
