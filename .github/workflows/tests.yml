@@ -42,3 +42,47 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
+
+  # Every job above builds Release/RelWithDebInfo, which all define NDEBUG and
+  # compile out every assert()-based contract check in src/ -- including the
+  # S2.5 death-test cell (tests/test_main.cpp) that proves a caller-contract
+  # violation aborts a debug build. That claim was previously provable only on
+  # a developer machine (build.bat, which does not define NDEBUG). This job
+  # builds CMake's Debug configuration, which the generated project files
+  # confirm never defines NDEBUG on any of MSVC/GCC/Clang, so the assert-live
+  # branch of the death-test cell runs here and the same suite is proved
+  # against it in CI.
+  linux-x64-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build
+      - run: ./build/superslm_tests
+
+  # The golden headers under tests/ and tools/ state, in their own generated
+  # comments, that re-running their generator reproduces them byte-for-byte.
+  # This job makes that claim structural rather than asserted: it regenerates
+  # every generator that can run on a bare CI runner and fails if the working
+  # tree changes, which also re-fires each generator's own guards (the ASCII
+  # assertion, the pinned UTF-8 encoding, and the matmul golden's int32-escape
+  # reconciliation) on every push and PR instead of only when a developer
+  # happens to run the script locally.
+  #
+  # tests/gen_intmath_fixtures.py and tests/gen_matmul_fixtures.py are NOT run
+  # here: both import a pinned Python reference from a path outside this
+  # repository (a sibling worktree's Tools/superslm_spike), which a clean
+  # checkout of this repo does not have and cannot vendor without changing
+  # generator logic. Their fixture headers are not covered by this gate.
+  generators:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: pip install numpy
+      - run: python tools/gen_matmul_golden.py
+      - run: python tools/gen_silu_lut_golden.py
+      - name: Fail if regenerating changed any tracked file
+        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h
