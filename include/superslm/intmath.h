@@ -167,6 +167,13 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // is otherwise UB out of domain — the same caller-ensures convention as `MaxAbsReduce`/`ShiftByMax`,
 // not a runtime rejection. The coefficient integers are positive (C7 N2-5). `out_scale` is never
 // computed at runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
+//
+// **A THIRD precondition, and it is not a lower bound:** the returned value must be representable,
+// which `IExpConstantsInDomain` below answers. A debug build asserts it, so a large but
+// contract-legal `q_ln2` or `q_c` aborts here rather than returning silently. Under `NDEBUG` the
+// assert is compiled out and the truncated — possibly NEGATIVE — value is returned, which is what
+// makes the guard a caller obligation rather than a runtime rejection. See that function for the
+// executed witness and for why a caller must not re-derive the test itself.
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 // C7/C8 — `IExpFromConstants`'s internal decomposition, exposed so a caller can EVALUATE
@@ -210,12 +217,18 @@ int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
 // general: at `q_ln2 = 4000000000, q_b = 1, q_c = 0`, `q = 0` answers `true` while
 // `q = −3999999999` — same triple, same `z = 0` — answers `false`.
 //
-// The one-call-per-triple shortcut holds **only where C30 derives the constants**, because
-// there `q_b / q_ln2` is fixed at ≈1.952, which keeps `base` positive across the row and
-// maximal at `q = 0`. A caller in that regime discharges the whole row's obligation with a
-// single `q = 0` call, and this is not a per-element runtime guard. **A caller supplying
-// constants from anywhere else does not get that shortcut** and must either establish the
-// same property for its own constants or check the row's extremes.
+// The one-call-per-triple shortcut holds **only where `q_b >= q_ln2`** — which is what C30's
+// derivation gives, fixing `q_b / q_ln2` at ≈1.952. That condition keeps `base` positive
+// across the row and maximal at `q_p = 0`, which is also the element where the bound
+// `2^63·2^z − 1` is tightest, so the largest numerator and the tightest bound coincide there
+// and one `q = 0` call discharges the row. This is not a per-element runtime guard.
+//
+// **A caller whose constants do not satisfy `q_b >= q_ln2` gets no shortcut, and must call
+// this per element.** In particular, do NOT substitute "check the row's extremes": when
+// `q_b < q_ln2` the worst element is INTERIOR, at `q_p = −(q_ln2 − 1)`, so both endpoints can
+// answer `true` while an element between them answers `false` (executed witness:
+// `q_ln2 = 4000000000, q_b = 1, q_c = 0`, row `q ∈ [−8e9, 0]` — endpoints in domain,
+// `q = −3999999999` not).
 bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------

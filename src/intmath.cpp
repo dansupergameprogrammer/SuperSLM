@@ -405,6 +405,16 @@ bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	// or admit a negative `base²` term, and the guarantee silently disappears with nothing
 	// failing. Keeping it costs one comparison and is the difference between correct by
 	// construction and correct by coincidence.
+	//
+	// The paragraph above rests on `q_c` being 64-bit — and names widening `q_c` as the very
+	// event that would make the branch live. So it is asserted rather than merely written
+	// down: widen the parameter and this fails at compile time instead of leaving a comment
+	// that quietly became false.
+	static_assert(sizeof(q_c) == 8,
+	              "IExpConstantsInDomain's lower bound is documented as unreachable BECAUSE "
+	              "q_c is 64-bit (so v >= INT64_MIN == lower at z=0). Widening q_c makes the "
+	              "branch reachable and that comment wrong — re-derive it, and give the "
+	              "lower bound test coverage, before changing this signature.");
 	return SGe(upper, v) && SGe(v, lower);
 }
 
