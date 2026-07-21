@@ -58,6 +58,13 @@ _MASK = (1 << 64) - 1
 
 KIND_LCG = 0
 KIND_EXTREMES = 1
+# Single-signed attainable extremes: every product at the maximal ATTAINABLE magnitude
+# 16,256 (activation +/-127 against weight -128) and all of one sign, so the sum grows
+# monotonically and leaves int32 at the deep lengths. An LCG fill cannot reach here --
+# its mixed signs cancel, which is precisely why the first version of this golden
+# certified nothing about the int64 accumulator (Poirot finding 1).
+KIND_EXTREME_NEG = 2  # activations +127, weights -128 -> product -16,256
+KIND_EXTREME_POS = 3  # activations -127, weights -128 -> product +16,256
 
 
 class Lcg:
@@ -93,8 +100,16 @@ CASES = [
     ("synthetic_tail7_1535",    9, 1535,      8, 1, KIND_LCG,      True),
     ("floor_in1_out1",          6,    1,      1, 1, KIND_LCG,      True),
     ("int8_extremes_1024",      0, 1024,      4, 1, KIND_EXTREMES, True),
-    ("deep_flush_132105",       8, 132105,    2, 1, KIND_LCG,      False),
+    ("deep_flush_lcg_132105",   8, 132105,    2, 1, KIND_LCG,      False),
+    ("deep_beyond_i32_neg",     0, 132105,    1, 1, KIND_EXTREME_NEG, False),
+    ("deep_beyond_i32_pos",     0, 132105,    1, 1, KIND_EXTREME_POS, False),
 ]
+
+# The two single-signed deep cases are the ONLY ones whose sums leave int32:
+# 132,105 x 16,256 = 2,147,498,880, which is 15,233 past INT32_MAX and 15,232 past
+# INT32_MIN in the other direction. main() asserts this rather than trusting the
+# arithmetic here, so the property cannot silently lapse if a length is edited.
+_I32_ESCAPE_CASES = {"deep_beyond_i32_neg", "deep_beyond_i32_pos"}
 
 
 def build_inputs(seed, in_channels, out_channels, num_tokens, kind):
@@ -104,6 +119,11 @@ def build_inputs(seed, in_channels, out_channels, num_tokens, kind):
                 for _ in range(num_tokens)]
         wgts = [[127 if ((j + k) % 2 == 0) else -128 for k in range(in_channels)]
                 for j in range(out_channels)]
+        return acts, wgts
+    if kind in (KIND_EXTREME_NEG, KIND_EXTREME_POS):
+        a = 127 if kind == KIND_EXTREME_NEG else -127
+        acts = [[a] * in_channels for _ in range(num_tokens)]
+        wgts = [[-128] * in_channels for _ in range(out_channels)]
         return acts, wgts
     # Fill order is load-bearing: all activation rows first (token-major), then all
     # weight rows (output-channel-major), one LCG stream per case.
@@ -150,9 +170,21 @@ def main() -> None:
                     f"{label}: accumulator {v} does not fit int32 — the case is mislabelled "
                     f"int32_safe and NarrowAccumulatorToI32 would be UB")
                 blob += i32_le(v)
+        # The int64-range property, asserted rather than trusted: a golden whose every
+        # accumulator fits int32 is reproduced bit-for-bit by a kernel that narrows
+        # mid-reduction, so it certifies nothing about the int64 accumulate. Checking it
+        # here means a future edit to a length or a fill cannot silently take it away.
+        if label in _I32_ESCAPE_CASES:
+            assert any(v > (1 << 31) - 1 or v < -(1 << 31) for v in wide_row0), (
+                f"{label}: every accumulator fits int32, so this case no longer proves the "
+                f"int64 range it exists to prove")
         h.update(blob)
         total += len(blob)
         per_case.append((label, len(blob)))
+
+    # The same property stated over the whole set: at least one case must leave int32,
+    # or the golden as a whole is passed by a wrapping-int32 accumulator.
+    assert _I32_ESCAPE_CASES, "the canonical set has no case that leaves int32"
 
     digest = h.hexdigest()
 
@@ -163,12 +195,12 @@ def main() -> None:
         "// GENERATED FILE. Do not hand-edit.",
         "//",
         "// Produced by tools/gen_matmul_golden.py. The pinned hash below is computed by that",
-        "// script in arbitrary-precision Python integer arithmetic reproducing the design's §5",
+        "// script in arbitrary-precision Python integer arithmetic reproducing the design's S5",
         "// scalar reference (SuperSLM_matmul_subslot_design-2026-07-20.md), NOT by recording",
-        "// what a C++ build printed — the golden is generated from the reference, so a matching",
+        "// what a C++ build printed -- the golden is generated from the reference, so a matching",
         "// C++ hash is agreement with an independent computation.",
         "//",
-        "// Design record: SuperSLM_matmul_subslot_design-2026-07-20.md §10 step 5 / §11 item 6.",
+        "// Design record: SuperSLM_matmul_subslot_design-2026-07-20.md S10 step 5 / S11 item 6.",
         "// Re-running the generator must reproduce this file byte-for-byte.",
         "#ifndef SUPERSLM_TESTS_MATMUL_GOLDEN_PIN_H",
         "#define SUPERSLM_TESTS_MATMUL_GOLDEN_PIN_H",
@@ -178,7 +210,11 @@ def main() -> None:
         "",
         "namespace superslm_test {",
         "",
-        "// kind: 0 = pinned-LCG fill, 1 = int8-extremes pattern (both mirrored in test_main.cpp).",
+        "// kind: 0 = pinned-LCG fill, 1 = alternating int8-extremes pattern, 2 = single-signed",
+        "// attainable extremes (act +127, wgt -128), 3 = single-signed the other direction (act",
+        "// -127, wgt -128). All four are mirrored in test_main.cpp. Kinds 2 and 3 are the only",
+        "// fills whose sums leave int32: an LCG's mixed signs cancel, so a golden without them is",
+        "// reproduced bit-for-bit by a kernel that narrows mid-reduction.",
         "struct MatmulGoldenCase {",
         "\tconst char* label;",
         "\tuint64_t seed;",
@@ -186,7 +222,7 @@ def main() -> None:
         "\tsize_t out_channels;",
         "\tsize_t num_tokens;",
         "\tint kind;",
-        "\tbool int32_safe;  // §8's 131,071 bound declares MatmulAccumWidth::Int32 for this case",
+        "\tbool int32_safe;  // S8's 131,071 bound declares MatmulAccumWidth::Int32 for this case",
         "};",
         "",
         "inline constexpr MatmulGoldenCase kMatmulGoldenCases[] = {",
@@ -206,7 +242,7 @@ def main() -> None:
         "",
         f"inline constexpr size_t kMatmulGoldenTotalBytes = {total};",
         "",
-        "// PINNED golden. A mismatch is a cross-platform/toolchain/ISA determinism break — or an",
+        "// PINNED golden. A mismatch is a cross-platform/toolchain/ISA determinism break -- or an",
         "// intended construction change, in which case re-run tools/gen_matmul_golden.py",
         "// deliberately and review the diff.",
         f'inline constexpr char kMatmulGoldenHash[] =',
@@ -216,7 +252,16 @@ def main() -> None:
         "",
         "#endif  // SUPERSLM_TESTS_MATMUL_GOLDEN_PIN_H",
     ]
-    OUT.write_text("\n".join(lines) + "\n", newline="\n")
+    text = "\n".join(lines) + "\n"
+    # The emitted header is pure ASCII and is written as UTF-8 with an explicit newline.
+    # Both halves are load-bearing for "re-running the generator reproduces this file
+    # byte-for-byte": write_text without encoding= uses the platform's locale encoding, so
+    # a non-ASCII character would serialize to different bytes on a Windows host (cp1252)
+    # than on a Linux one (UTF-8) for an unchanged hash, and would raise outright under a
+    # C/POSIX locale. Asserting ASCII here means the claim cannot lapse by someone adding a
+    # typographic character to a comment above.
+    text.encode("ascii")  # raises UnicodeEncodeError if a non-ASCII character crept in
+    OUT.write_text(text, newline="\n", encoding="utf-8")
 
     print(f"wrote {OUT}")
     for label, n in per_case:

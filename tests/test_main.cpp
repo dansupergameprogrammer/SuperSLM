@@ -4198,7 +4198,7 @@ static void TestMatmulGoldenHashCrossPlatform() {
 	for (const MatmulGoldenCase& c : kMatmulGoldenCases) {
 		std::vector<int8_t> acts(c.num_tokens * c.in_channels);
 		std::vector<int8_t> wgts(c.out_channels * c.in_channels);
-		if (c.kind == 1) {  // int8-extremes pattern
+		if (c.kind == 1) {  // alternating int8-extremes pattern
 			for (size_t t = 0; t < c.num_tokens; ++t) {
 				for (size_t k = 0; k < c.in_channels; ++k) {
 					acts[t * c.in_channels + k] = static_cast<int8_t>((k % 2 == 0) ? 127 : -127);
@@ -4209,6 +4209,15 @@ static void TestMatmulGoldenHashCrossPlatform() {
 					wgts[j * c.in_channels + k] = static_cast<int8_t>(((j + k) % 2 == 0) ? 127 : -128);
 				}
 			}
+		} else if (c.kind == 2 || c.kind == 3) {
+			// Single-signed attainable extremes: every product at magnitude 16,256
+			// (±127 against -128) and all one sign, so the sum grows monotonically and
+			// leaves int32 at the deep lengths. The LCG fills cannot reach here — their
+			// mixed signs cancel — so these are the only cases that put the int64
+			// accumulate itself inside the golden.
+			const int8_t a = static_cast<int8_t>(c.kind == 2 ? 127 : -127);
+			for (size_t i = 0; i < acts.size(); ++i) acts[i] = a;
+			for (size_t i = 0; i < wgts.size(); ++i) wgts[i] = static_cast<int8_t>(-128);
 		} else {  // pinned-LCG fill; activation rows first, then weight rows, one stream
 			MatmulGoldenLcg g(c.seed);
 			for (size_t i = 0; i < acts.size(); ++i) acts[i] = MatmulGoldenActCode(g.NextByte());
