@@ -49,15 +49,21 @@ int32_t SiluSigmoidQ15(const int32_t* table, int8_t code, int64_t m, int e) {
 	const int i0 = static_cast<int>(i0_64);
 	const int64_t frac = pos_fixed - (static_cast<int64_t>(i0) << kSiluLutQIdx);
 
-	// §6 — linear interpolation, exactly one C3 rounding (the shipped int32 primitive: the product
-	// fits int32, |frac·diff| <= 2^12 · 2^15 = 2^27). table[i0+1] always addresses a real entry
-	// (i0 <= N-1, and the table has N+1 entries for exactly this reason).
-	const int32_t lo = table[i0];
-	const int32_t hi = table[i0 + 1];
-	const int32_t diff = hi - lo;
-	const int32_t product = static_cast<int32_t>(frac * diff);
-	const int32_t delta = RoundingDivideByPOT(product, kSiluLutQIdx);
-	return lo + delta;
+	// §6 — linear interpolation, exactly one C3 rounding. table[i0+1] always addresses a real
+	// entry (i0 <= N-1, and the table has N+1 entries for exactly this reason). Under the
+	// canonical table (ParseSigmoidLut's pinned-content check, S-HARDEN-1 F20/F22 — the ONLY
+	// table this function is ever called with in the shipped path) |frac*diff| <= 2^12 * 2^15 =
+	// 2^27, which fits int32 exactly as the design derives. `diff`/`product`/`delta` are widened
+	// to int64_t as DEFENCE IN DEPTH beneath that content-pinning guarantee, not because the
+	// canonical table needs it: the guarantee is load-bearing at the parser, not re-derived here,
+	// but the two unvalidated-artifact-operand UB chain (F22) is the standing argument for never
+	// letting a downstream arithmetic step be the last line of defense on its own.
+	const int64_t lo = table[i0];
+	const int64_t hi = table[i0 + 1];
+	const int64_t diff = hi - lo;
+	const int64_t product = frac * diff;
+	const int64_t delta = RoundingDivideByPOT(product, kSiluLutQIdx);
+	return static_cast<int32_t>(lo + delta);
 }
 
 }  // namespace superslm

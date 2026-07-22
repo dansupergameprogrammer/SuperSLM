@@ -9,10 +9,12 @@
 // before any tensor byte is exposed. Deviation is a rejection with a status, never a
 // silent partial view. Standard library only (D-SLM13).
 #include "superslm/model.h"
+#include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable — S-HARDEN-1 (F20/F22)
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <unordered_set>
 
 namespace superslm {
@@ -95,6 +97,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::UnsupportedSigmoidLutVersion: return "UnsupportedSigmoidLutVersion";
 		case SslmModelStatus::BadSigmoidLutCount: return "BadSigmoidLutCount";
 		case SslmModelStatus::BadSigmoidLutReserved: return "BadSigmoidLutReserved";
+		case SslmModelStatus::BadSigmoidLutContent: return "BadSigmoidLutContent";
 	}
 	return "Unknown";
 }
@@ -447,7 +450,31 @@ SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& 
 	if (RdU32(base + 12) != 0)
 		return Reject(SslmModelStatus::BadSigmoidLutReserved, err, "SIL1 reserved field != 0");
 
-	out.values = base + kSigmoidLutHeaderBytes;  // the 1025 int32 Q15 nodes, read via SigmoidLutValue
+	// S-HARDEN-1 (F20/F22): SIL1 is a universal construction the spec fixes
+	// entirely (not model-specific learned data), so every node is validated
+	// against the pinned canonical table — a byte-for-byte comparison, not a
+	// per-node range/monotonicity predicate. A structurally valid section whose
+	// content differs from canonical is rejected here, BEFORE any node value is
+	// exposed through `out` — this is what stops a hostile-but-structurally-
+	// valid table (adjacent nodes at INT32_MIN/INT32_MAX, the exact operand a
+	// strike drove through this parser once already) from ever reaching
+	// SiluSigmoidQ15's interpolation. Read via the same little-endian
+	// byte-assembly discipline as every other field in this file — never a
+	// reinterpret_cast over the section's bytes.
+	const uint8_t* nodes = base + kSigmoidLutHeaderBytes;
+	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) {
+		const int32_t got = static_cast<int32_t>(RdU32(nodes + static_cast<size_t>(i) * 4));
+		if (got != kSiluLutCanonicalTable[i]) {
+			if (err) {
+				*err = "SIL1 node " + std::to_string(i) + " (" + std::to_string(got) +
+				       ") does not match the pinned canonical table (" +
+				       std::to_string(kSiluLutCanonicalTable[i]) + ")";
+			}
+			return SslmModelStatus::BadSigmoidLutContent;
+		}
+	}
+
+	out.values = nodes;  // the 1025 int32 Q15 nodes, read via SigmoidLutValue
 	out.entry_count = kSigmoidLutEntries;
 	return SslmModelStatus::Ok;
 }

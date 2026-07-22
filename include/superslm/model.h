@@ -142,6 +142,7 @@ enum class SslmModelStatus {
 	UnsupportedSigmoidLutVersion, // SIL1 version != kManifestVersion
 	BadSigmoidLutCount,         // entry_count != kSigmoidLutEntries
 	BadSigmoidLutReserved,      // the SIL1 reserved field != 0
+	BadSigmoidLutContent,       // a node does not match the pinned canonical table (S-HARDEN-1, F20/F22)
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -237,6 +238,14 @@ struct SslmSigmoidLut {
 // section must already be validated by SslmArtifact. Fixed-layout like CFG1: the exact-size
 // check gates every read. Rejects (fails closed, `out` left default) on a wrong size/magic/
 // version/entry_count or a nonzero reserved field — the §11 reject-over-degrade law. Never throws.
+//
+// S-HARDEN-1 (F20/F22): SIL1 is a universal construction the spec fixes entirely, not
+// model-specific learned data, so every node is ALSO validated against the pinned
+// canonical table (include/superslm/silu_lut_canonical.h) — a structurally valid
+// section whose content is not byte-for-byte the canonical table is rejected with
+// BadSigmoidLutContent. This is what stops a hostile-but-structurally-valid table
+// (e.g. adjacent nodes at INT32_MIN/INT32_MAX) from ever reaching SiluSigmoidQ15's
+// interpolation, which relies on the canonical invariant |table[i+1]-table[i]| bounded.
 SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& out, std::string* err);
 
 // Read Q15 node `i` (< entry_count) of `lut` as a signed int32 (little-endian byte assembly).

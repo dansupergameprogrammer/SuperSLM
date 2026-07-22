@@ -14,6 +14,7 @@
 #include "superslm/model.h"
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
+#include "superslm/silu_lut_canonical.h"
 #include "superslm/tokenizer.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
@@ -3203,6 +3204,106 @@ static void TestSil1RejectsBadReserved() {
 }
 
 // ---------------------------------------------------------------------------
+// S-HARDEN-1 (F20/F22): pinned canonical content. SIL1 is a universal
+// construction the spec fixes entirely, not model-specific learned data — so a
+// section that passes every STRUCTURAL check (size/magic/version/count/
+// reserved) but carries node values that are not byte-for-byte the canonical
+// table must still be rejected. This is the gap the external review's strike
+// exploited: F20's original fix validated node RANGES/monotonicity: this cell
+// forces a case that is well-formed under a range check yet is not the
+// canonical table, which only an exact-content comparison catches. §17.3
+// cell 6's oracle ("pinned canonical content... a section hash or
+// byte-for-byte comparison").
+// ---------------------------------------------------------------------------
+
+static void TestSil1RejectsSingleNodeContentMismatch() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	// Node 512 (the table's midpoint, sigmoid(0)*2^15 == 16384): off by exactly
+	// one from canonical — a range/monotonicity check would not catch this, an
+	// exact-content check must.
+	const uint32_t mutated = static_cast<uint32_t>(superslm::kSiluLutCanonicalTable[512] + 1);
+	PutU32(bytes, kSil1NodesOff + 512u * 4u, mutated);
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutContent,
+	                    "SIL1 node[512] == canonical+1 (single off-by-one, still monotone and in-range)");
+}
+
+// The exact shape the external review's strike used against F20's original
+// range-only fix: two ADJACENT nodes at INT32_MIN and INT32_MAX. Both are
+// individually "in range" for an int32 field and the pair is even monotone
+// non-decreasing is not required by a range check — this is precisely the
+// operand that reached SiluSigmoidQ15's `diff = hi - lo` and produced UB
+// (F20's remedy text). The content-pinning check must reject this
+// independently of any node-range/monotonicity check that may or may not
+// exist, because content-pinning is what this slot commits to as the actual
+// gate (defence-in-depth, never the sole claimed protection).
+static void TestSil1RejectsHostileExtremeAdjacentNodes() {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
+	PutU32(bytes, kSil1NodesOff + 513u * 4u, static_cast<uint32_t>(INT32_MAX));
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutContent,
+	                    "SIL1 node[512]=INT32_MIN, node[513]=INT32_MAX (the F20/F22 strike's exact operand)");
+}
+
+// The gate cell, run through the REAL artifact/parser path end to end
+// (OpenFromMemory, THEN ParseSigmoidLut on the section it returns) so parser
+// safety and construction identity cannot drift apart (S-HARDEN-1's own gate
+// text). A correctly-hashed, structurally valid v2 artifact carrying the
+// F20/F22 hostile operand must load Ok at the OUTER layer (the outer loader
+// has no notion of SIL1's internal content) and then be rejected at the SIL1
+// sub-parse specifically — never reach SiluSigmoidQ15.
+static void TestArtifactRejectsHostileSigmoidLutContentThroughRealPath() {
+	using namespace superslm_test;
+	auto hostile_sil1 = MakeMinimalValidSil1();
+	PutU32(hostile_sil1, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
+	PutU32(hostile_sil1, kSil1NodesOff + 513u * 4u, static_cast<uint32_t>(INT32_MAX));
+	FixtureSection sigmoid_lut =
+	    MakeSection(SslmSectionType::SigmoidLut, SslmDtype::Int32, hostile_sil1, /*alignment=*/64);
+	auto built = BuildArtifact({MakeConfigSection(), sigmoid_lut});
+
+	SslmArtifact out;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok,
+	          "outer artifact structurally valid (hostile bytes are a content matter, not structure): got %s",
+	          SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	const SslmSectionView* section = out.Section(SslmSectionType::SigmoidLut);
+	CHECK(section != nullptr);
+	if (section == nullptr) return;
+
+	SslmSigmoidLut lut;
+	std::string perr;
+	SslmModelStatus pstatus = ParseSigmoidLut(*section, lut, &perr);
+	CHECK_MSG(pstatus == SslmModelStatus::BadSigmoidLutContent,
+	          "ParseSigmoidLut on a loaded hostile SIL1 section: got %s, want BadSigmoidLutContent",
+	          SslmModelStatusName(pstatus));
+	CHECK_MSG(lut.values == nullptr && lut.entry_count == 0,
+	          "hostile SIL1 not left at defaults on a rejected parse — a view MUST NOT be exposed");
+}
+
+// The F1 gate's own literal red cell, stated in S-HARDEN-1's plan text: "a
+// correctly-hashed config-only v2 artifact expecting a specific
+// missing-SigmoidLut diagnostic." Distinct from TestRejectsMissingConfigSection
+// (which is missing Config, not SigmoidLut) — this is the mirror case the
+// version-indexed schema exists to catch.
+static void TestArtifactRejectsConfigOnlyV2MissingSigmoidLut() {
+	auto built = BuildArtifact({MakeConfigSection()});  // Config only; no SigmoidLut
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::MissingSection, "got %s, want MissingSection", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::MissingSection);
+	CHECK(err.section_index == kNoSection);
+	CHECK_MSG(err.message.find("SigmoidLut") != std::string::npos,
+	          "diagnostic does not name SigmoidLut specifically: \"%s\"", err.message.c_str());
+	CHECK(!out.Ok());
+}
+
+// ---------------------------------------------------------------------------
 // dim 9 — version evolution / mutual rejection. Only the CURRENT (v2) loader
 // is compiled into this binary, so only one of the design's two named
 // directions is executable here: a new-version loader rejecting a
@@ -5345,6 +5446,13 @@ int main(int argc, char** argv) {
 	TestSil1RejectsUnsupportedVersion();
 	TestSil1RejectsBadEntryCount();
 	TestSil1RejectsBadReserved();
+
+	// --- S-HARDEN-1 (F20/F22): pinned canonical content (red-first). ---
+	TestSil1RejectsSingleNodeContentMismatch();
+	TestSil1RejectsHostileExtremeAdjacentNodes();
+	TestArtifactRejectsHostileSigmoidLutContentThroughRealPath();
+	TestArtifactRejectsConfigOnlyV2MissingSigmoidLut();
+
 	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
 	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
 	TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch();
