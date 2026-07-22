@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Generates tests/sslm_iexp_domain_fixtures.h -- Curie's S2.6-amendment red suite for
 IExpShift / IExpBase / IExpConstantsInDomain (D-SLM78/79/81; Claude/Loki/
-softmax-s2.6-strike-2026-07-21.md).
+softmax-s2.6-strike-2026-07-21.md), AND (from the `kIExpGuardOrderCases` table down)
+Curie's S-HARDEN-0 population suite for F9/F21 (SuperSLM_IndependentReview_Evaluation-
+2026-07-21.md), reproducing both findings' bodies plus enumerated members of their two
+classes -- the q_ln2 ceiling axis (F9) and the q_b lower-bound axis (F21) -- against the
+UNCHANGED public API that ships at commit f078403 (the S-HARDEN preamble's preserved
+reference state). This file serves two test-design records; see each section's own
+docstring for which.
 
 Every expected value is computed HERE, directly from the five-line decomposition
 IExpFromConstants documents in src/intmath.cpp / include/superslm/intmath.h --
@@ -33,7 +39,11 @@ recovered from either the extraction under test or its stub.
 
 Re-running this script must reproduce sslm_iexp_domain_fixtures.h byte-for-byte.
 
-Test-design record: Claude/Curie/superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md
+Test-design records:
+  S2.6-amendment section (kIExpAccessorCases / kIExpDomainCases):
+    Claude/Curie/superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md
+  S-HARDEN-0 section (kIExpGuardOrderCases):
+    Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md
 """
 
 from __future__ import annotations
@@ -457,6 +467,91 @@ for label, q, q_ln2, q_b, z, base, expected in accessor_cases:
     assert 0 <= z <= I_EXP_CLIP_N, f"{label}: z={z} outside documented [0, {I_EXP_CLIP_N}]"
 
 # ---------------------------------------------------------------------------
+# S-HARDEN-0 population: F9 (guard-order overflow, the q_ln2 ceiling axis) and F21
+# (the guard's own overflow, the q_b lower-bound axis) -- SuperSLM_Plan.md's S-HARDEN
+# preamble and S-HARDEN-0 sub-slot; SuperSLM_IndependentReview_Evaluation-2026-07-21.md
+# findings F9 and F21. Test-design record:
+# Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md.
+#
+# Every row is checked at f078403 through a crash-probe subprocess (test_main.cpp's
+# `RunCrashProbe`, probe name "iexp_guard_order:<fn>:<q>:<q_ln2>:<q_b>:<q_c>") rather
+# than an in-process call, because the whole point of a row is that -- TODAY, at
+# f078403, under the linux-x64-asan CI leg's sanitizer flags (RelWithDebInfo, i.e.
+# NDEBUG, plus -fsanitize=address,undefined -fno-sanitize-recover=all) -- calling it
+# directly aborts the ENTIRE test process with no chance to run anything after it. The
+# crash-probe isolates each row's call in its own child process so one crashing row
+# neither kills every row that would run after it nor is mistaken for a suite defect.
+#
+# `fn` is "eval" (IExpFromConstants, the evaluator F9's finding names -- it calls
+# IExpShift/IExpBase BEFORE the domain assert, so it overflows even where the guard
+# itself would not) or "pred" (IExpConstantsInDomain, the guard F21's finding names --
+# its OWN internal IExpBase call overflows on an unbounded q_b before the guard can
+# answer). Every row's `expected_in_domain` is computed by the SAME independent
+# oracle (`in_domain()` above) already used for kIExpDomainCases -- never by calling
+# either C++ primitive under test. The suite's fixed, unconditional claim for every
+# row, true both today and after the fix (no row is ever edited): the crash-probe
+# outcome is kRanNoCrash. For "pred" rows this additionally pins the exact boolean the
+# child printed; for "eval" rows this additionally pins the exact evaluated integer
+# ONLY when the row is in-domain (an out-of-domain IExpFromConstants call's numeric
+# return is not a claim this suite makes, post-fix or otherwise -- only its freedom
+# from undefined behavior is).
+#
+# Confirmed by direct execution at f078403 (Curie, 2026-07-21): a standalone driver
+# linking src/intmath.cpp, built with the exact linux-x64-asan flags
+# (-std=c++20 -O2 -g -DNDEBUG -fsanitize=address,undefined -fno-sanitize-recover=all),
+# reproduces every "must crash today" row's UBSan report and every "must not crash
+# today" row's clean return -- see the test-design record for the full transcript.
+# ---------------------------------------------------------------------------
+
+guard_order_cases: list[tuple] = []
+# (label, fn, q, q_ln2, q_b, q_c, expected_in_domain, eval_value_pinned, eval_expected_value)
+
+
+def add_guard_order(label: str, fn: str, q: int, q_ln2: int, q_b: int, q_c: int) -> None:
+    ok, shifted, _, _ = in_domain(q, q_ln2, q_b, q_c)
+    eval_pinned = (fn == "eval") and ok
+    eval_val = shifted if eval_pinned else 0
+    if eval_pinned:
+        assert INT64_MIN <= eval_val <= INT64_MAX
+    guard_order_cases.append((label, fn, q, q_ln2, q_b, q_c, ok, eval_pinned, eval_val))
+
+
+# --- F9's own witness and the q_ln2 ceiling axis (kIExpMaxQLn2 = INT64_MAX // 30),
+#     via the EVALUATOR (IExpFromConstants) -- F9's finding is specifically that the
+#     evaluator overflows regardless of what the guard would say, because it calls
+#     the accessors before ever consulting the guard. q_b=1, q_c=0 isolate the axis
+#     (same witness constants Poirot's 7b668b2/e6db8ea review already used for the
+#     ceiling boundary above). ---
+add_guard_order("f9_witness_ceiling_extreme_int64_max", "eval", 0, INT64_MAX, 1, 0)
+add_guard_order("f9_ceiling_boundary_last_safe", "eval", 0, kIExpMaxQLn2, 1, 0)
+add_guard_order("f9_ceiling_boundary_first_over", "eval", 0, kIExpMaxQLn2 + 1, 1, 0)
+add_guard_order("f9_ceiling_interior_over", "eval", 0, 2 * kIExpMaxQLn2, 1, 0)
+
+# --- F21's own witness and the q_b lower-bound axis, via the GUARD (IExpConstantsInDomain)
+#     -- F21's finding is specifically that the guard's own internal IExpBase call
+#     overflows, on an operand the header documents no lower bound for. q=-999,
+#     q_ln2=1000 (q near the far, most-negative end of its row, q_p=-999) widens the
+#     unsafe q_b window to 999 values (q_b <= INT64_MIN+998) so a genuine interior
+#     point exists distinct from both boundary ends -- at q=-1 (F21's own witness)
+#     the unsafe window is a single point (only q_b==INT64_MIN itself), which cannot
+#     hold an interior cell. Every boundary/interior value below is executed and
+#     confirmed against the real predicate at f078403 (see the record). ---
+add_guard_order("f21_witness_qb_int64_min", "pred", -1, 1000, INT64_MIN, 0)
+add_guard_order("f21_qb_boundary_last_safe", "pred", -999, 1000, INT64_MIN + 999, 0)
+add_guard_order("f21_qb_boundary_first_unsafe", "pred", -999, 1000, INT64_MIN + 998, 0)
+add_guard_order("f21_qb_interior_unsafe", "pred", -999, 1000, INT64_MIN + 500, 0)
+
+# --- The q_b axis reachable through the EVALUATOR too (the same IExpBase call that
+#     overflows inside the guard also executes, unguarded, inside IExpFromConstants --
+#     confirmed by execution, not assumed): the gate text ("no signed overflow ... at
+#     q_b = INT64_MIN") names the evaluator explicitly, so this is checked directly
+#     rather than inferred from the guard-side rows above. ---
+add_guard_order("f21_eval_witness_qb_int64_min", "eval", -1, 1000, INT64_MIN, 0)
+add_guard_order("f21_eval_qb_boundary_first_unsafe", "eval", -999, 1000, INT64_MIN + 998, 0)
+
+assert len(guard_order_cases) == 10
+
+# ---------------------------------------------------------------------------
 # Emit the C++ header.
 # ---------------------------------------------------------------------------
 
@@ -552,6 +647,37 @@ for label, q, q_ln2, q_b, q_c, ok in domain_cases:
     )
 emit("};")
 emit(f"inline constexpr size_t kIExpDomainCasesCount = {len(domain_cases)};")
+emit("")
+
+emit("// --- S-HARDEN-0 population: F9 (guard-order overflow) / F21 (guard's own")
+emit("//     overflow). Every row's expected_in_domain is computed by the SAME")
+emit("//     independent oracle as kIExpDomainCases above -- never by calling either")
+emit("//     C++ primitive under test. See gen_iexp_domain_fixtures.py's own comment")
+emit("//     immediately above this table's construction for the full discipline.")
+emit("//     Test-design record:")
+emit("//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md ---")
+emit("")
+emit("struct IExpGuardOrderCase {")
+emit("\tconst char* label;")
+emit("\tconst char* fn;  // \"eval\" (IExpFromConstants) or \"pred\" (IExpConstantsInDomain)")
+emit("\tint64_t q;")
+emit("\tint64_t q_ln2;")
+emit("\tint64_t q_b;")
+emit("\tint64_t q_c;")
+emit("\tbool expected_in_domain;")
+emit("\tbool eval_value_pinned;  // true only for in-domain \"eval\" rows")
+emit("\tint64_t eval_expected_value;  // valid only when eval_value_pinned")
+emit("};")
+emit("")
+emit("inline constexpr IExpGuardOrderCase kIExpGuardOrderCases[] = {")
+for label, fn, q, q_ln2, q_b, q_c, ok, eval_pinned, eval_val in guard_order_cases:
+    emit(
+        f"\t{{{cxx_str(label)}, {cxx_str(fn)}, {cxx_i64(q)}, {cxx_i64(q_ln2)}, "
+        f"{cxx_i64(q_b)}, {cxx_i64(q_c)}, {cxx_bool(ok)}, {cxx_bool(eval_pinned)}, "
+        f"{cxx_i64(eval_val)}}},"
+    )
+emit("};")
+emit(f"inline constexpr size_t kIExpGuardOrderCasesCount = {len(guard_order_cases)};")
 emit("")
 
 emit("}  // namespace superslm_test")

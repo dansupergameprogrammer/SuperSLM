@@ -154,6 +154,40 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 };
 inline constexpr size_t kIExpDomainCasesCount = 62;
 
+// --- S-HARDEN-0 population: F9 (guard-order overflow) / F21 (guard's own
+//     overflow). Every row's expected_in_domain is computed by the SAME
+//     independent oracle as kIExpDomainCases above -- never by calling either
+//     C++ primitive under test. See gen_iexp_domain_fixtures.py's own comment
+//     immediately above this table's construction for the full discipline.
+//     Test-design record:
+//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md ---
+
+struct IExpGuardOrderCase {
+	const char* label;
+	const char* fn;  // "eval" (IExpFromConstants) or "pred" (IExpConstantsInDomain)
+	int64_t q;
+	int64_t q_ln2;
+	int64_t q_b;
+	int64_t q_c;
+	bool expected_in_domain;
+	bool eval_value_pinned;  // true only for in-domain "eval" rows
+	int64_t eval_expected_value;  // valid only when eval_value_pinned
+};
+
+inline constexpr IExpGuardOrderCase kIExpGuardOrderCases[] = {
+	{"f9_witness_ceiling_extreme_int64_max", "eval", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
+	{"f9_ceiling_boundary_last_safe", "eval", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), true, true, INT64_C(1)},
+	{"f9_ceiling_boundary_first_over", "eval", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
+	{"f9_ceiling_interior_over", "eval", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
+	{"f21_witness_qb_int64_min", "pred", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, false, INT64_C(0)},
+	{"f21_qb_boundary_last_safe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774809), INT64_C(0), false, false, INT64_C(0)},
+	{"f21_qb_boundary_first_unsafe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, false, INT64_C(0)},
+	{"f21_qb_interior_unsafe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854775308), INT64_C(0), false, false, INT64_C(0)},
+	{"f21_eval_witness_qb_int64_min", "eval", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, false, INT64_C(0)},
+	{"f21_eval_qb_boundary_first_unsafe", "eval", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, false, INT64_C(0)},
+};
+inline constexpr size_t kIExpGuardOrderCasesCount = 10;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SSLM_IEXP_DOMAIN_FIXTURES_H
