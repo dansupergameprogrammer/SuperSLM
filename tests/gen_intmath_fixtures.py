@@ -9,7 +9,7 @@ sslm_intmath_fixtures.h byte-for-byte (Poirot's reproducibility check).
 Test-design records:
 Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md (C1/C2/C3, C19-C22)
 Claude/Curie/superslm-s2.2-nonlinear-test-design-2026-07-19.md (ISqrt/ISqrtTrace,
-ShiftByMax, IExpFromConstants)
+ShiftByMax, IExpConstruct/IExpEvaluate)
 Claude/Curie/superslm-s2.3-rope-test-design-2026-07-19.md (RopeApplyPair)
 """
 
@@ -434,7 +434,8 @@ assert max(_wide_spread) - min(_wide_spread) > (1 << 32) - 1, (
 add_shiftmax("wide_spread_exceeds_int32", _wide_spread)
 
 # --------------------------------------------------------------------------
-# S2.2 — IExpFromConstants (C7/C8). Constants are derived OFFLINE, in this
+# S2.2 — the i-exp core (C7/C8), reached via IExpConstruct/IExpEvaluate since
+# S-HARDEN-0. Constants are derived OFFLINE, in this
 # generator ONLY, by reproducing i_exp's internal (q_ln2, q_b, q_c)
 # derivation for a chosen float `scale` — the C++ under test consumes these
 # as opaque pre-derived integers and never performs this float division
@@ -997,7 +998,7 @@ emit("};")
 emit(f"inline constexpr size_t kShiftByMaxCasesCount = {len(shiftmax_cases)};")
 emit("")
 
-# --- S2.2: IExpFromConstants (C7/C8) ---
+# --- S2.2: the i-exp core (C7/C8) ---
 emit("// --- C7/C8: IExpFromConstants ------------------------------------------------------")
 emit("")
 emit(f"// Width probe: the widest intermediate constructed in this suite is")

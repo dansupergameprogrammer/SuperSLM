@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generates tests/sslm_iexp_domain_fixtures.h -- Curie's S2.6-amendment red suite for
-IExpShift / IExpBase / IExpConstantsInDomain (D-SLM78/79/81; Claude/Loki/
+IExpConstruct / IExpEvaluate / IExpConstantsInDomain (D-SLM78/79/81; Claude/Loki/
 softmax-s2.6-strike-2026-07-21.md), AND (from the `kIExpConstructCases` table down)
 Curie's S-HARDEN-0 population suite for the checked `IExpConstruct`/`IExpEvaluate` entry
 point (F9, F21, and Poirot's a1d7986 code-review Finding 1) -- against the FINAL API
@@ -67,7 +67,8 @@ def wrap_to_int64(v: int) -> int:
     kNotRepresentable construction (src/intmath.cpp: `SShrToI64`). Confirmed against the
     committed golden below (D-SLM78's strike input): wrap_to_int64(1733160715**2 +
     (2**63-1)) == -6219525972835464584, the exact pinned value
-    TestIExpFromConstantsAssertsOnOutOfDomainConstants asserts. The true 128-bit-wide
+    TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants asserts.
+    The true 128-bit-wide
     intermediate (base**2 + q_c, before the >> z narrowing) never exceeds roughly 2**93 for
     any int64 base/q_c/z this primitive can ever form (base**2 < 2**126 at worst, but the
     documented contract only reaches this function via IExpConstruct, whose base is itself
@@ -459,7 +460,7 @@ for label, q, q_ln2, q_b, q_c, expected in _existing_iexp_cases:
     add_domain(f"existing_fixture_{label}", q, q_ln2, q_b, q_c)
 
 # ---------------------------------------------------------------------------
-# IExpShift postcondition: z is always in [0, I_EXP_CLIP_N] over accessor_cases
+# IExpConstruct's z postcondition: always in [0, I_EXP_CLIP_N] over accessor_cases
 # -- checked here so the generator itself cannot silently emit an accessor
 # fixture that violates the documented postcondition.
 #
@@ -517,7 +518,7 @@ for label, q, q_ln2, q_b, z, base, expected in accessor_cases:
 # API lands, not invented at build time by whoever implements it.
 #
 # REVISED 2026-07-21 (Brunel, mid-build): the entry point returns a five-way
-# `IExpDomain` enum, not a bool -- `IExpFromConstantsAssertsOnOutOfDomainConstants`'s
+# `IExpDomain` enum, not a bool -- the wrapped-value cell's
 # existing, unedited golden pins a DEFINED (narrowed, "meaningless" but not UB)
 # wrapped value for one specific input, so the entry point must distinguish "the
 # decomposition is well-formed but the final result does not fit int64"
@@ -604,7 +605,7 @@ def add_construct(label: str, q: int, q_ln2: int, q_b: int, q_c: int) -> None:
 add_construct("badq_last_valid_q_zero", 0, 6, 13, 95)
 add_construct("badq_first_invalid_q_one", 1, 6, 13, 95)
 # Confirmed by execution at f078403 (test-design record): calling the UNCHANGED
-# IExpFromConstants(1000000, 6, 13, 95) today crashes with "shift exponent -166666 is
+# IExpFromConstants(1000000, 6, 13, 95) crashed THERE with "shift exponent -166666 is
 # negative" at src/intmath.cpp:50 -- a THIRD, currently-live UB class distinct from
 # F9/F21, found the same way F21 was (by exploring the domain object, not named in
 # either review finding), accepted by Brunel and filed to the planner's register as
@@ -732,9 +733,9 @@ def cxx_bool(v: bool) -> str:
 emit("// GENERATED FILE. Do not hand-edit.")
 emit("//")
 emit("// Produced by tests/gen_iexp_domain_fixtures.py: every expected value is computed")
-emit("// there from IExpFromConstants's documented five-line decomposition using Python")
-emit("// arbitrary-precision integers -- never by calling IExpShift/IExpBase/")
-emit("// IExpConstantsInDomain (which do not exist yet) and never by re-deriving the bound")
+emit("// there from the documented five-line i-exp decomposition using Python")
+emit("// arbitrary-precision integers -- never by calling IExpConstruct/IExpEvaluate/")
+emit("// IExpConstantsInDomain and never by re-deriving the bound")
 emit("// in fixed-width int64 arithmetic (that re-derivation reproduces the D-SLM81 defect:")
 emit("// base**2 alone overflows int64). Re-running the generator must reproduce this file")
 emit("// byte-for-byte.")
@@ -751,7 +752,7 @@ emit("")
 emit("namespace superslm_test {")
 emit("")
 
-emit("// --- IExpShift / IExpBase: independently-derived (z, base) pairs, keyed to the")
+emit("// --- IExpConstruct's (z, base): independently-derived pairs, keyed to the")
 emit("//     SAME (label, q, q_ln2, q_b, q_c) fixtures already shipped in")
 emit("//     sslm_intmath_fixtures.h's kIExpCases (this generator asserts its own")
 emit("//     recomposition, (base**2+q_c)>>z, equals that file's already-independent")

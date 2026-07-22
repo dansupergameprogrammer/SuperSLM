@@ -223,8 +223,15 @@ enum class IExpDomain : int {
 // Declared ahead of the class so the friend declaration below names THIS function rather than
 // introducing a new one that unqualified lookup would never find.
 class IExpConstruction;
-IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
-                         IExpConstruction* out);
+
+// `[[nodiscard]]` is load-bearing, not decoration. Without it the outcome can be dropped and
+// the untouched `*out` read anyway — which reproduces, one level up, the exact defect that
+// splitting this operation was meant to remove: a caller gets a plausible value (`0` from a
+// default construction, or the PREVIOUS call's values from a reused one) with no diagnostic at
+// `-Wall -Wextra`. The split moved the indistinguishability from a returned `int64_t` to a
+// discarded enum; this attribute is what actually closes it.
+[[nodiscard]] IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                                       IExpConstruction* out);
 
 // A validated decomposition: `z` is the number of ln2 steps the clip/divide yields, `base` is
 // `q_p + q_b`, and `q_c` is the constant the representability judgement was made against.
@@ -236,6 +243,14 @@ IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
 // the values arrive as parameters or as fields. Only `IExpConstruct` can populate one, so the two
 // reachable origins are a default-constructed `{0, 0, 0}` (safe: `z = 0` is a legal shift) and a
 // construction this header validated.
+//
+// **The exact reach of that claim, stated narrowly on purpose.** It covers every route the
+// language offers through the type system — aggregate initialisation, direct field assignment,
+// derived types, copy and assignment, value-initialisation. It does **not** cover deliberate
+// object-representation punning: `std::bit_cast` or `memcpy` over these three `int64_t`s can
+// fabricate any `z`, and `IExpEvaluate` would then shift by it. That is out of contract and is
+// not defended against, because nothing at this layer can defend against it. The claim is
+// "cannot be written by accident", never "cannot be forged".
 //
 // **`q_c` is carried rather than passed to the evaluator, and that is not tidiness.** A separate
 // `q_c` argument on `IExpEvaluate` would let a caller validate against one constant and evaluate
@@ -309,8 +324,11 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // preconditions, and it executes no undefined behaviour on any `int64_t` input. It
 // previously asserted `q <= 0 && q_ln2 >= 1` and formed `q_p + q_b` unguarded, which made
 // the guard undefined on `q_b = INT64_MIN` — the input class it exists to screen. Its
-// answer is unchanged on every input for which the old predicate was defined; use
-// `IExpConstruct` directly when the reason for a rejection matters.
+// **Its answer is unchanged INSIDE the contract, and changed on two strips outside it** —
+// `0 < q < q_ln2` and `q_ln2 <= -1`, where the old predicate answered `true` without executing
+// undefined behaviour and this one answers `false`. Those are the same two strips §157 records;
+// stating "unchanged wherever the old predicate was defined" here would contradict that, and did.
+// Use `IExpConstruct` directly when the reason for a rejection matters.
 //
 // **Cost note (D-SLM83) — read the condition, it is load-bearing.** `base = q_p + q_b`
 // varies with `q` even at a fixed `z`, so this predicate is **not** `q`-invariant in
@@ -330,7 +348,7 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // false all-clear: at `q_ln2 = 3e9, q_b = 1.8e9, q_c = 7783372039254775806` the element at
 // `q_p = −(q_ln2 − 1)` answers `true` while `q_p = 0` answers `false`, and `q_p = 0` is the
 // one that makes the parent return a wrapped negative under `NDEBUG`.
-bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
+[[nodiscard]] bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
 //

@@ -1,9 +1,9 @@
 // GENERATED FILE. Do not hand-edit.
 //
 // Produced by tests/gen_iexp_domain_fixtures.py: every expected value is computed
-// there from IExpFromConstants's documented five-line decomposition using Python
-// arbitrary-precision integers -- never by calling IExpShift/IExpBase/
-// IExpConstantsInDomain (which do not exist yet) and never by re-deriving the bound
+// there from the documented five-line i-exp decomposition using Python
+// arbitrary-precision integers -- never by calling IExpConstruct/IExpEvaluate/
+// IExpConstantsInDomain and never by re-deriving the bound
 // in fixed-width int64 arithmetic (that re-derivation reproduces the D-SLM81 defect:
 // base**2 alone overflows int64). Re-running the generator must reproduce this file
 // byte-for-byte.
@@ -19,7 +19,7 @@
 
 namespace superslm_test {
 
-// --- IExpShift / IExpBase: independently-derived (z, base) pairs, keyed to the
+// --- IExpConstruct's (z, base): independently-derived pairs, keyed to the
 //     SAME (label, q, q_ln2, q_b, q_c) fixtures already shipped in
 //     sslm_intmath_fixtures.h's kIExpCases (this generator asserts its own
 //     recomposition, (base**2+q_c)>>z, equals that file's already-independent
