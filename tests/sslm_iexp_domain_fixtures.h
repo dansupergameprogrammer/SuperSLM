@@ -154,56 +154,27 @@ inline constexpr IExpDomainCase kIExpDomainCases[] = {
 };
 inline constexpr size_t kIExpDomainCasesCount = 62;
 
-// --- S-HARDEN-0 population: F9 (guard-order overflow) / F21 (guard's own
-//     overflow). Every row's expected_in_domain is computed by the SAME
-//     independent oracle as kIExpDomainCases above -- never by calling either
-//     C++ primitive under test. See gen_iexp_domain_fixtures.py's own comment
-//     immediately above this table's construction for the full discipline.
-//     Test-design record:
-//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md ---
-
-struct IExpGuardOrderCase {
-	const char* label;
-	const char* fn;  // "eval" (IExpFromConstants) or "pred" (IExpConstantsInDomain)
-	int64_t q;
-	int64_t q_ln2;
-	int64_t q_b;
-	int64_t q_c;
-	bool expected_in_domain;
-	bool eval_value_pinned;  // true only for in-domain "eval" rows
-	int64_t eval_expected_value;  // valid only when eval_value_pinned
-};
-
-inline constexpr IExpGuardOrderCase kIExpGuardOrderCases[] = {
-	{"f9_witness_ceiling_extreme_int64_max", "eval", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
-	{"f9_ceiling_boundary_last_safe", "eval", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), true, true, INT64_C(1)},
-	{"f9_ceiling_boundary_first_over", "eval", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
-	{"f9_ceiling_interior_over", "eval", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), false, false, INT64_C(0)},
-	{"f21_witness_qb_int64_min", "pred", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, false, INT64_C(0)},
-	{"f21_qb_boundary_last_safe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774809), INT64_C(0), false, false, INT64_C(0)},
-	{"f21_qb_boundary_first_unsafe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, false, INT64_C(0)},
-	{"f21_qb_interior_unsafe", "pred", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854775308), INT64_C(0), false, false, INT64_C(0)},
-	{"f21_eval_witness_qb_int64_min", "eval", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, false, INT64_C(0)},
-	{"f21_eval_qb_boundary_first_unsafe", "eval", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, false, INT64_C(0)},
-};
-inline constexpr size_t kIExpGuardOrderCasesCount = 10;
-
-// --- S-HARDEN-0 LAYER B: kIExpConstructCases, for the NEW `IExpConstruct` entry
-//     point (does not exist at f078403 -- this table and the test cells that
-//     consume it do NOT compile until Brunel builds it; see
-//     gen_iexp_domain_fixtures.py's own comment above this table's construction,
-//     and the test-design record,
-//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md, for why this
-//     is the correct state today.
+// --- S-HARDEN-0 LAYER B: kIExpConstructCases, for the checked `IExpConstruct` /
+//     `IExpEvaluate` entry point (final API, S-HARDEN-0). expected_domain is one
+//     of "kOk", "kNotRepresentable", "kBadQ", "kBadQLn2", "kBadQB" -- a
+//     string, not superslm::IExpDomain directly, so this header stays free of a
+//     compile-time dependency on that enum's exact values; the consuming test maps
+//     IExpDomain to its name and string-compares.
 //
-//     expected_domain is one of "kOk", "kNotRepresentable", "kBadQ",
-//     "kBadQLn2", "kBadQB" -- a string, not superslm::IExpDomain directly, so
-//     this header stays free of a compile-time dependency on that enum's exact
-//     values; the consuming test maps IExpDomain to its name and string-compares.
-//     expected_z/expected_base are valid (IExpConstruction is filled) whenever
-//     expected_domain is "kOk" or "kNotRepresentable" -- the decomposition is
-//     well-formed for both; they are 0 placeholders, never asserted, for the
-//     three kBad* rows, where *out is contractually left untouched. ---
+//     expected_z/expected_base/expected_value are valid (IExpConstruction is
+//     filled, and IExpEvaluate on it is asserted) whenever expected_domain is
+//     "kOk" or "kNotRepresentable" -- the decomposition is well-formed for both,
+//     and IExpEvaluate is TOTAL over both per the final API. expected_value is the
+//     exact wrapped int64 IExpEvaluate must return -- see gen_iexp_domain_fixtures
+//     .py's wrap_to_int64() docstring for how a kNotRepresentable row's value is
+//     derived. All three fields are 0 placeholders, never asserted, for the three
+//     kBad* rows, where *out is contractually left untouched (checked against a
+//     priming construction, not against these placeholders).
+//
+//     Includes the ported S-HARDEN-0 population cells (retired kIExpGuardOrderCases
+//     -- see this generator's own comment at the retirement site) and Poirot's
+//     a1d7986 code-review Finding 1 strips (stripa_*/stripb_*). Test-design record:
+//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md ---
 
 struct IExpConstructCase {
 	const char* label;
@@ -214,26 +185,35 @@ struct IExpConstructCase {
 	const char* expected_domain;
 	int64_t expected_z;
 	int64_t expected_base;
+	int64_t expected_value;  // IExpEvaluate(...); valid for kOk/kNotRepresentable only
 };
 
 inline constexpr IExpConstructCase kIExpConstructCases[] = {
-	{"badq_last_valid_q_zero", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), "kOk", INT64_C(0), INT64_C(13)},
-	{"badq_first_invalid_q_one", INT64_C(1), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0)},
-	{"badq_interior_invalid_large_positive_q", INT64_C(1000000), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0)},
-	{"badqln2_last_valid_qln2_one", INT64_C(0), INT64_C(1), INT64_C(5), INT64_C(10), "kOk", INT64_C(0), INT64_C(5)},
-	{"badqln2_first_invalid_qln2_zero", INT64_C(0), INT64_C(0), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0)},
-	{"badqln2_interior_invalid_qln2_negative", INT64_C(0), INT64_C(-1000), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0)},
-	{"badqln2_last_valid_ceiling", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), "kOk", INT64_C(0), INT64_C(1)},
-	{"badqln2_first_invalid_ceiling", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
-	{"badqln2_interior_invalid_ceiling", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
-	{"badqln2_f9_witness_int64_max", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
-	{"badqb_f21_witness_qb_int64_min", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0)},
-	{"badqb_boundary_first_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0)},
-	{"notrepresentable_strike_witness", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(9223372036854775807), "kNotRepresentable", INT64_C(0), INT64_C(1733160715)},
-	{"notrepresentable_boundary_last_ok", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464582), "kOk", INT64_C(0), INT64_C(1733160715)},
-	{"notrepresentable_boundary_first_not_representable", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464583), "kNotRepresentable", INT64_C(0), INT64_C(1733160715)},
+	{"badq_last_valid_q_zero", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), "kOk", INT64_C(0), INT64_C(13), INT64_C(264)},
+	{"badq_first_invalid_q_one", INT64_C(1), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badq_interior_invalid_large_positive_q", INT64_C(1000000), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqln2_last_valid_qln2_one", INT64_C(0), INT64_C(1), INT64_C(5), INT64_C(10), "kOk", INT64_C(0), INT64_C(5), INT64_C(35)},
+	{"badqln2_first_invalid_qln2_zero", INT64_C(0), INT64_C(0), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqln2_interior_invalid_qln2_negative", INT64_C(0), INT64_C(-1000), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqln2_last_valid_ceiling", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), "kOk", INT64_C(0), INT64_C(1), INT64_C(1)},
+	{"badqln2_first_invalid_ceiling", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqln2_interior_invalid_ceiling", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqln2_f9_witness_int64_max", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqb_f21_witness_qb_int64_min", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqb_boundary_first_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqb_interior_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854775308), INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badqb_representable_boundary_square_not_representable", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774809), INT64_C(0), "kNotRepresentable", INT64_C(0), INT64_MIN, INT64_C(0)},
+	{"notrepresentable_strike_witness", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(9223372036854775807), "kNotRepresentable", INT64_C(0), INT64_C(1733160715), INT64_C(-6219525972835464584)},
+	{"notrepresentable_boundary_last_ok", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464582), "kOk", INT64_C(0), INT64_C(1733160715), INT64_C(9223372036854775807)},
+	{"notrepresentable_boundary_first_not_representable", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464583), "kNotRepresentable", INT64_C(0), INT64_C(1733160715), INT64_MIN},
+	{"stripa_review_smallest_witness", INT64_C(1), INT64_C(1000), INT64_C(0), INT64_C(0), "kBadQ", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"stripa_boundary_q_just_below_qln2", INT64_C(999), INT64_C(1000), INT64_C(0), INT64_C(0), "kBadQ", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"stripa_interior", INT64_C(500), INT64_C(1000), INT64_C(0), INT64_C(0), "kBadQ", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"stripb_boundary_qln2_neg_one", INT64_C(0), INT64_C(-1), INT64_C(0), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"stripb_boundary_qln2_most_negative", INT64_C(0), INT64_C(-307445734561825860), INT64_C(0), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"stripb_interior", INT64_C(0), INT64_C(-153722867280912930), INT64_C(0), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0), INT64_C(0)},
 };
-inline constexpr size_t kIExpConstructCasesCount = 15;
+inline constexpr size_t kIExpConstructCasesCount = 23;
 
 }  // namespace superslm_test
 

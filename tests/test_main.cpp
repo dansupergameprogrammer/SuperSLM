@@ -39,6 +39,7 @@
 #include <fstream>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #ifdef _WIN32
@@ -2591,19 +2592,38 @@ static void TestShiftByMax() {
 	}
 }
 
-static void TestIExpFromConstants() {
+// PORTED (this session, S-HARDEN-0 final API): IExpFromConstants is REMOVED --
+// evaluation is now construct-then-evaluate. Every one of these 36 goldens is
+// documented in-domain (each already produced a value that fits int64_t, by
+// construction of gen_intmath_fixtures.py's own width-probe search), so
+// IExpConstruct is asserted to return kOk before IExpEvaluate is ever called;
+// the expected numeric value is UNCHANGED from the original suite (per the
+// commission: if any of these 36 values had moved, that would be a real
+// regression, not a port detail -- none did, confirmed by this port compiling
+// and passing against the unedited kIExpCases table).
+static void TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpCasesCount; ++i) {
 		const IExpCase& c = kIExpCases[i];
-		int64_t got = superslm::IExpFromConstants(c.q, c.q_ln2, c.q_b, c.q_c);
-		CHECK_MSG(got == c.expected, "%s: IExpFromConstants(q=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) == %lld, want %lld",
+		superslm::IExpConstruction out;
+		superslm::IExpDomain d = superslm::IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
+		CHECK_MSG(d == superslm::IExpDomain::kOk,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) returned domain %d, want kOk "
+		          "-- every kIExpCases golden is documented in-domain",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), static_cast<int>(d));
+		if (d != superslm::IExpDomain::kOk) continue;
+		int64_t got = superslm::IExpEvaluate(out);
+		CHECK_MSG(got == c.expected,
+		          "%s: IExpEvaluate(IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld)) == %lld, want %lld",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), static_cast<long long>(got),
 		          static_cast<long long>(c.expected));
 	}
 }
 
-static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
+// PORTED (this session): construct-then-evaluate, same claim.
+static void TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily() {
 	// C8's clip claim, checked live across every "realistic_s*"/"qln2_min"
 	// family in the fixture set: the clip-boundary input and the beyond-clip
 	// input for the SAME (q_ln2, q_b, q_c) triple must produce the SAME
@@ -2621,8 +2641,16 @@ static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
 		                     clip.q_ln2 == beyond.q_ln2 && clip.q_b == beyond.q_b && clip.q_c == beyond.q_c;
 		if (!is_clip_pair) continue;
 		++pairs_checked;
-		int64_t got_clip = superslm::IExpFromConstants(clip.q, clip.q_ln2, clip.q_b, clip.q_c);
-		int64_t got_beyond = superslm::IExpFromConstants(beyond.q, beyond.q_ln2, beyond.q_b, beyond.q_c);
+		superslm::IExpConstruction clip_out, beyond_out;
+		superslm::IExpDomain clip_d = superslm::IExpConstruct(clip.q, clip.q_ln2, clip.q_b, clip.q_c, &clip_out);
+		superslm::IExpDomain beyond_d =
+		    superslm::IExpConstruct(beyond.q, beyond.q_ln2, beyond.q_b, beyond.q_c, &beyond_out);
+		CHECK_MSG(clip_d == superslm::IExpDomain::kOk && beyond_d == superslm::IExpDomain::kOk,
+		          "%s/%s: both are documented in-domain fixtures; IExpConstruct returned %d/%d, want kOk/kOk",
+		          clip.label, beyond.label, static_cast<int>(clip_d), static_cast<int>(beyond_d));
+		if (clip_d != superslm::IExpDomain::kOk || beyond_d != superslm::IExpDomain::kOk) continue;
+		int64_t got_clip = superslm::IExpEvaluate(clip_out);
+		int64_t got_beyond = superslm::IExpEvaluate(beyond_out);
 		CHECK_MSG(got_clip == got_beyond,
 		          "%s/%s: clip-boundary result %lld != beyond-clip result %lld for the same constants",
 		          clip.label, beyond.label, static_cast<long long>(got_clip), static_cast<long long>(got_beyond));
@@ -2789,10 +2817,12 @@ static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
 	}
 }
 
-// D-SLM79 part 2's internal domain assert on IExpFromConstants is exercised by
-// TestIExpFromConstantsAssertsOnOutOfDomainConstants, defined further below in
-// this file (S2.5's crash-probe section) once RunsCrashProbeAndCrashes /
-// RunCrashProbe exist to isolate the abort()-capable call in a child process.
+// D-SLM79 part 2's internal domain assert on IExpFromConstants no longer has a
+// subject under the final API (IExpFromConstants is removed; IExpConstruct/
+// IExpEvaluate assert nothing, in any build configuration). The wrapped-value
+// golden it used to pin survives as
+// TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants,
+// defined further below -- see that function's own comment for the full account.
 
 // ---------------------------------------------------------------------------
 // Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
@@ -3662,7 +3692,8 @@ static std::string GSelfPath;  // argv[0], captured in main() for the death-test
 // --- S12 dim 5 / the design's debug-assert-fire smoke check: a caller-contract
 //     violation (in_channels == 0 -- below the architectural floor of 1, design S12
 //     dim 4) must abort a debug build (the caller-ensures convention MaxAbsReduce/
-//     IExpFromConstants already use). assert()'s abort() would take down this
+//     ShiftByMax already use -- i-exp moved from caller-ensures to checked at
+//     S-HARDEN-0, so it is no longer this convention's example). assert()'s abort() would take down this
 //     ENTIRE process -- and every check after it -- if the violating call ran
 //     in-process, so it runs in an isolated child process instead; the parent only
 //     observes whether the child terminated abnormally. This is new infrastructure:
@@ -3842,17 +3873,16 @@ static CrashProbeOutcome RunsCrashProbeAndCrashes(const char* probe_name, std::s
 // is not a recognized probe -- this must read as "the probe did not run" to
 // every caller, never as "the probe ran and did not crash".
 static int RunCrashProbe(const std::string& name) {
-	if (name == "iexp_out_of_domain_constants") {
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe iexp_out_of_domain_constants: calling IExpFromConstants with the "
-		            "strike's exact out-of-domain constants (Claude/Loki/"
-		            "softmax-s2.6-strike-2026-07-21.md)\n");
-		std::fflush(stdout);
-		int64_t got = IExpFromConstants(INT64_C(0), INT64_C(887904998), INT64_C(1733160715),
-		                                 INT64_C(9223372036854775807));
-		std::printf("RETURNED %lld\n", static_cast<long long>(got));
-		return 0;
-	}
+	// RETIRED 2026-07-22 (S-HARDEN-0 final API): the "iexp_out_of_domain_constants" and
+	// "iexp_guard_order:<fn>:..." probes that used to live here called IExpFromConstants
+	// directly with contract-violating raw (q, q_ln2, q_b, q_c) -- a call this API no
+	// longer allows anyone to write. IExpFromConstants is removed; the only entry point
+	// that takes raw constants is IExpConstruct, and it is TOTAL and asserts nothing, in
+	// every build configuration, so there is no longer a contract-violating call to
+	// isolate in a crash-probe child at all. See
+	// TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants and the
+	// comment at the retired TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle
+	// call site below for the full account and where each witness value now lives.
 	if (name == "matmul_zero_in_channels") {
 		int8_t act[1] = {0};
 		int8_t wgt[1] = {0};
@@ -3864,63 +3894,6 @@ static int RunCrashProbe(const std::string& name) {
 		GemmInt8AccumulateRow(act, wgt, /*in_channels=*/0, /*out_channels=*/1, out_acc);
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
-	}
-	// S-HARDEN-0 population (F9/F21, SuperSLM_IndependentReview_Evaluation-2026-07-21.md;
-	// Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). Probe name shape:
-	// "iexp_guard_order:<fn>:<q>:<q_ln2>:<q_b>:<q_c>", <fn> in {"eval","pred"} --
-	// parameterized rather than one hand-written branch per case, because
-	// kIExpGuardOrderCases (tests/sslm_iexp_domain_fixtures.h, generated by
-	// tests/gen_iexp_domain_fixtures.py) is the single source of the argument tuples;
-	// duplicating them into literal probe bodies here would let the two drift.
-	{
-		static const char* kPrefix = "iexp_guard_order:";
-		if (name.rfind(kPrefix, 0) == 0) {
-			std::string rest = name.substr(std::strlen(kPrefix));
-			// Exactly 5 ':'-delimited fields: fn, q, q_ln2, q_b, q_c.
-			std::string fields[5];
-			size_t start = 0;
-			int field = 0;
-			bool malformed = false;
-			for (int i = 0; i < 4; ++i) {
-				size_t colon = rest.find(':', start);
-				if (colon == std::string::npos) {
-					malformed = true;
-					break;
-				}
-				fields[field++] = rest.substr(start, colon - start);
-				start = colon + 1;
-			}
-			if (!malformed) fields[field++] = rest.substr(start);
-			if (malformed || field != 5) {
-				std::printf("PROBE DID NOT CRASH (malformed iexp_guard_order probe name: %s)\n",
-				            name.c_str());
-				return 2;
-			}
-			const std::string& fn = fields[0];
-			int64_t q = std::strtoll(fields[1].c_str(), nullptr, 10);
-			int64_t q_ln2 = std::strtoll(fields[2].c_str(), nullptr, 10);
-			int64_t q_b = std::strtoll(fields[3].c_str(), nullptr, 10);
-			int64_t q_c = std::strtoll(fields[4].c_str(), nullptr, 10);
-			if (fn != "eval" && fn != "pred") {
-				std::printf("PROBE DID NOT CRASH (unrecognized fn in iexp_guard_order probe: %s)\n",
-				            name.c_str());
-				return 2;
-			}
-			std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-			std::printf("crash-probe iexp_guard_order: calling %s(%lld, %lld, %lld, %lld)\n",
-			            fn == "eval" ? "IExpFromConstants" : "IExpConstantsInDomain",
-			            static_cast<long long>(q), static_cast<long long>(q_ln2),
-			            static_cast<long long>(q_b), static_cast<long long>(q_c));
-			std::fflush(stdout);
-			if (fn == "eval") {
-				int64_t got = IExpFromConstants(q, q_ln2, q_b, q_c);
-				std::printf("RETURNED %lld\n", static_cast<long long>(got));
-			} else {
-				bool got = IExpConstantsInDomain(q, q_ln2, q_b, q_c);
-				std::printf("RETURNED %s\n", got ? "true" : "false");
-			}
-			return 0;
-		}
 	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
@@ -3963,184 +3936,158 @@ static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() 
 #endif
 }
 
-// --- D-SLM79 part 2's internal domain assert on IExpFromConstants (S2.6-amendment
-//     red suite; Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
-//     superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). Isolated in a
-//     child process via the same crash-probe infrastructure as the matmul cell
-//     above -- a contract-violating call whose assert may abort() would take down
-//     this entire process, and every check after it, if run in-process. ---
-
-static void TestIExpFromConstantsAssertsOnOutOfDomainConstants() {
-	static const char* kProbeName = "iexp_out_of_domain_constants";
-	std::string tail;
-	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
-#ifdef NDEBUG
-	// assert() is compiled out under NDEBUG. D-SLM80: the extraction is
-	// behaviour-preserving by construction, so under NDEBUG the primitive must
-	// still return the SAME wrapped value the strike observed -- proving the
-	// amendment does not silently change release-mode output, only adds a
-	// debug-only guard plus the caller-facing predicate (IExpConstantsInDomain)
-	// that lets a caller avoid this input in the first place.
-	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
-	          "IExpFromConstants(strike's out-of-domain constants) under NDEBUG: assert is "
-	          "compiled out, so the child must complete without abnormal termination -- "
-	          "outcome was %s, child output was: %s",
-	          CrashProbeOutcomeName(outcome), tail.c_str());
-	CHECK_MSG(tail.find("RETURNED -6219525972835464584") != std::string::npos,
-	          "IExpFromConstants(strike's out-of-domain constants) under NDEBUG must still return "
-	          "the exact wrapped value the strike observed (-6219525972835464584, "
-	          "Claude/Loki/softmax-s2.6-strike-2026-07-21.md) -- child output was: %s",
-	          tail.c_str());
-#else
-	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
-	          "IExpFromConstants(strike's out-of-domain constants) must abort a debug build "
-	          "(D-SLM79 part 2's internal domain assert) -- outcome was %s, child output was: %s",
-	          CrashProbeOutcomeName(outcome), tail.c_str());
-#endif
+// REWORKED 2026-07-22 (S-HARDEN-0 final API port). This cell used to pin TWO things
+// under the old two-function API: a debug-build abort (IExpFromConstants's internal
+// "asserts success" contract), and the exact NDEBUG wrapped value
+// (-6219525972835464584) for IExpFromConstants(0, 887904998, 1733160715, INT64_MAX).
+//
+// Under the final API there is no contract-violating call left to abort on.
+// IExpConstruct(0, 887904998, 1733160715, INT64_MAX, &out) does not violate any
+// contract -- q<=0 and 1<=q_ln2<=ceiling both hold, and q_p+q_b is representable --
+// it returns kNotRepresentable, a documented, non-erroneous outcome that FILLS *out,
+// and IExpEvaluate(out) is TOTAL on that construction in EVERY build configuration
+// (no assert anywhere in IExpConstruct or IExpEvaluate -- confirmed by reading both
+// bodies in src/intmath.cpp, S-HARDEN-0). There is no debug-vs-release split left to
+// assert, because there is no code path in this call that ever asserts, in any
+// configuration. The assert half of this cell's original claim therefore has no
+// surviving subject, and is not silently dropped -- it is named here as retired,
+// with the reason, per this project's "a gap is a finding, not a silent omission"
+// discipline.
+//
+// The wrapped-value golden MUST survive, and does: this is exactly
+// kIExpConstructCases' "notrepresentable_strike_witness" row (D-SLM78's original
+// strike input), so this cell is also a standalone, individually diagnosable
+// regression check for that one row, checked directly rather than by scanning a
+// table (the same rationale TestIExpConstantsInDomainRejectsStrikeExactInput already
+// uses for the predicate side of the same input).
+static void TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants() {
+	superslm::IExpConstruction out;
+	superslm::IExpDomain d = superslm::IExpConstruct(INT64_C(0), INT64_C(887904998), INT64_C(1733160715),
+	                                                  INT64_C(9223372036854775807), &out);
+	CHECK_MSG(d == superslm::IExpDomain::kNotRepresentable,
+	          "IExpConstruct(0, 887904998, 1733160715, 2^63-1) returned domain %d, want "
+	          "kNotRepresentable -- this is the strike's exact contract-legal input for which the "
+	          "decomposition is well-formed but base^2+q_c does not fit int64 "
+	          "(Claude/Loki/softmax-s2.6-strike-2026-07-21.md)",
+	          static_cast<int>(d));
+	if (d != superslm::IExpDomain::kNotRepresentable) return;
+	CHECK_MSG(out.z() == 0 && out.base() == INT64_C(1733160715) && out.q_c() == INT64_C(9223372036854775807),
+	          "IExpConstruct(...) is kNotRepresentable and must FILL *out with the well-formed "
+	          "decomposition -- got z=%lld base=%lld q_c=%lld, want z=0 base=1733160715 q_c=%lld",
+	          static_cast<long long>(out.z()), static_cast<long long>(out.base()),
+	          static_cast<long long>(out.q_c()), static_cast<long long>(INT64_C(9223372036854775807)));
+	int64_t got = superslm::IExpEvaluate(out);
+	CHECK_MSG(got == INT64_C(-6219525972835464584),
+	          "IExpEvaluate(construction from the strike's out-of-domain constants) == %lld, want "
+	          "-6219525972835464584 (the exact wrapped value the strike observed, "
+	          "Claude/Loki/softmax-s2.6-strike-2026-07-21.md, D-SLM80 behaviour-preservation) -- this "
+	          "value must be identical in EVERY build configuration: IExpEvaluate has no assert and "
+	          "no NDEBUG split, unlike the retired IExpFromConstants this cell used to pin",
+	          static_cast<long long>(got));
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S-HARDEN-0 population suite (LAYER A): F9 (IExpFromConstants overflows
-// before ever consulting its own guard, at src/intmath.cpp:351) and F21
-// (IExpConstantsInDomain's own IExpBase call overflows on an unbounded q_b, at
-// src/intmath.cpp:373) -- SuperSLM_IndependentReview_Evaluation-2026-07-21.md;
-// SuperSLM_Plan.md's S-HARDEN preamble and S-HARDEN-0 sub-slot; Claude/Curie/
-// superslm-s-harden-0-test-design-2026-07-21.md.
+// RETIRED 2026-07-22 (S-HARDEN-0 final API port). Curie's S-HARDEN-0 population
+// suite, LAYER A, used to live here: a crash-probe population over the OLD
+// two-function API (IExpFromConstants / IExpConstantsInDomain), distinguishing an
+// "eval" call path (F9's finding: the evaluator consults its accessors, which
+// overflow, before ever asserting the domain) from a "pred" call path (F21's
+// finding: the guard's own internal accessor call overflows on an unbounded q_b
+// before the guard can answer). Both required child-process isolation because,
+// at f078403 and through this branch's a1d7986 revision, the un-fixed call really
+// could crash the ENTIRE test process.
 //
-// Every row calls the EXISTING, UNCHANGED public API (IExpFromConstants /
-// IExpConstantsInDomain) -- this is the population the S-HARDEN preamble's
-// governing law requires: shown red against f078403 (the preserved reference
-// state) BEFORE any fix lands. Confirmed by direct execution at f078403 (a
-// standalone driver linking src/intmath.cpp, built with the linux-x64-asan CI
-// leg's exact flags): every row below whose call overflows at f078403 aborts
-// under -fsanitize=undefined -fno-sanitize-recover=all with the UBSan report
-// this record's fixture-generation comment names; every row whose call does not
-// overflow returns cleanly and the return value is confirmed to match the
-// independently-computed oracle. See the test-design record for the full
-// transcript.
+// The final API collapses the distinction this population existed to test.
+// IExpFromConstants is removed; the only function that takes raw (q, q_ln2, q_b,
+// q_c) is IExpConstruct, and it is TOTAL -- asserts nothing, executes no UB, in
+// every build configuration (read: both IExpConstruct's and IExpEvaluate's bodies
+// in src/intmath.cpp, S-HARDEN-0; confirmed further by Poirot's a1d7986 review,
+// 5,684,354 executed quadruples under UBSan, 0 diagnostics). There is no longer a
+// second call path for "eval" to name, and no longer a crash to isolate a child
+// process against -- an evaluation is now only ever reachable through a
+// construction IExpConstruct itself validated (or the safe default {0,0,0}), which
+// TestIExpConstructionDefaultIsSafeToEvaluate and the two IExpEvaluate-totality
+// static_asserts below prove structurally rather than by population.
 //
-// Each row's assertion is the SAME sentence for every row, unedited by the
-// eventual fix: the call must never execute undefined behavior (the crash-probe
-// outcome must be kRanNoCrash), and where it does not crash, its observable
-// result (IExpConstantsInDomain's boolean; IExpFromConstants's exact value, but
-// ONLY when the row is in-domain -- an out-of-domain evaluator call's numeric
-// return is not a claim this suite makes) matches the independent oracle. A row
-// that overflows today satisfies neither half of "kRanNoCrash and matches" --
-// today it is a crash, not a wrong answer -- and after S-HARDEN-0 lands it must
-// satisfy both, with this cell's source text unchanged. This is precisely the
-// "death test that aborts only after the overflow is not a valid guard test"
-// prohibition the sub-slot's gate states: nothing here treats an abort as the
-// expected outcome for any row, at any point before or after the fix.
+// No witness value is dropped. Every input this population's ten rows drove is a
+// row of kIExpConstructCases (tests/sslm_iexp_domain_fixtures.h) now: F9's four
+// ceiling witnesses are badqln2_last_valid_ceiling / badqln2_first_invalid_ceiling
+// / badqln2_interior_invalid_ceiling / badqln2_f9_witness_int64_max; F21's four
+// q_b witnesses are badqb_f21_witness_qb_int64_min / badqb_boundary_first_unsafe /
+// badqb_interior_unsafe / badqb_representable_boundary_square_not_representable
+// (the last one carries a corrected label: it IS the old "boundary_last_safe"
+// witness, exact same (q, q_ln2, q_b) -- accurate about q_p+q_b being
+// representable, but the old label implied overall domain membership, which this
+// input does not have once base=INT64_MIN is squared; see that row's own comment
+// in gen_iexp_domain_fixtures.py). The two "_eval_" duplicates named no witness
+// value the "pred" rows above did not already carry, so nothing beyond those eight
+// is owed. TestIExpConstructMatchesIndependentOracleAcrossCases (below) sweeps all
+// of kIExpConstructCases, including these rows, in-process, under whichever
+// sanitizer configuration the suite is built with -- the same population, proven
+// the same way execution always proved it, without a probe.
 // ---------------------------------------------------------------------------
 
-// FIXED 2026-07-21 (this session, against Brunel's landed implementation, `5d8b006`):
-// this function originally asserted kRanNoCrash unconditionally, in every build
-// configuration. Running the real suite in a plain (non-NDEBUG, non-sanitized) debug
-// build -- CI's `linux-x64-debug` leg -- surfaced 5 failures: every "eval" row whose
-// constants are out of domain aborts there, because `IExpFromConstants` "asserts
-// success" (its own documented contract) and the assert is compiled IN. That abort is
-// controlled, DEFINED program termination via `assert()` -- the same caller-ensures
-// convention `TestIExpFromConstantsAssertsOnOutOfDomainConstants` already exercises,
-// not the undefined behavior this population exists to close. Requiring kRanNoCrash
-// there was a defect in this cell's own original authoring (never run against a
-// debug build before Brunel's implementation landed), not a finding about the
-// implementation. "pred" rows (IExpConstantsInDomain, `== IExpConstruct(...) ==
-// kOk`, TOTAL and never-asserting by its own documented contract) are unaffected in
-// either configuration, confirmed by the same run (0 pred-row failures).
-static void TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle() {
-	using namespace superslm_test;
-	for (size_t i = 0; i < kIExpGuardOrderCasesCount; ++i) {
-		const IExpGuardOrderCase& c = kIExpGuardOrderCases[i];
-		std::string probe_name = std::string("iexp_guard_order:") + c.fn + ":" +
-		                          std::to_string(c.q) + ":" + std::to_string(c.q_ln2) + ":" +
-		                          std::to_string(c.q_b) + ":" + std::to_string(c.q_c);
-		std::string tail;
-		CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(probe_name.c_str(), &tail);
-		bool is_pred = std::string(c.fn) == "pred";
-#ifdef NDEBUG
-		// The sanitizer CI leg's own claim, and this suite's hard constraint (a
-		// death test that aborts only after the overflow is not a valid guard
-		// test): under NDEBUG every caller-ensures assert is compiled out, so the
-		// ONLY way an out-of-domain call can still terminate abnormally is
-		// undefined behavior actually executing. Every row, both fn, must not
-		// crash -- this is the population law's real claim and the one this
-		// section's red evidence (the test-design record) was captured against.
-		CrashProbeOutcome expected_outcome = CrashProbeOutcome::kRanNoCrash;
-#else
-		// Plain debug build, assert() compiled in. "pred" never asserts (TOTAL, by
-		// contract). "eval" aborts cleanly via its own "asserts success" contract
-		// on any row that is not in-domain -- controlled termination, not UB.
-		CrashProbeOutcome expected_outcome = (is_pred || c.expected_in_domain)
-		                                          ? CrashProbeOutcome::kRanNoCrash
-		                                          : CrashProbeOutcome::kRanAndCrashed;
-#endif
-		CHECK_MSG(outcome == expected_outcome,
-		          "%s: %s(%lld, %lld, %lld, %lld) -- outcome was %s, want %s "
-		          "(S-HARDEN-0 / F9 F21) -- child output was: %s",
-		          c.label, c.fn, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
-		          CrashProbeOutcomeName(outcome), CrashProbeOutcomeName(expected_outcome),
-		          tail.c_str());
-		if (outcome != CrashProbeOutcome::kRanNoCrash) continue;  // nothing further to check
-		if (is_pred) {
-			const char* expected = c.expected_in_domain ? "RETURNED true" : "RETURNED false";
-			CHECK_MSG(tail.find(expected) != std::string::npos,
-			          "%s: IExpConstantsInDomain(%lld, %lld, %lld, %lld) child output must contain "
-			          "'%s' (independently-derived oracle) -- child output was: %s",
-			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), expected,
-			          tail.c_str());
-		} else if (c.eval_value_pinned) {
-			std::string expected = "RETURNED " + std::to_string(c.eval_expected_value);
-			CHECK_MSG(tail.find(expected) != std::string::npos,
-			          "%s: IExpFromConstants(%lld, %lld, %lld, %lld) is in-domain (D-SLM80 "
-			          "behaviour-preservation) and child output must contain '%s' "
-			          "(independently-derived oracle) -- child output was: %s",
-			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
-			          expected.c_str(), tail.c_str());
-		}
-		// Out-of-domain "eval" rows: no value claim, per the comment above.
-	}
+// ---------------------------------------------------------------------------
+// Curie's S-HARDEN-0 population suite (LAYER B): the checked `IExpConstruct` /
+// `IExpConstruction` / `IExpDomain` / `IExpEvaluate` entry point, final API
+// (SuperSLM_Plan.md's S-HARDEN-0 sub-slot; Claude/Curie/
+// superslm-s-harden-0-test-design-2026-07-21.md). `IExpConstruction`'s fields are
+// PRIVATE (`z()`/`base()`/`q_c()` accessors only, populated solely by
+// `IExpConstruct`'s friend access) and `IExpEvaluate` takes only the construction --
+// this section's own two structural static_asserts, immediately below, pin both of
+// those properties at compile time, and TestIExpConstructionDefaultIsSafeToEvaluate
+// pins that the only OTHER reachable origin (a default-constructed object) is safe.
+// ---------------------------------------------------------------------------
+
+// Property: "IExpEvaluate takes only a construction; q_c is carried, never passed
+// separately." A separate q_c parameter would let a caller validate against one
+// constant and evaluate against another -- the exact two-derivations-drift defect
+// this slot's own header comment names (F10). The final API makes that call
+// unwritable: IExpEvaluate's signature has no q_c parameter at all. This is a
+// property OF THE SIGNATURE, so it is pinned at compile time -- a future edit that
+// re-introduces a second q_c argument fails to compile this file, immediately,
+// rather than waiting for a test to notice a caller passing mismatched values.
+static_assert(std::is_same<decltype(&superslm::IExpEvaluate), int64_t (*)(const superslm::IExpConstruction&)>::value,
+              "IExpEvaluate must take ONLY a construction -- q_c must be carried by it, not accepted "
+              "as a separate argument (S-HARDEN-0: a separate q_c would let a caller validate "
+              "against one constant and evaluate against another, the two-derivations-drift defect "
+              "F10 already recorded)");
+
+// Property: "IExpConstruction's fields are private, and only IExpConstruct can
+// populate one." A type with private non-static data members is never an
+// aggregate (C++ [dcl.init.aggr]), so this is equivalent to "no caller can
+// brace-initialize or field-assign an IExpConstruction into a state IExpConstruct
+// never produced" -- the exact defect this slot's header comment names: "a public
+// {z, base} aggregate would admit z = 999 from any caller," which is an unchecked
+// shift and undefined behaviour in IExpEvaluate. Pinned at compile time for the
+// same reason as the assert above: this is a property of the TYPE, not of any one
+// call, so a test that only ever calls IExpConstruct correctly could never observe
+// a regression here -- only the type system can.
+static_assert(!std::is_aggregate<superslm::IExpConstruction>::value,
+              "IExpConstruction must not be an aggregate -- z_/base_/q_c_ must stay private and "
+              "unsettable directly by any caller (S-HARDEN-0: a public aggregate would admit an "
+              "unchecked z outside [0, I_EXP_CLIP_N], which IExpEvaluate's shift cannot survive)");
+
+// Property: the OTHER reachable origin of an IExpConstruction -- besides one
+// IExpConstruct itself validated -- is a default-constructed object, and the header
+// documents it as safe ("a default-constructed one is {0, 0, 0}, which is safe: z =
+// 0 is a legal shift"). Checked directly rather than assumed: default-construct,
+// read the three accessors, and evaluate it, confirming the documented zero state
+// and that evaluating it executes no UB (run under ASan+UBSan, this cell would trap
+// if z were anything other than a legal shift amount) and returns the value the
+// formula predicts ((0^2 + 0) >> 0 == 0).
+static void TestIExpConstructionDefaultIsSafeToEvaluate() {
+	superslm::IExpConstruction c;
+	CHECK_MSG(c.z() == 0 && c.base() == 0 && c.q_c() == 0,
+	          "a default-constructed IExpConstruction must be {z=0, base=0, q_c=0} -- got "
+	          "z=%lld base=%lld q_c=%lld",
+	          static_cast<long long>(c.z()), static_cast<long long>(c.base()), static_cast<long long>(c.q_c()));
+	int64_t got = superslm::IExpEvaluate(c);
+	CHECK_MSG(got == 0,
+	          "IExpEvaluate(default-constructed IExpConstruction) == %lld, want 0 -- (0^2+0)>>0 == 0, "
+	          "and z=0 is documented as a legal (no-op) shift",
+	          static_cast<long long>(got));
 }
-
-// ---------------------------------------------------------------------------
-// Curie's S-HARDEN-0 population suite (LAYER B): the NEW `IExpConstruct` /
-// `IExpConstruction` / `IExpDomain` entry point (SuperSLM_Plan.md's S-HARDEN-0
-// sub-slot; Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). NEITHER
-// EXISTS AT f078403 -- every function below references a type and a function this
-// commit's src/ and include/ do not declare, so this section, and therefore this
-// whole translation unit, DOES NOT COMPILE until Brunel builds `IExpDomain
-// IExpConstruct(int64_t, int64_t, int64_t, int64_t, IExpConstruction*)`, the
-// `IExpConstruction{int64_t z; int64_t base;}` struct, and the five-way `IExpDomain`
-// enum (`kOk`, `kNotRepresentable`, `kBadQ`, `kBadQLn2`, `kBadQB`). This is the
-// documented, correct state for Layer B: the red suite is authored complete now,
-// against the API the S-HARDEN-0 build will land, so red-then-green begins the
-// moment the API exists rather than being invented ad hoc by whoever implements it.
-//
-// REVISED 2026-07-21 (Brunel, mid-build): the entry point returns the five-way enum
-// above, not a bool. A committed golden
-// (`TestIExpFromConstantsAssertsOnOutOfDomainConstants`'s `#ifdef NDEBUG` arm, below
-// -- untouched by this revision) pins a DEFINED, narrowed-but-not-UB wrapped value for
-// one specific input once the guard-order fix lands, so the entry point must
-// distinguish "the decomposition is well-formed but the final result does not fit
-// int64" (`kNotRepresentable`, `*out` IS filled) from "the decomposition itself
-// could not be formed" (`kBadQ`/`kBadQLn2`/`kBadQB`, `*out` is left untouched).
-// `IExpConstantsInDomain(q, q_ln2, q_b, q_c)` is exactly
-// `IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk` -- same signature,
-// same bool, unchanged answers on every input that was previously defined.
-//
-// Every row consumed here is kIExpConstructCases (tests/sslm_iexp_domain_fixtures.h,
-// generated by tests/gen_iexp_domain_fixtures.py's `construct_cases` section), which
-// documents which of the five outcomes (kOk, kNotRepresentable, kBadQ -- q<=0,
-// kBadQLn2 -- q_ln2's two axes collapsed to one outcome, kBadQB -- q_p+q_b
-// representability) each row targets. Under the bool contract this suite's prior
-// revision authored, kBadQB and kNotRepresentable were indistinguishable by return
-// value; under the enum they are two independently observable outcomes, and both
-// now carry their own witnesses (`kNotRepresentable` reuses D-SLM78's original
-// strike input, the exact triple `TestIExpFromConstantsAssertsOnOutOfDomainConstants`
-// already pins a wrapped value for).
-// ---------------------------------------------------------------------------
 
 // Stringifies IExpDomain for CHECK_MSG output and for comparison against the
 // fixture's expected_domain field (a string, kept free of a compile-time dependency
@@ -4163,22 +4110,29 @@ static const char* IExpDomainName(IExpDomain d) {
 }
 
 // "*out is FILLED whenever the decomposition is well-formed -- that is, for kOk AND
-// kNotRepresentable." True for exactly those two outcome names.
+// kNotRepresentable, and IExpEvaluate is TOTAL over both." True for exactly those
+// two outcome names.
 static bool IExpDomainNameIsWellFormed(const char* name) {
 	return std::strcmp(name, "kOk") == 0 || std::strcmp(name, "kNotRepresentable") == 0;
 }
 
-// The primary sweep: every row's returned IExpDomain against the independent oracle,
-// and -- for the two well-formed outcomes -- out.z/out.base against the same oracle.
-// Does not poison *out with a sentinel (that is the dedicated concern of
+// The primary sweep: every row's returned IExpDomain against the independent
+// oracle, and -- for the two well-formed outcomes -- out.z()/out.base()/out.q_c()
+// AND IExpEvaluate(out) against the same oracle. This is the cell that proves
+// IExpEvaluate's totality (dimension: "IExpEvaluate is total on any construction it
+// can be given, including one from a kNotRepresentable outcome, which still yields
+// the exact wrapped value") across the FULL population, not only the single
+// standalone golden TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants
+// pins. Does not poison *out with a sentinel (that is the dedicated concern of
 // TestIExpConstructOutContractPerOutcome below); this function is the one place a
-// reader confirms "does the entry point classify and decompose correctly" without
-// also having to reason about the untouched-vs-filled contract at the same time.
+// reader confirms "does the entry point classify, decompose, and evaluate
+// correctly" without also having to reason about the untouched-vs-filled contract
+// at the same time.
 static void TestIExpConstructMatchesIndependentOracleAcrossCases() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
-		IExpConstruction out{};
+		IExpConstruction out;
 		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
 		CHECK_MSG(std::strcmp(IExpDomainName(got), c.expected_domain) == 0,
 		          "%s: IExpConstruct(%lld, %lld, %lld, %lld) returned %s, independently-derived "
@@ -4188,41 +4142,69 @@ static void TestIExpConstructMatchesIndependentOracleAcrossCases() {
 		          c.expected_domain);
 		if (std::strcmp(IExpDomainName(got), c.expected_domain) != 0) continue;
 		if (IExpDomainNameIsWellFormed(c.expected_domain)) {
-			CHECK_MSG(out.z == c.expected_z,
-			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].z == %lld, oracle expects %lld",
+			CHECK_MSG(out.z() == c.expected_z,
+			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].z() == %lld, oracle expects %lld",
 			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.expected_domain,
-			          static_cast<long long>(out.z), static_cast<long long>(c.expected_z));
-			CHECK_MSG(out.base == c.expected_base,
-			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].base == %lld, oracle expects %lld",
+			          static_cast<long long>(out.z()), static_cast<long long>(c.expected_z));
+			CHECK_MSG(out.base() == c.expected_base,
+			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].base() == %lld, oracle expects %lld",
 			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.expected_domain,
-			          static_cast<long long>(out.base), static_cast<long long>(c.expected_base));
+			          static_cast<long long>(out.base()), static_cast<long long>(c.expected_base));
+			CHECK_MSG(out.q_c() == c.q_c,
+			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].q_c() == %lld, want the SAME "
+			          "q_c passed to IExpConstruct (%lld) -- q_c is carried by the construction, not "
+			          "re-derived",
+			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.expected_domain,
+			          static_cast<long long>(out.q_c()), static_cast<long long>(c.q_c));
+			int64_t evaluated = IExpEvaluate(out);
+			CHECK_MSG(evaluated == c.expected_value,
+			          "%s: IExpEvaluate(IExpConstruct(%lld, %lld, %lld, %lld)) == %lld, "
+			          "independently-derived oracle expects %lld -- IExpEvaluate must be TOTAL over "
+			          "this outcome (%s)",
+			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
+			          static_cast<long long>(evaluated), static_cast<long long>(c.expected_value),
+			          c.expected_domain);
 		}
 	}
 }
 
 // The IExpConstruction contract, per outcome: filled for kOk and kNotRepresentable,
-// untouched for kBadQ/kBadQLn2/kBadQB. Pre-fills *out with a sentinel neither 0 nor
-// any expected z/base value in this table (0 is never emitted by the generator for a
-// well-formed row), so "filled with the independently-derived value" and "left
-// untouched" are both distinguishable from "reset to some other fixed value" (e.g.
-// zeroed), which the primary sweep above cannot detect on its own -- a zeroing
-// implementation would still pass every check there, since 0 never appears as an
-// expected z/base by construction. This is the cell Brunel's finding calls for: a
-// kNotRepresentable row's *out must be filled with the SAME z/base the old
-// decomposition produced (the exact construction the pinned wrapped-value golden on
-// TestIExpFromConstantsAssertsOnOutOfDomainConstants below is computed from), not
-// merely "not crash."
+// untouched for kBadQ/kBadQLn2/kBadQB. IExpConstruction's fields are private with no
+// setters (pinned above by the !is_aggregate static_assert), so this cell cannot
+// poison *out with a hand-fabricated sentinel the way the prior (public-struct)
+// revision did -- the only way to put a NON-default value into an IExpConstruction
+// is a real IExpConstruct call. So it primes *out with a real, known-good
+// construction first (kPriming*, chosen so its z/base/q_c collide with no row's
+// expected_z/expected_base/q_c below -- confirmed: every well-formed row here has
+// z==0, and the priming call's z==1), records the priming values, then calls
+// IExpConstruct for the case under test into the SAME out: for kBad* outcomes,
+// *out must still read back exactly the PRIMING values (untouched); for kOk/
+// kNotRepresentable, *out must now read back the CASE's own independently-derived
+// values (overwritten). This is a stronger test than a sentinel, not a weaker one:
+// it proves untouched-ness against a real object a caller could actually be
+// holding across two calls, not against an artificial poison value.
 static void TestIExpConstructOutContractPerOutcome() {
 	using namespace superslm_test;
-	const int64_t kSentinelZ = INT64_C(0x5EED5EED5EED5EED);
-	const int64_t kSentinelBase = INT64_C(0x1234123412341234);
+	const int64_t kPrimingQ = INT64_C(-777);
+	const int64_t kPrimingQLn2 = INT64_C(777);
+	const int64_t kPrimingQB = INT64_C(777);
+	const int64_t kPrimingQC = INT64_C(777);
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
 		IExpConstruction out;
-		out.z = kSentinelZ;
-		out.base = kSentinelBase;
+		IExpDomain priming_domain = IExpConstruct(kPrimingQ, kPrimingQLn2, kPrimingQB, kPrimingQC, &out);
+		CHECK_MSG(priming_domain == IExpDomain::kOk,
+		          "priming call IExpConstruct(-777, 777, 777, 777) returned %s, want kOk -- this "
+		          "cell's priming construction is expected in-domain; if this fails, the priming "
+		          "constants themselves need revisiting, not the row under test",
+		          IExpDomainName(priming_domain));
+		const int64_t priming_z = out.z();
+		const int64_t priming_base = out.base();
+		const int64_t priming_qc = out.q_c();
 		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
 		CHECK_MSG(std::strcmp(IExpDomainName(got), c.expected_domain) == 0,
 		          "%s: IExpConstruct(%lld, %lld, %lld, %lld) returned %s, independently-derived "
@@ -4231,19 +4213,21 @@ static void TestIExpConstructOutContractPerOutcome() {
 		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), IExpDomainName(got),
 		          c.expected_domain);
 		if (IExpDomainNameIsWellFormed(c.expected_domain)) {
-			CHECK_MSG(out.z == c.expected_z && out.base == c.expected_base,
-			          "%s: IExpConstruct(...) is %s and must FILL *out -- got z=%lld base=%lld, "
-			          "oracle expects z=%lld base=%lld",
-			          c.label, c.expected_domain, static_cast<long long>(out.z),
-			          static_cast<long long>(out.base), static_cast<long long>(c.expected_z),
-			          static_cast<long long>(c.expected_base));
+			CHECK_MSG(out.z() == c.expected_z && out.base() == c.expected_base && out.q_c() == c.q_c,
+			          "%s: IExpConstruct(...) is %s and must FILL *out -- got z=%lld base=%lld "
+			          "q_c=%lld, oracle expects z=%lld base=%lld q_c=%lld",
+			          c.label, c.expected_domain, static_cast<long long>(out.z()),
+			          static_cast<long long>(out.base()), static_cast<long long>(out.q_c()),
+			          static_cast<long long>(c.expected_z), static_cast<long long>(c.expected_base),
+			          static_cast<long long>(c.q_c));
 		} else {
-			CHECK_MSG(out.z == kSentinelZ && out.base == kSentinelBase,
+			CHECK_MSG(out.z() == priming_z && out.base() == priming_base && out.q_c() == priming_qc,
 			          "%s: IExpConstruct(...) is %s and must leave *out UNTOUCHED -- got z=%lld "
-			          "base=%lld, sentinel was z=%lld base=%lld",
-			          c.label, c.expected_domain, static_cast<long long>(out.z),
-			          static_cast<long long>(out.base), static_cast<long long>(kSentinelZ),
-			          static_cast<long long>(kSentinelBase));
+			          "base=%lld q_c=%lld, priming construction was z=%lld base=%lld q_c=%lld",
+			          c.label, c.expected_domain, static_cast<long long>(out.z()),
+			          static_cast<long long>(out.base()), static_cast<long long>(out.q_c()),
+			          static_cast<long long>(priming_z), static_cast<long long>(priming_base),
+			          static_cast<long long>(priming_qc));
 		}
 	}
 }
@@ -4291,10 +4275,11 @@ static void TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk() {
 }
 
 // ---------------------------------------------------------------------------
-// PORTED (Brunel, mid-build): the pre-existing S2.6-amendment accessor cells
-// (Claude/Curie/superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md)
-// called `superslm::IExpShift`/`superslm::IExpBase` directly; both are removed from
-// the public header by this slot. `kIExpAccessorCases` (tests/
+// PORTED (Brunel, mid-build 2026-07-21; accessor methods 2026-07-22): the
+// pre-existing S2.6-amendment accessor cells (Claude/Curie/
+// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md) called
+// `superslm::IExpShift`/`superslm::IExpBase` directly; both are removed from the
+// public header by this slot. `kIExpAccessorCases` (tests/
 // sslm_iexp_domain_fixtures.h, unchanged -- its 36 rows' values are unaffected by
 // the API change) is reused as-is; only the two functions that consumed it are
 // ported, merged into one below since both now come from a single IExpConstruct
@@ -4312,7 +4297,7 @@ static void TestIExpConstructMatchesAccessorCasesZAndBase() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
 		const IExpAccessorCase& c = kIExpAccessorCases[i];
-		IExpConstruction out{};
+		IExpConstruction out;
 		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, /*q_c=*/0, &out);
 		// q_c=0 here: kIExpAccessorCases carries no q_c field (IExpShift/IExpBase
 		// never took one -- z/base depend only on q, q_ln2, q_b) and this function
@@ -4333,25 +4318,30 @@ static void TestIExpConstructMatchesAccessorCasesZAndBase() {
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 		          static_cast<long long>(c.q_b), IExpDomainName(got));
 		if (got != IExpDomain::kOk && got != IExpDomain::kNotRepresentable) continue;
-		CHECK_MSG(out.z == c.expected_z,
-		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z == %lld, want %lld "
+		CHECK_MSG(out.z() == c.expected_z,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z() == %lld, want %lld "
 		          "(independently derived)",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(out.z),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.z()),
 		          static_cast<long long>(c.expected_z));
-		CHECK_MSG(out.base == c.expected_base,
-		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).base == %lld, want %lld "
+		CHECK_MSG(out.base() == c.expected_base,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).base() == %lld, want %lld "
 		          "(independently derived)",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(out.base),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.base()),
 		          static_cast<long long>(c.expected_base));
+		CHECK_MSG(out.q_c() == 0,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld, q_c=0).q_c() == %lld, want 0 -- "
+		          "q_c is carried by the construction unchanged from what was passed in",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.q_c()));
 		// IExpShift's own documented postcondition (z in [0, I_EXP_CLIP_N]),
 		// checked live -- ported unchanged from TestIExpShiftMatchesIndependentlyDerivedZ.
-		CHECK_MSG(out.z >= 0 && out.z <= I_EXP_CLIP_N,
-		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z == %lld, outside documented "
+		CHECK_MSG(out.z() >= 0 && out.z() <= I_EXP_CLIP_N,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z() == %lld, outside documented "
 		          "[0, %d]",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(out.z), I_EXP_CLIP_N);
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.z()), I_EXP_CLIP_N);
 	}
 }
 
@@ -5242,29 +5232,32 @@ int main(int argc, char** argv) {
 	TestISqrt();
 	TestISqrtTrace();
 	TestShiftByMax();
-	TestIExpFromConstants();
-	TestIExpFromConstantsClipClampsIdenticallyAcrossFamily();
+	// PORTED (S-HARDEN-0 final API): IExpFromConstants is removed; evaluation is
+	// now construct-then-evaluate. Expected values unchanged from the original 36
+	// kIExpCases goldens.
+	TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases();
+	TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily();
 
-	// --- Curie's S2.6-amendment red suite for IExpConstantsInDomain (red-first;
-	//     this primitive and IExpFromConstants's new internal domain assert do not
-	//     exist yet -- D-SLM78/79/81). ---
+	// --- Curie's S2.6-amendment red suite for IExpConstantsInDomain (D-SLM78/79/81;
+	//     unchanged by the S-HARDEN-0 final API -- IExpConstantsInDomain's own
+	//     signature and behaviour are untouched). ---
 	TestIExpConstantsInDomainAcrossCorpus();
 	TestIExpConstantsInDomainRejectsStrikeExactInput();
 	TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim();
-	TestIExpFromConstantsAssertsOnOutOfDomainConstants();
+	// REWORKED (S-HARDEN-0 final API): no debug-build assert survives to pin (see
+	// the function's own comment); the wrapped-value golden is preserved.
+	TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants();
 
-	// --- Curie's S-HARDEN-0 population suite (F9/F21; red-first against the
-	//     UNCHANGED public API at f078403 -- SuperSLM_Plan.md's S-HARDEN preamble;
-	//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). ---
-	TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle();
-
-	// --- Curie's S-HARDEN-0 population suite, LAYER B (F9/F21's fix, the new
-	//     IExpConstruct/IExpConstruction/IExpDomain API -- does not exist at
-	//     f078403; this whole translation unit does not compile until Brunel builds
-	//     it. Expected and correct -- see the section's own comment above and the
-	//     test-design record, Claude/Curie/superslm-s-harden-0-test-design-
-	//     2026-07-21.md. Includes the ported S2.6-amendment accessor cells,
-	//     TestIExpConstructMatchesAccessorCasesZAndBase (Brunel, mid-build). ---
+	// --- Curie's S-HARDEN-0 population suite, final API (F9, F21, Poirot's
+	// a1d7986 code-review Finding 1; SuperSLM_Plan.md's S-HARDEN preamble;
+	// Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). Layer A's
+	// separate crash-probe population is RETIRED -- the API collapse removed its
+	// subject; see the comment at its former call site (above, in this file) for
+	// the full account and where every witness value now lives (kIExpConstructCases
+	// below). IExpEvaluate's totality and IExpConstruction's structural safety are
+	// pinned first (default-construction safety, and the two static_asserts
+	// immediately preceding it), then the full construct/evaluate population. ---
+	TestIExpConstructionDefaultIsSafeToEvaluate();
 	TestIExpConstructMatchesIndependentOracleAcrossCases();
 	TestIExpConstructOutContractPerOutcome();
 	TestIExpConstructAcceptsNullOutForPredicateOnlyUse();
