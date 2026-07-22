@@ -307,47 +307,33 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out) {
 	for (size_t i = 0; i < n; ++i) out[i] = logits[i] - peak;
 }
 
-int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
-	// Preconditions (caller-ensured; the reference raises on violation): q <= 0 keeps z >= 0 so
-	// the final shift is never negative, and q_ln2 >= 1 keeps the division well defined. In the
-	// live pipeline both hold structurally (ShiftByMax → q <= 0; C30 fine-scale rejection →
-	// q_ln2 >= 1). **Violating them is no longer undefined behaviour (S-HARDEN-0):** they are
-	// tested by IExpConstruct below, before any arithmetic that depends on them runs. They
-	// remain preconditions — the assert still fires in a debug build — but the release path is
-	// now defined on every int64 input rather than merely documented as the caller's problem.
-	// S-HARDEN-0 (F9, F21): the decomposition is formed by the ONE checked entry point, so
-	// every bound that makes it safe is tested BEFORE the arithmetic it protects. The prior
-	// body called IExpShift/IExpBase here and asserted the domain afterwards, which put the
-	// ceiling guard after the overflow it had been added to prevent — in debug builds too,
-	// because the overflow is inside the accessors rather than in this function.
-	//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2
-	//   return ((q_p + q_b)^2 + q_c) >> z
-	IExpConstruction c;
-	const IExpDomain d = IExpConstruct(q, q_ln2, q_b, q_c, &c);
-
-	// The domain stays a CALLER obligation, asserted as the no-exceptions equivalent of the
-	// reference's raise — the same convention as MaxAbsReduce/ShiftByMax. What this slot
-	// changed is that violating it is no longer undefined behaviour.
-	assert(d == IExpDomain::kOk);
-
-	// These three carry no decomposition to compute from: q > 0 has none to state, and the
-	// other two mean the clip bound or `q_p + q_b` is not representable. Every one of them
-	// was UB before this slot, so returning 0 changes no previously-defined result.
-	if (d != IExpDomain::kOk && d != IExpDomain::kNotRepresentable) return 0;
-
-	// kOk and kNotRepresentable both carry a well-formed decomposition, and the arithmetic
-	// below is bit-identical to the prior body for both. base^2 reaches ~2^62 and q_c ~2^62
-	// in the realistic domain (near 0.5·INT64_MAX), and C30's per-token constants may push
-	// wider — so carry it wide and take an arithmetic (floor) shift to match the reference's
-	// big-integer `>>`.
+int64_t IExpEvaluate(const IExpConstruction& c) {
+	// S-HARDEN-0 (F9, F21). This function has NO preconditions and asserts nothing, because
+	// there is no input to it that can be out of contract: an IExpConstruction's fields are
+	// private and only IExpConstruct can populate one, so every value reaching here was either
+	// validated by that function or is the default {0, 0, 0}. `z` is therefore in
+	// [0, I_EXP_CLIP_N] and `base` was formed without overflow.
 	//
-	// The narrowing is unchecked, so out of domain the low 64 bits are kept and the result
-	// can be NEGATIVE; a blind strike produced contract-legal constants that did exactly
-	// that (D-SLM78). Under NDEBUG the assert above is compiled out and that wrapped value
-	// is returned UNCHANGED — the behaviour-preservation property D-SLM80 records, which a
-	// committed golden pins and this slot deliberately preserves.
-	S128 v = SAdd(SMul(c.base, c.base), SFromI64(q_c));
-	return SShrToI64(v, static_cast<int>(c.z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
+	// That is the point of splitting construct from evaluate. The prior single-call shape had
+	// to answer a contract-violating call with some int64_t, and every candidate answer -- 0
+	// included -- is a legitimate in-domain result, so a broken call was indistinguishable from
+	// a real one. Here the check happens where the caller can act on it and the arithmetic
+	// happens where nothing can be wrong.
+	//
+	//   value = (base^2 + q_c) >> z
+	//
+	// base^2 reaches ~2^62 and q_c ~2^62 in the realistic domain (near 0.5*INT64_MAX), and
+	// C30's per-token constants may push wider -- so carry it wide and take an arithmetic
+	// (floor) shift to match the reference's big-integer `>>`.
+	//
+	// For a construction from a kNotRepresentable outcome the narrowing keeps the low 64 bits
+	// and the result can be NEGATIVE; a blind strike produced contract-legal constants that did
+	// exactly that (D-SLM78). That value is bit-identical to what the pre-S-HARDEN-0 code
+	// returned for the same constants, which is the behaviour-preservation property D-SLM80
+	// records and a committed golden pins. The caller was told by the outcome; it is not this
+	// function's job to withhold the value.
+	const S128 v = SAdd(SMul(c.base(), c.base()), SFromI64(c.q_c()));
+	return SShrToI64(v, static_cast<int>(c.z()));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
 namespace {
@@ -403,8 +389,13 @@ IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
 	// below is not representable — that outcome is a defined (wrapped) return the parent
 	// still produces, and a caller reproducing it needs these two values.
 	if (out != nullptr) {
-		out->z = z;
-		out->base = base;
+		out->z_ = z;
+		out->base_ = base;
+		// Carried, not re-supplied at evaluation: a caller that could validate against one q_c
+		// and evaluate against another would hold a representability guarantee about a value it
+		// never computed. That is a second derivation of one domain, which F10 already recorded
+		// drifting between the S2.6 design and this predicate.
+		out->q_c_ = q_c;
 	}
 
 	const S128 v = SAdd(SMul(base, base), SFromI64(q_c));

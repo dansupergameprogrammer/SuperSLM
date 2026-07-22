@@ -155,40 +155,46 @@ void ISqrtTrace(int64_t n, int64_t out_iterates[I_SQRT_ITERATIONS]);
 void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 
 // C7/C8 — the I-BERT second-order integer polynomial core, exp(q·scale) in fixed point, from
-// PRE-DERIVED positive integer constants (q_ln2, q_b, q_c) — the caller supplies them (offline
-// or C30). Same decomposition as intmath.py's `i_exp_from_constants`:
+// PRE-DERIVED integer constants (q_ln2, q_b, q_c) — the caller supplies them (offline or C30).
+// Same decomposition as intmath.py's `i_exp_from_constants`:
 //   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2;
-//   return ((q_p + q_b)^2 + q_c) >> z.
-// **Preconditions the caller ensures** (structurally upstream — `ShiftByMax` gives q <= 0, and
-// C30's fine-scale rejection gives q_ln2 >= 1): `q` is a max-shifted logit (q <= 0; a positive q
-// has no valid decomposition — it would drive z negative) and q_ln2 >= 1 (a coarser scale has no
-// decomposition to state, and q_ln2 == 0 would divide by zero). The reference `i_exp_from_constants`
-// RAISES on either violation; this primitive asserts them (the no-exceptions runtime equivalent) and
-// is otherwise UB out of domain — the same caller-ensures convention as `MaxAbsReduce`/`ShiftByMax`,
-// not a runtime rejection. The coefficient integers are positive (C7 N2-5). `out_scale` is never
-// computed at runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
+//   value   = ((q_p + q_b)^2 + q_c) >> z.
 //
-// **A THIRD precondition, and it is not a lower bound:** the returned value must be representable,
-// which `IExpConstantsInDomain` below answers. A debug build asserts it, so a large but
-// contract-legal `q_ln2` or `q_c` aborts here rather than returning silently. Under `NDEBUG` the
-// assert is compiled out and the truncated — possibly NEGATIVE — value is returned, which is what
-// makes the guard a caller obligation rather than a runtime rejection. See that function for the
-// executed witness and for why a caller must not re-derive the test itself.
+// **The operation is TWO calls, and that is deliberate (S-HARDEN-0).** `IExpConstruct` below
+// validates and produces an `IExpConstruction`; `IExpEvaluate` turns that construction into the
+// value. There is no single-call form, because a single-call form must answer a
+// contract-violating call with *some* `int64_t`, and every available answer is a legitimate
+// in-domain result — `0` included, which `((base² + q_c) >> z)` yields whenever `base² + q_c`
+// lands in `[0, 2^z)`. A broken call would be indistinguishable from a real one. Splitting the
+// operation removes the question instead of answering it badly: the invalid call cannot be
+// written.
 //
-// **What `NDEBUG` returns is now split by outcome (S-HARDEN-0).** The decomposition is formed by
-// `IExpConstruct` below, so nothing here can overflow before its checks run. Where the
-// decomposition is well-formed and only the narrowing overflows (`kNotRepresentable`), the
-// truncated value described above is returned **bit-identically to before** — that behaviour is a
-// documented property (D-SLM80) with a committed golden, and this slot preserves it. Where no
-// decomposition exists at all (`kBadQ`, `kBadQLn2`, `kBadQB`) the call was previously undefined
-// behaviour; it now returns `0`. No previously-defined result changes.
-int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
+// **Preconditions are now CHECKED rather than caller-ensured**, and the two are not the same
+// promise. `q <= 0` (a positive q has no valid decomposition — beyond `q_ln2` it drives z
+// negative) and `q_ln2 >= 1` (q_ln2 == 0 would divide by zero) were previously documented
+// preconditions that a release build did not enforce. `IExpConstruct` tests them and reports
+// `kBadQ`/`kBadQLn2`, so the caller learns rather than guesses. `out_scale` is never computed at
+// runtime (C30: the nonlinear consumers are same-scale ratios and it cancels).
+//
+// **The coefficients are NOT constrained to be positive.** C7 N2-5's positivity is a property of
+// how C30 and the offline derivation produce these constants, not an invariant of this primitive
+// — the parameter types admit all of `int64_t`, and `q_b` near `INT64_MIN` was an executed
+// overflow (F21). `q_b` is therefore checked for *representability* of `q_p + q_b`, not for sign.
+//
+// **What changed for callers that were outside the contract (S-HARDEN-0, measured).** Two input
+// strips executed no undefined behaviour before this slot and produced values, by accident rather
+// than by promise: `0 < q < q_ln2`, where `(−q)/q_ln2` truncates to `z == 0`; and `q_ln2 <= −1`,
+// where the clip bound goes positive and `z` lands on `I_EXP_CLIP_N`. Both are now refused. The
+// preserved property is the one D-SLM80 actually states — **behaviour-preserving INSIDE the
+// domain** — and inside the domain every value is bit-identical, including the wrapped results of
+// `kNotRepresentable`. Outside it, a documented precondition that a release build silently
+// tolerated is now enforced; nothing depended on the tolerance.
 
 // C7/C8 — the i-exp decomposition, as ONE checked construction/evaluation entry point
 // (S-HARDEN-0; findings F9 and F21). Every consumer of the decomposition routes through
-// here: the evaluator `IExpFromConstants` and the predicate `IExpConstantsInDomain` are
-// both defined in terms of it, so neither can form the decomposition before the checks
-// that make it safe have run.
+// here: the evaluator `IExpEvaluate` and the predicate `IExpConstantsInDomain` are both
+// defined in terms of it, so neither can form the decomposition before the checks that
+// make it safe have run.
 //
 // **Why a funnel rather than two accessors plus a documented rule.** The prior API exposed
 // `IExpShift`/`IExpBase` so a caller could evaluate the domain instead of re-deriving it,
@@ -213,11 +219,39 @@ enum class IExpDomain : int {
 	kBadQB,             // `q_p + q_b` is not representable
 };
 
-// The decomposition `IExpFromConstants` squares: `z` is the number of ln2 steps the
-// clip/divide yields, `base` is `q_p + q_b`.
-struct IExpConstruction {
-	int64_t z;
-	int64_t base;
+// Declared ahead of the class so the friend declaration below names THIS function rather than
+// introducing a new one that unqualified lookup would never find.
+class IExpConstruction;
+IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                         IExpConstruction* out);
+
+// A validated decomposition: `z` is the number of ln2 steps the clip/divide yields, `base` is
+// `q_p + q_b`, and `q_c` is the constant the representability judgement was made against.
+//
+// **The fields are private, and that is the load-bearing part of this type.** `IExpEvaluate`
+// narrows with `>> z`, so a `z` outside `[0, I_EXP_CLIP_N]` is an unchecked shift and undefined
+// behaviour. A public `{z, base}` aggregate would admit `z = 999` from any caller — which is F21's
+// own lesson one level up: a *type* that admits values the contract forbids is the defect, whether
+// the values arrive as parameters or as fields. Only `IExpConstruct` can populate one, so the two
+// reachable origins are a default-constructed `{0, 0, 0}` (safe: `z = 0` is a legal shift) and a
+// construction this header validated.
+//
+// **`q_c` is carried rather than passed to the evaluator, and that is not tidiness.** A separate
+// `q_c` argument on `IExpEvaluate` would let a caller validate against one constant and evaluate
+// against another, silently voiding the representability guarantee — a second derivation of one
+// domain, which is the drift finding F10 already recorded happening between the S2.6 design and
+// this predicate. Carrying it makes the mismatch unrepresentable.
+class IExpConstruction {
+public:
+	int64_t z() const { return z_; }
+	int64_t base() const { return base_; }
+	int64_t q_c() const { return q_c_; }
+
+private:
+	friend IExpDomain IExpConstruct(int64_t, int64_t, int64_t, int64_t, IExpConstruction*);
+	int64_t z_ = 0;
+	int64_t base_ = 0;
+	int64_t q_c_ = 0;
 };
 
 // Forms the decomposition and judges the result, in that order, each step guarded before
@@ -230,8 +264,24 @@ struct IExpConstruction {
 // result the evaluator still returns, so the caller that wants it needs `z` and `base`.
 // The `kBad*` outcomes mean no decomposition exists to report. `out` may be null when only
 // the domain answer is wanted.
-IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
-                         IExpConstruction* out);
+//
+// (Declared above the class; this is the documentation site.)
+
+// C7/C8 — the value, from a construction this header produced: `(base² + q_c) >> z`, carried at
+// 128-bit width and narrowed by an arithmetic (floor) shift to match the reference's big-integer
+// `>>`.
+//
+// **TOTAL, and it needs no preconditions of its own.** Every `IExpConstruction` that can exist
+// holds a `z` in `[0, I_EXP_CLIP_N]` and a `base` this header formed without overflow, so there is
+// no input to this function that is out of contract. That is the whole reason the operation is
+// split: the check happens where the caller can act on it, and the arithmetic happens where
+// nothing can be wrong.
+//
+// Evaluating a construction from a `kNotRepresentable` outcome is **legal and defined**: the low 64
+// bits are kept and the result can be NEGATIVE. That is the exact value the pre-S-HARDEN-0 code
+// returned for the same constants and a committed golden pins it (D-SLM80). A caller that does not
+// want it was told so by the outcome.
+int64_t IExpEvaluate(const IExpConstruction& c);
 
 // C7/C8 — **the domain predicate. Call this before `IExpFromConstants` on any constants
 // not already proven in range.** Returns whether `(base² + q_c) >> z` — the value the
