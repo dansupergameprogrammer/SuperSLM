@@ -188,6 +188,46 @@ inline constexpr IExpGuardOrderCase kIExpGuardOrderCases[] = {
 };
 inline constexpr size_t kIExpGuardOrderCasesCount = 10;
 
+// --- S-HARDEN-0 LAYER B: kIExpConstructCases, for the NEW `IExpConstruct` entry
+//     point (does not exist at f078403 -- this table and the test cells that
+//     consume it do NOT compile until Brunel builds it; see
+//     gen_iexp_domain_fixtures.py's own comment above this table's construction,
+//     and the test-design record,
+//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md, for why this
+//     is the correct state today.
+//
+//     expected_z/expected_base/expected_value are valid only when expected_ok
+//     is true; every row is otherwise (false, 0, 0, 0) by construction, computed
+//     by the SAME independent oracle as every table above. ---
+
+struct IExpConstructCase {
+	const char* label;
+	int64_t q;
+	int64_t q_ln2;
+	int64_t q_b;
+	int64_t q_c;
+	bool expected_ok;
+	int64_t expected_z;
+	int64_t expected_base;
+	int64_t expected_value;
+};
+
+inline constexpr IExpConstructCase kIExpConstructCases[] = {
+	{"r1_last_valid_q_zero", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), true, INT64_C(0), INT64_C(13), INT64_C(264)},
+	{"r1_first_invalid_q_one", INT64_C(1), INT64_C(6), INT64_C(13), INT64_C(95), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r1_interior_invalid_large_positive_q", INT64_C(1000000), INT64_C(6), INT64_C(13), INT64_C(95), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r2_last_valid_qln2_one", INT64_C(0), INT64_C(1), INT64_C(5), INT64_C(10), true, INT64_C(0), INT64_C(5), INT64_C(35)},
+	{"r2_first_invalid_qln2_zero", INT64_C(0), INT64_C(0), INT64_C(5), INT64_C(10), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r2_interior_invalid_qln2_negative", INT64_C(0), INT64_C(-1000), INT64_C(5), INT64_C(10), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r3_last_valid_ceiling", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), true, INT64_C(0), INT64_C(1), INT64_C(1)},
+	{"r3_first_invalid_ceiling", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r3_interior_invalid_ceiling", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r3_f9_witness_int64_max", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r4_f21_witness_qb_int64_min", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"r4_boundary_first_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+};
+inline constexpr size_t kIExpConstructCasesCount = 12;
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SSLM_IEXP_DOMAIN_FIXTURES_H

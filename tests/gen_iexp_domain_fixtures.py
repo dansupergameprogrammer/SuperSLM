@@ -552,6 +552,93 @@ add_guard_order("f21_eval_qb_boundary_first_unsafe", "eval", -999, 1000, INT64_M
 assert len(guard_order_cases) == 10
 
 # ---------------------------------------------------------------------------
+# S-HARDEN-0 LAYER B: kIExpConstructCases, for the NEW `IExpConstruct` entry point
+# the build lands (SuperSLM_Plan.md's S-HARDEN-0 sub-slot). References a type/function
+# that does NOT EXIST at f078403 -- the emitted C++ struct and the test cells that
+# consume it do not compile until Brunel builds `IExpConstruct` / `IExpConstruction`.
+# This is the documented, correct state for Layer B (see the test-design record); it is
+# authored now so the red suite is complete and ready the moment the API lands, not
+# invented at build time by whoever implements it.
+#
+# Five rejection reasons, per IExpConstruct's contract (validated before any
+# arithmetic that could overflow): R1 q<=0, R2 q_ln2>=1, R3 q_ln2<=INT64_MAX/30 (the
+# ceiling), R4 q_p+q_b representable, R5 (base^2+q_c)>>z representable. Each reason
+# gets its own boundary pair (last-accepting / first-rejecting) plus an interior
+# rejection, so a mutation weakening any ONE clause is forced by a cell that isolates
+# that clause -- except R4, which cannot be isolated from R5 by any black-box return
+# value: whenever q_p+q_b overflows int64 as an unbounded value, |base| >= 2^63, and
+# squaring that always exceeds the widest representable ceiling (2^93, at z=30) -- so
+# an R4 violation always implies R5 would ALSO reject, mathematically, had it been
+# reachable. R4's cells therefore reuse F21's own witnesses (proving R4 is checked
+# BEFORE the sum is formed, closing the crash) rather than attempting a
+# R4-fails/R5-would-have-passed witness, which does not exist. R5 itself is already
+# exhaustively covered by kIExpDomainCases above (62 cases against the unchanged
+# IExpConstantsInDomain signature) and is not re-derived here -- see the test-design
+# record's coverage-dimension accounting for why no new R5 cells are authored.
+# ---------------------------------------------------------------------------
+
+construct_cases: list[tuple] = []
+# (label, q, q_ln2, q_b, q_c, expected_ok, expected_z, expected_base, expected_value)
+
+
+def add_construct(label: str, q: int, q_ln2: int, q_b: int, q_c: int) -> None:
+    # in_domain()/derive() assume q <= 0 and q_ln2 >= 1 (documented preconditions of
+    # the formula itself -- q_ln2 <= 0 divides by zero in derive(), and q > 0 makes
+    # Python's floor-division z go negative, which val >> z then rejects outright).
+    # IExpConstruct additionally owns rejecting q > 0 (R1) and q_ln2 <= 0 (R2) BEFORE
+    # ever reaching that formula, so those two rows are authored with
+    # expected_ok=False directly here, by construction, never by calling
+    # in_domain()/derive() on an input its own formula does not assume.
+    if q <= 0 and q_ln2 >= 1:
+        ok, shifted, z, base = in_domain(q, q_ln2, q_b, q_c)
+        if ok:
+            assert z is not None and base is not None and shifted is not None
+            construct_cases.append((label, q, q_ln2, q_b, q_c, True, z, base, shifted))
+            return
+    construct_cases.append((label, q, q_ln2, q_b, q_c, False, 0, 0, 0))
+
+
+# --- R1: q <= 0. Reuses the existing "realistic_s0" witness family (already-shipped
+#     golden 264 at q=0) as the last-valid boundary, so this cell cross-checks against
+#     a value the suite has pinned since S2.2 rather than a fresh one. ---
+add_construct("r1_last_valid_q_zero", 0, 6, 13, 95)
+add_construct("r1_first_invalid_q_one", 1, 6, 13, 95)
+# Confirmed by execution at f078403 (test-design record): calling the UNCHANGED
+# IExpFromConstants(1000000, 6, 13, 95) today crashes with "shift exponent -166666 is
+# negative" at src/intmath.cpp:50 -- a THIRD, currently-live UB class distinct from
+# F9/F21, found the same way F21 was (by exploring the domain object, not named in
+# either review finding). Flagged in the test-design record as a finding for the
+# planner; not added to the Layer A population (out of the two named classes'
+# explicit scope) but its closure rides this exact R1 check, so this Layer B cell
+# is also that finding's regression cell once IExpConstruct exists.
+add_construct("r1_interior_invalid_large_positive_q", 1000000, 6, 13, 95)
+
+# --- R2: q_ln2 >= 1. q_ln2=0 would divide by zero in the OLD decomposition if ever
+#     reached (never executed here -- add_construct short-circuits q_ln2<1 without
+#     calling in_domain/derive, so this generator itself never divides by zero
+#     either). ---
+add_construct("r2_last_valid_qln2_one", 0, 1, 5, 10)
+add_construct("r2_first_invalid_qln2_zero", 0, 0, 5, 10)
+add_construct("r2_interior_invalid_qln2_negative", 0, -1000, 5, 10)
+
+# --- R3: the q_ln2 ceiling, reusing the Layer A witnesses above (kIExpGuardOrderCases'
+#     f9_* rows) so the SAME inputs that crash today via the unchanged evaluator are
+#     also proven, once IExpConstruct exists, to construct cleanly (last-safe) or
+#     reject cleanly (first-over / interior / F9's own extreme witness) through the
+#     new checked entry point. ---
+add_construct("r3_last_valid_ceiling", 0, kIExpMaxQLn2, 1, 0)
+add_construct("r3_first_invalid_ceiling", 0, kIExpMaxQLn2 + 1, 1, 0)
+add_construct("r3_interior_invalid_ceiling", 0, 2 * kIExpMaxQLn2, 1, 0)
+add_construct("r3_f9_witness_int64_max", 0, INT64_MAX, 1, 0)
+
+# --- R4: q_p + q_b representability, reusing F21's exact witnesses -- see this
+#     block's own docstring above for why no R4-isolated-from-R5 witness exists. ---
+add_construct("r4_f21_witness_qb_int64_min", -1, 1000, INT64_MIN, 0)
+add_construct("r4_boundary_first_unsafe", -999, 1000, INT64_MIN + 998, 0)
+
+assert len(construct_cases) == 12
+
+# ---------------------------------------------------------------------------
 # Emit the C++ header.
 # ---------------------------------------------------------------------------
 
@@ -678,6 +765,40 @@ for label, fn, q, q_ln2, q_b, q_c, ok, eval_pinned, eval_val in guard_order_case
     )
 emit("};")
 emit(f"inline constexpr size_t kIExpGuardOrderCasesCount = {len(guard_order_cases)};")
+emit("")
+
+emit("// --- S-HARDEN-0 LAYER B: kIExpConstructCases, for the NEW `IExpConstruct` entry")
+emit("//     point (does not exist at f078403 -- this table and the test cells that")
+emit("//     consume it do NOT compile until Brunel builds it; see")
+emit("//     gen_iexp_domain_fixtures.py's own comment above this table's construction,")
+emit("//     and the test-design record,")
+emit("//     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md, for why this")
+emit("//     is the correct state today.")
+emit("//")
+emit("//     expected_z/expected_base/expected_value are valid only when expected_ok")
+emit("//     is true; every row is otherwise (false, 0, 0, 0) by construction, computed")
+emit("//     by the SAME independent oracle as every table above. ---")
+emit("")
+emit("struct IExpConstructCase {")
+emit("\tconst char* label;")
+emit("\tint64_t q;")
+emit("\tint64_t q_ln2;")
+emit("\tint64_t q_b;")
+emit("\tint64_t q_c;")
+emit("\tbool expected_ok;")
+emit("\tint64_t expected_z;")
+emit("\tint64_t expected_base;")
+emit("\tint64_t expected_value;")
+emit("};")
+emit("")
+emit("inline constexpr IExpConstructCase kIExpConstructCases[] = {")
+for label, q, q_ln2, q_b, q_c, ok, z, base, val in construct_cases:
+    emit(
+        f"\t{{{cxx_str(label)}, {cxx_i64(q)}, {cxx_i64(q_ln2)}, {cxx_i64(q_b)}, "
+        f"{cxx_i64(q_c)}, {cxx_bool(ok)}, {cxx_i64(z)}, {cxx_i64(base)}, {cxx_i64(val)}}},"
+    )
+emit("};")
+emit(f"inline constexpr size_t kIExpConstructCasesCount = {len(construct_cases)};")
 emit("")
 
 emit("}  // namespace superslm_test")
