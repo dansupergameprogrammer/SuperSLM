@@ -2632,13 +2632,21 @@ static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S2.6-amendment red suite for IExpShift / IExpBase / IExpConstantsInDomain
-// (D-SLM78/79/81; Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
-// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). These three
-// primitives, and IExpFromConstants's new internal domain assert, do not exist in
-// src/intmath.cpp / include/superslm/intmath.h yet -- every cell below fails to
-// compile (IExpShift/IExpBase/IExpConstantsInDomain are undeclared) until Brunel
-// lands the extraction. That is the expected, documented RED state.
+// Curie's S2.6-amendment red suite for IExpConstantsInDomain (D-SLM78/79/81;
+// Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
+// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). This primitive, and
+// IExpFromConstants's new internal domain assert, do not exist in src/intmath.cpp /
+// include/superslm/intmath.h yet -- every cell below fails to compile
+// (IExpConstantsInDomain is undeclared) until Brunel lands the extraction. That is
+// the expected, documented RED state.
+//
+// The two accessor cells originally here (TestIExpShiftMatchesIndependentlyDerivedZ,
+// TestIExpBaseMatchesIndependentlyDerivedBase, against IExpShift/IExpBase) were
+// PORTED to TestIExpConstructMatchesAccessorCasesZAndBase above (Brunel, mid-build,
+// 2026-07-21): IExpShift/IExpBase are removed from the public header by S-HARDEN-0,
+// so every cell using them had to move to IExpConstruct's IExpConstruction output.
+// kIExpAccessorCases itself (36 rows) is unchanged -- its values do not depend on
+// which function reads them.
 //
 // Every expected value in sslm_iexp_domain_fixtures.h is computed by
 // tests/gen_iexp_domain_fixtures.py, transcribing IExpFromConstants's documented
@@ -2647,41 +2655,6 @@ static void TestIExpFromConstantsClipClampsIdenticallyAcrossFamily() {
 // re-deriving the bound in fixed-width int64 (the exact shape of the D-SLM81
 // defect this amendment fixes).
 // ---------------------------------------------------------------------------
-
-static void TestIExpShiftMatchesIndependentlyDerivedZ() {
-	// IExpShift's z, checked against a value computed in Python arbitrary precision
-	// from the documented formula -- NOT against IExpFromConstants's own behavior
-	// (which would be a self-consistent oracle proving nothing once the parent is
-	// refactored to call this same accessor internally). Also checks live the
-	// postcondition IExpShift's own contract states: z in [0, I_EXP_CLIP_N].
-	using namespace superslm_test;
-	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
-		const IExpAccessorCase& c = kIExpAccessorCases[i];
-		int64_t got = superslm::IExpShift(c.q, c.q_ln2);
-		CHECK_MSG(got == c.expected_z, "%s: IExpShift(q=%lld, q_ln2=%lld) == %lld, want %lld (independently derived)",
-		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(got), static_cast<long long>(c.expected_z));
-		CHECK_MSG(got >= 0 && got <= superslm::I_EXP_CLIP_N,
-		          "%s: IExpShift(q=%lld, q_ln2=%lld) == %lld, outside documented [0, %d]", c.label,
-		          static_cast<long long>(c.q), static_cast<long long>(c.q_ln2), static_cast<long long>(got),
-		          superslm::I_EXP_CLIP_N);
-	}
-}
-
-static void TestIExpBaseMatchesIndependentlyDerivedBase() {
-	// IExpBase's base, checked against the same independently-derived (Python
-	// arbitrary precision) expectation as IExpShift above -- not against
-	// IExpFromConstants's own output.
-	using namespace superslm_test;
-	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
-		const IExpAccessorCase& c = kIExpAccessorCases[i];
-		int64_t got = superslm::IExpBase(c.q, c.q_ln2, c.q_b);
-		CHECK_MSG(got == c.expected_base,
-		          "%s: IExpBase(q=%lld, q_ln2=%lld, q_b=%lld) == %lld, want %lld (independently derived)", c.label,
-		          static_cast<long long>(c.q), static_cast<long long>(c.q_ln2), static_cast<long long>(c.q_b),
-		          static_cast<long long>(got), static_cast<long long>(c.expected_base));
-	}
-}
 
 static void TestIExpConstantsInDomainAcrossCorpus() {
 	// The full domain-predicate corpus: the strike's exact input, both the z=0 and
@@ -4060,6 +4033,20 @@ static void TestIExpFromConstantsAssertsOnOutOfDomainConstants() {
 // expected outcome for any row, at any point before or after the fix.
 // ---------------------------------------------------------------------------
 
+// FIXED 2026-07-21 (this session, against Brunel's landed implementation, `5d8b006`):
+// this function originally asserted kRanNoCrash unconditionally, in every build
+// configuration. Running the real suite in a plain (non-NDEBUG, non-sanitized) debug
+// build -- CI's `linux-x64-debug` leg -- surfaced 5 failures: every "eval" row whose
+// constants are out of domain aborts there, because `IExpFromConstants` "asserts
+// success" (its own documented contract) and the assert is compiled IN. That abort is
+// controlled, DEFINED program termination via `assert()` -- the same caller-ensures
+// convention `TestIExpFromConstantsAssertsOnOutOfDomainConstants` already exercises,
+// not the undefined behavior this population exists to close. Requiring kRanNoCrash
+// there was a defect in this cell's own original authoring (never run against a
+// debug build before Brunel's implementation landed), not a finding about the
+// implementation. "pred" rows (IExpConstantsInDomain, `== IExpConstruct(...) ==
+// kOk`, TOTAL and never-asserting by its own documented contract) are unaffected in
+// either configuration, confirmed by the same run (0 pred-row failures).
 static void TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpGuardOrderCasesCount; ++i) {
@@ -4069,14 +4056,33 @@ static void TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle()
 		                          std::to_string(c.q_b) + ":" + std::to_string(c.q_c);
 		std::string tail;
 		CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(probe_name.c_str(), &tail);
-		CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
-		          "%s: %s(%lld, %lld, %lld, %lld) must never execute undefined behavior "
-		          "(S-HARDEN-0 / F9 F21) -- outcome was %s, child output was: %s",
+		bool is_pred = std::string(c.fn) == "pred";
+#ifdef NDEBUG
+		// The sanitizer CI leg's own claim, and this suite's hard constraint (a
+		// death test that aborts only after the overflow is not a valid guard
+		// test): under NDEBUG every caller-ensures assert is compiled out, so the
+		// ONLY way an out-of-domain call can still terminate abnormally is
+		// undefined behavior actually executing. Every row, both fn, must not
+		// crash -- this is the population law's real claim and the one this
+		// section's red evidence (the test-design record) was captured against.
+		CrashProbeOutcome expected_outcome = CrashProbeOutcome::kRanNoCrash;
+#else
+		// Plain debug build, assert() compiled in. "pred" never asserts (TOTAL, by
+		// contract). "eval" aborts cleanly via its own "asserts success" contract
+		// on any row that is not in-domain -- controlled termination, not UB.
+		CrashProbeOutcome expected_outcome = (is_pred || c.expected_in_domain)
+		                                          ? CrashProbeOutcome::kRanNoCrash
+		                                          : CrashProbeOutcome::kRanAndCrashed;
+#endif
+		CHECK_MSG(outcome == expected_outcome,
+		          "%s: %s(%lld, %lld, %lld, %lld) -- outcome was %s, want %s "
+		          "(S-HARDEN-0 / F9 F21) -- child output was: %s",
 		          c.label, c.fn, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
-		          CrashProbeOutcomeName(outcome), tail.c_str());
+		          CrashProbeOutcomeName(outcome), CrashProbeOutcomeName(expected_outcome),
+		          tail.c_str());
 		if (outcome != CrashProbeOutcome::kRanNoCrash) continue;  // nothing further to check
-		if (std::string(c.fn) == "pred") {
+		if (is_pred) {
 			const char* expected = c.expected_in_domain ? "RETURNED true" : "RETURNED false";
 			CHECK_MSG(tail.find(expected) != std::string::npos,
 			          "%s: IExpConstantsInDomain(%lld, %lld, %lld, %lld) child output must contain "
@@ -4100,81 +4106,145 @@ static void TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle()
 
 // ---------------------------------------------------------------------------
 // Curie's S-HARDEN-0 population suite (LAYER B): the NEW `IExpConstruct` /
-// `IExpConstruction` entry point (SuperSLM_Plan.md's S-HARDEN-0 sub-slot; Claude/
-// Curie/superslm-s-harden-0-test-design-2026-07-21.md). NEITHER EXISTS AT f078403 --
-// every function below references a type and a function this commit's src/ and
-// include/ do not declare, so this section, and therefore this whole translation
-// unit, DOES NOT COMPILE until Brunel builds `IExpConstruct(int64_t, int64_t,
-// int64_t, int64_t, IExpConstruction*)` and the `IExpConstruction{int64_t z;
-// int64_t base;}` struct. This is the documented, correct state for Layer B: the red
-// suite is authored complete now, against the API the S-HARDEN-0 build will land, so
-// red-then-green begins the moment the API exists rather than being invented ad hoc
-// by whoever implements it.
+// `IExpConstruction` / `IExpDomain` entry point (SuperSLM_Plan.md's S-HARDEN-0
+// sub-slot; Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). NEITHER
+// EXISTS AT f078403 -- every function below references a type and a function this
+// commit's src/ and include/ do not declare, so this section, and therefore this
+// whole translation unit, DOES NOT COMPILE until Brunel builds `IExpDomain
+// IExpConstruct(int64_t, int64_t, int64_t, int64_t, IExpConstruction*)`, the
+// `IExpConstruction{int64_t z; int64_t base;}` struct, and the five-way `IExpDomain`
+// enum (`kOk`, `kNotRepresentable`, `kBadQ`, `kBadQLn2`, `kBadQB`). This is the
+// documented, correct state for Layer B: the red suite is authored complete now,
+// against the API the S-HARDEN-0 build will land, so red-then-green begins the
+// moment the API exists rather than being invented ad hoc by whoever implements it.
+//
+// REVISED 2026-07-21 (Brunel, mid-build): the entry point returns the five-way enum
+// above, not a bool. A committed golden
+// (`TestIExpFromConstantsAssertsOnOutOfDomainConstants`'s `#ifdef NDEBUG` arm, below
+// -- untouched by this revision) pins a DEFINED, narrowed-but-not-UB wrapped value for
+// one specific input once the guard-order fix lands, so the entry point must
+// distinguish "the decomposition is well-formed but the final result does not fit
+// int64" (`kNotRepresentable`, `*out` IS filled) from "the decomposition itself
+// could not be formed" (`kBadQ`/`kBadQLn2`/`kBadQB`, `*out` is left untouched).
+// `IExpConstantsInDomain(q, q_ln2, q_b, q_c)` is exactly
+// `IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk` -- same signature,
+// same bool, unchanged answers on every input that was previously defined.
 //
 // Every row consumed here is kIExpConstructCases (tests/sslm_iexp_domain_fixtures.h,
 // generated by tests/gen_iexp_domain_fixtures.py's `construct_cases` section), which
-// documents which of the five rejection reasons (R1 q<=0, R2 q_ln2>=1, R3 the q_ln2
-// ceiling, R4 q_p+q_b representability, R5 result representability) each row targets
-// and why R4 cannot be isolated from R5 by any black-box return value. R5 itself is
-// not re-derived here -- it is already exhaustively covered by kIExpDomainCases
-// above (62 cases against the unchanged IExpConstantsInDomain signature), which
-// continues to apply once IExpConstantsInDomain becomes a thin wrapper over
-// IExpConstruct(..., nullptr) per the plan's own wording.
+// documents which of the five outcomes (kOk, kNotRepresentable, kBadQ -- q<=0,
+// kBadQLn2 -- q_ln2's two axes collapsed to one outcome, kBadQB -- q_p+q_b
+// representability) each row targets. Under the bool contract this suite's prior
+// revision authored, kBadQB and kNotRepresentable were indistinguishable by return
+// value; under the enum they are two independently observable outcomes, and both
+// now carry their own witnesses (`kNotRepresentable` reuses D-SLM78's original
+// strike input, the exact triple `TestIExpFromConstantsAssertsOnOutOfDomainConstants`
+// already pins a wrapped value for).
 // ---------------------------------------------------------------------------
 
+// Stringifies IExpDomain for CHECK_MSG output and for comparison against the
+// fixture's expected_domain field (a string, kept free of a compile-time dependency
+// on IExpDomain's exact enum values -- see sslm_iexp_domain_fixtures.h's own
+// comment). Mirrors this file's existing CrashProbeOutcomeName pattern.
+static const char* IExpDomainName(IExpDomain d) {
+	switch (d) {
+		case IExpDomain::kOk:
+			return "kOk";
+		case IExpDomain::kNotRepresentable:
+			return "kNotRepresentable";
+		case IExpDomain::kBadQ:
+			return "kBadQ";
+		case IExpDomain::kBadQLn2:
+			return "kBadQLn2";
+		case IExpDomain::kBadQB:
+			return "kBadQB";
+	}
+	return "(unknown IExpDomain)";
+}
+
+// "*out is FILLED whenever the decomposition is well-formed -- that is, for kOk AND
+// kNotRepresentable." True for exactly those two outcome names.
+static bool IExpDomainNameIsWellFormed(const char* name) {
+	return std::strcmp(name, "kOk") == 0 || std::strcmp(name, "kNotRepresentable") == 0;
+}
+
+// The primary sweep: every row's returned IExpDomain against the independent oracle,
+// and -- for the two well-formed outcomes -- out.z/out.base against the same oracle.
+// Does not poison *out with a sentinel (that is the dedicated concern of
+// TestIExpConstructOutContractPerOutcome below); this function is the one place a
+// reader confirms "does the entry point classify and decompose correctly" without
+// also having to reason about the untouched-vs-filled contract at the same time.
 static void TestIExpConstructMatchesIndependentOracleAcrossCases() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
-		IExpConstruction out;
-		bool ok = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
-		CHECK_MSG(ok == c.expected_ok,
+		IExpConstruction out{};
+		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
+		CHECK_MSG(std::strcmp(IExpDomainName(got), c.expected_domain) == 0,
 		          "%s: IExpConstruct(%lld, %lld, %lld, %lld) returned %s, independently-derived "
 		          "oracle expects %s",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), ok ? "true" : "false",
-		          c.expected_ok ? "true" : "false");
-		if (ok && c.expected_ok) {
+		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), IExpDomainName(got),
+		          c.expected_domain);
+		if (std::strcmp(IExpDomainName(got), c.expected_domain) != 0) continue;
+		if (IExpDomainNameIsWellFormed(c.expected_domain)) {
 			CHECK_MSG(out.z == c.expected_z,
-			          "%s: IExpConstruct(%lld, %lld, %lld, %lld).z == %lld, oracle expects %lld",
+			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].z == %lld, oracle expects %lld",
 			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
+			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.expected_domain,
 			          static_cast<long long>(out.z), static_cast<long long>(c.expected_z));
 			CHECK_MSG(out.base == c.expected_base,
-			          "%s: IExpConstruct(%lld, %lld, %lld, %lld).base == %lld, oracle expects %lld",
+			          "%s: IExpConstruct(%lld, %lld, %lld, %lld) [%s].base == %lld, oracle expects %lld",
 			          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
+			          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.expected_domain,
 			          static_cast<long long>(out.base), static_cast<long long>(c.expected_base));
 		}
 	}
 }
 
-// The IExpConstruction contract: "*out is emitted only on success; *out is left
-// untouched on failure." A construction that ZEROS *out on failure would pass every
-// check above (0 is never one of this table's expected_z/expected_base values by
-// construction of the fixtures) but violates the documented contract -- this cell is
-// the one that distinguishes "left untouched" from "reset to some other fixed value",
-// by pre-filling *out with a sentinel neither 0 nor any expected in-domain value and
-// confirming the sentinel survives the call.
-static void TestIExpConstructLeavesOutUntouchedOnFailure() {
+// The IExpConstruction contract, per outcome: filled for kOk and kNotRepresentable,
+// untouched for kBadQ/kBadQLn2/kBadQB. Pre-fills *out with a sentinel neither 0 nor
+// any expected z/base value in this table (0 is never emitted by the generator for a
+// well-formed row), so "filled with the independently-derived value" and "left
+// untouched" are both distinguishable from "reset to some other fixed value" (e.g.
+// zeroed), which the primary sweep above cannot detect on its own -- a zeroing
+// implementation would still pass every check there, since 0 never appears as an
+// expected z/base by construction. This is the cell Brunel's finding calls for: a
+// kNotRepresentable row's *out must be filled with the SAME z/base the old
+// decomposition produced (the exact construction the pinned wrapped-value golden on
+// TestIExpFromConstantsAssertsOnOutOfDomainConstants below is computed from), not
+// merely "not crash."
+static void TestIExpConstructOutContractPerOutcome() {
 	using namespace superslm_test;
 	const int64_t kSentinelZ = INT64_C(0x5EED5EED5EED5EED);
 	const int64_t kSentinelBase = INT64_C(0x1234123412341234);
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
-		if (c.expected_ok) continue;  // only failure rows exercise this contract
 		IExpConstruction out;
 		out.z = kSentinelZ;
 		out.base = kSentinelBase;
-		bool ok = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
-		CHECK_MSG(!ok, "%s: IExpConstruct(%lld, %lld, %lld, %lld) must return false on this row",
+		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, &out);
+		CHECK_MSG(std::strcmp(IExpDomainName(got), c.expected_domain) == 0,
+		          "%s: IExpConstruct(%lld, %lld, %lld, %lld) returned %s, independently-derived "
+		          "oracle expects %s",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c));
-		CHECK_MSG(out.z == kSentinelZ && out.base == kSentinelBase,
-		          "%s: IExpConstruct(...) must leave *out untouched on failure -- got z=%lld "
-		          "base=%lld, sentinel was z=%lld base=%lld",
-		          c.label, static_cast<long long>(out.z), static_cast<long long>(out.base),
-		          static_cast<long long>(kSentinelZ), static_cast<long long>(kSentinelBase));
+		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), IExpDomainName(got),
+		          c.expected_domain);
+		if (IExpDomainNameIsWellFormed(c.expected_domain)) {
+			CHECK_MSG(out.z == c.expected_z && out.base == c.expected_base,
+			          "%s: IExpConstruct(...) is %s and must FILL *out -- got z=%lld base=%lld, "
+			          "oracle expects z=%lld base=%lld",
+			          c.label, c.expected_domain, static_cast<long long>(out.z),
+			          static_cast<long long>(out.base), static_cast<long long>(c.expected_z),
+			          static_cast<long long>(c.expected_base));
+		} else {
+			CHECK_MSG(out.z == kSentinelZ && out.base == kSentinelBase,
+			          "%s: IExpConstruct(...) is %s and must leave *out UNTOUCHED -- got z=%lld "
+			          "base=%lld, sentinel was z=%lld base=%lld",
+			          c.label, c.expected_domain, static_cast<long long>(out.z),
+			          static_cast<long long>(out.base), static_cast<long long>(kSentinelZ),
+			          static_cast<long long>(kSentinelBase));
+		}
 	}
 }
 
@@ -4183,37 +4253,105 @@ static void TestIExpConstructAcceptsNullOutForPredicateOnlyUse() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
-		bool ok = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, nullptr);
-		CHECK_MSG(ok == c.expected_ok,
+		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, nullptr);
+		CHECK_MSG(std::strcmp(IExpDomainName(got), c.expected_domain) == 0,
 		          "%s: IExpConstruct(%lld, %lld, %lld, %lld, nullptr) returned %s, "
 		          "independently-derived oracle expects %s",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
-		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), ok ? "true" : "false",
-		          c.expected_ok ? "true" : "false");
+		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), IExpDomainName(got),
+		          c.expected_domain);
 	}
 }
 
-// "IExpConstantsInDomain(q, q_ln2, q_b, q_c) becomes IExpConstruct(q, q_ln2, q_b,
-// q_c, nullptr)" (S-HARDEN-0 sub-slot). Proves the equivalence directly rather than
-// assuming the two calls agree because both matched the same oracle independently.
-static void TestIExpConstantsInDomainEquivalentToIExpConstructWithNullOut() {
+// "IExpConstantsInDomain(q, q_ln2, q_b, q_c) is exactly IExpConstruct(q, q_ln2, q_b,
+// q_c, nullptr) == IExpDomain::kOk -- same signature, same bool, unchanged answers on
+// every input that was previously defined" (S-HARDEN-0 sub-slot, Brunel's revision).
+// Proves the equivalence directly rather than assuming the two calls agree because
+// both matched the same oracle independently.
+static void TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
 		bool pred = IExpConstantsInDomain(c.q, c.q_ln2, c.q_b, c.q_c);
-		bool construct_null = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, nullptr);
-		CHECK_MSG(pred == construct_null,
+		bool construct_is_ok = IExpConstruct(c.q, c.q_ln2, c.q_b, c.q_c, nullptr) == IExpDomain::kOk;
+		bool expected_ok = std::strcmp(c.expected_domain, "kOk") == 0;
+		CHECK_MSG(pred == construct_is_ok,
 		          "%s: IExpConstantsInDomain(%lld, %lld, %lld, %lld) == %s but "
-		          "IExpConstruct(..., nullptr) == %s on the identical arguments",
+		          "(IExpConstruct(..., nullptr) == kOk) == %s on the identical arguments",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
-		          pred ? "true" : "false", construct_null ? "true" : "false");
-		CHECK_MSG(pred == c.expected_ok,
+		          pred ? "true" : "false", construct_is_ok ? "true" : "false");
+		CHECK_MSG(pred == expected_ok,
 		          "%s: IExpConstantsInDomain(%lld, %lld, %lld, %lld) == %s, independently-derived "
 		          "oracle expects %s",
 		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
 		          static_cast<long long>(c.q_b), static_cast<long long>(c.q_c),
-		          pred ? "true" : "false", c.expected_ok ? "true" : "false");
+		          pred ? "true" : "false", expected_ok ? "true" : "false");
+	}
+}
+
+// ---------------------------------------------------------------------------
+// PORTED (Brunel, mid-build): the pre-existing S2.6-amendment accessor cells
+// (Claude/Curie/superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md)
+// called `superslm::IExpShift`/`superslm::IExpBase` directly; both are removed from
+// the public header by this slot. `kIExpAccessorCases` (tests/
+// sslm_iexp_domain_fixtures.h, unchanged -- its 36 rows' values are unaffected by
+// the API change) is reused as-is; only the two functions that consumed it are
+// ported, merged into one below since both now come from a single IExpConstruct
+// call rather than two separate accessor calls. Confirmed (this session, before
+// porting): none of the 36 rows' q_ln2 exceeds kIExpMaxQLn2 (max is 887904998
+// against a ceiling of 307445734561825860), so none needs to become a rejection
+// cell -- the caution in Brunel's message ("cells that pin decomposition values for
+// inputs ABOVE the q_ln2 ceiling... cannot port as value pins") does not apply to
+// any row here, verified rather than assumed. Every row is expected kOk (each
+// already produced a golden that fits int64_t, per the original suite's own
+// docstring), so this function also checks the returned IExpDomain.
+// ---------------------------------------------------------------------------
+
+static void TestIExpConstructMatchesAccessorCasesZAndBase() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
+		const IExpAccessorCase& c = kIExpAccessorCases[i];
+		IExpConstruction out{};
+		IExpDomain got = IExpConstruct(c.q, c.q_ln2, c.q_b, /*q_c=*/0, &out);
+		// q_c=0 here: kIExpAccessorCases carries no q_c field (IExpShift/IExpBase
+		// never took one -- z/base depend only on q, q_ln2, q_b) and this function
+		// checks only z/base, not the final (base^2+q_c)>>z step, so no real q_c is
+		// needed. This does NOT justify asserting kOk specifically: q_c=0 is a
+		// fabricated probe value, not this row's real q_c, so its actual domain
+		// (kOk vs kNotRepresentable) at q_c=0 is not a claim about the row as
+		// originally fixtured. What IS true regardless of q_c, confirmed for every
+        // one of these 36 rows before porting (all have q<=0, 1<=q_ln2<=ceiling --
+		// verified above -- and |q_b| at most ~1.7e9, far below where q_p+q_b could
+		// overflow int64): the decomposition is well-formed, so *out is filled and
+		// the domain is one of {kOk, kNotRepresentable} -- never one of the three
+		// kBad* outcomes, which would leave *out untouched and make the z/base
+		// comparisons below meaningless.
+		CHECK_MSG(got == IExpDomain::kOk || got == IExpDomain::kNotRepresentable,
+		          "%s: IExpConstruct(%lld, %lld, %lld, 0) returned %s, want kOk or "
+		          "kNotRepresentable (this row's decomposition is well-formed regardless of q_c)",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), IExpDomainName(got));
+		if (got != IExpDomain::kOk && got != IExpDomain::kNotRepresentable) continue;
+		CHECK_MSG(out.z == c.expected_z,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z == %lld, want %lld "
+		          "(independently derived)",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.z),
+		          static_cast<long long>(c.expected_z));
+		CHECK_MSG(out.base == c.expected_base,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).base == %lld, want %lld "
+		          "(independently derived)",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.base),
+		          static_cast<long long>(c.expected_base));
+		// IExpShift's own documented postcondition (z in [0, I_EXP_CLIP_N]),
+		// checked live -- ported unchanged from TestIExpShiftMatchesIndependentlyDerivedZ.
+		CHECK_MSG(out.z >= 0 && out.z <= I_EXP_CLIP_N,
+		          "%s: IExpConstruct(q=%lld, q_ln2=%lld, q_b=%lld).z == %lld, outside documented "
+		          "[0, %d]",
+		          c.label, static_cast<long long>(c.q), static_cast<long long>(c.q_ln2),
+		          static_cast<long long>(c.q_b), static_cast<long long>(out.z), I_EXP_CLIP_N);
 	}
 }
 
@@ -5107,11 +5245,9 @@ int main(int argc, char** argv) {
 	TestIExpFromConstants();
 	TestIExpFromConstantsClipClampsIdenticallyAcrossFamily();
 
-	// --- Curie's S2.6-amendment red suite for IExpShift/IExpBase/
-	//     IExpConstantsInDomain (red-first; these primitives and IExpFromConstants's
-	//     new internal domain assert do not exist yet -- D-SLM78/79/81). ---
-	TestIExpShiftMatchesIndependentlyDerivedZ();
-	TestIExpBaseMatchesIndependentlyDerivedBase();
+	// --- Curie's S2.6-amendment red suite for IExpConstantsInDomain (red-first;
+	//     this primitive and IExpFromConstants's new internal domain assert do not
+	//     exist yet -- D-SLM78/79/81). ---
 	TestIExpConstantsInDomainAcrossCorpus();
 	TestIExpConstantsInDomainRejectsStrikeExactInput();
 	TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim();
@@ -5123,14 +5259,17 @@ int main(int argc, char** argv) {
 	TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle();
 
 	// --- Curie's S-HARDEN-0 population suite, LAYER B (F9/F21's fix, the new
-	//     IExpConstruct/IExpConstruction API -- does not exist at f078403; this
-	//     whole translation unit does not compile until Brunel builds it. Expected
-	//     and correct -- see the section's own comment above and the test-design
-	//     record, Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). ---
+	//     IExpConstruct/IExpConstruction/IExpDomain API -- does not exist at
+	//     f078403; this whole translation unit does not compile until Brunel builds
+	//     it. Expected and correct -- see the section's own comment above and the
+	//     test-design record, Claude/Curie/superslm-s-harden-0-test-design-
+	//     2026-07-21.md. Includes the ported S2.6-amendment accessor cells,
+	//     TestIExpConstructMatchesAccessorCasesZAndBase (Brunel, mid-build). ---
 	TestIExpConstructMatchesIndependentOracleAcrossCases();
-	TestIExpConstructLeavesOutUntouchedOnFailure();
+	TestIExpConstructOutContractPerOutcome();
 	TestIExpConstructAcceptsNullOutForPredicateOnlyUse();
-	TestIExpConstantsInDomainEquivalentToIExpConstructWithNullOut();
+	TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk();
+	TestIExpConstructMatchesAccessorCasesZAndBase();
 
 	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
 	//     RopeApplyPair body is currently the deliberately-wrong stub sentinel

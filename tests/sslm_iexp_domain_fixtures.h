@@ -196,9 +196,14 @@ inline constexpr size_t kIExpGuardOrderCasesCount = 10;
 //     Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md, for why this
 //     is the correct state today.
 //
-//     expected_z/expected_base/expected_value are valid only when expected_ok
-//     is true; every row is otherwise (false, 0, 0, 0) by construction, computed
-//     by the SAME independent oracle as every table above. ---
+//     expected_domain is one of "kOk", "kNotRepresentable", "kBadQ",
+//     "kBadQLn2", "kBadQB" -- a string, not superslm::IExpDomain directly, so
+//     this header stays free of a compile-time dependency on that enum's exact
+//     values; the consuming test maps IExpDomain to its name and string-compares.
+//     expected_z/expected_base are valid (IExpConstruction is filled) whenever
+//     expected_domain is "kOk" or "kNotRepresentable" -- the decomposition is
+//     well-formed for both; they are 0 placeholders, never asserted, for the
+//     three kBad* rows, where *out is contractually left untouched. ---
 
 struct IExpConstructCase {
 	const char* label;
@@ -206,27 +211,29 @@ struct IExpConstructCase {
 	int64_t q_ln2;
 	int64_t q_b;
 	int64_t q_c;
-	bool expected_ok;
+	const char* expected_domain;
 	int64_t expected_z;
 	int64_t expected_base;
-	int64_t expected_value;
 };
 
 inline constexpr IExpConstructCase kIExpConstructCases[] = {
-	{"r1_last_valid_q_zero", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), true, INT64_C(0), INT64_C(13), INT64_C(264)},
-	{"r1_first_invalid_q_one", INT64_C(1), INT64_C(6), INT64_C(13), INT64_C(95), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r1_interior_invalid_large_positive_q", INT64_C(1000000), INT64_C(6), INT64_C(13), INT64_C(95), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r2_last_valid_qln2_one", INT64_C(0), INT64_C(1), INT64_C(5), INT64_C(10), true, INT64_C(0), INT64_C(5), INT64_C(35)},
-	{"r2_first_invalid_qln2_zero", INT64_C(0), INT64_C(0), INT64_C(5), INT64_C(10), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r2_interior_invalid_qln2_negative", INT64_C(0), INT64_C(-1000), INT64_C(5), INT64_C(10), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r3_last_valid_ceiling", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), true, INT64_C(0), INT64_C(1), INT64_C(1)},
-	{"r3_first_invalid_ceiling", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r3_interior_invalid_ceiling", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r3_f9_witness_int64_max", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r4_f21_witness_qb_int64_min", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
-	{"r4_boundary_first_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), false, INT64_C(0), INT64_C(0), INT64_C(0)},
+	{"badq_last_valid_q_zero", INT64_C(0), INT64_C(6), INT64_C(13), INT64_C(95), "kOk", INT64_C(0), INT64_C(13)},
+	{"badq_first_invalid_q_one", INT64_C(1), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0)},
+	{"badq_interior_invalid_large_positive_q", INT64_C(1000000), INT64_C(6), INT64_C(13), INT64_C(95), "kBadQ", INT64_C(0), INT64_C(0)},
+	{"badqln2_last_valid_qln2_one", INT64_C(0), INT64_C(1), INT64_C(5), INT64_C(10), "kOk", INT64_C(0), INT64_C(5)},
+	{"badqln2_first_invalid_qln2_zero", INT64_C(0), INT64_C(0), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0)},
+	{"badqln2_interior_invalid_qln2_negative", INT64_C(0), INT64_C(-1000), INT64_C(5), INT64_C(10), "kBadQLn2", INT64_C(0), INT64_C(0)},
+	{"badqln2_last_valid_ceiling", INT64_C(0), INT64_C(307445734561825860), INT64_C(1), INT64_C(0), "kOk", INT64_C(0), INT64_C(1)},
+	{"badqln2_first_invalid_ceiling", INT64_C(0), INT64_C(307445734561825861), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
+	{"badqln2_interior_invalid_ceiling", INT64_C(0), INT64_C(614891469123651720), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
+	{"badqln2_f9_witness_int64_max", INT64_C(0), INT64_C(9223372036854775807), INT64_C(1), INT64_C(0), "kBadQLn2", INT64_C(0), INT64_C(0)},
+	{"badqb_f21_witness_qb_int64_min", INT64_C(-1), INT64_C(1000), INT64_MIN, INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0)},
+	{"badqb_boundary_first_unsafe", INT64_C(-999), INT64_C(1000), INT64_C(-9223372036854774810), INT64_C(0), "kBadQB", INT64_C(0), INT64_C(0)},
+	{"notrepresentable_strike_witness", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(9223372036854775807), "kNotRepresentable", INT64_C(0), INT64_C(1733160715)},
+	{"notrepresentable_boundary_last_ok", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464582), "kOk", INT64_C(0), INT64_C(1733160715)},
+	{"notrepresentable_boundary_first_not_representable", INT64_C(0), INT64_C(887904998), INT64_C(1733160715), INT64_C(6219525972835464583), "kNotRepresentable", INT64_C(0), INT64_C(1733160715)},
 };
-inline constexpr size_t kIExpConstructCasesCount = 12;
+inline constexpr size_t kIExpConstructCasesCount = 15;
 
 }  // namespace superslm_test
 
