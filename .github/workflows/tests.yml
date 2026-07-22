@@ -89,4 +89,4 @@ jobs:
       # bare checkout. Resolves its output path from __file__, so the cwd does not matter.
       - run: python tests/gen_iexp_domain_fixtures.py
       - name: Fail if regenerating changed any tracked file
-        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h tests/sslm_iexp_domain_fixtures.h
+        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h

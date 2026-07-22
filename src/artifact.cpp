@@ -78,6 +78,8 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 const char* SslmStatusName(SslmStatus s) noexcept {
 	switch (s) {
 		case SslmStatus::Ok: return "Ok";
+		case SslmStatus::NullData: return "NullData";
+		case SslmStatus::NullPath: return "NullPath";
 		case SslmStatus::Truncated: return "Truncated";
 		case SslmStatus::BadMagic: return "BadMagic";
 		case SslmStatus::UnsupportedVersion: return "UnsupportedVersion";
@@ -134,11 +136,60 @@ struct Placed {
 	uint32_t alignment;
 };
 
+// F1 (S-HARDEN-1): the required-section schema, keyed by format_version and
+// transcribed independently from docs/sslm_format.md's section-types table
+// (the "**required**" / "**required from v2**" column) rather than derived
+// from the writer. Presence alone is not the claim — every placed section
+// already carries its own type+dtype pairing check (SectionDtypeMismatch,
+// below), so a required section that IS present is checked on both axes; this
+// table only supplies the "and it must be present at all" axis, per version.
+struct RequiredSection {
+	SslmSectionType type;
+	const char* name;
+};
+constexpr RequiredSection kRequiredSectionsV1[] = {
+    {SslmSectionType::Config, "Config"},
+};
+constexpr RequiredSection kRequiredSectionsV2[] = {
+    {SslmSectionType::Config, "Config"},
+    {SslmSectionType::SigmoidLut, "SigmoidLut"},  // required from v2 (C10, D-SLM68)
+};
+
+struct RequiredSectionSpan {
+	const RequiredSection* items;
+	size_t count;
+};
+
+// Only `version == kArtifactFormatVersion` ever reaches this (the version
+// check above rejects everything else with UnsupportedVersion), so today only
+// the v2 arm is reachable. The v1 arm is kept as a real, checkable row rather
+// than deleted, so the table stays a version-indexed schema in fact and not
+// only in name if a v1 compatibility mode is ever added.
+RequiredSectionSpan RequiredSectionsForVersion(uint32_t version) noexcept {
+	switch (version) {
+		case 1:
+			return RequiredSectionSpan{kRequiredSectionsV1,
+			                            sizeof(kRequiredSectionsV1) / sizeof(kRequiredSectionsV1[0])};
+		case 2:
+		default:
+			return RequiredSectionSpan{kRequiredSectionsV2,
+			                            sizeof(kRequiredSectionsV2) / sizeof(kRequiredSectionsV2[0])};
+	}
+}
+
 } // namespace
 
 SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
                                         SslmArtifact& out, SslmError* err) {
 	out = SslmArtifact{};
+
+	// F14: a null buffer is rejected explicitly and unconditionally, before any
+	// other check (including the length check below) — `size` alone cannot
+	// prove `data` is valid, and a nonzero `size` with `data == nullptr` must
+	// never reach `std::memcmp`.
+	if (data == nullptr) {
+		return Reject(err, SslmStatus::NullData, kNoSection, "data pointer is null");
+	}
 
 	// --- Header (all checks before a single section byte is examined) ---
 	if (size < kHeaderBytes) {
@@ -293,13 +344,27 @@ SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
 			}
 		}
 	}
-	bool has_config = false;
-	for (const Placed& p : placed) {
-		if (static_cast<SslmSectionType>(p.type) == SslmSectionType::Config) has_config = true;
-	}
-	if (!has_config) {
-		return Reject(err, SslmStatus::MissingSection, kNoSection,
-		              "required Config section is absent");
+	// F1: version-indexed required-section schema. Every required section for
+	// THIS artifact's format_version must be present — checked one at a time so
+	// the diagnostic names the specific missing section (never a generic "a
+	// required section is missing"), and in table order so a config-only v2
+	// artifact (Config present, SigmoidLut absent) reports MissingSection
+	// naming SigmoidLut specifically, not Config.
+	{
+		const RequiredSectionSpan required = RequiredSectionsForVersion(version);
+		for (size_t r = 0; r < required.count; ++r) {
+			bool found = false;
+			for (const Placed& p : placed) {
+				if (static_cast<SslmSectionType>(p.type) == required.items[r].type) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				return Reject(err, SslmStatus::MissingSection, kNoSection,
+				              std::string("required ") + required.items[r].name + " section is absent");
+			}
+		}
 	}
 
 	// --- Accepted: take ownership of the bytes and build views into them. bytes_
@@ -330,6 +395,12 @@ SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
 
 SslmStatus SslmArtifact::OpenFromFile(const char* path, SslmArtifact& out, SslmError* err) {
 	out = SslmArtifact{};
+	// F14: a null path is rejected explicitly, before any file-system call —
+	// std::ifstream's path constructor requires a valid null-terminated string,
+	// so a null `path` must never reach it.
+	if (path == nullptr) {
+		return Reject(err, SslmStatus::NullPath, kNoSection, "path pointer is null");
+	}
 	std::ifstream f(path, std::ios::binary | std::ios::ate);
 	if (!f) {
 		return Reject(err, SslmStatus::IoError, kNoSection,

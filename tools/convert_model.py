@@ -101,6 +101,14 @@ def build_sections(model):
     klr = {k: tuple(int(x) for x in model.kv_landing_reciprocals[k]) for k in sorted(model.kv_landing_reciprocals)}
     sections.append(F.Section(F.SectionType.KV_LANDING_RECIPROCALS, W.write_kvc1(3, klr)))
 
+    # SigmoidLut (SIL1) — required from v2 (C10, D-SLM68). S-HARDEN-1 (F1): this was
+    # never wired in, so the standard converter emitted a formally invalid v2
+    # artifact that the loader's presence-only Config check let through unnoticed
+    # (the correlated-oracle failure §17.3 exists to catch). The table is the fixed
+    # universal construction (build_sigmoid_lut) the runtime's pinned canonical
+    # content check (ParseSigmoidLut, src/model.cpp) validates against byte-for-byte.
+    sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
+
     return sections
 
 

@@ -208,6 +208,50 @@ static void TestRejectsTruncatedHeader() {
 	CHECK(err.section_index == kNoSection);
 }
 
+// F14 (S-HARDEN-1): a null buffer with a nonzero size must be REJECTED with an
+// explicit diagnostic, never dereferenced. Before this fix, OpenFromMemory's
+// only length check (`size < kHeaderBytes`) lets a 64+-byte nonzero `size`
+// through to `std::memcmp(data, kMagic, 4)`, which faults on `data == nullptr`
+// (the external review's ASan probe: abort on `OpenFromMemory(nullptr, 64, ...)`).
+// This cell asserts the DEFINED-REJECTION contract, not merely "does not crash"
+// — a null check that returns Ok would pass a crash-only assertion and still be
+// wrong, so the assertion is the specific status and diagnostic.
+static void TestRejectsNullDataNonzeroSize() {
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(nullptr, 64, out, &err);
+	CHECK_MSG(status == SslmStatus::NullData, "got %s, want NullData", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::NullData);
+	CHECK(err.section_index == kNoSection);
+	CHECK(!out.Ok());
+}
+
+// The null-buffer rejection does not depend on `size` happening to clear the
+// header-length bound — a null pointer with a SMALL nonzero size (which the
+// unfixed code's `size < kHeaderBytes` check would have caught first, masking
+// whether the null check exists at all) must reach the same explicit status.
+static void TestRejectsNullDataSmallNonzeroSize() {
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(nullptr, 4, out, &err);
+	CHECK_MSG(status == SslmStatus::NullData, "got %s, want NullData", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::NullData);
+	CHECK(!out.Ok());
+}
+
+// F14 (S-HARDEN-1): a null path must be rejected explicitly, never handed to
+// the stream constructor (whose behavior on a null `const char*` is itself
+// undefined — std::ifstream's path constructor requires a valid null-terminated
+// string).
+static void TestRejectsNullPath() {
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromFile(nullptr, out, &err);
+	CHECK_MSG(status == SslmStatus::NullPath, "got %s, want NullPath", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::NullPath);
+	CHECK(!out.Ok());
+}
+
 static void TestRejectsTruncatedSectionTable() {
 	// Two sections declared (a 144-byte table+header region) but the buffer is cut
 	// to 100 bytes — the header is intact but the declared table does not fit.
@@ -514,7 +558,7 @@ static void TestRejectsIntegrityMismatch() {
 
 static void TestAcceptsEmptySection() {
 	FixtureSection empty = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {});  // byte_size 0
-	auto built = BuildArtifact({MakeConfigSection(), empty});
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(), empty});  // SigmoidLut required from v2 (F1)
 
 	SslmArtifact out;
 	SslmError err;
@@ -530,7 +574,7 @@ static void TestAcceptsEmptySection() {
 }
 
 static void TestAcceptsMaximumAlignment() {
-	auto built = BuildArtifact({MakeConfigSection(),
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/4096)});
 	SslmArtifact out;
@@ -547,17 +591,25 @@ static void TestAcceptsSectionsInNonAscendingOffsetOrder() {
 	// Table row 0 (Config) is placed at the HIGHER byte offset; table row 1
 	// (Provenance) is placed at the LOWER one — docs/sslm_format.md: "Their order
 	// in the table is not constrained; their byte ranges are."
+	//
+	// Three rows now (SigmoidLut required from v2, F1): the header+table region
+	// is 64 + 3*40 = 184 bytes, so every explicit offset below must clear that —
+	// the two-row table this cell predates only needed to clear 144.
 	FixtureSection config = MakeConfigSection();
 	config.data.resize(32, '{');
 	config.alignment = 16;
-	config.offset_override = 160;  // 160 % 16 == 0
+	config.offset_override = 224;  // 224 % 16 == 0; >= table_end (184) and >= provenance's end (208)
 
 	FixtureSection provenance =
 	    MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 	                /*alignment=*/16);
-	provenance.offset_override = 144;  // 144 % 16 == 0; ends exactly at 160, no overlap
+	provenance.offset_override = 192;  // 192 % 16 == 0; >= table_end (184); ends at 208, no overlap with config
 
-	auto built = BuildArtifact({config, provenance});
+	// required from v2 (F1) — explicit offset well past both of the above.
+	FixtureSection sigmoid_lut = MakeSigmoidLutSection();
+	sigmoid_lut.offset_override = 320;  // 320 % 64 == 0; >= config's end (256)
+
+	auto built = BuildArtifact({config, provenance, sigmoid_lut});
 
 	SslmArtifact out;
 	SslmError err;
@@ -583,8 +635,8 @@ static void TestAcceptsSectionsInNonAscendingOffsetOrder() {
 }
 
 static void TestAcceptsReservedSectionTypeStructurally() {
-	auto built = BuildArtifact(
-	    {MakeConfigSection(), MakeSection(SslmSectionType::Tokenizer, SslmDtype::Raw, {9, 9, 9})});
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
+	                            MakeSection(SslmSectionType::Tokenizer, SslmDtype::Raw, {9, 9, 9})});
 	SslmArtifact out;
 	SslmError err;
 	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
@@ -603,8 +655,8 @@ static void TestAcceptsReservedSectionTypeStructurally() {
 }
 
 static void TestOpenFromFileLoadsValidArtifact() {
-	auto built = BuildArtifact(
-	    {MakeConfigSection(), MakeSection(SslmSectionType::Weights, SslmDtype::Int8, EncodeInt8({1, 2, 3, 4}))});
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
+	                            MakeSection(SslmSectionType::Weights, SslmDtype::Int8, EncodeInt8({1, 2, 3, 4}))});
 
 	std::filesystem::path path =
 	    std::filesystem::temp_directory_path() / "superslm_test_valid_artifact_37c1.sslm";
@@ -665,8 +717,9 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	FixtureSection rope =
 	    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64,
 	                EncodeInt64LE({1, -1, 123456789012LL, 0}), /*alignment=*/64);
+	FixtureSection sigmoid_lut = MakeSigmoidLutSection();  // required from v2 (F1)
 
-	auto built = BuildArtifact({config, weights, biases, rope});
+	auto built = BuildArtifact({config, weights, biases, rope, sigmoid_lut});
 
 	SslmArtifact out;
 	SslmError err;
@@ -675,7 +728,7 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	CHECK(out.Ok());
 	CHECK(out.FormatVersion() == kArtifactFormatVersion);
 	CHECK(out.FileBytes() == built.bytes.size());
-	CHECK(out.Sections().size() == 4);
+	CHECK(out.Sections().size() == 5);
 
 	// Independent fingerprint oracle: SHA-256 over the exact bytes handed to
 	// OpenFromMemory, hash field zeroed — the spec's definition, computed fresh
@@ -701,6 +754,7 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 	    {SslmSectionType::Weights, SslmDtype::Int8, &weights.data, 8, 64},
 	    {SslmSectionType::Biases, SslmDtype::Int64, &biases.data, 4, 64},
 	    {SslmSectionType::RopeTables, SslmDtype::Int64, &rope.data, 4, 64},
+	    {SslmSectionType::SigmoidLut, SslmDtype::Int32, &sigmoid_lut.data, kSigmoidLutBytes / 4, 64},
 	};
 	for (const auto& e : expected) {
 		const SslmSectionView* view = out.Section(e.type);
@@ -5056,6 +5110,12 @@ int main(int argc, char** argv) {
 	TestRejectsNonzeroFlags();
 	TestRejectsNonzeroReserved0();
 	TestRejectsTruncatedHeader();
+
+	// --- S-HARDEN-1 (F14): null-buffer / null-path rejection (red-first). ---
+	TestRejectsNullDataNonzeroSize();
+	TestRejectsNullDataSmallNonzeroSize();
+	TestRejectsNullPath();
+
 	TestRejectsTruncatedSectionTable();
 	TestRejectsTooManySections();
 	TestRejectsFileSizeMismatch();

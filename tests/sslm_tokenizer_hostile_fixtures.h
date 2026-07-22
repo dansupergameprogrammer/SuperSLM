@@ -17,6 +17,7 @@
 #define SUPERSLM_TESTS_SSLM_TOKENIZER_HOSTILE_FIXTURES_H
 
 #include "sslm_fixtures.h"
+#include "sslm_sil1_hostile_fixtures.h"  // MakeSigmoidLutSection — required from v2 (S-HARDEN-1, F1)
 #include "superslm/artifact.h"
 
 #include <array>
@@ -321,21 +322,25 @@ inline BuiltUni1 MakeMinimalValidUni1() {
 // calling this always gets a self-consistent, integrity-valid outer artifact: the
 // loader accepts it, and only TokenizerView::Open's sub-parse can reject.
 inline BuiltArtifact BuildTokenizerArtifact(const std::vector<uint8_t>& tok1, const std::vector<uint8_t>& uni1) {
-	return BuildArtifact({MakeConfigSection(),
+	return BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),
 	                       MakeSection(superslm::SslmSectionType::Tokenizer, superslm::SslmDtype::Raw, tok1),
 	                       MakeSection(superslm::SslmSectionType::UnicodeTables, superslm::SslmDtype::Raw, uni1)});
 }
 
-// Config + Tokenizer only — no UnicodeTables section.
+// Config + SigmoidLut + Tokenizer only — no UnicodeTables section. SigmoidLut is
+// present (required from v2, S-HARDEN-1 F1) so the OUTER loader accepts this
+// artifact and the rejection this fixture exists to force comes from
+// TokenizerView::Open's own missing-UnicodeTables check, not the outer schema.
 inline BuiltArtifact BuildArtifactMissingUnicodeTables(const std::vector<uint8_t>& tok1) {
-	return BuildArtifact(
-	    {MakeConfigSection(), MakeSection(superslm::SslmSectionType::Tokenizer, superslm::SslmDtype::Raw, tok1)});
+	return BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),
+	                       MakeSection(superslm::SslmSectionType::Tokenizer, superslm::SslmDtype::Raw, tok1)});
 }
 
-// Config + UnicodeTables only — no Tokenizer section.
+// Config + SigmoidLut + UnicodeTables only — no Tokenizer section. Same
+// reasoning as BuildArtifactMissingUnicodeTables above, mirrored.
 inline BuiltArtifact BuildArtifactMissingTokenizer(const std::vector<uint8_t>& uni1) {
-	return BuildArtifact(
-	    {MakeConfigSection(), MakeSection(superslm::SslmSectionType::UnicodeTables, superslm::SslmDtype::Raw, uni1)});
+	return BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),
+	                       MakeSection(superslm::SslmSectionType::UnicodeTables, superslm::SslmDtype::Raw, uni1)});
 }
 
 }  // namespace superslm_test

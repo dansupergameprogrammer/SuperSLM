@@ -79,6 +79,8 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept;
 // Every way a `.sslm` can be rejected. `Ok` is the only non-error value.
 enum class SslmStatus {
 	Ok = 0,
+	NullData,            // OpenFromMemory: data == nullptr
+	NullPath,            // OpenFromFile: path == nullptr
 	Truncated,           // file smaller than the header/table it declares
 	BadMagic,            // first four bytes are not "SSLM"
 	UnsupportedVersion,  // format_version != kArtifactFormatVersion
@@ -94,7 +96,7 @@ enum class SslmStatus {
 	SizeMismatch,        // byte_size != elem_count * dtype_size
 	UnknownSection,      // a section type outside the v1 set
 	DuplicateSection,    // the same section type appears twice
-	MissingSection,      // a required section (Config) is absent
+	MissingSection,      // a required section for this format_version is absent
 	IntegrityMismatch,   // recomputed SHA-256 != stored integrity hash
 	IoError,             // the file could not be read (OpenFromFile only)
 };
@@ -141,11 +143,15 @@ public:
 	// Validate `size` bytes at `data` as a v1 `.sslm`. On Ok, `out` owns a copy of
 	// the bytes and exposes the header + sections. On any error, `out` is left empty
 	// and `err` (if non-null) carries the diagnostic. Never throws; never reads a
-	// section byte before the file passes every structural check.
+	// section byte before the file passes every structural check. `data == nullptr`
+	// is rejected explicitly (NullData) before any other check, regardless of
+	// `size` — the caller's null pointer is never dereferenced (F14).
 	static SslmStatus OpenFromMemory(const uint8_t* data, size_t size,
 	                                 SslmArtifact& out, SslmError* err);
 
-	// Read the file at `path`, then OpenFromMemory. IoError if the file is unreadable.
+	// Read the file at `path`, then OpenFromMemory. `path == nullptr` is rejected
+	// explicitly (NullPath) before any file-system call. IoError if the file is
+	// unreadable.
 	static SslmStatus OpenFromFile(const char* path, SslmArtifact& out, SslmError* err);
 
 	bool Ok() const noexcept { return ok_; }

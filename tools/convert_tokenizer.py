@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import sslm_format as F
+import sslm_model_writer as W
 from unicode_tables import Unicode
 
 # The pattern this converter and the runtime implement (documented, pinned for v1).
@@ -254,6 +255,13 @@ class TokenizerTables:
             F.Section(F.SectionType.UNICODE_TABLES, self.u.serialize()),
             F.Section(F.SectionType.CHAT_TEMPLATE,
                       json.dumps({"chat_template": self.chat_template}, sort_keys=True).encode("utf-8")),
+            # S-HARDEN-1 (F1): this converter is coupled to the same missing-required-
+            # section defect as convert_model.py — the artifact format has ONE
+            # required-section schema per format_version (docs/sslm_format.md), and
+            # SigmoidLut is required from v2 regardless of which converter emitted
+            # the bytes. Without this, the C++ loader's version-indexed schema check
+            # rejects every tokenizer-only artifact this converter produces.
+            F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()),
         ]
         return F.write_artifact(out_path, sections)
 
