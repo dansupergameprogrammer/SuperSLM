@@ -174,23 +174,64 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // assert is compiled out and the truncated — possibly NEGATIVE — value is returned, which is what
 // makes the guard a caller obligation rather than a runtime rejection. See that function for the
 // executed witness and for why a caller must not re-derive the test itself.
+//
+// **What `NDEBUG` returns is now split by outcome (S-HARDEN-0).** The decomposition is formed by
+// `IExpConstruct` below, so nothing here can overflow before its checks run. Where the
+// decomposition is well-formed and only the narrowing overflows (`kNotRepresentable`), the
+// truncated value described above is returned **bit-identically to before** — that behaviour is a
+// documented property (D-SLM80) with a committed golden, and this slot preserves it. Where no
+// decomposition exists at all (`kBadQ`, `kBadQLn2`, `kBadQB`) the call was previously undefined
+// behaviour; it now returns `0`. No previously-defined result changes.
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
-// C7/C8 — `IExpFromConstants`'s internal decomposition, exposed so a caller can EVALUATE
-// the domain requirement below instead of re-deriving it (D-SLM79/D-SLM81). Same
-// caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`); the parent calls
-// these, so they are the same values it uses, not a parallel derivation.
+// C7/C8 — the i-exp decomposition, as ONE checked construction/evaluation entry point
+// (S-HARDEN-0; findings F9 and F21). Every consumer of the decomposition routes through
+// here: the evaluator `IExpFromConstants` and the predicate `IExpConstantsInDomain` are
+// both defined in terms of it, so neither can form the decomposition before the checks
+// that make it safe have run.
 //
-// `IExpShift` returns `z` — the number of ln2 steps the clip/divide yields. `IExpBase`
-// returns `q_p + q_b`, the value the parent squares.
+// **Why a funnel rather than two accessors plus a documented rule.** The prior API exposed
+// `IExpShift`/`IExpBase` so a caller could evaluate the domain instead of re-deriving it,
+// and both projected through the clip/divide unguarded. Two orderings then went wrong the
+// same way: the evaluator called them BEFORE asserting the domain, so the guard added to
+// prevent `−I_EXP_CLIP_N · q_ln2` from overflowing ran after the overflow (F9); and the
+// predicate itself formed `q_p + q_b` on a `q_b` that carries no lower bound, so the guard
+// callers were told to invoke was undefined on the input class it exists to screen (F21).
+// A rule about call order is a rule someone must remember; a funnel is a path that does not
+// exist. `StandardsDocument` §4: where a rule can be made structural, make it structural.
 //
-// **`z` lies in `[0, I_EXP_CLIP_N]` only while `q_ln2 <= INT64_MAX / I_EXP_CLIP_N`.** Above
-// that the clip bound `−I_EXP_CLIP_N · q_ln2` overflows int64 and the decomposition is
-// meaningless — the executed witness is `z = −29` at a contract-legal `q_ln2`. `q_ln2` has
-// no documented upper bound, so this is a real reachable region; `IExpConstantsInDomain`
-// answers `false` throughout it, which is the guard a caller should be relying on.
-int64_t IExpShift(int64_t q, int64_t q_ln2);
-int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
+// **`IExpConstruct` is TOTAL.** It is defined on all four `int64_t` arguments, asserts
+// nothing about its own domain, and executes no undefined behaviour on any input — including
+// the inputs it rejects. That totality is the fix: a guard that is UB on hostile input is not
+// a guard. It is therefore safe to call speculatively, from any caller, on unvalidated
+// constants.
+enum class IExpDomain : int {
+	kOk = 0,            // decomposition formed AND `(base² + q_c) >> z` fits int64_t
+	kNotRepresentable,  // decomposition formed; the result does not fit int64_t
+	kBadQ,              // `q > 0` — no valid decomposition (it would drive `z` negative)
+	kBadQLn2,           // `q_ln2 < 1`, or above the clip ceiling `INT64_MAX / I_EXP_CLIP_N`
+	kBadQB,             // `q_p + q_b` is not representable
+};
+
+// The decomposition `IExpFromConstants` squares: `z` is the number of ln2 steps the
+// clip/divide yields, `base` is `q_p + q_b`.
+struct IExpConstruction {
+	int64_t z;
+	int64_t base;
+};
+
+// Forms the decomposition and judges the result, in that order, each step guarded before
+// the arithmetic that could overflow it.
+//
+// **`*out` is filled whenever the decomposition is WELL-FORMED — for `kOk` and for
+// `kNotRepresentable` alike — and is left untouched for the three `kBad*` outcomes.** The
+// distinction is load-bearing and is not a convenience: `kNotRepresentable` means the
+// decomposition is sound and only the narrowing overflows, which is a defined (if wrong)
+// result the evaluator still returns, so the caller that wants it needs `z` and `base`.
+// The `kBad*` outcomes mean no decomposition exists to report. `out` may be null when only
+// the domain answer is wanted.
+IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                         IExpConstruction* out);
 
 // C7/C8 — **the domain predicate. Call this before `IExpFromConstants` on any constants
 // not already proven in range.** Returns whether `(base² + q_c) >> z` — the value the
@@ -209,8 +250,14 @@ int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b);
 // int64 and itself overflows once `q_b` exceeds ~3.04e9 — reproducing the defect in the
 // guard (D-SLM81). Callers therefore use this predicate; they do not re-derive it.
 //
-// Same caller-ensures preconditions as the parent (`q <= 0`, `q_ln2 >= 1`) — this predicate
-// answers the width question only, and does not validate those.
+// **This predicate is TOTAL (S-HARDEN-0, F21).** It is exactly
+// `IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk`, so it validates `q`,
+// `q_ln2`, and `q_b`'s range itself rather than inheriting them as caller-ensures
+// preconditions, and it executes no undefined behaviour on any `int64_t` input. It
+// previously asserted `q <= 0 && q_ln2 >= 1` and formed `q_p + q_b` unguarded, which made
+// the guard undefined on `q_b = INT64_MIN` — the input class it exists to screen. Its
+// answer is unchanged on every input for which the old predicate was defined; use
+// `IExpConstruct` directly when the reason for a rejection matters.
 //
 // **Cost note (D-SLM83) — read the condition, it is load-bearing.** `base = q_p + q_b`
 // varies with `q` even at a fixed `z`, so this predicate is **not** `q`-invariant in

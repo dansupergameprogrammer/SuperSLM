@@ -309,76 +309,104 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out) {
 
 int64_t IExpFromConstants(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	// Preconditions (caller-ensured; the reference raises on violation): q <= 0 keeps z >= 0 so
-	// the final shift is never negative, and q_ln2 >= 1 keeps the division well defined. The
-	// assert is the no-exceptions runtime equivalent of the reference's raise; out of domain the
-	// body is UB (negative shift / divide-by-zero), the same caller-ensures convention as
-	// MaxAbsReduce/ShiftByMax. In the live pipeline both hold structurally (ShiftByMax → q <= 0;
-	// C30 fine-scale rejection → q_ln2 >= 1).
-	assert(q <= 0 && q_ln2 >= 1);
-	// I-BERT integer polynomial core. q is a max-shifted logit (q <= 0) and q_ln2 >= 1 by
-	// contract, so z >= 0 and the final shift is well defined (no negative shift).
+	// the final shift is never negative, and q_ln2 >= 1 keeps the division well defined. In the
+	// live pipeline both hold structurally (ShiftByMax → q <= 0; C30 fine-scale rejection →
+	// q_ln2 >= 1). **Violating them is no longer undefined behaviour (S-HARDEN-0):** they are
+	// tested by IExpConstruct below, before any arithmetic that depends on them runs. They
+	// remain preconditions — the assert still fires in a debug build — but the release path is
+	// now defined on every int64 input rather than merely documented as the caller's problem.
+	// S-HARDEN-0 (F9, F21): the decomposition is formed by the ONE checked entry point, so
+	// every bound that makes it safe is tested BEFORE the arithmetic it protects. The prior
+	// body called IExpShift/IExpBase here and asserted the domain afterwards, which put the
+	// ceiling guard after the overflow it had been added to prevent — in debug builds too,
+	// because the overflow is inside the accessors rather than in this function.
 	//   clipped = max(q, −I_EXP_CLIP_N·q_ln2);  z = −clipped / q_ln2;  q_p = clipped + z·q_ln2
 	//   return ((q_p + q_b)^2 + q_c) >> z
-	const int64_t z = IExpShift(q, q_ln2);
-	const int64_t base = IExpBase(q, q_ln2, q_b);
-	// (base^2 + q_c) >> z in 128-bit: base^2 reaches ~2^62 and q_c ~2^62 in the realistic
-	// domain (near 0.5·INT64_MAX), and C30's per-token constants may push wider — so carry it
-	// wide and take an arithmetic (floor) shift to match the reference's big-integer `>>`.
+	IExpConstruction c;
+	const IExpDomain d = IExpConstruct(q, q_ln2, q_b, q_c, &c);
+
+	// The domain stays a CALLER obligation, asserted as the no-exceptions equivalent of the
+	// reference's raise — the same convention as MaxAbsReduce/ShiftByMax. What this slot
+	// changed is that violating it is no longer undefined behaviour.
+	assert(d == IExpDomain::kOk);
+
+	// These three carry no decomposition to compute from: q > 0 has none to state, and the
+	// other two mean the clip bound or `q_p + q_b` is not representable. Every one of them
+	// was UB before this slot, so returning 0 changes no previously-defined result.
+	if (d != IExpDomain::kOk && d != IExpDomain::kNotRepresentable) return 0;
+
+	// kOk and kNotRepresentable both carry a well-formed decomposition, and the arithmetic
+	// below is bit-identical to the prior body for both. base^2 reaches ~2^62 and q_c ~2^62
+	// in the realistic domain (near 0.5·INT64_MAX), and C30's per-token constants may push
+	// wider — so carry it wide and take an arithmetic (floor) shift to match the reference's
+	// big-integer `>>`.
 	//
-	// The narrowing below is unchecked, so the shifted value must be representable. That is a
-	// caller-ensures precondition (IExpConstantsInDomain), asserted here as the no-exceptions
-	// equivalent of the reference's raise — the same convention as the two above. Out of
-	// domain the low 64 bits are kept and the result can be NEGATIVE; a blind strike produced
-	// contract-legal constants that did exactly that (D-SLM78). Under NDEBUG this assert is
-	// compiled out and the wrapped value is returned unchanged, which is what makes the
-	// extraction behaviour-preserving (D-SLM80).
-	assert(IExpConstantsInDomain(q, q_ln2, q_b, q_c));
-	S128 v = SAdd(SMul(base, base), SFromI64(q_c));
-	return SShrToI64(v, static_cast<int>(z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
+	// The narrowing is unchecked, so out of domain the low 64 bits are kept and the result
+	// can be NEGATIVE; a blind strike produced contract-legal constants that did exactly
+	// that (D-SLM78). Under NDEBUG the assert above is compiled out and that wrapped value
+	// is returned UNCHANGED — the behaviour-preservation property D-SLM80 records, which a
+	// committed golden pins and this slot deliberately preserves.
+	S128 v = SAdd(SMul(c.base, c.base), SFromI64(q_c));
+	return SShrToI64(v, static_cast<int>(c.z));  // z in [0, I_EXP_CLIP_N] (=30), fits int
 }
 
 namespace {
 
-// The clip/divide, in ONE place. IExpShift and IExpBase both project from this rather
-// than each re-deriving it: two private copies of the same four lines is how they drift
-// apart under a later edit (Poirot review of 7b668b2, Minor).
-struct IExpDecomp {
-	int64_t z;
-	int64_t q_p;
-};
-
-inline IExpDecomp IExpDecompose(int64_t q, int64_t q_ln2) {
-	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
-	const int64_t clipped = q < clip_lo ? clip_lo : q;
-	const int64_t z = (-clipped) / q_ln2;  // clipped <= 0, q_ln2 >= 1 → non-negative
-	return {z, clipped + z * q_ln2};       // q_p in (−q_ln2, 0]
-}
-
-// `clip_lo` above is `−I_EXP_CLIP_N · q_ln2`, which overflows int64 once q_ln2 exceeds
-// this. Beyond it the decomposition is meaningless — the executed witness is z = −29 at
-// a contract-legal q_ln2 — so IExpConstantsInDomain answers false there rather than
-// blessing it. This is a SECOND axis from the width question: q_ln2 has no documented
-// upper bound either, the same gap that produced the original strike on q_c.
+// `clip_lo` is `−I_EXP_CLIP_N · q_ln2`, which overflows int64 once q_ln2 exceeds this.
+// Beyond it the decomposition is meaningless — the executed witness is z = −29 at a
+// contract-legal q_ln2 — so IExpConstruct refuses there rather than blessing it. This is a
+// SECOND axis from the width question: q_ln2 has no documented upper bound either, the
+// same gap that produced the original strike on q_c.
 constexpr int64_t kIExpMaxQLn2 = INT64_MAX / static_cast<int64_t>(I_EXP_CLIP_N);
 
 }  // namespace
 
-int64_t IExpShift(int64_t q, int64_t q_ln2) {
-	assert(q <= 0 && q_ln2 >= 1);
-	return IExpDecompose(q, q_ln2).z;
-}
+IExpDomain IExpConstruct(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                         IExpConstruction* out) {
+	// S-HARDEN-0 (F9, F21). The checks below run in DEPENDENCY ORDER: each one is what
+	// makes the next line's arithmetic well defined, so no check may be moved after the
+	// operation it protects. That ordering is the whole fix, and it is why this is one
+	// function rather than a predicate callers are asked to remember to call first — the
+	// previous shape put the ceiling test after the overflow it existed to prevent (F9),
+	// and left the predicate itself undefined on the input class it screens (F21).
+	//
+	// This function is TOTAL: every path below is defined for all four int64 arguments,
+	// including the ones it rejects. A guard that is UB on hostile input is not a guard.
 
-int64_t IExpBase(int64_t q, int64_t q_ln2, int64_t q_b) {
-	assert(q <= 0 && q_ln2 >= 1);
-	return IExpDecompose(q, q_ln2).q_p + q_b;
-}
+	// A positive q has no valid decomposition — it drives z negative, and the parent's
+	// final shift with it. (Found by execution during this slot's test authoring; a third
+	// UB class, distinct from F9 and F21, and closed here by the same funnel.)
+	if (q > 0) return IExpDomain::kBadQ;
 
-bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
-	assert(q <= 0 && q_ln2 >= 1);
-	// The decomposition must itself be sound before its width can be judged.
-	if (q_ln2 > kIExpMaxQLn2) return false;
-	const int64_t z = IExpShift(q, q_ln2);
-	const int64_t base = IExpBase(q, q_ln2, q_b);
+	// q_ln2 == 0 divides by zero below and a negative q_ln2 has no decomposition to state.
+	// Above kIExpMaxQLn2 the clip bound overflows — this is F9's own ceiling, now tested
+	// BEFORE clip_lo is formed rather than after.
+	if (q_ln2 < 1 || q_ln2 > kIExpMaxQLn2) return IExpDomain::kBadQLn2;
+
+	// Safe now, and only now: |clip_lo| <= I_EXP_CLIP_N · (INT64_MAX / I_EXP_CLIP_N) <=
+	// INT64_MAX, so clip_lo > INT64_MIN and the negation of `clipped` cannot overflow
+	// either. z <= I_EXP_CLIP_N follows from clipped >= clip_lo, so z · q_ln2 fits.
+	const int64_t clip_lo = -static_cast<int64_t>(I_EXP_CLIP_N) * q_ln2;
+	const int64_t clipped = q < clip_lo ? clip_lo : q;
+	const int64_t z = (-clipped) / q_ln2;     // clipped <= 0, q_ln2 >= 1 → non-negative
+	const int64_t q_p = clipped + z * q_ln2;  // q_p in (−q_ln2, 0]
+
+	// F21: q_b carries no lower bound anywhere. The public header states coefficient
+	// positivity as a fact about how C7/C30 derive the constants, not as a precondition,
+	// and the parameter type admits all of int64 — so `q_p + q_b` is checked, not assumed.
+	// Only underflow is possible because q_p <= 0, and `INT64_MIN - q_p` cannot itself
+	// overflow for q_p <= 0.
+	if (q_b < INT64_MIN - q_p) return IExpDomain::kBadQB;
+	const int64_t base = q_p + q_b;
+
+	// The decomposition is well formed from here, so it is reported even when the result
+	// below is not representable — that outcome is a defined (wrapped) return the parent
+	// still produces, and a caller reproducing it needs these two values.
+	if (out != nullptr) {
+		out->z = z;
+		out->base = base;
+	}
+
 	const S128 v = SAdd(SMul(base, base), SFromI64(q_c));
 
 	// `(v >> z)` is an arithmetic (floor) shift, so it is representable in int64 exactly
@@ -411,11 +439,19 @@ bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	// down: widen the parameter and this fails at compile time instead of leaving a comment
 	// that quietly became false.
 	static_assert(sizeof(q_c) == 8,
-	              "IExpConstantsInDomain's lower bound is documented as unreachable BECAUSE "
+	              "IExpConstruct's lower bound is documented as unreachable BECAUSE "
 	              "q_c is 64-bit (so v >= INT64_MIN == lower at z=0). Widening q_c makes the "
 	              "branch reachable and that comment wrong — re-derive it, and give the "
 	              "lower bound test coverage, before changing this signature.");
-	return SGe(upper, v) && SGe(v, lower);
+	return (SGe(upper, v) && SGe(v, lower)) ? IExpDomain::kOk : IExpDomain::kNotRepresentable;
+}
+
+bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
+	// The predicate IS the entry point, asked for one bit of its answer. Defining it any
+	// other way is how the two derivations of one domain drift apart — which this file has
+	// already recorded happening once (evaluation record F10), and which the S2.6 design
+	// and the shipped predicate did to each other independently.
+	return IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk;
 }
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
