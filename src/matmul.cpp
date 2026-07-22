@@ -156,7 +156,7 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32) {
 	// The ONLY narrowing point (design §3/§4). Caller-ensures convention: UB if the
 	// declared MatmulAccumWidth was wrong for this tensor (i.e. a value does not fit
-	// int32) -- matching MaxAbsReduce/IExpFromConstants, not a runtime-checked cast.
+	// int32) -- matching MaxAbsReduce/ShiftByMax, not a runtime-checked cast.
 	for (size_t i = 0; i < n; ++i) {
 		out_i32[i] = static_cast<int32_t>(wide_row[i]);
 	}

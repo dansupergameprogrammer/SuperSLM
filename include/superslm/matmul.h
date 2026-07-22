@@ -32,7 +32,7 @@ namespace superslm {
 // never touches int32.
 //
 // Caller ensures (contract, not runtime-checked -- the same caller-ensures convention as
-// MaxAbsReduce/IExpFromConstants): `activations` has `in_channels` elements; `weights`
+// MaxAbsReduce/ShiftByMax): `activations` has `in_channels` elements; `weights`
 // has `out_channels * in_channels` elements; `out_acc` has `out_channels` elements (one
 // int64 sum per output channel). No accumulation order is pinned -- integer addition of
 // exact int64 products is exactly associative and commutative (design §4), so any
@@ -60,9 +60,15 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
 // §8's derived bound, 131,071). This is the ONLY point an int32 array is ever
 // materialized -- GemmInt8Accumulate itself never produces int32.
 //
-// Caller-ensures convention (matching MaxAbsReduce / IExpFromConstants): UB if the
-// declared width was wrong for this tensor (i.e. the wide row's values do not fit
-// int32). `n` elements each direction.
+// Caller-ensures convention (matching MaxAbsReduce / ShiftByMax): UB if the declared
+// width was wrong for this tensor (i.e. the wide row's values do not fit int32). `n`
+// elements each direction.
+//
+// **The i-exp primitives no longer belong on that list (S-HARDEN-0).** They moved from
+// caller-ensures to checked, because a guard that is undefined on the input it screens is
+// not a guard (F9, F21). Whether the rest of Layer 1 should follow is a live design
+// question and is NOT answered here -- this comment records which convention this
+// function actually uses, not which one it ought to.
 void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32);
 
 // C17 -- the per-tensor accumulator-width choice, recorded in the artifact (design §4,

@@ -124,7 +124,8 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 // The reproducible-path integer cores only. The float-taking offline derivations
 // (`intmath.py`'s `i_exp(q, scale)`, `iexp_scale_constants` / C30, `i_exp_ln2_quantum`)
 // are NOT ported here — those live in the converter (offline) or ride the site-composition
-// slot (C23–C30). Here: `IExpFromConstants` consumes constants already derived to integers.
+// slot (C23–C30). Here: `IExpConstruct`/`IExpEvaluate` consume constants already derived to
+// integers.
 
 // C5 — one restoring digit-recurrence iteration per base-4 digit of an int64 radicand: the
 // count follows from the type, so it CANNOT be data-dependent (§14, §17 "the cell determinism
@@ -283,22 +284,24 @@ private:
 // want it was told so by the outcome.
 int64_t IExpEvaluate(const IExpConstruction& c);
 
-// C7/C8 — **the domain predicate. Call this before `IExpFromConstants` on any constants
-// not already proven in range.** Returns whether `(base² + q_c) >> z` — the value the
-// parent returns — is representable in `int64_t`.
+// C7/C8 — **the domain predicate, for a caller that wants the yes/no and not the
+// construction.** Returns whether `(base² + q_c) >> z` — the value `IExpEvaluate` produces —
+// is representable in `int64_t`. A caller that is going to evaluate anyway should call
+// `IExpConstruct` and read the outcome instead; this asks the same question and throws the
+// construction away.
 //
 // **Why this exists as a function rather than a documented inequality.** Every other
 // precondition this header states is a LOWER bound; there was no upper bound on `q_b` or
-// `q_c`, and `IExpFromConstants` narrows its 128-bit intermediate with an unchecked shift.
-// A blind adversary strike produced contract-legal constants (`q = 0`, `q_ln2 = 887904998`,
-// `q_b = 1733160715`, `q_c = 2^63−1`) for which the parent returns a NEGATIVE exponential:
+// `q_c`, and the evaluator narrows its 128-bit intermediate with an unchecked shift. A blind
+// adversary strike produced contract-legal constants (`q = 0`, `q_ln2 = 887904998`,
+// `q_b = 1733160715`, `q_c = 2^63−1`) for which the value is a NEGATIVE exponential:
 // `base² + q_c` exceeds `INT64_MAX` and the low 64 bits are kept. With `q = 0` the shift is
 // 0, so nothing shifts the overflow away.
 //
 // The test is performed in the 128-bit domain internally **because a caller cannot safely
-// perform it**: the obvious check, `IExpBase(...)² + q_c <= INT64_MAX`, squares `base` in
-// int64 and itself overflows once `q_b` exceeds ~3.04e9 — reproducing the defect in the
-// guard (D-SLM81). Callers therefore use this predicate; they do not re-derive it.
+// perform it**: the obvious check, `base² + q_c <= INT64_MAX`, squares `base` in int64 and
+// itself overflows once `q_b` exceeds ~3.04e9 — reproducing the defect in the guard
+// (D-SLM81). Callers therefore use this predicate; they do not re-derive it.
 //
 // **This predicate is TOTAL (S-HARDEN-0, F21).** It is exactly
 // `IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk`, so it validates `q`,
