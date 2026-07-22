@@ -3304,6 +3304,118 @@ static void TestArtifactRejectsConfigOnlyV2MissingSigmoidLut() {
 }
 
 // ---------------------------------------------------------------------------
+// S-HARDEN-1's parser-vs-consumer gate (F22/F23/F24) — LEFT RED.
+//
+// D-SLM118 (Claude/Decisions/DecisionLog.md, 2026-07-21) states the open design
+// decision this slot must take EXPLICITLY and record: value-range validation
+// for KVC1's carried scale (F22), WSC1's shift column (F23), and ROP1's cos/sin
+// (F24) lands at the two parsers (SslmKeyedConstants::Parse,
+// SslmTensorManifest::Parse) or at each consumer. That decision is NOT YET
+// recorded as of this build — grepped for "parser-vs-consumer" / "F22" / "value
+// validation" in DecisionLog.md and found only the open-question entry, no
+// ruling. Per this slot's brief: leave these three red, do not invent the
+// design by picking a landing site unasked.
+//
+// Each cell is authored at the OBSERVABLE CONTRACT boundary, not a specific
+// function: "loading an artifact carrying this hostile value must be rejected
+// at load with an explicit diagnostic." This holds whichever side of the
+// parser-vs-consumer split eventually implements it, so the cell does not need
+// rewriting once the decision lands — only greening. None of these cells
+// invoke the downstream kernel with the hostile operand (SiluSigmoidQ15,
+// RoundingDivideByPOT, RopeApplyPair) — doing so would execute the actual UB
+// the finding names, which is unsafe to run inside an automated suite (Debug/
+// UBSan/ASan behavior on genuine UB is by definition unspecified — it could
+// abort the whole binary rather than fail one check). The assertion is instead
+// exactly the contract's rejection half: today, nothing anywhere in the
+// currently-buildable load path (SslmArtifact::OpenFromMemory,
+// SslmKeyedConstants::Parse, SslmTensorManifest::Parse) rejects the hostile
+// value, which is the finding's own "every gate returns Ok" observation, and
+// is what "must not reach UB" is currently failing to prevent.
+// ---------------------------------------------------------------------------
+
+// F22: the exact operand a strike drove through SiluSigmoidQ15's three-site UB
+// chain (Claude/Loki/superslm-reviewfold-strike-2026-07-21.md, Case 1 —
+// "hostile mantissa", FRACTURE): m = 2^60, e = -17. Both are individually
+// in-range int64 values (no field-level bound is violated — the KVC1 parser's
+// own checks are all structural: magic/version/count/value_words/bounds), so
+// only a DOMAIN check on the composed (m, e) pair — wherever it lands — can
+// catch this.
+static void TestKvc1RejectsHostileCompositionConstantsScale() {
+	using namespace superslm_test;
+	const int64_t kHostileM = INT64_C(1) << 60;
+	const int64_t kHostileE = -17;
+	auto built = BuildKvc1(2, {{"hostile_scale", {kHostileM, kHostileE}}});
+
+	SslmSectionView view = MakeConstantsSectionView(SslmSectionType::CompositionConstants, built.bytes);
+	SslmKeyedConstants out;
+	std::string err;
+	SslmModelStatus status = SslmKeyedConstants::Parse(view, out, &err);
+	// RED: today this is Ok — SslmKeyedConstants::Parse validates the KVC1
+	// container's structure only, never a composed value's domain. The design
+	// decision this slot owes (parser vs. consumer) is what would turn this
+	// into a real rejection; until it is made and recorded, this cell states
+	// the gap rather than closing it.
+	CHECK_MSG(status != SslmModelStatus::Ok,
+	          "F22 (S-HARDEN-1 parser-vs-consumer, undecided): hostile CompositionConstants scale "
+	          "(m=2^60, e=-17) was accepted (status=%s) — no check anywhere in the current load path "
+	          "rejects the operand that reaches SiluSigmoidQ15's three-site UB chain",
+	          SslmModelStatusName(status));
+}
+
+// F23: WSC1's shift column, documented [0,31] bound is a header comment only
+// (docs/sslm_format.md; `RoundingDivideByPOT`'s exponent parameter). shift=32
+// is the exact one-past-the-end value the finding names as UB.
+static void TestWsc1RejectsHostileShiftOutOfDocumentedBound() {
+	using namespace superslm_test;
+	auto built = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{3});
+	// Overwrite the one tensor's (identity, mult, shift) int32 triple directly —
+	// BuildManifest's auto-filled data pattern is not a meaningful fold op, so
+	// every field is set explicitly rather than patching one byte of the pattern.
+	const size_t data_off = static_cast<size_t>(built.tensor_data_off[0]);
+	PutU32(built.bytes, data_off + 0, 0);   // identity = 0 (not a pass-through fold)
+	PutU32(built.bytes, data_off + 4, 1);   // mult = 1
+	PutU32(built.bytes, data_off + 8, 32);  // shift = 32 — one past the documented [0,31] bound
+
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::WeightScales, SslmDtype::Int32, built.bytes);
+	SslmTensorManifest out;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, out, &err);
+	// RED: today this is Ok — SslmTensorManifest::Parse validates shape/rank/
+	// bounds/overlap, never a fold-op triple's own domain. Same undecided gate
+	// as F22 above.
+	CHECK_MSG(status != SslmModelStatus::Ok,
+	          "F23 (S-HARDEN-1 parser-vs-consumer, undecided): WSC1 shift=32 (documented bound [0,31] is "
+	          "a header comment) was accepted (status=%s) — RoundingDivideByPOT(x, 32) is undefined behavior",
+	          SslmModelStatusName(status));
+}
+
+// F24: ROP1's yr addition overflows on hostile cos/sin (the sweep's own
+// by-reading prediction said this join was safe; execution refuted it —
+// "the method lesson" per the finding record). cos = sin = INT32_MIN is the
+// named hostile pair; ROP1's declared dtype is Int64 (ExpectedDtype), so the
+// hostile values are carried as the int64 bit pattern of INT32_MIN.
+static void TestRop1RejectsHostileCosSinPair() {
+	using namespace superslm_test;
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {1}}, {"sin", {1}}};
+	auto built = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	PutU64(built.bytes, static_cast<size_t>(built.tensor_data_off[0]), static_cast<uint64_t>(int64_t{INT32_MIN}));
+	PutU64(built.bytes, static_cast<size_t>(built.tensor_data_off[1]), static_cast<uint64_t>(int64_t{INT32_MIN}));
+
+	SslmSectionView view = MakeManifestSectionView(SslmSectionType::RopeTables, SslmDtype::Int64, built.bytes);
+	SslmTensorManifest out;
+	std::string err;
+	SslmModelStatus status = SslmTensorManifest::Parse(view, out, &err);
+	// RED: today this is Ok — SslmTensorManifest::Parse validates shape/rank/
+	// bounds/overlap, never a rope-table value's own domain (the `yr = x*sin +
+	// y*cos` join RopeApplyPair computes has no predicate anywhere upstream of
+	// it). Same undecided gate as F22/F23 above.
+	CHECK_MSG(status != SslmModelStatus::Ok,
+	          "F24 (S-HARDEN-1 parser-vs-consumer, undecided): ROP1 cos=sin=INT32_MIN was accepted "
+	          "(status=%s) — RopeApplyPair's yr = x*sin + y*cos overflows on this pair",
+	          SslmModelStatusName(status));
+}
+
+// ---------------------------------------------------------------------------
 // dim 9 — version evolution / mutual rejection. Only the CURRENT (v2) loader
 // is compiled into this binary, so only one of the design's two named
 // directions is executable here: a new-version loader rejecting a
@@ -5452,6 +5564,16 @@ int main(int argc, char** argv) {
 	TestSil1RejectsHostileExtremeAdjacentNodes();
 	TestArtifactRejectsHostileSigmoidLutContentThroughRealPath();
 	TestArtifactRejectsConfigOnlyV2MissingSigmoidLut();
+
+	// --- S-HARDEN-1's parser-vs-consumer gate (F22/F23/F24) — INTENTIONALLY
+	//     LEFT RED. D-SLM118 records the design decision (validation at the two
+	//     parsers vs. at each consumer) as open; per this slot's brief, these
+	//     three cells state the gap rather than inventing where the fix lands.
+	//     Expect FAIL lines from these three in the summary below until the
+	//     decision is recorded and a follow-up build greens them. ---
+	TestKvc1RejectsHostileCompositionConstantsScale();
+	TestWsc1RejectsHostileShiftOutOfDocumentedBound();
+	TestRop1RejectsHostileCosSinPair();
 
 	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
 	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
