@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "superslm/artifact.h"
+#include "superslm/tokenizer.h"
 
 namespace superslm {
 
@@ -150,6 +151,10 @@ enum class SslmModelStatus {
 	WeightScaleShiftOutOfDomain, // WSC1 shift column outside [0,31] (RoundingDivideByPOT's exponent domain)
 	WeightScaleIdentityNotBool,  // WSC1 identity column not in {0,1}
 	RopeTableEntryOutOfDomain,   // ROP1 element outside [-2^30, 2^30] (RopeApplyPair's yr-addition safety bound)
+	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
+	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
+	                              // them (structurally, or exactly one of the two sections is present)
+	TokenizerVocabSizeMismatch,  // TOK1.vocab_count != CFG1.vocab_size -- the two blobs' declared sizes disagree
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -298,6 +303,19 @@ struct SslmModelView {
 
 	SslmKeyedConstants kv_landing_reciprocals;
 	bool has_kv_landing_reciprocals = false;
+
+	// The tokenizer join (S-HARDEN-2, F18/F6/F7/F15): present iff the artifact
+	// carries BOTH the Tokenizer and UnicodeTables sections and TokenizerView::Open
+	// accepted them structurally. An artifact carrying neither is a valid
+	// tokenizer-less model artifact (has_tokenizer stays false, no rejection);
+	// carrying exactly one of the two, or a structurally malformed TOK1/UNI1, is a
+	// Load-time rejection (TokenizerRejected) -- the same fail-closed posture as
+	// every other section here. When present, its VocabSize() is additionally
+	// cross-checked against `config.vocab_size` (TokenizerVocabSizeMismatch on
+	// disagreement) -- the TOK1 x CFG1 join two independently-parsed blobs never
+	// enforced before this slot.
+	TokenizerView tokenizer;
+	bool has_tokenizer = false;
 };
 
 // The load-time orchestration entry point (S-HARDEN-1, D-SLM141): the one

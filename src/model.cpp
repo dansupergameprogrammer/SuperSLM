@@ -12,6 +12,7 @@
 #include "superslm/intmath.h"       // S-HARDEN-1 (D-SLM142): pin the value gate's bounds to their source
 #include "superslm/silu_lut.h"      // kSiluLutLog2K/kSiluLutQIdx/kSiluLutTermLeftShiftOverflowExponent
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable — S-HARDEN-1 (F20/F22)
+#include "superslm/tokenizer.h"     // S-HARDEN-2 (F18/F6/F7/F15): the tokenizer join
 
 #include <algorithm>
 #include <cstdint>
@@ -105,6 +106,8 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::WeightScaleShiftOutOfDomain: return "WeightScaleShiftOutOfDomain";
 		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
 		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
+		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
+		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
 	}
 	return "Unknown";
 }
@@ -643,6 +646,29 @@ SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::str
 	return SslmModelStatus::Ok;
 }
 
+// S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
+// "enforced at a named API" -- this is that API. The two blobs are parsed by
+// entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
+// never see each other's bytes; nothing before this slot joined them, while
+// the forward path indexes the token embedding with whatever Encode() returns
+// and sizes that embedding from CFG1.vocab_size. Both views are already
+// populated and individually valid by the time this runs (Load's section
+// loop / tokenizer-open step), so this check is a pure comparison, not a
+// re-parse.
+SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::string* err) {
+	if (!view.has_tokenizer || !view.has_config) return SslmModelStatus::Ok;
+	const int32_t tok_vocab = view.tokenizer.VocabSize();
+	const int64_t cfg_vocab = int64_t(view.config.vocab_size);
+	if (int64_t(tok_vocab) != cfg_vocab) {
+		if (err) {
+			*err = "TOK1.vocab_count (" + std::to_string(tok_vocab) + ") != CFG1.vocab_size (" +
+			       std::to_string(view.config.vocab_size) + ")";
+		}
+		return SslmModelStatus::TokenizerVocabSizeMismatch;
+	}
+	return SslmModelStatus::Ok;
+}
+
 // S-HARDEN-1's schema-value gate (D-SLM141): one pass over the already
 // sub-parsed views, applying each present section's domain descriptor. Runs
 // AFTER every present section's structural sub-parse has already succeeded
@@ -662,6 +688,11 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	}
 	if (view.has_rope_tables) {
 		const SslmModelStatus s = ValidateRopeTablesDomain(view.rope_tables, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.
+	{
+		const SslmModelStatus s = ValidateTokenizerVocabSizeJoin(view, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	return SslmModelStatus::Ok;
@@ -733,6 +764,32 @@ SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView&
 		if (s != SslmModelStatus::Ok) {
 			out = SslmModelView{};  // fail closed — never a partial view
 			return s;
+		}
+	}
+
+	// S-HARDEN-2 (F18/F6/F7/F15): the tokenizer's own entry point, driven from the
+	// same `SslmModel::Load` boundary as every other section — TokenizerView::Open
+	// takes the whole artifact (it needs both the Tokenizer and UnicodeTables
+	// sections together), so it is not a per-section-type case in the loop above.
+	// Neither section present is a valid tokenizer-less model artifact; exactly one
+	// present, or a structurally malformed TOK1/UNI1, is a rejection here — never a
+	// partial tokenizer view.
+	{
+		const SslmSectionView* tok_sec = artifact.Section(SslmSectionType::Tokenizer);
+		const SslmSectionView* uni_sec = artifact.Section(SslmSectionType::UnicodeTables);
+		if (tok_sec != nullptr || uni_sec != nullptr) {
+			if (tok_sec == nullptr || uni_sec == nullptr) {
+				out = SslmModelView{};
+				return Reject(SslmModelStatus::TokenizerRejected, err,
+				              "artifact carries one of Tokenizer/UnicodeTables without the other");
+			}
+			std::string terr;
+			if (!TokenizerView::Open(artifact, out.tokenizer, &terr)) {
+				out = SslmModelView{};
+				if (err) *err = "Tokenizer rejected: " + terr;
+				return SslmModelStatus::TokenizerRejected;
+			}
+			out.has_tokenizer = true;
 		}
 	}
 
