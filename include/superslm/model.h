@@ -143,6 +143,13 @@ enum class SslmModelStatus {
 	BadSigmoidLutCount,         // entry_count != kSigmoidLutEntries
 	BadSigmoidLutReserved,      // the SIL1 reserved field != 0
 	BadSigmoidLutContent,       // a node does not match the pinned canonical table (S-HARDEN-1, F20/F22)
+	// --- S-HARDEN-1 load-time schema-value gate (D-SLM141/D-SLM142) ---
+	ArtifactRejected,            // SslmModel::Load: the outer SslmArtifact::OpenFromMemory rejected the
+	                              // container; the underlying SslmStatus is named in the diagnostic
+	CompositionScaleOutOfDomain, // KVC1 CompositionConstants (m,e) outside SiluSigmoidQ15's no-UB floor
+	WeightScaleShiftOutOfDomain, // WSC1 shift column outside [0,31] (RoundingDivideByPOT's exponent domain)
+	WeightScaleIdentityNotBool,  // WSC1 identity column not in {0,1}
+	RopeTableEntryOutOfDomain,   // ROP1 element outside [-2^30, 2^30] (RopeApplyPair's yr-addition safety bound)
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -251,6 +258,65 @@ SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& 
 // Read Q15 node `i` (< entry_count) of `lut` as a signed int32 (little-endian byte assembly).
 // Behavior is undefined if `i >= entry_count`.
 int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept;
+
+// A fully composed, value-validated view of one `.sslm` artifact's model
+// sections, built only by SslmModel::Load. S-HARDEN-1 (D-SLM141): this is the
+// one place that opens an artifact, drives every present section's
+// sub-parser, and then validates every section's carried VALUES against its
+// consumer's domain — the schema-value gate. A default instance is empty;
+// Load leaves it at defaults on any rejection (fail closed, never a partial
+// view).
+struct SslmModelView {
+	SslmModelConfig config;
+	bool has_config = false;
+
+	SslmSigmoidLut sigmoid_lut;
+	bool has_sigmoid_lut = false;
+
+	SslmTensorManifest weights;
+	bool has_weights = false;
+
+	SslmTensorManifest biases;
+	bool has_biases = false;
+
+	SslmTensorManifest rope_tables;
+	bool has_rope_tables = false;
+
+	SslmTensorManifest weight_scales;
+	bool has_weight_scales = false;
+
+	SslmKeyedConstants composition_constants;
+	bool has_composition_constants = false;
+
+	// KvLandingScales/KvLandingReciprocals (C27): parsed structurally like
+	// every other keyed-constant section, but their VALUE domain is not yet
+	// declared — no consumer exists in the tree for either (S-HARDEN-1,
+	// D-SLM142). SslmModel::Load leaves their carried values unchecked; a
+	// future slot adds their domain descriptor when the C27 consumer lands.
+	SslmKeyedConstants kv_landing_scales;
+	bool has_kv_landing_scales = false;
+
+	SslmKeyedConstants kv_landing_reciprocals;
+	bool has_kv_landing_reciprocals = false;
+};
+
+// The load-time orchestration entry point (S-HARDEN-1, D-SLM141): the one
+// call site that composes SslmArtifact::OpenFromMemory, every present
+// section's sub-parser, and the schema-value gate into a single pass. Never
+// throws; `out` is left at SslmModelView{} defaults on ANY rejection —
+// container-level, structural sub-parse, or value-domain — and is populated
+// only on full success (§11 reject-over-degrade). `err` (if non-null) carries
+// a diagnostic naming what was rejected.
+//
+// A container-level rejection (SslmArtifact::OpenFromMemory failing) is
+// reported as SslmModelStatus::ArtifactRejected with the underlying
+// SslmStatus named in `err`; every other rejection is the specific
+// SslmModelStatus code of the section sub-parse or value-domain check that
+// failed.
+class SslmModel {
+public:
+	static SslmModelStatus Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err);
+};
 
 } // namespace superslm
 

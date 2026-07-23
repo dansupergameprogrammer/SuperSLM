@@ -139,6 +139,17 @@ inline std::vector<uint8_t> BuildCfg1(const Cfg1Spec& s = Cfg1Spec{}) {
 // oracle's own fixture.
 inline std::vector<uint8_t> MakeMinimalValidCfg1() { return BuildCfg1(Cfg1Spec{}); }
 
+// An outer artifact-level Config section carrying a spec-faithful CFG1 blob —
+// what a fixture routed through SslmModel::Load needs (S-HARDEN-1, D-SLM141:
+// Load sub-parses every present Config section via ParseConfig, so the
+// simpler `{'{','}'}` placeholder MakeConfigSection() in sslm_fixtures.h,
+// which only ever satisfied the outer loader's structural check, is not
+// enough once a fixture is driven through Load rather than OpenFromMemory
+// alone).
+inline FixtureSection MakeValidConfigSection() {
+	return MakeSection(superslm::SslmSectionType::Config, superslm::SslmDtype::Raw, MakeMinimalValidCfg1());
+}
+
 // A validated SslmSectionView directly over `bytes`, of section type Config —
 // ParseConfig's actual input. No outer SslmArtifact is built: the CFG1 sub-parse
 // never reads back through the artifact once it holds a validated section (the

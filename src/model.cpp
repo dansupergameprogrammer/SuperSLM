@@ -98,6 +98,11 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::BadSigmoidLutCount: return "BadSigmoidLutCount";
 		case SslmModelStatus::BadSigmoidLutReserved: return "BadSigmoidLutReserved";
 		case SslmModelStatus::BadSigmoidLutContent: return "BadSigmoidLutContent";
+		case SslmModelStatus::ArtifactRejected: return "ArtifactRejected";
+		case SslmModelStatus::CompositionScaleOutOfDomain: return "CompositionScaleOutOfDomain";
+		case SslmModelStatus::WeightScaleShiftOutOfDomain: return "WeightScaleShiftOutOfDomain";
+		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
+		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
 	}
 	return "Unknown";
 }
@@ -485,6 +490,103 @@ int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept {
 	const uint8_t* p = lut.values + static_cast<size_t>(i) * 4;
 	uint32_t v = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 	return static_cast<int32_t>(v);
+}
+
+// --- S-HARDEN-1: the load-time orchestration entry point and the
+//     schema-value gate (D-SLM141/D-SLM142) ---------------------------------
+//
+// SslmModel::Load is the one call site that composes SslmArtifact::
+// OpenFromMemory, every present section's sub-parser, and ValidateSectionValues
+// into a single pass. No such orchestrator existed before this slot — every
+// sub-parser above was invoked one at a time, by hand, by tests and tools.
+namespace {
+
+// TEMPORARY (S-HARDEN-1, red step): the schema-value gate itself is not yet
+// wired in — Load composes the container and every section's structural
+// sub-parse only. This lets the rewritten F22/F23/F24 cells be shown red
+// against the real entry point before the domain checks land, per the
+// population law. Replaced by the real ValidateSectionValues below in the
+// same slot's next commit.
+SslmModelStatus ValidateSectionValues(const SslmModelView& /*view*/, std::string* /*err*/) {
+	return SslmModelStatus::Ok;
+}
+
+}  // namespace
+
+SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err) {
+	out = SslmModelView{};
+	if (err) err->clear();
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	const SslmStatus astatus = SslmArtifact::OpenFromMemory(data, size, artifact, &aerr);
+	if (astatus != SslmStatus::Ok) {
+		if (err) {
+			*err = std::string("artifact rejected (") + SslmStatusName(astatus) + "): " + aerr.message;
+		}
+		return SslmModelStatus::ArtifactRejected;
+	}
+
+	for (const SslmSectionView& section : artifact.Sections()) {
+		SslmModelStatus s = SslmModelStatus::Ok;
+		switch (section.type) {
+			case SslmSectionType::Config:
+				s = ParseConfig(section, out.config, err);
+				out.has_config = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::SigmoidLut:
+				s = ParseSigmoidLut(section, out.sigmoid_lut, err);
+				out.has_sigmoid_lut = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::Weights:
+				s = SslmTensorManifest::Parse(section, out.weights, err);
+				out.has_weights = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::Biases:
+				s = SslmTensorManifest::Parse(section, out.biases, err);
+				out.has_biases = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::RopeTables:
+				s = SslmTensorManifest::Parse(section, out.rope_tables, err);
+				out.has_rope_tables = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::WeightScales:
+				s = SslmTensorManifest::Parse(section, out.weight_scales, err);
+				out.has_weight_scales = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::CompositionConstants:
+				s = SslmKeyedConstants::Parse(section, out.composition_constants, err);
+				out.has_composition_constants = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::KvLandingScales:
+				s = SslmKeyedConstants::Parse(section, out.kv_landing_scales, err);
+				out.has_kv_landing_scales = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::KvLandingReciprocals:
+				s = SslmKeyedConstants::Parse(section, out.kv_landing_reciprocals, err);
+				out.has_kv_landing_reciprocals = (s == SslmModelStatus::Ok);
+				break;
+			default:
+				// No sub-parser owns this section type here (Provenance, Scales,
+				// Calibration, GoldenHashes, Tokenizer, ChatTemplate, UnicodeTables,
+				// SchemaMasks) — the S1 sections have their own TokenizerView entry
+				// point, and the rest carry no typed sub-parse in this tree. Already
+				// structurally validated by SslmArtifact::OpenFromMemory.
+				continue;
+		}
+		if (s != SslmModelStatus::Ok) {
+			out = SslmModelView{};  // fail closed — never a partial view
+			return s;
+		}
+	}
+
+	const SslmModelStatus vstatus = ValidateSectionValues(out, err);
+	if (vstatus != SslmModelStatus::Ok) {
+		out = SslmModelView{};
+		return vstatus;
+	}
+
+	return SslmModelStatus::Ok;
 }
 
 } // namespace superslm
