@@ -270,7 +270,7 @@ class TokenizerTables:
         tokenizer must reproduce every record's ids and the same hash (§10 gate)."""
         from transformers import AutoTokenizer
         hf = AutoTokenizer.from_pretrained(self.ckpt)
-        lines = [ln for ln in Path(corpus_path).read_text(encoding="utf-8").splitlines() if ln]
+        lines = read_corpus_records(corpus_path)
         records, h = [], hashlib.sha256()
         for text in lines:
             ids = hf.encode(text, add_special_tokens=False)
@@ -313,17 +313,44 @@ def gen_property_ranges(pred):
     return ranges
 
 
+def read_corpus_records(corpus_path):
+    """Reads a golden/verify corpus: ONE JSON STRING LITERAL PER PHYSICAL LINE
+    (JSON Lines), e.g. `"Hello, world!"` or `"line one\\nline two"`. This is the
+    corpus format from S-HARDEN-2 onward (Claude/Plans/SuperSLM_Plan.md
+    S-HARDEN-2 slot): the prior plain-text-one-record-per-line format
+    (str.splitlines(), discarding empty lines) could not represent an embedded
+    \\n/\\r\\n WITHIN one record, or a genuinely empty-string record (a blank line
+    was indistinguishable from "no record here" and was silently dropped) --
+    both are named coverage classes the JSON-string encoding represents exactly,
+    using the same escaping every JSON tool already implements correctly.
+    A physical line that is empty (a blank line IN THE FILE, not a record whose
+    decoded value is empty) is still skipped -- that is source-file formatting,
+    not a corpus record; an intentional empty-string record is written as `""`.
+    """
+    records = []
+    for lineno, raw_line in enumerate(Path(corpus_path).read_text(encoding="utf-8").split("\n"), start=1):
+        line = raw_line.rstrip("\r")
+        if not line:
+            continue
+        try:
+            text = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{corpus_path}:{lineno}: not a valid JSON string literal ({e}): {line!r}") from e
+        if not isinstance(text, str):
+            raise ValueError(f"{corpus_path}:{lineno}: JSON value is not a string: {line!r}")
+        records.append(text)
+    return records
+
+
 def verify(ckpt_dir, corpus_path, limit=None):
     from transformers import AutoTokenizer
     tables = TokenizerTables(ckpt_dir)
     hf = AutoTokenizer.from_pretrained(ckpt_dir)
-    lines = Path(corpus_path).read_text(encoding="utf-8").splitlines()
+    lines = read_corpus_records(corpus_path)
     if limit:
         lines = lines[:limit]
     mism = 0
     for ln, text in enumerate(lines):
-        if not text:
-            continue
         got = tables.ref_encode(text)
         want = hf.encode(text, add_special_tokens=False)
         if got != want:
