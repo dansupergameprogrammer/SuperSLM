@@ -4298,6 +4298,118 @@ static void TestLoadComposedViewReopenIsIdempotent() {
 }
 
 // ---------------------------------------------------------------------------
+// T-403 regression PIN (SslmModelView lifetime-contract fix, the design at
+// Claude/Vitruvius/SuperSLM_Load_UAF_LifetimeFix_Design-2026-07-22.md §7 plus
+// Charpy's 2026-07-22 temper §6 amendment). `SslmModel::Load` previously
+// constructed a function-local SslmArtifact and populated the returned view
+// with pointers into it, freed the instant Load returned. Every existing
+// happy-path cell above reads a Load-returned view immediately, with no
+// intervening heap allocation, so none of them can expose a freed backing
+// store. These cells close that gap: a read after deliberate intervening
+// allocation (§7.2), and the moved-from object's inertness (the amendment's
+// §6 cell) — both against an independent, fixture-known oracle, never a
+// self-comparison.
+// ---------------------------------------------------------------------------
+
+// SslmModelView must never be copyable: its backing store (like SslmArtifact's
+// own) is move-only, so a copyable view of borrowed bytes would be a lie. True
+// on both the pre-fix and post-fix type (TokenizerView's own deleted copy
+// constructor already forced this — Charpy's 2026-07-22 temper, Note finding);
+// stated here as a standing structural guarantee the rest of this PIN assumes.
+static_assert(!std::is_copy_constructible_v<SslmModelView>,
+              "SslmModelView must stay non-copyable — its backing store is move-only");
+
+static superslm_test::BuiltArtifact BuildFullyValidV2ArtifactForLoadWithTokenizer() {
+	using namespace superslm_test;
+	auto tok1 = MakeMinimalValidTok1();  // vocab_count == 5; Encode("cat") == {3, 2} (pinned above, line ~1096)
+	auto uni1 = MakeMinimalValidUni1();
+	Cfg1Spec cfg;
+	cfg.vocab_size = tok1.layout.vocab_count;  // join CFG1.vocab_size to TOK1.vocab_count (F18)
+	FixtureSection composition_constants = MakeKvc1CompositionSection(/*m=*/1000000, /*e=*/0);
+	FixtureSection weight_scales = MakeWsc1Section(/*identity=*/1, /*mult=*/12345, /*shift=*/10);
+	FixtureSection rope_tables = MakeRop1Section(/*cos=*/500000000, /*sin=*/-500000000);
+	return BuildArtifact({MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(cfg)),
+	                      MakeSigmoidLutSection(), composition_constants, weight_scales, rope_tables,
+	                      MakeSection(SslmSectionType::Tokenizer, SslmDtype::Raw, tok1.bytes),
+	                      MakeSection(SslmSectionType::UnicodeTables, SslmDtype::Raw, uni1.bytes)});
+}
+
+// §7.2 — the behavioral layer. RED on the pre-fix Load (freed function-local
+// SslmArtifact; the intervening allocation below reclaims and poisons the
+// freed block, reproducing the sslm_verify garble witness deterministically);
+// GREEN once SslmModelView owns its backing store.
+static void TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoadWithTokenizer();
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the PIN's fully valid v2+tokenizer artifact through SslmModel::Load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	// Intervening heap churn, sized to reclaim and overwrite Load's freed
+	// function-local backing store under the pre-fix code: many blocks the same
+	// size as the artifact's own byte length, retained so the allocator actually
+	// hands the freed block back and the runtime stamps it with 0xA5. Under the
+	// fix, `view`'s own owned backing store is untouched by any of this churn.
+	std::vector<std::vector<uint8_t>> churn;
+	churn.reserve(4096);
+	for (int i = 0; i < 4096; ++i) {
+		churn.emplace_back(built.bytes.size(), static_cast<uint8_t>(0xA5));
+	}
+
+	// Every pointer-bearing field, read AFTER the churn above, asserted against
+	// the FIXTURE's own known written values — an independent oracle, never a
+	// self-comparison.
+	const SslmTensorView* wsc = view.weight_scales.Tensor("t0");
+	CHECK_MSG(wsc != nullptr, "the WeightScales view exposes no \"t0\" tensor after intervening allocation");
+	if (wsc != nullptr) {
+		CHECK(ReadRawI32LE(wsc->data + 0) == 1);
+		CHECK(ReadRawI32LE(wsc->data + 4) == 12345);
+		CHECK(ReadRawI32LE(wsc->data + 8) == 10);
+	}
+
+	const SslmTensorView* cos = view.rope_tables.Tensor("cos");
+	CHECK_MSG(cos != nullptr, "the RopeTables view exposes no \"cos\" tensor after intervening allocation");
+	if (cos != nullptr) CHECK(ReadRawI64LE(cos->data) == 500000000);
+
+	const SslmConstantEntry* scale = view.composition_constants.Entry("scale");
+	CHECK_MSG(scale != nullptr,
+	          "the CompositionConstants view exposes no \"scale\" entry after intervening allocation");
+	if (scale != nullptr) {
+		CHECK(SslmKeyedConstants::Value(*scale, 0) == 1000000);
+		CHECK(SslmKeyedConstants::Value(*scale, 1) == 0);
+	}
+
+	CHECK(SigmoidLutValue(view.sigmoid_lut, 0) == kSiluLutGoldenTable[0]);
+	CHECK(SigmoidLutValue(view.sigmoid_lut, kSiluLutN) == kSiluLutGoldenTable[static_cast<size_t>(kSiluLutN)]);
+
+	// The strongest exposure: TokenizerView::Impl::decode() is the one tokenizer
+	// path that dereferences vocab_offsets/vocab_blob straight out of the backing
+	// bytes (byte_to_id and the merge table are copied into Impl at Open() time,
+	// so Encode()/VocabSize() alone do NOT exercise the dangling pointer — Decode()
+	// is required to reach it). Fixture-known (pinned at test_main.cpp line ~1096
+	// for the same MakeMinimalValidTok1 fixture): Encode("cat") == {3, 2} and
+	// Decode({3, 2}) == "cat".
+	CHECK_MSG(view.has_tokenizer, "the view exposes no tokenizer after intervening allocation");
+	if (view.has_tokenizer) {
+		CHECK(view.tokenizer.VocabSize() == static_cast<int32_t>(view.config.vocab_size));
+		std::vector<int32_t> ids = view.tokenizer.Encode("cat");
+		std::vector<int32_t> want_ids = {3, 2};
+		CHECK_MSG(ids == want_ids,
+		          "Encode(\"cat\") after intervening allocation produced %zu id(s), want [3,2]", ids.size());
+		std::string decoded = view.tokenizer.Decode(want_ids);
+		CHECK_MSG(decoded == "cat",
+		          "Decode({3, 2}) after intervening allocation produced \"%s\", want \"cat\" — this is the "
+		          "path that actually dereferences vocab_offsets/vocab_blob into the backing bytes",
+		          decoded.c_str());
+	}
+}
+
+// ---------------------------------------------------------------------------
 // S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count and
 // CFG1.vocab_size, "enforced at a named API" — SslmModel::Load, per the
 // S-HARDEN-1 boundary-gate pattern this slot follows rather than inventing a
@@ -6830,6 +6942,10 @@ int main(int argc, char** argv) {
 	TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact();
 	TestLoadComposedViewRepeatedReadsShowNoDrift();
 	TestLoadComposedViewReopenIsIdempotent();
+
+	// --- T-403 regression PIN: SslmModelView lifetime-contract fix (design's
+	//     §7 behavioral cell). ---
+	TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead();
 
 	// --- S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count x
 	//     CFG1.vocab_size enforced at SslmModel::Load, following the S-HARDEN-1
