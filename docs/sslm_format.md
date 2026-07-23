@@ -261,10 +261,16 @@ header); a wrong magic or version; `entry_count > kMaxConstantEntries`; a `value
 name blob exceeding `byte_size` (computed in 64-bit — `entry_count * value_words * 8` is the
 overflow-prone product and is guarded); for **any** entry — a name range outside the name blob, a
 zero-length name, a duplicate name, or a nonzero-reserved header. The integer values themselves are
-not range-checked here (a corrupt-but-readable value is the kernel's C29 input-domain concern, not
-the structural parse's); the parse guarantees only that `entry_count` tuples of `value_words`
-`int64`s and their keys are safely readable. `int64`s are read by explicit little-endian byte
-assembly, so the value array needs no alignment.
+not range-checked here — the structural parse stays value-blind by design, so it does not couple
+this format to any one consumer's kernel domain. The obligation belongs to the load-time
+schema-value gate (`SslmModel::Load` + `ValidateSectionValues`, S-HARDEN-1, D-SLM141): each
+consuming primitive documents its domain (e.g. `CompositionConstants`' `(m, e)` against
+`SiluSigmoidQ15`'s no-UB floor), and the gate declares that domain as data in a per-section
+descriptor table, checked once per artifact open before any typed view is exposed. This is what the
+now-built `SslmModel::Load` orchestrates in place of the machinery this section previously deferred
+to (an unbuilt "C29" input-domain check with no host); the parse itself guarantees only that
+`entry_count` tuples of `value_words` `int64`s and their keys are safely readable. `int64`s are read
+by explicit little-endian byte assembly, so the value array needs no alignment.
 
 `kMaxConstantEntries` is declared in `include/superslm/model.h`.
 
