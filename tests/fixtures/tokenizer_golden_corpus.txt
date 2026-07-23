@@ -21,6 +21,16 @@ Hello<|im_end|>
 punctuation!!! ??? ...---___
 $100.00 & 50% @ #hashtag
 snake_case camelCase kebab-case
-   
-	
+
+
+Hangul syllable (L+V+T): 한글은 아름답습니다
+Hangul syllable (L+V only, no trailing consonant): 그리고 나는
+Hangul jamo sequence mixed with Latin: 안녕hello세계
+Flag emoji (regional indicator pair): 🇺🇸 and 🇯🇵 and 🇰🇷
+Fullwidth Latin and digits: Ｈｅｌｌｏ，Ｗｏｒｌｄ！１２３
+Ligatures: ﬁle ﬂow ﬀlorish ﬃsh ﬄuent
+Overlapping specials: <|im_start|><|im_end|> adjacent with no text between
+Adjacent specials with text: <|im_start|>system<|im_end|><|im_start|>user
+Reordered multi-mark CCC: q̛̈ (base q, combining dot-below CCC 220, combining diaeresis CCC 230, input NOT in canonical order)
+Reordered multi-mark CCC second case: a︠︡ combining ligature marks in reverse declaration order
 end
