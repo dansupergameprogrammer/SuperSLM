@@ -90,3 +90,23 @@ jobs:
       - run: python tests/gen_iexp_domain_fixtures.py
       - name: Fail if regenerating changed any tracked file
         run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h
+
+  # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
+  # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
+  # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and
+  # tools/test_pinned_calibration_gate.py (the "small pinned calibrated
+  # fixture" gate) can invoke the REAL compiled binary, not a stand-in --
+  # every other module under tools/ is import-independent of the cross-tree
+  # spike (see sslm_convert_validate.py's own module docstring) and runs on
+  # this bare checkout with no calibrated checkpoint.
+  converter-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: pip install numpy pytest
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --target sslm_verify
+      - run: python -m pytest tools/ -v
