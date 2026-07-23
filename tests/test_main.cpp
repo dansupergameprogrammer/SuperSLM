@@ -6219,12 +6219,11 @@ static void TestS2Point5SixCaseAcceptanceGateMeasurement() {
 	const double kPerCaseBoundCoefficient = 0.5;
 
 	// Six-case aggregate regression constants (see UPDATE PROTOCOL above before
-	// changing either). PLACEHOLDER -- deliberately wrong pending calibration
-	// (red-uncalibrated, Curie §7): the per-case bound above is already correct (the
-	// S2.5 pipeline is not the defect; the missing assertion was), so this is the cell
-	// still owed its real measurement.
-	const double kPinnedAggregateMaxAbsError = 0.0;
-	const double kPinnedAggregateMeanAbsError = 0.0;
+	// changing either). Measured by running this exact test against
+	// D:\SuperSLM @ ee77e8a (the S2.5 kernel and requant chain are unchanged by
+	// S-HARDEN-4 -- this slot adds the missing assertion, not a kernel fix).
+	const double kPinnedAggregateMaxAbsError = 2111.34375;
+	const double kPinnedAggregateMeanAbsError = 626.114286634657;
 	// Absorbs float32 summation-order noise across in_channels up to 8960 under
 	// different compilers' auto-vectorization of the reference accumulation loop
 	// (-ffp-contract=off / /fp:precise forbid FMA contraction project-wide, but not
