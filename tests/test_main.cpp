@@ -1207,6 +1207,31 @@ static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
 	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
+static void TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence() {
+	// 0xF0 0x80 0x80 0x80: an overlong 4-byte encoding (F0's first continuation
+	// must be >= 0x90; here it is 0x80). Same maximal-subpart shape as the
+	// overlong-3-byte and surrogate cells above, one byte longer: F0's first
+	// continuation fails the range check, so F0 alone is the one-byte subpart,
+	// and the three un-consumed trailing bytes are each their own ill-formed
+	// one-byte subpart — four U+FFFD, not one.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x80\x80\x80", 4), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence() {
+	// 0xF0 0x90 0x80: the first three bytes of the 4-byte sequence for U+10000,
+	// missing its final continuation byte. F0's first continuation (0x90) and
+	// second continuation (0x80) are both individually valid, so the decoder
+	// consumes all three bytes as one truncated unit and substitutes exactly one
+	// U+FFFD — the 4-byte analogue of the already-tested 3-byte truncation cell.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x90\x80", 3), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8);
+}
+
 static void TestDecodeSubstitutesReplacementCharForLoneContinuationByte() {
 	// 0x80 alone: a continuation byte with no lead byte before it.
 	std::string err;
@@ -1331,6 +1356,15 @@ namespace {
 // stamp always makes the OUTER artifact load Ok — a cell where it does not is a
 // bug in the cell, not a finding — and then TokenizerView::Open on that outer
 // artifact must return false, with Ok() left false.
+//
+// `why` is the literal substring of ParseTok/ParseUni's fail() message that the
+// TARGETED guard emits (verified against src/tokenizer.cpp), not merely a
+// description of the mutation. Asserting `terr` contains it closes the shadowing
+// class Poirot's review found (e448fb8..e79ca03 S-1): `Open` returning false
+// alone does not say WHICH check fired, so a mutated fixture can be caught by an
+// unrelated downstream guard (a shadowing check) while the guard the cell targets
+// is silently dead — reverting a targeted guard now surfaces as `terr` carrying
+// the shadowing guard's own (different) message, which fails this assertion.
 void AssertTok1Rejected(const std::vector<uint8_t>& mutated_tok1, const char* why) {
 	auto uni1 = MakeMinimalValidUni1();
 	auto built = BuildTokenizerArtifact(mutated_tok1, uni1.bytes);
@@ -1347,6 +1381,10 @@ void AssertTok1Rejected(const std::vector<uint8_t>& mutated_tok1, const char* wh
 	bool opened = TokenizerView::Open(artifact, view, &terr);
 	CHECK_MSG(!opened, "%s: TokenizerView::Open ACCEPTED a malformed TOK1 blob (gap)", why);
 	CHECK(!view.Ok());
+	if (opened) return;
+	CHECK_MSG(terr.find(why) != std::string::npos,
+	          "%s: rejected, but for the WRONG reason (a shadowing check fired instead) — got \"%s\"",
+	          why, terr.c_str());
 }
 
 void AssertUni1Rejected(const std::vector<uint8_t>& mutated_uni1, const char* why) {
@@ -1365,6 +1403,10 @@ void AssertUni1Rejected(const std::vector<uint8_t>& mutated_uni1, const char* wh
 	bool opened = TokenizerView::Open(artifact, view, &terr);
 	CHECK_MSG(!opened, "%s: TokenizerView::Open ACCEPTED a malformed UNI1 blob (gap)", why);
 	CHECK(!view.Ok());
+	if (opened) return;
+	CHECK_MSG(terr.find(why) != std::string::npos,
+	          "%s: rejected, but for the WRONG reason (a shadowing check fired instead) — got \"%s\"",
+	          why, terr.c_str());
 }
 
 }  // namespace
@@ -1375,55 +1417,55 @@ void AssertUni1Rejected(const std::vector<uint8_t>& mutated_uni1, const char* wh
 static void TestTok1RejectsBadMagic() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes[0] = 'X';  // was 'T' of "TOK1", offset 0
-	AssertTok1Rejected(tok1.bytes, "TOK1 bad magic");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad TOK1 header");
 }
 
 static void TestTok1RejectsTruncatedHeader() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(10);  // shorter than the 24-byte fixed TOK1 header
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated header");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad TOK1 header");
 }
 
 static void TestTok1RejectsVocabCountOverflow() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0xFFFFFFFFu);
-	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == 0xFFFFFFFF");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab_count exceeds INT32_MAX");
 }
 
 static void TestTok1RejectsMergeCountOverflow() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merge_count_off, 0xFFFFFFFFu);
-	AssertTok1Rejected(tok1.bytes, "TOK1 merge_count == 0xFFFFFFFF");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated merges");
 }
 
 static void TestTok1RejectsSpecialCountOverflow() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.special_count_off, 0xFFFFFFFFu);
-	AssertTok1Rejected(tok1.bytes, "TOK1 special_count == 0xFFFFFFFF");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special ids");
 }
 
 static void TestTok1RejectsTruncatedByteToId() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.byte_to_id_off + 100);  // 100 of the required 1024 bytes
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated byte_to_id");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated byte_to_id");
 }
 
 static void TestTok1RejectsTruncatedVocabOffsets() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_offsets_off + 4);  // 1 of the required vocab_count+1=5 entries
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_offsets");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab offsets");
 }
 
 static void TestTok1RejectsTruncatedVocabBlobLen() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_blob_len_off + 2);  // half of the 4-byte length field
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_blob_len");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab blob_len");
 }
 
 static void TestTok1RejectsTruncatedVocabBlob() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_blob_off + tok1.layout.vocab_blob_len - 1);  // one byte short
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated vocab_blob");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab blob");
 }
 
 static void TestTok1RejectsVocabOffsetNonMonotonic() {
@@ -1433,7 +1475,7 @@ static void TestTok1RejectsVocabOffsetNonMonotonic() {
 	// now smaller than its predecessor (4) — a pure non-monotonic violation, no
 	// offset exceeds vblob.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, 4);
-	AssertTok1Rejected(tok1.bytes, "TOK1 vocab offset non-monotonic");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
 static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
@@ -1442,44 +1484,44 @@ static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
 	// per S-HARDEN-2's fixture replacement note above); baseline value == vblob.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + tok1.layout.vocab_count * 4,
 	       tok1.layout.vocab_blob_len + 50);
-	AssertTok1Rejected(tok1.bytes, "TOK1 last vocab offset > vblob");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
 static void TestTok1RejectsMiddleVocabOffsetExceedsBlob() {
 	auto tok1 = MakeMinimalValidTok1();
 	// Index 2 is not the terminal offset (index `vocab_count` is); baseline value 2.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, tok1.layout.vocab_blob_len + 50);
-	AssertTok1Rejected(tok1.bytes, "TOK1 middle (non-terminal) vocab offset > vblob");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
 static void TestTok1RejectsTruncatedMerges() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.merges_off + 6);  // half of the one 12-byte merge record
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated merges");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated merges");
 }
 
 static void TestTok1RejectsTruncatedSpecialIds() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_ids_off + 2);  // half of the one 4-byte special id
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special-id table");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special ids");
 }
 
 static void TestTok1RejectsTruncatedSpecialOffsets() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_offsets_off + 4);  // 1 of the required special_count+1=2 entries
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special-offset table");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special offsets");
 }
 
 static void TestTok1RejectsTruncatedSpecialBlobLen() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_blob_len_off + 2);  // half of the 4-byte length field
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special_blob_len");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special blob_len");
 }
 
 static void TestTok1RejectsTruncatedSpecialBlob() {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_blob_off + tok1.layout.special_blob_len - 1);  // one byte short
-	AssertTok1Rejected(tok1.bytes, "TOK1 truncated special_blob");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special blob");
 }
 
 static void TestTok1RejectsSpecialOffsetNonMonotonic() {
@@ -1488,7 +1530,7 @@ static void TestTok1RejectsSpecialOffsetNonMonotonic() {
 	// non-monotonic; index 1 (5) does not itself exceed sblob (5), so the range
 	// branch cannot also fire.
 	PutU32(tok1.bytes, tok1.layout.special_offsets_off + 0 * 4, 6);
-	AssertTok1Rejected(tok1.bytes, "TOK1 special offset non-monotonic");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad special offset");
 }
 
 static void TestTok1RejectsSpecialOffsetOutOfRange() {
@@ -1497,7 +1539,7 @@ static void TestTok1RejectsSpecialOffsetOutOfRange() {
 	// instead (5 -> 3), so the terminal offset (5) now exceeds the declared length
 	// — a pure range violation, isolated from the monotonic check.
 	PutU32(tok1.bytes, tok1.layout.special_blob_len_off, tok1.layout.special_blob_len - 2);
-	AssertTok1Rejected(tok1.bytes, "TOK1 special offset out of range (special_blob_len understated)");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad special offset");
 }
 
 // --- S-HARDEN-2 (F6): TOK1's declared version and reserved fields (offset 4 and
@@ -1508,13 +1550,13 @@ static void TestTok1RejectsSpecialOffsetOutOfRange() {
 static void TestTok1RejectsUnsupportedVersion() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.version_off, 2);  // only 1 is the declared TOK1 version
-	AssertTok1Rejected(tok1.bytes, "TOK1 unsupported version");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: unsupported TOK1 version");
 }
 
 static void TestTok1RejectsNonzeroReserved() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.reserved_off, 1);
-	AssertTok1Rejected(tok1.bytes, "TOK1 reserved field != 0");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: TOK1 reserved field != 0");
 }
 
 // --- S-HARDEN-2 (F18): vocab_count's own declared domain — zero encodes no byte
@@ -1526,7 +1568,7 @@ static void TestTok1RejectsNonzeroReserved() {
 static void TestTok1RejectsVocabCountZero() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0);
-	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == 0");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab_count == 0");
 }
 
 static void TestTok1RejectsVocabCountExceedsInt32Max() {
@@ -1536,7 +1578,7 @@ static void TestTok1RejectsVocabCountExceedsInt32Max() {
 	// slot's new INT32_MAX check also rejects, but that cell was written before
 	// this bound existed and does not isolate it).
 	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0x80000000u);
-	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == INT32_MAX + 1");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab_count exceeds INT32_MAX");
 }
 
 // --- S-HARDEN-2 (F18): vocabulary-bound rejection. Every id this parser stores
@@ -1551,7 +1593,7 @@ static void TestTok1RejectsByteToIdEntryAtOrAboveVocabCount() {
 	// byte_to_id['z'] defaults to 0 (a valid id, below vocab_count=5); mutate it to
 	// vocab_count itself — one past the last real vocabulary slot.
 	PutU32(tok1.bytes, tok1.layout.byte_to_id_off + static_cast<unsigned char>('z') * 4, tok1.layout.vocab_count);
-	AssertTok1Rejected(tok1.bytes, "TOK1 byte_to_id entry >= vocab_count");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: byte_to_id entry >= vocab_count");
 }
 
 static void TestTok1RejectsMergeOperandAAtOrAboveVocabCount() {
@@ -1559,19 +1601,19 @@ static void TestTok1RejectsMergeOperandAAtOrAboveVocabCount() {
 	// The one merge record is (a=0, b=1, merged=3) at merges_off; field `a` is the
 	// first u32.
 	PutU32(tok1.bytes, tok1.layout.merges_off + 0, tok1.layout.vocab_count);
-	AssertTok1Rejected(tok1.bytes, "TOK1 merge operand a >= vocab_count");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
 static void TestTok1RejectsMergeOperandBAtOrAboveVocabCount() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merges_off + 4, tok1.layout.vocab_count);
-	AssertTok1Rejected(tok1.bytes, "TOK1 merge operand b >= vocab_count");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
 static void TestTok1RejectsMergeResultAtOrAboveVocabCount() {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merges_off + 8, tok1.layout.vocab_count);
-	AssertTok1Rejected(tok1.bytes, "TOK1 merge result >= vocab_count");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
 static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
@@ -1580,7 +1622,7 @@ static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
 	// that the baseline fixture itself is valid: the special's declared id (4)
 	// pushed one past the vocabulary (5).
 	PutU32(tok1.bytes, tok1.layout.special_ids_off, tok1.layout.vocab_count);
-	AssertTok1Rejected(tok1.bytes, "TOK1 special id >= vocab_count");
+	AssertTok1Rejected(tok1.bytes, "Tokenizer: special id >= vocab_count");
 }
 
 // --- UNI1 cells. Each isolates exactly one deviation from docs/sslm_format.md's
@@ -1594,13 +1636,13 @@ static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
 static void TestUni1RejectsBadMagic() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes[0] = 'X';  // was 'U' of "UNI1", offset 0
-	AssertUni1Rejected(uni1.bytes, "UNI1 bad magic");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad UNI1 header");
 }
 
 static void TestUni1RejectsTruncatedHeader() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(5);  // shorter than the 8-byte magic+version header
-	AssertUni1Rejected(uni1.bytes, "UNI1 truncated header");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad UNI1 header");
 }
 
 // S-HARDEN-2 (F6): offset 4's version field was skipped past (`pos = 8`) but
@@ -1609,79 +1651,79 @@ static void TestUni1RejectsTruncatedHeader() {
 static void TestUni1RejectsUnsupportedVersion() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.version_off, 2);  // only 1 is the declared UNI1 version
-	AssertUni1Rejected(uni1.bytes, "UNI1 unsupported version");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: unsupported UNI1 version");
 }
 
 static void TestUni1RejectsLetterCountFieldTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.letter_count_off + 2);  // half of the 4-byte count field
-	AssertUni1Rejected(uni1.bytes, "UNI1 letter range-table count field truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated range count");
 }
 
 static void TestUni1RejectsLetterRangesTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.letter_data_off + 4);  // 4 of the required 16 bytes (2 ranges)
-	AssertUni1Rejected(uni1.bytes, "UNI1 letter ranges truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsLetterCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.letter_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 letter range count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsNumberRangesTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.number_data_off + 4);  // 4 of the required 8 bytes (1 range)
-	AssertUni1Rejected(uni1.bytes, "UNI1 number ranges truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsNumberCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.number_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 number range count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsSpaceRangesTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.space_data_off + 8);  // 8 of the required 16 bytes (2 ranges)
-	AssertUni1Rejected(uni1.bytes, "UNI1 space ranges truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsSpaceCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.space_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 space range count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
 static void TestUni1RejectsCccTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.ccc_data_off + 4);  // 4 of the required 8 bytes (1 entry)
-	AssertUni1Rejected(uni1.bytes, "UNI1 ccc table truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ccc");
 }
 
 static void TestUni1RejectsCccCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.ccc_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 ccc count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ccc");
 }
 
 static void TestUni1RejectsDecompCpsTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_cps_off + 2);  // half of the required 4 bytes (1 cp)
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp cps truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp cps");
 }
 
 static void TestUni1RejectsDecompCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.decomp_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp cps");
 }
 
 static void TestUni1RejectsDecompOffsetsTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_offsets_off + 4);  // 1 of the required decomp_count+1=2 entries
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offsets truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp offsets");
 }
 
 static void TestUni1RejectsDecompOffsetOutOfRange() {
@@ -1689,7 +1731,7 @@ static void TestUni1RejectsDecompOffsetOutOfRange() {
 	// Baseline decomp offsets [0,2] (seq_len=2). Bump the terminal offset (index 1)
 	// past seq_len while keeping it >= its predecessor — a pure range violation.
 	PutU32(uni1.bytes, uni1.layout.decomp_offsets_off + 1 * 4, uni1.layout.seq_len + 97);
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offset out of range");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad decomp offset");
 }
 
 static void TestUni1RejectsDecompOffsetNonMonotonic() {
@@ -1697,25 +1739,25 @@ static void TestUni1RejectsDecompOffsetNonMonotonic() {
 	// Baseline decomp offsets [0,2]. Set index 0 to 3 (> index 1's 2) — non-
 	// monotonic; index 1 (2) does not itself exceed seq_len (2).
 	PutU32(uni1.bytes, uni1.layout.decomp_offsets_off + 0 * 4, 3);
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp offset non-monotonic");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad decomp offset");
 }
 
 static void TestUni1RejectsDecompSeqTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_seq_off + 4);  // half of the required 8 bytes (seq_len=2)
-	AssertUni1Rejected(uni1.bytes, "UNI1 decomp seq truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp seq");
 }
 
 static void TestUni1RejectsComposeTruncated() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.compose_data_off + 6);  // half of the required 12 bytes (1 entry)
-	AssertUni1Rejected(uni1.bytes, "UNI1 compose table truncated");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated compose");
 }
 
 static void TestUni1RejectsComposeCountOverflow() {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.compose_count_off, 0xFFFFFFFFu);
-	AssertUni1Rejected(uni1.bytes, "UNI1 compose count == 0xFFFFFFFF");
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated compose");
 }
 
 // ---------------------------------------------------------------------------
@@ -6314,6 +6356,8 @@ int main(int argc, char** argv) {
 	TestDecodeSubstitutesReplacementCharForSurrogateCodepoint();
 	TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF();
 	TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax();
+	TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence();
+	TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence();
 	TestDecodeSubstitutesReplacementCharForLoneContinuationByte();
 	TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd();
 	TestDecodeReconstructsSequenceSplitAcrossTokenBoundary();
