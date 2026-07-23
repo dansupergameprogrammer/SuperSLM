@@ -1001,6 +1001,44 @@ static void TestTokenizerAsciiStringRoundTrips() {
 	CHECK(ft.view.Decode(ft.view.Encode(text)) == text);
 }
 
+// S-HARDEN-2 (F15's "every raw byte mapping" class): the GPT-2-style
+// byte-level BPE base vocabulary is a bijection over every possible byte
+// value 0-255 (bytes_to_unicode(), tools/convert_tokenizer.py) -- every one
+// of the 256 entries in the artifact's byte_to_id table must name an id
+// whose OWN raw vocabulary bytes are exactly that one byte. Checked directly
+// against the artifact's bytes (ParseTokenizerBlob's byte_to_id and
+// id_to_bytes, independent of src/tokenizer.cpp), never through
+// Decode() -- a single extended-range byte (>= 0x80) decoded ALONE is
+// correctly not valid standalone UTF-8 under F7's strict policy, which is a
+// different claim from "the base vocabulary has one slot per byte value";
+// testing Decode() on an isolated out-of-context id would conflate the two
+// and assert something F7 correctly makes false.
+static void TestTokenizerByteToIdBijectsOntoEveryRawByteValue() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
+	if (!ft.artifact_ok) return;
+
+	const SslmSectionView* tok_section = ft.artifact.Section(SslmSectionType::Tokenizer);
+	CHECK_MSG(tok_section != nullptr, "artifact has no Tokenizer section");
+	if (!tok_section) return;
+	TokBlobInfo blob = ParseTokenizerBlob(tok_section->data, static_cast<size_t>(tok_section->byte_size));
+	CHECK_MSG(blob.ok, "TOK1 blob failed to parse: %s", blob.error.c_str());
+	if (!blob.ok) return;
+	CHECK_MSG(blob.byte_to_id.size() == 256, "byte_to_id table has %zu entries, want 256",
+	          blob.byte_to_id.size());
+
+	for (int b = 0; b < 256 && b < static_cast<int>(blob.byte_to_id.size()); ++b) {
+		const uint32_t id = blob.byte_to_id[b];
+		CHECK_MSG(id < blob.id_to_bytes.size(), "byte_to_id[0x%02x] == %u, outside id_to_bytes (size %zu)", b, id,
+		          blob.id_to_bytes.size());
+		if (id >= blob.id_to_bytes.size()) continue;
+		const std::string& raw = blob.id_to_bytes[id];
+		const std::string want(1, static_cast<char>(static_cast<unsigned char>(b)));
+		CHECK_MSG(raw == want, "byte_to_id[0x%02x] == id %u, whose own vocabulary bytes are %zu byte(s), want "
+		          "exactly the one byte 0x%02x", b, id, raw.size(), b);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Curie's T-129 TOK1/UNI1 sub-parse hostile-input suite (DecisionLog D-SLM62).
 // TokenizerView::Open parses the TOK1 (Tokenizer section) and UNI1 (UnicodeTables
@@ -6267,6 +6305,7 @@ int main(int argc, char** argv) {
 	TestTokenizerSpecialTokenIdMatchesArtifactDeclaration();
 	TestTokenizerVocabSizeMatchesArtifactDeclaration();
 	TestTokenizerAsciiStringRoundTrips();
+	TestTokenizerByteToIdBijectsOntoEveryRawByteValue();
 
 	// --- S-HARDEN-2 (F7, red-first): Decode's documented malformed-UTF-8 policy
 	//     through the one strict decoder shared by encode and decode. ---

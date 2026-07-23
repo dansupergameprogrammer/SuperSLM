@@ -167,6 +167,16 @@ struct TokBlobInfo {
 	uint32_t merge_count = 0;
 	uint32_t special_count = 0;
 	std::vector<TokBlobSpecial> specials;
+	// S-HARDEN-2 (F15's "every raw byte mapping" class): the 256-entry byte->id
+	// base table and the id->raw-bytes vocabulary blob, retained (not merely
+	// walked) so a cell can check the base vocabulary's bijection onto raw
+	// bytes directly from the artifact's own bytes, independent of
+	// TokenizerView::Open/Decode (whose Decode() now applies UTF-8 validation
+	// over the CONCATENATION of a request's ids — a single extended-range byte
+	// token decoded ALONE is correctly not valid standalone UTF-8, which is a
+	// different claim from "the vocabulary has one slot per byte value").
+	std::vector<uint32_t> byte_to_id;
+	std::vector<std::string> id_to_bytes;  // index == token id, size == vocab_count
 };
 
 // Parses the TOK1 blob exactly as `tools/convert_tokenizer.py`'s
@@ -204,11 +214,15 @@ inline TokBlobInfo ParseTokenizerBlob(const uint8_t* data, size_t size) {
 	// b[20..24) is the reserved u32 — not asserted here.
 
 	size_t pos = 24;
+	out.byte_to_id.reserve(256);
+	for (uint32_t k = 0; k < 256; ++k) out.byte_to_id.push_back(ReadU32LE(b, pos + k * 4u));
 	pos += 256u * 4u;  // byte_to_id[256]
 	if (!need(pos, static_cast<size_t>(out.vocab_count + 1) * 4)) {
 		out.error = "TOK1 blob truncated in id_to_bytes offsets";
 		return out;
 	}
+	std::vector<uint32_t> vocab_offs(out.vocab_count + 1);
+	for (uint32_t i = 0; i <= out.vocab_count; ++i) vocab_offs[i] = ReadU32LE(b, pos + static_cast<size_t>(i) * 4);
 	pos += static_cast<size_t>(out.vocab_count + 1) * 4;  // id_to_bytes offsets
 	if (!need(pos, 4)) {
 		out.error = "TOK1 blob truncated before id_to_bytes blob_len";
@@ -219,6 +233,15 @@ inline TokBlobInfo ParseTokenizerBlob(const uint8_t* data, size_t size) {
 	if (!need(pos, id_bytes_blob_len)) {
 		out.error = "TOK1 blob truncated in id_to_bytes blob";
 		return out;
+	}
+	out.id_to_bytes.reserve(out.vocab_count);
+	for (uint32_t i = 0; i < out.vocab_count; ++i) {
+		const uint32_t o0 = vocab_offs[i], o1 = vocab_offs[i + 1];
+		if (o0 > o1 || o1 > id_bytes_blob_len) {
+			out.error = "TOK1 blob: id_to_bytes offset out of range";
+			return out;
+		}
+		out.id_to_bytes.emplace_back(reinterpret_cast<const char*>(b.data() + pos + o0), o1 - o0);
 	}
 	pos += id_bytes_blob_len;
 
