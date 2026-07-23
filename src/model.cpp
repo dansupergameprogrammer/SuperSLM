@@ -704,9 +704,8 @@ SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView&
 	out = SslmModelView{};
 	if (err) err->clear();
 
-	SslmArtifact artifact;
 	SslmError aerr;
-	const SslmStatus astatus = SslmArtifact::OpenFromMemory(data, size, artifact, &aerr);
+	const SslmStatus astatus = SslmArtifact::OpenFromMemory(data, size, out.backing_, &aerr);
 	if (astatus != SslmStatus::Ok) {
 		if (err) {
 			*err = std::string("artifact rejected (") + SslmStatusName(astatus) + "): " + aerr.message;
@@ -714,7 +713,7 @@ SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView&
 		return SslmModelStatus::ArtifactRejected;
 	}
 
-	for (const SslmSectionView& section : artifact.Sections()) {
+	for (const SslmSectionView& section : out.backing_.Sections()) {
 		SslmModelStatus s = SslmModelStatus::Ok;
 		switch (section.type) {
 			case SslmSectionType::Config:
@@ -775,8 +774,8 @@ SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView&
 	// present, or a structurally malformed TOK1/UNI1, is a rejection here — never a
 	// partial tokenizer view.
 	{
-		const SslmSectionView* tok_sec = artifact.Section(SslmSectionType::Tokenizer);
-		const SslmSectionView* uni_sec = artifact.Section(SslmSectionType::UnicodeTables);
+		const SslmSectionView* tok_sec = out.backing_.Section(SslmSectionType::Tokenizer);
+		const SslmSectionView* uni_sec = out.backing_.Section(SslmSectionType::UnicodeTables);
 		if (tok_sec != nullptr || uni_sec != nullptr) {
 			if (tok_sec == nullptr || uni_sec == nullptr) {
 				out = SslmModelView{};
@@ -784,7 +783,7 @@ SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView&
 				              "artifact carries one of Tokenizer/UnicodeTables without the other");
 			}
 			std::string terr;
-			if (!TokenizerView::Open(artifact, out.tokenizer, &terr)) {
+			if (!TokenizerView::Open(out.backing_, out.tokenizer, &terr)) {
 				out = SslmModelView{};
 				if (err) *err = "Tokenizer rejected: " + terr;
 				return SslmModelStatus::TokenizerRejected;

@@ -271,6 +271,26 @@ int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept;
 // consumer's domain — the schema-value gate. A default instance is empty;
 // Load leaves it at defaults on any rejection (fail closed, never a partial
 // view).
+//
+// Ownership (T-403 lifetime-contract fix, 2026-07-22): the view is
+// self-contained. It owns its backing store (`backing_`, populated only by
+// SslmModel::Load) and every pointer/`string_view` it exposes points into
+// storage the view itself keeps alive for exactly as long as the view lives
+// — holding the view is sufficient; there is no second object to keep alive.
+// The view is movable (a move carries the backing store — `std::vector`'s
+// move-preserves-buffer-address guarantee, the same invariant SslmArtifact
+// already ships, artifact.h — so every exposed pointer stays valid) and
+// non-copyable (its backing store is move-only; a copyable view of borrowed
+// bytes was never sound). Move construction/assignment are HAND-WRITTEN, not
+// `= default`: every pointer-bearing member except `sigmoid_lut` clears
+// itself on an ordinary container move, but `sigmoid_lut` is a bare
+// pointer+count with no container of its own, so a member-wise default move
+// would copy its pointer bits onto the destination while leaving the
+// source's copy — and its `has_sigmoid_lut` flag — untouched, a dangling
+// pointer on the moved-from object indistinguishable from a populated one.
+// The hand-written move clears `sigmoid_lut` and every `has_*` flag on the
+// source explicitly, so destroying — or moving from — the view invalidates
+// every view it exposed, uniformly across every pointer-bearing member.
 struct SslmModelView {
 	SslmModelConfig config;
 	bool has_config = false;
@@ -316,6 +336,66 @@ struct SslmModelView {
 	// enforced before this slot.
 	TokenizerView tokenizer;
 	bool has_tokenizer = false;
+
+	SslmModelView() = default;
+	SslmModelView(SslmModelView&& other) noexcept { MoveFrom(other); }
+	SslmModelView& operator=(SslmModelView&& other) noexcept {
+		if (this != &other) MoveFrom(other);
+		return *this;
+	}
+	SslmModelView(const SslmModelView&) = delete;
+	SslmModelView& operator=(const SslmModelView&) = delete;
+
+private:
+	friend class SslmModel;
+
+	// The one place that carries every member across a move and then clears
+	// the source. See the struct's ownership comment above for why this is
+	// hand-written rather than `= default`.
+	void MoveFrom(SslmModelView& other) noexcept {
+		config = other.config;
+		has_config = other.has_config;
+		sigmoid_lut = other.sigmoid_lut;
+		has_sigmoid_lut = other.has_sigmoid_lut;
+		weights = std::move(other.weights);
+		has_weights = other.has_weights;
+		biases = std::move(other.biases);
+		has_biases = other.has_biases;
+		rope_tables = std::move(other.rope_tables);
+		has_rope_tables = other.has_rope_tables;
+		weight_scales = std::move(other.weight_scales);
+		has_weight_scales = other.has_weight_scales;
+		composition_constants = std::move(other.composition_constants);
+		has_composition_constants = other.has_composition_constants;
+		kv_landing_scales = std::move(other.kv_landing_scales);
+		has_kv_landing_scales = other.has_kv_landing_scales;
+		kv_landing_reciprocals = std::move(other.kv_landing_reciprocals);
+		has_kv_landing_reciprocals = other.has_kv_landing_reciprocals;
+		tokenizer = std::move(other.tokenizer);
+		has_tokenizer = other.has_tokenizer;
+		backing_ = std::move(other.backing_);
+
+		// Clear the source. Every member above except `sigmoid_lut` is a
+		// vector/unique_ptr-backed container whose ordinary move already left
+		// `other` empty/null; `sigmoid_lut` has no container to do that for
+		// it, so it is reset explicitly here, alongside every `has_*` flag —
+		// otherwise `other.has_sigmoid_lut` would still read true over a
+		// pointer `this` now exclusively owns.
+		other.config = SslmModelConfig{};
+		other.has_config = false;
+		other.sigmoid_lut = SslmSigmoidLut{};
+		other.has_sigmoid_lut = false;
+		other.has_weights = false;
+		other.has_biases = false;
+		other.has_rope_tables = false;
+		other.has_weight_scales = false;
+		other.has_composition_constants = false;
+		other.has_kv_landing_scales = false;
+		other.has_kv_landing_reciprocals = false;
+		other.has_tokenizer = false;
+	}
+
+	SslmArtifact backing_;  // owns the file bytes every view above points into
 };
 
 // The load-time orchestration entry point (S-HARDEN-1, D-SLM141): the one
