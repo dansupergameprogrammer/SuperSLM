@@ -5,9 +5,21 @@ reaches the runtime — §6.8; `quantize_multiplier`/`_reference_fold` are offli
 and emits the binary model sections via `sslm_model_writer`. Proves the whole model
 pipeline the S1 way: Python emits -> the C++ loader accepts byte-identically and the
 ModelView reads every section back. Build-time tooling; Python ships nothing (§11).
+
+S-HARDEN-3 (F13): conversion is now the two-phase checked transaction
+SuperSLM_Plan.md §13 item 7 specifies — validate (sslm_convert_validate.validate_model,
+reject-over-degrade for every dtype/range/geometry/scale/fold-bound claim), THEN
+serialize (build_sections, now writing explicit little-endian dtypes), THEN invoke
+the independent C++ verifier (sslm_convert_manifest.verify_and_merge, which runs the
+compiled `sslm_verify` binary and raises on rejection or a failed geometry
+cross-check) and emit the combined proof manifest. Coercion is not proof: the old
+two-line pipeline (build_sections then write_artifact, with no validate phase and no
+independent load-back) is exactly what let an int16 [128,-129] array become
+int8 [-128,127] silently — this module's own defect finding.
 """
 
 import argparse
+import os
 import sys
 
 import numpy as np
@@ -19,8 +31,12 @@ if _SPIKE_ROOT not in sys.path:
     sys.path.insert(0, _SPIKE_ROOT)
 from superslm_spike import artifact_cache, pipeline  # noqa: E402
 
+import sslm_convert_manifest as M  # noqa: E402
+import sslm_convert_validate as V  # noqa: E402
 import sslm_format as F  # noqa: E402
 import sslm_model_writer as W  # noqa: E402
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _fold_ops_tensor(channel_scales):
@@ -116,14 +132,45 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--artifact", required=True, help="calibrated artifact directory")
     ap.add_argument("--out", required=True, help="output .sslm path")
+    ap.add_argument("--verifier", default=None,
+                    help="path to the compiled sslm_verify binary (default: searched under build/)")
+    ap.add_argument("--manifest-out", default=None,
+                    help="path for the combined proof manifest (default: <out>.manifest.json)")
+    ap.add_argument("--skip-verify", action="store_true",
+                    help="skip invoking the independent C++ verifier (debugging only -- "
+                         "the artifact's 'must load Ok' contract is NOT discharged without it)")
     args = ap.parse_args()
 
     model = artifact_cache.load_artifact(args.artifact)
+
+    # Phase 1: validate. Every dtype/range/integralness/finiteness/geometry/
+    # required-key/shape/scale-positivity/fold-bound/Unicode-coherence claim
+    # is checked BEFORE a single array is cast — reject-over-degrade, not the
+    # old writer's silent np.asarray(..., dtype=X) coercion.
+    V.validate_model(model, fold_ops_tensor=_fold_ops_tensor, ctx_fold_tensor=_ctx_fold_tensor,
+                     unicode_major=15, unicode_minor=1, unicode_patch=0)
+
+    # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
     sections = build_sections(model)
     fp = F.write_artifact(args.out, sections)
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")
     print(f"sections {len(sections)}: " + ", ".join(str(s.type) for s in sections))
+
+    # Phase 3: invoke the independent C++ verifier and emit the proof manifest
+    # (§13 item 7). This is what discharges the writer's "must load Ok"
+    # contract by INVOKING the loader, not by asserting it.
+    if args.skip_verify:
+        print("--skip-verify set: the independent verifier was NOT run; the artifact's "
+              "'must load Ok' contract is unproven for this conversion")
+        return
+
+    verifier_cmd = [args.verifier] if args.verifier else None
+    manifest = M.verify_and_merge(_REPO_ROOT, args.out, args.artifact, verifier_cmd=verifier_cmd,
+                                  manifest_out_path=args.manifest_out)
+    manifest_path = args.manifest_out or (args.out + ".manifest.json")
+    print(f"verified: independent loader accepted the artifact")
+    print(f"proof manifest: {manifest_path}")
 
 
 if __name__ == "__main__":
