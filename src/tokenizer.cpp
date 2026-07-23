@@ -13,27 +13,101 @@ uint32_t Rd32(const uint8_t* p) {
 	return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
 
+// The tokenizer's TOK1/UNI1 blob format version (docs/sslm_format.md "Tokenizer
+// blob -- TOK1" / "UnicodeTables blob -- UNI1"): both fields are documented `u32 = 1`
+// today. S-HARDEN-2 (F6): this is a real, checked precondition, not a magic literal
+// repeated at each call site.
+constexpr uint32_t kTokBlobVersion = 1;
+constexpr uint32_t kUniBlobVersion = 1;
+// TOK1.vocab_count's declared domain (S-HARDEN-2, F18): zero is a vocabulary that can
+// encode no byte and index no token, and every id this parser stores is narrowed to
+// int32_t downstream (Encode/Decode/VocabSize), so a vocab_count that cannot be
+// represented as a non-negative int32 is rejected here rather than silently wrapping
+// at the narrowing site.
+constexpr uint32_t kTokVocabCountMax = 0x7FFFFFFFu;  // INT32_MAX
+
+// The ONE strict UTF-8 decoder shared by Encode (over raw input text) and Decode
+// (over the concatenated raw bytes of every emitted token id) -- S-HARDEN-2 (F7).
+// `include/superslm/tokenizer.h`'s documented policy is "invalid sequences pass
+// through as replacement chars"; this is the one place that policy is implemented,
+// so Encode and Decode cannot silently diverge on what counts as malformed. Rejects
+// (substitutes exactly one U+FFFD for) every ill-formed subsequence per the Unicode
+// Standard's "maximal subpart of an ill-formed subsequence" algorithm: overlong
+// encodings (a non-canonical byte length for the encoded codepoint), UTF-16
+// surrogate codepoints (U+D800-U+DFFF, which UTF-8 must never encode), codepoints
+// past U+10FFFF, a continuation byte with no valid lead, and a sequence truncated at
+// end-of-input. Because this runs over the FULLY CONCATENATED byte string (all of
+// Encode's input span, or all of Decode's ids' bytes joined in order) rather than
+// per-token, a multi-byte sequence whose bytes are split across two adjacent
+// tokens' vocabulary entries reassembles correctly before this ever sees it.
 void Utf8Decode(std::string_view s, std::vector<uint32_t>& out) {
-	size_t i = 0, n = s.size();
+	const size_t n = s.size();
+	size_t i = 0;
+	// The continuation byte (10xxxxxx) at `idx`'s low 6 bits, or -1 if `idx` is past
+	// the end or the byte there is not a valid continuation byte.
+	auto cont = [&](size_t idx) -> int {
+		if (idx >= n) return -1;
+		uint8_t c = uint8_t(s[idx]);
+		if ((c & 0xC0) != 0x80) return -1;
+		return int(c & 0x3F);
+	};
 	while (i < n) {
-		uint8_t c = uint8_t(s[i]);
-		uint32_t cp;
-		int len;
-		if (c < 0x80) { cp = c; len = 1; }
-		else if ((c >> 5) == 0x6) { cp = c & 0x1F; len = 2; }
-		else if ((c >> 4) == 0xE) { cp = c & 0x0F; len = 3; }
-		else if ((c >> 3) == 0x1E) { cp = c & 0x07; len = 4; }
-		else { out.push_back(0xFFFD); ++i; continue; }
-		if (i + size_t(len) > n) { out.push_back(0xFFFD); ++i; continue; }
-		bool ok = true;
-		for (int k = 1; k < len; ++k) {
-			uint8_t cc = uint8_t(s[i + k]);
-			if ((cc >> 6) != 0x2) { ok = false; break; }
-			cp = (cp << 6) | (cc & 0x3F);
+		const uint8_t b0 = uint8_t(s[i]);
+		if (b0 < 0x80) { out.push_back(b0); ++i; continue; }
+		if (b0 < 0xC2) {
+			// 0x80-0xBF: a lone/unexpected continuation byte, no lead preceded it.
+			// 0xC0-0xC1: the only two-byte lead bytes that can only ever encode an
+			// overlong form (codepoints < 0x80, already representable in one byte).
+			out.push_back(0xFFFD); ++i; continue;
 		}
-		if (!ok) { out.push_back(0xFFFD); ++i; continue; }
-		out.push_back(cp);
-		i += size_t(len);
+		if (b0 < 0xE0) {
+			// Two-byte: C2-DF. Every remaining lead in this range is canonical for
+			// some codepoint in [0x80, 0x7FF]; no separate overlong check needed.
+			const int c1 = cont(i + 1);
+			if (c1 < 0) { out.push_back(0xFFFD); ++i; continue; }
+			out.push_back((uint32_t(b0 & 0x1F) << 6) | uint32_t(c1));
+			i += 2; continue;
+		}
+		if (b0 < 0xF0) {
+			// Three-byte: E0-EF. E0's first continuation must be >= 0xA0 (else the
+			// codepoint is overlong, representable in two bytes); ED's first
+			// continuation must be <= 0x9F (else the codepoint is a UTF-16
+			// surrogate, U+D800-U+DFFF, which UTF-8 must never encode).
+			const int c1 = cont(i + 1);
+			bool c1_ok = c1 >= 0;
+			if (c1_ok) {
+				const uint8_t c1b = uint8_t(s[i + 1]);
+				if (b0 == 0xE0 && c1b < 0xA0) c1_ok = false;
+				if (b0 == 0xED && c1b > 0x9F) c1_ok = false;
+			}
+			if (!c1_ok) { out.push_back(0xFFFD); ++i; continue; }
+			const int c2 = cont(i + 2);
+			if (c2 < 0) { out.push_back(0xFFFD); i += 2; continue; }  // truncated: consume lead + 1 valid cont
+			out.push_back((uint32_t(b0 & 0x0F) << 12) | (uint32_t(c1) << 6) | uint32_t(c2));
+			i += 3; continue;
+		}
+		if (b0 < 0xF5) {
+			// Four-byte: F0-F4. F0's first continuation must be >= 0x90 (else
+			// overlong, representable in three bytes); F4's first continuation must
+			// be <= 0x8F (else the codepoint exceeds U+10FFFF).
+			const int c1 = cont(i + 1);
+			bool c1_ok = c1 >= 0;
+			if (c1_ok) {
+				const uint8_t c1b = uint8_t(s[i + 1]);
+				if (b0 == 0xF0 && c1b < 0x90) c1_ok = false;
+				if (b0 == 0xF4 && c1b > 0x8F) c1_ok = false;
+			}
+			if (!c1_ok) { out.push_back(0xFFFD); ++i; continue; }
+			const int c2 = cont(i + 2);
+			if (c2 < 0) { out.push_back(0xFFFD); i += 2; continue; }
+			const int c3 = cont(i + 3);
+			if (c3 < 0) { out.push_back(0xFFFD); i += 3; continue; }
+			out.push_back((uint32_t(b0 & 0x07) << 18) | (uint32_t(c1) << 12) | (uint32_t(c2) << 6) | uint32_t(c3));
+			i += 4; continue;
+		}
+		// 0xF5-0xFF: every codepoint a lead this large could encode exceeds
+		// U+10FFFF outright.
+		out.push_back(0xFFFD); ++i;
 	}
 }
 
@@ -298,13 +372,24 @@ struct TokenizerView::Impl {
 		}
 	}
 
+	// S-HARDEN-2 (F7): concatenate every id's raw vocabulary bytes FIRST -- so a
+	// multi-byte UTF-8 sequence whose bytes are split across two adjacent tokens
+	// reassembles correctly -- then run the one strict decoder (Utf8Decode, shared
+	// with encode()) and re-encode, so a malformed byte sequence anywhere in the
+	// concatenation surfaces as U+FFFD per the documented policy
+	// (include/superslm/tokenizer.h) rather than passing through as raw bytes.
 	void decode(const std::vector<int32_t>& ids, std::string& out) const {
+		std::string raw;
 		for (int32_t id : ids) {
 			if (id < 0 || uint32_t(id) >= vocab_count) continue;
 			uint32_t off = Rd32(vocab_offsets + size_t(id) * 4);
 			uint32_t end = Rd32(vocab_offsets + (size_t(id) + 1) * 4);
-			out.append(reinterpret_cast<const char*>(vocab_blob) + off, end - off);
+			raw.append(reinterpret_cast<const char*>(vocab_blob) + off, end - off);
 		}
+		std::vector<uint32_t> cps;
+		Utf8Decode(raw, cps);
+		out.reserve(out.size() + raw.size());
+		for (uint32_t cp : cps) Utf8Append(cp, out);
 	}
 };
 
@@ -319,11 +404,33 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	// `count + 1` or `count * k` must not wrap before the bound check (Poirot S1-2).
 	auto need = [&](uint64_t off, uint64_t len) { return off + len <= uint64_t(sz); };
 	if (!need(0, 24) || std::memcmp(d, "TOK1", 4) != 0) return fail("Tokenizer: bad TOK1 header");
+	// S-HARDEN-2 (F6): offset 4 (version) and offset 20 (reserved) are declared by
+	// the format (docs/sslm_format.md "Tokenizer blob -- TOK1") and were never read
+	// by any code path before this -- a guard-vitality gap (§17 dim 11): the format
+	// claims both are enforced and nothing enforced either.
+	if (Rd32(d + 4) != kTokBlobVersion) return fail("Tokenizer: unsupported TOK1 version");
 	uint32_t vocab = Rd32(d + 8), merge = Rd32(d + 12), special = Rd32(d + 16);
+	if (Rd32(d + 20) != 0) return fail("Tokenizer: TOK1 reserved field != 0");
+	// S-HARDEN-2 (F18): vocab_count == 0 encodes no byte and indexes no token; every
+	// id this parser stores is narrowed to int32_t downstream, so a vocab_count that
+	// cannot be represented as a non-negative int32 is rejected before it can make
+	// that narrowing (or the byte/merge/special bound checks below, which compare
+	// against `vocab` as read) silently wrong.
+	if (vocab == 0) return fail("Tokenizer: vocab_count == 0");
+	if (vocab > kTokVocabCountMax) return fail("Tokenizer: vocab_count exceeds INT32_MAX");
 	im.vocab_count = vocab;
 	size_t pos = 24;
 	if (!need(pos, 256 * 4)) return fail("Tokenizer: truncated byte_to_id");
-	for (int b = 0; b < 256; ++b) im.byte_to_id[b] = Rd32(d + pos + size_t(b) * 4);
+	for (int b = 0; b < 256; ++b) {
+		const uint32_t id = Rd32(d + pos + size_t(b) * 4);
+		// S-HARDEN-2 (F18): every one of the 256 byte->id entries must index a real
+		// vocabulary slot -- an id here that Encode() can emit and Decode()/the
+		// forward path's token-embedding lookup then cannot bound is exactly the
+		// defect a committed test used to require (MakeMinimalValidTok1's <eos> at
+		// id 1000 against a 4-entry vocab).
+		if (id >= vocab) return fail("Tokenizer: byte_to_id entry >= vocab_count");
+		im.byte_to_id[b] = id;
+	}
 	pos += 256 * 4;
 	if (!need(pos, (uint64_t(vocab) + 1) * 4)) return fail("Tokenizer: truncated vocab offsets");
 	im.vocab_offsets = d + pos;
@@ -349,12 +456,25 @@ bool ParseTok(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string*
 	im.merges.reserve(merge);
 	for (uint32_t r = 0; r < merge; ++r) {
 		uint32_t a = Rd32(d + pos), b = Rd32(d + pos + 4), m = Rd32(d + pos + 8);
+		// S-HARDEN-2 (F18): a merge's operands and result all become ids Encode()
+		// can emit (`bpe`'s `ids[best_pos] = it->second.second`); each must index
+		// the vocabulary the same way byte_to_id's entries must.
+		if (a >= vocab || b >= vocab || m >= vocab)
+			return fail("Tokenizer: merge operand or result >= vocab_count");
 		im.merges.emplace((uint64_t(a) << 32) | b, std::make_pair(int32_t(r), int32_t(m)));
 		pos += 12;
 	}
 	if (!need(pos, uint64_t(special) * 4)) return fail("Tokenizer: truncated special ids");
 	std::vector<uint32_t> sids(special);
-	for (uint32_t i = 0; i < special; ++i) { sids[i] = Rd32(d + pos); pos += 4; }
+	for (uint32_t i = 0; i < special; ++i) {
+		const uint32_t sid = Rd32(d + pos);
+		// S-HARDEN-2 (F18): the exact defect the review's finding named -- a special
+		// id outside the vocabulary is emitted verbatim by encode()'s special-token
+		// path and then indexes past the token embedding once a forward kernel
+		// exists (F18's "out-of-range index into the token embedding").
+		if (sid >= vocab) return fail("Tokenizer: special id >= vocab_count");
+		sids[i] = sid; pos += 4;
+	}
 	if (!need(pos, (uint64_t(special) + 1) * 4)) return fail("Tokenizer: truncated special offsets");
 	std::vector<uint32_t> soff(special + 1);
 	for (uint32_t i = 0; i <= special; ++i) { soff[i] = Rd32(d + pos); pos += 4; }
@@ -384,6 +504,11 @@ bool ReadRanges(const uint8_t* d, size_t sz, size_t& pos, std::vector<Range>& r,
 bool ParseUni(const uint8_t* d, size_t sz, TokenizerView::Impl& im, std::string* err) {
 	auto fail = [&](const char* m) { if (err) *err = m; return false; };
 	if (sz < 8 || std::memcmp(d, "UNI1", 4) != 0) return fail("UnicodeTables: bad UNI1 header");
+	// S-HARDEN-2 (F6): the version field at offset 4 was skipped past (`pos = 8`)
+	// but never actually read and compared -- the same guard-vitality gap as TOK1's
+	// version/reserved fields (§17 dim 11): the format declares `u32 = 1` and no
+	// code path could ever reject a different value.
+	if (Rd32(d + 4) != kUniBlobVersion) return fail("UnicodeTables: unsupported UNI1 version");
 	size_t pos = 8; // magic + blob version
 	if (!ReadRanges(d, sz, pos, im.letter, err)) return false;
 	if (!ReadRanges(d, sz, pos, im.number, err)) return false;
