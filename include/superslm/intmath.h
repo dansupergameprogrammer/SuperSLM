@@ -49,14 +49,25 @@ inline constexpr int32_t kInt32Max = 2147483647;       //  2^31 - 1
 // exact result exceeds INT32_MAX, and it saturates to INT32_MAX.
 int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b);
 
+// RoundingDivideByPOT's documented exponent domain, named (S-HARDEN-1, D-SLM142) so a
+// caller-side bound — e.g. the load-time schema-value gate's WSC1 `shift` domain and the
+// KVC1 `e` no-UB floor's right-branch reach, both in src/model.cpp — can be pinned to this
+// primitive's actual domain by `static_assert` rather than by a duplicated numeric literal
+// that can drift out of step with it silently.
+inline constexpr int kRoundingDivideByPotExponentMinI32 = 0;
+inline constexpr int kRoundingDivideByPotExponentMaxI32 = 31;   // int32 overload's exponent ceiling
+inline constexpr int kRoundingDivideByPotExponentMinI64 = 0;
+inline constexpr int kRoundingDivideByPotExponentMaxI64 = 63;   // int64 overload's exponent ceiling
+
 // C1/C3 — gemmlowp `RoundingDivideByPOT`: x / 2^exponent, ties AWAY FROM ZERO.
-// Defined for exponent in [0, 31]; exponent 0 is the identity. The `+1` carried on the
-// negative branch of the threshold is what turns the floor shift's half-up behaviour
-// into half-away-from-zero.
+// Defined for exponent in [kRoundingDivideByPotExponentMinI32, kRoundingDivideByPotExponentMaxI32];
+// exponent 0 is the identity. The `+1` carried on the negative branch of the threshold is what
+// turns the floor shift's half-up behaviour into half-away-from-zero.
 int32_t RoundingDivideByPOT(int32_t x, int exponent);
 
 // C3 — the int64-domain sibling of RoundingDivideByPOT: x / 2^exponent, ties AWAY FROM
-// ZERO, for exponent in [0, 63]. Delegates to the SAME width-generic rounding template S2.3
+// ZERO, for exponent in [kRoundingDivideByPotExponentMinI64, kRoundingDivideByPotExponentMaxI64].
+// Delegates to the SAME width-generic rounding template S2.3
 // already instantiates at int64 for RopeApplyPair (S23-1's unification) — one tie rule, no
 // duplication. Exposed publicly so S2.4's SiLU-LUT index derivation can round its int64
 // sub-node position (SuperSLM_S2.4_SiLU_LUT_Design §5, §9).

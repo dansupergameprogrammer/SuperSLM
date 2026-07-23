@@ -9,6 +9,8 @@
 // before any tensor byte is exposed. Deviation is a rejection with a status, never a
 // silent partial view. Standard library only (D-SLM13).
 #include "superslm/model.h"
+#include "superslm/intmath.h"       // S-HARDEN-1 (D-SLM142): pin the value gate's bounds to their source
+#include "superslm/silu_lut.h"      // kSiluLutLog2K/kSiluLutQIdx/kSiluLutTermLeftShiftOverflowExponent
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable — S-HARDEN-1 (F20/F22)
 
 #include <algorithm>
@@ -532,6 +534,32 @@ constexpr int32_t kWeightScaleShiftMax = 31;
 // iff |cos|,|sin| <= ROPE_ONE (2^30, intmath.h:360) — the exact bound that
 // restores its "each product <= 2^61, each sum <= 2^62" premise.
 constexpr int64_t kRopeEntryAbsMax = INT64_C(1) << 30;
+
+// S-HARDEN-1 (T-400, Poirot Finding 2): pin every domain constant above to the source it is
+// cited to, so an edit to either side — this gate's own literal, or the kernel arithmetic it
+// protects — fails the build instead of drifting past a reviewer's read. A comment citing a
+// source line is a claim nobody checks; these are the same claims, checked at compile time.
+static_assert(kCompositionScaleMaxAbsM == kInt32Max,
+              "KVC1 m's no-UB floor must equal intmath.h's kInt32Max: silu_lut.cpp's |term| bound "
+              "(|term| < 127*2^31 < 2^39) assumes |m| <= INT32_MAX — if this drifts, F22's no-UB "
+              "floor is no longer the exact bound the comment claims");
+static_assert(kCompositionScaleMaxE + kSiluLutLog2K + kSiluLutQIdx < kSiluLutTermLeftShiftOverflowExponent,
+              "KVC1 e's upper no-UB floor must keep SiluSigmoidQ15's left-branch shift "
+              "(e + kSiluLutLog2K + kSiluLutQIdx) below silu_lut.cpp's overflow point — if this "
+              "drifts, F22's left branch (term << shift) can overflow int64");
+static_assert(-kCompositionScaleMinE - kSiluLutLog2K - kSiluLutQIdx <= kRoundingDivideByPotExponentMaxI64,
+              "KVC1 e's lower no-UB floor must keep SiluSigmoidQ15's right-branch -shift inside "
+              "RoundingDivideByPOT's documented int64 exponent domain — if this drifts, F22's right "
+              "branch calls RoundingDivideByPOT out of its domain");
+static_assert(kWeightScaleShiftMin == kRoundingDivideByPotExponentMinI32 &&
+                  kWeightScaleShiftMax == kRoundingDivideByPotExponentMaxI32,
+              "WSC1 shift's domain must equal RoundingDivideByPOT's documented int32 exponent "
+              "domain (intmath.h) exactly — if this drifts, F23's floor no longer matches the "
+              "primitive it protects");
+static_assert(kRopeEntryAbsMax == ROPE_ONE,
+              "ROP1 element's domain must equal intmath.h's ROPE_ONE — RopeApplyPair's safety "
+              "argument (intmath.cpp:451, '|cos|,|sin| <= ROPE_ONE') is exactly this bound; if it "
+              "drifts, F24's floor no longer restores that premise");
 
 // F22 — CompositionConstants (m, e): one check per keyed entry closes all
 // three of SiluSigmoidQ15's UB sites (silu_lut.cpp:20 the code*m product,

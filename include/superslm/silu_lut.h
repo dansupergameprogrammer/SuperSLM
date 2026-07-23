@@ -26,6 +26,14 @@ inline constexpr int kSiluLutX = 16;                       // domain half-width 
 inline constexpr int kSiluLutLog2K = 5;                    // k = log2(N / 2X) = log2(32); K = 2^k
 inline constexpr int kSiluLutQIdx = 12;                    // sub-node index fractional bits (§5, §7)
 
+// S-HARDEN-1 (D-SLM142): named so the KVC1 (m,e) no-UB floor's upper bound on `e`
+// (src/model.cpp `kCompositionScaleMaxE`) can be pinned by `static_assert` to the exact
+// shift at which SiluSigmoidQ15's left branch (`term << shift`, src/silu_lut.cpp) overflows
+// int64 — 26, given |term| < 2^39 from |code| <= 127 and |m| bounded by the floor's own
+// `kCompositionScaleMaxAbsM`. A prose-only bound (a comment citing "26") is checked by
+// nobody; this constant is what the pin in model.cpp compares against.
+inline constexpr int kSiluLutTermLeftShiftOverflowExponent = 26;
+
 // sigmoid(code * realscale) in Q15 via the LUT, where realscale = m * 2^e and `code` is the
 // int8 SwiGLU gate value (the codebase's activation format, in [-127, 127]). `table` is
 // kSigmoidLutEntries (= N+1) native-endian int32 Q15 nodes (the caller materializes it from the
