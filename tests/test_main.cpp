@@ -3407,6 +3407,535 @@ static void TestRop1RejectsHostileCosSinPair() {
 }
 
 // ---------------------------------------------------------------------------
+// Mendeleev's 2026-07-22 coverage audit of this gate (Claude/Mendeleev/
+// superslm-s-harden-1-valuegate-coverage-audit-2026-07-22.md) found the three
+// cells above prove only the exact adversarial operand each finding names —
+// one guard sub-branch per domain, one side of each bound. The cells below
+// close the audit's routed gaps: the other guard sub-branch on each domain
+// check (§3.1, dims 2/4/5/11), an accept-at-bound cell per bound (dim 4, so a
+// future off-by-one is caught on the side that currently passes silently),
+// `Load`'s own `ArtifactRejected` container-reject branch, `Load`'s
+// fail-closed reset on a STRUCTURAL sub-parse failure as opposed to a value
+// rejection (§3.2, dims 7/11), `Load`'s own success path (§3.3, dim 10,
+// Structural), and the dim-1 warm-object obligation for the newly validated
+// `SslmModelView` (§4, T-164). Every cell drives a complete v2 artifact
+// through `SslmModel::Load`, never the bare sub-parsers, per D-SLM143.
+// ---------------------------------------------------------------------------
+
+// Builds a CompositionConstants (KVC1) section with one entry named "scale"
+// carrying (m, e) — the same construction as
+// TestKvc1RejectsHostileCompositionConstantsScale above, factored out so the
+// boundary matrix below does not repeat it once per clause.
+static FixtureSection MakeKvc1CompositionSection(int64_t m, int64_t e) {
+	using namespace superslm_test;
+	auto kvc1 = BuildKvc1(2, {{"scale", {m, e}}});
+	return MakeSection(SslmSectionType::CompositionConstants, SslmDtype::Raw, kvc1.bytes, /*alignment=*/64);
+}
+
+// Builds a WeightScales (WSC1) section with one (identity, mult, shift) row —
+// the same construction as TestWsc1RejectsHostileShiftOutOfDocumentedBound
+// above, factored out for the boundary matrix below.
+static FixtureSection MakeWsc1Section(int32_t identity, int32_t mult, int32_t shift) {
+	using namespace superslm_test;
+	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{3});
+	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
+	PutU32(manifest.bytes, data_off + 0, static_cast<uint32_t>(identity));
+	PutU32(manifest.bytes, data_off + 4, static_cast<uint32_t>(mult));
+	PutU32(manifest.bytes, data_off + 8, static_cast<uint32_t>(shift));
+	return MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
+}
+
+// Builds a RopeTables (ROP1) section with "cos"/"sin" single-element tensors —
+// the same construction as TestRop1RejectsHostileCosSinPair above, factored
+// out for the boundary matrix below.
+static FixtureSection MakeRop1Section(int64_t cos_v, int64_t sin_v) {
+	using namespace superslm_test;
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {1}}, {"sin", {1}}};
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]), static_cast<uint64_t>(cos_v));
+	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]), static_cast<uint64_t>(sin_v));
+	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+}
+
+// Little-endian byte assemblers over a raw section pointer (never a cast over
+// unaligned/untrusted bytes) — the same discipline model.cpp's own RdI32/RdI64
+// use, reimplemented independently here so a §3.3/§4 feature-oracle assertion
+// is never checked against the code under test's own reader.
+static int32_t ReadRawI32LE(const uint8_t* p) {
+	uint32_t v = uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+	return static_cast<int32_t>(v);
+}
+static int64_t ReadRawI64LE(const uint8_t* p) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
+	return static_cast<int64_t>(v);
+}
+
+// A complete, fully in-domain v2 artifact: Config, SigmoidLut, and one each of
+// CompositionConstants/WeightScales/RopeTables with every gated field inside
+// its stated domain — the §3.3 success-path fixture and the §4 warm-object
+// base case (Mendeleev's routing: "should be authored first so §4's cell can
+// build on it rather than duplicate it"). Values are arbitrary but
+// deliberately non-trivial (not 0, not a bound) so the feature-oracle checks
+// below cannot pass on a coincidentally-zeroed read.
+static superslm_test::BuiltArtifact BuildFullyValidV2ArtifactForLoad() {
+	using namespace superslm_test;
+	FixtureSection composition_constants = MakeKvc1CompositionSection(/*m=*/1000000, /*e=*/0);
+	FixtureSection weight_scales = MakeWsc1Section(/*identity=*/1, /*mult=*/12345, /*shift=*/10);
+	FixtureSection rope_tables = MakeRop1Section(/*cos=*/500000000, /*sin=*/-500000000);
+	return BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(), composition_constants,
+	                      weight_scales, rope_tables});
+}
+
+// --- §3.1 boundary/guard matrix: the bare reject-just-past clauses (Mendeleev
+//     finding 2). Each is the ONE value past the stated bound on the side no
+//     existing cell reaches; the companion field is held safely in-domain so
+//     the assertion isolates exactly the one clause named. ---
+
+static void TestKvc1RejectsCompositionScaleMUnderNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/INT64_C(-2147483648), /*e=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::CompositionScaleOutOfDomain,
+	          "KVC1 m=-2147483648 (one past the no-UB floor's lower bound -2147483647): got %s, want "
+	          "CompositionScaleOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_composition_constants);
+}
+
+static void TestKvc1RejectsCompositionScaleEUnderNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/-81)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::CompositionScaleOutOfDomain,
+	          "KVC1 e=-81 (one past the no-UB floor's lower bound -80): got %s, want "
+	          "CompositionScaleOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_composition_constants);
+}
+
+static void TestKvc1RejectsCompositionScaleEOverNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/8)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::CompositionScaleOutOfDomain,
+	          "KVC1 e=8 (one past the no-UB floor's upper bound 7): got %s, want "
+	          "CompositionScaleOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_composition_constants);
+}
+
+static void TestWsc1RejectsIdentityUnderDocumentedBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/-1, /*mult=*/1, /*shift=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::WeightScaleIdentityNotBool,
+	          "WSC1 identity=-1 (below the documented {0,1} bound): got %s, want "
+	          "WeightScaleIdentityNotBool (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_weight_scales);
+}
+
+static void TestWsc1RejectsIdentityOverDocumentedBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/2, /*mult=*/1, /*shift=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::WeightScaleIdentityNotBool,
+	          "WSC1 identity=2 (above the documented {0,1} bound): got %s, want "
+	          "WeightScaleIdentityNotBool (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_weight_scales);
+}
+
+static void TestWsc1RejectsShiftUnderDocumentedBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/-1)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::WeightScaleShiftOutOfDomain,
+	          "WSC1 shift=-1 (one past the documented [0,31] bound's lower side): got %s, want "
+	          "WeightScaleShiftOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_weight_scales);
+}
+
+static void TestRop1RejectsElementOverDocumentedBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeRop1Section(/*cos_v=*/INT64_C(1073741825), /*sin_v=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::RopeTableEntryOutOfDomain,
+	          "ROP1 element=1073741825 (one past the [-2^30,2^30] bound's upper side): got %s, want "
+	          "RopeTableEntryOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_rope_tables);
+}
+
+// --- §3.1 boundary/guard matrix: the accept-at-bound companions (Mendeleev
+//     finding 3, dim 4). Each is the value EXACTLY at the stated bound —
+//     distinct from the reject-just-past cell above it by exactly one — so a
+//     future off-by-one in either direction is caught on the side that
+//     currently passes silently. Reference/exact-value oracle: status must be
+//     Ok and the section's own view must be exposed. ---
+
+static void TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/INT64_C(-2147483647), /*e=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "KVC1 m=-2147483647 (exactly the no-UB floor's lower "
+	          "bound) must be accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_composition_constants);
+}
+
+static void TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/-80)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "KVC1 e=-80 (exactly the no-UB floor's lower bound) "
+	          "must be accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_composition_constants);
+}
+
+static void TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/7)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "KVC1 e=7 (exactly the no-UB floor's upper bound) must "
+	          "be accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_composition_constants);
+}
+
+static void TestWsc1AcceptsIdentityAtZero() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WSC1 identity=0 must be accepted: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_weight_scales);
+}
+
+static void TestWsc1AcceptsIdentityAtOne() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/1, /*mult=*/1, /*shift=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WSC1 identity=1 must be accepted: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_weight_scales);
+}
+
+static void TestWsc1AcceptsShiftAtLowerBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WSC1 shift=0 (exactly the documented lower bound) "
+	          "must be accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_weight_scales);
+}
+
+static void TestWsc1AcceptsShiftAtUpperBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/31)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "WSC1 shift=31 (exactly the documented upper bound) "
+	          "must be accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_weight_scales);
+}
+
+static void TestRop1AcceptsElementAtPositiveBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeRop1Section(/*cos_v=*/INT64_C(1073741824), /*sin_v=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "ROP1 element=2^30 (exactly the upper bound) must be "
+	          "accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_rope_tables);
+}
+
+static void TestRop1AcceptsElementAtNegativeBound() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeRop1Section(/*cos_v=*/INT64_C(-1073741824), /*sin_v=*/0)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "ROP1 element=-2^30 (exactly the lower bound) must be "
+	          "accepted: got %s (%s)", SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_rope_tables);
+}
+
+// --- §3.1: Load's own container-reject branch (Mendeleev row 11). No cell
+//     called SslmModel::Load on a structurally invalid artifact before this
+//     one — every existing structural-rejection cell calls
+//     SslmArtifact::OpenFromMemory directly. ---
+
+static void TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected() {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
+	built.bytes[0] = 'X';  // was 'S' — corrupts the header magic, a container-level defect
+	RecomputeIntegrityHash(built.bytes);
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::ArtifactRejected,
+	          "a structurally invalid artifact through SslmModel::Load: got %s, want ArtifactRejected (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_config);
+	CHECK(!view.has_sigmoid_lut);
+	CHECK(!view.has_composition_constants);
+	CHECK(!view.has_weight_scales);
+	CHECK(!view.has_rope_tables);
+}
+
+// --- §3.2: Load's fail-closed reset on a STRUCTURAL sub-parse failure, as
+//     opposed to a value-domain rejection (dims 7/11). The three existing
+//     "!view.has_*" assertions above are all on the value-rejection path;
+//     none drives a structurally-hostile section through Load. A WeightScales
+//     tensor with a corrupted manifest magic is reused here (the same defect
+//     class TestManifestRejectsBadMagicWgt/Bia/Rop already prove at the bare
+//     sub-parser) so the fixture's own values stay in-domain — the rejection
+//     this cell targets is the STRUCTURAL one, never the value gate's. ---
+
+static void TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate() {
+	using namespace superslm_test;
+	// An otherwise-valid WeightScales manifest (in-domain identity/mult/shift)
+	// with its own magic corrupted, so SslmTensorManifest::Parse itself rejects
+	// it (BadManifestMagic) before ValidateSectionValues ever runs.
+	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{3});
+	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
+	PutU32(manifest.bytes, data_off + 0, 0);  // identity — in-domain
+	PutU32(manifest.bytes, data_off + 4, 1);  // mult
+	PutU32(manifest.bytes, data_off + 8, 0);  // shift — in-domain
+	manifest.bytes[0] = 'X';                  // was 'W' of "WSC1" — corrupts the manifest's own magic
+
+	FixtureSection weight_scales =
+	    MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(), weight_scales});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::BadManifestMagic,
+	          "a WeightScales section whose OWN manifest magic is corrupt (a structural defect, not a "
+	          "value-domain one) through SslmModel::Load: got %s, want BadManifestMagic (the structural "
+	          "sub-parse's own status, never a value-domain code and never ArtifactRejected) (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	// Load's loop resets `out` unconditionally on ANY section's structural
+	// sub-parse failure — Config and SigmoidLut, which parsed fine before
+	// WeightScales was reached, must be un-exposed too (fail-closed, never a
+	// partial view).
+	CHECK_MSG(!view.has_config, "structural failure on a LATER section must still un-expose an EARLIER "
+	          "section's already-successful sub-parse (Load's fail-closed reset)");
+	CHECK(!view.has_sigmoid_lut);
+	CHECK(!view.has_weight_scales);
+}
+
+// --- §3.3: Load's own success path (dim 10, Structural). Every existing call
+//     to SslmModel::Load in this suite asserts a rejection status; none
+//     asserts Ok with a populated view — the entry point's own achievement
+//     claim ("exposes the composed ModelView only on full success", D-SLM141)
+//     had zero proving test before this cell. Feature oracle: the exposed
+//     values on every populated view are checked against what the fixture
+//     wrote, not against themselves. ---
+
+static void TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoad();
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "a fully valid v2 artifact (every gated field inside its domain) through SslmModel::Load: "
+	          "got %s, want Ok (%s)", SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK(view.has_config);
+	CHECK(view.has_sigmoid_lut);
+	CHECK(view.has_composition_constants);
+	CHECK(view.has_weight_scales);
+	CHECK(view.has_rope_tables);
+
+	// Config — spot-check against MakeValidConfigSection's Cfg1Spec{} defaults.
+	CHECK(view.config.hidden_size == 4096);
+	CHECK(view.config.num_hidden_layers == 32);
+	CHECK(view.config.vocab_size == 32001);
+	CHECK(view.config.tie_word_embeddings == true);
+	CHECK(view.config.kv_precision == SslmKvPrecision::Int16);
+	CHECK(view.config.rope_theta == 1000000.0);
+
+	// SigmoidLut — the pinned canonical table (MakeSigmoidLutSection's content).
+	CHECK(view.sigmoid_lut.entry_count == kSigmoidLutEntries);
+	CHECK(SigmoidLutValue(view.sigmoid_lut, 0) == kSiluLutGoldenTable[0]);
+	CHECK(SigmoidLutValue(view.sigmoid_lut, kSiluLutN) ==
+	      kSiluLutGoldenTable[static_cast<size_t>(kSiluLutN)]);
+
+	// CompositionConstants — the "scale" entry's (m, e) written by
+	// BuildFullyValidV2ArtifactForLoad.
+	const SslmConstantEntry* scale = view.composition_constants.Entry("scale");
+	CHECK_MSG(scale != nullptr, "the CompositionConstants view exposes no \"scale\" entry");
+	if (scale != nullptr) {
+		CHECK(SslmKeyedConstants::Value(*scale, 0) == 1000000);
+		CHECK(SslmKeyedConstants::Value(*scale, 1) == 0);
+	}
+
+	// WeightScales — the "t0" tensor's (identity, mult, shift) triple.
+	const SslmTensorView* wsc = view.weight_scales.Tensor("t0");
+	CHECK_MSG(wsc != nullptr, "the WeightScales view exposes no \"t0\" tensor");
+	if (wsc != nullptr) {
+		CHECK(ReadRawI32LE(wsc->data + 0) == 1);
+		CHECK(ReadRawI32LE(wsc->data + 4) == 12345);
+		CHECK(ReadRawI32LE(wsc->data + 8) == 10);
+	}
+
+	// RopeTables — the "cos"/"sin" tensors' single elements.
+	const SslmTensorView* cos = view.rope_tables.Tensor("cos");
+	const SslmTensorView* sin = view.rope_tables.Tensor("sin");
+	CHECK_MSG(cos != nullptr && sin != nullptr, "the RopeTables view is missing \"cos\" or \"sin\"");
+	if (cos != nullptr) CHECK(ReadRawI64LE(cos->data) == 500000000);
+	if (sin != nullptr) CHECK(ReadRawI64LE(sin->data) == -500000000);
+}
+
+// --- §4: the dim-1 warm-object obligation for the newly validated
+//     SslmModelView (T-164), on the existing TestSil1WarmObjectRepeatedReadsShowNoDrift
+//     precedent. Two clauses: repeated reads never drift (this cell), and a
+//     second Load on the identical bytes reproduces the first call's result
+//     bit-for-bit (the next cell — re-open idempotence, which the SIL1
+//     precedent does not itself cover since it never re-parses). The third
+//     clause ("a view built from a rejected artifact is never exposed") is
+//     already discharged by every "!view.has_*" assertion above. ---
+
+static void TestLoadComposedViewRepeatedReadsShowNoDrift() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoad();
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "warm-object fixture failed to load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	const SslmConstantEntry* scale = view.composition_constants.Entry("scale");
+	const SslmTensorView* wsc = view.weight_scales.Tensor("t0");
+	const SslmTensorView* cos = view.rope_tables.Tensor("cos");
+	CHECK_MSG(scale != nullptr && wsc != nullptr && cos != nullptr,
+	          "warm-object fixture's view is missing an expected entry/tensor");
+	if (scale == nullptr || wsc == nullptr || cos == nullptr) return;
+
+	const int32_t first_hidden_size = static_cast<int32_t>(view.config.hidden_size);
+	const int32_t first_lut_node0 = SigmoidLutValue(view.sigmoid_lut, 0);
+	const int64_t first_scale_m = SslmKeyedConstants::Value(*scale, 0);
+	const int32_t first_wsc_shift = ReadRawI32LE(wsc->data + 8);
+	const int64_t first_cos = ReadRawI64LE(cos->data);
+
+	int drift = 0;
+	for (int pass = 0; pass < 1000; ++pass) {
+		if (static_cast<int32_t>(view.config.hidden_size) != first_hidden_size) ++drift;
+		if (SigmoidLutValue(view.sigmoid_lut, 0) != first_lut_node0) ++drift;
+		if (SslmKeyedConstants::Value(*scale, 0) != first_scale_m) ++drift;
+		if (ReadRawI32LE(wsc->data + 8) != first_wsc_shift) ++drift;
+		if (ReadRawI64LE(cos->data) != first_cos) ++drift;
+	}
+	CHECK_MSG(drift == 0,
+	          "%d of 5000 repeated reads across the Load-composed view's five section kinds drifted "
+	          "from the first read (no re-derivation expected)",
+	          drift);
+}
+
+static void TestLoadComposedViewReopenIsIdempotent() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoad();
+
+	SslmModelView view1;
+	std::string err1;
+	SslmModelStatus status1 = SslmModel::Load(built.bytes.data(), built.bytes.size(), view1, &err1);
+	CHECK_MSG(status1 == SslmModelStatus::Ok, "first Load of the warm-object fixture failed: got %s (%s)",
+	          SslmModelStatusName(status1), err1.c_str());
+
+	// A second Load on the IDENTICAL byte buffer (no re-encode, no mutation) —
+	// re-open idempotence, distinct from repeated reads of one already-parsed
+	// view: this re-runs the whole parse-and-validate pass a second time.
+	SslmModelView view2;
+	std::string err2;
+	SslmModelStatus status2 = SslmModel::Load(built.bytes.data(), built.bytes.size(), view2, &err2);
+	CHECK_MSG(status2 == SslmModelStatus::Ok, "second Load of the identical bytes failed: got %s (%s)",
+	          SslmModelStatusName(status2), err2.c_str());
+	if (status1 != SslmModelStatus::Ok || status2 != SslmModelStatus::Ok) return;
+
+	CHECK(view1.config.hidden_size == view2.config.hidden_size);
+	CHECK(view1.config.vocab_size == view2.config.vocab_size);
+	CHECK(SigmoidLutValue(view1.sigmoid_lut, 0) == SigmoidLutValue(view2.sigmoid_lut, 0));
+	CHECK(SigmoidLutValue(view1.sigmoid_lut, kSiluLutN) == SigmoidLutValue(view2.sigmoid_lut, kSiluLutN));
+
+	const SslmConstantEntry* scale1 = view1.composition_constants.Entry("scale");
+	const SslmConstantEntry* scale2 = view2.composition_constants.Entry("scale");
+	CHECK_MSG(scale1 != nullptr && scale2 != nullptr, "one of the two Loads exposes no \"scale\" entry");
+	if (scale1 != nullptr && scale2 != nullptr) {
+		CHECK(SslmKeyedConstants::Value(*scale1, 0) == SslmKeyedConstants::Value(*scale2, 0));
+		CHECK(SslmKeyedConstants::Value(*scale1, 1) == SslmKeyedConstants::Value(*scale2, 1));
+	}
+
+	const SslmTensorView* wsc1 = view1.weight_scales.Tensor("t0");
+	const SslmTensorView* wsc2 = view2.weight_scales.Tensor("t0");
+	CHECK_MSG(wsc1 != nullptr && wsc2 != nullptr, "one of the two Loads exposes no \"t0\" tensor");
+	if (wsc1 != nullptr && wsc2 != nullptr) {
+		CHECK(ReadRawI32LE(wsc1->data + 0) == ReadRawI32LE(wsc2->data + 0));
+		CHECK(ReadRawI32LE(wsc1->data + 4) == ReadRawI32LE(wsc2->data + 4));
+		CHECK(ReadRawI32LE(wsc1->data + 8) == ReadRawI32LE(wsc2->data + 8));
+	}
+
+	const SslmTensorView* cos1 = view1.rope_tables.Tensor("cos");
+	const SslmTensorView* cos2 = view2.rope_tables.Tensor("cos");
+	CHECK_MSG(cos1 != nullptr && cos2 != nullptr, "one of the two Loads exposes no \"cos\" tensor");
+	if (cos1 != nullptr && cos2 != nullptr) {
+		CHECK(ReadRawI64LE(cos1->data) == ReadRawI64LE(cos2->data));
+	}
+}
+
+// ---------------------------------------------------------------------------
 // dim 9 — version evolution / mutual rejection. Only the CURRENT (v2) loader
 // is compiled into this binary, so only one of the design's two named
 // directions is executable here: a new-version loader rejecting a
@@ -5556,15 +6085,38 @@ int main(int argc, char** argv) {
 	TestArtifactRejectsHostileSigmoidLutContentThroughRealPath();
 	TestArtifactRejectsConfigOnlyV2MissingSigmoidLut();
 
-	// --- S-HARDEN-1's parser-vs-consumer gate (F22/F23/F24) — INTENTIONALLY
-	//     LEFT RED. D-SLM118 records the design decision (validation at the two
-	//     parsers vs. at each consumer) as open; per this slot's brief, these
-	//     three cells state the gap rather than inventing where the fix lands.
-	//     Expect FAIL lines from these three in the summary below until the
-	//     decision is recorded and a follow-up build greens them. ---
+	// --- S-HARDEN-1's schema-value gate (F22/F23/F24, D-SLM141/D-SLM142) — the
+	//     parser-vs-consumer question is RULED: value validation lives at the
+	//     new SslmModel::Load entry point, not at the two structural parsers. ---
 	TestKvc1RejectsHostileCompositionConstantsScale();
 	TestWsc1RejectsHostileShiftOutOfDocumentedBound();
 	TestRop1RejectsHostileCosSinPair();
+
+	// --- Mendeleev's 2026-07-22 coverage audit of the gate above: the
+	//     boundary/guard matrix (§3.1), Load's structural fail-closed reset
+	//     (§3.2), Load's own success path (§3.3), and the dim-1 warm-object
+	//     cell (§4, T-164). ---
+	TestKvc1RejectsCompositionScaleMUnderNoUbFloor();
+	TestKvc1RejectsCompositionScaleEUnderNoUbFloor();
+	TestKvc1RejectsCompositionScaleEOverNoUbFloor();
+	TestWsc1RejectsIdentityUnderDocumentedBound();
+	TestWsc1RejectsIdentityOverDocumentedBound();
+	TestWsc1RejectsShiftUnderDocumentedBound();
+	TestRop1RejectsElementOverDocumentedBound();
+	TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor();
+	TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor();
+	TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor();
+	TestWsc1AcceptsIdentityAtZero();
+	TestWsc1AcceptsIdentityAtOne();
+	TestWsc1AcceptsShiftAtLowerBound();
+	TestWsc1AcceptsShiftAtUpperBound();
+	TestRop1AcceptsElementAtPositiveBound();
+	TestRop1AcceptsElementAtNegativeBound();
+	TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected();
+	TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate();
+	TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact();
+	TestLoadComposedViewRepeatedReadsShowNoDrift();
+	TestLoadComposedViewReopenIsIdempotent();
 
 	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
 	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
