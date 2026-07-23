@@ -1120,28 +1120,39 @@ static void TestMinimalTokenizerArtifactOpensAndRoundTrips() {
 
 namespace {
 
+// TokenizerView::Open's contract (include/superslm/tokenizer.h) is explicit:
+// "The artifact must outlive the view — table pointers reference its bytes."
+// OpenTokenizerWithSingleVocabEntry's fixtures must therefore keep the
+// artifact and the view together, exactly like FixtureTokenizer above — a
+// helper that opened a local SslmArtifact and returned only the TokenizerView
+// left the artifact's owned byte buffer destroyed at return while the
+// returned view's Decode() still read through pointers into it.
+struct SingleVocabTokenizer {
+	SslmArtifact artifact;
+	TokenizerView view;
+};
+
 // A single-entry TOK1 whose one vocabulary slot (id 0) carries exactly
 // `raw_bytes` — enough to exercise Decode({0, ...}) against those bytes, with
 // no merges/specials in the way.
-TokenizerView OpenTokenizerWithSingleVocabEntry(const std::string& raw_bytes, std::string* out_err = nullptr) {
+SingleVocabTokenizer OpenTokenizerWithSingleVocabEntry(const std::string& raw_bytes, std::string* out_err = nullptr) {
+	SingleVocabTokenizer result;
 	std::array<uint32_t, 256> byte_to_id{};
 	std::vector<TokVocabEntry> vocab = {{raw_bytes}};
 	auto tok1 = BuildTok1(byte_to_id, vocab, {}, {});
 	auto uni1 = MakeMinimalValidUni1();
 	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
 
-	SslmArtifact artifact;
 	SslmError aerr;
-	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), result.artifact, &aerr);
 	if (status != SslmStatus::Ok) {
 		if (out_err) *out_err = std::string("outer artifact rejected: ") + SslmStatusName(status);
-		return TokenizerView{};
+		return result;
 	}
-	TokenizerView view;
 	std::string terr;
-	bool opened = TokenizerView::Open(artifact, view, &terr);
+	bool opened = TokenizerView::Open(result.artifact, result.view, &terr);
 	if (!opened && out_err) *out_err = terr;
-	return view;
+	return result;
 }
 
 const std::string kFffdUtf8 = "\xEF\xBF\xBD";  // U+FFFD, the documented replacement char
@@ -1152,9 +1163,9 @@ static void TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence() {
 	// 0xC0 0x80: the canonical two-byte encoding of NUL — always overlong (NUL is
 	// representable in one byte); C0/C1 can never start a well-formed sequence.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xC0\x80", 2), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8);  // both bytes are individually invalid leads
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xC0\x80", 2), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8);  // both bytes are individually invalid leads
 }
 
 static void TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence() {
@@ -1167,9 +1178,9 @@ static void TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence() {
 	// ill-formed one-byte subpart. Three independently-invalid bytes -> three
 	// U+FFFD, not one — this is the textbook worked example for this policy.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xE0\x80\x80", 3), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xE0\x80\x80", 3), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForSurrogateCodepoint() {
@@ -1180,20 +1191,20 @@ static void TestDecodeSubstitutesReplacementCharForSurrogateCodepoint() {
 	// and the un-consumed 0xA0 and 0x80 are each their own ill-formed subpart —
 	// three U+FFFD.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xED\xA0\x80", 3), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xED\xA0\x80", 3), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF() {
 	// 0xF5 alone: any lead >= 0xF5 can only encode a codepoint past U+10FFFF.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF5\x80\x80\x80", 4), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xF5\x80\x80\x80", 4), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
 	// F5 itself is rejected outright (one U+FFFD, one byte consumed); the three
 	// trailing 0x80 bytes are then each a lone continuation byte (one U+FFFD
 	// each) — four total.
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
@@ -1203,9 +1214,9 @@ static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
 	// one-byte subpart, and the three un-consumed trailing bytes (0x90, 0x80,
 	// 0x80) are each their own ill-formed one-byte subpart — four U+FFFD.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF4\x90\x80\x80", 4), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xF4\x90\x80\x80", 4), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence() {
@@ -1216,9 +1227,9 @@ static void TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence() {
 	// and the three un-consumed trailing bytes are each their own ill-formed
 	// one-byte subpart — four U+FFFD, not one.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x80\x80\x80", 4), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x80\x80\x80", 4), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence() {
@@ -1228,26 +1239,54 @@ static void TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence() {
 	// consumes all three bytes as one truncated unit and substitutes exactly one
 	// U+FFFD — the 4-byte analogue of the already-tested 3-byte truncation cell.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x90\x80", 3), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xF0\x90\x80", 3), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForLoneContinuationByte() {
 	// 0x80 alone: a continuation byte with no lead byte before it.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\x80", 1), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\x80", 1), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8);
 }
 
 static void TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd() {
 	// 0xE2 0x82: the first two bytes of the 3-byte sequence for U+20AC ('€'),
 	// missing its final continuation byte.
 	std::string err;
-	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xE2\x82", 2), &err);
-	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
-	CHECK(view.Decode({0}) == kFffdUtf8);
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xE2\x82", 2), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	CHECK(t.view.Decode({0}) == kFffdUtf8);
+}
+
+// Regression guard, 2026-07-22: OpenTokenizerWithSingleVocabEntry used to open a
+// local SslmArtifact and return only the TokenizerView built against it. The
+// artifact -- and the byte buffer TokenizerView::Open's contract requires it to
+// keep alive (include/superslm/tokenizer.h: "The artifact must outlive the
+// view") -- was destroyed at the helper's return, so every Decode() call after
+// it read through a dangling pointer (CI's ASan leg caught this as a
+// heap-use-after-free in Rd32 at tokenizer.cpp:13, freed via ~vector, allocated
+// via vector::_M_assign_aux -- SslmArtifact::OpenFromMemory's
+// `bytes_.assign(data, data + size)`). The fix pairs the artifact with the view
+// in one returned struct (SingleVocabTokenizer), the same lifetime idiom
+// FixtureTokenizer already used above for exactly this reason. This cell forces
+// a burst of unrelated heap allocation and deallocation between the helper's
+// return and the Decode() call -- the shape most likely to overwrite a freed
+// buffer with different bytes -- and asserts the exact expected output, so a
+// reintroduced bare-view return is likely to surface here as corrupted bytes on
+// a normal (non-ASan) build, not only under CI's sanitizer leg.
+static void TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode() {
+	std::string err;
+	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xC0\x80", 2), &err);
+	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
+	{
+		std::vector<std::vector<uint8_t>> churn;
+		churn.reserve(64);
+		for (int i = 0; i < 64; ++i) churn.emplace_back(256, uint8_t(0xAB + i));
+	}
+	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8);
 }
 
 static void TestDecodeReconstructsSequenceSplitAcrossTokenBoundary() {
@@ -6735,6 +6774,7 @@ int main(int argc, char** argv) {
 	TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence();
 	TestDecodeSubstitutesReplacementCharForLoneContinuationByte();
 	TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd();
+	TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode();
 	TestDecodeReconstructsSequenceSplitAcrossTokenBoundary();
 	TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText();
 
