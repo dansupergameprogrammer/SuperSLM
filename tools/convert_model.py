@@ -59,24 +59,69 @@ def _fold_ops_tensor(channel_scales):
     return np.asarray(rows, dtype=np.int32)
 
 
+def _ctx_channel_scales(model, layer):
+    """The per-head V scale one layer's ctx-fold approximates, in `_ctx_fold_tensor`'s own
+    row order -- factored out so `build_sections`'s `fold_approximation_error`
+    aggregation (T-408 §3.1/§8 step 1) and `_ctx_fold_tensor` itself share one source of
+    the per-head scale gather rather than deriving it twice and risking a silent
+    divergence."""
+    cfg = model.config
+    group = cfg.num_attention_heads // cfg.num_key_value_heads
+    s_v = [model.scales.scale(f"layer{layer}.v_head{h}.scale") for h in range(cfg.num_key_value_heads)]
+    return [s_v[head // group] for head in range(cfg.num_attention_heads)]
+
+
 def _ctx_fold_tensor(model, layer):
     """C27/D-SLM57 attention-context per-head fold as a [num_attention_heads, 3] int32
     tensor. Mirrors dynamic_engine's offline computation: f_v / s_v_max -> (mult, shift),
     identity where a head already sits at the max V scale."""
     _artifact_cache, pipeline = _load_spike()
-    cfg = model.config
-    group = cfg.num_attention_heads // cfg.num_key_value_heads
-    s_v = [model.scales.scale(f"layer{layer}.v_head{h}.scale") for h in range(cfg.num_key_value_heads)]
+    s_v = _ctx_channel_scales(model, layer)
     s_v_max = max(s_v)
     rows = []
-    for head in range(cfg.num_attention_heads):
-        f_v = s_v[head // group]
+    for f_v in s_v:
         if f_v == s_v_max:
             rows.append((1, 0, 0))
         else:
             m, sh = pipeline.quantize_multiplier(f_v / s_v_max)
             rows.append((0, int(m), int(sh)))
     return np.asarray(rows, dtype=np.int32)
+
+
+def _fold_relative_error(mult, shift, exact):
+    """T-408 §3.1's per-channel relative error between a gemmlowp (mult, shift) pair's
+    reconstructed real value and the exact ratio it approximates.
+
+    The design's own pseudocode states `approx = mult * 2**-shift`; the real value a
+    (mult, shift) pair reconstructs to also carries the pair's implicit `2**-31`
+    normalization -- `intmath.saturating_rounding_doubling_high_mul`'s
+    `(a*b + 2**30) >> 31` applies this same scaling to `mult` before
+    `rounding_divide_by_pot`'s `2**-shift` step runs, and `quantize_multiplier`'s own
+    construction (`multiplier = round(fraction * (1 << 31))`) is what produces a `mult`
+    in `[2**30, 2**31)` that needs it. Read directly from the codebase (StandardsDocument
+    §5.4: exactness verified at source, never by construction) rather than applying the
+    design's literal formula, which would report a >>1 relative error for every
+    non-identity fold and fail this metric's own CI range gate (§6 item 3:
+    `0.0 <= value < 1.0`) on every real conversion."""
+    approx = mult * (2.0 ** -31) * (2.0 ** -shift)
+    return abs(approx - exact) / exact
+
+
+def _fold_max_relative_error(rows, channel_scales):
+    """T-408 §3.1's `fold_approximation_error`, aggregated over one WSC1 tensor's rows:
+    the maximum relative error over every non-identity fold in `rows`, fed from the same
+    `channel_scales` the caller already passed to `fold_ops_tensor`/`ctx_fold_tensor` --
+    no new data crosses the cache boundary and no fold is recomputed a second time.
+    Identity rows (rows[i][0] == 1) contribute 0.0 by construction: no approximation was
+    performed on that channel, which is the true, non-fabricated relative error for it,
+    whether the row came from a real fold or an injected fixture's own pass-through."""
+    s_ref = max(channel_scales)
+    errors = [0.0]
+    for (identity, mult, shift), s_i in zip(rows, channel_scales):
+        if identity:
+            continue
+        errors.append(_fold_relative_error(int(mult), int(shift), s_i / s_ref))
+    return max(errors)
 
 
 def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
@@ -87,11 +132,19 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
     validate_model`, so the SAME real `build_sections` runs in both the
     production path and the CI gate, never a reimplementation that could
     silently diverge from what actually ships.
+
+    Returns `(sections, fold_approximation_error)` (T-408 §5/§8 step 1):
+    `fold_approximation_error` is the maximum relative error (§3.1) over every
+    per-channel weight fold and per-head ctx-fold this call emits, aggregated
+    from the same WSC1 rows and channel scales already computed to build the
+    WeightScales section -- no second pass over the tensors, no new data
+    crossing the cache boundary.
     """
     fold_ops_tensor = fold_ops_tensor or _fold_ops_tensor
     ctx_fold_tensor = ctx_fold_tensor or _ctx_fold_tensor
     cfg = model.config
     sections = []
+    fold_errors = [0.0]
 
     # Config (CFG1). q_b is uniform 30 across dynamic_biases (verified); kv/block are v1
     # forward-looking. Unicode version is the tokenizer's pin (15.1.0).
@@ -121,9 +174,16 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
     sections.append(F.Section(F.SectionType.ROPE_TABLES, W.write_tensor_manifest(W.ROP1, np.int64, rope)))
 
     # WeightScales (WSC1, int32) — per-channel fold ops + the per-layer ctx-fold.
-    wsc = {k: fold_ops_tensor(model.weight_scales[k]) for k in sorted(model.weight_scales)}
+    wsc = {}
+    for k in sorted(model.weight_scales):
+        channel_scales = model.weight_scales[k]
+        rows = fold_ops_tensor(channel_scales)
+        wsc[k] = rows
+        fold_errors.append(_fold_max_relative_error(rows, channel_scales))
     for L in range(cfg.num_hidden_layers):
-        wsc[f"layer{L}.ctx_fold"] = ctx_fold_tensor(model, L)
+        rows = ctx_fold_tensor(model, L)
+        wsc[f"layer{L}.ctx_fold"] = rows
+        fold_errors.append(_fold_max_relative_error(rows, _ctx_channel_scales(model, L)))
     sections.append(F.Section(F.SectionType.WEIGHT_SCALES, W.write_tensor_manifest(W.WSC1, np.int32, wsc)))
 
     # Composition constants (KVC1, 2 words) — plus the uniform bias q_b, stored so the
@@ -147,7 +207,7 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
     # content check (ParseSigmoidLut, src/model.cpp) validates against byte-for-byte.
     sections.append(F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()))
 
-    return sections
+    return sections, max(fold_errors)
 
 
 def main():
@@ -174,7 +234,7 @@ def main():
                      unicode_major=15, unicode_minor=1, unicode_patch=0)
 
     # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
-    sections = build_sections(model)
+    sections, fold_approximation_error = build_sections(model)
     fp = F.write_artifact(args.out, sections)
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")
@@ -190,7 +250,8 @@ def main():
 
     verifier_cmd = [args.verifier] if args.verifier else None
     manifest = M.verify_and_merge(_REPO_ROOT, args.out, args.artifact, verifier_cmd=verifier_cmd,
-                                  manifest_out_path=args.manifest_out)
+                                  manifest_out_path=args.manifest_out, model=model,
+                                  fold_approximation_error=fold_approximation_error)
     manifest_path = args.manifest_out or (args.out + ".manifest.json")
     print(f"verified: independent loader accepted the artifact")
     print(f"proof manifest: {manifest_path}")

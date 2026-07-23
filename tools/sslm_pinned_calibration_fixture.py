@@ -57,17 +57,32 @@ def _base_model():
     cfg = _cfg()
     weights = np.array([[-128, -1, 0, 1, 2, 3, 4, 127],
                         [5, -5, 10, -10, 20, -20, 30, -30]], dtype=np.int8)
+    weight_scales = {"layer0.w": [0.5, 1.5]}
+    # T-408 §4/§8 step 8: a planted float_weight dict alongside the existing planted
+    # weights/weight_scales -- the same "every value fixed by construction" discipline
+    # this module's own docstring states. Exact dequantization for every element except
+    # one deliberately nonzero delta (row 1, last column: error_in_lsb = |0.6| / 1.5 =
+    # 0.4), mirroring how build_out_of_range_fixture already plants a hostile value to
+    # prove rejection fires -- this plants a genuine, nonzero quantization_error_percentiles
+    # population instead.
+    scale_row = np.asarray(weight_scales["layer0.w"], dtype=np.float64).reshape(-1, 1)
+    dequantized = weights.astype(np.float64) * scale_row
+    float_weights = dequantized.copy()
+    float_weights[1, 7] += 0.6
     return types.SimpleNamespace(
         config=cfg,
         weights={"layer0.w": weights},
         dynamic_biases={"layer0.site": (30, np.array([1, 2, 3, 4], dtype=np.int64))},
         rope_tables=(np.array([1000, 2000, 3000], dtype=np.int64),
                     np.array([-1000, -2000, -3000], dtype=np.int64)),
-        weight_scales={"layer0.w": [0.5, 1.5]},
+        weight_scales=weight_scales,
         scales=_Scales({"layer0.v_head0.scale": 0.75}),
         composition_constants={"scale": (1000000, 0)},
         kv_landing_scales={"kv": (1, 0)},
         kv_landing_reciprocals={"kv": (1, 0, 0)},
+        # A plain callable, not a bound method -- called identically to the real
+        # QuantizedModel.float_weight as `model.float_weight(name)`.
+        float_weight=lambda name: {"layer0.w": float_weights}[name],
     )
 
 
