@@ -6183,64 +6183,117 @@ static void TestGemmInt8AccumulateComposesWithShippedRequantChain() {
 	}
 }
 
-// --- S12 dim 10, S11 item 5: op-level parity -- dequantized int8 output vs a
-//     float32 reference matmul of the dequantized inputs (NOT raw-accumulator vs
-//     float32; the int64 accumulate is exact ground truth, proven by item 1). The
-//     reference is the UNSCALED, code-level matmul (the C24/C25 weight-scale fold is
-//     out of scope, design S9): both operands are used as their raw int8 numeric
-//     value in float32, matching this component's own scope boundary. The
-//     TOLERANCE is an owed build-time measurement (design S11 item 5) -- this
-//     harness computes and prints the error statistics; the CHECK below is a
-//     generous smoke bound catching a gross divergence, not the acceptance
-//     tolerance, which is Brunel's to measure and pin. ---
+// --- S-HARDEN-4 (F2, SuperSLM_Plan.md §17.3 cell 8): the S2.5 acceptance gate, not a
+//     smoke bound. The S2.5 closeout record pinned max_abs_error <= 0.5 * output_scale
+//     from a scratch measurement across all six committed composition cases (worst
+//     observed ratio 0.3287-0.4990 x output_scale) -- but the committed suite exercised
+//     only kCompositionCases[0], against a 4x+1 smoke bound roughly eight times looser,
+//     and printed the true tolerance as "owed, not asserted". This test is the missing
+//     committed fixture: every one of the six cases is measured and gated against the
+//     pinned 0.5x coefficient, and the six-case aggregate maximum and mean are pinned
+//     as regression constants below. A regression that would have passed the old 4x+1
+//     smoke bound now fails here (mutation-proved; see the build log).
+//
+//     Reference is the UNSCALED, code-level float32 matmul (the C24/C25 weight-scale
+//     fold is out of scope, design S9): both operands are used as their raw int8
+//     numeric value in float32, matching this component's own scope boundary.
+//
+//     UPDATE PROTOCOL for kPinnedAggregateMaxAbsError / kPinnedAggregateMeanAbsError:
+//     these two constants may be revised only when (1) an intentional, reviewed change
+//     to the S2.5 matmul/requant pipeline (C17-C22) or this op-level dequant reference
+//     changes the measurement's true error characteristics -- never to silence a
+//     failing assertion; (2) the new values are re-measured by running this exact test
+//     against the changed implementation over the same six committed composition
+//     cases; (3) the new literals land in the same commit as the implementation change
+//     that moved them, with the decision log recording why and citing the measurement;
+//     and (4) the per-case 0.5x bound (kPerCaseBoundCoefficient) is not weakened as
+//     part of the same change -- a wider aggregate pin does not license a wider
+//     per-case bound, and vice versa. ---
 
-static void TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference() {
+static void TestS2Point5SixCaseAcceptanceGateMeasurement() {
 	using namespace superslm_test;
-	const CompositionCase& c = kCompositionCases[0];  // hidden_size_1536_qwen2_5_1_5b
 
-	std::vector<int64_t> wide(c.out_channels, 0);
-	GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels, wide.data());
-	std::vector<int32_t> narrowed(c.out_channels, 0);
-	NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+	// The pinned per-case acceptance coefficient (F2): the closeout record's measured
+	// worst-case ratio across all six cases was 0.3287-0.4990 x output_scale; 0.5x is
+	// the pinned acceptance bound, not the smoke bound's 4x+1.
+	const double kPerCaseBoundCoefficient = 0.5;
 
-	int64_t d_prime = MaxAbsReduce(narrowed.data(), c.out_channels);
-	NormalizedScale ns = NormalizeScale(d_prime);
-	int64_t r = DynamicScaleReciprocal(ns.dn);
-	std::vector<int8_t> codes(c.out_channels);
-	for (size_t j = 0; j < c.out_channels; ++j) codes[j] = RequantTokenCode(narrowed[j], r, ns.s);
+	// Six-case aggregate regression constants (see UPDATE PROTOCOL above before
+	// changing either). PLACEHOLDER -- deliberately wrong pending calibration
+	// (red-uncalibrated, Curie §7): the per-case bound above is already correct (the
+	// S2.5 pipeline is not the defect; the missing assertion was), so this is the cell
+	// still owed its real measurement.
+	const double kPinnedAggregateMaxAbsError = 0.0;
+	const double kPinnedAggregateMeanAbsError = 0.0;
+	// Absorbs float32 summation-order noise across in_channels up to 8960 under
+	// different compilers' auto-vectorization of the reference accumulation loop
+	// (-ffp-contract=off / /fp:precise forbid FMA contraction project-wide, but not
+	// reassociation); at these magnitudes a real regression is the whole point of the
+	// smoke-bound gap this test closes (roughly 8x), several orders of magnitude
+	// above this tolerance.
+	const double kAggregateTolerance = 0.5;
 
-	const float output_scale = static_cast<float>(d_prime) / 127.0f;
-	double max_abs_error = 0.0;
-	double sum_abs_error = 0.0;
-	for (size_t j = 0; j < c.out_channels; ++j) {
-		float float_ref = 0.0f;  // unscaled, code-level float32 matmul (design S9/S11 item 5)
-		for (size_t k = 0; k < c.in_channels; ++k) {
-			float_ref += static_cast<float>(c.activations[k]) *
-			              static_cast<float>(c.weights[j * c.in_channels + k]);
+	double aggregate_max_abs_error = 0.0;
+	double sum_of_case_means = 0.0;
+
+	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
+		const CompositionCase& c = kCompositionCases[i];
+
+		std::vector<int64_t> wide(c.out_channels, 0);
+		GemmInt8AccumulateRow(c.activations, c.weights, c.in_channels, c.out_channels, wide.data());
+		std::vector<int32_t> narrowed(c.out_channels, 0);
+		NarrowAccumulatorToI32(wide.data(), c.out_channels, narrowed.data());
+
+		int64_t d_prime = MaxAbsReduce(narrowed.data(), c.out_channels);
+		NormalizedScale ns = NormalizeScale(d_prime);
+		int64_t r = DynamicScaleReciprocal(ns.dn);
+		std::vector<int8_t> codes(c.out_channels);
+		for (size_t j = 0; j < c.out_channels; ++j) codes[j] = RequantTokenCode(narrowed[j], r, ns.s);
+
+		const float output_scale = static_cast<float>(d_prime) / 127.0f;
+		double max_abs_error = 0.0;
+		double sum_abs_error = 0.0;
+		for (size_t j = 0; j < c.out_channels; ++j) {
+			float float_ref = 0.0f;  // unscaled, code-level float32 matmul (design S9/S11 item 5)
+			for (size_t k = 0; k < c.in_channels; ++k) {
+				float_ref += static_cast<float>(c.activations[k]) *
+				              static_cast<float>(c.weights[j * c.in_channels + k]);
+			}
+			const float dequant_output = static_cast<float>(codes[j]) * output_scale;
+			const double err = std::fabs(static_cast<double>(dequant_output) - static_cast<double>(float_ref));
+			max_abs_error = std::max(max_abs_error, err);
+			sum_abs_error += err;
 		}
-		const float dequant_output = static_cast<float>(codes[j]) * output_scale;
-		const double err = std::fabs(static_cast<double>(dequant_output) - static_cast<double>(float_ref));
-		max_abs_error = std::max(max_abs_error, err);
-		sum_abs_error += err;
+		const double mean_abs_error = sum_abs_error / static_cast<double>(c.out_channels);
+		const double per_case_bound = kPerCaseBoundCoefficient * static_cast<double>(output_scale);
+
+		std::printf(
+		    "S2.5 acceptance gate (%s): max |error| = %.6f, mean |error| = %.6f, "
+		    "output_scale = %.6f (D'=%lld), per-case bound (0.5x) = %.6f -- asserted (F2, "
+		    "S-HARDEN-4)\n",
+		    c.label, max_abs_error, mean_abs_error, static_cast<double>(output_scale),
+		    static_cast<long long>(d_prime), per_case_bound);
+
+		CHECK_MSG(max_abs_error <= per_case_bound,
+		          "%s: max |dequant - float32 reference| = %.6f exceeds the pinned S2.5 "
+		          "acceptance bound 0.5 * output_scale = %.6f (F2, S-HARDEN-4)",
+		          c.label, max_abs_error, per_case_bound);
+
+		aggregate_max_abs_error = std::max(aggregate_max_abs_error, max_abs_error);
+		sum_of_case_means += mean_abs_error;
 	}
-	const double mean_abs_error = sum_abs_error / static_cast<double>(c.out_channels);
-	std::printf(
-	    "S2.5 op-level dequant parity (%s): max |error| = %.6f, mean |error| = %.6f, "
-	    "output_scale = %.6f (D'=%lld) -- tolerance is an owed build-time measurement, not "
-	    "asserted here (design S11 item 5)\n",
-	    c.label, max_abs_error, mean_abs_error, static_cast<double>(output_scale),
-	    static_cast<long long>(d_prime));
-	// Provisional smoke bound only (catches a gross divergence, e.g. a scale or sign
-	// error): the true magnitude a per-token dynamic-scale requant can be off by is
-	// bounded by roughly one quantization step, output_scale/2, times some small
-	// constant for cross-channel accumulation slack -- generous by design.
-	const double smoke_bound = static_cast<double>(output_scale) * 4.0 + 1.0;
-	CHECK_MSG(max_abs_error <= smoke_bound,
-	          "%s: max |dequant - float32 reference| = %.6f exceeds the provisional smoke bound "
-	          "%.6f -- this is not the acceptance tolerance (owed, build-time measured, design "
-	          "S11 item 5), but this magnitude suggests a gross defect (scale or sign error), "
-	          "not ordinary quantization error",
-	          c.label, max_abs_error, smoke_bound);
+
+	const double aggregate_mean_abs_error =
+	    sum_of_case_means / static_cast<double>(kCompositionCasesCount);
+
+	CHECK_MSG(std::fabs(aggregate_max_abs_error - kPinnedAggregateMaxAbsError) <= kAggregateTolerance,
+	          "S2.5 six-case aggregate max |error| = %.6f moved past the pinned regression "
+	          "constant %.6f +/- %.6f -- see this test's UPDATE PROTOCOL before changing the pin",
+	          aggregate_max_abs_error, kPinnedAggregateMaxAbsError, kAggregateTolerance);
+	CHECK_MSG(std::fabs(aggregate_mean_abs_error - kPinnedAggregateMeanAbsError) <= kAggregateTolerance,
+	          "S2.5 six-case aggregate mean |error| = %.6f moved past the pinned regression "
+	          "constant %.6f +/- %.6f -- see this test's UPDATE PROTOCOL before changing the pin",
+	          aggregate_mean_abs_error, kPinnedAggregateMeanAbsError, kAggregateTolerance);
 }
 
 // --- S11 item 4 addendum -- closes Poirot's S2.5 review finding: the normative
@@ -7075,7 +7128,7 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange();
 	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
-	TestGemmInt8AccumulateOpLevelDequantParityVsFloat32Reference();
+	TestS2Point5SixCaseAcceptanceGateMeasurement();
 	TestDotRowScalarRefMatchesShippingSse2PathAndOracle();
 	TestMatmulGoldenHashCrossPlatform();
 
