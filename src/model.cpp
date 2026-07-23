@@ -501,13 +501,141 @@ int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept {
 // sub-parser above was invoked one at a time, by hand, by tests and tools.
 namespace {
 
-// TEMPORARY (S-HARDEN-1, red step): the schema-value gate itself is not yet
-// wired in — Load composes the container and every section's structural
-// sub-parse only. This lets the rewritten F22/F23/F24 cells be shown red
-// against the real entry point before the domain checks land, per the
-// population law. Replaced by the real ValidateSectionValues below in the
-// same slot's next commit.
-SslmModelStatus ValidateSectionValues(const SslmModelView& /*view*/, std::string* /*err*/) {
+int32_t RdI32(const uint8_t* p) noexcept { return static_cast<int32_t>(RdU32(p)); }
+int64_t RdI64(const uint8_t* p) noexcept { return static_cast<int64_t>(RdU64(p)); }
+
+// S-HARDEN-1's domain-descriptor constants (D-SLM141/D-SLM142), carried as
+// data and cited to their source rather than re-derived per call site — one
+// pass over these closes F22/F23/F24 and every future site the same section
+// value would otherwise reach unchecked.
+//
+// CompositionConstants (KVC1) SiLU (m, e): the mandatory no-UB floor, exact
+// from source (silu_lut.cpp:20-39) and sufficient against all three of
+// SiluSigmoidQ15's UB sites. The tighter C29 swept envelope
+// (`-shift in [15,19]`, i.e. `e in [-36,-32]`) is an inline source comment,
+// not a recorded sweep, and is deliberately NOT enforced here — S-HARDEN-1
+// ships the floor only; narrowing it is a follow-on data edit gated on a
+// recorded S2.4 §10 sweep (Charpy Finding 2, D-SLM142).
+constexpr int64_t kCompositionScaleMaxAbsM = (INT64_C(1) << 31) - 1;  // |m| <= 2^31-1
+constexpr int64_t kCompositionScaleMinE = -80;                       // silu_lut.cpp:35 right branch, -shift <= 63
+constexpr int64_t kCompositionScaleMaxE = 7;                         // silu_lut.cpp:35 left branch, term << shift exact
+
+// WeightScales (WSC1): shift is UB-derived and exact (intmath.h:53,
+// RoundingDivideByPOT's documented exponent domain; shift==32 and any
+// negative shift are shift-count UB in RoundingDivideByPOTImpl). identity is
+// a documented format invariant (sslm_format.md:315) with no in-tree consumer
+// yet — enforced early at the gate, not because it is UB-linked.
+constexpr int32_t kWeightScaleShiftMin = 0;
+constexpr int32_t kWeightScaleShiftMax = 31;
+
+// RopeTables (ROP1): RopeApplyPair's safety argument (intmath.cpp:451) holds
+// iff |cos|,|sin| <= ROPE_ONE (2^30, intmath.h:360) — the exact bound that
+// restores its "each product <= 2^61, each sum <= 2^62" premise.
+constexpr int64_t kRopeEntryAbsMax = INT64_C(1) << 30;
+
+// F22 — CompositionConstants (m, e): one check per keyed entry closes all
+// three of SiluSigmoidQ15's UB sites (silu_lut.cpp:20 the code*m product,
+// :35 the shift placement, :39 the accumulate) at once, because the mantissa
+// and exponent both feed all three from the same two values.
+SslmModelStatus ValidateCompositionConstantsDomain(const SslmKeyedConstants& kvc, std::string* err) {
+	for (const SslmConstantEntry& e : kvc.Entries()) {
+		const int64_t m = SslmKeyedConstants::Value(e, 0);
+		const int64_t x_e = SslmKeyedConstants::Value(e, 1);
+		if (m < -kCompositionScaleMaxAbsM || m > kCompositionScaleMaxAbsM) {
+			if (err) {
+				*err = "CompositionConstants entry \"" + std::string(e.name) + "\" m=" + std::to_string(m) +
+				       " outside the no-UB floor |m| <= " + std::to_string(kCompositionScaleMaxAbsM);
+			}
+			return SslmModelStatus::CompositionScaleOutOfDomain;
+		}
+		if (x_e < kCompositionScaleMinE || x_e > kCompositionScaleMaxE) {
+			if (err) {
+				*err = "CompositionConstants entry \"" + std::string(e.name) + "\" e=" + std::to_string(x_e) +
+				       " outside the no-UB floor [" + std::to_string(kCompositionScaleMinE) + "," +
+				       std::to_string(kCompositionScaleMaxE) + "]";
+			}
+			return SslmModelStatus::CompositionScaleOutOfDomain;
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
+// F23 — WeightScales: docs/sslm_format.md "Weight-scale fold blob" describes
+// each row as an (identity, mult, shift) int32 triple, column-major within
+// the row; walked here as flat triples over each tensor's elements (row i's
+// triple at [3i, 3i+3)) rather than assuming a specific rank, so both a
+// production [num_channels,3] tensor and a single-row rank-1 [3] tensor use
+// the same walk. `mult` (column 1) is intentionally unchecked — any int32 is
+// safe, per D-SLM142 (SaturatingRoundingDoublingHighMul saturates the sole
+// overflow pair, intmath.cpp:146-152).
+SslmModelStatus ValidateWeightScalesDomain(const SslmTensorManifest& wsc, std::string* err) {
+	for (const SslmTensorView& t : wsc.Tensors()) {
+		const uint64_t rows = t.elem_count / 3;
+		for (uint64_t r = 0; r < rows; ++r) {
+			const int32_t identity = RdI32(t.data + (r * 3 + 0) * 4);
+			const int32_t shift = RdI32(t.data + (r * 3 + 2) * 4);
+			if (identity < 0 || identity > 1) {
+				if (err) {
+					*err = "WeightScales tensor \"" + std::string(t.name) + "\" row " + std::to_string(r) +
+					       " identity=" + std::to_string(identity) + " not in {0,1}";
+				}
+				return SslmModelStatus::WeightScaleIdentityNotBool;
+			}
+			if (shift < kWeightScaleShiftMin || shift > kWeightScaleShiftMax) {
+				if (err) {
+					*err = "WeightScales tensor \"" + std::string(t.name) + "\" row " + std::to_string(r) +
+					       " shift=" + std::to_string(shift) + " outside [" +
+					       std::to_string(kWeightScaleShiftMin) + "," + std::to_string(kWeightScaleShiftMax) + "]";
+				}
+				return SslmModelStatus::WeightScaleShiftOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
+// F24 — RopeTables: every stored element (cos and sin tables alike) must
+// clear RopeApplyPair's safety bound before any element is used as an
+// operand. The section stores int64 while the kernel takes int32, so the
+// bound is checked on the stored int64 before any narrowing.
+SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::string* err) {
+	for (const SslmTensorView& t : rop.Tensors()) {
+		for (uint64_t i = 0; i < t.elem_count; ++i) {
+			const int64_t v = RdI64(t.data + i * 8);
+			if (v < -kRopeEntryAbsMax || v > kRopeEntryAbsMax) {
+				if (err) {
+					*err = "RopeTables tensor \"" + std::string(t.name) + "\" element " + std::to_string(i) +
+					       "=" + std::to_string(v) + " outside [-" + std::to_string(kRopeEntryAbsMax) + "," +
+					       std::to_string(kRopeEntryAbsMax) + "]";
+				}
+				return SslmModelStatus::RopeTableEntryOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
+// S-HARDEN-1's schema-value gate (D-SLM141): one pass over the already
+// sub-parsed views, applying each present section's domain descriptor. Runs
+// AFTER every present section's structural sub-parse has already succeeded
+// (Load's section loop) and BEFORE `out` is exposed to the caller — the
+// boundary where an artifact value enters and can still be refused.
+// KvLandingScales/KvLandingReciprocals are deliberately not checked here
+// (D-SLM142: pending-consumer rows — no consumer exists in the tree yet, so
+// no true domain exists to declare).
+SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* err) {
+	if (view.has_composition_constants) {
+		const SslmModelStatus s = ValidateCompositionConstantsDomain(view.composition_constants, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_weight_scales) {
+		const SslmModelStatus s = ValidateWeightScalesDomain(view.weight_scales, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_rope_tables) {
+		const SslmModelStatus s = ValidateRopeTablesDomain(view.rope_tables, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
 	return SslmModelStatus::Ok;
 }
 
