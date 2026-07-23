@@ -1045,7 +1045,10 @@ static void TestMinimalTokenizerArtifactOpensAndRoundTrips() {
 	CHECK_MSG(opened, "TokenizerView::Open failed on the minimal valid fixture: %s", terr.c_str());
 	if (!opened) return;
 	CHECK(view.Ok());
-	CHECK(view.VocabSize() == 4);
+	// S-HARDEN-2 (F18): 5 entries now — "c","a","t","ca","<eos>" — the fixture's
+	// special token has its own real vocabulary slot (id 4) rather than the prior
+	// out-of-vocabulary id 1000 a committed test used to require.
+	CHECK(view.VocabSize() == 5);
 
 	// "cat": pretokenizes as one word piece (all ASCII letters); byte-level ids
 	// [byte_to_id['c'],['a'],['t']] = [0,1,2]; the one merge (0,1)->3 fires once at
@@ -1056,10 +1059,193 @@ static void TestMinimalTokenizerArtifactOpensAndRoundTrips() {
 	CHECK(view.Decode(ids) == "cat");
 
 	// The special token matches the whole input and emits its declared id, not a
-	// byte-level encoding of its text.
+	// byte-level encoding of its text. S-HARDEN-2 (F18): id 4 is now an id INSIDE
+	// the vocabulary (unlike the prior fixture's 1000), and it decodes back to the
+	// special's own content via the vocabulary entry, not a raw-index escape hatch.
 	std::vector<int32_t> special_ids = view.Encode("<eos>");
-	CHECK_MSG(special_ids.size() == 1 && special_ids[0] == 1000,
-	          "Encode(\"<eos>\") produced %zu id(s), want exactly [1000]", special_ids.size());
+	CHECK_MSG(special_ids.size() == 1 && special_ids[0] == 4,
+	          "Encode(\"<eos>\") produced %zu id(s), want exactly [4]", special_ids.size());
+	CHECK(view.Decode(special_ids) == "<eos>");
+}
+
+// ---------------------------------------------------------------------------
+// S-HARDEN-2 (F7): Decode's documented malformed-UTF-8 policy
+// (include/superslm/tokenizer.h: "invalid sequences pass through as
+// replacement chars") through the ONE strict decoder shared by encode and
+// decode. Each cell builds a tiny TOK1 whose vocabulary entries carry the
+// exact raw bytes under test — independent of MakeMinimalValidTok1 (which is
+// all-ASCII) — and asserts Decode()'s output, never Encode() (encode's input
+// is a std::string_view over already-decoded text; this suite is about bytes
+// arriving FROM the vocabulary, the concatenated-token-bytes path F7 names).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A single-entry TOK1 whose one vocabulary slot (id 0) carries exactly
+// `raw_bytes` — enough to exercise Decode({0, ...}) against those bytes, with
+// no merges/specials in the way.
+TokenizerView OpenTokenizerWithSingleVocabEntry(const std::string& raw_bytes, std::string* out_err = nullptr) {
+	std::array<uint32_t, 256> byte_to_id{};
+	std::vector<TokVocabEntry> vocab = {{raw_bytes}};
+	auto tok1 = BuildTok1(byte_to_id, vocab, {}, {});
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	if (status != SslmStatus::Ok) {
+		if (out_err) *out_err = std::string("outer artifact rejected: ") + SslmStatusName(status);
+		return TokenizerView{};
+	}
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	if (!opened && out_err) *out_err = terr;
+	return view;
+}
+
+const std::string kFffdUtf8 = "\xEF\xBF\xBD";  // U+FFFD, the documented replacement char
+
+}  // namespace
+
+static void TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence() {
+	// 0xC0 0x80: the canonical two-byte encoding of NUL — always overlong (NUL is
+	// representable in one byte); C0/C1 can never start a well-formed sequence.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xC0\x80", 2), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8);  // both bytes are individually invalid leads
+}
+
+static void TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence() {
+	// 0xE0 0x80 0x80: an overlong 3-byte encoding (E0's first continuation must be
+	// >= 0xA0; here it is 0x80). Per the Unicode Standard's "maximal subpart of an
+	// ill-formed subsequence" algorithm, a lead whose FIRST continuation byte
+	// fails the range check forms a one-byte maximal subpart (E0 alone) — the
+	// failing continuation byte is NOT consumed with it, so it is re-scanned at
+	// the top of the loop; a bare 0x80 byte with nothing before it is itself an
+	// ill-formed one-byte subpart. Three independently-invalid bytes -> three
+	// U+FFFD, not one — this is the textbook worked example for this policy.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xE0\x80\x80", 3), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForSurrogateCodepoint() {
+	// 0xED 0xA0 0x80: encodes U+D800, a UTF-16 surrogate half — UTF-8 must never
+	// encode U+D800-U+DFFF (ED's first continuation must be <= 0x9F; here 0xA0).
+	// Same maximal-subpart shape as the overlong-3-byte cell above: ED's first
+	// continuation fails the range check, so ED alone is the one-byte subpart,
+	// and the un-consumed 0xA0 and 0x80 are each their own ill-formed subpart —
+	// three U+FFFD.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xED\xA0\x80", 3), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF() {
+	// 0xF5 alone: any lead >= 0xF5 can only encode a codepoint past U+10FFFF.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF5\x80\x80\x80", 4), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	// F5 itself is rejected outright (one U+FFFD, one byte consumed); the three
+	// trailing 0x80 bytes are then each a lone continuation byte (one U+FFFD
+	// each) — four total.
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
+	// 0xF4 0x90 0x80 0x80: F4's first continuation must be <= 0x8F (else the
+	// codepoint exceeds U+10FFFF) — 0x90 is one past that. Same maximal-subpart
+	// shape as the two three-byte cells above, one byte longer: F4 alone is the
+	// one-byte subpart, and the three un-consumed trailing bytes (0x90, 0x80,
+	// 0x80) are each their own ill-formed one-byte subpart — four U+FFFD.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xF4\x90\x80\x80", 4), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForLoneContinuationByte() {
+	// 0x80 alone: a continuation byte with no lead byte before it.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\x80", 1), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8);
+}
+
+static void TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd() {
+	// 0xE2 0x82: the first two bytes of the 3-byte sequence for U+20AC ('€'),
+	// missing its final continuation byte.
+	std::string err;
+	TokenizerView view = OpenTokenizerWithSingleVocabEntry(std::string("\xE2\x82", 2), &err);
+	CHECK_MSG(view.Ok(), "setup: %s", err.c_str());
+	CHECK(view.Decode({0}) == kFffdUtf8);
+}
+
+static void TestDecodeReconstructsSequenceSplitAcrossTokenBoundary() {
+	// U+00E9 ('é') encodes as 0xC3 0xA9. Split it across two vocabulary entries —
+	// id 0 carries only the lead byte 0xC3, id 1 carries only the continuation
+	// byte 0xA9 — so NEITHER token's bytes are individually valid UTF-8, but
+	// concatenated in order they are. F7's own scope: "invalid bytes split across
+	// token boundaries" — this proves the split reassembles rather than each
+	// half independently substituting U+FFFD.
+	std::array<uint32_t, 256> byte_to_id{};
+	std::vector<TokVocabEntry> vocab = {{std::string("\xC3", 1)}, {std::string("\xA9", 1)}};
+	auto tok1 = BuildTok1(byte_to_id, vocab, {}, {});
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "outer artifact failed to load: %s", SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(opened, "TokenizerView::Open failed: %s", terr.c_str());
+	if (!opened) return;
+
+	CHECK(view.Decode({0, 1}) == "\xC3\xA9");  // reassembled: valid 'é', no U+FFFD
+	// Each half decoded ALONE, by contrast, is genuinely malformed on its own —
+	// confirms the two single-id decodes are not accidentally also valid.
+	CHECK(view.Decode({0}) == kFffdUtf8);
+	CHECK(view.Decode({1}) == kFffdUtf8);
+}
+
+static void TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText() {
+	// A well-formed non-ASCII round trip through the SAME decoder Encode's input
+	// path uses (Utf8Decode -> NFC -> pretokenize -> BPE), confirming the shared
+	// strict decoder does not regress ordinary valid text: 'é' (U+00E9, already
+	// NFC-composed) byte-BPE-encodes to its own byte-level id and decodes back
+	// unchanged.
+	std::array<uint32_t, 256> byte_to_id{};
+	// Map both raw bytes of 'é' to distinct ids so Decode's byte-level path is
+	// exercised without relying on NFC composing them into one vocabulary entry.
+	byte_to_id[0xC3] = 0;
+	byte_to_id[0xA9] = 1;
+	std::vector<TokVocabEntry> vocab = {{std::string("\xC3", 1)}, {std::string("\xA9", 1)}};
+	auto tok1 = BuildTok1(byte_to_id, vocab, {}, {});
+	auto uni1 = MakeMinimalValidUni1();  // already declares NFC-relevant tables for U+00E9
+	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok, "outer artifact failed to load: %s", SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+	TokenizerView view;
+	std::string terr;
+	bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(opened, "TokenizerView::Open failed: %s", terr.c_str());
+	if (!opened) return;
+
+	std::vector<int32_t> ids = view.Encode("\xC3\xA9");  // "é"
+	CHECK(view.Decode(ids) == "\xC3\xA9");
 }
 
 // --- Structural: TokenizerView::Open requires both sections outright. ---
@@ -1204,23 +1390,26 @@ static void TestTok1RejectsTruncatedVocabBlob() {
 
 static void TestTok1RejectsVocabOffsetNonMonotonic() {
 	auto tok1 = MakeMinimalValidTok1();
-	// Baseline vocab_offsets [0,1,2,3,5] (vblob=5). Bump index 2 from 2 to 4 (still
-	// <= vblob): index 3's value (3) is now smaller than its predecessor (4) — a
-	// pure non-monotonic violation, no offset exceeds vblob.
+	// Baseline vocab_offsets [0,1,2,3,5,10] (vblob=10, S-HARDEN-2's 5-entry
+	// fixture). Bump index 2 from 2 to 4 (still <= vblob): index 3's value (3) is
+	// now smaller than its predecessor (4) — a pure non-monotonic violation, no
+	// offset exceeds vblob.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, 4);
 	AssertTok1Rejected(tok1.bytes, "TOK1 vocab offset non-monotonic");
 }
 
 static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
 	auto tok1 = MakeMinimalValidTok1();
-	// Index 4 (vocab_count) is the terminal offset; baseline value 5 == vblob.
-	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 4 * 4, tok1.layout.vocab_blob_len + 50);
+	// Index `vocab_count` is the terminal offset (derived, not a hardcoded literal,
+	// per S-HARDEN-2's fixture replacement note above); baseline value == vblob.
+	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + tok1.layout.vocab_count * 4,
+	       tok1.layout.vocab_blob_len + 50);
 	AssertTok1Rejected(tok1.bytes, "TOK1 last vocab offset > vblob");
 }
 
 static void TestTok1RejectsMiddleVocabOffsetExceedsBlob() {
 	auto tok1 = MakeMinimalValidTok1();
-	// Index 2 is not the terminal offset (index 4 is); baseline value 2.
+	// Index 2 is not the terminal offset (index `vocab_count` is); baseline value 2.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, tok1.layout.vocab_blob_len + 50);
 	AssertTok1Rejected(tok1.bytes, "TOK1 middle (non-terminal) vocab offset > vblob");
 }
@@ -1273,6 +1462,89 @@ static void TestTok1RejectsSpecialOffsetOutOfRange() {
 	AssertTok1Rejected(tok1.bytes, "TOK1 special offset out of range (special_blob_len understated)");
 }
 
+// --- S-HARDEN-2 (F6): TOK1's declared version and reserved fields (offset 4 and
+//     offset 20 respectively, docs/sslm_format.md "Tokenizer blob — TOK1") were
+//     never read by any code path before this slot — a guard-vitality gap (§17
+//     dim 11): the format declares both and nothing enforced either. ---
+
+static void TestTok1RejectsUnsupportedVersion() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.version_off, 2);  // only 1 is the declared TOK1 version
+	AssertTok1Rejected(tok1.bytes, "TOK1 unsupported version");
+}
+
+static void TestTok1RejectsNonzeroReserved() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.reserved_off, 1);
+	AssertTok1Rejected(tok1.bytes, "TOK1 reserved field != 0");
+}
+
+// --- S-HARDEN-2 (F18): vocab_count's own declared domain — zero encodes no byte
+//     and indexes no token; every id this parser stores is narrowed to int32_t
+//     downstream, so a vocab_count past INT32_MAX must be rejected before that
+//     narrowing (or the bound checks below, which compare ids against vocab_count
+//     as read) can be silently wrong. ---
+
+static void TestTok1RejectsVocabCountZero() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0);
+	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == 0");
+}
+
+static void TestTok1RejectsVocabCountExceedsInt32Max() {
+	auto tok1 = MakeMinimalValidTok1();
+	// The exact boundary — INT32_MAX + 1 — not merely a very large value (the
+	// pre-existing TestTok1RejectsVocabCountOverflow uses 0xFFFFFFFF, which this
+	// slot's new INT32_MAX check also rejects, but that cell was written before
+	// this bound existed and does not isolate it).
+	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0x80000000u);
+	AssertTok1Rejected(tok1.bytes, "TOK1 vocab_count == INT32_MAX + 1");
+}
+
+// --- S-HARDEN-2 (F18): vocabulary-bound rejection. Every id this parser stores
+//     for later emission (byte_to_id, merge operands/results, special ids) must
+//     index a real vocabulary slot — the exact defect the finding named: a
+//     committed fixture used to declare a special id (1000) with no matching
+//     vocabulary entry (4 declared), and TokenizerView::Open accepted it. Each
+//     cell below isolates one of the four id classes the parser stores. ---
+
+static void TestTok1RejectsByteToIdEntryAtOrAboveVocabCount() {
+	auto tok1 = MakeMinimalValidTok1();
+	// byte_to_id['z'] defaults to 0 (a valid id, below vocab_count=5); mutate it to
+	// vocab_count itself — one past the last real vocabulary slot.
+	PutU32(tok1.bytes, tok1.layout.byte_to_id_off + static_cast<unsigned char>('z') * 4, tok1.layout.vocab_count);
+	AssertTok1Rejected(tok1.bytes, "TOK1 byte_to_id entry >= vocab_count");
+}
+
+static void TestTok1RejectsMergeOperandAAtOrAboveVocabCount() {
+	auto tok1 = MakeMinimalValidTok1();
+	// The one merge record is (a=0, b=1, merged=3) at merges_off; field `a` is the
+	// first u32.
+	PutU32(tok1.bytes, tok1.layout.merges_off + 0, tok1.layout.vocab_count);
+	AssertTok1Rejected(tok1.bytes, "TOK1 merge operand a >= vocab_count");
+}
+
+static void TestTok1RejectsMergeOperandBAtOrAboveVocabCount() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.merges_off + 4, tok1.layout.vocab_count);
+	AssertTok1Rejected(tok1.bytes, "TOK1 merge operand b >= vocab_count");
+}
+
+static void TestTok1RejectsMergeResultAtOrAboveVocabCount() {
+	auto tok1 = MakeMinimalValidTok1();
+	PutU32(tok1.bytes, tok1.layout.merges_off + 8, tok1.layout.vocab_count);
+	AssertTok1Rejected(tok1.bytes, "TOK1 merge result >= vocab_count");
+}
+
+static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
+	auto tok1 = MakeMinimalValidTok1();
+	// This is F18's own fixture pattern reproduced as a hostile mutation cell now
+	// that the baseline fixture itself is valid: the special's declared id (4)
+	// pushed one past the vocabulary (5).
+	PutU32(tok1.bytes, tok1.layout.special_ids_off, tok1.layout.vocab_count);
+	AssertTok1Rejected(tok1.bytes, "TOK1 special id >= vocab_count");
+}
+
 // --- UNI1 cells. Each isolates exactly one deviation from docs/sslm_format.md's
 //     "UnicodeTables blob — UNI1" layout in the minimal valid blob. letter/
 //     number/space share one ReadRanges() implementation in src/tokenizer.cpp;
@@ -1291,6 +1563,15 @@ static void TestUni1RejectsTruncatedHeader() {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(5);  // shorter than the 8-byte magic+version header
 	AssertUni1Rejected(uni1.bytes, "UNI1 truncated header");
+}
+
+// S-HARDEN-2 (F6): offset 4's version field was skipped past (`pos = 8`) but
+// never actually read and compared — the same guard-vitality gap as TOK1's
+// version/reserved fields.
+static void TestUni1RejectsUnsupportedVersion() {
+	auto uni1 = MakeMinimalValidUni1();
+	PutU32(uni1.bytes, uni1.layout.version_off, 2);  // only 1 is the declared UNI1 version
+	AssertUni1Rejected(uni1.bytes, "UNI1 unsupported version");
 }
 
 static void TestUni1RejectsLetterCountFieldTruncated() {
@@ -3936,6 +4217,108 @@ static void TestLoadComposedViewReopenIsIdempotent() {
 }
 
 // ---------------------------------------------------------------------------
+// S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count and
+// CFG1.vocab_size, "enforced at a named API" — SslmModel::Load, per the
+// S-HARDEN-1 boundary-gate pattern this slot follows rather than inventing a
+// new mechanism (Claude/Vitruvius/SuperSLM_S-HARDEN-1_ParserVsConsumer_
+// Decision-2026-07-22.md §4). Every cell drives a complete, otherwise-valid v2
+// artifact (Config + SigmoidLut + Tokenizer + UnicodeTables) through
+// SslmModel::Load, never the bare TokenizerView::Open/ParseConfig alone — a
+// bare-sub-parser assertion could not detect a MISSING join by construction.
+// ---------------------------------------------------------------------------
+
+static void TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch() {
+	using namespace superslm_test;
+	auto tok1 = MakeMinimalValidTok1();       // vocab_count == 5
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/999);  // deliberately != 5
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::TokenizerVocabSizeMismatch,
+	          "F18 join (S-HARDEN-2): TOK1.vocab_count=5, CFG1.vocab_size=999, through SslmModel::Load: "
+	          "got %s, want TokenizerVocabSizeMismatch (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(!view.has_tokenizer, "a mismatched-vocab-size artifact must not expose a tokenizer view");
+	CHECK_MSG(err.find("5") != std::string::npos && err.find("999") != std::string::npos,
+	          "diagnostic does not name both declared sizes: \"%s\"", err.c_str());
+}
+
+static void TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize() {
+	using namespace superslm_test;
+	auto tok1 = MakeMinimalValidTok1();  // vocab_count == 5
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/5);  // matches
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "matching TOK1.vocab_count/CFG1.vocab_size (both 5): got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK(view.has_tokenizer);
+	CHECK(view.tokenizer.Ok());
+	CHECK(view.tokenizer.VocabSize() == 5);
+	CHECK(view.config.vocab_size == 5u);
+	// The exposed view is a working tokenizer, not merely a bookkeeping flag.
+	std::vector<int32_t> ids = view.tokenizer.Encode("cat");
+	CHECK(view.tokenizer.Decode(ids) == "cat");
+}
+
+static void TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables() {
+	using namespace superslm_test;
+	auto tok1 = MakeMinimalValidTok1();
+	Cfg1Spec cfg;
+	cfg.vocab_size = tok1.layout.vocab_count;
+	auto built = BuildArtifact({MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(cfg)),
+	                            MakeSigmoidLutSection(),
+	                            MakeSection(SslmSectionType::Tokenizer, SslmDtype::Raw, tok1.bytes)});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::TokenizerRejected,
+	          "Tokenizer section present, UnicodeTables absent, through SslmModel::Load: got %s, want "
+	          "TokenizerRejected (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_tokenizer);
+}
+
+static void TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer() {
+	using namespace superslm_test;
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                            MakeSection(SslmSectionType::UnicodeTables, SslmDtype::Raw, uni1.bytes)});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::TokenizerRejected,
+	          "UnicodeTables section present, Tokenizer absent, through SslmModel::Load: got %s, want "
+	          "TokenizerRejected (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_tokenizer);
+}
+
+static void TestLoadAcceptsArtifactWithNeitherTokenizerSection() {
+	// A model-weights-only artifact (no Tokenizer, no UnicodeTables) is a valid
+	// artifact shape (tokenizer and model weights are emitted by separate
+	// converter invocations, tools/convert_tokenizer.py vs tools/convert_model.py)
+	// — the tokenizer join must not turn a legitimately tokenizer-less model
+	// artifact into a rejection.
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "a Config+SigmoidLut-only (no tokenizer) artifact: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(!view.has_tokenizer);
+}
+
+// ---------------------------------------------------------------------------
 // dim 9 — version evolution / mutual rejection. Only the CURRENT (v2) loader
 // is compiled into this binary, so only one of the design's two named
 // directions is executable here: a new-version loader rejecting a
@@ -5885,6 +6268,18 @@ int main(int argc, char** argv) {
 	TestTokenizerVocabSizeMatchesArtifactDeclaration();
 	TestTokenizerAsciiStringRoundTrips();
 
+	// --- S-HARDEN-2 (F7, red-first): Decode's documented malformed-UTF-8 policy
+	//     through the one strict decoder shared by encode and decode. ---
+	TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence();
+	TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence();
+	TestDecodeSubstitutesReplacementCharForSurrogateCodepoint();
+	TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF();
+	TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax();
+	TestDecodeSubstitutesReplacementCharForLoneContinuationByte();
+	TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd();
+	TestDecodeReconstructsSequenceSplitAcrossTokenBoundary();
+	TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText();
+
 	// --- Curie's T-129 TOK1/UNI1 sub-parse hostile-input suite (red-first). ---
 	TestMinimalTokenizerArtifactOpensAndRoundTrips();
 	TestOpenRejectsArtifactMissingTokenizerSection();
@@ -5908,8 +6303,23 @@ int main(int argc, char** argv) {
 	TestTok1RejectsTruncatedSpecialBlob();
 	TestTok1RejectsSpecialOffsetNonMonotonic();
 	TestTok1RejectsSpecialOffsetOutOfRange();
+
+	// --- S-HARDEN-2 (F6/F18, red-first): TOK1's version/reserved fields and its
+	//     vocabulary-bound rejection (byte_to_id, merge operands/results, special
+	//     ids, and vocab_count's own domain). ---
+	TestTok1RejectsUnsupportedVersion();
+	TestTok1RejectsNonzeroReserved();
+	TestTok1RejectsVocabCountZero();
+	TestTok1RejectsVocabCountExceedsInt32Max();
+	TestTok1RejectsByteToIdEntryAtOrAboveVocabCount();
+	TestTok1RejectsMergeOperandAAtOrAboveVocabCount();
+	TestTok1RejectsMergeOperandBAtOrAboveVocabCount();
+	TestTok1RejectsMergeResultAtOrAboveVocabCount();
+	TestTok1RejectsSpecialIdAtOrAboveVocabCount();
+
 	TestUni1RejectsBadMagic();
 	TestUni1RejectsTruncatedHeader();
+	TestUni1RejectsUnsupportedVersion();
 	TestUni1RejectsLetterCountFieldTruncated();
 	TestUni1RejectsLetterRangesTruncated();
 	TestUni1RejectsLetterCountOverflow();
@@ -6117,6 +6527,15 @@ int main(int argc, char** argv) {
 	TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact();
 	TestLoadComposedViewRepeatedReadsShowNoDrift();
 	TestLoadComposedViewReopenIsIdempotent();
+
+	// --- S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count x
+	//     CFG1.vocab_size enforced at SslmModel::Load, following the S-HARDEN-1
+	//     boundary-gate pattern. ---
+	TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch();
+	TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize();
+	TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables();
+	TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer();
+	TestLoadAcceptsArtifactWithNeitherTokenizerSection();
 
 	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
 	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
