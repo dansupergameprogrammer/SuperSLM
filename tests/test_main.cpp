@@ -6450,7 +6450,7 @@ static void TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact() {
 	SslmArtifact artifact;
 	SslmError aerr;
 	SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
-	const std::string manifest = BuildProofManifestJson(artifact, view);
+	const std::string manifest = BuildProofManifestJson(artifact);
 	CHECK_MSG(manifest.find("\"ok\": true") != std::string::npos,
 	          "proof manifest for a geometry-coherent artifact must report config_geometry.ok == true; "
 	          "manifest:\n%s",
@@ -6478,7 +6478,7 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 	SslmArtifact artifact;
 	SslmError aerr;
 	SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
-	const std::string manifest = BuildProofManifestJson(artifact, view);
+	const std::string manifest = BuildProofManifestJson(artifact);
 	CHECK_MSG(manifest.find("\"ok\": false") != std::string::npos,
 	          "proof manifest for Cfg1Spec{}'s incoherent default shape (24*128=3072 != hidden_size 4096) "
 	          "must report config_geometry.ok == false; manifest:\n%s",

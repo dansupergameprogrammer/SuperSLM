@@ -15,6 +15,16 @@
 // converter/reference commits) into the combined proof manifest. This binary
 // never sees the calibration pipeline's float arrays -- it reads only the bytes
 // that were actually written, which is the whole point of the independence.
+//
+// Load's returned SslmModelView is used ONLY for its Ok/rejected STATUS below,
+// never for a pointer-bearing field (SslmTensorView::data, SslmConstantEntry::
+// values, etc.) -- Load constructs and destroys its own internal SslmArtifact
+// before returning, so a view's pointer fields are dangling the instant Load
+// returns, regardless of how soon they are read afterward (discovered while
+// building this tool; flagged in this slot's handoff as a pre-existing defect
+// in SslmModel::Load itself, out of scope to fix here). Every manifest field
+// below is derived by BuildProofManifestJson re-parsing directly from THIS
+// function's own long-lived `artifact` object instead.
 #include <cstdio>
 #include <fstream>
 #include <string>
@@ -33,49 +43,61 @@ int main(int argc, char** argv) {
 	const char* artifact_path = argv[1];
 	const char* manifest_path = argv[2];
 
-	SslmModelView view;
-	std::string err;
-	const SslmModelStatus status = [&] {
-		SslmArtifact art;
-		SslmError aerr;
-		if (SslmArtifact::OpenFromFile(artifact_path, art, &aerr) != SslmStatus::Ok) {
-			err = std::string("artifact rejected before Load (") + SslmStatusName(aerr.code) + "): " + aerr.message;
-			return SslmModelStatus::ArtifactRejected;
-		}
-		// Re-open via Load's own entry point (it re-parses from bytes rather than
-		// reusing `art`, matching how every real consumer calls it) using the raw
-		// file bytes so Load's OpenFromMemory path is what is actually exercised.
-		std::ifstream f(artifact_path, std::ios::binary);
-		std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-		return SslmModel::Load(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), view, &err);
-	}();
-
-	if (status != SslmModelStatus::Ok) {
+	// The long-lived artifact object: everything BuildProofManifestJson
+	// reports below is re-parsed from THIS object, not from Load's
+	// (separately constructed, separately destroyed) internal one.
+	SslmArtifact artifact;
+	SslmError aerr;
+	if (SslmArtifact::OpenFromFile(artifact_path, artifact, &aerr) != SslmStatus::Ok) {
 		std::ofstream out(manifest_path, std::ios::binary);
-		out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n  \"reject_status\": \""
-		    << SslmModelStatusName(status) << "\",\n  \"diagnostic\": \"" << err << "\"\n}\n";
-		std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmModelStatusName(status), err.c_str());
+		out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n"
+		    << "  \"reject_status\": \"ArtifactRejected\",\n  \"diagnostic\": \"" << SslmStatusName(aerr.code)
+		    << ": " << aerr.message << "\"\n}\n";
+		std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmStatusName(aerr.code), aerr.message.c_str());
 		return 1;
 	}
 
-	SslmArtifact artifact;
-	SslmError aerr;
-	SslmArtifact::OpenFromFile(artifact_path, artifact, &aerr);  // already proven Ok above
+	// Discharge the "must load Ok" contract by invoking Load -- the returned
+	// `view`'s STATUS is what matters here; its pointer fields are never
+	// touched (see this file's header comment).
+	{
+		std::ifstream f(artifact_path, std::ios::binary);
+		std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+		SslmModelView view;
+		std::string load_err;
+		const SslmModelStatus status =
+		    SslmModel::Load(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), view, &load_err);
+		if (status != SslmModelStatus::Ok) {
+			std::ofstream out(manifest_path, std::ios::binary);
+			out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n  \"reject_status\": \""
+			    << SslmModelStatusName(status) << "\",\n  \"diagnostic\": \"" << load_err << "\"\n}\n";
+			std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmModelStatusName(status), load_err.c_str());
+			return 1;
+		}
+	}
 
-	const std::string manifest = BuildProofManifestJson(artifact, view);
+	const std::string manifest = BuildProofManifestJson(artifact);
 
 	// The independent geometry cross-check is also this tool's own pass/fail
 	// verdict, not only a manifest field -- a manifest nobody's exit code
 	// depends on is the correlated-oracle failure this whole family exists to
-	// close (§17.3's own preamble).
+	// close (§17.3's own preamble). Re-parsed fresh here too, for the same
+	// reason BuildProofManifestJson does: never trust a pointer-bearing (or,
+	// here, even a plain-value) field of a view returned by a Load call whose
+	// internal artifact has already been destroyed.
 	bool geometry_ok = true;
-	if (view.has_config) {
-		const auto g = CheckConfigGeometry(view.config.hidden_size, view.config.num_attention_heads,
-		                                   view.config.num_key_value_heads, view.config.head_dim);
-		geometry_ok = (g.status == ConfigGeometryStatus::Ok);
-		if (!geometry_ok) {
-			std::fprintf(stderr, "GEOMETRY REJECTED: %s -- %s\n", ConfigGeometryStatusName(g.status),
-			             g.diagnostic.c_str());
+	const SslmSectionView* config_section = artifact.Section(SslmSectionType::Config);
+	if (config_section != nullptr) {
+		SslmModelConfig cfg;
+		std::string cfg_err;
+		if (ParseConfig(*config_section, cfg, &cfg_err) == SslmModelStatus::Ok) {
+			const auto g = CheckConfigGeometry(cfg.hidden_size, cfg.num_attention_heads,
+			                                   cfg.num_key_value_heads, cfg.head_dim);
+			geometry_ok = (g.status == ConfigGeometryStatus::Ok);
+			if (!geometry_ok) {
+				std::fprintf(stderr, "GEOMETRY REJECTED: %s -- %s\n", ConfigGeometryStatusName(g.status),
+				             g.diagnostic.c_str());
+			}
 		}
 	}
 

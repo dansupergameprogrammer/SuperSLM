@@ -105,14 +105,27 @@ std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorMani
 // is for).
 std::string HashSectionHex(const SslmSectionView& section);
 
-// Assembles the full proof-manifest JSON body for an already-Load-accepted
-// artifact: format version, artifact fingerprint (re-derived from `artifact`,
-// independent of whatever the Python writer printed), the geometry check result,
-// per-section hash, and per-tensor/weight-scale evidence for every section this
-// tool knows how to interpret. Never throws. The caller (tools/sslm_verify.cpp)
-// adds the fields only the Python side can supply (source hashes, converter and
-// reference commits) and writes the combined document.
-std::string BuildProofManifestJson(const SslmArtifact& artifact, const SslmModelView& view);
+// Assembles the full proof-manifest JSON body for an artifact the caller has
+// already confirmed loads Ok (via a separate SslmModel::Load call whose
+// SslmModelView is used only for its Ok/rejected STATUS and its plain-value
+// Config fields -- never for a pointer-bearing field of that view). This
+// function re-derives everything it reports directly from `artifact` itself
+// -- Config, geometry, and every tensor's evidence are (re-)parsed HERE, from
+// `artifact.Sections()`, not read from a previously-populated SslmModelView.
+//
+// This is deliberate, not merely independent-for-its-own-sake: SslmModelView
+// (populated by SslmModel::Load, include/superslm/model.h) stores pointer
+// fields (SslmTensorView::data, SslmConstantEntry::values, etc.) that point
+// into the SslmArtifact Load constructs and destroys INTERNALLY before
+// returning -- a view's pointer fields are dangling the instant Load returns,
+// regardless of how soon they are read afterward (this is latent, pre-
+// existing undefined behavior discovered while building this manifest;
+// flagged in this slot's handoff, not fixed here -- fixing SslmModel::Load's
+// lifetime contract is a separate, larger change outside a converter-
+// verifier slot's scope). Re-parsing directly from the CALLER's own
+// long-lived `artifact` (guaranteed alive for this call's duration) is what
+// keeps this function's own reads memory-safe. Never throws.
+std::string BuildProofManifestJson(const SslmArtifact& artifact);
 
 }  // namespace superslm
 

@@ -236,7 +236,26 @@ void AppendTensorEvidenceArray(std::string& out, const std::vector<TensorEvidenc
 
 }  // namespace
 
-std::string BuildProofManifestJson(const SslmArtifact& artifact, const SslmModelView& view) {
+namespace {
+
+// Re-parses `type`'s section fresh, from `artifact` (long-lived for the
+// duration of BuildProofManifestJson's call), into `out`. Returns false
+// (leaving `out` empty) if the section is absent or fails its own structural
+// sub-parse -- both are reported as an empty evidence array, matching how
+// the rest of this manifest degrades gracefully on an absent section rather
+// than treating it as an error (the caller has already confirmed the whole
+// artifact loads Ok via a separate SslmModel::Load call before this
+// function is ever invoked).
+bool TryParseTensorManifest(const SslmArtifact& artifact, SslmSectionType type, SslmTensorManifest& out) {
+	const SslmSectionView* section = artifact.Section(type);
+	if (section == nullptr) return false;
+	std::string err;
+	return SslmTensorManifest::Parse(*section, out, &err) == SslmModelStatus::Ok;
+}
+
+}  // namespace
+
+std::string BuildProofManifestJson(const SslmArtifact& artifact) {
 	std::string out;
 	out += "{\n";
 	out += "  \"schema\": \"sslm_proof_manifest_v1\",\n";
@@ -244,14 +263,28 @@ std::string BuildProofManifestJson(const SslmArtifact& artifact, const SslmModel
 	out += "  \"file_bytes\": " + std::to_string(artifact.FileBytes()) + ",\n";
 	out += "  \"artifact_hash\": \"" + artifact.FingerprintHex() + "\",\n";
 
-	// The geometry cross-check (§17.3 cell 4) -- independently re-derived from
-	// the parsed Config here, never from whatever the Python writer computed.
-	if (view.has_config) {
-		const auto g = CheckConfigGeometry(view.config.hidden_size, view.config.num_attention_heads,
-		                                   view.config.num_key_value_heads, view.config.head_dim);
-		out += "  \"config_geometry\": {\"ok\": " + std::string(g.status == ConfigGeometryStatus::Ok ? "true" : "false") +
-		       ", \"status\": \"" + ConfigGeometryStatusName(g.status) + "\", \"diagnostic\": \"" +
-		       JsonEscape(g.diagnostic) + "\"},\n";
+	// The geometry cross-check (§17.3 cell 4) -- Config is re-parsed HERE,
+	// fresh, from `artifact` (long-lived), rather than trusting a
+	// previously-populated SslmModelView (see this function's header
+	// comment: a view's pointer fields are dangling the instant
+	// SslmModel::Load returns; Config's fields are plain values, not
+	// pointers, so reading them from an already-returned view would
+	// actually be safe, but re-parsing here keeps every field this function
+	// reports sourced the same way, and costs one cheap 84-byte re-parse).
+	const SslmSectionView* config_section = artifact.Section(SslmSectionType::Config);
+	if (config_section != nullptr) {
+		SslmModelConfig cfg;
+		std::string err;
+		if (ParseConfig(*config_section, cfg, &err) == SslmModelStatus::Ok) {
+			const auto g = CheckConfigGeometry(cfg.hidden_size, cfg.num_attention_heads,
+			                                   cfg.num_key_value_heads, cfg.head_dim);
+			out += "  \"config_geometry\": {\"ok\": " +
+			       std::string(g.status == ConfigGeometryStatus::Ok ? "true" : "false") + ", \"status\": \"" +
+			       ConfigGeometryStatusName(g.status) + "\", \"diagnostic\": \"" + JsonEscape(g.diagnostic) +
+			       "\"},\n";
+		} else {
+			out += "  \"config_geometry\": null,\n";
+		}
 	} else {
 		out += "  \"config_geometry\": null,\n";
 	}
@@ -266,24 +299,30 @@ std::string BuildProofManifestJson(const SslmArtifact& artifact, const SslmModel
 	}
 	out += "  ],\n";
 
+	SslmTensorManifest weights, biases, rope_tables, weight_scales;
+	const bool has_weights = TryParseTensorManifest(artifact, SslmSectionType::Weights, weights);
+	const bool has_biases = TryParseTensorManifest(artifact, SslmSectionType::Biases, biases);
+	const bool has_rope = TryParseTensorManifest(artifact, SslmSectionType::RopeTables, rope_tables);
+	const bool has_wsc = TryParseTensorManifest(artifact, SslmSectionType::WeightScales, weight_scales);
+
 	out += "  \"weights_evidence\": ";
-	AppendTensorEvidenceArray(out, view.has_weights ? ComputeTensorEvidence(view.weights, SslmDtype::Int8)
-	                                                : std::vector<TensorEvidence>{});
+	AppendTensorEvidenceArray(out, has_weights ? ComputeTensorEvidence(weights, SslmDtype::Int8)
+	                                           : std::vector<TensorEvidence>{});
 	out += ",\n";
 
 	out += "  \"biases_evidence\": ";
-	AppendTensorEvidenceArray(out, view.has_biases ? ComputeTensorEvidence(view.biases, SslmDtype::Int64)
-	                                               : std::vector<TensorEvidence>{});
+	AppendTensorEvidenceArray(out, has_biases ? ComputeTensorEvidence(biases, SslmDtype::Int64)
+	                                          : std::vector<TensorEvidence>{});
 	out += ",\n";
 
 	out += "  \"rope_tables_evidence\": ";
-	AppendTensorEvidenceArray(out, view.has_rope_tables ? ComputeTensorEvidence(view.rope_tables, SslmDtype::Int64)
-	                                                    : std::vector<TensorEvidence>{});
+	AppendTensorEvidenceArray(out, has_rope ? ComputeTensorEvidence(rope_tables, SslmDtype::Int64)
+	                                        : std::vector<TensorEvidence>{});
 	out += ",\n";
 
 	out += "  \"weight_scales_evidence\": [";
-	if (view.has_weight_scales) {
-		const auto wse = ComputeWeightScaleEvidence(view.weight_scales);
+	if (has_wsc) {
+		const auto wse = ComputeWeightScaleEvidence(weight_scales);
 		for (size_t i = 0; i < wse.size(); ++i) {
 			if (i) out += ",";
 			const auto& e = wse[i];

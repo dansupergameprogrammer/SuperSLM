@@ -24,13 +24,6 @@ import sys
 
 import numpy as np
 
-# The spike (calibrated-model loader + the offline fold pipeline) lives in the Wizard
-# records tree; this is build-time tooling, so a cross-tree import is fine (nothing ships).
-_SPIKE_ROOT = r"D:\Wizard\Tools"
-if _SPIKE_ROOT not in sys.path:
-    sys.path.insert(0, _SPIKE_ROOT)
-from superslm_spike import artifact_cache, pipeline  # noqa: E402
-
 import sslm_convert_manifest as M  # noqa: E402
 import sslm_convert_validate as V  # noqa: E402
 import sslm_format as F  # noqa: E402
@@ -38,11 +31,29 @@ import sslm_model_writer as W  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# The spike (calibrated-model loader + the offline fold pipeline) lives in the Wizard
+# records tree; this is build-time tooling, so a cross-tree import is fine (nothing
+# ships) -- but it is a LAZY import (S-HARDEN-3), triggered only when the real
+# `_fold_ops_tensor`/`_ctx_fold_tensor` defaults below are actually called, not at
+# module load. This is what keeps convert_model.py's own `build_sections`/`main`
+# importable on a bare checkout (no D:\Wizard sibling) for tests and CI that supply
+# their own fold functions -- the same constraint sslm_convert_validate.py's module
+# docstring documents for every other test module in this slot.
+_SPIKE_ROOT = r"D:\Wizard\Tools"
+
+
+def _load_spike():
+    if _SPIKE_ROOT not in sys.path:
+        sys.path.insert(0, _SPIKE_ROOT)
+    from superslm_spike import artifact_cache, pipeline  # noqa: E402
+    return artifact_cache, pipeline
+
 
 def _fold_ops_tensor(channel_scales):
     """C24/C25 per-channel fold as a [num_channels, 3] int32 tensor: each row is
     (identity, mult, shift). `pipeline._reference_fold` returns None for a true
     pass-through channel (C24's identity) and an offline (mult, shift) otherwise."""
+    _artifact_cache, pipeline = _load_spike()
     folds, _s_ref = pipeline._reference_fold(list(channel_scales))
     rows = [(1, 0, 0) if f is None else (0, int(f[0]), int(f[1])) for f in folds]
     return np.asarray(rows, dtype=np.int32)
@@ -52,6 +63,7 @@ def _ctx_fold_tensor(model, layer):
     """C27/D-SLM57 attention-context per-head fold as a [num_attention_heads, 3] int32
     tensor. Mirrors dynamic_engine's offline computation: f_v / s_v_max -> (mult, shift),
     identity where a head already sits at the max V scale."""
+    _artifact_cache, pipeline = _load_spike()
     cfg = model.config
     group = cfg.num_attention_heads // cfg.num_key_value_heads
     s_v = [model.scales.scale(f"layer{layer}.v_head{h}.scale") for h in range(cfg.num_key_value_heads)]
@@ -67,7 +79,17 @@ def _ctx_fold_tensor(model, layer):
     return np.asarray(rows, dtype=np.int32)
 
 
-def build_sections(model):
+def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
+    """`fold_ops_tensor`/`ctx_fold_tensor` default to this module's own
+    spike-backed implementations above; a caller that cannot import the spike
+    (every test in this slot, and the pinned CI fixture) injects its own pure
+    functions instead -- the same injection design as `sslm_convert_validate.
+    validate_model`, so the SAME real `build_sections` runs in both the
+    production path and the CI gate, never a reimplementation that could
+    silently diverge from what actually ships.
+    """
+    fold_ops_tensor = fold_ops_tensor or _fold_ops_tensor
+    ctx_fold_tensor = ctx_fold_tensor or _ctx_fold_tensor
     cfg = model.config
     sections = []
 
@@ -99,9 +121,9 @@ def build_sections(model):
     sections.append(F.Section(F.SectionType.ROPE_TABLES, W.write_tensor_manifest(W.ROP1, np.int64, rope)))
 
     # WeightScales (WSC1, int32) — per-channel fold ops + the per-layer ctx-fold.
-    wsc = {k: _fold_ops_tensor(model.weight_scales[k]) for k in sorted(model.weight_scales)}
+    wsc = {k: fold_ops_tensor(model.weight_scales[k]) for k in sorted(model.weight_scales)}
     for L in range(cfg.num_hidden_layers):
-        wsc[f"layer{L}.ctx_fold"] = _ctx_fold_tensor(model, L)
+        wsc[f"layer{L}.ctx_fold"] = ctx_fold_tensor(model, L)
     sections.append(F.Section(F.SectionType.WEIGHT_SCALES, W.write_tensor_manifest(W.WSC1, np.int32, wsc)))
 
     # Composition constants (KVC1, 2 words) — plus the uniform bias q_b, stored so the
@@ -141,6 +163,7 @@ def main():
                          "the artifact's 'must load Ok' contract is NOT discharged without it)")
     args = ap.parse_args()
 
+    artifact_cache, _pipeline = _load_spike()
     model = artifact_cache.load_artifact(args.artifact)
 
     # Phase 1: validate. Every dtype/range/integralness/finiteness/geometry/
