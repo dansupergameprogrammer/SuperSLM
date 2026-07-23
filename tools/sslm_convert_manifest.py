@@ -109,7 +109,12 @@ def compute_quantization_error_percentiles(model):
             pooled.append(_tensor_error_in_scale_units(name, model))
         except VerifierFailure:
             raise
-        except RuntimeError as exc:
+        except (RuntimeError, KeyError, ValueError) as exc:
+            # RuntimeError is the stub artifact_cache's signal; a *live* reopened
+            # _CheckpointFloatSource instead signals a missing tensor via KeyError and
+            # an unwidenable/unsupported one via ValueError (UnsupportedOpSet/ConfigError
+            # subclasses). All three are fail-loud, never a fabricated report (M1,
+            # Poirot e850e92 review) -- re-raised as VerifierFailure naming the tensor.
             raise VerifierFailure(
                 f"quantization_error_percentiles: float reference unavailable for "
                 f"{name!r}: {exc}") from exc

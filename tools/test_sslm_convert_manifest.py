@@ -287,6 +287,22 @@ def test_quantization_error_percentiles_raises_verifierfailure_on_unresolvable_c
     assert "checkpoint_path" in str(exc.value)
 
 
+@pytest.mark.parametrize("exc_type", [KeyError, ValueError])
+def test_quantization_error_percentiles_raises_verifierfailure_on_live_source_signals(exc_type):
+    """T-408 M1 (Poirot e850e92): a *live* reopened _CheckpointFloatSource signals a
+    missing tensor via KeyError and an unwidenable/unsupported one via ValueError
+    (UnsupportedOpSet/ConfigError). Neither is a RuntimeError, so before the M1 widening
+    both escaped bare past the re-wrap. Fail-loud, never fabricated -- surfaced as
+    VerifierFailure naming the tensor, not the raw exception."""
+    def raising_float_weight(name):
+        raise exc_type(f"tensor {name!r} unavailable from the reopened checkpoint")
+
+    model = _tiny_model(float_weight=raising_float_weight)
+    with pytest.raises(M.VerifierFailure) as exc:
+        M.compute_quantization_error_percentiles(model)
+    assert "float reference unavailable" in str(exc.value)
+
+
 def test_verify_and_merge_raises_verifierfailure_through_the_merge_boundary_not_a_bare_runtimeerror(tmp_path):
     """The same raise, reached through `verify_and_merge` (the actual gate §6 item 2
     names) rather than by calling the percentile computation directly -- distinguishing
