@@ -17,6 +17,7 @@ add_library(superslm STATIC
 	src/intmath.cpp
 	src/silu_lut.cpp
 	src/matmul.cpp
+	src/proof_manifest.cpp
 )
 target_include_directories(superslm PUBLIC include)
 
@@ -40,3 +41,17 @@ endif()
 
 enable_testing()
 add_test(NAME superslm_tests COMMAND superslm_tests)
+
+# The §13 item 7 independent converter verifier (S-HARDEN-3, F13): loads a
+# `.sslm` through the same SslmModel::Load every other consumer uses, then
+# writes a proof manifest (include/superslm/proof_manifest.h) from what the
+# loader actually accepted -- never from the Python writer's own arrays.
+# convert_model.py invokes this binary after every write; §17.3 cell 2's
+# integration test invokes it directly as the independent oracle.
+add_executable(sslm_verify tools/sslm_verify.cpp)
+target_link_libraries(sslm_verify PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_verify PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_verify PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
