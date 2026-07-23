@@ -4409,6 +4409,49 @@ static void TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead() {
 	}
 }
 
+// The amendment's cell (Charpy temper §6): the MOVED-FROM object, not only the
+// moved-to one. RED against a member-wise default move (the pre-amendment
+// type: sigmoid_lut is a bare pointer+count with no container to clear it, so
+// a default move copies its bits onto the destination and leaves the source's
+// copy — and its has_sigmoid_lut flag — untouched); GREEN only once the move
+// constructor/assignment are hand-written to clear the source explicitly.
+static void TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoad();
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "fixture failed to load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	SslmModelView moved = std::move(view);
+
+	// The moved-TO object is fully populated — confirms the move actually ran.
+	CHECK(moved.has_sigmoid_lut);
+	CHECK(SigmoidLutValue(moved.sigmoid_lut, 0) == kSiluLutGoldenTable[0]);
+	CHECK(SigmoidLutValue(moved.sigmoid_lut, kSiluLutN) == kSiluLutGoldenTable[static_cast<size_t>(kSiluLutN)]);
+
+	// The moved-FROM object must be inert: every has_* flag reads false, and
+	// sigmoid_lut carries no pointer into memory the moved-to object now
+	// exclusively owns.
+	CHECK(!view.has_config);
+	CHECK(!view.has_sigmoid_lut);
+	CHECK(!view.has_weights);
+	CHECK(!view.has_biases);
+	CHECK(!view.has_rope_tables);
+	CHECK(!view.has_weight_scales);
+	CHECK(!view.has_composition_constants);
+	CHECK(!view.has_kv_landing_scales);
+	CHECK(!view.has_kv_landing_reciprocals);
+	CHECK(!view.has_tokenizer);
+	CHECK_MSG(view.sigmoid_lut.values == nullptr,
+	          "moved-from view's sigmoid_lut.values must be cleared to nullptr, not left pointing into "
+	          "memory the moved-to object now exclusively owns");
+	CHECK(view.sigmoid_lut.entry_count == 0);
+}
+
 // ---------------------------------------------------------------------------
 // S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count and
 // CFG1.vocab_size, "enforced at a named API" — SslmModel::Load, per the
@@ -6943,9 +6986,11 @@ int main(int argc, char** argv) {
 	TestLoadComposedViewRepeatedReadsShowNoDrift();
 	TestLoadComposedViewReopenIsIdempotent();
 
-	// --- T-403 regression PIN: SslmModelView lifetime-contract fix (design's
-	//     §7 behavioral cell). ---
+	// --- T-403 regression PIN: SslmModelView lifetime-contract fix (the
+	//     design's §7 behavioral cell plus Charpy's 2026-07-22 temper §6
+	//     amendment's moved-from-inertness cell). ---
 	TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead();
+	TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut();
 
 	// --- S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count x
 	//     CFG1.vocab_size enforced at SslmModel::Load, following the S-HARDEN-1
