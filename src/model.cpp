@@ -544,7 +544,7 @@ constexpr int64_t kRopeEntryAbsMax = INT64_C(1) << 30;
 // source line is a claim nobody checks; these are the same claims, checked at compile time.
 static_assert(kCompositionScaleMaxAbsM == kInt32Max,
               "KVC1 m's no-UB floor must equal intmath.h's kInt32Max: silu_lut.cpp's |term| bound "
-              "(|term| < 127*2^31 < 2^39) assumes |m| <= INT32_MAX — if this drifts, F22's no-UB "
+              "(|term| < 127*2^31 < 2^38) assumes |m| <= INT32_MAX — if this drifts, F22's no-UB "
               "floor is no longer the exact bound the comment claims");
 static_assert(kCompositionScaleMaxE + kSiluLutLog2K + kSiluLutQIdx < kSiluLutTermLeftShiftOverflowExponent,
               "KVC1 e's upper no-UB floor must keep SiluSigmoidQ15's left-branch shift "

@@ -118,6 +118,13 @@ jobs:
         with:
           python-version: '3.13'
       - run: pip install numpy pytest
+      # T-407: assert the Python<->Unicode coupling the comment above only documents, at setup,
+      # so a runner drift fails loud HERE instead of deep inside the pytest run as an opaque
+      # UnicodeVersionMismatch. Compares the running interpreter against the single pinned source
+      # of truth (PINNED_UNICODE_VERSION), never a second copy of the version literal.
+      - name: Assert running unicodedata matches PINNED_UNICODE_VERSION
+        run: |
+          python -c "import sys; sys.path.insert(0, 'tools'); import unicodedata; from sslm_convert_validate import PINNED_UNICODE_VERSION as P; a = tuple(int(x) for x in unicodedata.unidata_version.split('.')); assert a == P, f'unicodedata {a} != pinned {P}'"
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --target sslm_verify
       - run: python -m pytest tools/ -v

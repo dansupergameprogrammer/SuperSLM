@@ -4336,6 +4336,50 @@ static void TestLoadComposedViewReopenIsIdempotent() {
 	}
 }
 
+// T-402 (Poirot Observation 2): TestLoadComposedViewReopenIsIdempotent above loads into two
+// FRESH views. This pins the other half — Load onto an ALREADY-POPULATED view object. The
+// second Load must fully RESET the target to the freshly-parsed state; an append-without-clear
+// would leave the first Load's entries in place (doubling the constants container), which a
+// value-only check on Entry("scale") would not catch because the lookup would still resolve.
+static void TestLoadOntoPopulatedViewResetsEntries() {
+	using namespace superslm_test;
+	auto built = BuildFullyValidV2ArtifactForLoad();
+
+	// A fresh-view Load of the identical bytes: the reference the populated-target Load must match.
+	SslmModelView fresh;
+	std::string errf;
+	SslmModelStatus sf = SslmModel::Load(built.bytes.data(), built.bytes.size(), fresh, &errf);
+	CHECK_MSG(sf == SslmModelStatus::Ok, "reference fresh Load failed: got %s (%s)",
+	          SslmModelStatusName(sf), errf.c_str());
+
+	// ONE view, loaded twice: the second Load's target is already populated.
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus s1 = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(s1 == SslmModelStatus::Ok, "first Load into the reused view failed: got %s (%s)",
+	          SslmModelStatusName(s1), err.c_str());
+	SslmModelStatus s2 = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(s2 == SslmModelStatus::Ok, "re-Load onto a populated view failed: got %s (%s)",
+	          SslmModelStatusName(s2), err.c_str());
+	if (sf != SslmModelStatus::Ok || s1 != SslmModelStatus::Ok || s2 != SslmModelStatus::Ok) return;
+
+	// Entry COUNT, not just lookup: a missing reset would double the populated container.
+	CHECK_MSG(view.composition_constants.Entries().size() == fresh.composition_constants.Entries().size(),
+	          "re-Load onto a populated view did not reset composition_constants: %zu entries vs a fresh %zu",
+	          view.composition_constants.Entries().size(), fresh.composition_constants.Entries().size());
+
+	// And the values still match a fresh parse (reset produced the right state, not an empty one).
+	CHECK(view.config.hidden_size == fresh.config.hidden_size);
+	CHECK(view.config.vocab_size == fresh.config.vocab_size);
+	const SslmConstantEntry* sp = view.composition_constants.Entry("scale");
+	const SslmConstantEntry* sr = fresh.composition_constants.Entry("scale");
+	CHECK_MSG(sp != nullptr && sr != nullptr, "populated-target re-Load lost the \"scale\" entry");
+	if (sp != nullptr && sr != nullptr) {
+		CHECK(SslmKeyedConstants::Value(*sp, 0) == SslmKeyedConstants::Value(*sr, 0));
+		CHECK(SslmKeyedConstants::Value(*sp, 1) == SslmKeyedConstants::Value(*sr, 1));
+	}
+}
+
 // ---------------------------------------------------------------------------
 // T-403 regression PIN (SslmModelView lifetime-contract fix, the design at
 // Claude/Vitruvius/SuperSLM_Load_UAF_LifetimeFix_Design-2026-07-22.md §7 plus
@@ -7077,6 +7121,7 @@ int main(int argc, char** argv) {
 	TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact();
 	TestLoadComposedViewRepeatedReadsShowNoDrift();
 	TestLoadComposedViewReopenIsIdempotent();
+	TestLoadOntoPopulatedViewResetsEntries();
 
 	// --- T-403 regression PIN: SslmModelView lifetime-contract fix (the
 	//     design's §7 behavioral cell plus Charpy's 2026-07-22 temper §6

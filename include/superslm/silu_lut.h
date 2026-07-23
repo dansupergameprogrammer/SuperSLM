@@ -29,9 +29,13 @@ inline constexpr int kSiluLutQIdx = 12;                    // sub-node index fra
 // S-HARDEN-1 (D-SLM142): named so the KVC1 (m,e) no-UB floor's upper bound on `e`
 // (src/model.cpp `kCompositionScaleMaxE`) can be pinned by `static_assert` to the exact
 // shift at which SiluSigmoidQ15's left branch (`term << shift`, src/silu_lut.cpp) overflows
-// int64 — 26, given |term| < 2^39 from |code| <= 127 and |m| bounded by the floor's own
+// int64 — 26, given |term| < 2^38 from |code| <= 127 (< 2^7) and |m| bounded by the floor's own
 // `kCompositionScaleMaxAbsM`. A prose-only bound (a comment citing "26") is checked by
 // nobody; this constant is what the pin in model.cpp compares against.
+// T-402 (Poirot Observation 3): `26` is hand-derived from |term| < 2^38 and int64's headroom.
+// If a future change (C29) widens the KVC1 m-domain past INT32_MAX, model.cpp's
+// `kCompositionScaleMaxAbsM == kInt32Max` static_assert fires first — but this constant must then
+// be RE-DERIVED, because the shift-side pin would still pass against a now-stale overflow point.
 inline constexpr int kSiluLutTermLeftShiftOverflowExponent = 26;
 
 // sigmoid(code * realscale) in Q15 via the LUT, where realscale = m * 2^e and `code` is the
