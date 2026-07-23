@@ -32,6 +32,21 @@ KV_PRECISION_INT16 = 1
 # numpy dtype -> element size, for the tensor-manifest data payload.
 _ELEM_SIZE = {np.int8: 1, np.int32: 4, np.int64: 8}
 
+# S-HARDEN-3 (F13): explicit little-endian dtype objects, keyed by the same
+# caller-facing dtype identity as _ELEM_SIZE. `np.int8`/`np.int32`/`np.int64`
+# are the platform's NATIVE dtype -- on every platform this project's own CI
+# matrix runs (x64, ARM64), native already IS little-endian, so casting to
+# the bare native dtype and calling `.tobytes()` happens to emit correct
+# bytes here today. It is not a portability guarantee: a big-endian build
+# host would cast to ITS native representation and emit big-endian bytes,
+# silently producing an artifact the (always-little-endian) C++ reader
+# misreads with no diagnostic anywhere (the finding's own words: "the writer
+# additionally relies on host-native NumPy byte order while the format
+# documents explicit little-endian"). Casting to the EXPLICIT little-endian
+# dtype below removes the platform dependency outright rather than relying on
+# every future build host happening to be little-endian.
+_LE_DTYPE = {np.int8: np.dtype("<i1"), np.int32: np.dtype("<i4"), np.int64: np.dtype("<i8")}
+
 
 def _align_up(v, a):
     return v if a == 0 else (v + (a - 1)) // a * a
@@ -44,8 +59,9 @@ def write_tensor_manifest(magic, element_np_dtype, tensors):
     tensor's data packed contiguously from the element-aligned data region.
     """
     element_size = _ELEM_SIZE[element_np_dtype]
+    le_dtype = _LE_DTYPE[element_np_dtype]
     names = list(tensors.keys())
-    arrs = [np.ascontiguousarray(tensors[n], dtype=element_np_dtype) for n in names]
+    arrs = [np.ascontiguousarray(tensors[n], dtype=le_dtype) for n in names]
     for a in arrs:
         if a.ndim < 1 or a.ndim > MAX_TENSOR_RANK:
             raise ValueError(f"tensor rank {a.ndim} outside [1, {MAX_TENSOR_RANK}]")
@@ -149,7 +165,7 @@ def write_sil1(table=None):
     """
     if table is None:
         table = build_sigmoid_lut()
-    table = np.ascontiguousarray(table, dtype=np.int32)
+    table = np.ascontiguousarray(table, dtype=_LE_DTYPE[np.int32])
     if table.size != SIGMOID_LUT_ENTRIES:
         raise ValueError(f"SIL1 table must have {SIGMOID_LUT_ENTRIES} entries, got {table.size}")
     buf = bytearray()
