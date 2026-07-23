@@ -16,6 +16,7 @@
 #ifndef SUPERSLM_TESTS_SSLM_TOKENIZER_HOSTILE_FIXTURES_H
 #define SUPERSLM_TESTS_SSLM_TOKENIZER_HOSTILE_FIXTURES_H
 
+#include "sslm_cfg1_hostile_fixtures.h"  // BuildCfg1/Cfg1Spec — S-HARDEN-2's TOK1 x CFG1 join fixtures
 #include "sslm_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"  // MakeSigmoidLutSection — required from v2 (S-HARDEN-1, F1)
 #include "superslm/artifact.h"
@@ -150,19 +151,36 @@ inline BuiltTok1 BuildTok1(const std::array<uint32_t, 256>& byte_to_id,
 	return out;
 }
 
-// The minimal valid TOK1 blob every TOK1 hostile cell mutates from: 4 vocab
-// entries ("c","a","t","ca"), one merge ((c,a) -> "ca"), one special ("<eos>").
-// byte_to_id maps only 'c'/'a'/'t' (the bytes the round-trip cell actually
-// exercises) — every other byte value is left at 0, which is harmless because no
-// cell decodes an id produced from an unmapped byte.
+// The minimal valid TOK1 blob every TOK1 hostile cell mutates from: 5 vocab
+// entries ("c","a","t","ca","<eos>"), one merge ((c,a) -> "ca"), one special
+// ("<eos>", id 4). byte_to_id maps only 'c'/'a'/'t' (the bytes the round-trip
+// cell actually exercises) — every other byte value is left at 0, which is
+// harmless because no cell decodes an id produced from an unmapped byte.
+//
+// S-HARDEN-2 (F18): this fixture REPLACES the prior "minimal valid" TOK1, which
+// declared only 4 vocab entries and assigned the special "<eos>" id 1000 — an id
+// that indexes nothing in a 4-entry vocabulary. A committed test
+// (TestMinimalTokenizerArtifactOpensAndRoundTrips) required Encode("<eos>") to
+// equal that exact out-of-vocabulary id: the suite did not merely tolerate F18,
+// it demanded the defective behaviour, so the fixture itself was the defect,
+// not one deviating hostile cell. The special's id now names a REAL vocabulary
+// slot (id 4, the fixture's 5th entry, whose bytes are the special's own
+// content "<eos>") — mirroring how the real converter builds `id_to_bytes`
+// (tools/convert_tokenizer.py: `max_id = max(max(vocab ids), max(added ids))`,
+// so every declared id, special or not, indexes the id->bytes table it builds).
+// vocab_count is 5, not 4 — every existing cell that names an offset or index
+// derives it from `layout.*` rather than a hardcoded constant, so this change
+// does not silently invalidate an unrelated cell's assertion; the two cells
+// that DID encode "vocab_count == 4" as a bare literal are updated at their own
+// site (test_main.cpp).
 inline BuiltTok1 MakeMinimalValidTok1() {
 	std::array<uint32_t, 256> byte_to_id{};
 	byte_to_id[static_cast<unsigned char>('c')] = 0;
 	byte_to_id[static_cast<unsigned char>('a')] = 1;
 	byte_to_id[static_cast<unsigned char>('t')] = 2;
-	std::vector<TokVocabEntry> vocab = {{"c"}, {"a"}, {"t"}, {"ca"}};
+	std::vector<TokVocabEntry> vocab = {{"c"}, {"a"}, {"t"}, {"ca"}, {"<eos>"}};
 	std::vector<TokMerge> merges = {{0, 1, 3}};
-	std::vector<TokSpecial> specials = {{"<eos>", 1000}};
+	std::vector<TokSpecial> specials = {{"<eos>", 4}};
 	return BuildTok1(byte_to_id, vocab, merges, specials);
 }
 
@@ -340,6 +358,23 @@ inline BuiltArtifact BuildArtifactMissingUnicodeTables(const std::vector<uint8_t
 // reasoning as BuildArtifactMissingUnicodeTables above, mirrored.
 inline BuiltArtifact BuildArtifactMissingTokenizer(const std::vector<uint8_t>& uni1) {
 	return BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),
+	                       MakeSection(superslm::SslmSectionType::UnicodeTables, superslm::SslmDtype::Raw, uni1)});
+}
+
+// A complete, otherwise-valid v2 artifact — real CFG1 (not the placeholder
+// `{'{','}'}` MakeConfigSection()), SigmoidLut, Tokenizer, UnicodeTables — with
+// CFG1.vocab_size set explicitly, for driving through SslmModel::Load rather
+// than TokenizerView::Open alone (S-HARDEN-2, F18's join cell, §17.3-3): Load
+// sub-parses Config via ParseConfig, which requires the real 84-byte CFG1
+// struct, so the placeholder Config used by the TokenizerView::Open-only
+// fixtures above is not enough once a fixture is routed through Load.
+inline BuiltArtifact BuildTokenizerArtifactForLoad(const std::vector<uint8_t>& tok1,
+                                                    const std::vector<uint8_t>& uni1, uint32_t vocab_size) {
+	Cfg1Spec cfg;
+	cfg.vocab_size = vocab_size;
+	return BuildArtifact({MakeSection(superslm::SslmSectionType::Config, superslm::SslmDtype::Raw, BuildCfg1(cfg)),
+	                       MakeSigmoidLutSection(),
+	                       MakeSection(superslm::SslmSectionType::Tokenizer, superslm::SslmDtype::Raw, tok1),
 	                       MakeSection(superslm::SslmSectionType::UnicodeTables, superslm::SslmDtype::Raw, uni1)});
 }
 
