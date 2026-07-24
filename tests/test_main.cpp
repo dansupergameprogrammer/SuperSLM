@@ -30,8 +30,10 @@
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
+#include "support/bad_alloc_injection.h"
 
 #include <atomic>
+#include <stdexcept>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -6776,6 +6778,361 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 	CHECK(manifest.find("HiddenSizeGeometryMismatch") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S-HARDEN-7 red suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
+// Design-2026-07-23.md §3; T-411): the "throws only std::bad_alloc" contract.
+// Every cell below is authored against the corrected, four-condition
+// membership rule's population of EIGHTEEN sites (§3.1's table) -- not the
+// twelve, ten, six, or seven a hand enumeration found across earlier passes
+// of the design.
+//
+// None of the eighteen sites is wrapped yet: src/*.cpp still has no *Impl
+// split and no catch-and-rethrow wrap, and nothing in src/*.cpp calls
+// superslm_test::MaybeThrowInjectedFault() (tests/support/bad_alloc_injection.h).
+// Every cell below therefore arms the seam, calls the site's real public
+// entry point with a minimal, safe argument, and observes that the seam was
+// never consulted -- the production function ran its real (unwrapped) logic
+// and returned or threw normally, without ever seeing the injected fault.
+// That is the documented RED state: S-HARDEN-7's rename-and-wrap (design
+// §3.1) is what wires MaybeThrowInjectedFault() into each site's *Impl body,
+// at which point every cell below goes green with no change to this file.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// One CHECK per site: the caller must observe exactly std::bad_alloc for an
+// injected std::length_error, and nothing else. `call_site` invokes the real
+// production entry point with the seam armed.
+template <typename Callable>
+void CheckBadAllocContractSite(const char* site_name, Callable&& call_site) {
+	using namespace superslm_test;
+	ArmInjectedFault(InjectThrowKind::kLengthError);
+	bool threw_bad_alloc = false;
+	bool threw_other = false;
+	bool threw_nothing = false;
+	try {
+		call_site();
+		threw_nothing = true;
+	} catch (const std::bad_alloc&) {
+		threw_bad_alloc = true;
+	} catch (...) {
+		threw_other = true;
+	}
+	DisarmInjectedFault();
+	CHECK_MSG(threw_bad_alloc,
+	          "%s must convert an injected std::length_error into std::bad_alloc "
+	          "(S-HARDEN-7 design §3.1) -- observed %s; RED until the rename-and-wrap "
+	          "lands and this site's *Impl body calls MaybeThrowInjectedFault()",
+	          site_name,
+	          threw_nothing ? "no exception at all (the seam is not yet consulted)"
+	                        : (threw_other ? "a non-bad_alloc exception (unconverted)"
+	                                       : "bad_alloc"));
+}
+
+}  // namespace
+
+// --- Site 1/18: SslmArtifact::OpenFromMemory (artifact.h:149) ---
+static void TestBadAllocContractOpenFromMemory() {
+	uint8_t data[4] = {'S', 'S', 'L', 'M'};
+	SslmArtifact out;
+	SslmError err;
+	CheckBadAllocContractSite("SslmArtifact::OpenFromMemory", [&] {
+		SslmArtifact::OpenFromMemory(data, sizeof(data), out, &err);
+	});
+}
+
+// --- Site 1/18, representative marker cell (design §3.2 "New cell -- force a
+//     genuine std::bad_alloc through the wrap"): the shared wrap helper must
+//     take the catch(const std::bad_alloc&){throw;} clause specifically, not
+//     merely produce an observably-equal std::bad_alloc via the general
+//     catch(const std::exception&) clause. One representative site stands for
+//     the mechanism per §17 dimension 11's usual population-validation shape
+//     (the shared helper makes this true for all eighteen sites by
+//     construction). ---
+static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
+	using namespace superslm_test;
+	ArmInjectedFault(InjectThrowKind::kBadAlloc);
+	bool threw_bad_alloc = false;
+	uint8_t data[4] = {'S', 'S', 'L', 'M'};
+	SslmArtifact out;
+	SslmError err;
+	try {
+		SslmArtifact::OpenFromMemory(data, sizeof(data), out, &err);
+	} catch (const std::bad_alloc&) {
+		threw_bad_alloc = true;
+	} catch (...) {
+	}
+	LastWrapClause clause = g_last_wrap_clause;
+	DisarmInjectedFault();
+	CHECK_MSG(threw_bad_alloc,
+	          "OpenFromMemory did not propagate an injected std::bad_alloc unchanged -- "
+	          "RED until the rename-and-wrap lands");
+	CHECK_MSG(clause == LastWrapClause::kBadAllocClause,
+	          "OpenFromMemory's wrap must take the catch(const std::bad_alloc&){throw;} "
+	          "clause specifically -- marker read %s; RED until the wrap helper sets "
+	          "g_last_wrap_clause",
+	          clause == LastWrapClause::kNone ? "kNone (the wrap helper does not exist yet)"
+	          : clause == LastWrapClause::kGeneralClause ? "kGeneralClause (wrong branch)"
+	                                                      : "kBadAllocClause");
+}
+
+// --- Site 2/18: SslmArtifact::OpenFromFile (artifact.h:155) ---
+static void TestBadAllocContractOpenFromFile() {
+	SslmArtifact out;
+	SslmError err;
+	CheckBadAllocContractSite("SslmArtifact::OpenFromFile", [&] {
+		SslmArtifact::OpenFromFile("this/path/does/not/exist.sslm", out, &err);
+	});
+}
+
+// --- Site 3/18 (this fold's addition, condition 4(b)): SslmArtifact::
+//     FingerprintHex (artifact.h:162) ---
+static void TestBadAllocContractFingerprintHex() {
+	SslmArtifact out;
+	CheckBadAllocContractSite("SslmArtifact::FingerprintHex", [&] {
+		(void)out.FingerprintHex();
+	});
+}
+
+// --- Site 4/18: SslmTensorManifest::Parse (model.h:178), the direct-call
+//     path ---
+static void TestBadAllocContractTensorManifestParseDirect() {
+	SslmSectionView section{};
+	SslmTensorManifest out;
+	std::string err;
+	CheckBadAllocContractSite("SslmTensorManifest::Parse (direct)", [&] {
+		SslmTensorManifest::Parse(section, out, &err);
+	});
+}
+
+// --- Site 4/18, the Load-mediated path: the S-HARDEN-7 design's own defect
+//     class (design §3.1: "Load's wrap ... is not a substitute for [a
+//     site's] own independent wrap") -- confirms the seam is consulted by the
+//     *Impl body itself, not only by whatever calls it directly, using a
+//     fully valid artifact whose Weights section routes through
+//     SslmTensorManifest::Parse from inside SslmModel::Load. ---
+static void TestBadAllocContractTensorManifestParseViaLoad() {
+	auto built = BuildFullyValidV2ArtifactForLoad();
+	SslmModelView view;
+	std::string err;
+	CheckBadAllocContractSite("SslmTensorManifest::Parse (via SslmModel::Load)", [&] {
+		SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	});
+}
+
+// --- Site 5/18: SslmKeyedConstants::Parse (model.h:219) ---
+static void TestBadAllocContractKeyedConstantsParse() {
+	SslmSectionView section{};
+	SslmKeyedConstants out;
+	std::string err;
+	CheckBadAllocContractSite("SslmKeyedConstants::Parse", [&] {
+		SslmKeyedConstants::Parse(section, out, &err);
+	});
+}
+
+// --- Site 6/18: ParseConfig (model.h:239) ---
+static void TestBadAllocContractParseConfig() {
+	SslmSectionView section{};
+	SslmModelConfig out{};
+	std::string err;
+	CheckBadAllocContractSite("ParseConfig", [&] {
+		ParseConfig(section, out, &err);
+	});
+}
+
+// --- Site 7/18: ParseSigmoidLut (model.h:261) ---
+static void TestBadAllocContractParseSigmoidLut() {
+	SslmSectionView section{};
+	SslmSigmoidLut out{};
+	std::string err;
+	CheckBadAllocContractSite("ParseSigmoidLut", [&] {
+		ParseSigmoidLut(section, out, &err);
+	});
+}
+
+// --- Site 8/18: SslmModel::Load (model.h:416), its own unwrapped surface
+//     (model.cpp:711,788's string concatenations) -- exercised here via the
+//     null-data path, which reaches Load's own body before any sub-parser
+//     runs. ---
+static void TestBadAllocContractLoad() {
+	SslmModelView out;
+	std::string err;
+	CheckBadAllocContractSite("SslmModel::Load", [&] {
+		SslmModel::Load(nullptr, 0, out, &err);
+	});
+}
+
+// --- Site 9/18: TokenizerView::Open (tokenizer.h:35), the direct-call path
+//     (tools/tok_verify.cpp's bypass shape) ---
+static void TestBadAllocContractTokenizerOpenDirect() {
+	SslmArtifact artifact;  // default: no sections, Ok() == false
+	TokenizerView out;
+	std::string err;
+	CheckBadAllocContractSite("TokenizerView::Open (direct)", [&] {
+		TokenizerView::Open(artifact, out, &err);
+	});
+}
+
+// --- Site 9/18, the Load-mediated path: TokenizerView::Open called from
+//     inside SslmModel::Load when a Tokenizer section is present -- the exact
+//     bypass shape this fold's own §3.1 documents as previously missed. Uses
+//     the real Qwen2.5-1.5B fixture artifact (the only fixture in this suite
+//     that carries a genuine Tokenizer + UnicodeTables pair), read as raw
+//     bytes and driven through SslmModel::Load directly rather than through
+//     SslmArtifact::OpenFromFile. ---
+static void TestBadAllocContractTokenizerOpenViaLoad() {
+	std::string path = ResolveFixturePath("qwen2.5-1.5b.tok.sslm");
+	if (path.empty()) {
+		CHECK_MSG(false,
+		          "fixture qwen2.5-1.5b.tok.sslm not found under tests/fixtures -- cannot "
+		          "exercise TokenizerView::Open's Load-mediated path");
+		return;
+	}
+	std::ifstream f(path, std::ios::binary);
+	std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	CHECK_MSG(!bytes.empty(), "fixture qwen2.5-1.5b.tok.sslm read as zero bytes from %s",
+	          path.c_str());
+	if (bytes.empty()) return;
+
+	SslmModelView view;
+	std::string err;
+	CheckBadAllocContractSite("TokenizerView::Open (via SslmModel::Load)", [&] {
+		SslmModel::Load(bytes.data(), bytes.size(), view, &err);
+	});
+}
+
+// --- Site 10/18 (this fold's addition, condition 4(b)): TokenizerView::Encode
+//     (tokenizer.h:44) ---
+static void TestBadAllocContractTokenizerEncode() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Encode injection fixture: %s",
+	          ft.view_error.c_str());
+	if (!ft.view_ok) return;
+	CheckBadAllocContractSite("TokenizerView::Encode", [&] {
+		(void)ft.view.Encode("the quick brown fox");
+	});
+}
+
+// --- Site 11/18 (this fold's addition, condition 4(b)): TokenizerView::Decode
+//     (tokenizer.h:48) ---
+static void TestBadAllocContractTokenizerDecode() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Decode injection fixture: %s",
+	          ft.view_error.c_str());
+	if (!ft.view_ok) return;
+	std::vector<int32_t> ids = {1, 2, 3};
+	CheckBadAllocContractSite("TokenizerView::Decode", [&] {
+		(void)ft.view.Decode(ids);
+	});
+}
+
+// --- Site 12/18 (this fold's addition, condition 4(b)): ComputeTensorEvidence
+//     (proof_manifest.h:84) ---
+static void TestBadAllocContractComputeTensorEvidence() {
+	SslmTensorManifest manifest;
+	CheckBadAllocContractSite("ComputeTensorEvidence", [&] {
+		(void)ComputeTensorEvidence(manifest, SslmDtype::Int8);
+	});
+}
+
+// --- Site 13/18 (this fold's addition, condition 4(b)):
+//     ComputeWeightScaleEvidence (proof_manifest.h:99) ---
+static void TestBadAllocContractComputeWeightScaleEvidence() {
+	SslmTensorManifest manifest;
+	CheckBadAllocContractSite("ComputeWeightScaleEvidence", [&] {
+		(void)ComputeWeightScaleEvidence(manifest);
+	});
+}
+
+// --- Site 14/18: HashSectionHex (proof_manifest.h:106) ---
+static void TestBadAllocContractHashSectionHex() {
+	SslmSectionView section{};
+	CheckBadAllocContractSite("HashSectionHex", [&] {
+		(void)HashSectionHex(section);
+	});
+}
+
+// --- Site 15/18: BuildProofManifestJson (proof_manifest.h:128) ---
+static void TestBadAllocContractBuildProofManifestJson() {
+	SslmArtifact artifact;
+	CheckBadAllocContractSite("BuildProofManifestJson", [&] {
+		(void)BuildProofManifestJson(artifact);
+	});
+}
+
+// --- Site 16/18: Sha256::Update (sha256.h:19). Cannot currently throw
+//     anything (src/sha256.cpp operates on fixed-size stack buffers only,
+//     design §3.1) -- this cell proves the injection seam itself fires
+//     rather than a pre-existing real-world leak, the same shape every other
+//     site's cell uses, applied to a site whose current implementation
+//     happens not to need it yet. ---
+static void TestBadAllocContractSha256Update() {
+	Sha256 h;
+	const uint8_t byte = 'x';
+	CheckBadAllocContractSite("Sha256::Update", [&] {
+		h.Update(&byte, 1);
+	});
+}
+
+// --- Site 17/18: Sha256Hash (sha256.h:32). Same "cannot currently throw"
+//     shape as site 16. ---
+static void TestBadAllocContractSha256HashFreeFunction() {
+	const uint8_t byte = 'x';
+	uint8_t digest[32];
+	CheckBadAllocContractSite("Sha256Hash", [&] {
+		Sha256Hash(&byte, 1, digest);
+	});
+}
+
+// --- Site 18/18 (this fold's addition, condition 4(b)): superslm::ToHex
+//     (sha256.h:35). A FREE FUNCTION in namespace superslm, not a Sha256
+//     member -- the design text writes "Sha256::ToHex" throughout §3.1/§3.2/
+//     §3.3, but sha256.h:35 declares it outside the Sha256 class (Weak
+//     finding, fourth-pass temper). This cell references the correct symbol,
+//     superslm::ToHex; the design's prose is corrected by the planner, not by
+//     this test. Cannot practically reach std::length_error given a fixed
+//     64-character output (design §3.1) -- same "seam-fires, not a real
+//     leak" shape as sites 16-17. ---
+static void TestBadAllocContractToHex() {
+	uint8_t digest[32] = {};
+	CheckBadAllocContractSite("superslm::ToHex", [&] {
+		(void)ToHex(digest);
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Curie's S-HARDEN-8 coverage cell (design §4.2/§4.3; T-412): the generic
+// per-section-descriptor-row `reserved` field (artifact.cpp:275-280) is
+// rejected by production code today, but no existing test exercised this
+// specific field before this cell -- the four existing "reserved == 1"-style
+// tests (test_main.cpp:2152,2425,2730,3604) each target a structurally
+// distinct PAYLOAD-level reserved field (WGT1/KVC1/CFG1/SIL1), parsed inside
+// a typed section by model.cpp, never the generic per-section-descriptor row
+// every section carries regardless of type. This cell is expected to PASS
+// immediately: the rejection already exists in production (S-HARDEN-1); its
+// role is closing the coverage hole the branch-coverage instrument (design
+// §4.1) would otherwise have to rediscover, not gating unbuilt behavior.
+// ---------------------------------------------------------------------------
+
+static void TestRejectsNonZeroSectionDescriptorReservedField() {
+	auto built = BuildArtifact({MakeConfigSection()});
+	const size_t row = kHeaderBytes;  // section 0's descriptor row
+	built.bytes[row + 36] = 7;        // the generic reserved field -- distinct from any
+	                                  // payload-level reserved field
+	RecomputeIntegrityHash(built.bytes);
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::BadHeader,
+	          "a nonzero generic section-descriptor reserved field must reject BadHeader: "
+	          "got %s (%s)",
+	          SslmStatusName(status), err.message.c_str());
+	CHECK(err.code == SslmStatus::BadHeader);
+	CHECK(err.section_index == 0);
+	CHECK(err.message.find("reserved") != std::string::npos);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -7190,6 +7547,37 @@ int main(int argc, char** argv) {
 	TestHashSectionHexMatchesIndependentSha256();
 	TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact();
 	TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact();
+
+	// --- S-HARDEN-7 (F5, §3, T-411): the "throws only std::bad_alloc" contract,
+	//     all eighteen sites of the corrected, four-condition membership rule's
+	//     derived population (design §3.1's table). Red until the rename-and-wrap
+	//     lands and each site's *Impl body consults the test-only injection seam
+	//     (tests/support/bad_alloc_injection.h). ---
+	TestBadAllocContractOpenFromMemory();
+	TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific();
+	TestBadAllocContractOpenFromFile();
+	TestBadAllocContractFingerprintHex();
+	TestBadAllocContractTensorManifestParseDirect();
+	TestBadAllocContractTensorManifestParseViaLoad();
+	TestBadAllocContractKeyedConstantsParse();
+	TestBadAllocContractParseConfig();
+	TestBadAllocContractParseSigmoidLut();
+	TestBadAllocContractLoad();
+	TestBadAllocContractTokenizerOpenDirect();
+	TestBadAllocContractTokenizerOpenViaLoad();
+	TestBadAllocContractTokenizerEncode();
+	TestBadAllocContractTokenizerDecode();
+	TestBadAllocContractComputeTensorEvidence();
+	TestBadAllocContractComputeWeightScaleEvidence();
+	TestBadAllocContractHashSectionHex();
+	TestBadAllocContractBuildProofManifestJson();
+	TestBadAllocContractSha256Update();
+	TestBadAllocContractSha256HashFreeFunction();
+	TestBadAllocContractToHex();
+
+	// --- S-HARDEN-8 (F12, §4.2/§4.3, T-412): the generic section-descriptor
+	//     `reserved` field, untested until this cell. ---
+	TestRejectsNonZeroSectionDescriptorReservedField();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
