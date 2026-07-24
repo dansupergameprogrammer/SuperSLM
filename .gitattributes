@@ -12,3 +12,9 @@ tests/golden/**  -text
 *.h    text
 *.cpp  text
 *.md   text
+
+# The vendored spike reference (tests/reference/superslm_spike/*.py) is hashed by
+# check_provenance.py -- a determinism gate -- so per the policy above it must be
+# eol=lf, not tool-native. A bare `text` checks out CRLF on Windows and the pin
+# (computed on Linux/LF) fails there. (S-HARDEN-5 provenance, bench 2026-07-24.)
+*.py   text eol=lf
