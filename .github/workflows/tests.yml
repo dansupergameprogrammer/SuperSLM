@@ -267,18 +267,22 @@ jobs:
   # RelWithDebInfo, not Release: assert()-gated contract checks stay live
   # (matching linux-x64-debug's own reasoning above), so their branches are
   # part of what this leg measures.
+  # Pinned to Clang 18, not a fresh `apt-get install clang llvm`: Ubuntu's `llvm`
+  # apt package installs its tools under version-suffixed names
+  # (llvm-cov-18, llvm-profdata-18, ...) and does not reliably create
+  # unversioned aliases, and a floating `clang`/`gcc` conflates releases across
+  # runner-image updates regardless (the same reasoning as linux-x64-tsan and
+  # the digest jobs above, Laplace findings 7/8). clang-18/clang++-18 are
+  # already proven present on this exact runner image by those jobs -- no
+  # apt-get step is needed here either.
   branch-coverage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install a Clang with LLVM source-coverage tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang llvm
       - name: Build with source-coverage instrumentation
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
             -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
             -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate"
           cmake --build build --target superslm_tests
@@ -287,10 +291,10 @@ jobs:
           LLVM_PROFILE_FILE=build/superslm_tests.profraw ./build/superslm_tests
       - name: Merge the raw profile
         run: |
-          llvm-profdata merge -sparse build/superslm_tests.profraw -o build/superslm_tests.profdata
+          llvm-profdata-18 merge -sparse build/superslm_tests.profraw -o build/superslm_tests.profdata
       - name: Export per-file branch coverage
         run: |
-          llvm-cov export --format=text \
+          llvm-cov-18 export --format=text \
             -instr-profile=build/superslm_tests.profdata \
             ./build/superslm_tests \
             -- src/*.cpp include/superslm/*.h \
@@ -367,6 +371,14 @@ jobs:
   # confirmation.
   bad-alloc-membership-check:
     runs-on: ubuntu-latest
+    # Pinned to Clang 18 (matching linux-x64-tsan and the digest jobs above,
+    # Laplace findings 7/8): tests/ci/derive_bad_alloc_membership.py invokes
+    # `clang++ -Xclang -ast-dump=json` via the SUPERSLM_CLANGXX env var
+    # (default bare "clang++" for local use); a floating `clang++` on this job
+    # would conflate releases across runner-image updates the same as an
+    # unpinned CC/CXX would.
+    env:
+      SUPERSLM_CLANGXX: clang++-18
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
