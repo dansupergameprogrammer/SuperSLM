@@ -14,6 +14,11 @@ not only the matmul oracle agreeing with itself.
 
 Re-running this script must reproduce sslm_matmul_fixtures.h byte-for-byte.
 
+The pinned reference is vendored at a content-addressed revision
+(tests/reference/PROVENANCE.md, checked by tests/reference/check_provenance.py)
+so this reproduces on a bare checkout with no access to any sibling repository
+(S-HARDEN-5, F3).
+
 Test-design record: Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md
 """
 
@@ -24,13 +29,15 @@ import random
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_SPIKE_DIR = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "Wizard", ".claude", "worktrees",
-                 "superslm-dev-continue-d0b08e", "Tools", "superslm_spike")
-)
-_TOOLS_DIR = os.path.dirname(_SPIKE_DIR)
+_REFERENCE_DIR = os.path.normpath(os.path.join(_THIS_DIR, "reference"))
+_SPIKE_DIR = os.path.join(_REFERENCE_DIR, "superslm_spike")
+# Two entries are required, not one: the bare `import intmath as im` below
+# resolves against _SPIKE_DIR (the package directory itself). A single-entry
+# collapse to only the parent leaves it unresolved -- verified by execution
+# (Charpy STRUCTURAL, S-HARDEN-5 design S3): `ModuleNotFoundError: No module
+# named 'intmath'`.
 sys.path.insert(0, _SPIKE_DIR)
-sys.path.insert(0, _TOOLS_DIR)
+sys.path.insert(0, _REFERENCE_DIR)
 
 import intmath as im  # noqa: E402
 

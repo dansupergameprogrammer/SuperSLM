@@ -147,14 +147,18 @@ def build_sections(model, *, fold_ops_tensor=None, ctx_fold_tensor=None):
     fold_errors = [0.0]
 
     # Config (CFG1). q_b is uniform 30 across dynamic_biases (verified); kv/block are v1
-    # forward-looking. Unicode version is the tokenizer's pin (15.1.0).
+    # forward-looking. Unicode version is the tokenizer's pin, imported from
+    # sslm_convert_validate.PINNED_UNICODE_VERSION -- the single source of
+    # truth, not a second independently-typed copy of the same three integers
+    # (S-HARDEN-5, F8).
     sections.append(F.Section(F.SectionType.CONFIG, W.write_cfg1(
         hidden_size=cfg.hidden_size, num_hidden_layers=cfg.num_hidden_layers,
         num_attention_heads=cfg.num_attention_heads, num_key_value_heads=cfg.num_key_value_heads,
         head_dim=cfg.head_dim, intermediate_size=cfg.intermediate_size, vocab_size=cfg.vocab_size,
         context_cap=cfg.context_cap, tie_word_embeddings=cfg.tie_word_embeddings,
         kv_precision=W.KV_PRECISION_INT8, kv_block_size=16,
-        unicode_major=15, unicode_minor=1, unicode_patch=0,
+        unicode_major=V.PINNED_UNICODE_VERSION[0], unicode_minor=V.PINNED_UNICODE_VERSION[1],
+        unicode_patch=V.PINNED_UNICODE_VERSION[2],
         rope_theta=cfg.rope_theta, rms_norm_eps=cfg.rms_norm_eps)))
 
     # Weights (WGT1, int8).
@@ -231,7 +235,9 @@ def main():
     # is checked BEFORE a single array is cast — reject-over-degrade, not the
     # old writer's silent np.asarray(..., dtype=X) coercion.
     V.validate_model(model, fold_ops_tensor=_fold_ops_tensor, ctx_fold_tensor=_ctx_fold_tensor,
-                     unicode_major=15, unicode_minor=1, unicode_patch=0)
+                     unicode_major=V.PINNED_UNICODE_VERSION[0],
+                     unicode_minor=V.PINNED_UNICODE_VERSION[1],
+                     unicode_patch=V.PINNED_UNICODE_VERSION[2])
 
     # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
     sections, fold_approximation_error = build_sections(model)

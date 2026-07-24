@@ -1,0 +1,9 @@
+unicode_version=15.1.0
+blob_sha256=e7252f9a014b882c62ef4f0d5c6ecf20e88c2f464a5a320758f250b25216a8cd
+blob_bytes=55276
+letter_ranges=660
+number_ranges=137
+space_ranges=10
+ccc_entries=922
+decomp_entries=2061
+compose_entries=941

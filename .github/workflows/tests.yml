@@ -69,27 +69,40 @@ jobs:
   # reconciliation) on every push and PR instead of only when a developer
   # happens to run the script locally.
   #
-  # tests/gen_intmath_fixtures.py and tests/gen_matmul_fixtures.py are NOT run
-  # here: both import a pinned Python reference from a path outside this
-  # repository (a sibling worktree's Tools/superslm_spike), which a clean
-  # checkout of this repo does not have and cannot vendor without changing
-  # generator logic. Their fixture headers are not covered by this gate.
+  # tests/gen_intmath_fixtures.py and tests/gen_matmul_fixtures.py import their
+  # pinned reference from tests/reference/superslm_spike/, vendored in-repo at
+  # a content-addressed revision (tests/reference/PROVENANCE.md) rather than
+  # from a path outside this repository -- both now run on a bare checkout
+  # with no access to any sibling repository (S-HARDEN-5, F3). The provenance
+  # check runs first, so a tampered or stale vendor tree fails before either
+  # regeneration step runs.
+  #
+  # tools/unicode_tables_golden.py (S-HARDEN-5, F8) is Unicode.build()'s first
+  # committed golden: it asserts the pinned unicodedata version before any
+  # table-building loop runs, then hashes the exact UNI1 blob bytes
+  # convert_tokenizer.py embeds into every converted model. That assertion is
+  # why this job's Python is pinned to the exact version below rather than a
+  # floating one, the same reason converter-validate already pins it (T-406).
   generators:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.13'
       - run: pip install numpy
+      - run: python tests/reference/check_provenance.py
+      - run: python tests/gen_intmath_fixtures.py
+      - run: python tests/gen_matmul_fixtures.py
       - run: python tools/gen_matmul_golden.py
       - run: python tools/gen_silu_lut_golden.py
-      # Imports nothing outside the standard library, so unlike gen_intmath_fixtures.py and
-      # gen_matmul_fixtures.py (which import an out-of-repo spike directory) it runs on a
-      # bare checkout. Resolves its output path from __file__, so the cwd does not matter.
+      # Imports nothing outside the standard library, so it runs on a bare
+      # checkout regardless of the reference-vendoring above. Resolves its
+      # output path from __file__, so the cwd does not matter.
       - run: python tests/gen_iexp_domain_fixtures.py
+      - run: python tools/unicode_tables_golden.py
       - name: Fail if regenerating changed any tracked file
-        run: git diff --exit-code -- tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h
+        run: git diff --exit-code -- tests/sslm_intmath_fixtures.h tests/sslm_matmul_fixtures.h tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h tools/unicode_tables_golden.txt
 
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
@@ -127,4 +140,9 @@ jobs:
           python -c "import sys; sys.path.insert(0, 'tools'); import unicodedata; from sslm_convert_validate import PINNED_UNICODE_VERSION as P; a = tuple(int(x) for x in unicodedata.unidata_version.split('.')); assert a == P, f'unicodedata {a} != pinned {P}'"
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --config Release --target sslm_verify
-      - run: python -m pytest tools/ -v
+      # tests/reference/ added for S-HARDEN-5: its guard-vitality suite
+      # (tests/reference/test_check_provenance.py) proves check_provenance.py
+      # actually rejects a tampered vendored file, not merely that a clean
+      # tree passes. Import-independent of the cross-tree spike, same as
+      # everything else this job already runs.
+      - run: python -m pytest tools/ tests/reference/ -v

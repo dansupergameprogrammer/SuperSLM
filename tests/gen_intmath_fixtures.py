@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 """Generates sslm_intmath_fixtures.h from the pinned Python reference (D-SLM52).
 
-Every expected value below is computed by IMPORTING and CALLING
-Tools/superslm_spike/intmath.py — never hand-computed, never copied from any
-C++ implementation. Re-running this script must reproduce
+Every expected value below is computed by IMPORTING and CALLING the vendored
+tests/reference/superslm_spike/intmath.py -- never hand-computed, never copied
+from any C++ implementation. Re-running this script must reproduce
 sslm_intmath_fixtures.h byte-for-byte (Poirot's reproducibility check).
+
+The vendored reference is pinned at a content-addressed revision
+(tests/reference/PROVENANCE.md, checked by tests/reference/check_provenance.py)
+so this reproduces on a bare checkout with no access to any sibling repository
+(S-HARDEN-5, F3). The rope table's cos/sin entries and the i-exp LN2 quantum are
+read from tests/reference/superslm_spike/rope_tables_pinned.json rather than
+computed via math.cos/math.sin/math.log at generation time -- those are
+non-correctly-rounded libm transcendentals, and a committed golden that embeds
+their live output is a function of the runner's C library, not of pinned
+content (S-HARDEN-5 design S3.2).
 
 Test-design records:
 Claude/Curie/superslm-s2.1-intmath-test-design-2026-07-19.md (C1/C2/C3, C19-C22)
@@ -15,6 +25,7 @@ Claude/Curie/superslm-s2.3-rope-test-design-2026-07-19.md (RopeApplyPair)
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
@@ -22,16 +33,34 @@ import sys
 from fractions import Fraction
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-_SPIKE_DIR = os.path.normpath(
-    os.path.join(_THIS_DIR, "..", "..", "Wizard", ".claude", "worktrees",
-                 "superslm-dev-continue-d0b08e", "Tools", "superslm_spike")
-)
-_TOOLS_DIR = os.path.dirname(_SPIKE_DIR)
+_REFERENCE_DIR = os.path.normpath(os.path.join(_THIS_DIR, "reference"))
+_SPIKE_DIR = os.path.join(_REFERENCE_DIR, "superslm_spike")
+# Two entries are required, not one: the bare `import intmath as im` below
+# resolves against _SPIKE_DIR (the package directory itself), while
+# `import superslm_spike.rope as rope` resolves against _REFERENCE_DIR (the
+# package's parent). A single-entry collapse to only the parent leaves the
+# bare import unresolved -- verified by execution (Charpy STRUCTURAL,
+# S-HARDEN-5 design S3): `ModuleNotFoundError: No module named 'intmath'`.
 sys.path.insert(0, _SPIKE_DIR)
-sys.path.insert(0, _TOOLS_DIR)
+sys.path.insert(0, _REFERENCE_DIR)
 
 import intmath as im  # noqa: E402
 import superslm_spike.rope as rope  # noqa: E402
+
+with open(os.path.join(_SPIKE_DIR, "rope_tables_pinned.json"), "r", encoding="ascii") as _f:
+    _PINNED_ROPE = json.load(_f)
+
+# Importing intmath.py evaluates its module-level `_LN2 = math.log(2)` as a side
+# effect of import -- unavoidable while the vendored copy stays verbatim (S8 step
+# 1a) and is still imported for its many other, non-transcendental integer
+# primitives (i_sqrt, shift_by_max, the saturating/rounding ops, ...). That one
+# import-time call never feeds a fixture value: immediately below, `im._LN2` is
+# overridden to the value precomputed once and pinned in rope_tables_pinned.json
+# (S-HARDEN-5 design S3.2), so every downstream reader of `im._LN2`
+# (`i_exp_ln2_quantum`, `i_exp`) sees the pinned bit-exact constant, not a value
+# resolved fresh against this runner's libm. `float.fromhex` is an exact,
+# lossless round trip of the precomputed double.
+im._LN2 = float.fromhex(_PINNED_ROPE["ln2"]["hex"])
 
 INT32_MIN = im.INT32_MIN
 INT32_MAX = im.INT32_MAX
@@ -594,15 +623,29 @@ assert (_ex, _ey) == (0, 0), "degenerate cos=sin=0 must give (0, 0)"
 add_rope("edge_cos_one_sin_one_typical", 100, -50, ROPE_ONE, ROPE_ONE)
 add_rope("edge_cos_negone_sin_negone_typical", 100, -50, -ROPE_ONE, -ROPE_ONE)
 
-# --- General angles: real Q2.30 rows from rope_tables (a Qwen2.5-1.5B-shaped
-#     RoPE configuration: head_dim=128, so 64 pairs; context_cap=128;
-#     theta=1000000.0), sampled across positions and pair indices, each row
-#     paired with a rotating set of representative (x, y) activation values so
-#     the general-angle class also exercises sign and magnitude diversity. ---
+# --- General angles: real Q2.30 rows from the pinned rope table (a
+#     Qwen2.5-1.5B-shaped RoPE configuration: head_dim=128, so 64 pairs;
+#     context_cap=128; theta=1000000.0), sampled across positions and pair
+#     indices, each row paired with a rotating set of representative (x, y)
+#     activation values so the general-angle class also exercises sign and
+#     magnitude diversity.
+#
+#     Read from rope_tables_pinned.json rather than calling
+#     rope.rope_tables(...) here: that call computes each entry via
+#     math.cos/math.sin, a non-correctly-rounded libm transcendental that is
+#     demonstrably ULP-different across glibc/MSVCRT/Apple libm, so a
+#     committed golden built from a live call is a function of the runner's C
+#     library, not of pinned content (S-HARDEN-5 design S3.2). The table was
+#     precomputed once (tests/reference/precompute_pinned.py) against this
+#     exact configuration and is pinned by tests/reference/PROVENANCE.md /
+#     check_provenance.py the same way the vendored source files are. ---
 _ROPE_HEAD_DIM = 128
 _ROPE_CONTEXT_CAP = 128
 _ROPE_THETA = 1000000.0
-_cos_table, _sin_table = rope.rope_tables(_ROPE_HEAD_DIM, _ROPE_CONTEXT_CAP, _ROPE_THETA)
+assert _PINNED_ROPE["rope"]["head_dim"] == _ROPE_HEAD_DIM
+assert _PINNED_ROPE["rope"]["context_cap"] == _ROPE_CONTEXT_CAP
+assert _PINNED_ROPE["rope"]["theta"] == _ROPE_THETA
+_cos_table, _sin_table = _PINNED_ROPE["rope"]["cos_q30"], _PINNED_ROPE["rope"]["sin_q30"]
 _general_xy = [(37, -58), (0, 0), (-1000, 2000), (INT32_MAX // 4, -(INT32_MAX // 4)), (-777, -777), (999999, 1)]
 
 _general_idx = 0
