@@ -17,8 +17,8 @@ to a specific, hashed, dated source state, machine-checked by
 
 | File | SHA-256 |
 |---|---|
-| `superslm_spike/intmath.py` | `d1d7c6a01eb5c8ba05f7171d34b71d0518accc795ef82c51d141f09456452748` |
-| `superslm_spike/rope.py` | `a1e90961d24535541932e08cc394a18ee7837692556d80de3385ad8d365d02ba` |
+| `superslm_spike/intmath.py` | `d780f5f17f1cd9d0db83359adcf541506d413bf375e2468074a25e22741a52da` |
+| `superslm_spike/rope.py` | `4e54dda3cf9004d63700732d63419d0135ee459db8b5ecf428c441c4c08bcff7` |
 | `superslm_spike/rope_tables_pinned.json` | `4e79a90101c3447302296f93ef0bdd3240a7972fbcdb76a3ac6acbf1fe1c66b7` |
 
 `rope_tables_pinned.json` is not itself a vendored copy of an upstream file --

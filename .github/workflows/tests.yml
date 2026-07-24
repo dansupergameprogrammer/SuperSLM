@@ -242,7 +242,10 @@ jobs:
           echo "Comparing:"; cat $files
           first=""
           for f in $files; do
-            hash=$(cat "$f")
+            # Strip CR: the Windows axis writes its digest via Out-File (CRLF),
+            # the Linux axes via grep>file (LF). A byte-identical digest then
+            # differs only by a trailing \r and falsely trips the mismatch.
+            hash=$(tr -d '\r' < "$f")
             if [ -z "$first" ]; then
               first="$hash"
               first_file="$f"
