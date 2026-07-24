@@ -9,7 +9,7 @@ if not exist %VSDEVCMD% (
 call %VSDEVCMD% -arch=x64 -no_logo
 pushd %~dp0
 if not exist out mkdir out
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp ^
 	tests\test_main.cpp /Fo:out\ /Fe:out\superslm_tests.exe
 if errorlevel 1 (popd & exit /b 1)

@@ -1,5 +1,7 @@
 #include "superslm/tokenizer.h"
 
+#include "bad_alloc_wrap.h"
+
 #include <algorithm>
 #include <cstring>
 #include <unordered_map>
@@ -556,13 +558,31 @@ TokenizerView::~TokenizerView() = default;
 TokenizerView::TokenizerView(TokenizerView&&) noexcept = default;
 TokenizerView& TokenizerView::operator=(TokenizerView&&) noexcept = default;
 
+// S-HARDEN-7 (design Sec3.1): the *Impl bodies below need private access to
+// TokenizerView (impl_), which a free function cannot have.
+// TokenizerViewAccess is the sole friend (tokenizer.h's
+// `friend struct TokenizerViewAccess;`) -- declared and defined only here,
+// never in the header. See artifact.cpp's identical SslmArtifactAccess
+// comment for the full reasoning.
+struct TokenizerViewAccess {
+	static bool OpenImpl(const SslmArtifact& artifact, TokenizerView& out, std::string* err);
+	static std::vector<int32_t> EncodeImpl(const TokenizerView& self, std::string_view text);
+	static std::string DecodeImpl(const TokenizerView& self, const std::vector<int32_t>& ids);
+};
+
 bool TokenizerView::Open(const SslmArtifact& artifact, TokenizerView& out, std::string* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return TokenizerViewAccess::OpenImpl(artifact, out, err); });
+}
+
+bool TokenizerViewAccess::OpenImpl(const SslmArtifact& artifact, TokenizerView& out, std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = TokenizerView{};
 	const SslmSectionView* tok = artifact.Section(SslmSectionType::Tokenizer);
 	const SslmSectionView* uni = artifact.Section(SslmSectionType::UnicodeTables);
 	if (!tok) { if (err) *err = "artifact has no Tokenizer section"; return false; }
 	if (!uni) { if (err) *err = "artifact has no UnicodeTables section"; return false; }
-	auto im = std::make_unique<Impl>();
+	auto im = std::make_unique<TokenizerView::Impl>();
 	if (!ParseTok(tok->data, size_t(tok->byte_size), *im, err)) return false;
 	if (!ParseUni(uni->data, size_t(uni->byte_size), *im, err)) return false;
 	im->ok = true;
@@ -577,14 +597,26 @@ int32_t TokenizerView::VocabSize() const noexcept {
 }
 
 std::vector<int32_t> TokenizerView::Encode(std::string_view text) const {
+	return internal::WrapBadAllocContract(
+	    [&] { return TokenizerViewAccess::EncodeImpl(*this, text); });
+}
+
+std::vector<int32_t> TokenizerViewAccess::EncodeImpl(const TokenizerView& self, std::string_view text) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::vector<int32_t> out;
-	if (impl_ && impl_->ok) impl_->encode(text, out);
+	if (self.impl_ && self.impl_->ok) self.impl_->encode(text, out);
 	return out;
 }
 
 std::string TokenizerView::Decode(const std::vector<int32_t>& ids) const {
+	return internal::WrapBadAllocContract(
+	    [&] { return TokenizerViewAccess::DecodeImpl(*this, ids); });
+}
+
+std::string TokenizerViewAccess::DecodeImpl(const TokenizerView& self, const std::vector<int32_t>& ids) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::string out;
-	if (impl_ && impl_->ok) impl_->decode(ids, out);
+	if (self.impl_ && self.impl_->ok) self.impl_->decode(ids, out);
 	return out;
 }
 

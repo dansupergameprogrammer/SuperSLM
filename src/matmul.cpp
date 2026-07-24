@@ -17,7 +17,15 @@
 
 #include <cassert>
 
-#if defined(_M_X64) || defined(__x86_64__)
+// S-HARDEN-6 (T-180, design Sec2.1 component 3): a build-time override that
+// forces the scalar reference path even on x64, so the S-HARDEN-6 digest
+// jobs can compare a scalar-forced digest against the SIMD-enabled one --
+// the "scalar-forced vs SIMD-enabled" axis component 2's digest-and-compare
+// pattern needs and today has no build-time override to select. Checked
+// BEFORE the architecture test, so defining it wins regardless of target.
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+#define SUPERSLM_MATMUL_HAVE_SSE2 0
+#elif defined(_M_X64) || defined(__x86_64__)
 #define SUPERSLM_MATMUL_HAVE_SSE2 1
 #include <emmintrin.h>
 #else

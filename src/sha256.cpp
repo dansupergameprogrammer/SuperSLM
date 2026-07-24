@@ -1,5 +1,7 @@
 #include "superslm/sha256.h"
 
+#include "bad_alloc_wrap.h"
+
 namespace superslm {
 namespace {
 
@@ -54,29 +56,49 @@ void Sha256::Block(const uint8_t* p) {
 	h_[4] += e; h_[5] += f; h_[6] += g; h_[7] += h;
 }
 
+// S-HARDEN-7 (design Sec3.1): Update's *Impl body needs private access to
+// Sha256 (total_bits_, buf_, buf_len_, Block), which a free function cannot
+// have. Sha256Access is the sole friend (sha256.h's
+// `friend struct Sha256Access;`) -- declared and defined only here, never
+// in the header. See artifact.cpp's identical SslmArtifactAccess comment
+// for the full reasoning.
+struct Sha256Access {
+	static void UpdateImpl(Sha256& self, const uint8_t* data, size_t len);
+};
+
 void Sha256::Update(const uint8_t* data, size_t len) {
-	total_bits_ += uint64_t(len) * 8;
+	internal::WrapBadAllocContract([&] { Sha256Access::UpdateImpl(*this, data, len); });
+}
+
+void Sha256Access::UpdateImpl(Sha256& self, const uint8_t* data, size_t len) {
+	internal::MaybeThrowInjectedBadAllocFault();
+	self.total_bits_ += uint64_t(len) * 8;
 	while (len > 0) {
-		size_t take = 64 - buf_len_;
+		size_t take = 64 - self.buf_len_;
 		if (take > len) take = len;
-		for (size_t i = 0; i < take; ++i) buf_[buf_len_ + i] = data[i];
-		buf_len_ += take;
+		for (size_t i = 0; i < take; ++i) self.buf_[self.buf_len_ + i] = data[i];
+		self.buf_len_ += take;
 		data += take;
 		len -= take;
-		if (buf_len_ == 64) {
-			Block(buf_);
-			buf_len_ = 0;
+		if (self.buf_len_ == 64) {
+			self.Block(self.buf_);
+			self.buf_len_ = 0;
 		}
 	}
 }
 
 void Sha256::Final(uint8_t out[32]) {
 	// Append 0x80, pad with zeros to 56 mod 64, then the 64-bit big-endian length.
+	// Calls Sha256Access::UpdateImpl directly, not the public wrapped Update
+	// -- these bytes are fixed, already-trusted padding, never caller-supplied
+	// artifact bytes, so routing them through the wrap's try/catch on every one of up
+	// to 63 padding bytes per digest would add overhead for no benefit
+	// (S-HARDEN-7 design Sec3.1).
 	uint8_t pad = 0x80;
 	uint64_t bits = total_bits_;
-	Update(&pad, 1);
+	Sha256Access::UpdateImpl(*this, &pad, 1);
 	uint8_t zero = 0;
-	while (buf_len_ != 56) Update(&zero, 1);
+	while (buf_len_ != 56) Sha256Access::UpdateImpl(*this, &zero, 1);
 	uint8_t lenbe[8];
 	for (int i = 0; i < 8; ++i) lenbe[i] = uint8_t(bits >> (56 - i * 8));
 	// Update() would re-add these 8 bytes to total_bits_; feed them through Block
@@ -93,13 +115,25 @@ void Sha256::Final(uint8_t out[32]) {
 	}
 }
 
-void Sha256Hash(const uint8_t* data, size_t len, uint8_t out[32]) {
+namespace {
+
+// S-HARDEN-7: today's bodies, renamed; Sha256Hash/ToHex below wrap these
+// with the shared catch-and-rethrow helper. Sha256HashImpl calls the
+// public, already-wrapped Sha256::Update rather than reaching into
+// Sha256's private UpdateImpl (which a free function has no access to) --
+// Sha256HashImpl already runs inside Sha256Hash's own wrap and consults the
+// injection seam at its own entry, so the one nested try/catch this costs is
+// inert in practice, never exercised (the seam is single-shot and already
+// fired, or was never armed).
+void Sha256HashImpl(const uint8_t* data, size_t len, uint8_t out[32]) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	Sha256 h;
 	h.Update(data, len);
 	h.Final(out);
 }
 
-std::string ToHex(const uint8_t digest[32]) {
+std::string ToHexImpl(const uint8_t digest[32]) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	static const char* kHex = "0123456789abcdef";
 	std::string s;
 	s.resize(64);
@@ -108,6 +142,16 @@ std::string ToHex(const uint8_t digest[32]) {
 		s[i * 2 + 1] = kHex[digest[i] & 0xF];
 	}
 	return s;
+}
+
+}  // namespace
+
+void Sha256Hash(const uint8_t* data, size_t len, uint8_t out[32]) {
+	internal::WrapBadAllocContract([&] { Sha256HashImpl(data, len, out); });
+}
+
+std::string ToHex(const uint8_t digest[32]) {
+	return internal::WrapBadAllocContract([&] { return ToHexImpl(digest); });
 }
 
 } // namespace superslm

@@ -1,4 +1,8 @@
-// SuperSLM artifact format (`.sslm`) — version 1.
+// SuperSLM artifact format (`.sslm`). Current format version is
+// kArtifactFormatVersion below, the single source of truth -- not restated
+// as a number here, so this comment cannot go stale the next time the
+// format bumps (S-HARDEN-8; this file previously said "version 1" after the
+// real format version had already moved to 2 at S-HARDEN-1).
 //
 // The runtime C++ loader for a converted, quantized model. This header is the
 // machine-readable contract for the format specified in docs/sslm_format.md; the
@@ -142,16 +146,17 @@ public:
 
 	// Validate `size` bytes at `data` as a v1 `.sslm`. On Ok, `out` owns a copy of
 	// the bytes and exposes the header + sections. On any error, `out` is left empty
-	// and `err` (if non-null) carries the diagnostic. Never throws; never reads a
-	// section byte before the file passes every structural check. `data == nullptr`
-	// is rejected explicitly (NullData) before any other check, regardless of
-	// `size` — the caller's null pointer is never dereferenced (F14).
+	// and `err` (if non-null) carries the diagnostic. Throws only std::bad_alloc
+	// (S-HARDEN-7, F5); never reads a section byte before the file passes every
+	// structural check. `data == nullptr` is rejected explicitly (NullData) before
+	// any other check, regardless of `size` — the caller's null pointer is never
+	// dereferenced (F14).
 	static SslmStatus OpenFromMemory(const uint8_t* data, size_t size,
 	                                 SslmArtifact& out, SslmError* err);
 
 	// Read the file at `path`, then OpenFromMemory. `path == nullptr` is rejected
 	// explicitly (NullPath) before any file-system call. IoError if the file is
-	// unreadable.
+	// unreadable. Throws only std::bad_alloc (S-HARDEN-7, F5).
 	static SslmStatus OpenFromFile(const char* path, SslmArtifact& out, SslmError* err);
 
 	bool Ok() const noexcept { return ok_; }
@@ -159,6 +164,7 @@ public:
 	uint64_t FileBytes() const noexcept { return file_bytes_; }
 
 	// Lowercase hex of the stored integrity hash (the artifact's fingerprint).
+	// Throws only std::bad_alloc (S-HARDEN-7, F5).
 	std::string FingerprintHex() const;
 
 	const std::vector<SslmSectionView>& Sections() const noexcept { return sections_; }
@@ -167,6 +173,19 @@ public:
 	const SslmSectionView* Section(SslmSectionType type) const noexcept;
 
 private:
+	// S-HARDEN-7: grants src/artifact.cpp's SslmArtifactAccess (defined only
+	// there, never declared here) access to the private members below, so
+	// this class's *Impl bodies can live entirely in the .cpp rather than as
+	// private member declarations in this header. A private member
+	// declaration here would itself be a public-C++-surface function the
+	// membership-check AST walk (S-HARDEN-7, design Sec3.1) would derive as
+	// a member of its own population — access specifiers are invisible to
+	// that walk, which is why the *Impl bodies must not be declared here at
+	// all, not merely marked private. A friend `struct` declaration is a
+	// FriendDecl in the AST, not a FunctionDecl/CXXMethodDecl, so it can
+	// never be picked up by that walk regardless of the rule's conditions.
+	friend struct SslmArtifactAccess;
+
 	bool ok_ = false;
 	uint32_t format_version_ = 0;
 	uint64_t file_bytes_ = 0;

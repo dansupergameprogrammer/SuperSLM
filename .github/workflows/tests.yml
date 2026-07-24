@@ -60,6 +60,251 @@ jobs:
       - run: cmake --build build
       - run: ./build/superslm_tests
 
+  # S-HARDEN-6 component 1 (F4, design Sec2.1, T-410): the ThreadSanitizer
+  # leg. Ubuntu's default CMake compiler is GCC (none of the jobs above set
+  # CC/CXX), so a plain `cmake -B build` never invokes Clang -- CC/CXX are
+  # set to a pinned Clang major version explicitly (a floating `clang` would
+  # conflate releases, Laplace finding 7/8). The two concurrent-read stress
+  # harnesses already in tests/test_main.cpp
+  # (TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded,
+  # TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded) name
+  # themselves as waiting on exactly this leg ("the project's ThreadSanitizer
+  # leg is the separate CI clang build, not this binary") -- no new test code
+  # is needed, only the job that runs the existing binary under
+  # -fsanitize=thread.
+  linux-x64-tsan:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=thread"
+      - run: cmake --build build --target superslm_tests
+      - run: ./build/superslm_tests
+
+  # S-HARDEN-6 components 2/3 (F4, design Sec2.1, T-410, T-180): the
+  # cross-toolchain / cross-optimization digest-and-compare pattern Laplace
+  # finding 2 names as entirely absent from CI ("no job compares its output
+  # to any other job's"). Each job below builds tools/ci/sslm_axis_digest.cpp
+  # (promoted from the disposable commission instrument) against a pinned
+  # toolchain, runs it, and uploads its GLOBAL SHA-256 line. Every job also
+  # fails locally if the harness's own scalar-vs-SIMD invariant check
+  # reports a nonzero local_invariant_failures count, independent of what
+  # axis-digest-compare finds afterward -- defense in depth, not a
+  # substitute for the compare job (a single job's self-check cannot catch a
+  # divergence BETWEEN jobs, which is the actual gap this component closes).
+  #
+  # Six jobs, not five: the four x64-toolchain-pair jobs (GCC/Clang x
+  # Linux/Windows), the ratified macos-arm64-digest leg (Sec7.1, D-SLM170 --
+  # not required by F4's text, ratified into this slot's scope), and the
+  # SUPERSLM_FORCE_SCALAR_MATMUL leg (component 3, T-180) built from the
+  # dedicated CMake target (sslm_axis_digest_scalar_forced). Comparing every
+  # job's GLOBAL hash for equality covers all three axes (toolchain,
+  # platform, SIMD-vs-scalar) in the one compare job below, since a correct
+  # build produces the identical global digest regardless of which
+  # conformant traversal order or code path computed it (design Sec4's
+  # associativity argument) -- this is the direct CI expression of the
+  # 54-axis-point local run (Claude/Laplace/sharden6-axis-harness) that
+  # found them all equal.
+  linux-x64-gcc-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
+      - run: cmake --build build --target sslm_axis_digest
+      - name: Run and extract the GLOBAL digest
+        run: |
+          ./build/sslm_axis_digest | tee axis_output.txt
+          grep -q '^local_invariant_failures 0$' axis_output.txt
+          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-linux-x64-gcc
+          path: global_digest.txt
+
+  linux-x64-clang-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target sslm_axis_digest
+      - name: Run and extract the GLOBAL digest
+        run: |
+          ./build/sslm_axis_digest | tee axis_output.txt
+          grep -q '^local_invariant_failures 0$' axis_output.txt
+          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-linux-x64-clang
+          path: global_digest.txt
+
+  windows-msvc-digest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build
+      - run: cmake --build build --config Release --target sslm_axis_digest
+      - name: Run and extract the GLOBAL digest
+        shell: pwsh
+        run: |
+          $out = & build/Release/sslm_axis_digest.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-windows-msvc
+          path: global_digest.txt
+
+  windows-clangcl-digest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -T ClangCL
+      - run: cmake --build build --config Release --target sslm_axis_digest
+      - name: Run and extract the GLOBAL digest
+        shell: pwsh
+        run: |
+          $out = & build/Release/sslm_axis_digest.exe
+          $out | Out-File -Encoding ascii axis_output.txt
+          if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-windows-clangcl
+          path: global_digest.txt
+
+  # Ratified into this slot's scope (Sec7.1, D-SLM170): the first executed
+  # x64-vs-ARM comparison this plan's own text (SuperSLM_Plan.md:1436, T-182)
+  # claims exists. GitHub-hosted `macos-latest` runners are Apple Silicon, so
+  # this is the same digest-and-compare pattern as the four jobs above, no
+  # new mechanism.
+  macos-arm64-digest:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --target sslm_axis_digest
+      - name: Run and extract the GLOBAL digest
+        run: |
+          ./build/sslm_axis_digest | tee axis_output.txt
+          grep -q '^local_invariant_failures 0$' axis_output.txt
+          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-macos-arm64
+          path: global_digest.txt
+
+  # Component 3 (T-180): the scalar-forced axis, Clang/Linux (matches the
+  # local mutation-vitality proof already run against this exact toolchain).
+  linux-x64-clang-scalar-forced-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target sslm_axis_digest_scalar_forced
+      - name: Run and extract the GLOBAL digest
+        run: |
+          ./build/sslm_axis_digest_scalar_forced | tee axis_output.txt
+          grep -q '^local_invariant_failures 0$' axis_output.txt
+          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axis-digest-linux-x64-clang-scalar-forced
+          path: global_digest.txt
+
+  # The missing half Laplace finding 2 names: "no CI job compares its output
+  # to any other job's." Downloads every digest artifact above and fails if
+  # any two GLOBAL hashes differ -- covering the toolchain-pair axis
+  # (GCC-vs-Clang, MSVC-vs-clang-cl), the platform axis (x64-vs-ARM, closing
+  # T-182), and the SIMD-vs-scalar axis (component 3) in one comparison,
+  # since a correct build's GLOBAL hash does not depend on which of these a
+  # conformant build chose (design Sec4's associativity argument).
+  axis-digest-compare:
+    needs:
+      - linux-x64-gcc-digest
+      - linux-x64-clang-digest
+      - windows-msvc-digest
+      - windows-clangcl-digest
+      - macos-arm64-digest
+      - linux-x64-clang-scalar-forced-digest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: axis-digest-*
+          path: digests
+      - name: Compare every axis's GLOBAL digest
+        run: |
+          set -e
+          files=$(find digests -name global_digest.txt | sort)
+          echo "Comparing:"; cat $files
+          first=""
+          for f in $files; do
+            # Strip CR: the Windows axis writes its digest via Out-File (CRLF),
+            # the Linux axes via grep>file (LF). A byte-identical digest then
+            # differs only by a trailing \r and falsely trips the mismatch.
+            hash=$(tr -d '\r' < "$f")
+            if [ -z "$first" ]; then
+              first="$hash"
+              first_file="$f"
+            elif [ "$hash" != "$first" ]; then
+              echo "MISMATCH: $f ($hash) != $first_file ($first)"
+              exit 1
+            fi
+          done
+          echo "All $(echo "$files" | wc -l) axis digests agree: $first"
+
+  # S-HARDEN-8 (F12, design Sec4.1, Sec4.3): source-only LLVM branch coverage
+  # over src/ and include/superslm/ (tests/ and tools/ excluded from the
+  # measured set), with per-file floors rather than one aggregate threshold
+  # -- F12's own finding is that a single aggregate line percentage hides
+  # exactly the parser gaps that matter (artifact.cpp and model.cpp were the
+  # two files a 97%/92%/75.7% aggregate concealed real gaps inside). Floors
+  # are measured, never invented (tools/ci/branch_coverage_floors.json,
+  # committed) -- tools/ci/check_branch_coverage_floors.py fails the build if
+  # any file's measured branch percentage drops below its pinned floor. A
+  # per-branch allowlist (tools/ci/branch_coverage_allowlist.txt) exists for
+  # genuinely-unreachable defensive code, each entry carrying its own reason.
+  # RelWithDebInfo, not Release: assert()-gated contract checks stay live
+  # (matching linux-x64-debug's own reasoning above), so their branches are
+  # part of what this leg measures.
+  # Pinned to Clang 18, not a fresh `apt-get install clang llvm`: Ubuntu's `llvm`
+  # apt package installs its tools under version-suffixed names
+  # (llvm-cov-18, llvm-profdata-18, ...) and does not reliably create
+  # unversioned aliases, and a floating `clang`/`gcc` conflates releases across
+  # runner-image updates regardless (the same reasoning as linux-x64-tsan and
+  # the digest jobs above, Laplace findings 7/8). clang-18/clang++-18 are
+  # already proven present on this exact runner image by those jobs -- no
+  # apt-get step is needed here either.
+  branch-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build with source-coverage instrumentation
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate"
+          cmake --build build --target superslm_tests
+      - name: Run the suite under instrumentation
+        run: |
+          LLVM_PROFILE_FILE=build/superslm_tests.profraw ./build/superslm_tests
+      - name: Merge the raw profile
+        run: |
+          llvm-profdata-18 merge -sparse build/superslm_tests.profraw -o build/superslm_tests.profdata
+      - name: Export per-file branch coverage
+        run: |
+          llvm-cov-18 export --format=text \
+            -instr-profile=build/superslm_tests.profdata \
+            ./build/superslm_tests \
+            -- src/*.cpp include/superslm/*.h \
+            > build/coverage.json
+      - name: Check per-file branch-coverage floors
+        run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
+
   # The golden headers under tests/ and tools/ state, in their own generated
   # comments, that re-running their generator reproduces them byte-for-byte.
   # This job makes that claim structural rather than asserted: it regenerates
@@ -92,6 +337,13 @@ jobs:
           python-version: '3.13'
       - run: pip install numpy
       - run: python tests/reference/check_provenance.py
+      # M1 fold (S-HARDEN-5): total AST ban on the `**` operator in the two
+      # generators below, run BEFORE either regenerates -- `**` compiles to a
+      # libm pow() call for a float operand, which is exactly what "no
+      # sin/cos/log/exp/pow call executes on the regeneration path" must mean
+      # if it is to be true (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
+      # Design-2026-07-23.md Sec5).
+      - run: python tests/check_no_pow_operator.py
       - run: python tests/gen_intmath_fixtures.py
       - run: python tests/gen_matmul_fixtures.py
       - run: python tools/gen_matmul_golden.py
@@ -103,6 +355,43 @@ jobs:
       - run: python tools/unicode_tables_golden.py
       - name: Fail if regenerating changed any tracked file
         run: git diff --exit-code -- tests/sslm_intmath_fixtures.h tests/sslm_matmul_fixtures.h tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h tools/unicode_tables_golden.txt
+
+  # S-HARDEN-7 (F5, design Sec3.1, T-411): the "throws only std::bad_alloc"
+  # contract's `membership-check` job. Mechanically, on every run: derives the
+  # eighteen-site population from the nine include/superslm/*.h headers via a
+  # Clang AST walk (tests/ci/derive_bad_alloc_membership.py's corrected,
+  # four-condition rule), confirms it matches the pinned oracle
+  # (tests/ci/bad_alloc_membership_expected.txt) under three independent scan
+  # strategies and the injected-19th-function vitality proof
+  # (tests/ci/test_membership_check_population.py), then runs the production
+  # gate itself (tools/ci/check_bad_alloc_contract.py --list-unwrapped),
+  # which fails naming any derived member whose .cpp definition does not
+  # match the shared wrap-helper's rename-and-wrap shape. A Clang capable of
+  # `-Xclang -ast-dump=json` ships pre-installed on GitHub's stock
+  # `ubuntu-latest` runner image per its published software manifest
+  # (design Sec3.1's independence note) -- not reconfirmed by executing a
+  # runner in this design pass; this job's own first run is that
+  # confirmation.
+  bad-alloc-membership-check:
+    runs-on: ubuntu-latest
+    # Pinned to Clang 18 (matching linux-x64-tsan and the digest jobs above,
+    # Laplace findings 7/8): tests/ci/derive_bad_alloc_membership.py invokes
+    # `clang++ -Xclang -ast-dump=json` via the SUPERSLM_CLANGXX env var
+    # (default bare "clang++" for local use); a floating `clang++` on this job
+    # would conflate releases across runner-image updates the same as an
+    # unpinned CC/CXX would.
+    env:
+      SUPERSLM_CLANGXX: clang++-18
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: Population-validation and vitality tests
+        run: python -m pytest tests/ci/ -v
+      - name: Fail on any unwrapped member of the derived population
+        run: python tools/ci/check_bad_alloc_contract.py --list-unwrapped
 
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++

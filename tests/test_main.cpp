@@ -30,8 +30,10 @@
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
+#include "support/bad_alloc_injection.h"
 
 #include <atomic>
+#include <stdexcept>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -120,12 +122,9 @@ static void TestKnownSectionTypes() {
 // Curie's S0 loader red suite (SuperSLM_Plan.md §15; §17 Coverage Model dim 2 —
 // the artifact loader is the named trust boundary). Every cell below builds a
 // `.sslm` byte buffer per docs/sslm_format.md via sslm_fixtures.h, independent of
-// SslmArtifact::OpenFromMemory, and calls the loader under test. At S0 the loader
-// is the unbuilt stub in src/artifact.cpp (always returns IoError, no field
-// examined) — every cell below fails red for that one reason: the loader has not
-// validated. Once Brunel builds the loader, each cell fails red for its own
-// documented reason until the corresponding check is implemented, then goes
-// green.
+// SslmArtifact::OpenFromMemory, and calls the loader under test. The loader in
+// src/artifact.cpp is fully built (shipped at S-HARDEN-1); every cell below is
+// green against it.
 // ---------------------------------------------------------------------------
 
 // --- Rejection cells: one per SslmStatus the header/table/section checks can
@@ -694,12 +693,9 @@ static void TestOpenFromFileMissingFileReturnsIoError() {
 	CHECK_MSG(status == SslmStatus::IoError, "got %s", SslmStatusName(status));
 	CHECK(err.code == SslmStatus::IoError);
 	CHECK(!out.Ok());
-	// The IoError status alone coincides with the S0 stub's unconditional return
-	// (it never reads a byte), so it is not yet red. artifact.h pins SslmError's
-	// message as carrying "the offending values" — for a missing file, that is the
-	// path — so this cell also requires the diagnostic to name it, which the stub's
-	// fixed placeholder text does not. Forces this cell red until OpenFromFile
-	// genuinely attempts the read and reports what it tried.
+	// artifact.h pins SslmError's message as carrying "the offending values" —
+	// for a missing file, that is the path — so this cell also requires the
+	// diagnostic to name it, not merely to report IoError.
 	CHECK_MSG(err.message.find(path.string()) != std::string::npos,
 	          "message does not carry the missing path: \"%s\"", err.message.c_str());
 }
@@ -777,13 +773,9 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 // algorithm is already proven bit-for-bit against the upstream HF tokenizer by
 // the Python reference (tools/convert_tokenizer.py, 0 mismatch over 2000+
 // adversarial+multilingual lines) — this suite is the C++ gate that proves the
-// ported TokenizerView reproduces those upstream ids. At S1.3 TokenizerView is
-// an unbuilt stub (src/tokenizer.cpp): Open always returns false, Encode/Decode
-// always return empty — every cell below fails red for that one reason: the
-// golden ids never match empty output, and every cell that depends on a
-// successfully-opened view fails its explicit `view_ok` assertion. Once Brunel
-// builds the tokenizer, each cell fails red for its own reason (if any) until
-// implemented correctly, then goes green.
+// ported TokenizerView reproduces those upstream ids. TokenizerView is fully
+// built (src/tokenizer.cpp, shipped at S-HARDEN-2); every cell below is green
+// against it.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -1807,9 +1799,9 @@ static void TestUni1RejectsComposeCountOverflow() {
 // manifest AFTER SslmArtifact has verified whole-file structure and integrity
 // — a crafted integrity-valid artifact can still carry a malformed manifest
 // inside a validated section, so this sub-parse is its own hostile-input
-// trust boundary, held to the same T-129 bar. src/model.cpp is currently a
-// RED-FIRST STUB: Parse() leaves `out` empty and reports Ok unconditionally,
-// so every cell below is red until the parse is built.
+// trust boundary, held to the same T-129 bar. SslmTensorManifest::Parse is
+// fully built (src/model.cpp, shipped at S-HARDEN-1); every cell below is
+// green against it.
 //
 // Every cell starts from a small spec-faithful manifest (sslm_model_hostile_
 // fixtures.h), mutates exactly one descriptor or header field, and asserts
@@ -2251,9 +2243,9 @@ static void TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds() {
 // structure and integrity — a crafted integrity-valid artifact can still
 // carry a malformed KVC1 blob inside a validated section, so this sub-parse
 // is its own hostile-input trust boundary, held to the same T-129 bar as
-// TOK1/UNI1 and WGT1/BIA1/ROP1. src/model.cpp is currently a RED-FIRST STUB:
-// Parse() leaves `out` empty and reports Ok unconditionally, so every cell
-// below is red until the parse is built.
+// TOK1/UNI1 and WGT1/BIA1/ROP1. SslmKeyedConstants::Parse is fully built
+// (src/model.cpp, shipped at S-HARDEN-1); every cell below is green against
+// it.
 //
 // Every cell starts from a small spec-faithful KVC1 blob (sslm_kvc1_hostile_
 // fixtures.h), mutates exactly one header or descriptor field, and asserts
@@ -2554,9 +2546,8 @@ static void TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo() {
 // trust boundary AND the §11 reject-over-degrade gate applied to config: a
 // zero dimension or a defaulted field is "a model that loads, runs, generates
 // fluent text, and is not the source model" (§6.8 C15) and must be rejected,
-// never repaired. src/model.cpp's ParseConfig is currently a RED-FIRST STUB:
-// it leaves `out` at SslmModelConfig{} defaults and reports Ok unconditionally,
-// so every hostile cell below is red until the parse is built.
+// never repaired. ParseConfig is fully built (src/model.cpp, shipped at
+// S-HARDEN-1); every hostile cell below is green against it.
 //
 // Every cell asserts the SPECIFIC SslmModelStatus its one named mutation
 // should trigger. CFG1 is a single fixed-layout struct (no variable-length
@@ -2742,9 +2733,8 @@ static void TestCfg1RejectsBadConfigReserved() {
 // swept in S2.0a's WGT1/BIA1/ROP1 suite above) — a small oracle plus one
 // wiring-discrimination negative cell suffices.
 //
-// Unlike every CFG1 cell above, this feature oracle is expected to PASS at
-// authoring time: it exercises SslmTensorManifest::Parse, which S2.0a already
-// built to green, not src/model.cpp's still-stubbed ParseConfig.
+// Unlike every CFG1 cell above, this feature oracle exercises
+// SslmTensorManifest::Parse (S2.0a), not ParseConfig.
 // ---------------------------------------------------------------------------
 
 static void TestWeightScalesMinimalManifestParsesAndRoundTrips() {
@@ -2805,11 +2795,8 @@ static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
 // Every golden value in sslm_intmath_fixtures.h is computed by CALLING
 // Tools/superslm_spike/intmath.py (D-SLM52, the pinned reference) via
 // tests/gen_intmath_fixtures.py — never hand-computed. src/intmath.cpp is
-// currently a red-first stub (deliberately-wrong sentinel bodies): every
-// cell below fails red against those sentinels for its own documented
-// reason. Once Brunel ports the real bodies, each cell either passes or
-// fails for its own reason until the port is bit-exact against the pinned
-// reference, then goes green.
+// fully ported and bit-exact against the pinned reference (shipped at
+// S-HARDEN-1); every cell below is green against it.
 // ---------------------------------------------------------------------------
 
 static void TestC2SaturatingRoundingDoublingHighMul() {
@@ -2976,10 +2963,10 @@ static void TestIntmathPipelineComposition() {
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S2.2 nonlinear scalar primitives red suite (red-first; src/intmath.cpp's
-// ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants bodies are currently
-// deliberately-wrong stub sentinels — every cell below fails red for that one
-// reason until Brunel's port lands. Test-design record: Claude/Curie/
+// Curie's S2.2 nonlinear scalar primitives red suite. src/intmath.cpp's
+// ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants bodies are fully ported
+// (shipped at S-HARDEN-1); every cell below is green against them.
+// Test-design record: Claude/Curie/
 // superslm-s2.2-nonlinear-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
@@ -3281,10 +3268,9 @@ static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
 // defined further below -- see that function's own comment for the full account.
 
 // ---------------------------------------------------------------------------
-// Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
-// RopeApplyPair body is currently the deliberately-wrong stub sentinel
-// {-1, -1} — every cell below fails red for that one reason until Brunel's
-// port lands. Test-design record: Claude/Curie/
+// Curie's S2.3 RopeApplyPair red suite. src/intmath.cpp's RopeApplyPair
+// body is fully ported (shipped at S-HARDEN-1); every cell below is green
+// against it. Test-design record: Claude/Curie/
 // superslm-s2.3-rope-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
@@ -3411,13 +3397,12 @@ static void TestRopeApplyPairTieRoundsAwayFromZero() {
 
 // ---------------------------------------------------------------------------
 // Curie's S2.4 SiLU sigmoid-LUT red suite (SuperSLM_S2.4_SiLU_LUT_Design;
-// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both red-first stubs:
+// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both fully built
+// (shipped at S-HARDEN-1):
 //   - `superslm::ParseSigmoidLut` (src/model.cpp) — the SIL1 fixed-layout
-//     hostile sub-parse, currently accepts everything and exposes nothing
-//     (§8, §12 dim 2/5/9).
+//     hostile sub-parse (§8, §12 dim 2/5/9).
 //   - `superslm::SiluSigmoidQ15` (src/silu_lut.cpp) — the runtime index
-//     derivation + interpolation, currently returns the sentinel INT32_MIN
-//     unconditionally (§5, §6, §12 dim 4/6/7/10).
+//     derivation + interpolation (§5, §6, §12 dim 4/6/7/10).
 //
 // Every cell states, in its own comment, which §12 Coverage Model dimension /
 // §10 acceptance item it proves and its oracle kind. Per §12's own discipline:
@@ -3475,11 +3460,10 @@ static void TestMinimalSil1ParsesAndReadsBackAllNodes() {
 
 	CHECK_MSG(out.entry_count == kSigmoidLutEntries, "entry_count == %u, want %u", out.entry_count,
 	          kSigmoidLutEntries);
-	// The red-first stub reports Ok while leaving `out` at SslmSigmoidLut{}
-	// defaults (values == nullptr): SigmoidLutValue's contract is undefined
-	// for i >= entry_count, so guard against reading through a null/empty
-	// view rather than let the stub's false "Ok" crash this cell.
-	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse (red-first stub)");
+	// SigmoidLutValue's contract is undefined for i >= entry_count, so guard
+	// against reading through a null/empty view rather than let a defect
+	// that reports Ok with an empty view crash this cell.
+	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse");
 	if (out.entry_count != kSigmoidLutEntries || out.values == nullptr) return;
 	int mismatches = 0;
 	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) {
@@ -3508,10 +3492,10 @@ static void TestSil1WarmObjectRepeatedReadsShowNoDrift() {
 	CHECK_MSG(status == SslmModelStatus::Ok, "warm-object fixture failed to parse: got %s",
 	          SslmModelStatusName(status));
 	if (status != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
-	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	          "out is not a populated view on a status==Ok parse");
 	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
 
 	const int32_t first_read_node0 = SigmoidLutValue(out, 0);
@@ -3539,10 +3523,10 @@ static void TestSil1RoundTripReencodeMatchesOriginalBytes() {
 	CHECK_MSG(status == SslmModelStatus::Ok, "round-trip fixture failed to parse: got %s",
 	          SslmModelStatusName(status));
 	if (status != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
-	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	          "out is not a populated view on a status==Ok parse");
 	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
 
 	std::vector<int32_t> readback(kSigmoidLutEntries);
@@ -4700,10 +4684,10 @@ static void TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection() {
 	CHECK_MSG(pstatus == SslmModelStatus::Ok, "ParseSigmoidLut on the loaded section: got %s: %s",
 	          SslmModelStatusName(pstatus), parse_err.c_str());
 	if (pstatus != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(lut.values != nullptr && lut.entry_count == kSigmoidLutEntries,
-	          "lut is not a populated view on a status==Ok parse (red-first stub)");
+	          "lut is not a populated view on a status==Ok parse");
 	if (lut.values == nullptr || lut.entry_count != kSigmoidLutEntries) return;
 	CHECK(SigmoidLutValue(lut, 0) == ref[0]);
 	CHECK(SigmoidLutValue(lut, kSiluLutN) == ref[static_cast<size_t>(kSiluLutN)]);
@@ -4901,10 +4885,10 @@ static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
 			                                                        : x;
 			const double sig = 1.0 / (1.0 + std::exp(-xc));
 			const int32_t ref_q15 = static_cast<int32_t>(std::nearbyint(sig * 32768.0));
-			// Widen to int64 before subtracting: `lut` can be the stub's
-			// INT32_MIN sentinel, and `ref_q15 - lut` in 32-bit arithmetic
-			// would itself overflow (signed UB) rather than report a large
-			// delta.
+			// Widen to int64 before subtracting: a defective `lut` read
+			// could be as far off as INT32_MIN, and `ref_q15 - lut` in
+			// 32-bit arithmetic would itself overflow (signed UB) rather
+			// than report a large delta.
 			const int64_t delta = lut > ref_q15 ? static_cast<int64_t>(lut) - ref_q15
 			                                     : static_cast<int64_t>(ref_q15) - lut;
 			if (delta > 1) ++over_bound;
@@ -5160,15 +5144,9 @@ static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
 
 // ---------------------------------------------------------------------------
 // S2.5 matmul red suite (Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md;
-// design: SuperSLM_matmul_subslot_design-2026-07-20.md). src/matmul.cpp is currently
-// a red-phase stub: every one of GemmInt8AccumulateRow / GemmInt8Accumulate /
-// NarrowAccumulatorToI32 unconditionally asserts(false) on entry
-// (include/superslm/matmul.h), before examining any argument. Every cell below
-// therefore fails red for the SAME reason today -- the implementation is absent --
-// which is verified structurally (the stub body never reaches its arguments) and
-// empirically (build+run; see the test-design record's red-confirmation section).
-// Once Brunel builds the scalar reference (design S5), each cell fails red for its
-// own reason (if any) until implemented correctly, then goes green.
+// design: SuperSLM_matmul_subslot_design-2026-07-20.md). src/matmul.cpp's
+// GemmInt8AccumulateRow / GemmInt8Accumulate / NarrowAccumulatorToI32 are fully
+// built (shipped at S2.5); every cell below is green against them.
 //
 // Goldens: tests/gen_matmul_fixtures.py, an arbitrary-precision (Python native int)
 // oracle independent of any C++ implementation (design S5). Composition-regression
@@ -6776,6 +6754,361 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 	CHECK(manifest.find("HiddenSizeGeometryMismatch") != std::string::npos);
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S-HARDEN-7 red suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
+// Design-2026-07-23.md §3; T-411): the "throws only std::bad_alloc" contract.
+// Every cell below is authored against the corrected, four-condition
+// membership rule's population of EIGHTEEN sites (§3.1's table) -- not the
+// twelve, ten, six, or seven a hand enumeration found across earlier passes
+// of the design.
+//
+// None of the eighteen sites is wrapped yet: src/*.cpp still has no *Impl
+// split and no catch-and-rethrow wrap, and nothing in src/*.cpp calls
+// superslm_test::MaybeThrowInjectedFault() (tests/support/bad_alloc_injection.h).
+// Every cell below therefore arms the seam, calls the site's real public
+// entry point with a minimal, safe argument, and observes that the seam was
+// never consulted -- the production function ran its real (unwrapped) logic
+// and returned or threw normally, without ever seeing the injected fault.
+// That is the documented RED state: S-HARDEN-7's rename-and-wrap (design
+// §3.1) is what wires MaybeThrowInjectedFault() into each site's *Impl body,
+// at which point every cell below goes green with no change to this file.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// One CHECK per site: the caller must observe exactly std::bad_alloc for an
+// injected std::length_error, and nothing else. `call_site` invokes the real
+// production entry point with the seam armed.
+template <typename Callable>
+void CheckBadAllocContractSite(const char* site_name, Callable&& call_site) {
+	using namespace superslm_test;
+	ArmInjectedFault(InjectThrowKind::kLengthError);
+	bool threw_bad_alloc = false;
+	bool threw_other = false;
+	bool threw_nothing = false;
+	try {
+		call_site();
+		threw_nothing = true;
+	} catch (const std::bad_alloc&) {
+		threw_bad_alloc = true;
+	} catch (...) {
+		threw_other = true;
+	}
+	DisarmInjectedFault();
+	CHECK_MSG(threw_bad_alloc,
+	          "%s must convert an injected std::length_error into std::bad_alloc "
+	          "(S-HARDEN-7 design §3.1) -- observed %s; RED until the rename-and-wrap "
+	          "lands and this site's *Impl body calls MaybeThrowInjectedFault()",
+	          site_name,
+	          threw_nothing ? "no exception at all (the seam is not yet consulted)"
+	                        : (threw_other ? "a non-bad_alloc exception (unconverted)"
+	                                       : "bad_alloc"));
+}
+
+}  // namespace
+
+// --- Site 1/18: SslmArtifact::OpenFromMemory (artifact.h:149) ---
+static void TestBadAllocContractOpenFromMemory() {
+	uint8_t data[4] = {'S', 'S', 'L', 'M'};
+	SslmArtifact out;
+	SslmError err;
+	CheckBadAllocContractSite("SslmArtifact::OpenFromMemory", [&] {
+		SslmArtifact::OpenFromMemory(data, sizeof(data), out, &err);
+	});
+}
+
+// --- Site 1/18, representative marker cell (design §3.2 "New cell -- force a
+//     genuine std::bad_alloc through the wrap"): the shared wrap helper must
+//     take the catch(const std::bad_alloc&){throw;} clause specifically, not
+//     merely produce an observably-equal std::bad_alloc via the general
+//     catch(const std::exception&) clause. One representative site stands for
+//     the mechanism per §17 dimension 11's usual population-validation shape
+//     (the shared helper makes this true for all eighteen sites by
+//     construction). ---
+static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
+	using namespace superslm_test;
+	ArmInjectedFault(InjectThrowKind::kBadAlloc);
+	bool threw_bad_alloc = false;
+	uint8_t data[4] = {'S', 'S', 'L', 'M'};
+	SslmArtifact out;
+	SslmError err;
+	try {
+		SslmArtifact::OpenFromMemory(data, sizeof(data), out, &err);
+	} catch (const std::bad_alloc&) {
+		threw_bad_alloc = true;
+	} catch (...) {
+	}
+	LastWrapClause clause = g_last_wrap_clause;
+	DisarmInjectedFault();
+	CHECK_MSG(threw_bad_alloc,
+	          "OpenFromMemory did not propagate an injected std::bad_alloc unchanged -- "
+	          "RED until the rename-and-wrap lands");
+	CHECK_MSG(clause == LastWrapClause::kBadAllocClause,
+	          "OpenFromMemory's wrap must take the catch(const std::bad_alloc&){throw;} "
+	          "clause specifically -- marker read %s; RED until the wrap helper sets "
+	          "g_last_wrap_clause",
+	          clause == LastWrapClause::kNone ? "kNone (the wrap helper does not exist yet)"
+	          : clause == LastWrapClause::kGeneralClause ? "kGeneralClause (wrong branch)"
+	                                                      : "kBadAllocClause");
+}
+
+// --- Site 2/18: SslmArtifact::OpenFromFile (artifact.h:155) ---
+static void TestBadAllocContractOpenFromFile() {
+	SslmArtifact out;
+	SslmError err;
+	CheckBadAllocContractSite("SslmArtifact::OpenFromFile", [&] {
+		SslmArtifact::OpenFromFile("this/path/does/not/exist.sslm", out, &err);
+	});
+}
+
+// --- Site 3/18 (this fold's addition, condition 4(b)): SslmArtifact::
+//     FingerprintHex (artifact.h:162) ---
+static void TestBadAllocContractFingerprintHex() {
+	SslmArtifact out;
+	CheckBadAllocContractSite("SslmArtifact::FingerprintHex", [&] {
+		(void)out.FingerprintHex();
+	});
+}
+
+// --- Site 4/18: SslmTensorManifest::Parse (model.h:178), the direct-call
+//     path ---
+static void TestBadAllocContractTensorManifestParseDirect() {
+	SslmSectionView section{};
+	SslmTensorManifest out;
+	std::string err;
+	CheckBadAllocContractSite("SslmTensorManifest::Parse (direct)", [&] {
+		SslmTensorManifest::Parse(section, out, &err);
+	});
+}
+
+// --- Site 4/18, the Load-mediated path: the S-HARDEN-7 design's own defect
+//     class (design §3.1: "Load's wrap ... is not a substitute for [a
+//     site's] own independent wrap") -- confirms the seam is consulted by the
+//     *Impl body itself, not only by whatever calls it directly, using a
+//     fully valid artifact whose Weights section routes through
+//     SslmTensorManifest::Parse from inside SslmModel::Load. ---
+static void TestBadAllocContractTensorManifestParseViaLoad() {
+	auto built = BuildFullyValidV2ArtifactForLoad();
+	SslmModelView view;
+	std::string err;
+	CheckBadAllocContractSite("SslmTensorManifest::Parse (via SslmModel::Load)", [&] {
+		SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	});
+}
+
+// --- Site 5/18: SslmKeyedConstants::Parse (model.h:219) ---
+static void TestBadAllocContractKeyedConstantsParse() {
+	SslmSectionView section{};
+	SslmKeyedConstants out;
+	std::string err;
+	CheckBadAllocContractSite("SslmKeyedConstants::Parse", [&] {
+		SslmKeyedConstants::Parse(section, out, &err);
+	});
+}
+
+// --- Site 6/18: ParseConfig (model.h:239) ---
+static void TestBadAllocContractParseConfig() {
+	SslmSectionView section{};
+	SslmModelConfig out{};
+	std::string err;
+	CheckBadAllocContractSite("ParseConfig", [&] {
+		ParseConfig(section, out, &err);
+	});
+}
+
+// --- Site 7/18: ParseSigmoidLut (model.h:261) ---
+static void TestBadAllocContractParseSigmoidLut() {
+	SslmSectionView section{};
+	SslmSigmoidLut out{};
+	std::string err;
+	CheckBadAllocContractSite("ParseSigmoidLut", [&] {
+		ParseSigmoidLut(section, out, &err);
+	});
+}
+
+// --- Site 8/18: SslmModel::Load (model.h:416), its own unwrapped surface
+//     (model.cpp:711,788's string concatenations) -- exercised here via the
+//     null-data path, which reaches Load's own body before any sub-parser
+//     runs. ---
+static void TestBadAllocContractLoad() {
+	SslmModelView out;
+	std::string err;
+	CheckBadAllocContractSite("SslmModel::Load", [&] {
+		SslmModel::Load(nullptr, 0, out, &err);
+	});
+}
+
+// --- Site 9/18: TokenizerView::Open (tokenizer.h:35), the direct-call path
+//     (tools/tok_verify.cpp's bypass shape) ---
+static void TestBadAllocContractTokenizerOpenDirect() {
+	SslmArtifact artifact;  // default: no sections, Ok() == false
+	TokenizerView out;
+	std::string err;
+	CheckBadAllocContractSite("TokenizerView::Open (direct)", [&] {
+		TokenizerView::Open(artifact, out, &err);
+	});
+}
+
+// --- Site 9/18, the Load-mediated path: TokenizerView::Open called from
+//     inside SslmModel::Load when a Tokenizer section is present -- the exact
+//     bypass shape this fold's own §3.1 documents as previously missed. Uses
+//     the real Qwen2.5-1.5B fixture artifact (the only fixture in this suite
+//     that carries a genuine Tokenizer + UnicodeTables pair), read as raw
+//     bytes and driven through SslmModel::Load directly rather than through
+//     SslmArtifact::OpenFromFile. ---
+static void TestBadAllocContractTokenizerOpenViaLoad() {
+	std::string path = ResolveFixturePath("qwen2.5-1.5b.tok.sslm");
+	if (path.empty()) {
+		CHECK_MSG(false,
+		          "fixture qwen2.5-1.5b.tok.sslm not found under tests/fixtures -- cannot "
+		          "exercise TokenizerView::Open's Load-mediated path");
+		return;
+	}
+	std::ifstream f(path, std::ios::binary);
+	std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+	CHECK_MSG(!bytes.empty(), "fixture qwen2.5-1.5b.tok.sslm read as zero bytes from %s",
+	          path.c_str());
+	if (bytes.empty()) return;
+
+	SslmModelView view;
+	std::string err;
+	CheckBadAllocContractSite("TokenizerView::Open (via SslmModel::Load)", [&] {
+		SslmModel::Load(bytes.data(), bytes.size(), view, &err);
+	});
+}
+
+// --- Site 10/18 (this fold's addition, condition 4(b)): TokenizerView::Encode
+//     (tokenizer.h:44) ---
+static void TestBadAllocContractTokenizerEncode() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Encode injection fixture: %s",
+	          ft.view_error.c_str());
+	if (!ft.view_ok) return;
+	CheckBadAllocContractSite("TokenizerView::Encode", [&] {
+		(void)ft.view.Encode("the quick brown fox");
+	});
+}
+
+// --- Site 11/18 (this fold's addition, condition 4(b)): TokenizerView::Decode
+//     (tokenizer.h:48) ---
+static void TestBadAllocContractTokenizerDecode() {
+	auto ft = OpenFixtureTokenizer();
+	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Decode injection fixture: %s",
+	          ft.view_error.c_str());
+	if (!ft.view_ok) return;
+	std::vector<int32_t> ids = {1, 2, 3};
+	CheckBadAllocContractSite("TokenizerView::Decode", [&] {
+		(void)ft.view.Decode(ids);
+	});
+}
+
+// --- Site 12/18 (this fold's addition, condition 4(b)): ComputeTensorEvidence
+//     (proof_manifest.h:84) ---
+static void TestBadAllocContractComputeTensorEvidence() {
+	SslmTensorManifest manifest;
+	CheckBadAllocContractSite("ComputeTensorEvidence", [&] {
+		(void)ComputeTensorEvidence(manifest, SslmDtype::Int8);
+	});
+}
+
+// --- Site 13/18 (this fold's addition, condition 4(b)):
+//     ComputeWeightScaleEvidence (proof_manifest.h:99) ---
+static void TestBadAllocContractComputeWeightScaleEvidence() {
+	SslmTensorManifest manifest;
+	CheckBadAllocContractSite("ComputeWeightScaleEvidence", [&] {
+		(void)ComputeWeightScaleEvidence(manifest);
+	});
+}
+
+// --- Site 14/18: HashSectionHex (proof_manifest.h:106) ---
+static void TestBadAllocContractHashSectionHex() {
+	SslmSectionView section{};
+	CheckBadAllocContractSite("HashSectionHex", [&] {
+		(void)HashSectionHex(section);
+	});
+}
+
+// --- Site 15/18: BuildProofManifestJson (proof_manifest.h:128) ---
+static void TestBadAllocContractBuildProofManifestJson() {
+	SslmArtifact artifact;
+	CheckBadAllocContractSite("BuildProofManifestJson", [&] {
+		(void)BuildProofManifestJson(artifact);
+	});
+}
+
+// --- Site 16/18: Sha256::Update (sha256.h:19). Cannot currently throw
+//     anything (src/sha256.cpp operates on fixed-size stack buffers only,
+//     design §3.1) -- this cell proves the injection seam itself fires
+//     rather than a pre-existing real-world leak, the same shape every other
+//     site's cell uses, applied to a site whose current implementation
+//     happens not to need it yet. ---
+static void TestBadAllocContractSha256Update() {
+	Sha256 h;
+	const uint8_t byte = 'x';
+	CheckBadAllocContractSite("Sha256::Update", [&] {
+		h.Update(&byte, 1);
+	});
+}
+
+// --- Site 17/18: Sha256Hash (sha256.h:32). Same "cannot currently throw"
+//     shape as site 16. ---
+static void TestBadAllocContractSha256HashFreeFunction() {
+	const uint8_t byte = 'x';
+	uint8_t digest[32];
+	CheckBadAllocContractSite("Sha256Hash", [&] {
+		Sha256Hash(&byte, 1, digest);
+	});
+}
+
+// --- Site 18/18 (this fold's addition, condition 4(b)): superslm::ToHex
+//     (sha256.h:35). A FREE FUNCTION in namespace superslm, not a Sha256
+//     member -- the design text writes "Sha256::ToHex" throughout §3.1/§3.2/
+//     §3.3, but sha256.h:35 declares it outside the Sha256 class (Weak
+//     finding, fourth-pass temper). This cell references the correct symbol,
+//     superslm::ToHex; the design's prose is corrected by the planner, not by
+//     this test. Cannot practically reach std::length_error given a fixed
+//     64-character output (design §3.1) -- same "seam-fires, not a real
+//     leak" shape as sites 16-17. ---
+static void TestBadAllocContractToHex() {
+	uint8_t digest[32] = {};
+	CheckBadAllocContractSite("superslm::ToHex", [&] {
+		(void)ToHex(digest);
+	});
+}
+
+// ---------------------------------------------------------------------------
+// Curie's S-HARDEN-8 coverage cell (design §4.2/§4.3; T-412): the generic
+// per-section-descriptor-row `reserved` field (artifact.cpp:275-280) is
+// rejected by production code today, but no existing test exercised this
+// specific field before this cell -- the four existing "reserved == 1"-style
+// tests (test_main.cpp:2152,2425,2730,3604) each target a structurally
+// distinct PAYLOAD-level reserved field (WGT1/KVC1/CFG1/SIL1), parsed inside
+// a typed section by model.cpp, never the generic per-section-descriptor row
+// every section carries regardless of type. This cell is expected to PASS
+// immediately: the rejection already exists in production (S-HARDEN-1); its
+// role is closing the coverage hole the branch-coverage instrument (design
+// §4.1) would otherwise have to rediscover, not gating unbuilt behavior.
+// ---------------------------------------------------------------------------
+
+static void TestRejectsNonZeroSectionDescriptorReservedField() {
+	auto built = BuildArtifact({MakeConfigSection()});
+	const size_t row = kHeaderBytes;  // section 0's descriptor row
+	built.bytes[row + 36] = 7;        // the generic reserved field -- distinct from any
+	                                  // payload-level reserved field
+	RecomputeIntegrityHash(built.bytes);
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::BadHeader,
+	          "a nonzero generic section-descriptor reserved field must reject BadHeader: "
+	          "got %s (%s)",
+	          SslmStatusName(status), err.message.c_str());
+	CHECK(err.code == SslmStatus::BadHeader);
+	CHECK(err.section_index == 0);
+	CHECK(err.message.find("reserved") != std::string::npos);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -6932,8 +7265,7 @@ int main(int argc, char** argv) {
 	TestUni1RejectsComposeTruncated();
 	TestUni1RejectsComposeCountOverflow();
 
-	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite
-	//     (red-first; src/model.cpp is currently a stub). ---
+	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite. ---
 	TestWgtMinimalManifestParsesAndRoundTrips();
 	TestBiaMinimalManifestParsesAndRoundTrips();
 	TestRopMinimalManifestParsesAndRoundTrips();
@@ -6963,9 +7295,7 @@ int main(int argc, char** argv) {
 	TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop();
 	TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds();
 
-	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite
-	//     (red-first; src/model.cpp's SslmKeyedConstants::Parse is currently a
-	//     stub). ---
+	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite. ---
 	TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips();
 	TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips();
 	TestKvc1RejectsSectionTooShort();
@@ -6984,8 +7314,7 @@ int main(int argc, char** argv) {
 	TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree();
 	TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo();
 
-	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite (red-first;
-	//     src/model.cpp's ParseConfig is currently a stub). ---
+	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite. ---
 	TestMinimalCfg1ParsesAndMatchesEveryField();
 	TestCfg1RejectsSizeTooShort();
 	TestCfg1RejectsSizeTooLong();
@@ -7010,8 +7339,7 @@ int main(int argc, char** argv) {
 	TestWeightScalesMinimalManifestParsesAndRoundTrips();
 	TestWeightScalesRejectsWrongMagicDiscriminatesPerType();
 
-	// --- Curie's S2.1 intmath red suite (red-first; src/intmath.cpp is
-	//     currently deliberately-wrong stub bodies). ---
+	// --- Curie's S2.1 intmath red suite. ---
 	TestC2SaturatingRoundingDoublingHighMul();
 	TestC1C3RoundingDivideByPOT();
 	TestMultiplyByQuantizedMultiplier();
@@ -7023,9 +7351,7 @@ int main(int argc, char** argv) {
 	TestRequantTokenCode();
 	TestIntmathPipelineComposition();
 
-	// --- Curie's S2.2 nonlinear scalar primitives red suite (red-first;
-	//     src/intmath.cpp's ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants
-	//     bodies are currently deliberately-wrong stub sentinels). ---
+	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();
 	TestISqrtTrace();
 	TestShiftByMax();
@@ -7061,18 +7387,14 @@ int main(int argc, char** argv) {
 	TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk();
 	TestIExpConstructMatchesAccessorCasesZAndBase();
 
-	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
-	//     RopeApplyPair body is currently the deliberately-wrong stub sentinel
-	//     {-1, -1}). ---
+	// --- Curie's S2.3 RopeApplyPair red suite. ---
 	TestRopeApplyPair();
 	TestRopeApplyPairIdentityIsExact();
 	TestRopeApplyPairQuarterTurnIsExact();
 	TestRopeApplyPairWideInputExceedsInt32Range();
 	TestRopeApplyPairTieRoundsAwayFromZero();
 
-	// --- Curie's S2.4 SiLU sigmoid-LUT red suite (red-first; src/model.cpp's
-	//     ParseSigmoidLut and src/silu_lut.cpp's SiluSigmoidQ15 are currently
-	//     deliberately-wrong stubs). ---
+	// --- Curie's S2.4 SiLU sigmoid-LUT red suite. ---
 	TestMinimalSil1ParsesAndReadsBackAllNodes();
 	TestSil1WarmObjectRepeatedReadsShowNoDrift();
 	TestSil1RoundTripReencodeMatchesOriginalBytes();
@@ -7155,12 +7477,7 @@ int main(int argc, char** argv) {
 	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
 	TestSiluSigmoidQ15GoldenHashCrossPlatform();
 
-	// --- Curie's S2.5 matmul red suite (red-first; src/matmul.cpp's
-	//     GemmInt8AccumulateRow/GemmInt8Accumulate/NarrowAccumulatorToI32 are
-	//     currently stubs that unconditionally assert(false) on entry). Every
-	//     cell below that calls into matmul.cpp directly will abort this process
-	//     until Brunel implements the scalar reference -- this is the expected,
-	//     documented RED state (see the test-design record), not a suite defect. ---
+	// --- Curie's S2.5 matmul red suite. ---
 	TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation();
 	TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases();
 	TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases();
@@ -7190,6 +7507,37 @@ int main(int argc, char** argv) {
 	TestHashSectionHexMatchesIndependentSha256();
 	TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact();
 	TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact();
+
+	// --- S-HARDEN-7 (F5, §3, T-411): the "throws only std::bad_alloc" contract,
+	//     all eighteen sites of the corrected, four-condition membership rule's
+	//     derived population (design §3.1's table). Red until the rename-and-wrap
+	//     lands and each site's *Impl body consults the test-only injection seam
+	//     (tests/support/bad_alloc_injection.h). ---
+	TestBadAllocContractOpenFromMemory();
+	TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific();
+	TestBadAllocContractOpenFromFile();
+	TestBadAllocContractFingerprintHex();
+	TestBadAllocContractTensorManifestParseDirect();
+	TestBadAllocContractTensorManifestParseViaLoad();
+	TestBadAllocContractKeyedConstantsParse();
+	TestBadAllocContractParseConfig();
+	TestBadAllocContractParseSigmoidLut();
+	TestBadAllocContractLoad();
+	TestBadAllocContractTokenizerOpenDirect();
+	TestBadAllocContractTokenizerOpenViaLoad();
+	TestBadAllocContractTokenizerEncode();
+	TestBadAllocContractTokenizerDecode();
+	TestBadAllocContractComputeTensorEvidence();
+	TestBadAllocContractComputeWeightScaleEvidence();
+	TestBadAllocContractHashSectionHex();
+	TestBadAllocContractBuildProofManifestJson();
+	TestBadAllocContractSha256Update();
+	TestBadAllocContractSha256HashFreeFunction();
+	TestBadAllocContractToHex();
+
+	// --- S-HARDEN-8 (F12, §4.2/§4.3, T-412): the generic section-descriptor
+	//     `reserved` field, untested until this cell. ---
+	TestRejectsNonZeroSectionDescriptorReservedField();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

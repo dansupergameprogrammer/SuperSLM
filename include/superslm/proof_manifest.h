@@ -80,7 +80,8 @@ struct TensorEvidence {
 
 // Reads every tensor in a parsed manifest section (WGT1/BIA1/ROP1) and computes
 // its evidence. `dtype` fixes the signed range the min/max/saturation counters
-// are read against (matches the section's ExpectedDtype).
+// are read against (matches the section's ExpectedDtype). Throws only
+// std::bad_alloc (S-HARDEN-7, F5).
 std::vector<TensorEvidence> ComputeTensorEvidence(const SslmTensorManifest& manifest, SslmDtype dtype);
 
 // WeightScales (WSC1) is itself a tensor manifest of (identity, mult, shift)
@@ -96,13 +97,14 @@ struct WeightScaleEvidence {
 	uint64_t identity_count = 0;   // rows with identity == 1
 };
 
+// Throws only std::bad_alloc (S-HARDEN-7, F5).
 std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorManifest& weight_scales);
 
 // SHA-256 of one section's raw bytes, lowercase hex -- independent evidence per
 // section, distinct from the whole-artifact integrity hash SslmArtifact already
 // verifies (T-129: whole-file integrity proves bytes were not changed; it proves
 // nothing about whether they are safe operands, which is what the evidence above
-// is for).
+// is for). Throws only std::bad_alloc (S-HARDEN-7, F5).
 std::string HashSectionHex(const SslmSectionView& section);
 
 // Assembles the full proof-manifest JSON body for an artifact the caller has
@@ -124,7 +126,8 @@ std::string HashSectionHex(const SslmSectionView& section);
 // lifetime contract is a separate, larger change outside a converter-
 // verifier slot's scope). Re-parsing directly from the CALLER's own
 // long-lived `artifact` (guaranteed alive for this call's duration) is what
-// keeps this function's own reads memory-safe. Never throws.
+// keeps this function's own reads memory-safe. Throws only std::bad_alloc
+// (S-HARDEN-7, F5).
 std::string BuildProofManifestJson(const SslmArtifact& artifact);
 
 }  // namespace superslm
