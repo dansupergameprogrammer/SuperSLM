@@ -1,0 +1,24 @@
+# Pinned oracle: the "throws only std::bad_alloc" contract membership
+# population, independently derived by tests/ci/derive_bad_alloc_membership.py
+# (S-HARDEN-7, design Sec3.1, T-411). One site per line: header:line:name
+# Regenerate with: python tests/ci/derive_bad_alloc_membership.py
+#
+# 18 sites.
+artifact.h:149:OpenFromMemory
+artifact.h:155:OpenFromFile
+artifact.h:162:FingerprintHex
+model.h:178:Parse
+model.h:219:Parse
+model.h:239:ParseConfig
+model.h:261:ParseSigmoidLut
+model.h:416:Load
+proof_manifest.h:84:ComputeTensorEvidence
+proof_manifest.h:99:ComputeWeightScaleEvidence
+proof_manifest.h:106:HashSectionHex
+proof_manifest.h:128:BuildProofManifestJson
+sha256.h:19:Update
+sha256.h:32:Sha256Hash
+sha256.h:35:ToHex
+tokenizer.h:35:Open
+tokenizer.h:44:Encode
+tokenizer.h:48:Decode
