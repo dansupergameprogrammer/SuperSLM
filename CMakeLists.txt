@@ -77,3 +77,37 @@ if(MSVC)
 else()
 	target_compile_options(sslm_verify PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
+
+# S-HARDEN-6 (design Sec2.1 component 2/3, T-410): the cross-toolchain /
+# cross-optimization axis-digest harness, promoted from a disposable
+# commission instrument into committed CI tooling
+# (tools/ci/sslm_axis_digest.cpp). sslm_axis_digest links the clean
+# `superslm` (the SIMD-enabled path on x64, matching production); a second
+# executable, sslm_axis_digest_scalar_forced, links a third compile of the
+# same core sources with SUPERSLM_FORCE_SCALAR_MATMUL defined -- the
+# component-3 axis the digest-compare job needs a scalar-only build to
+# compare against.
+add_executable(sslm_axis_digest tools/ci/sslm_axis_digest.cpp)
+target_link_libraries(sslm_axis_digest PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_axis_digest PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_axis_digest PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
+add_library(superslm_scalar_forced STATIC ${SUPERSLM_CORE_SOURCES})
+target_include_directories(superslm_scalar_forced PUBLIC include)
+target_compile_definitions(superslm_scalar_forced PRIVATE SUPERSLM_FORCE_SCALAR_MATMUL)
+if(MSVC)
+	target_compile_options(superslm_scalar_forced PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(superslm_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
+add_executable(sslm_axis_digest_scalar_forced tools/ci/sslm_axis_digest.cpp)
+target_link_libraries(sslm_axis_digest_scalar_forced PRIVATE superslm_scalar_forced)
+if(MSVC)
+	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
