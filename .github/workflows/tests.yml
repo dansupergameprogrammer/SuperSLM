@@ -111,6 +111,35 @@ jobs:
       - name: Fail if regenerating changed any tracked file
         run: git diff --exit-code -- tests/sslm_intmath_fixtures.h tests/sslm_matmul_fixtures.h tests/matmul_golden_pin.h tests/silu_lut_golden_table.h include/superslm/silu_lut_canonical.h tests/sslm_iexp_domain_fixtures.h tools/unicode_tables_golden.txt
 
+  # S-HARDEN-7 (F5, design Sec3.1, T-411): the "throws only std::bad_alloc"
+  # contract's `membership-check` job. Mechanically, on every run: derives the
+  # eighteen-site population from the nine include/superslm/*.h headers via a
+  # Clang AST walk (tests/ci/derive_bad_alloc_membership.py's corrected,
+  # four-condition rule), confirms it matches the pinned oracle
+  # (tests/ci/bad_alloc_membership_expected.txt) under three independent scan
+  # strategies and the injected-19th-function vitality proof
+  # (tests/ci/test_membership_check_population.py), then runs the production
+  # gate itself (tools/ci/check_bad_alloc_contract.py --list-unwrapped),
+  # which fails naming any derived member whose .cpp definition does not
+  # match the shared wrap-helper's rename-and-wrap shape. A Clang capable of
+  # `-Xclang -ast-dump=json` ships pre-installed on GitHub's stock
+  # `ubuntu-latest` runner image per its published software manifest
+  # (design Sec3.1's independence note) -- not reconfirmed by executing a
+  # runner in this design pass; this job's own first run is that
+  # confirmation.
+  bad-alloc-membership-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: Population-validation and vitality tests
+        run: python -m pytest tests/ci/ -v
+      - name: Fail on any unwrapped member of the derived population
+        run: python tools/ci/check_bad_alloc_contract.py --list-unwrapped
+
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
   # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and

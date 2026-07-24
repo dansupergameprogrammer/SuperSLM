@@ -5,6 +5,8 @@
 
 #include "superslm/sha256.h"
 
+#include "bad_alloc_wrap.h"
+
 namespace superslm {
 
 namespace {
@@ -115,7 +117,9 @@ ConfigGeometryResult CheckConfigGeometry(uint32_t hidden_size, uint32_t num_atte
 	return r;
 }
 
-std::vector<TensorEvidence> ComputeTensorEvidence(const SslmTensorManifest& manifest, SslmDtype dtype) {
+namespace {
+std::vector<TensorEvidence> ComputeTensorEvidenceImpl(const SslmTensorManifest& manifest, SslmDtype dtype) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::vector<TensorEvidence> out;
 	out.reserve(manifest.Tensors().size());
 
@@ -159,7 +163,8 @@ std::vector<TensorEvidence> ComputeTensorEvidence(const SslmTensorManifest& mani
 	return out;
 }
 
-std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorManifest& weight_scales) {
+std::vector<WeightScaleEvidence> ComputeWeightScaleEvidenceImpl(const SslmTensorManifest& weight_scales) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::vector<WeightScaleEvidence> out;
 	out.reserve(weight_scales.Tensors().size());
 	for (const SslmTensorView& t : weight_scales.Tensors()) {
@@ -188,10 +193,26 @@ std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorMani
 	return out;
 }
 
-std::string HashSectionHex(const SslmSectionView& section) {
+std::string HashSectionHexImpl(const SslmSectionView& section) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	uint8_t digest[32];
 	Sha256Hash(section.data, static_cast<size_t>(section.byte_size), digest);
 	return ToHex(digest);
+}
+}  // namespace
+
+// S-HARDEN-7: today's bodies, renamed to *Impl above; each wraps its Impl
+// with the shared catch-and-rethrow helper (src/bad_alloc_wrap.h).
+std::vector<TensorEvidence> ComputeTensorEvidence(const SslmTensorManifest& manifest, SslmDtype dtype) {
+	return internal::WrapBadAllocContract([&] { return ComputeTensorEvidenceImpl(manifest, dtype); });
+}
+
+std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorManifest& weight_scales) {
+	return internal::WrapBadAllocContract([&] { return ComputeWeightScaleEvidenceImpl(weight_scales); });
+}
+
+std::string HashSectionHex(const SslmSectionView& section) {
+	return internal::WrapBadAllocContract([&] { return HashSectionHexImpl(section); });
 }
 
 namespace {
@@ -255,7 +276,9 @@ bool TryParseTensorManifest(const SslmArtifact& artifact, SslmSectionType type, 
 
 }  // namespace
 
-std::string BuildProofManifestJson(const SslmArtifact& artifact) {
+namespace {
+std::string BuildProofManifestJsonImpl(const SslmArtifact& artifact) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::string out;
 	out += "{\n";
 	out += "  \"schema\": \"sslm_proof_manifest_v1\",\n";
@@ -337,6 +360,13 @@ std::string BuildProofManifestJson(const SslmArtifact& artifact) {
 
 	out += "}\n";
 	return out;
+}
+}  // namespace
+
+// S-HARDEN-7: today's body, renamed to BuildProofManifestJsonImpl above;
+// wraps it with the shared catch-and-rethrow helper (src/bad_alloc_wrap.h).
+std::string BuildProofManifestJson(const SslmArtifact& artifact) {
+	return internal::WrapBadAllocContract([&] { return BuildProofManifestJsonImpl(artifact); });
 }
 
 }  // namespace superslm

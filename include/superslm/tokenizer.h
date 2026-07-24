@@ -31,7 +31,8 @@ public:
 	// Returns false (and sets *err, if non-null) when either section is absent or
 	// malformed; the artifact's integrity is already verified by the loader, so this
 	// parse trusts the bytes and only sanity-checks structure. The artifact must
-	// outlive the view — table pointers reference its bytes.
+	// outlive the view — table pointers reference its bytes. Throws only
+	// std::bad_alloc (S-HARDEN-7, F5).
 	static bool Open(const SslmArtifact& artifact, TokenizerView& out, std::string* err);
 
 	bool Ok() const noexcept;
@@ -41,10 +42,12 @@ public:
 	// (longest first) and emitted as its id; every other span is NFC-normalized,
 	// pre-tokenized by the fixed Qwen/GPT pattern, byte-level encoded, and BPE-merged.
 	// No BOS/EOS/chat markers are added — that is the caller's (or a template's) job.
+	// Throws only std::bad_alloc (S-HARDEN-7, F5).
 	std::vector<int32_t> Encode(std::string_view text) const;
 
 	// ids -> UTF-8 text: the byte-level bytes each token carries, concatenated and
 	// interpreted as UTF-8 (invalid sequences pass through as replacement chars).
+	// Throws only std::bad_alloc (S-HARDEN-7, F5).
 	std::string Decode(const std::vector<int32_t>& ids) const;
 
 	// Opaque; defined in tokenizer.cpp. Public only so the .cpp's parse helpers can
@@ -52,6 +55,13 @@ public:
 	struct Impl;
 
 private:
+	// S-HARDEN-7 (design Sec3.1): grants src/tokenizer.cpp's
+	// TokenizerViewAccess (defined only there) access to impl_, so
+	// Open/Encode/Decode's *Impl bodies can live entirely in the .cpp
+	// rather than as private member declarations here. See artifact.h's
+	// identical SslmArtifactAccess comment for the full reasoning.
+	friend struct TokenizerViewAccess;
+
 	std::unique_ptr<Impl> impl_;
 };
 

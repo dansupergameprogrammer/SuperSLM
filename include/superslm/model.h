@@ -173,8 +173,9 @@ public:
 	// Parse the tensor manifest in `section`. The section must already be validated by
 	// SslmArtifact (structure + integrity); its type fixes the expected magic and the
 	// tensors' element dtype. On Ok, `out` owns the validated tensor views. On any
-	// error, `out` is left empty and `err` (if non-null) carries a diagnostic. Never
-	// throws; never exposes a tensor byte before every descriptor passes validation.
+	// error, `out` is left empty and `err` (if non-null) carries a diagnostic. Throws
+	// only std::bad_alloc (S-HARDEN-7, F5); never exposes a tensor byte before every
+	// descriptor passes validation.
 	static SslmModelStatus Parse(const SslmSectionView& section, SslmTensorManifest& out,
 	                             std::string* err);
 
@@ -184,6 +185,15 @@ public:
 	const SslmTensorView* Tensor(std::string_view name) const noexcept;
 
 private:
+	// S-HARDEN-7 (design Sec3.1): grants src/model.cpp's
+	// SslmTensorManifestAccess (defined only there) access to tensors_, so
+	// Parse's *Impl body can live entirely in the .cpp rather than as a
+	// private member declaration here — a private member declaration would
+	// itself be picked up by the membership-check AST walk, which does not
+	// see access specifiers. See artifact.h's identical SslmArtifactAccess
+	// comment for the full reasoning.
+	friend struct SslmTensorManifestAccess;
+
 	std::vector<SslmTensorView> tensors_;
 };
 
@@ -214,8 +224,8 @@ public:
 	// Parse the KVC1 table in `section` (whose type fixes the expected value_words). The
 	// section must already be validated by SslmArtifact. The parse is a hostile-input
 	// trust boundary: it fails closed on any malformed field, leaving `out` empty. On Ok,
-	// `out` owns the validated entry views. Never throws; never exposes an entry before
-	// every descriptor passes validation.
+	// `out` owns the validated entry views. Throws only std::bad_alloc (S-HARDEN-7, F5);
+	// never exposes an entry before every descriptor passes validation.
 	static SslmModelStatus Parse(const SslmSectionView& section, SslmKeyedConstants& out,
 	                             std::string* err);
 
@@ -229,13 +239,17 @@ public:
 	static int64_t Value(const SslmConstantEntry& entry, uint32_t w) noexcept;
 
 private:
+	// S-HARDEN-7 (design Sec3.1): see SslmTensorManifest's identical
+	// SslmTensorManifestAccess comment above.
+	friend struct SslmKeyedConstantsAccess;
+
 	std::vector<SslmConstantEntry> entries_;
 };
 
 // Parse the CFG1 Config section into `out`. The section must already be validated by
 // SslmArtifact. Rejects (fails closed, `out` left default) on a wrong size/magic/version,
 // a zero dimension, an out-of-range enum/bool, or a nonzero reserved field — the §11
-// reject-over-degrade law for config. Never throws.
+// reject-over-degrade law for config. Throws only std::bad_alloc (S-HARDEN-7, F5).
 SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out, std::string* err);
 
 // A validated view of the SIL1 sigmoid LUT: kSigmoidLutEntries Q15 nodes. `values` points
@@ -249,7 +263,8 @@ struct SslmSigmoidLut {
 // Parse the SIL1 Sigmoid-LUT section (whose geometry is fixed by kSigmoidLut* constants). The
 // section must already be validated by SslmArtifact. Fixed-layout like CFG1: the exact-size
 // check gates every read. Rejects (fails closed, `out` left default) on a wrong size/magic/
-// version/entry_count or a nonzero reserved field — the §11 reject-over-degrade law. Never throws.
+// version/entry_count or a nonzero reserved field — the §11 reject-over-degrade law. Throws
+// only std::bad_alloc (S-HARDEN-7, F5).
 //
 // S-HARDEN-1 (F20/F22): SIL1 is a universal construction the spec fixes entirely, not
 // model-specific learned data, so every node is ALSO validated against the pinned
@@ -347,7 +362,13 @@ struct SslmModelView {
 	SslmModelView& operator=(const SslmModelView&) = delete;
 
 private:
-	friend class SslmModel;
+	// S-HARDEN-7 (design Sec3.1): SslmModel::Load's *Impl body (which needs
+	// backing_) lives in src/model.cpp's SslmModelAccess, not as a private
+	// member of SslmModel — see SslmArtifact's identical SslmArtifactAccess
+	// comment (artifact.h) for why. SslmModelAccess is the sole friend here;
+	// SslmModel itself needs no friend access, since its only method (Load)
+	// is public and never touches backing_ directly.
+	friend struct SslmModelAccess;
 
 	// The one place that carries every member across a move and then clears
 	// the source. See the struct's ownership comment above for why this is
@@ -400,11 +421,12 @@ private:
 
 // The load-time orchestration entry point (S-HARDEN-1, D-SLM141): the one
 // call site that composes SslmArtifact::OpenFromMemory, every present
-// section's sub-parser, and the schema-value gate into a single pass. Never
-// throws; `out` is left at SslmModelView{} defaults on ANY rejection —
-// container-level, structural sub-parse, or value-domain — and is populated
-// only on full success (§11 reject-over-degrade). `err` (if non-null) carries
-// a diagnostic naming what was rejected.
+// section's sub-parser, and the schema-value gate into a single pass. Throws
+// only std::bad_alloc (S-HARDEN-7, F5); `out` is left at SslmModelView{}
+// defaults on ANY rejection — container-level, structural sub-parse, or
+// value-domain — and is populated only on full success (§11
+// reject-over-degrade). `err` (if non-null) carries a diagnostic naming what
+// was rejected.
 //
 // A container-level rejection (SslmArtifact::OpenFromMemory failing) is
 // reported as SslmModelStatus::ArtifactRejected with the underlying

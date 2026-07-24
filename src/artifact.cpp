@@ -2,6 +2,8 @@
 
 #include "superslm/sha256.h"
 
+#include "bad_alloc_wrap.h"
+
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -179,8 +181,30 @@ RequiredSectionSpan RequiredSectionsForVersion(uint32_t version) noexcept {
 
 } // namespace
 
+// S-HARDEN-7 (design Sec3.1): the *Impl bodies below need private access to
+// SslmArtifact (out.bytes_, out.sections_, out.ok_, ...), which a free
+// function cannot have. SslmArtifactAccess is the sole friend
+// (include/superslm/artifact.h's `friend struct SslmArtifactAccess;`) --
+// declared and defined only here, never in the header, so the
+// membership-check AST walk (which scans headers only) never sees it and
+// the population it derives stays exactly the eighteen public entry points,
+// not the private *Impl bodies behind them.
+struct SslmArtifactAccess {
+	static SslmStatus OpenFromMemoryImpl(const uint8_t* data, size_t size,
+	                                     SslmArtifact& out, SslmError* err);
+	static SslmStatus OpenFromFileImpl(const char* path, SslmArtifact& out, SslmError* err);
+	static std::string FingerprintHexImpl(const SslmArtifact& self);
+};
+
 SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
                                         SslmArtifact& out, SslmError* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmArtifactAccess::OpenFromMemoryImpl(data, size, out, err); });
+}
+
+SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t size,
+                                                  SslmArtifact& out, SslmError* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = SslmArtifact{};
 
 	// F14: a null buffer is rejected explicitly and unconditionally, before any
@@ -394,6 +418,12 @@ SslmStatus SslmArtifact::OpenFromMemory(const uint8_t* data, size_t size,
 }
 
 SslmStatus SslmArtifact::OpenFromFile(const char* path, SslmArtifact& out, SslmError* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmArtifactAccess::OpenFromFileImpl(path, out, err); });
+}
+
+SslmStatus SslmArtifactAccess::OpenFromFileImpl(const char* path, SslmArtifact& out, SslmError* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = SslmArtifact{};
 	// F14: a null path is rejected explicitly, before any file-system call —
 	// std::ifstream's path constructor requires a valid null-terminated string,
@@ -417,11 +447,23 @@ SslmStatus SslmArtifact::OpenFromFile(const char* path, SslmArtifact& out, SslmE
 		return Reject(err, SslmStatus::IoError, kNoSection,
 		              std::string("cannot read file: ") + path);
 	}
-	return OpenFromMemory(buf.data(), buf.size(), out, err);
+	// Calls the Impl body directly, not the public wrapped OpenFromMemory --
+	// OpenFromFileImpl already runs inside OpenFromFile's own wrap, so a
+	// second nested try/catch here would be redundant (design Sec3.1's
+	// "only the boundary where external bytes first enter goes through the
+	// wrap" principle, the same one Sha256::Final's internal Update calls
+	// follow).
+	return OpenFromMemoryImpl(buf.data(), buf.size(), out, err);
 }
 
 std::string SslmArtifact::FingerprintHex() const {
-	return ToHex(integrity_);
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmArtifactAccess::FingerprintHexImpl(*this); });
+}
+
+std::string SslmArtifactAccess::FingerprintHexImpl(const SslmArtifact& self) {
+	internal::MaybeThrowInjectedBadAllocFault();
+	return ToHex(self.integrity_);
 }
 
 const SslmSectionView* SslmArtifact::Section(SslmSectionType type) const noexcept {

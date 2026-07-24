@@ -14,6 +14,8 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable — S-HARDEN-1 (F20/F22)
 #include "superslm/tokenizer.h"     // S-HARDEN-2 (F18/F6/F7/F15): the tokenizer join
 
+#include "bad_alloc_wrap.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -142,8 +144,34 @@ const uint8_t* ManifestMagicFor(SslmSectionType type) noexcept {
 	}
 }
 
+// S-HARDEN-7 (design Sec3.1): the *Impl bodies below need private access to
+// their class (out.tensors_, out.entries_, out.backing_), which a free
+// function cannot have. Each Access struct is the sole friend of its class
+// (model.h) -- declared and defined only here, never in the header, so the
+// membership-check AST walk never sees it. See artifact.cpp's identical
+// SslmArtifactAccess comment for the full reasoning.
+struct SslmTensorManifestAccess {
+	static SslmModelStatus ParseImpl(const SslmSectionView& section, SslmTensorManifest& out,
+	                                 std::string* err);
+};
+struct SslmKeyedConstantsAccess {
+	static SslmModelStatus ParseImpl(const SslmSectionView& section, SslmKeyedConstants& out,
+	                                 std::string* err);
+};
+struct SslmModelAccess {
+	static SslmModelStatus LoadImpl(const uint8_t* data, size_t size, SslmModelView& out,
+	                                std::string* err);
+};
+
 SslmModelStatus SslmTensorManifest::Parse(const SslmSectionView& section,
                                           SslmTensorManifest& out, std::string* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmTensorManifestAccess::ParseImpl(section, out, err); });
+}
+
+SslmModelStatus SslmTensorManifestAccess::ParseImpl(const SslmSectionView& section,
+                                                     SslmTensorManifest& out, std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out.tensors_.clear();
 	if (err) err->clear();
 
@@ -285,6 +313,13 @@ const SslmTensorView* SslmTensorManifest::Tensor(std::string_view name) const no
 
 SslmModelStatus SslmKeyedConstants::Parse(const SslmSectionView& section,
                                           SslmKeyedConstants& out, std::string* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmKeyedConstantsAccess::ParseImpl(section, out, err); });
+}
+
+SslmModelStatus SslmKeyedConstantsAccess::ParseImpl(const SslmSectionView& section,
+                                                     SslmKeyedConstants& out, std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out.entries_.clear();
 	if (err) err->clear();
 
@@ -375,8 +410,10 @@ int64_t SslmKeyedConstants::Value(const SslmConstantEntry& entry, uint32_t w) no
 	return static_cast<int64_t>(v);
 }
 
-SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out,
-                            std::string* err) {
+namespace {
+SslmModelStatus ParseConfigImpl(const SslmSectionView& section, SslmModelConfig& out,
+                                std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = SslmModelConfig{};
 	if (err) err->clear();
 
@@ -434,13 +471,24 @@ SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out
 	out = c;
 	return SslmModelStatus::Ok;
 }
+}  // namespace
+
+// S-HARDEN-7: today's body, renamed to ParseConfigImpl above; wraps it with
+// the shared catch-and-rethrow helper (src/bad_alloc_wrap.h).
+SslmModelStatus ParseConfig(const SslmSectionView& section, SslmModelConfig& out,
+                            std::string* err) {
+	return internal::WrapBadAllocContract([&] { return ParseConfigImpl(section, out, err); });
+}
 
 // --- SIL1 sigmoid-LUT sub-parse -----------------------------------------------
 // A fixed-layout section (like CFG1): the exact-size check is the entire bounds surface and
 // gates every field read below. Every deviation is a rejection with a status, never a repaired
 // or partial view (§11 reject-over-degrade; docs/sslm_format.md "Sigmoid-LUT blob — SIL1").
-SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& out,
-                                std::string* err) {
+// Throws only std::bad_alloc (S-HARDEN-7, F5).
+namespace {
+SslmModelStatus ParseSigmoidLutImpl(const SslmSectionView& section, SslmSigmoidLut& out,
+                                    std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = SslmSigmoidLut{};
 	if (err) err->clear();
 
@@ -487,6 +535,14 @@ SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& 
 	out.values = nodes;  // the 1025 int32 Q15 nodes, read via SigmoidLutValue
 	out.entry_count = kSigmoidLutEntries;
 	return SslmModelStatus::Ok;
+}
+}  // namespace
+
+// S-HARDEN-7: today's body, renamed to ParseSigmoidLutImpl above; wraps it
+// with the shared catch-and-rethrow helper (src/bad_alloc_wrap.h).
+SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& out,
+                                std::string* err) {
+	return internal::WrapBadAllocContract([&] { return ParseSigmoidLutImpl(section, out, err); });
 }
 
 int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept {
@@ -701,6 +757,13 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 }  // namespace
 
 SslmModelStatus SslmModel::Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmModelAccess::LoadImpl(data, size, out, err); });
+}
+
+SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, SslmModelView& out,
+                                          std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	out = SslmModelView{};
 	if (err) err->clear();
 
