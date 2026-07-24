@@ -122,12 +122,9 @@ static void TestKnownSectionTypes() {
 // Curie's S0 loader red suite (SuperSLM_Plan.md §15; §17 Coverage Model dim 2 —
 // the artifact loader is the named trust boundary). Every cell below builds a
 // `.sslm` byte buffer per docs/sslm_format.md via sslm_fixtures.h, independent of
-// SslmArtifact::OpenFromMemory, and calls the loader under test. At S0 the loader
-// is the unbuilt stub in src/artifact.cpp (always returns IoError, no field
-// examined) — every cell below fails red for that one reason: the loader has not
-// validated. Once Brunel builds the loader, each cell fails red for its own
-// documented reason until the corresponding check is implemented, then goes
-// green.
+// SslmArtifact::OpenFromMemory, and calls the loader under test. The loader in
+// src/artifact.cpp is fully built (shipped at S-HARDEN-1); every cell below is
+// green against it.
 // ---------------------------------------------------------------------------
 
 // --- Rejection cells: one per SslmStatus the header/table/section checks can
@@ -696,12 +693,9 @@ static void TestOpenFromFileMissingFileReturnsIoError() {
 	CHECK_MSG(status == SslmStatus::IoError, "got %s", SslmStatusName(status));
 	CHECK(err.code == SslmStatus::IoError);
 	CHECK(!out.Ok());
-	// The IoError status alone coincides with the S0 stub's unconditional return
-	// (it never reads a byte), so it is not yet red. artifact.h pins SslmError's
-	// message as carrying "the offending values" — for a missing file, that is the
-	// path — so this cell also requires the diagnostic to name it, which the stub's
-	// fixed placeholder text does not. Forces this cell red until OpenFromFile
-	// genuinely attempts the read and reports what it tried.
+	// artifact.h pins SslmError's message as carrying "the offending values" —
+	// for a missing file, that is the path — so this cell also requires the
+	// diagnostic to name it, not merely to report IoError.
 	CHECK_MSG(err.message.find(path.string()) != std::string::npos,
 	          "message does not carry the missing path: \"%s\"", err.message.c_str());
 }
@@ -779,13 +773,9 @@ static void TestValidArtifactLoadsToExpectedEndState() {
 // algorithm is already proven bit-for-bit against the upstream HF tokenizer by
 // the Python reference (tools/convert_tokenizer.py, 0 mismatch over 2000+
 // adversarial+multilingual lines) — this suite is the C++ gate that proves the
-// ported TokenizerView reproduces those upstream ids. At S1.3 TokenizerView is
-// an unbuilt stub (src/tokenizer.cpp): Open always returns false, Encode/Decode
-// always return empty — every cell below fails red for that one reason: the
-// golden ids never match empty output, and every cell that depends on a
-// successfully-opened view fails its explicit `view_ok` assertion. Once Brunel
-// builds the tokenizer, each cell fails red for its own reason (if any) until
-// implemented correctly, then goes green.
+// ported TokenizerView reproduces those upstream ids. TokenizerView is fully
+// built (src/tokenizer.cpp, shipped at S-HARDEN-2); every cell below is green
+// against it.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -1809,9 +1799,9 @@ static void TestUni1RejectsComposeCountOverflow() {
 // manifest AFTER SslmArtifact has verified whole-file structure and integrity
 // — a crafted integrity-valid artifact can still carry a malformed manifest
 // inside a validated section, so this sub-parse is its own hostile-input
-// trust boundary, held to the same T-129 bar. src/model.cpp is currently a
-// RED-FIRST STUB: Parse() leaves `out` empty and reports Ok unconditionally,
-// so every cell below is red until the parse is built.
+// trust boundary, held to the same T-129 bar. SslmTensorManifest::Parse is
+// fully built (src/model.cpp, shipped at S-HARDEN-1); every cell below is
+// green against it.
 //
 // Every cell starts from a small spec-faithful manifest (sslm_model_hostile_
 // fixtures.h), mutates exactly one descriptor or header field, and asserts
@@ -2253,9 +2243,9 @@ static void TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds() {
 // structure and integrity — a crafted integrity-valid artifact can still
 // carry a malformed KVC1 blob inside a validated section, so this sub-parse
 // is its own hostile-input trust boundary, held to the same T-129 bar as
-// TOK1/UNI1 and WGT1/BIA1/ROP1. src/model.cpp is currently a RED-FIRST STUB:
-// Parse() leaves `out` empty and reports Ok unconditionally, so every cell
-// below is red until the parse is built.
+// TOK1/UNI1 and WGT1/BIA1/ROP1. SslmKeyedConstants::Parse is fully built
+// (src/model.cpp, shipped at S-HARDEN-1); every cell below is green against
+// it.
 //
 // Every cell starts from a small spec-faithful KVC1 blob (sslm_kvc1_hostile_
 // fixtures.h), mutates exactly one header or descriptor field, and asserts
@@ -2556,9 +2546,8 @@ static void TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo() {
 // trust boundary AND the §11 reject-over-degrade gate applied to config: a
 // zero dimension or a defaulted field is "a model that loads, runs, generates
 // fluent text, and is not the source model" (§6.8 C15) and must be rejected,
-// never repaired. src/model.cpp's ParseConfig is currently a RED-FIRST STUB:
-// it leaves `out` at SslmModelConfig{} defaults and reports Ok unconditionally,
-// so every hostile cell below is red until the parse is built.
+// never repaired. ParseConfig is fully built (src/model.cpp, shipped at
+// S-HARDEN-1); every hostile cell below is green against it.
 //
 // Every cell asserts the SPECIFIC SslmModelStatus its one named mutation
 // should trigger. CFG1 is a single fixed-layout struct (no variable-length
@@ -2744,9 +2733,8 @@ static void TestCfg1RejectsBadConfigReserved() {
 // swept in S2.0a's WGT1/BIA1/ROP1 suite above) — a small oracle plus one
 // wiring-discrimination negative cell suffices.
 //
-// Unlike every CFG1 cell above, this feature oracle is expected to PASS at
-// authoring time: it exercises SslmTensorManifest::Parse, which S2.0a already
-// built to green, not src/model.cpp's still-stubbed ParseConfig.
+// Unlike every CFG1 cell above, this feature oracle exercises
+// SslmTensorManifest::Parse (S2.0a), not ParseConfig.
 // ---------------------------------------------------------------------------
 
 static void TestWeightScalesMinimalManifestParsesAndRoundTrips() {
@@ -2807,11 +2795,8 @@ static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
 // Every golden value in sslm_intmath_fixtures.h is computed by CALLING
 // Tools/superslm_spike/intmath.py (D-SLM52, the pinned reference) via
 // tests/gen_intmath_fixtures.py — never hand-computed. src/intmath.cpp is
-// currently a red-first stub (deliberately-wrong sentinel bodies): every
-// cell below fails red against those sentinels for its own documented
-// reason. Once Brunel ports the real bodies, each cell either passes or
-// fails for its own reason until the port is bit-exact against the pinned
-// reference, then goes green.
+// fully ported and bit-exact against the pinned reference (shipped at
+// S-HARDEN-1); every cell below is green against it.
 // ---------------------------------------------------------------------------
 
 static void TestC2SaturatingRoundingDoublingHighMul() {
@@ -2978,10 +2963,10 @@ static void TestIntmathPipelineComposition() {
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S2.2 nonlinear scalar primitives red suite (red-first; src/intmath.cpp's
-// ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants bodies are currently
-// deliberately-wrong stub sentinels — every cell below fails red for that one
-// reason until Brunel's port lands. Test-design record: Claude/Curie/
+// Curie's S2.2 nonlinear scalar primitives red suite. src/intmath.cpp's
+// ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants bodies are fully ported
+// (shipped at S-HARDEN-1); every cell below is green against them.
+// Test-design record: Claude/Curie/
 // superslm-s2.2-nonlinear-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
@@ -3283,10 +3268,9 @@ static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
 // defined further below -- see that function's own comment for the full account.
 
 // ---------------------------------------------------------------------------
-// Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
-// RopeApplyPair body is currently the deliberately-wrong stub sentinel
-// {-1, -1} — every cell below fails red for that one reason until Brunel's
-// port lands. Test-design record: Claude/Curie/
+// Curie's S2.3 RopeApplyPair red suite. src/intmath.cpp's RopeApplyPair
+// body is fully ported (shipped at S-HARDEN-1); every cell below is green
+// against it. Test-design record: Claude/Curie/
 // superslm-s2.3-rope-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
@@ -3413,13 +3397,12 @@ static void TestRopeApplyPairTieRoundsAwayFromZero() {
 
 // ---------------------------------------------------------------------------
 // Curie's S2.4 SiLU sigmoid-LUT red suite (SuperSLM_S2.4_SiLU_LUT_Design;
-// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both red-first stubs:
+// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both fully built
+// (shipped at S-HARDEN-1):
 //   - `superslm::ParseSigmoidLut` (src/model.cpp) — the SIL1 fixed-layout
-//     hostile sub-parse, currently accepts everything and exposes nothing
-//     (§8, §12 dim 2/5/9).
+//     hostile sub-parse (§8, §12 dim 2/5/9).
 //   - `superslm::SiluSigmoidQ15` (src/silu_lut.cpp) — the runtime index
-//     derivation + interpolation, currently returns the sentinel INT32_MIN
-//     unconditionally (§5, §6, §12 dim 4/6/7/10).
+//     derivation + interpolation (§5, §6, §12 dim 4/6/7/10).
 //
 // Every cell states, in its own comment, which §12 Coverage Model dimension /
 // §10 acceptance item it proves and its oracle kind. Per §12's own discipline:
@@ -3477,11 +3460,10 @@ static void TestMinimalSil1ParsesAndReadsBackAllNodes() {
 
 	CHECK_MSG(out.entry_count == kSigmoidLutEntries, "entry_count == %u, want %u", out.entry_count,
 	          kSigmoidLutEntries);
-	// The red-first stub reports Ok while leaving `out` at SslmSigmoidLut{}
-	// defaults (values == nullptr): SigmoidLutValue's contract is undefined
-	// for i >= entry_count, so guard against reading through a null/empty
-	// view rather than let the stub's false "Ok" crash this cell.
-	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse (red-first stub)");
+	// SigmoidLutValue's contract is undefined for i >= entry_count, so guard
+	// against reading through a null/empty view rather than let a defect
+	// that reports Ok with an empty view crash this cell.
+	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse");
 	if (out.entry_count != kSigmoidLutEntries || out.values == nullptr) return;
 	int mismatches = 0;
 	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) {
@@ -3510,10 +3492,10 @@ static void TestSil1WarmObjectRepeatedReadsShowNoDrift() {
 	CHECK_MSG(status == SslmModelStatus::Ok, "warm-object fixture failed to parse: got %s",
 	          SslmModelStatusName(status));
 	if (status != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
-	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	          "out is not a populated view on a status==Ok parse");
 	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
 
 	const int32_t first_read_node0 = SigmoidLutValue(out, 0);
@@ -3541,10 +3523,10 @@ static void TestSil1RoundTripReencodeMatchesOriginalBytes() {
 	CHECK_MSG(status == SslmModelStatus::Ok, "round-trip fixture failed to parse: got %s",
 	          SslmModelStatusName(status));
 	if (status != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
-	          "out is not a populated view on a status==Ok parse (red-first stub)");
+	          "out is not a populated view on a status==Ok parse");
 	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
 
 	std::vector<int32_t> readback(kSigmoidLutEntries);
@@ -4702,10 +4684,10 @@ static void TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection() {
 	CHECK_MSG(pstatus == SslmModelStatus::Ok, "ParseSigmoidLut on the loaded section: got %s: %s",
 	          SslmModelStatusName(pstatus), parse_err.c_str());
 	if (pstatus != SslmModelStatus::Ok) return;
-	// Guard against the red-first stub's false "Ok" over a null/empty view
-	// (see TestMinimalSil1ParsesAndReadsBackAllNodes).
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
 	CHECK_MSG(lut.values != nullptr && lut.entry_count == kSigmoidLutEntries,
-	          "lut is not a populated view on a status==Ok parse (red-first stub)");
+	          "lut is not a populated view on a status==Ok parse");
 	if (lut.values == nullptr || lut.entry_count != kSigmoidLutEntries) return;
 	CHECK(SigmoidLutValue(lut, 0) == ref[0]);
 	CHECK(SigmoidLutValue(lut, kSiluLutN) == ref[static_cast<size_t>(kSiluLutN)]);
@@ -4903,10 +4885,10 @@ static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
 			                                                        : x;
 			const double sig = 1.0 / (1.0 + std::exp(-xc));
 			const int32_t ref_q15 = static_cast<int32_t>(std::nearbyint(sig * 32768.0));
-			// Widen to int64 before subtracting: `lut` can be the stub's
-			// INT32_MIN sentinel, and `ref_q15 - lut` in 32-bit arithmetic
-			// would itself overflow (signed UB) rather than report a large
-			// delta.
+			// Widen to int64 before subtracting: a defective `lut` read
+			// could be as far off as INT32_MIN, and `ref_q15 - lut` in
+			// 32-bit arithmetic would itself overflow (signed UB) rather
+			// than report a large delta.
 			const int64_t delta = lut > ref_q15 ? static_cast<int64_t>(lut) - ref_q15
 			                                     : static_cast<int64_t>(ref_q15) - lut;
 			if (delta > 1) ++over_bound;
@@ -5162,15 +5144,9 @@ static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
 
 // ---------------------------------------------------------------------------
 // S2.5 matmul red suite (Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md;
-// design: SuperSLM_matmul_subslot_design-2026-07-20.md). src/matmul.cpp is currently
-// a red-phase stub: every one of GemmInt8AccumulateRow / GemmInt8Accumulate /
-// NarrowAccumulatorToI32 unconditionally asserts(false) on entry
-// (include/superslm/matmul.h), before examining any argument. Every cell below
-// therefore fails red for the SAME reason today -- the implementation is absent --
-// which is verified structurally (the stub body never reaches its arguments) and
-// empirically (build+run; see the test-design record's red-confirmation section).
-// Once Brunel builds the scalar reference (design S5), each cell fails red for its
-// own reason (if any) until implemented correctly, then goes green.
+// design: SuperSLM_matmul_subslot_design-2026-07-20.md). src/matmul.cpp's
+// GemmInt8AccumulateRow / GemmInt8Accumulate / NarrowAccumulatorToI32 are fully
+// built (shipped at S2.5); every cell below is green against them.
 //
 // Goldens: tests/gen_matmul_fixtures.py, an arbitrary-precision (Python native int)
 // oracle independent of any C++ implementation (design S5). Composition-regression
@@ -7289,8 +7265,7 @@ int main(int argc, char** argv) {
 	TestUni1RejectsComposeTruncated();
 	TestUni1RejectsComposeCountOverflow();
 
-	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite
-	//     (red-first; src/model.cpp is currently a stub). ---
+	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite. ---
 	TestWgtMinimalManifestParsesAndRoundTrips();
 	TestBiaMinimalManifestParsesAndRoundTrips();
 	TestRopMinimalManifestParsesAndRoundTrips();
@@ -7320,9 +7295,7 @@ int main(int argc, char** argv) {
 	TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop();
 	TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds();
 
-	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite
-	//     (red-first; src/model.cpp's SslmKeyedConstants::Parse is currently a
-	//     stub). ---
+	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite. ---
 	TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips();
 	TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips();
 	TestKvc1RejectsSectionTooShort();
@@ -7341,8 +7314,7 @@ int main(int argc, char** argv) {
 	TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree();
 	TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo();
 
-	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite (red-first;
-	//     src/model.cpp's ParseConfig is currently a stub). ---
+	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite. ---
 	TestMinimalCfg1ParsesAndMatchesEveryField();
 	TestCfg1RejectsSizeTooShort();
 	TestCfg1RejectsSizeTooLong();
@@ -7367,8 +7339,7 @@ int main(int argc, char** argv) {
 	TestWeightScalesMinimalManifestParsesAndRoundTrips();
 	TestWeightScalesRejectsWrongMagicDiscriminatesPerType();
 
-	// --- Curie's S2.1 intmath red suite (red-first; src/intmath.cpp is
-	//     currently deliberately-wrong stub bodies). ---
+	// --- Curie's S2.1 intmath red suite. ---
 	TestC2SaturatingRoundingDoublingHighMul();
 	TestC1C3RoundingDivideByPOT();
 	TestMultiplyByQuantizedMultiplier();
@@ -7380,9 +7351,7 @@ int main(int argc, char** argv) {
 	TestRequantTokenCode();
 	TestIntmathPipelineComposition();
 
-	// --- Curie's S2.2 nonlinear scalar primitives red suite (red-first;
-	//     src/intmath.cpp's ISqrt/ISqrtTrace/ShiftByMax/IExpFromConstants
-	//     bodies are currently deliberately-wrong stub sentinels). ---
+	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();
 	TestISqrtTrace();
 	TestShiftByMax();
@@ -7418,18 +7387,14 @@ int main(int argc, char** argv) {
 	TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk();
 	TestIExpConstructMatchesAccessorCasesZAndBase();
 
-	// --- Curie's S2.3 RopeApplyPair red suite (red-first; src/intmath.cpp's
-	//     RopeApplyPair body is currently the deliberately-wrong stub sentinel
-	//     {-1, -1}). ---
+	// --- Curie's S2.3 RopeApplyPair red suite. ---
 	TestRopeApplyPair();
 	TestRopeApplyPairIdentityIsExact();
 	TestRopeApplyPairQuarterTurnIsExact();
 	TestRopeApplyPairWideInputExceedsInt32Range();
 	TestRopeApplyPairTieRoundsAwayFromZero();
 
-	// --- Curie's S2.4 SiLU sigmoid-LUT red suite (red-first; src/model.cpp's
-	//     ParseSigmoidLut and src/silu_lut.cpp's SiluSigmoidQ15 are currently
-	//     deliberately-wrong stubs). ---
+	// --- Curie's S2.4 SiLU sigmoid-LUT red suite. ---
 	TestMinimalSil1ParsesAndReadsBackAllNodes();
 	TestSil1WarmObjectRepeatedReadsShowNoDrift();
 	TestSil1RoundTripReencodeMatchesOriginalBytes();
@@ -7512,12 +7477,7 @@ int main(int argc, char** argv) {
 	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
 	TestSiluSigmoidQ15GoldenHashCrossPlatform();
 
-	// --- Curie's S2.5 matmul red suite (red-first; src/matmul.cpp's
-	//     GemmInt8AccumulateRow/GemmInt8Accumulate/NarrowAccumulatorToI32 are
-	//     currently stubs that unconditionally assert(false) on entry). Every
-	//     cell below that calls into matmul.cpp directly will abort this process
-	//     until Brunel implements the scalar reference -- this is the expected,
-	//     documented RED state (see the test-design record), not a suite defect. ---
+	// --- Curie's S2.5 matmul red suite. ---
 	TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation();
 	TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases();
 	TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases();

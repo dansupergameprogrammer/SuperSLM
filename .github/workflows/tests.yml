@@ -60,6 +60,51 @@ jobs:
       - run: cmake --build build
       - run: ./build/superslm_tests
 
+  # S-HARDEN-8 (F12, design Sec4.1, Sec4.3): source-only LLVM branch coverage
+  # over src/ and include/superslm/ (tests/ and tools/ excluded from the
+  # measured set), with per-file floors rather than one aggregate threshold
+  # -- F12's own finding is that a single aggregate line percentage hides
+  # exactly the parser gaps that matter (artifact.cpp and model.cpp were the
+  # two files a 97%/92%/75.7% aggregate concealed real gaps inside). Floors
+  # are measured, never invented (tools/ci/branch_coverage_floors.json,
+  # committed) -- tools/ci/check_branch_coverage_floors.py fails the build if
+  # any file's measured branch percentage drops below its pinned floor. A
+  # per-branch allowlist (tools/ci/branch_coverage_allowlist.txt) exists for
+  # genuinely-unreachable defensive code, each entry carrying its own reason.
+  # RelWithDebInfo, not Release: assert()-gated contract checks stay live
+  # (matching linux-x64-debug's own reasoning above), so their branches are
+  # part of what this leg measures.
+  branch-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install a Clang with LLVM source-coverage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm
+      - name: Build with source-coverage instrumentation
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate"
+          cmake --build build --target superslm_test_injection superslm_tests
+      - name: Run the suite under instrumentation
+        run: |
+          LLVM_PROFILE_FILE=build/superslm_tests.profraw ./build/superslm_tests
+      - name: Merge the raw profile
+        run: |
+          llvm-profdata merge -sparse build/superslm_tests.profraw -o build/superslm_tests.profdata
+      - name: Export per-file branch coverage
+        run: |
+          llvm-cov export --format=text \
+            -instr-profile=build/superslm_tests.profdata \
+            ./build/superslm_tests \
+            -- src/*.cpp include/superslm/*.h \
+            > build/coverage.json
+      - name: Check per-file branch-coverage floors
+        run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
+
   # The golden headers under tests/ and tools/ state, in their own generated
   # comments, that re-running their generator reproduces them byte-for-byte.
   # This job makes that claim structural rather than asserted: it regenerates

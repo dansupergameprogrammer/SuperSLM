@@ -1,0 +1,16 @@
+# S-HARDEN-8 branch-coverage allowlist (design Sec4.1, §17 dimension 11's
+# own limit: "this dimension has no subject where no guard exists" -- some
+# branches are genuinely unreachable defensive code, e.g. a `default:` in a
+# switch over an enum already exhaustively validated upstream).
+#
+# Format: one entry per line, `path/to/file.cpp:LINE  # reason`. An entry
+# with no reason is a defect in the allowlist, not a pass -- the checker
+# (tools/ci/check_branch_coverage_floors.py) rejects a malformed line rather
+# than silently admitting an unreasoned one.
+#
+# Empty at this design pass: no branch in the current source was found to
+# need allowlisting during this build. If the branch-coverage CI job's own
+# first run (the "Red: run llvm-cov report against current state with no
+# floors set" step) finds a defensive branch a test genuinely cannot reach,
+# add it here with its reason in the same change that adds the floor for
+# the file it lives in.

@@ -1,4 +1,7 @@
-// SuperSLM model view (`.sslm` model sections) — version 1.
+// SuperSLM model view (`.sslm` model sections). Current format version is
+// superslm::kArtifactFormatVersion (artifact.h), the single source of
+// truth -- not restated as a number here (S-HARDEN-8; see artifact.h's
+// identical header-comment note).
 //
 // The runtime typed view over a converted, quantized model's array sections. It sits
 // on top of SslmArtifact (include/superslm/artifact.h): SslmArtifact validates the

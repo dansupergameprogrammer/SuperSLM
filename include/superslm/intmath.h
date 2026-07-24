@@ -20,10 +20,10 @@
 //     and the per-token requant composition — the "127 scale wrapper" (C22, D-SLM52).
 //
 // Cost determinism (§14): every op count here is data-INDEPENDENT. The reciprocal runs
-// exactly 3 Newton iterations plus exactly 2 branch-free correction steps; normalization
-// runs one bit-scan plus one shift plus one select. No early exit, no data-dependent
-// trip count. This property is a source obligation Poirot verifies by reading the code,
-// on top of the exhaustive value certification.
+// exactly 3 Newton iterations plus exactly 2 fixed-iteration-count correction steps;
+// normalization runs one bit-scan plus one shift plus one unconditional select. No early
+// exit, no data-dependent trip count. This property is a source obligation Poirot
+// verifies by reading the code, on top of the exhaustive value certification.
 //
 // Wide intermediates: C19's reciprocal Newton products and C22's `x_i · 127 · R`
 // (magnitude up to ~2^70) exceed int64. The port carries them in a portable 128-bit
@@ -104,18 +104,18 @@ struct NormalizedScale {
 // C21 — map D' in [1, 2^31] into Dn in [2^30, 2^31) by a pure shift:
 // p = 63 - clz64(D'), s = 30 - p, Dn = s >= 0 ? D' << s : D' >> 1. The only negative-s
 // case is D' = 2^31 (even), whose single right-shift loses no bits (Dn = 2^30). Exact,
-// no rounding. Exactly one bit-scan + one shift + one branch-free select.
+// no rounding. Exactly one bit-scan + one shift + one unconditional select.
 NormalizedScale NormalizeScale(int64_t d_prime);
 
 // C19 — the reciprocal's pinned, data-INDEPENDENT op counts (§14): exactly 3 Newton
-// iterations then exactly 2 branch-free correction steps. Bare fixed-count Newton is
+// iterations then exactly 2 fixed-iteration-count correction steps. Bare fixed-count Newton is
 // deterministically wrong on 54–62% of the domain; the corrections close it.
 inline constexpr int DYNAMIC_RECIPROCAL_NEWTON_ITERATIONS = 3;
 inline constexpr int DYNAMIC_RECIPROCAL_CORRECTION_STEPS = 2;
 
 // C19 — fixed-point reciprocal: R = round_half_up(2^62 / Dn) for Dn in [2^30, 2^31),
 // computed DIVISION-FREE via corrected Newton — exactly 3 Newton iterations then exactly
-// 2 unconditional branch-free correction steps. Bare fixed-count Newton is deterministically
+// 2 unconditional, fixed-iteration-count correction steps. Bare fixed-count Newton is deterministically
 // wrong on 54–62% of the domain (error biased high → activation clipping); the correction
 // closes it to correctly-rounded over the entire normalized domain. Returns R in
 // (2^31, 2^32] (R = 2^32 exactly at Dn = 2^30). The seed is not pinned — any construction
