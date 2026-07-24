@@ -6,27 +6,22 @@ population-validation requirement StandardsDocument Sec4 sets for any new
 check -- shown able to FAIL on a fault it exists to catch, not only shown to
 pass on unchanged input.
 
-Two of these tests are RED against the current, unfixed tree (5c431d2 plus
-this fold's test-only additions, before M1's own code changes land):
+M1's fix has landed: gen_intmath_fixtures.py's three `**` sites (:428, :436,
+:484) are rewritten (the exact-integer literal, the bit-shift, and
+`scale * scale`) and the generator's tree is clean. Per this file's own
+documented obligation (Curie, S-HARDEN-5 M1 fold build log), the two tests
+that asserted the prior, still-broken state
+(test_current_tree_still_fails, test_main_reports_todays_three_open_sites)
+are updated here, by the build seat, to assert the now-clean tree instead --
+the transition the test author's own docstring anticipated and commissioned
+("must be revisited the moment M1's fix lands").
 
-- test_current_tree_still_fails: gen_intmath_fixtures.py still contains all
-  three `**` sites (:428, :436, :484) this fold's own design names -- this
-  test PASSES today (it is asserting the still-broken state), and is the
-  fixture the vitality cells below need: a checker that always reports OK
-  cannot be told apart from a checker that is broken.
-- test_temporarily_reintroducing_pow_is_caught_and_named: tampers a scratch
-  copy of an already-clean generator (gen_matmul_fixtures.py, which has zero
-  `**` uses today) to reintroduce each of the three eliminated forms in turn,
-  confirms check_no_pow_operator.py's underlying AST walk (find_pow_uses)
-  reports it, and restores nothing on disk (it never writes gen_matmul_
-  fixtures.py itself -- it walks a temp copy).
-
-Once M1's fix lands (gen_intmath_fixtures.py's three sites rewritten to
-eliminate `**` entirely), test_current_tree_still_fails is the one obligated
-to flip: it must be updated to assert a clean tree, or deleted in favor of
-the now-green check_no_pow_operator.py exit code the `generators` CI job
-enforces directly. That is this cell's own documented obligation, named here
-so it is not silently stale once the build seat's fix lands.
+test_temporarily_reintroducing_pow_is_caught_and_named-style cells tamper a
+scratch copy of an already-clean generator (gen_matmul_fixtures.py, which
+has zero `**` uses) to reintroduce each of the three eliminated forms in
+turn, confirm check_no_pow_operator.py's underlying AST walk (find_pow_uses)
+reports it, and restore nothing on disk (never writing gen_matmul_
+fixtures.py itself -- it walks a temp copy).
 """
 
 import contextlib
@@ -44,17 +39,15 @@ def _run_main():
     return code, buf.getvalue()
 
 
-def test_current_tree_still_fails():
-    """RED (expected): the three `**` sites named by design Sec5.1 have not
-    been rewritten yet. This test passes -- it documents the still-broken
-    state -- and must be revisited the moment M1's fix lands."""
+def test_current_tree_is_clean():
+    """M1's fix has landed (design Sec5.4 step 2): the three `**` sites named
+    by design Sec5.1 (:428, :436, :484) are rewritten to eliminate `**`
+    entirely. Zero hits over the real, current gen_intmath_fixtures.py."""
     gen_path = os.path.join(cnp._THIS_DIR, "gen_intmath_fixtures.py")
     hits = cnp.find_pow_uses(gen_path)
-    assert hits == [428, 436, 484], (
-        f"expected the three known-open ** sites at lines [428, 436, 484], got {hits} -- "
-        "if this list is empty or different, M1's fix has landed and this test (plus "
-        "check_no_pow_operator.py's CI wiring) needs to move from documenting the open "
-        "defect to enforcing its absence"
+    assert hits == [], (
+        f"expected zero ** uses in gen_intmath_fixtures.py after M1's fix, got {hits} -- "
+        "a nonempty result here means the ** operator was reintroduced"
     )
 
 
@@ -116,14 +109,12 @@ def test_missing_generator_file_is_reported(monkeypatch):
     assert "not found" in output.lower()
 
 
-def test_main_reports_todays_three_open_sites(monkeypatch):
+def test_main_passes_on_the_real_gen_intmath_fixtures(monkeypatch):
     """main() end-to-end against the real, current gen_intmath_fixtures.py:
-    RED today (all three sites still open), naming each file:line."""
+    green now that M1's fix has landed (all three sites eliminated)."""
     monkeypatch.setattr(cnp, "_CHECKED_FILES", ("gen_intmath_fixtures.py",))
-    code, output = _run_main()
-    assert code == 1
-    for line in (428, 436, 484):
-        assert f"gen_intmath_fixtures.py:{line}" in output
+    code, _ = _run_main()
+    assert code == 0
 
 
 def test_main_passes_on_a_checked_file_set_with_zero_pow_uses(monkeypatch):

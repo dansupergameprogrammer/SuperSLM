@@ -425,15 +425,16 @@ for k in (2, 3, 7, 10, 1000, 1_000_000, 3_037_000_499):
     if k * k + 1 <= (1 << 63) - 1:
         add_isqrt(f"just_above_square_k{k}", k * k + 1)
 
-for n in (2, 3, 5, 10, 99, 123_456_789, 10 ** 12 + 7):
+for n in (2, 3, 5, 10, 99, 123_456_789, 1_000_000_000_007):
     add_isqrt(f"non_square_{n}", n)
 
 add_isqrt("boundary_2_pow_62", 1 << 62)
 add_isqrt("boundary_int64_max", (1 << 63) - 1)
 
 # Every base-4 digit boundary the 32-iteration recurrence steps through.
+# 4**m == 2**(2*m) exactly for every m >= 0.
 for m in range(0, 32):
-    add_isqrt(f"power_of_4_m{m}", 4 ** m)
+    add_isqrt(f"power_of_4_m{m}", 1 << (2 * m))
 
 # --------------------------------------------------------------------------
 # S2.2 — ShiftByMax (C9)
@@ -481,7 +482,13 @@ def derive_constants(scale: float) -> tuple[int, int, int]:
     """Reproduces `i_exp`'s internal (q_ln2, q_b, q_c) derivation for `scale`."""
     q_ln2 = im.i_exp_ln2_quantum(scale)
     q_b = math.floor(_POLY_B / scale)
-    q_c = math.floor(_POLY_C / (_POLY_A * scale ** 2))
+    # scale * scale, not scale ** 2 (M1): `**` compiles to a libm pow(x, 2.0)
+    # call; `*` is correctly-rounded IEEE-754 multiplication. Measured, by
+    # execution, equal for the five real scales this project computes, on
+    # both libms this project's CI runs (MSVCRT, glibc >= 2.28) -- not a
+    # general guarantee about pow(x, 2.0), which does not hold for arbitrary
+    # x even on these same libms.
+    q_c = math.floor(_POLY_C / (_POLY_A * (scale * scale)))
     return q_ln2, q_b, q_c
 
 

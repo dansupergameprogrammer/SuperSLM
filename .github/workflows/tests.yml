@@ -92,6 +92,13 @@ jobs:
           python-version: '3.13'
       - run: pip install numpy
       - run: python tests/reference/check_provenance.py
+      # M1 fold (S-HARDEN-5): total AST ban on the `**` operator in the two
+      # generators below, run BEFORE either regenerates -- `**` compiles to a
+      # libm pow() call for a float operand, which is exactly what "no
+      # sin/cos/log/exp/pow call executes on the regeneration path" must mean
+      # if it is to be true (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
+      # Design-2026-07-23.md Sec5).
+      - run: python tests/check_no_pow_operator.py
       - run: python tests/gen_intmath_fixtures.py
       - run: python tests/gen_matmul_fixtures.py
       - run: python tools/gen_matmul_golden.py
