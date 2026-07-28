@@ -18,6 +18,7 @@
 #include "superslm/silu_lut.h"
 #include "superslm/silu_lut_canonical.h"
 #include "superslm/tokenizer.h"
+#include "superslm/trace_hook.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
 #include "sslm_iexp_domain_fixtures.h"
@@ -35,6 +36,7 @@
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
 
+#include <algorithm>
 #include <atomic>
 #include <stdexcept>
 #include <cmath>
@@ -5436,6 +5438,26 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
 	}
+	// S3 (Poirot review ac34677, 2026-07-28): RowBoundsWide (src/intmath.cpp:
+	// 279-280) reads x[0] before testing n at all -- with a null data pointer
+	// and n == 0 this is a null-pointer dereference, and the reviewer's own
+	// probe process terminated at the call (P7). Unlike matmul_zero_in_
+	// channels above, this is a genuine memory access, not an assert(): it is
+	// not compiled out under NDEBUG, so it must not crash in EITHER build
+	// configuration once fixed.
+	if (name == "row_bounds_wide_zero_len_null_ptr") {
+		int64_t out_max = 0;
+		int64_t out_min = 0;
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe row_bounds_wide_zero_len_null_ptr: calling RowBoundsWide "
+		            "with a null data pointer and n=0 (no n >= 1 precondition is documented "
+		            "on this primitive or on NarrowRowChecked, S3)\n");
+		std::fflush(stdout);
+		superslm::RowBoundsWide(nullptr, /*n=*/0, &out_max, &out_min);
+		std::printf("PROBE DID NOT CRASH (out_max=%lld out_min=%lld)\n",
+		            static_cast<long long>(out_max), static_cast<long long>(out_min));
+		return 0;
+	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
 }
@@ -5475,6 +5497,29 @@ static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() 
 	          "violation, design S12 dim 4/5) -- outcome was %s, child output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
 #endif
+}
+
+// S3 (Poirot review ac34677, 2026-07-28; SuperSLM_S3a_WalkingSkeleton_Plan.md
+// Sec11 S3.1, F-S3-7): RowBoundsWide reads x[0] before testing n at all
+// (src/intmath.cpp:279-280); with a null data pointer and n == 0 -- a
+// degenerate but in-contract input (neither RowBoundsWide's own header nor
+// NarrowRowChecked's contract documents an n >= 1 precondition) -- this is a
+// null-pointer dereference. Unlike the assert()-gated contract violation
+// above, a null-pointer dereference is NOT compiled out under NDEBUG (it is
+// a genuine memory access, not a debug check), so this cell asserts
+// kRanNoCrash unconditionally, with no #ifdef NDEBUG branch: the sibling
+// primitive MaxAbsReduceWide already treats n == 0 as an in-contract,
+// defined case (D' == 1, "the empty reduction", intmath.h:150-152), so n ==
+// 0 is not a caller-ensures contract violation this primitive is entitled
+// to leave undefined either.
+static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
+	static const char* kProbeName = "row_bounds_wide_zero_len_null_ptr";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "RowBoundsWide(nullptr, 0, &out_max, &out_min) must not crash in any build "
+	          "configuration -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 }
 
 // REWORKED 2026-07-22 (S-HARDEN-0 final API port). This cell used to pin TWO things
@@ -7611,6 +7656,284 @@ static void TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned() 
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Poirot review ac34677 (2026-07-28) of S3.1/S3.1a: five test-coverage
+// findings, each pinned as a cell in its own right (Claude/Curie/
+// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md Sec10;
+// superslm-s3.1a-trace-hook-test-design-2026-07-28.md Sec10). S1, S3, and S4
+// below fail today, each for its own reason; the two S9 cells are already
+// green (the reviewer executed both, P5/P6) and are committed here as suite
+// members rather than left as review-only probes.
+// ---------------------------------------------------------------------------
+
+// S1: MaxAbsReduceWide's own abs computation (`x[i] < 0 ? -x[i] : x[i]`,
+// src/intmath.cpp:272) is signed-integer overflow at x[i] == INT64_MIN --
+// negating INT64_MIN has no int64_t representation. On this toolchain it
+// wraps back to INT64_MIN, which fails the `a > d` comparison and silently
+// excludes the row's largest-magnitude element from the reduction: executed
+// (Poirot P1/P2), {INT64_MIN,5,-5,0} reports D' == 5 and RequantChainChecked
+// returns Ok, bypassing the very guard (C29) whose purpose is to reject a
+// row the chain cannot handle.
+//
+// What is pinned here, and why not an exact numeric D': the row's TRUE
+// max-abs magnitude is |INT64_MIN| == 2^63 -- C20's own definition (D =
+// max_i |x_i|) makes this unambiguous -- but 2^63 has no representation as a
+// positive int64_t (int64_t's own range tops out at 2^63-1), so no exact
+// equality claim on MaxAbsReduceWide's return is well-posed at this element,
+// unlike the int32 sibling MaxAbsReduce, whose own widen-before-abs fix
+// (src/intmath.cpp:197, "widen BEFORE abs so INT32_MIN yields 2^31 (not
+// int32 UB)") lands INT32_MIN's magnitude at exactly 2^31 -- comfortably
+// representable in the WIDER int64_t return type that primitive uses. This
+// cell derives its claim from the sibling's own contract (magnitude is
+// widened before the abs, and the guard the composition relies on is
+// C29's own D' > 2^31 domain check, checked_chain_funnel.cpp:78) rather than
+// from a specific fix construction: a row whose true magnitude is 2^63 is
+// unambiguously out of C29's domain (2^63 > 2^31), so MaxAbsReduceWide's own
+// report for this row must exceed 2^31, and RequantChainChecked must reject
+// it -- whatever internal representation the primitive eventually uses to
+// get there. Today it does neither.
+static void TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	constexpr int64_t kRow[] = {INT64_MIN, INT64_C(5), INT64_C(-5), INT64_C(0)};
+	constexpr size_t kRowLen = 4;
+
+	const int64_t d_prime = superslm::MaxAbsReduceWide(kRow, kRowLen);
+	CHECK_MSG(d_prime > (int64_t{1} << 31),
+	          "MaxAbsReduceWide({INT64_MIN,5,-5,0}) == %lld, want a value > 2^31 (the "
+	          "row's true max-abs magnitude is |INT64_MIN| == 2^63, definitionally out "
+	          "of C29's <= 2^31 domain regardless of how the implementation represents "
+	          "it)",
+	          static_cast<long long>(d_prime));
+
+	const CarriedScale site_constant{INT64_C(1073741824), 0};
+	int8_t out_codes[kRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::RequantChainChecked(kRow, kRowLen, std::span<const CarriedScale>{},
+	                                              site_constant, out_codes, &out_scale);
+	CHECK_MSG(result.status == SslmForwardStatus::ChainInputOutOfDomain,
+	          "RequantChainChecked({INT64_MIN,5,-5,0}) status == %s, want "
+	          "ChainInputOutOfDomain -- C29's guard exists precisely to reject a row "
+	          "the chain cannot handle, and INT64_MIN's magnitude is the largest a "
+	          "wide row can carry",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "RequantChainChecked({INT64_MIN,5,-5,0}): out_codes must be untouched on "
+	          "rejection (\"computes nothing\")");
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "RequantChainChecked({INT64_MIN,5,-5,0}): *out_scale must be untouched on "
+	          "rejection (\"computes nothing\")");
+}
+
+// S4: step 6 of RequantChainChecked -- C26's carried-scale product,
+// checked_chain_funnel.cpp:92-112 -- has no assertion of any kind anywhere
+// in the suite. The only prior statement about *out_scale
+// (TestRequantChainCheckedT1254Witness) asserts merely that it differs from
+// its poison value; two mutants defeat that (Poirot M3, M5): replacing the
+// whole computed value with a constant, and reversing the fold to
+// right-associated. This cell pins the EXACT value, derived independently
+// of src/forward/checked_chain_funnel.cpp -- from the vendored reference's
+// own carried_scale_product (tests/reference/superslm_spike/intmath.py:
+// 410-428), the same left-associated mechanism C26 pins and this design's
+// own pinned mechanism (Sec7.2 step 6), executed directly in Python rather
+// than read back from the C++ under test:
+//
+//   python -c "
+//   import sys; sys.path.insert(0, 'tests/reference/superslm_spike')
+//   sys.path.insert(0, 'tests/reference'); import intmath as im
+//   incoming = [(1441784252, -5), (2032538395, 4)]
+//   site_constant = (1935848999, -3)
+//   d_prime_factor = (1073741824, 1)  # this row's own (Dn, -s), Dn=2^30, s=-1
+//   print(im.carried_scale_product(incoming + [site_constant, d_prime_factor]))"
+//   # -> (1230129356, 89)
+//
+// A multi-factor `incoming` span is required: a single-factor fold cannot
+// distinguish left- from right-association at all (there is only one
+// combination to order). The three canonical factors above were found by
+// direct execution of the vendored reference across a random search over
+// canonical (m,e) triples (not constructed to force a result) to diverge
+// between left- and right-associated composition: right-associated
+// computes {m=1230129357, e=89} for this identical input -- a
+// one-ULP-in-mantissa difference this cell's exact-equality assertion
+// catches and the prior poison-value-difference check does not.
+static void TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	const CarriedScale incoming[] = {
+	    CarriedScale{/*m=*/INT64_C(1441784252), /*e=*/-5},
+	    CarriedScale{/*m=*/INT64_C(2032538395), /*e=*/4},
+	};
+	const CarriedScale site_constant{/*m=*/INT64_C(1935848999), /*e=*/-3};
+
+	// kWideT1254WitnessPositiveRow's own D' is exactly 2^31 (TestMaxAbsReduceWide),
+	// giving NormalizeScale's (Dn, s) = (2^30, -1) -- verified independently by
+	// Poirot's own P5 probe on this identical row ("D'=2^31, Dn=2^30, s=-1") -- and
+	// therefore the D'-factor CarriedScale{2^30, 1} used in the derivation above.
+	int8_t out_codes[4] = {0, 0, 0, 0};
+	CarriedScale out_scale{};
+	auto result = superslm::RequantChainChecked(
+	    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+	    std::span<const CarriedScale>(incoming, 2), site_constant, out_codes, &out_scale);
+	CHECK_MSG(result.status == SslmForwardStatus::Ok, "RequantChainChecked status == %s, want Ok",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(out_scale.m == INT64_C(1230129356) && out_scale.e == INT64_C(89),
+	          "*out_scale == {%lld,%lld}, want {1230129356,89} (C26's left-associated "
+	          "carried_scale_product, executed independently via the vendored reference "
+	          "-- see the derivation command above this test)",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+}
+
+// S9: the trace instrument's REDUCED funnel-level form (Sec11 S3.1a's own
+// Cell 1 and Cell 3, narrowed to the one production call site the hook is
+// wired to today -- RequantChainChecked itself, per the routing option
+// named and not adopted in superslm-s3.1a-trace-hook-test-design-2026-07-28.
+// md Sec6, since adopted). Both cells were already GREEN when the reviewer
+// executed them (P5, P6); they are committed here as suite members. This is
+// the REDUCED form, not Sec11 S3.1a's own full-forward Cell 1 (needs S3.6's
+// digests) or Cell 2 (needs the full forward and the reference prompt pack,
+// Sec14.3) -- both remain open, unchanged by this pass.
+namespace {
+
+struct ChainTraceSinkRecord {
+	std::string site;
+	size_t token_index = 0;
+	std::vector<int64_t> x_int;
+	int64_t d_prime = 0;
+	int64_t dn = 0;
+	int32_t s = 0;
+	int64_t r = 0;
+	std::vector<int8_t> codes;
+	int64_t m_out = 0;
+	int64_t e_out = 0;
+};
+
+void ChainTraceSinkHookFn(const superslm::SslmChainTraceRecord* chain,
+                           const superslm::SslmKvLandingTraceRecord* kv, void* user) {
+	// trace_hook.h's own contract: exactly one of the two record pointers is
+	// non-null per call, never both, never neither.
+	CHECK_MSG((chain != nullptr) != (kv != nullptr),
+	          "a trace hook call must carry exactly one non-null record pointer, never "
+	          "both and never neither");
+	if (chain == nullptr) return;
+	auto* sink = static_cast<std::vector<ChainTraceSinkRecord>*>(user);
+	ChainTraceSinkRecord rec;
+	rec.site.assign(chain->site.begin(), chain->site.end());
+	rec.token_index = chain->token_index;
+	rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
+	rec.d_prime = chain->d_prime;
+	rec.dn = chain->dn;
+	rec.s = chain->s;
+	rec.r = chain->r;
+	rec.codes.assign(chain->codes.begin(), chain->codes.end());
+	rec.m_out = chain->m_out;
+	rec.e_out = chain->e_out;
+	sink->push_back(std::move(rec));
+}
+
+}  // namespace
+
+static void TestRequantChainCheckedHookInstalledProducesIdenticalOutputs() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	int8_t codes_no_hook[4] = {0, 0, 0, 0};
+	CarriedScale scale_no_hook{};
+	auto result_no_hook = superslm::RequantChainChecked(
+	    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen, std::span<const CarriedScale>{},
+	    site_constant, codes_no_hook, &scale_no_hook, "s3.1a_reduced_probe", /*token_index=*/7);
+	CHECK_MSG(!superslm::SslmTraceHookInstalled(),
+	          "no hook installed yet -- SslmTraceHookInstalled() must read false");
+
+	std::vector<ChainTraceSinkRecord> sink;
+	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink);
+	CHECK_MSG(superslm::SslmTraceHookInstalled(), "SslmSetTraceHook must install the hook");
+
+	int8_t codes_with_hook[4] = {0, 0, 0, 0};
+	CarriedScale scale_with_hook{};
+	auto result_with_hook = superslm::RequantChainChecked(
+	    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen, std::span<const CarriedScale>{},
+	    site_constant, codes_with_hook, &scale_with_hook, "s3.1a_reduced_probe",
+	    /*token_index=*/7);
+
+	superslm::SslmSetTraceHook(nullptr, nullptr);
+	CHECK_MSG(!superslm::SslmTraceHookInstalled(), "SslmSetTraceHook(nullptr,...) must uninstall");
+
+	CHECK_MSG(result_with_hook.status == result_no_hook.status,
+	          "installing the hook must not change RequantChainChecked's status: %s (hook) "
+	          "vs %s (no hook)",
+	          superslm::SslmForwardStatusName(result_with_hook.status),
+	          superslm::SslmForwardStatusName(result_no_hook.status));
+	for (int i = 0; i < 4; ++i) {
+		CHECK_MSG(codes_with_hook[i] == codes_no_hook[i],
+		          "installing the hook must not change out_codes[%d]: %d (hook) vs %d (no "
+		          "hook)",
+		          i, static_cast<int>(codes_with_hook[i]), static_cast<int>(codes_no_hook[i]));
+	}
+	CHECK_MSG(scale_with_hook.m == scale_no_hook.m && scale_with_hook.e == scale_no_hook.e,
+	          "installing the hook must not change *out_scale: {%lld,%lld} (hook) vs "
+	          "{%lld,%lld} (no hook)",
+	          static_cast<long long>(scale_with_hook.m), static_cast<long long>(scale_with_hook.e),
+	          static_cast<long long>(scale_no_hook.m), static_cast<long long>(scale_no_hook.e));
+
+	// Exactly one record emitted, and its fields match the call's own already-
+	// computed internals -- the transparency half of Sec10.3's axis (Poirot P5:
+	// "the emitted record's fields matched the funnel's own internals").
+	CHECK_MSG(sink.size() == 1, "exactly one chain trace record must be emitted per call; got %zu",
+	          sink.size());
+	if (sink.size() == 1) {
+		const ChainTraceSinkRecord& rec = sink[0];
+		CHECK_MSG(rec.site == "s3.1a_reduced_probe",
+		          "emitted record's site == \"%s\", want the caller's own site name",
+		          rec.site.c_str());
+		CHECK_MSG(rec.token_index == 7, "emitted record's token_index == %zu, want 7",
+		          rec.token_index);
+		CHECK_MSG(rec.d_prime == kWideT1254WitnessDPrime,
+		          "emitted record's d_prime == %lld, want %lld (this row's own D')",
+		          static_cast<long long>(rec.d_prime), static_cast<long long>(kWideT1254WitnessDPrime));
+		CHECK_MSG(rec.m_out == scale_with_hook.m && rec.e_out == scale_with_hook.e,
+		          "emitted record's (m_out,e_out) == (%lld,%lld) must equal the call's own "
+		          "*out_scale (%lld,%lld)",
+		          static_cast<long long>(rec.m_out), static_cast<long long>(rec.e_out),
+		          static_cast<long long>(scale_with_hook.m), static_cast<long long>(scale_with_hook.e));
+		CHECK_MSG(rec.codes.size() == 4 &&
+		              std::equal(rec.codes.begin(), rec.codes.end(), codes_with_hook),
+		          "emitted record's codes must equal the call's own out_codes");
+		CHECK_MSG(rec.x_int.size() == kWideT1254WitnessRowLen &&
+		              std::equal(rec.x_int.begin(), rec.x_int.end(), kWideT1254WitnessPositiveRow),
+		          "emitted record's x_int must equal the row passed in");
+	}
+}
+
+static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+
+	std::vector<ChainTraceSinkRecord> sink;
+	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink);
+
+	const CarriedScale site_constant{INT64_C(1073741824), 0};
+	int8_t out_codes[1] = {INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::RequantChainChecked(kWideOverC29DomainRow, kWideOverC29DomainRowLen,
+	                                              std::span<const CarriedScale>{}, site_constant,
+	                                              out_codes, &out_scale, "s3.1a_reduced_probe_reject",
+	                                              /*token_index=*/3);
+
+	superslm::SslmSetTraceHook(nullptr, nullptr);
+
+	CHECK_MSG(result.status == superslm::SslmForwardStatus::ChainInputOutOfDomain,
+	          "a D'=2^31+1 row must still be rejected with a hook installed: got %s",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(sink.empty(),
+	          "a rejected call must emit zero trace records even with a hook installed; got %zu",
+	          sink.size());
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -7865,6 +8188,14 @@ int main(int argc, char** argv) {
 	TestNarrowRowCheckedC35VsC29NegativeControl();
 	TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep();
 	TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned();
+
+	// --- Poirot review ac34677 (2026-07-28) test-coverage findings: S1, S3,
+	//     S4 red; the two S9 cells already green at review time. ---
+	TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain();
+	TestRowBoundsWideZeroLenNullPtrDoesNotCrash();
+	TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference();
+	TestRequantChainCheckedHookInstalledProducesIdenticalOutputs();
+	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
 
 	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();
