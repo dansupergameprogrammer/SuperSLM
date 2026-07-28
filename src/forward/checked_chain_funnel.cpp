@@ -394,9 +394,15 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 	const int64_t m = static_cast<int64_t>(m128.lo);
 	// The sum `width * M` is checked without forming it (an overflowing
 	// multiply is itself UB), mirroring the comment this predicate's own
-	// declaration specifies. `m` is now known representable and
-	// non-negative-or-zero within the ceiling above, so this division is
-	// exactly as safe as it was before the fix.
+	// declaration specifies. `m` is now known representable within the
+	// ceiling above -- it is NOT proven non-negative by that check alone,
+	// since `q_c` is signed and `S128Ge` only bounds the upper side against
+	// the ceiling, not the lower side against zero. The reachable input
+	// class this predicate is exercised against never produces a negative
+	// `m` (0 of 28,386 canonical mantissa-domain (q_b, q_c) derivation
+	// points yield q_b^2 + q_c < 0), so this remains the only class this
+	// function has ever been checked against -- an unreached m < 0 is not
+	// covered by anything below, and this comment no longer claims it is.
 	if (m != 0 && width > static_cast<size_t>(INT64_MAX / m)) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
 	}

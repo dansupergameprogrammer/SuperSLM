@@ -26,10 +26,12 @@
 // superslm-s3.3-attention-interior-test-design-2026-07-28.md §6.2, §11); its
 // body is real, at 128-bit width (Poirot 2026-07-28 finding 1's fix, closing
 // the int64-overflow re-derivation the green-phase construction shipped
-// with). This file also declares CheckPositionOverCap (Board T-1308), a
-// standalone predicate stub for S3.3's own still-unbuilt position-cap gate
-// (§11 S3.3's gate line) so a follow-up Curie pass can attach a red cell
-// against a real, callable symbol.
+// with). This file also declares CheckPositionOverCap (Board T-1308) --
+// its own body is real too (src/forward/checked_chain_funnel.cpp), a
+// standalone predicate for S3.3's own position-cap gate (§11 S3.3's gate
+// line) so a follow-up Curie pass can attach a red cell against a real,
+// callable symbol; wiring it into an actual forward call site remains
+// S3.6's own job (§9.1).
 // The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
 // reconciliation compute, and the embed entry are S3.2's own site-composition
 // functions and are declared in include/superslm/forward_sites.h instead — not
