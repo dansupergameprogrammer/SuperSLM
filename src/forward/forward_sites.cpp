@@ -4,12 +4,16 @@
 // (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
 // F-S3-8, C27, C33). The S3.2 bodies (FloorDivI64, RmsNormSite,
 // ApplyWeightScaleFold, BiasReconcile, EmbedEntry) and the S3.3 bodies
-// (LandingRescale, ClampRopeCode) are the real green construction against the
-// red suite authored in tests/test_main.cpp (Claude/Curie/
-// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
-// §11; superslm-s3.3-attention-interior-test-design-2026-07-28.md §11/§12).
-// RopeApplySite below is a deliberately-wrong red-first STUB (D-SLM376,
-// D-SLM383, D-SLM384) -- see its own comment.
+// (LandingRescale, ClampRopeCode, RopeApplySite) are the real green
+// construction against the red suite authored in tests/test_main.cpp
+// (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
+// 2026-07-28.md §11; superslm-s3.3-attention-interior-test-design-2026-07-28.md
+// §11/§12; superslm-s3.3-rope-application-site-test-design-2026-07-28.md §6).
+// RopeApplySite's own real three-step composition (CheckPositionOverCap
+// first, then the ROP1 table read, then RopeApplyPair+ClampRopeCode per
+// pair) replaces the prior red-first STUB named in D-SLM376, D-SLM383,
+// D-SLM384, D-SLM386, per this build's own record
+// (Claude/Brunel/superslm-s3.3-rope-application-site-body-build-2026-07-28.md).
 #include "superslm/forward_sites.h"
 
 #include <vector>
@@ -24,6 +28,21 @@ namespace {
 // §5.1's own pinned integer — the normalization divide and the per-element
 // wide-row divide both shift by 2*NORM_FRAC_BITS).
 constexpr int kNormFracBits = 16;
+
+// Little-endian byte-assembly read of one int64 element from a ROP1 tensor's
+// stored bytes — the same discipline the loader itself uses for this exact
+// section (src/model.cpp's RdI64/ValidateRopeTablesDomain) and for every
+// other untrusted-alignment array in this tree (model.h's own
+// SslmKeyedConstants::Value comment: "read them with the byte-assembly
+// reader, never a cast (the array is not guaranteed aligned for an int64
+// load)"). `base` is a tensor's `data` pointer; `index` is a flat element
+// index into that tensor's row-major [context_cap, head_dim/2] layout.
+int64_t ReadRopeTableEntryI64(const uint8_t* base, uint64_t index) {
+	const uint8_t* p = base + index * 8;
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
+	return static_cast<int64_t>(v);
+}
 
 // --- LandingRescale's own portable 128-bit facility ---------------------------
 //
@@ -287,20 +306,47 @@ int64_t ClampRopeCode(int64_t raw) {
 	return raw;
 }
 
-SslmForwardStatus RopeApplySite(const int8_t* /*row*/, size_t /*head_dim*/,
-                                 int64_t /*position*/, int64_t /*context_cap*/,
-                                 const SslmTensorManifest& /*rope_tables*/,
-                                 int8_t* /*out_row*/) {
-	// S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-rope-application-site-
-	// test-design-2026-07-28.md §6, §7): unconditionally returns
-	// WorkspaceTooSmall, a status none of this site's own real outcomes (Ok,
-	// PositionOverCap) ever is -- matching this campaign's own
-	// SslmForwardStatus-returning stub convention (a594dd2, c4ee594's
-	// CheckSoftmaxRowWidthDomain). A follow-up Brunel pass replaces this body
-	// with the real CheckPositionOverCap-first, then-read-ROP1-row,
-	// then-RopeApplyPair-plus-ClampRopeCode-per-pair composition the
-	// declaration's own comment specifies.
-	return SslmForwardStatus::WorkspaceTooSmall;  // stub
+SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
+                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
+                                 int8_t* out_row) {
+	// §6.2 step 3 / §11 S3.3's own gate line (D-SLM376): CheckPositionOverCap
+	// is the site's documented FIRST ACT, and no ROP1 tensor is read before
+	// it returns. On rejection, `out_row` stays exactly as the caller left
+	// it and neither "cos" nor "sin" is touched -- "never a table read".
+	const SslmForwardStatus cap_status = CheckPositionOverCap(position, context_cap);
+	if (cap_status != SslmForwardStatus::Ok) {
+		return cap_status;
+	}
+
+	// Step 2: read the "cos"/"sin" tensors' row `position` (head_dim/2
+	// elements each). `rope_tables` is the loaded ROP1 view -- its "cos"/
+	// "sin" tensors are the declaration's own stated contract (forward_sites.h:
+	// "carrying the 'cos'/'sin' tensors this site reads by row"), caller-
+	// ensures like every other funnel-adjacent compute in this tree; every
+	// element already cleared ValidateRopeTablesDomain's |v| <= 2^30 bound at
+	// load time (src/model.cpp), which is RopeApplyPair's own safety
+	// precondition (intmath.cpp:451).
+	const SslmTensorView* cos = rope_tables.Tensor("cos");
+	const SslmTensorView* sin = rope_tables.Tensor("sin");
+	const size_t pairs = head_dim / 2;
+	const uint64_t row_offset = static_cast<uint64_t>(position) * static_cast<uint64_t>(pairs);
+
+	// Step 3: for each pair i in [0, head_dim/2), RopeApplyPair(row[2i],
+	// row[2i+1], cos_row[i], sin_row[i]) -- interleaved even/odd pairing,
+	// matching the reference's own _rotate_rows, not a first-half/second-half
+	// split -- then ClampRopeCode on each component, written to
+	// out_row[2i]/out_row[2i+1].
+	for (size_t i = 0; i < pairs; ++i) {
+		const int32_t x = static_cast<int32_t>(row[2 * i]);
+		const int32_t y = static_cast<int32_t>(row[2 * i + 1]);
+		const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(cos->data, row_offset + i));
+		const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(sin->data, row_offset + i));
+		const RopePair rotated = RopeApplyPair(x, y, cos_q30, sin_q30);
+		out_row[2 * i] = static_cast<int8_t>(ClampRopeCode(rotated.x));
+		out_row[2 * i + 1] = static_cast<int8_t>(ClampRopeCode(rotated.y));
+	}
+
+	return SslmForwardStatus::Ok;
 }
 
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,

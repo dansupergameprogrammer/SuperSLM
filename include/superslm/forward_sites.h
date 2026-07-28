@@ -21,11 +21,12 @@
 // 2026-07-28.md §4/§9). The S3.3 declarations LandingRescale and ClampRopeCode
 // are likewise real green constructions, against
 // Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §6.1/§6.3/§11's own red suite. RopeApplySite below is a deliberately-wrong
-// red-first STUB (this commit) — see its own comment; the site itself is the
-// production symbol Claude/Curie/superslm-s3.3-rope-application-site-test-
-// design-2026-07-28.md §6 named as missing, and D-SLM376 rules it is built
-// here, in S3.3, as CheckPositionOverCap's own first act.
+// §6.1/§6.3/§11's own red suite. RopeApplySite below is likewise real and
+// green — CheckPositionOverCap first, then the ROP1 table read, then
+// RopeApplyPair+ClampRopeCode per pair — against
+// Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
+// §6's own red suite; D-SLM376 rules it is built here, in S3.3, as
+// CheckPositionOverCap's own first act.
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob
@@ -195,7 +196,7 @@ int64_t ClampRopeCode(int64_t raw);
 // `rope_tables` is the loaded ROP1 view (`SslmModelView::rope_tables`,
 // model.h) carrying the "cos"/"sin" tensors this site reads by row.
 //
-// A real body performs, in this order and no other:
+// The real body performs, in this order and no other:
 //   1. CheckPositionOverCap(position, context_cap) (checked_chain_funnel.h) —
 //      the site's documented FIRST ACT (D-SLM376). On rejection, return
 //      PositionOverCap immediately; `out_row` is untouched and `rope_tables`'
@@ -209,15 +210,10 @@ int64_t ClampRopeCode(int64_t raw);
 //      first-half/second-half split), then `ClampRopeCode` on each
 //      component, written to `out_row[2i]` / `out_row[2i+1]`.
 //
-// STUB (this commit): unconditionally returns WorkspaceTooSmall — a status
-// none of this site's real outcomes (Ok, PositionOverCap) ever is, matching
-// this tree's own SslmForwardStatus-returning stub convention (a594dd2;
-// c4ee594's CheckSoftmaxRowWidthDomain, staged the same way before its own
-// green phase). Calls nothing, reads nothing, writes nothing to `out_row`.
-// The three-step body above is the next pass's job, not this one's; this
-// declaration and stub exist solely so a red suite can be authored against a
-// real, callable symbol (Claude/Curie/superslm-s3.3-rope-application-site-
-// test-design-2026-07-28.md §7).
+// The body is real (forward_sites.cpp), driven green against
+// Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
+// §6's red suite (the feature-oracle cell, the never-a-table-read ordering
+// cell, and the ASan guard-vitality cell).
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
