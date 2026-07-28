@@ -259,25 +259,47 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
-// --- F-S3-7 / §7.2 wide-row (int64 input width) siblings — STUB (S3.1 red-phase) ---
+// --- F-S3-7 / §7.2 wide-row (int64 input width) siblings ---------------------
 //
-// Deliberately-wrong sentinel bodies so the follow-up red suite (Claude/Curie/
-// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §4) compiles, links,
-// and FAILS against these three primitives' real semantics. Brunel replaces each body
-// with the bit-exact wide-width port in the S3.1 green phase (same construction as
-// the int32-input sibling above, at int64 input width).
+// Bit-exact wide-width ports of the int32-input siblings above: same construction,
+// each element already the wide type (no widen-before-abs step needed for
+// MaxAbsReduceWide, since the row already is int64), same 128-bit-intermediate
+// requant composite for RequantTokenCodeWide.
 
-int64_t MaxAbsReduceWide(const int64_t*, size_t) {
-	return 0;  // stub (violates the D' >= 1 postcondition on purpose)
+int64_t MaxAbsReduceWide(const int64_t* x, size_t n) {
+	int64_t d = 0;
+	for (size_t i = 0; i < n; ++i) {
+		int64_t a = x[i] < 0 ? -x[i] : x[i];
+		if (a > d) d = a;
+	}
+	return d < 1 ? 1 : d;  // all-zero-row guard, exact on that class
 }
 
-void RowBoundsWide(const int64_t*, size_t, int64_t* out_max, int64_t* out_min) {
-	*out_max = 0;  // stub
-	*out_min = 0;  // stub
+void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_min) {
+	int64_t mx = x[0];
+	int64_t mn = x[0];
+	for (size_t i = 1; i < n; ++i) {
+		if (x[i] > mx) mx = x[i];
+		if (x[i] < mn) mn = x[i];
+	}
+	*out_max = mx;
+	*out_min = mn;
 }
 
-int8_t RequantTokenCodeWide(int64_t, int64_t, int) {
-	return 0;  // stub
+int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s) {
+	// Same composite as RequantTokenCode above (C22's formula, unchanged) at
+	// int64 input width: q_i = clamp(round_half_away_from_zero((x_i·127·R) /
+	// 2^(62−s)), −127, 127).
+	int exponent = 62 - s;  // in [32, 63]
+	uint64_t abs_x = x_i < 0 ? (~static_cast<uint64_t>(x_i) + 1u) : static_cast<uint64_t>(x_i);
+
+	U128 prod = UMulWide(UMul(abs_x, static_cast<uint64_t>(r)), 127u);  // |x_i|·127·R
+	U128 numerator = UAdd64(UTwice(prod), uint64_t{1} << exponent);
+	uint64_t magnitude = UShrToU64(numerator, exponent + 1);
+
+	if (magnitude > 127u) magnitude = 127u;
+	int32_t q = static_cast<int32_t>(magnitude);
+	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------
