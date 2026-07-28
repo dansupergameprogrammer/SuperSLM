@@ -7,19 +7,25 @@
 // identity/near-identity fold-apply dispatch (C24/C25), the C28 bias-
 // reconciliation compute (§4.4), the embed entry with its host-supplied
 // token-id validation (F-S3-8, §4.8), the K/V landing composite's rescale
-// (C27, §8.1), and C33's post-rotation clamp (§5.3). C28's own (q_B, e_a)
-// domain predicate, CheckRoundingDivideByPotExponentDomain, and C32's own
-// softmax-row width predicate, CheckSoftmaxRowWidthDomain, are declared in
-// checked_chain_funnel.h instead — both are derived-operand predicates in the
-// funnel's own §7.2 second-limb family, not site compositions.
+// (C27, §8.1), C33's post-rotation clamp (§5.3), and the RoPE application
+// site (§6.2 step 3, §11 S3.3's own gate line; D-SLM376, D-SLM383, D-SLM384).
+// C28's own (q_B, e_a) domain predicate, CheckRoundingDivideByPotExponentDomain,
+// and C32's own softmax-row width predicate, CheckSoftmaxRowWidthDomain, are
+// declared in checked_chain_funnel.h instead — both are derived-operand
+// predicates in the funnel's own §7.2 second-limb family, not site
+// compositions.
 //
 // The S3.2 declarations' bodies (RmsNormSite, ApplyWeightScaleFold,
 // BiasReconcile, EmbedEntry, FloorDivI64) are the real green construction
 // (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
-// 2026-07-28.md §4/§9). The S3.3 declarations below (LandingRescale,
-// ClampRopeCode) are likewise real green constructions, against
+// 2026-07-28.md §4/§9). The S3.3 declarations LandingRescale and ClampRopeCode
+// are likewise real green constructions, against
 // Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §6.1/§6.3/§11's own red suite.
+// §6.1/§6.3/§11's own red suite. RopeApplySite below is a deliberately-wrong
+// red-first STUB (this commit) — see its own comment; the site itself is the
+// production symbol Claude/Curie/superslm-s3.3-rope-application-site-test-
+// design-2026-07-28.md §6 named as missing, and D-SLM376 rules it is built
+// here, in S3.3, as CheckPositionOverCap's own first act.
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob
@@ -38,6 +44,7 @@
 #include <string_view>
 
 #include "superslm/checked_chain_funnel.h"
+#include "superslm/model.h"  // SslmTensorManifest (RopeApplySite's rope_tables parameter)
 
 namespace superslm {
 
@@ -177,6 +184,44 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 // and the design's own discriminating fixture (§5.3) exists to catch an
 // implementation that clamps at the wrong one.
 int64_t ClampRopeCode(int64_t raw);
+
+// S3.3's RoPE application site (§6.2 step 3, §11 S3.3's own gate line;
+// T-1308, D-SLM376, D-SLM383, D-SLM384). Signature matches Claude/Curie/
+// superslm-s3.3-rope-application-site-test-design-2026-07-28.md §6.1 exactly,
+// so that record's §6 fixtures drop in unchanged once the real body below
+// replaces this stub. `row`/`out_row` each have `head_dim` elements
+// (`head_dim` even — the rotation pairs elements, load-time-rejected
+// otherwise, per §6.2 step 3's own "head_dim odd is a load-time rejection").
+// `rope_tables` is the loaded ROP1 view (`SslmModelView::rope_tables`,
+// model.h) carrying the "cos"/"sin" tensors this site reads by row.
+//
+// A real body performs, in this order and no other:
+//   1. CheckPositionOverCap(position, context_cap) (checked_chain_funnel.h) —
+//      the site's documented FIRST ACT (D-SLM376). On rejection, return
+//      PositionOverCap immediately; `out_row` is untouched and `rope_tables`'
+//      "cos"/"sin" tensors are never read — "never a table read" (§11 S3.3's
+//      own gate line, §6.2 step 3's own text).
+//   2. Read the "cos"/"sin" tensors' row `position` from `rope_tables`
+//      (`head_dim / 2` elements each).
+//   3. For each pair `i` in `[0, head_dim/2)`: `RopeApplyPair(row[2i],
+//      row[2i+1], cos_row[i], sin_row[i])` (intmath.h — interleaved even/odd
+//      pairing, matching the reference's own `_rotate_rows`, not a
+//      first-half/second-half split), then `ClampRopeCode` on each
+//      component, written to `out_row[2i]` / `out_row[2i+1]`.
+//
+// STUB (this commit): unconditionally returns WorkspaceTooSmall — a status
+// none of this site's real outcomes (Ok, PositionOverCap) ever is, matching
+// this tree's own SslmForwardStatus-returning stub convention (a594dd2;
+// c4ee594's CheckSoftmaxRowWidthDomain, staged the same way before its own
+// green phase). Calls nothing, reads nothing, writes nothing to `out_row`.
+// The three-step body above is the next pass's job, not this one's; this
+// declaration and stub exist solely so a red suite can be authored against a
+// real, callable symbol (Claude/Curie/superslm-s3.3-rope-application-site-
+// test-design-2026-07-28.md §7).
+SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
+                                 int64_t position, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables,
+                                 int8_t* out_row);
 
 // The forward's entry (C23, §6.1, F-S3-8): validates `token_id` against
 // `[0, vocab_size)` BEFORE any row of `embed_weights` is read (§4.8's standing

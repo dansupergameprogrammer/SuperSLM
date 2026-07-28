@@ -437,17 +437,19 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 // context_cap is rejected before a table read"; Board T-1308). Declared here,
 // in this file's own §7.2 second-limb predicate family, so a follow-up Curie
 // pass can attach a red cell against a real, callable symbol -- T-1308 named
-// the absence of any callable predicate or stub at either sub-slot (S3.3 or
-// S3.6) as the blocker itself, not merely a routing question (no `tests/`
-// edit accompanies this declaration; tests/ stays read-only to this
-// campaign). `position` is a host/runtime-supplied sequence position;
-// `context_cap` is the artifact's own config field (model.h). Rejects when
-// `position` is outside `[0, context_cap)` -- the cap is an EXCLUSIVE upper
-// bound, matching the plan's own "position == context_cap is rejected"
-// wording (equality with the cap is already one past the last valid slot).
-// Wiring this into an actual forward call site against a loaded model's real
-// context_cap remains S3.6's own job (§9.1); this predicate only makes the
-// comparison callable.
+// the absence of any callable predicate at either sub-slot (S3.3 or S3.6) as
+// the blocker itself, not merely a routing question (no `tests/` edit
+// accompanies this declaration; tests/ stays read-only to this campaign).
+// `position` is a host/runtime-supplied sequence position; `context_cap` is
+// the artifact's own config field (model.h). Rejects when `position` is
+// outside `[0, context_cap)` -- the cap is an EXCLUSIVE upper bound, matching
+// the plan's own "position == context_cap is rejected" wording (equality
+// with the cap is already one past the last valid slot). Wiring this into an
+// actual forward call site is S3.3's own job, not S3.6's (D-SLM376,
+// 2026-07-28; this exact paragraph was found, per D-SLM383, still routing
+// the wiring to S3.6 a day after the ruling overturned it, and is corrected
+// here as part of the site's own build): forward_sites.h's RopeApplySite
+// calls this predicate first, before any ROP1 table read.
 SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap) {
 	if (position < 0 || position >= context_cap) {
 		return SslmForwardStatus::PositionOverCap;

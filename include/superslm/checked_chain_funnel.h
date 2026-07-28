@@ -29,9 +29,11 @@
 // with). This file also declares CheckPositionOverCap (Board T-1308) --
 // its own body is real too (src/forward/checked_chain_funnel.cpp), a
 // standalone predicate for S3.3's own position-cap gate (§11 S3.3's gate
-// line) so a follow-up Curie pass can attach a red cell against a real,
-// callable symbol; wiring it into an actual forward call site remains
-// S3.6's own job (§9.1).
+// line). Wiring it into a real forward call site is S3.3's own job, not
+// S3.6's (D-SLM376, 2026-07-28, overturning this file's own prior routing;
+// the stale routing was itself caught and corrected per D-SLM383):
+// forward_sites.h's RopeApplySite calls this predicate as its own first act,
+// before any ROP1 table read.
 // The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
 // reconciliation compute, and the embed entry are S3.2's own site-composition
 // functions and are declared in include/superslm/forward_sites.h instead — not
@@ -104,7 +106,8 @@ enum class SslmForwardStatus {
 	SoftmaxRowWidthOutOfDomain,              // C32/D-SLM366 (§7.2 second limb) — S3.3's own build, §11 S3.3 §6.2
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
 	PositionOverCap,                         // CheckPositionOverCap (this file) declares the predicate, S3.3;
-	                                          // wiring it into a forward call site is owed by S3.6 (§9.1, T-1308)
+	                                          // RopeApplySite (forward_sites.h) wires it in as its first act --
+	                                          // S3.3's own job, not S3.6's (D-SLM376, D-SLM383, T-1308)
 	WorkspaceTooSmall,                       // owed by a later sub-slot
 	KvCapacityExhausted,                     // owed by S3.7 (§9.4) — defined and resumable
 	KvPrecisionUnsupported,                  // owed by S3.7 (§14.4)
@@ -320,9 +323,12 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 // file's own §7.2 second-limb predicate family, so a follow-up Curie pass
 // can attach a red cell against a real, callable symbol rather than the bare
 // `PositionOverCap` enumerator this tree carried with no function behind it.
-// Wiring this into an actual forward call site against a loaded model's real
-// context_cap remains S3.6's own job (§9.1); this predicate only makes the
-// comparison callable.
+// Wiring this into an actual forward call site is S3.3's own job, not S3.6's
+// (D-SLM376, 2026-07-28; this exact paragraph was found, per D-SLM383, still
+// routing the wiring to S3.6 a day after the ruling overturned it, and is
+// corrected here as part of the site's own build rather than as a separate
+// pass): forward_sites.h's RopeApplySite calls this predicate first, before
+// any ROP1 table read, exactly the ordering §11 S3.3's own gate line names.
 SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap);
 
 }  // namespace superslm

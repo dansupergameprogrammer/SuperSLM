@@ -3,11 +3,13 @@
 // See include/superslm/forward_sites.h for the contract
 // (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
 // F-S3-8, C27, C33). The S3.2 bodies (FloorDivI64, RmsNormSite,
-// ApplyWeightScaleFold, BiasReconcile, EmbedEntry) and the S3.3 bodies below
+// ApplyWeightScaleFold, BiasReconcile, EmbedEntry) and the S3.3 bodies
 // (LandingRescale, ClampRopeCode) are the real green construction against the
 // red suite authored in tests/test_main.cpp (Claude/Curie/
 // superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
 // §11; superslm-s3.3-attention-interior-test-design-2026-07-28.md §11/§12).
+// RopeApplySite below is a deliberately-wrong red-first STUB (D-SLM376,
+// D-SLM383, D-SLM384) -- see its own comment.
 #include "superslm/forward_sites.h"
 
 #include <vector>
@@ -283,6 +285,22 @@ int64_t ClampRopeCode(int64_t raw) {
 	if (raw > 127) return 127;
 	if (raw < -127) return -127;
 	return raw;
+}
+
+SslmForwardStatus RopeApplySite(const int8_t* /*row*/, size_t /*head_dim*/,
+                                 int64_t /*position*/, int64_t /*context_cap*/,
+                                 const SslmTensorManifest& /*rope_tables*/,
+                                 int8_t* /*out_row*/) {
+	// S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-rope-application-site-
+	// test-design-2026-07-28.md §6, §7): unconditionally returns
+	// WorkspaceTooSmall, a status none of this site's own real outcomes (Ok,
+	// PositionOverCap) ever is -- matching this campaign's own
+	// SslmForwardStatus-returning stub convention (a594dd2, c4ee594's
+	// CheckSoftmaxRowWidthDomain). A follow-up Brunel pass replaces this body
+	// with the real CheckPositionOverCap-first, then-read-ROP1-row,
+	// then-RopeApplyPair-plus-ClampRopeCode-per-pair composition the
+	// declaration's own comment specifies.
+	return SslmForwardStatus::WorkspaceTooSmall;  // stub
 }
 
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,
