@@ -10359,6 +10359,226 @@ static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// S3.3 -- the RoPE application site's own red suite, against the real,
+// callable RopeApplySite symbol declared and stubbed at commit 13dfcfd
+// (Claude/Brunel/superslm-s3.3-rope-application-site-header-contract-build-
+// 2026-07-28.md). The stub unconditionally returns WorkspaceTooSmall --
+// calling nothing, reading nothing, writing nothing to out_row -- so every
+// cell below fails against that status or against out_row's poison pattern,
+// never against a compile error or a fixture/setup failure: the three
+// blocked cells the test-design record's Sec6 fully specified
+// (Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
+// Sec6.2/6.3/6.4) are landed here, red, against the real symbol.
+// ---------------------------------------------------------------------------
+
+// Sec6.2's own feature-oracle cell: a purpose-built 128-row ROP1 section
+// carrying real, pinned data at rows 0 and (context_cap-1) only -- the two
+// positions kRopeSitePositionZeroCase/kRopeSitePositionCapMinusOneCase
+// exercise -- with every other row zero-filled. ValidateRopeTablesDomain's
+// own check is magnitude-only (|cos|,|sin| <= 2^30, Sec2 of the test-design
+// record) and has no shape cross-check against CFG1.context_cap, so a
+// zero-filled row is accepted; this is the "purpose-built 128-row ROP1
+// section" option the test-design record's own Sec6.2 names as a mechanical
+// extension of the already-green round-trip cell's own MakeRop1SectionMultiRow
+// helper.
+static superslm_test::FixtureSection MakeRop1SectionSparse128At(
+    const superslm_test::RopeSitePositionCase& zero_case,
+    const superslm_test::RopeSitePositionCase& cap_minus_one_case) {
+	using namespace superslm_test;
+	const int32_t cap = kRopeSitePinnedContextCap;
+	const int32_t pairs = kRopeSitePinnedPairs;
+	std::vector<int64_t> cos_flat(static_cast<size_t>(cap) * static_cast<size_t>(pairs), 0);
+	std::vector<int64_t> sin_flat(static_cast<size_t>(cap) * static_cast<size_t>(pairs), 0);
+	const size_t zero_row_off = static_cast<size_t>(zero_case.position) * static_cast<size_t>(pairs);
+	const size_t last_row_off = static_cast<size_t>(cap_minus_one_case.position) * static_cast<size_t>(pairs);
+	for (int32_t i = 0; i < pairs; ++i) {
+		cos_flat[zero_row_off + static_cast<size_t>(i)] = zero_case.cos_row[i];
+		sin_flat[zero_row_off + static_cast<size_t>(i)] = zero_case.sin_row[i];
+		cos_flat[last_row_off + static_cast<size_t>(i)] = cap_minus_one_case.cos_row[i];
+		sin_flat[last_row_off + static_cast<size_t>(i)] = cap_minus_one_case.sin_row[i];
+	}
+	return MakeRop1SectionMultiRow(cap, pairs, cos_flat.data(), sin_flat.data());
+}
+
+// Sec6.2 (test-design record §6.2): drives the real RopeApplySite with each
+// Sec4.1 case's row/position/context_cap (= kRopeSitePinnedContextCap)
+// against a real loaded model view carrying the purpose-built table above,
+// and asserts out_row == c.expected_out exactly -- the site's own feature
+// oracle, at position 0 (the identity) and position context_cap-1 (a
+// genuine, clamp-engaging rotation), per Sec13 dim 6's own named cell.
+static void TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne() {
+	using namespace superslm_test;
+
+	Cfg1Spec spec{};
+	spec.context_cap = static_cast<uint32_t>(kRopeSitePinnedContextCap);
+	spec.head_dim = static_cast<uint32_t>(kRopeSitePinnedHeadDim);
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables =
+	    MakeRop1SectionSparse128At(kRopeSitePositionZeroCase, kRopeSitePositionCapMinusOneCase);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the feature-oracle fixture (sparse 128-row RoPE table) failed to load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_rope_tables, "a successfully loaded artifact must expose its RopeTables view");
+	if (!view.has_rope_tables) return;
+
+	const RopeSitePositionCase* cases[] = {&kRopeSitePositionZeroCase, &kRopeSitePositionCapMinusOneCase};
+	for (const RopeSitePositionCase* c : cases) {
+		int8_t row[128];
+		int8_t out_row[128];
+		for (int i = 0; i < kRopeSitePinnedHeadDim; ++i) {
+			row[i] = static_cast<int8_t>(c->row[i]);
+			out_row[i] = INT8_C(-99);  // poison
+		}
+		const auto forward_status =
+		    RopeApplySite(row, static_cast<size_t>(kRopeSitePinnedHeadDim), c->position,
+		                  static_cast<int64_t>(kRopeSitePinnedContextCap), view.rope_tables, out_row);
+		CHECK_MSG(forward_status == SslmForwardStatus::Ok,
+		          "%s: RopeApplySite(position=%lld) status == %s, want Ok (Sec6.2's feature oracle: "
+		          "CheckPositionOverCap -> table read -> RopeApplyPair -> ClampRopeCode, in order, to "
+		          "completion)",
+		          c->label, static_cast<long long>(c->position), SslmForwardStatusName(forward_status));
+		bool matches = true;
+		for (int i = 0; i < kRopeSitePinnedHeadDim; ++i) {
+			if (out_row[i] != static_cast<int8_t>(c->expected_out[i])) {
+				matches = false;
+				break;
+			}
+		}
+		CHECK_MSG(matches,
+		          "%s: RopeApplySite(position=%lld) out_row does not match the reference-derived "
+		          "expected rotated-and-clamped row (tests/gen_s3_3_rope_application_site_fixtures.py, "
+		          "calling the vendored rope.py's own rope_apply_pair)",
+		          c->label, static_cast<long long>(c->position));
+	}
+}
+
+// Sec6.3 (test-design record §6.3): "a position == context_cap is rejected
+// before a table read" -- Sec11 S3.3's own gate line, Sec6.2 step 3's own
+// text. Poison-fills out_row before each call (this suite's own poison-fill
+// convention, e.g. TestRequantChainCheckedRejectsOverC29Domain above), calls
+// RopeApplySite at position == context_cap and position == context_cap + 1
+// against a real loaded ROP1 tensor whose row count is exactly context_cap
+// (kRopeSiteRoundTripContextCap = 4, so row 4 is one past the tensor's last
+// valid row), and asserts PositionOverCap AND out_row byte-for-byte
+// unchanged from the poison pattern -- proving no write, and therefore no
+// read of the out-of-bounds row, occurred (the strongest ordering proof
+// constructible without instrumenting the tensor accessor itself).
+static void TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead() {
+	using namespace superslm_test;
+
+	Cfg1Spec spec{};
+	spec.context_cap = static_cast<uint32_t>(kRopeSiteRoundTripContextCap);
+	spec.head_dim = static_cast<uint32_t>(kRopeSiteRoundTripHeadDim);
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
+	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the ordering-cell fixture (context_cap=%d RoPE table) failed to load: got %s (%s)",
+	          kRopeSiteRoundTripContextCap, SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_rope_tables, "a successfully loaded artifact must expose its RopeTables view");
+	if (!view.has_rope_tables) return;
+
+	int8_t row[128];
+	for (int i = 0; i < kRopeSiteRoundTripHeadDim; ++i) row[i] = static_cast<int8_t>((i * 3) - 5);
+
+	const int64_t over_positions[] = {
+	    static_cast<int64_t>(kRopeSiteRoundTripContextCap),      // == context_cap: one past the last valid slot
+	    static_cast<int64_t>(kRopeSiteRoundTripContextCap) + 1,  // > context_cap
+	};
+	for (int64_t position : over_positions) {
+		int8_t out_row[128];
+		for (int i = 0; i < kRopeSiteRoundTripHeadDim; ++i) out_row[i] = INT8_C(-99);  // poison
+
+		const auto forward_status =
+		    RopeApplySite(row, static_cast<size_t>(kRopeSiteRoundTripHeadDim), position,
+		                  static_cast<int64_t>(kRopeSiteRoundTripContextCap), view.rope_tables, out_row);
+		CHECK_MSG(forward_status == SslmForwardStatus::PositionOverCap,
+		          "position=%lld (context_cap=%d): RopeApplySite status == %s, want PositionOverCap",
+		          static_cast<long long>(position), kRopeSiteRoundTripContextCap,
+		          SslmForwardStatusName(forward_status));
+		bool untouched = true;
+		for (int i = 0; i < kRopeSiteRoundTripHeadDim; ++i) {
+			if (out_row[i] != INT8_C(-99)) {
+				untouched = false;
+				break;
+			}
+		}
+		CHECK_MSG(untouched,
+		          "position=%lld: out_row must be byte-for-byte unchanged from the poison pattern on "
+		          "rejection -- \"never a table read\" (Sec11 S3.3's own gate line) -- a real read would "
+		          "have overwritten at least one poisoned byte",
+		          static_cast<long long>(position));
+	}
+}
+
+// Sec6.4 (test-design record §6.4): the guard-vitality (ASan) cell, Coverage
+// Model dim 11 realized as a build-configuration-gated property (plan
+// acceptance criterion 8) rather than a plain-build assertion alone. The
+// ROP1 tensor here has exactly ONE row (context_cap = 1) -- the tightest
+// allocation this suite can construct -- so a real read of row 1 (one past
+// the tensor's only valid row) has the shortest possible distance to travel
+// before landing in unallocated memory, maximizing the chance an ASan
+// redzone traps it under the project's sanitizer CI leg. This cell also runs
+// and is checked in a plain (non-ASan) build: it does not require the
+// sanitizer to assert PositionOverCap, and the sanitizer is what turns a
+// would-be silent OOB read into a hard failure on top of that assertion --
+// exactly the "vitality" this dimension names, and distinct from Sec6.3's
+// cell above by using the tightest possible tensor rather than a
+// general-purpose one.
+static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
+	using namespace superslm_test;
+
+	const int32_t cap = 1;
+	const int32_t pairs = kRopeSitePinnedPairs;
+	std::vector<int64_t> cos_flat(static_cast<size_t>(pairs), INT64_C(1073741824));  // identity row (2^30)
+	std::vector<int64_t> sin_flat(static_cast<size_t>(pairs), 0);
+
+	Cfg1Spec spec{};
+	spec.context_cap = static_cast<uint32_t>(cap);
+	spec.head_dim = static_cast<uint32_t>(kRopeSitePinnedHeadDim);
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(cap, pairs, cos_flat.data(), sin_flat.data());
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the guard-vitality fixture (context_cap=1 RoPE table, the tightest allocation this suite "
+	          "constructs) failed to load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_rope_tables, "a successfully loaded artifact must expose its RopeTables view");
+	if (!view.has_rope_tables) return;
+
+	int8_t row[128];
+	for (int i = 0; i < kRopeSitePinnedHeadDim; ++i) row[i] = static_cast<int8_t>((i * 7) - 3);
+	int8_t out_row[128];
+	for (int i = 0; i < kRopeSitePinnedHeadDim; ++i) out_row[i] = INT8_C(-99);  // poison
+
+	const auto forward_status =
+	    RopeApplySite(row, static_cast<size_t>(kRopeSitePinnedHeadDim), /*position=*/static_cast<int64_t>(cap),
+	                  static_cast<int64_t>(cap), view.rope_tables, out_row);
+	CHECK_MSG(forward_status == SslmForwardStatus::PositionOverCap,
+	          "context_cap=1, position=1 (one past the tensor's single valid row): RopeApplySite status == "
+	          "%s, want PositionOverCap -- the guard must fire before any read of row 1, which does not "
+	          "exist in this tensor",
+	          SslmForwardStatusName(forward_status));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -10901,17 +11121,18 @@ int main(int argc, char** argv) {
 	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
 	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
 
-	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383; Claude/Curie/
-	// superslm-s3.3-rope-application-site-test-design-2026-07-28.md). The
-	// site itself does not exist yet (no production symbol composes
-	// CheckPositionOverCap + the ROP1 table read + RopeApplyPair +
-	// ClampRopeCode) -- see the record's Sec2/Sec6 for the fully specified,
-	// ready-to-drop-in blocked cells (the feature oracle, the "never a table
-	// read" ordering cell, and the guard-vitality ASan cell). What compiles
-	// today, real and green, against already-shipped primitives:
+	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383, D-SLM384,
+	// D-SLM385; Claude/Curie/superslm-s3.3-rope-application-site-test-design-
+	// 2026-07-28.md). The three cells below are the first C++ exercise of a
+	// real, declared, deliberately-wrong RopeApplySite (commit 13dfcfd's
+	// stub, unconditionally WorkspaceTooSmall) -- the fully specified Sec6
+	// cells, now landed red against the real symbol:
 	TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps();
 	TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives();
 	TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow();
+	TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne();
+	TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead();
+	TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

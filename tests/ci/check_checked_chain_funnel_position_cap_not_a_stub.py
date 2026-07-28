@@ -10,10 +10,14 @@ summary block, describes it accurately. The opening summary block does not:
 it calls the function "a standalone predicate stub for S3.3's own
 still-unbuilt position-cap gate" -- the same self-contradicting shape as the
 prior round's finding 4, in the same header, introduced by the repair FOR
-finding 4. The word to change is "stub"; the predicate is built. Its wiring
-into a real forward call site (S3.6's own job) is still owed and this check
-does not claim otherwise -- it pins only that the header stops describing an
-already-real, already-verified function as unbuilt.
+finding 4. The word to change is "stub"; the predicate is built. Its wiring into a
+real forward call site is RopeApplySite's own first act, in S3.3
+(D-SLM376, 2026-07-28, overturning this header's own prior "S3.6's own
+job" routing -- D-SLM383 found the stale text one day later and D-SLM385
+corrected it, along with three sibling comments in the same header and its
+.cpp) -- and this check does not claim otherwise: it pins only that the
+header stops describing an already-real, already-verified function as
+unbuilt.
 """
 from __future__ import annotations
 
