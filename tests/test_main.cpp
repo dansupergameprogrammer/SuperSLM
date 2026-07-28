@@ -7369,9 +7369,12 @@ static void TestC30DomainDisagreementPointsAreExplicitlyPinned() {
 //     descriptor (already shipped, S-HARDEN-1) and the runtime no-UB domain C34's
 //     production predicate encodes.
 //
-//     CheckSiluCompositionScaleDomain (declared checked_chain_funnel.h:203, defined
-//     src/forward/checked_chain_funnel.cpp:240) is real and is what every cell below
-//     calls -- CLOSING the prior round's own finding (Poirot 380b75f review, N3):
+//     CheckSiluCompositionScaleDomain (declared in checked_chain_funnel.h, defined in
+//     src/forward/checked_chain_funnel.cpp -- cited by symbol, not line: three prior
+//     rounds' line citations were each invalidated by a later commit in the same
+//     range, Poirot 7c74636 confirmation review NEW-4) is real and is what every
+//     cell below calls -- CLOSING the prior round's own finding (Poirot 380b75f
+//     review, N3):
 //     the containment cell used to call a test-local reimplementation instead of the
 //     production predicate, which let the two diverge with no failure. The formula
 //     below (IndependentSiluCompositionEDomainFormula) is retained ONLY as an
@@ -7388,58 +7391,79 @@ static bool IndependentSiluCompositionEDomainFormula(int e) {
 	       shift_lower <= kRoundingDivideByPotExponentMaxI64;
 }
 
-// The |m| axis's own independent formula (checked_chain_funnel.h:184-203's own
-// documented bound): the same symmetric kCompositionScaleMaxAbsM ceiling
+// The |m| axis's own independent formula (CheckSiluCompositionScaleDomain's own
+// documented bound, checked_chain_funnel.h -- cited by symbol per NEW-4 above):
+// the same symmetric kCompositionScaleMaxAbsM ceiling
 // SiluSigmoidQ15's term = code*m needs, a real public constant (silu_lut.h),
 // pinned equal to kInt32Max by model.cpp's own static_assert.
 static bool IndependentSiluCompositionMDomainFormula(int64_t m) {
 	return m >= -superslm::kCompositionScaleMaxAbsM && m <= superslm::kCompositionScaleMaxAbsM;
 }
 
-static bool C34LoadTimeAcceptsE(int64_t e) {
+static bool C34LoadTimeAcceptsE(int64_t m, int64_t e) {
 	using namespace superslm_test;
-	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
-	                             MakeKvc1CompositionSection(/*m=*/0, e)});
+	auto built = BuildArtifact(
+	    {MakeValidConfigSection(), MakeSigmoidLutSection(), MakeKvc1CompositionSection(m, e)});
 	SslmModelView view;
 	std::string err;
 	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
 	return status == SslmModelStatus::Ok;
 }
 
+// NEW-5 (Poirot 7c74636 confirmation review): this cell used to sweep e alone
+// with m fixed at 0 -- a value in neither of Sec5.4's own two named mantissas
+// (2^30, 2^31-1) -- so the containment relation the design actually specifies
+// (swept over BOTH m in {2^30, 2^31-1} and e) was measured on one axis only.
+// Fixed by sweeping the outer loop over both named mantissas; both are within
+// kCompositionScaleMaxAbsM (2^30 comfortably, 2^31-1 exactly at the boundary),
+// so the |m| branch never fires here -- this cell's own scope is the e-axis
+// containment relation at each mantissa, not the |m| branch (that is
+// TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound's own scope).
 static void TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor() {
 	using superslm::CheckSiluCompositionScaleDomain;
 	using superslm::SslmForwardStatus;
-	// Containment, swept: every e the real load-time gate accepts, the real
-	// production predicate also accepts at m=0 (in-domain on the |m| axis
-	// throughout). Never asserted the other way (the runtime domain is
-	// deliberately wider -- Sec5.4's whole point).
-	for (int e = -85; e <= 15; ++e) {
-		if (C34LoadTimeAcceptsE(e)) {
-			CHECK_MSG(CheckSiluCompositionScaleDomain(0, e) == SslmForwardStatus::Ok,
-			          "e=%d: load-time ACCEPTS but CheckSiluCompositionScaleDomain(0, e) == %s "
-			          "-- containment violated (Sec5.4)",
-			          e, superslm::SslmForwardStatusName(CheckSiluCompositionScaleDomain(0, e)));
+	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
+	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1
+	for (int64_t m : {kMLow, kMHigh}) {
+		// Containment, swept: every e the real load-time gate accepts at this
+		// mantissa, the real production predicate also accepts. Never asserted
+		// the other way (the runtime domain is deliberately wider -- Sec5.4's
+		// whole point).
+		for (int e = -85; e <= 15; ++e) {
+			if (C34LoadTimeAcceptsE(m, e)) {
+				CHECK_MSG(CheckSiluCompositionScaleDomain(m, e) == SslmForwardStatus::Ok,
+				          "m=%lld e=%d: load-time ACCEPTS but CheckSiluCompositionScaleDomain(m, e) "
+				          "== %s -- containment violated (Sec5.4)",
+				          static_cast<long long>(m), e,
+				          superslm::SslmForwardStatusName(CheckSiluCompositionScaleDomain(m, e)));
+			}
 		}
-	}
 
-	// The four named boundary points, pinned by their EXECUTED disposition (Sec5.4):
-	// e=7 both accept; e=8 the one point of difference (runtime accepts, load
-	// rejects); e=9 both reject (the overflow point itself, shift==26); e=-80 both
-	// accept (the shared exact lower endpoint), e=-81 both reject.
-	CHECK_MSG(C34LoadTimeAcceptsE(7) && CheckSiluCompositionScaleDomain(0, 7) == SslmForwardStatus::Ok,
-	          "e=7: both must accept (the load-time ceiling, shift 24)");
-	CHECK_MSG(!C34LoadTimeAcceptsE(8) && CheckSiluCompositionScaleDomain(0, 8) == SslmForwardStatus::Ok,
-	          "e=8: load-time must reject and the runtime predicate must accept -- the one "
-	          "point of difference Sec5.4 executes");
-	CHECK_MSG(!C34LoadTimeAcceptsE(9) &&
-	              CheckSiluCompositionScaleDomain(0, 9) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
-	          "e=9: both must reject (shift==26, the overflow point itself)");
-	CHECK_MSG(C34LoadTimeAcceptsE(-80) &&
-	              CheckSiluCompositionScaleDomain(0, -80) == SslmForwardStatus::Ok,
-	          "e=-80: both must accept (the shared exact lower endpoint)");
-	CHECK_MSG(!C34LoadTimeAcceptsE(-81) &&
-	              CheckSiluCompositionScaleDomain(0, -81) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
-	          "e=-81: both must reject");
+		// The four named boundary points, pinned by their EXECUTED disposition
+		// (Sec5.4), at this mantissa: e=7 both accept; e=8 the one point of
+		// difference (runtime accepts, load rejects); e=9 both reject (the
+		// overflow point itself, shift==26); e=-80 both accept (the shared exact
+		// lower endpoint), e=-81 both reject.
+		CHECK_MSG(
+		    C34LoadTimeAcceptsE(m, 7) && CheckSiluCompositionScaleDomain(m, 7) == SslmForwardStatus::Ok,
+		    "m=%lld e=7: both must accept (the load-time ceiling, shift 24)", static_cast<long long>(m));
+		CHECK_MSG(!C34LoadTimeAcceptsE(m, 8) &&
+		              CheckSiluCompositionScaleDomain(m, 8) == SslmForwardStatus::Ok,
+		          "m=%lld e=8: load-time must reject and the runtime predicate must accept -- the "
+		          "one point of difference Sec5.4 executes",
+		          static_cast<long long>(m));
+		CHECK_MSG(!C34LoadTimeAcceptsE(m, 9) &&
+		              CheckSiluCompositionScaleDomain(m, 9) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
+		          "m=%lld e=9: both must reject (shift==26, the overflow point itself)",
+		          static_cast<long long>(m));
+		CHECK_MSG(C34LoadTimeAcceptsE(m, -80) &&
+		              CheckSiluCompositionScaleDomain(m, -80) == SslmForwardStatus::Ok,
+		          "m=%lld e=-80: both must accept (the shared exact lower endpoint)",
+		          static_cast<long long>(m));
+		CHECK_MSG(!C34LoadTimeAcceptsE(m, -81) &&
+		              CheckSiluCompositionScaleDomain(m, -81) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
+		          "m=%lld e=-81: both must reject", static_cast<long long>(m));
+	}
 
 	// The load-time ceiling's own static_assert names the overflow point exactly:
 	// shift(7) = 7+17 = 24 < 26 (the overflow exponent) -- confirmed live against the
@@ -7786,8 +7810,9 @@ static void TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned() 
 // representable in the WIDER int64_t return type that primitive uses. This
 // cell derives its claim from the sibling's own contract (magnitude is
 // widened before the abs, and the guard the composition relies on is
-// C29's own D' > 2^31 domain check, checked_chain_funnel.cpp:78) rather than
-// from a specific fix construction: a row whose true magnitude is 2^63 is
+// C29's own D' > 2^31 domain check, RequantChainChecked's own step 3 in
+// src/forward/checked_chain_funnel.cpp -- cited by symbol, not line, per NEW-4)
+// rather than from a specific fix construction: a row whose true magnitude is 2^63 is
 // unambiguously out of C29's domain (2^63 > 2^31), so MaxAbsReduceWide's own
 // report for this row must exceed 2^31, and RequantChainChecked must reject
 // it -- whatever internal representation the primitive eventually uses to
@@ -7826,17 +7851,21 @@ static void TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain() {
 	          "rejection (\"computes nothing\")");
 }
 
-// S4: step 6 of RequantChainChecked -- C26's carried-scale product,
-// checked_chain_funnel.cpp:92-112 -- has no assertion of any kind anywhere
-// in the suite. The only prior statement about *out_scale
-// (TestRequantChainCheckedT1254Witness) asserts merely that it differs from
-// its poison value; two mutants defeat that (Poirot M3, M5): replacing the
-// whole computed value with a constant, and reversing the fold to
+// S4: step 5 of RequantChainChecked (renumbered from step 6 by commit 11650a8,
+// which reconciled the header's own step ordering against the fold-before-
+// write execution order) -- C26's carried-scale product, computed in
+// src/forward/checked_chain_funnel.cpp (cited by symbol, not line, per
+// NEW-4) -- HAD no assertion of any kind anywhere in the suite at review time
+// (Poirot ac34677 review); pinned by this cell below since. The only prior
+// statement about *out_scale (TestRequantChainCheckedT1254Witness) asserted
+// merely that it differs from its poison value; two mutants defeated that
+// (Poirot M3, M5): replacing the whole computed value with a constant, and
+// reversing the fold to
 // right-associated. This cell pins the EXACT value, derived independently
 // of src/forward/checked_chain_funnel.cpp -- from the vendored reference's
 // own carried_scale_product (tests/reference/superslm_spike/intmath.py:
 // 410-428), the same left-associated mechanism C26 pins and this design's
-// own pinned mechanism (Sec7.2 step 6), executed directly in Python rather
+// own pinned mechanism (Sec7.2 step 5, post-11650a8 numbering), executed directly in Python rather
 // than read back from the C++ under test:
 //
 //   python -c "
@@ -7886,8 +7915,10 @@ static void TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendor
 	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 }
 
-// N1 (Poirot 380b75f confirmation review): step 0 (checked_chain_funnel.cpp:90-102)
-// checks every `incoming` factor and `site_constant` against
+// N1 (Poirot 380b75f confirmation review): step 0 (RequantChainChecked's own
+// entry check, src/forward/checked_chain_funnel.cpp -- cited by symbol, not
+// line, per the 7c74636 confirmation review's NEW-4) checks every `incoming`
+// factor and `site_constant` against
 // CarriedScaleMantissaFitsInt32 before the fold runs, but never checks `running` --
 // the fold's own left operand on every combine after the first, and exactly what
 // CombineCarriedScale receives. CombineCarriedScale's renormalization
@@ -7939,13 +7970,27 @@ static void TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTr
 	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 }
 
-// N1's compounding half: CarriedScaleMantissaOutOfDomain appears zero times in
-// tests/ (380b75f review Sec4) -- an entirely new status and an entirely new
-// funnel step (step 0) shipped with no cell of any kind, even for the case step 0
-// ALREADY guards today (a single `incoming` factor whose own mantissa does not fit
-// int32_t, never mind the running-product gap the cell above pins). This cell is
-// independent of the gap above: it exercises step 0's existing, already-correct
-// per-operand check, and is expected to pass today.
+// N1's compounding half: CarriedScaleMantissaOutOfDomain appeared zero times in
+// tests/ (380b75f review Sec4) -- an entirely new status shipped with no cell of
+// any kind. CORRECTED (Poirot 7c74636 confirmation review, NEW-1): the comment
+// this cell carried claimed it "exercises step 0's existing, already-correct
+// per-operand check, and is expected to pass today" -- checked by mutation, that
+// claim is false. On the row used here (kWideT1254WitnessPositiveRow, D' == 2^31,
+// within C29's domain), an out-of-domain `incoming` or `site_constant` factor
+// becomes the FIRST value `running` takes in the fold (`fold_in`'s own
+// `running = have_running ? Combine(...) : next` branch assigns the raw operand,
+// uncombined, on the first factor), so the fold's own running-product check
+// (N1's remedy) rejects it with the identical CarriedScaleMantissaOutOfDomain
+// status even with step 0 deleted in full -- confirmed by mutation: 0 of this
+// cell's checks fail under the step-0-deleted mutant. What this cell actually
+// pins is narrower than its old comment claimed: an out-of-domain operand is
+// rejected with CarriedScaleMantissaOutOfDomain on an otherwise C29-in-domain
+// row, by WHICHEVER mechanism enforces it (step 0 today; the fold's own check
+// would enforce it alone if step 0 were ever removed). The cell that isolates
+// step 0 specifically -- a row that ALSO violates C29, so only step 0's
+// ahead-of-C29 ordering produces the documented status -- is
+// TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth, immediately
+// below.
 static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain() {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
@@ -7953,8 +7998,9 @@ static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain
 
 	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
 
-	// A single `incoming` factor one past INT32_MAX -- step 0's own precondition
-	// check (CarriedScaleMantissaFitsInt32) should catch this before any fold runs.
+	// A single `incoming` factor one past INT32_MAX, on a row within C29's own
+	// domain -- rejected today by step 0's per-operand check, and (per the
+	// comment above) also by the fold's own running-product check alone.
 	{
 		const CarriedScale incoming[] = {CarriedScale{/*m=*/INT64_C(2147483648), /*e=*/0}};
 		int8_t out_codes[kWideT1254WitnessRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
@@ -7964,14 +8010,16 @@ static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain
 		    std::span<const CarriedScale>(incoming, 1), site_constant, out_codes, &out_scale);
 		CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 		          "incoming[0].m == INT32_MAX+1: RequantChainChecked status == %s, want "
-		          "CarriedScaleMantissaOutOfDomain (step 0's own per-operand check)",
+		          "CarriedScaleMantissaOutOfDomain (enforced today by step 0, and equally by the "
+		          "fold's own running-product check alone -- this cell does not discriminate "
+		          "between the two on this row)",
 		          superslm::SslmForwardStatusName(result.status));
 		CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
 		          "incoming[0].m == INT32_MAX+1: out_codes and *out_scale must be untouched on "
 		          "rejection");
 	}
 	// site_constant one past INT32_MIN on the negative side -- the sibling operand
-	// step 0 also checks.
+	// step 0 also checks, same non-discrimination as above.
 	{
 		const CarriedScale site_out_of_domain{/*m=*/INT64_C(-2147483649), /*e=*/0};
 		int8_t out_codes[kWideT1254WitnessRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
@@ -7981,12 +8029,58 @@ static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain
 		                                              out_codes, &out_scale);
 		CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 		          "site_constant.m == INT32_MIN-1: RequantChainChecked status == %s, want "
-		          "CarriedScaleMantissaOutOfDomain (step 0's own per-operand check)",
+		          "CarriedScaleMantissaOutOfDomain (enforced today by step 0, and equally by the "
+		          "fold's own running-product check alone -- this cell does not discriminate "
+		          "between the two on this row)",
 		          superslm::SslmForwardStatusName(result.status));
 		CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
 		          "site_constant.m == INT32_MIN-1: out_codes and *out_scale must be untouched on "
 		          "rejection");
 	}
+}
+
+// NEW-1 (Poirot 7c74636 confirmation review, the Significant): step 0 (the
+// per-operand check above) is almost entirely redundant now that the fold's
+// own running-product check (N1's remedy, immediately above) exists -- any
+// operand step 0 would reject is also the first value `running` takes, so the
+// fold rejects it with the identical status (proven by the cell above, and by
+// mutation: deleting step 0 leaves the whole 9,710-check suite green). The one
+// residue is STATUS PRECEDENCE, and it is real: on a row that ALSO violates
+// C29 (step 3's own D' > 2^31 check) while carrying an out-of-domain operand,
+// step 0 rejects with CarriedScaleMantissaOutOfDomain BEFORE step 3 ever runs;
+// delete step 0, and the identical call instead reaches step 3 first and
+// returns ChainInputOutOfDomain. Which status a call returns is load-bearing
+// (Sec10.4's diagnostic table names the two statuses to different site
+// classes), so this cell pins the shipped precedence explicitly and is the
+// one cell in this suite that dies when step 0 is deleted (mutation-verified).
+static void TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	// kWideOverC29DomainRow (D' == 2^31+1) violates C29 on its own
+	// (TestRequantChainCheckedRejectsOverC29Domain, no out-of-domain operand
+	// involved); incoming[0].m one past INT32_MAX violates step 0's own
+	// per-operand check on its own (the cell above, on an otherwise
+	// C29-in-domain row). Combined on ONE call, only step 0's ahead-of-C29
+	// ordering can produce CarriedScaleMantissaOutOfDomain here -- with step 0
+	// deleted, step 3's C29 check fires first and the fold never runs.
+	const CarriedScale incoming[] = {CarriedScale{/*m=*/INT64_C(2147483648), /*e=*/0}};
+	int8_t out_codes[kWideOverC29DomainRowLen] = {INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::RequantChainChecked(
+	    kWideOverC29DomainRow, kWideOverC29DomainRowLen, std::span<const CarriedScale>(incoming, 1),
+	    site_constant, out_codes, &out_scale);
+	CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	          "D'=2^31+1 row, incoming[0].m == INT32_MAX+1: RequantChainChecked status == %s, want "
+	          "CarriedScaleMantissaOutOfDomain (step 0's own rejection must fire ahead of C29's "
+	          "step-3 check on a row that violates both -- deleting step 0 makes this return "
+	          "ChainInputOutOfDomain instead, per Sec10.4's diagnostic table)",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "D'=2^31+1 row, incoming[0].m == INT32_MAX+1: out_codes and *out_scale must be "
+	          "untouched on rejection");
 }
 
 // S9: the trace instrument's REDUCED funnel-level form (Sec11 S3.1a's own
@@ -8574,6 +8668,7 @@ int main(int argc, char** argv) {
 	//     chain-funnel-test-design-2026-07-28.md Sec12. ---
 	TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated();
 	TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain();
+	TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth();
 	TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash();
 	TestSslmModelLoadClearsPreviouslyInstalledTraceHook();
 
