@@ -10,6 +10,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/checked_chain_funnel.h"
+#include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
 #include "superslm/model.h"
@@ -30,6 +31,7 @@
 #include "sslm_silu_lut_real_vectors_fixtures.h"
 #include "sslm_s3_1_c30_iexp_domain_sweep_fixtures.h"
 #include "sslm_s3_1_wide_intmath_fixtures.h"
+#include "sslm_s3_2_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -8390,6 +8392,488 @@ static void TestSslmModelLoadClearsPreviouslyInstalledTraceHook() {
 	          "function already uses) -- got the hook still installed after a second Load");
 }
 
+// ---------------------------------------------------------------------------
+// SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.2 -- the weightless and
+// projection sites (C31's RMSNorm site, C24/C25's WSC1 identity/near-identity
+// fold-apply, C28's bias reconciliation, F-S3-8's embed entry, BIA1's
+// load-time value-domain descriptor). Every symbol under test here is a STUB
+// as of the S3.2 header-contract build (commit a594dd2:
+// include/superslm/forward_sites.h / src/forward_sites.cpp;
+// CheckRoundingDivideByPotExponentDomain in checked_chain_funnel.h/.cpp;
+// BiasCodeOutOfDomain/ValidateBiasesDomain in model.h/src/model.cpp) -- every
+// cell below is RED-UNIMPLEMENTED today, authored against the header contract
+// ahead of Brunel's green phase, per Claude/Curie/superslm-s3.2-weightless-
+// and-projection-sites-test-design-2026-07-28.md Sec4. Fixtures:
+// tests/sslm_s3_2_fixtures.h (Curie's own derived-and-mutation-verified
+// witnesses, Sec3/Sec6 of that record).
+//
+// NOT authored here, and why: Sec4.5's composition-level guard-vitality cell
+// for C28's (q_B, e_a) predicate needs a RUNNING FORWARD reaching the C28 site
+// with a hostile pair -- out of reach until the embed entry, the RMSNorm site,
+// the projection sites, and the C28 site itself are all wired into one
+// forward, the same class of gap S3.1's own Sec4.7 named for its own
+// composition-level guard-vitality cell. It remains a routed, fully specified
+// finding (test-design record Sec4.5), not invented coverage of a kind this
+// pass cannot yet realize as real, compiling C++.
+// ---------------------------------------------------------------------------
+
+// Sec4.1 (C31, F-S3-2, Sec5.1): FloorDivI64's own three-row unit witness.
+// The negative control is folded into this same cell rather than a second
+// function: asserting FloorDivI64 equals floor_q on every row already fails
+// against a truncating implementation on rows 0/1 (where floor_q != trunc_q);
+// row 2 is an exact divide, where floor and truncation cannot diverge for any
+// rounding-mode pair, so it has no discriminating power on its own and is not
+// expected to.
+//
+// Mutation-verification (StandardsDocument Sec4/D-SLM357): this cell's own
+// premise -- that a native C++ truncating divide reproduces the fixture's
+// trunc_q, derived in Python by gen_s3_2_fixtures.py's own `_trunc_div` -- is
+// checked here BY EXECUTING C++'s own `/` directly on every row, not assumed
+// to survive the Python/C++ language boundary unchanged.
+static void TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kC31UnitCasesCount; ++i) {
+		const C31UnitCase& c = kC31UnitCases[i];
+		const int64_t numerator = c.hidden << 32;  // NORM_FRAC_BITS=16, 2*16=32 (Sec5.1)
+
+		const int64_t native_trunc = numerator / c.roots;
+		CHECK_MSG(native_trunc == c.trunc_q,
+		          "row %zu (hidden=%lld, roots=%lld): native C++ (hidden<<32)/roots == %lld, "
+		          "want the fixture's own trunc_q %lld -- this cell's negative-control premise "
+		          "(a truncating divide reproduces trunc_q) does not hold in real C++",
+		          i, static_cast<long long>(c.hidden), static_cast<long long>(c.roots),
+		          static_cast<long long>(native_trunc), static_cast<long long>(c.trunc_q));
+		if (c.differs) {
+			CHECK_MSG(c.floor_q != c.trunc_q,
+			          "row %zu: fixture claims differs=true but floor_q == trunc_q -- the "
+			          "fixture itself has no discriminating power on this row",
+			          i);
+		}
+
+		const int64_t got = superslm::FloorDivI64(numerator, c.roots);
+		CHECK_MSG(got == c.floor_q,
+		          "row %zu (hidden=%lld, roots=%lld): FloorDivI64(hidden<<32, roots) == %lld, "
+		          "want %lld (F-S3-2's own floor-division witness)",
+		          i, static_cast<long long>(c.hidden), static_cast<long long>(c.roots),
+		          static_cast<long long>(got), static_cast<long long>(c.floor_q));
+	}
+}
+
+// Sec4.2 (C31, Sec5.1): the RMSNorm site's own composition, against a
+// reachable (h, root) witness at H=1536. The oracle is the ALREADY-SHIPPED
+// funnel (RequantChainChecked, S3.1), fed the floor-based wide row Curie's
+// record derived and mutation-verified at the WIDE level (test-design record
+// Sec3.2/Sec6) -- never a recount of RmsNormSite's own internal steps.
+//
+// CORRECTED against this pass's own test-design record Sec4.2, by execution
+// (StandardsDocument Sec5.6: "a ruling contradicted by a measurement is
+// re-opened, not defended"): Sec4.2's own text additionally promised that
+// out_codes would DIVERGE from a truncating implementation's codes at indices
+// 0 and 17. Checked by running both the vendored Python reference and this
+// exact C++ funnel over the floor-based and truncation-based rows: they agree
+// at every index every time (empirically, 500,000 randomized (h, g, root)
+// trials found zero cases where a non-dominant element's floor/trunc
+// divergence survived into a different requantized code). This is not
+// implementation flakiness; it is a closed-form bound on this composition's
+// own numeric ranges -- floor and trunc quotients differ by exactly 1 unit
+// when they diverge, so a non-dominant element's code can only shift if its
+// own quotient magnitude is under roughly 254 (half the ~D'/127 quantization
+// step, expressed as a ratio, which cancels the row's actual scale); the
+// smallest quotient magnitude reachable by ANY int8 h at this composition's
+// own root ceiling (H=1536, all elements at |h|=127, root=8,323,072) is 516,
+// already above that threshold. Floor-vs-truncation discrimination for C31 is
+// therefore fully and only provable at the unit-cell level (Sec4.1, above,
+// which retains full discriminating power on FloorDivI64 directly) and at the
+// wide-value level (kC31SiteElements' own `diverges` field, already
+// mutation-verified in gen_s3_2_fixtures.py) -- not restatable as an
+// out_codes-level claim at this site's own output resolution. What THIS cell
+// still proves, and correctly: the site's whole composition (sumsq -> ISqrt
+// o FloorDivI64 -> max(root,1) -> per-element FloorDivI64*g[i] -> the funnel)
+// produces exactly the codes the already-shipped funnel computes from the
+// correct, floor-based wide row -- a real feature oracle on the composition's
+// wiring, which a wrong hidden_size, a wrong shift, a wrong per-element
+// formula, or a dropped max(root,1) guard would all still fail.
+static void TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	std::vector<int8_t> h(kC31SiteHiddenSize, 0);
+	std::vector<int32_t> g(kC31SiteHiddenSize, 0);
+	for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+		const C31SiteElement& e = kC31SiteElements[i];
+		h[static_cast<size_t>(e.index)] = static_cast<int8_t>(e.h);
+		g[static_cast<size_t>(e.index)] = e.g;
+	}
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	const CarriedScale incoming_scale{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	std::vector<int64_t> floor_wide_row(kC31SiteHiddenSize, 0);
+	for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+		const C31SiteElement& e = kC31SiteElements[i];
+		floor_wide_row[static_cast<size_t>(e.index)] = e.floor_wide;
+	}
+
+	std::vector<int8_t> expected_codes(kC31SiteHiddenSize, 0);
+	CarriedScale expected_scale{};
+	auto expected_result = superslm::RequantChainChecked(
+	    floor_wide_row.data(), kC31SiteHiddenSize, std::span<const CarriedScale>{}, site_constant,
+	    expected_codes.data(), &expected_scale);
+	CHECK_MSG(expected_result.status == SslmForwardStatus::Ok,
+	          "the floor-based oracle row itself must be accepted by the already-shipped "
+	          "funnel: got %s", superslm::SslmForwardStatusName(expected_result.status));
+
+	std::vector<int8_t> out_codes(kC31SiteHiddenSize, INT8_C(-99));  // poison
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};              // poison
+	auto result = superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize, incoming_scale,
+	                                      site_constant, out_codes.data(), &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "RmsNormSite(C31 site witness) status == %s, want Ok (red-unimplemented until "
+	          "Brunel's green phase)",
+	          superslm::SslmForwardStatusName(result));
+	if (result == SslmForwardStatus::Ok) {
+		for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+			const C31SiteElement& e = kC31SiteElements[i];
+			const size_t idx = static_cast<size_t>(e.index);
+			CHECK_MSG(out_codes[idx] == expected_codes[idx],
+			          "RmsNormSite out_codes[%d] == %d, want %d (the floor-division oracle's "
+			          "own code, via the already-shipped funnel)",
+			          e.index, static_cast<int>(out_codes[idx]), static_cast<int>(expected_codes[idx]));
+		}
+	}
+}
+
+// Sec4.3 (C24/C25, Sec11 S3.2's own two-element-row cell): the WSC1
+// identity/near-identity fold-apply dispatch, against the real funnel.
+static void TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	// Mutation-verification: MultiplyByQuantizedMultiplier is ALREADY SHIPPED
+	// (S2.1) -- confirm by direct execution that it reproduces the plan's own
+	// "off by one" near-identity fold on the reference channel's raw value,
+	// rather than assuming the Python-derived fixture's claim survives into the
+	// real C++ kernel unchanged.
+	const int32_t near_identity_direct = superslm::MultiplyByQuantizedMultiplier(
+	    static_cast<int32_t>(kC24RefChannelPassThrough), /*quantized_multiplier=*/INT32_MAX,
+	    /*shift=*/0);
+	CHECK_MSG(near_identity_direct == static_cast<int32_t>(kC24RefChannelNearIdentity),
+	          "MultiplyByQuantizedMultiplier(%lld, INT32_MAX, 0) == %d, want %lld (the plan's "
+	          "own 'off by one' near-identity fold, S2.1's already-shipped kernel)",
+	          static_cast<long long>(kC24RefChannelPassThrough), near_identity_direct,
+	          static_cast<long long>(kC24RefChannelNearIdentity));
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	// Correct: the reference channel's true pass-through (identity=1).
+	const int64_t pass_through_ref = superslm::ApplyWeightScaleFold(
+	    kC24RefChannelPassThrough, /*identity=*/1, /*mult=*/0, /*shift=*/0);
+	CHECK_MSG(pass_through_ref == kC24RefChannelPassThrough,
+	          "ApplyWeightScaleFold(identity=1) == %lld, want %lld unchanged (true pass-through)",
+	          static_cast<long long>(pass_through_ref), static_cast<long long>(kC24RefChannelPassThrough));
+
+	int64_t pass_row[2] = {pass_through_ref, kC24SharedElementX};
+	int8_t pass_codes[2] = {INT8_C(-99), INT8_C(-99)};
+	CarriedScale pass_scale{INT64_C(-99), INT64_C(-99)};
+	auto pass_result = superslm::RequantChainChecked(pass_row, 2, std::span<const CarriedScale>{},
+	                                                    site_constant, pass_codes, &pass_scale);
+	CHECK_MSG(pass_result.status == SslmForwardStatus::Ok,
+	          "pass-through row through the real funnel: status == %s, want Ok",
+	          superslm::SslmForwardStatusName(pass_result.status));
+	CHECK_MSG(pass_codes[0] == kC24CodeRefPassThrough && pass_codes[1] == kC24CodeXPassThrough,
+	          "pass-through row codes == {%d, %d}, want {%d, %d} (the plan's own stated row)",
+	          static_cast<int>(pass_codes[0]), static_cast<int>(pass_codes[1]), kC24CodeRefPassThrough,
+	          kC24CodeXPassThrough);
+
+	// The cell's whole point: the same row with the reference channel WRONGLY
+	// dispatched as identity=0 (the near-identity fold applied where a true
+	// pass-through is owed). ApplyWeightScaleFold is exercised with these real
+	// (wrong-for-this-row) arguments -- not a fake stand-in -- to prove the
+	// one-unit difference this produces changes the OTHER element's own
+	// requantized code through the shared D', even though X's own raw value
+	// never changed between the two runs (test-design record Sec3.3).
+	const int64_t near_identity_ref = superslm::ApplyWeightScaleFold(
+	    kC24RefChannelPassThrough, /*identity=*/0, /*mult=*/INT32_MAX, /*shift=*/0);
+	CHECK_MSG(near_identity_ref == kC24RefChannelNearIdentity,
+	          "ApplyWeightScaleFold(identity=0, mult=2^31-1, shift=0) == %lld, want %lld (the "
+	          "near-identity fold wrongly applied to the reference channel)",
+	          static_cast<long long>(near_identity_ref), static_cast<long long>(kC24RefChannelNearIdentity));
+
+	int64_t near_identity_row[2] = {near_identity_ref, kC24SharedElementX};
+	int8_t near_identity_codes[2] = {INT8_C(-99), INT8_C(-99)};
+	CarriedScale near_identity_scale{INT64_C(-99), INT64_C(-99)};
+	auto near_identity_result = superslm::RequantChainChecked(
+	    near_identity_row, 2, std::span<const CarriedScale>{}, site_constant, near_identity_codes,
+	    &near_identity_scale);
+	CHECK_MSG(near_identity_result.status == SslmForwardStatus::Ok,
+	          "near-identity row through the real funnel: status == %s, want Ok",
+	          superslm::SslmForwardStatusName(near_identity_result.status));
+	CHECK_MSG(near_identity_codes[0] == kC24CodeRefNearIdentity &&
+	              near_identity_codes[1] == kC24CodeXNearIdentity,
+	          "near-identity row codes == {%d, %d}, want {%d, %d} -- the SECOND element's code "
+	          "must shift even though its own raw value (kC24SharedElementX) never changed (the "
+	          "divergence is token-wide through the shared D', SuperSLM_Plan.md:2194-2197)",
+	          static_cast<int>(near_identity_codes[0]), static_cast<int>(near_identity_codes[1]),
+	          kC24CodeRefNearIdentity, kC24CodeXNearIdentity);
+
+	CHECK_MSG(pass_codes[1] != near_identity_codes[1],
+	          "the shared element X's code must differ between the pass-through and "
+	          "near-identity runs (%d vs %d) -- otherwise this cell has no discriminating power "
+	          "on the exact claim it exists to prove",
+	          static_cast<int>(pass_codes[1]), static_cast<int>(near_identity_codes[1]));
+}
+
+// Sec4.4 (C28, Sec7.2 second limb, Sec4.4): the (q_B, e_a) domain-boundary
+// half. All four boundary points at q_B=30 (kC28TieQB, F-S3-4's own verified
+// constant), derived from k = q_B + 62 + e_a rather than guessed.
+static void TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix() {
+	using superslm::SslmForwardStatus;
+	struct Point {
+		int64_t e_a;
+		bool in_domain;
+		const char* label;
+	};
+	const Point points[] = {
+	    {kC28BoundaryBelowMinEA, kC28BoundaryBelowMinInDomain, "below_min (k=-1)"},
+	    {kC28BoundaryAtMinEA, kC28BoundaryAtMinInDomain, "at_min (k=0)"},
+	    {kC28BoundaryAtMaxEA, kC28BoundaryAtMaxInDomain, "at_max (k=63)"},
+	    {kC28BoundaryAboveMaxEA, kC28BoundaryAboveMaxInDomain, "above_max (k=64)"},
+	};
+	for (const Point& p : points) {
+		auto status = superslm::CheckRoundingDivideByPotExponentDomain(/*q_B=*/kC28TieQB, p.e_a);
+		if (p.in_domain) {
+			CHECK_MSG(status == SslmForwardStatus::Ok,
+			          "%s: CheckRoundingDivideByPotExponentDomain(q_B=30, e_a=%lld) status == "
+			          "%s, want Ok",
+			          p.label, static_cast<long long>(p.e_a), superslm::SslmForwardStatusName(status));
+		} else {
+			CHECK_MSG(status == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+			          "%s: CheckRoundingDivideByPotExponentDomain(q_B=30, e_a=%lld) status == "
+			          "%s, want RoundingDivideByPotExponentOutOfDomain",
+			          p.label, static_cast<long long>(p.e_a), superslm::SslmForwardStatusName(status));
+		}
+	}
+}
+
+// Sec4.6 (C28, Sec4.4): the bias-reconciliation compute's sign-inverted
+// negative control -- away-from-zero (C3, the correct rule, load-bearing
+// because B is signed) vs. round-half-up (C2, the wrong rule, used elsewhere
+// in this same composition) agree on the positive tie and disagree only on
+// the negative one. See the test-design record Sec5 for why this is the one
+// reading "C28's sign-inverted negative control" supports.
+static void TestBiasReconcileC28SignInvertedNegativeControl() {
+	// Pin the fixture's own claim (a comment naming a mechanism is a claim
+	// mutation-verified before filing): the wrong (round-half-up) candidate
+	// agrees with the correct (away-from-zero) result on the positive tie and
+	// disagrees on the negative one -- verified by execution in
+	// gen_s3_2_fixtures.py's own mutation log (test-design record Sec6,
+	// mutation 3). Pinned again here at compile time so a hand-edit to the
+	// generated header cannot silently drift this claim.
+	static_assert(kC28TieWrongPos == kC28TieCorrectPos,
+	              "the fixture's own negative-control premise (agreement on the positive tie) no "
+	              "longer holds");
+	static_assert(kC28TieWrongNeg != kC28TieCorrectNeg,
+	              "the fixture's own negative-control premise (disagreement on the negative tie) "
+	              "no longer holds -- the control would have no discriminating power");
+
+	const int64_t pos = superslm::BiasReconcile(kC28TieB, kC28TieQB, kC28TieRA, kC28TieEA);
+	CHECK_MSG(pos == kC28TieCorrectPos, "BiasReconcile(+B) == %lld, want %lld (C3, away-from-zero)",
+	          static_cast<long long>(pos), static_cast<long long>(kC28TieCorrectPos));
+
+	const int64_t neg = superslm::BiasReconcile(-kC28TieB, kC28TieQB, kC28TieRA, kC28TieEA);
+	CHECK_MSG(neg == kC28TieCorrectNeg,
+	          "BiasReconcile(-B) == %lld, want %lld (C3, away-from-zero) -- a wrong "
+	          "round-half-up implementation would return %lld here instead, agreeing with the "
+	          "correct result only on +B",
+	          static_cast<long long>(neg), static_cast<long long>(kC28TieCorrectNeg),
+	          static_cast<long long>(kC28TieWrongNeg));
+}
+
+// Sec4.7/Sec4.8 (BIA1, Sec7.2a third limb): the load-time magnitude descriptor.
+// Builds a single-tensor BIA1 (int64) manifest with one element set to the
+// value under test -- the same "one otherwise-valid v2 artifact, one hostile
+// section" pattern as TestKvc1RejectsHostileCompositionConstantsScale et al.
+static FixtureSection MakeBia1Section(int64_t value) {
+	auto manifest = BuildManifest(superslm::kBiasesMagic, /*element_size=*/8, {{"b0", {1}}});
+	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]), static_cast<uint64_t>(value));
+	return MakeSection(SslmSectionType::Biases, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+}
+
+static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
+	// Reject: one past the derived bound, both signs (Sec3.4/Sec4.7 -- the
+	// domain is symmetric, so both signs are named rather than assumed to fail
+	// identically).
+	{
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(), MakeBia1Section(kBia1HostileValue)});
+		SslmModelView view;
+		std::string err;
+		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::BiasCodeOutOfDomain,
+		          "BIA1 B[0]=2^31 (one past INT32_MAX): SslmModel::Load status == %s, want "
+		          "BiasCodeOutOfDomain (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK_MSG(!view.has_biases,
+		          "hostile Biases view exposed on a rejected Load — a view MUST NOT be exposed "
+		          "(Sec4.8's vitality proof: a view never exposed cannot be read by any "
+		          "downstream C28 site, so B[j] categorically cannot reach B[j]*R_a)");
+	}
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeBia1Section(kBia1HostileValueNegated)});
+		SslmModelView view;
+		std::string err;
+		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::BiasCodeOutOfDomain,
+		          "BIA1 B[0]=-2^31 (one past the bound, negative side): SslmModel::Load status "
+		          "== %s, want BiasCodeOutOfDomain (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK_MSG(!view.has_biases,
+		          "hostile Biases view exposed on a rejected Load — a view MUST NOT be exposed");
+	}
+	// Accept-at-bound: the off-by-one control every S-HARDEN-1 boundary matrix
+	// carries (Sec13 dim 4).
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeBia1Section(kBia1AcceptBoundaryValue)});
+		SslmModelView view;
+		std::string err;
+		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok,
+		          "BIA1 B[0]==INT32_MAX (exactly at the bound): SslmModel::Load status == %s, "
+		          "want Ok (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK_MSG(view.has_biases, "an in-domain Biases view must be exposed on a successful Load");
+	}
+}
+
+// Sec4.9 (F-S3-8, Sec4.8, Sec13 dim 2): the embed entry's token-id validation.
+static void TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	constexpr int32_t kVocabSize = 8;
+	constexpr size_t kHiddenSize = 4;
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	// Hostile ids: embed_weights is passed as nullptr. If EmbedEntry validates
+	// token_id BEFORE reading any row (the contract's own stated order,
+	// forward_sites.h), a null embed_weights is never dereferenced and the call
+	// returns cleanly; an implementation that reads first would dereference a
+	// pointer computed from a null base and a hostile id and crash -- a real,
+	// unambiguous vitality proof for a `const` input buffer, in the same
+	// non-crash idiom this suite already uses
+	// (TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash) rather than a
+	// poison-fill, which cannot distinguish "read" from "not read" on a buffer
+	// the callee never writes to.
+	const int32_t hostile_ids[] = {-1, kVocabSize, kVocabSize + 1};
+	const char* labels[] = {"token_id=-1", "token_id==vocab_size", "token_id==vocab_size+1"};
+	for (size_t i = 0; i < 3; ++i) {
+		int8_t out_codes[kHiddenSize] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto status = superslm::EmbedEntry(hostile_ids[i], kVocabSize, /*embed_weights=*/nullptr,
+		                                     kHiddenSize, site_constant, out_codes, &out_scale);
+		CHECK_MSG(status == SslmForwardStatus::TokenIdOutOfRange,
+		          "%s: EmbedEntry status == %s, want TokenIdOutOfRange (embed_weights == "
+		          "nullptr -- a validate-before-read implementation never dereferences it)",
+		          labels[i], superslm::SslmForwardStatusName(status));
+		CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+		          "%s: out_codes/*out_scale must be untouched on rejection (\"computes nothing\")",
+		          labels[i]);
+	}
+
+	// Accept boundary: token_id == vocab_size - 1 (the last valid id) must
+	// proceed to read the embedding row and produce the funnel's own codes --
+	// an independent feature oracle against the ALREADY-SHIPPED funnel, over a
+	// row widened from real embed_weights bytes, never a recount of
+	// EmbedEntry's own steps.
+	const int8_t embed_row[kHiddenSize] = {5, -3, 127, -100};
+	std::vector<int8_t> embed_weights(static_cast<size_t>(kVocabSize) * kHiddenSize, 0);
+	const int32_t accept_id = kVocabSize - 1;
+	std::memcpy(embed_weights.data() + static_cast<size_t>(accept_id) * kHiddenSize, embed_row,
+	            kHiddenSize);
+
+	int64_t expected_wide[kHiddenSize];
+	for (size_t j = 0; j < kHiddenSize; ++j) expected_wide[j] = static_cast<int64_t>(embed_row[j]);
+	int8_t expected_codes[kHiddenSize] = {0, 0, 0, 0};
+	CarriedScale expected_scale{};
+	auto expected_result = superslm::RequantChainChecked(expected_wide, kHiddenSize,
+	                                                        std::span<const CarriedScale>{}, site_constant,
+	                                                        expected_codes, &expected_scale);
+	CHECK_MSG(expected_result.status == SslmForwardStatus::Ok,
+	          "the accept-boundary oracle row itself must be accepted by the already-shipped "
+	          "funnel: got %s",
+	          superslm::SslmForwardStatusName(expected_result.status));
+
+	int8_t out_codes[kHiddenSize] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto status = superslm::EmbedEntry(accept_id, kVocabSize, embed_weights.data(), kHiddenSize,
+	                                     site_constant, out_codes, &out_scale);
+	CHECK_MSG(status == SslmForwardStatus::Ok,
+	          "token_id==vocab_size-1 (last valid id): EmbedEntry status == %s, want Ok "
+	          "(red-unimplemented until Brunel's green phase)",
+	          superslm::SslmForwardStatusName(status));
+	if (status == SslmForwardStatus::Ok) {
+		for (size_t j = 0; j < kHiddenSize; ++j) {
+			CHECK_MSG(out_codes[j] == expected_codes[j],
+			          "EmbedEntry out_codes[%zu] == %d, want %d (the already-shipped funnel's "
+			          "own code for this row)",
+			          j, static_cast<int>(out_codes[j]), static_cast<int>(expected_codes[j]));
+		}
+	}
+}
+
+// Sec4.10 (Sec11 S3.2's own gate line; Coverage Model dim 7): "the norm's
+// carried scale is gain-derived and an implementation forwarding the incoming
+// scale fails." A differential cell against the site's own two invocations --
+// identical hidden row, gain row, and site constant, two different incoming
+// carried scales -- no separate reference oracle is owed beyond the site's
+// own gain-derived formula (C23), which is already pinned prose, not a
+// quantity this pass derives.
+static void TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	std::vector<int8_t> h(kC31SiteHiddenSize, 0);
+	std::vector<int32_t> g(kC31SiteHiddenSize, 0);
+	for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+		const C31SiteElement& e = kC31SiteElements[i];
+		h[static_cast<size_t>(e.index)] = static_cast<int8_t>(e.h);
+		g[static_cast<size_t>(e.index)] = e.g;
+	}
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	const CarriedScale incoming_a{/*m=*/INT64_C(1073741824), /*e=*/0};
+	const CarriedScale incoming_b{/*m=*/INT64_C(2000000000), /*e=*/-7};
+
+	std::vector<int8_t> codes_a(kC31SiteHiddenSize, INT8_C(-99));
+	CarriedScale scale_a{INT64_C(-99), INT64_C(-99)};
+	auto result_a = superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize, incoming_a,
+	                                        site_constant, codes_a.data(), &scale_a);
+	CHECK_MSG(result_a == SslmForwardStatus::Ok, "RmsNormSite (incoming scale A) status == %s, want Ok",
+	          superslm::SslmForwardStatusName(result_a));
+
+	std::vector<int8_t> codes_b(kC31SiteHiddenSize, INT8_C(-99));
+	CarriedScale scale_b{INT64_C(-99), INT64_C(-99)};
+	auto result_b = superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize, incoming_b,
+	                                        site_constant, codes_b.data(), &scale_b);
+	CHECK_MSG(result_b == SslmForwardStatus::Ok, "RmsNormSite (incoming scale B) status == %s, want Ok",
+	          superslm::SslmForwardStatusName(result_b));
+
+	if (result_a == SslmForwardStatus::Ok && result_b == SslmForwardStatus::Ok) {
+		for (size_t i = 0; i < kC31SiteHiddenSize; ++i) {
+			CHECK_MSG(codes_a[i] == codes_b[i],
+			          "out_codes[%zu] must be identical across two incoming carried scales (%d "
+			          "vs %d) -- the incoming scale must be annihilated, never folded in",
+			          i, static_cast<int>(codes_a[i]), static_cast<int>(codes_b[i]));
+		}
+		CHECK_MSG(scale_a.m == scale_b.m && scale_a.e == scale_b.e,
+		          "*out_scale must be identical across two incoming carried scales -- got "
+		          "{%lld,%lld} vs {%lld,%lld}",
+		          static_cast<long long>(scale_a.m), static_cast<long long>(scale_a.e),
+		          static_cast<long long>(scale_b.m), static_cast<long long>(scale_b.e));
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -8876,6 +9360,20 @@ int main(int argc, char** argv) {
 	TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor();
 	TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep();
 	TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound();
+
+	// --- S3.2 (Sec11, C31/C24/C25/C28/F-S3-8/BIA1): the weightless and
+	//     projection sites' red suite, authored against the header contract
+	//     (commit a594dd2). Every one of these is RED-UNIMPLEMENTED today --
+	//     Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-
+	//     design-2026-07-28.md Sec4/Sec9. ---
+	TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision();
+	TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel();
+	TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel();
+	TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix();
+	TestBiasReconcileC28SignInvertedNegativeControl();
+	TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
+	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
+	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

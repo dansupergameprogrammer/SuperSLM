@@ -32,11 +32,33 @@ file), not the MECHANISM (a real banned-leaf call being caught): the funnel's
 own file is allowlisted, and `scan_files` skips reading an allowlisted path's
 content at all, so every mechanism cell still drives this module against
 constructed fixture files standing in for "a forward TU," per
-StandardsDocument Sec4's population-validation requirement. The site-
-composition sources for S3.2-S3.9 (Claude/Plans/
-SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11) still land under the same glob as
-they are built; no further default change is anticipated for those, since the
-glob root already covers `src/forward/**`.
+StandardsDocument Sec4's population-validation requirement.
+
+UPDATED AT THE S3.2 HEADER-CONTRACT BUILD (2026-07-28, commit a594dd2): the
+build staged S3.2's site compositions at `src/forward_sites.cpp` rather than
+under `src/forward/`, specifically so this module's own exact-population
+assertion (then hardcoded to one file) would not need editing as part of that
+pass -- see that build log (Claude/Brunel/superslm-s3.2-weightless-and-
+projection-sites-contract-build-2026-07-28.md) and the file's own placement
+comment. That left `src/forward_sites.cpp` -- a real forward-composition
+source, in the plan's own sense -- entirely outside _DEFAULT_FORWARD_GLOBS'
+scan root, so a banned leaf called directly from it would pass this check
+with nothing to catch it: the structural guarantee Sec7.3 exists to hold had
+a hole exactly where the newest site compositions live.
+
+Closed here by widening _DEFAULT_FORWARD_GLOBS to also name
+`src/forward_sites.cpp` explicitly (it is NOT added to _DEFAULT_ALLOWLIST --
+it is scanned, not exempted) and by moving the "expected real population"
+this module's own end-to-end test asserts from a hardcoded count of one to a
+named, sized set (_EXPECTED_REAL_FORWARD_FILES, below) that already lists
+both real files. Physically relocating `src/forward_sites.cpp` under
+`src/forward/` (the placement the S3.2 build log itself named as the
+eventual, cleaner fix) is a production-source change outside this module's
+own writable surface (`tests/`) and is routed rather than done here; this
+widening closes the coverage gap immediately, independent of whether or when
+that move happens, and keeps working unchanged after it does (the sibling
+glob entry becomes redundant with the directory glob at that point, not
+wrong).
 """
 from __future__ import annotations
 
@@ -62,12 +84,28 @@ BANNED_LEAVES = (
 )
 
 # The forward-composition source root (Sec11): src/forward/checked_chain_funnel.cpp
-# is the one real file under it as of the S3.1 header-contract build (2026-07-28,
-# commit 32aca0c); S3.2-S3.9's site-composition sources land under the same glob
-# root as they are built (see module docstring).
+# is the one real file under the directory glob as of the S3.1 header-contract
+# build (2026-07-28, commit 32aca0c). `src/forward_sites.cpp` (S3.2, commit
+# a594dd2) is a second real forward-composition source that was deliberately
+# placed OUTSIDE src/forward/ (see module docstring) -- named here explicitly so
+# it is scanned starting now, rather than left dark until a future move brings it
+# under the directory glob on its own.
 _DEFAULT_FORWARD_GLOBS = (
     "src/forward/**/*.cpp",
     "src/forward/**/*.h",
+    "src/forward_sites.cpp",
+)
+
+# The real forward-composition population this module's own end-to-end test
+# (test_check_no_forward_leaf_calls.py::
+# test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous)
+# asserts _DEFAULT_FORWARD_GLOBS resolves to EXACTLY -- a named, sized set
+# rather than a hardcoded count of one, so a third real file lands "correctly"
+# failing that assertion (per its own docstring) whatever N happens to be
+# today, without the assertion itself needing to change shape again.
+_EXPECTED_REAL_FORWARD_FILES = (
+    "src/forward/checked_chain_funnel.cpp",
+    "src/forward_sites.cpp",
 )
 
 # Relative-to-repo-root paths permitted to name a banned leaf directly. Only a

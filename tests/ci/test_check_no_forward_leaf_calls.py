@@ -193,10 +193,22 @@ def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
     holds -- `src/forward/checked_chain_funnel.cpp` now exists and is the exact
     file the default glob was written in anticipation of. This test asserts the
     real, current state instead of the historical one: the default glob matches a
-    nonempty, exact population (never grows silently uncounted -- a second real
+    nonempty, exact population (never grows silently uncounted -- a real
     forward-composition file landing without a matching update here is caught by
     the equality assertion, not just a >0 check), and the real production tree
     passes the check end-to-end.
+
+    UPDATED AGAIN 2026-07-28 (S3.2 header-contract build, commit a594dd2, closed
+    by this Curie pass): a second real forward-composition file,
+    `src/forward_sites.cpp`, landed outside `src/forward/` -- exactly the
+    situation the paragraph above named as "revisit again." The fix is not
+    `len(files) > 0` (that would stop this cell from ever catching an
+    unaccounted-for population change again, which is the whole property this
+    cell exists to hold); it is naming the real, current set explicitly, sized to
+    N rather than hardcoded to one. `cnfl._EXPECTED_REAL_FORWARD_FILES` is that
+    named set, updated in the same commit that widened `_DEFAULT_FORWARD_GLOBS`
+    to scan the new file, so this cell's equality assertion and the module's own
+    scan stay in agreement rather than one silently drifting from the other.
 
     The funnel's own file passes here because `scan_files` skips reading an
     allowlisted path's content entirely (short-circuits on the path match before
@@ -206,22 +218,57 @@ def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
     against constructed scratch content standing in for it, per
     StandardsDocument Sec4's population-validation requirement (a vacuous
     production scan proves nothing; every other cell in this suite drives the
-    mechanism directly). What this cell proves that the scratch cells cannot is
-    that the real glob and the real allowlist, unmodified, agree on the real file
-    that exists today -- the wiring, not the mechanism.
+    mechanism directly). `src/forward_sites.cpp` is NOT allowlisted, so this cell
+    DOES exercise real content through it -- it passes only because the file's
+    real content today (S3.2's deliberately-wrong stub bodies) names no banned
+    leaf, confirmed by direct read, not assumed.
 
-    Revisit again the moment a second real forward-composition file lands: this
-    exact-match assertion will fail, correctly, and should be updated to name the
-    new file rather than loosened to `len(files) > 0`."""
+    Revisit again the moment a third real forward-composition file lands, or the
+    moment `src/forward_sites.cpp` is relocated under `src/forward/` (at which
+    point it is matched by the directory glob on its own and its explicit entry
+    in `_DEFAULT_FORWARD_GLOBS`/`_EXPECTED_REAL_FORWARD_FILES` becomes
+    redundant, not wrong): this exact-match assertion will fail, correctly, and
+    should be updated to name the new/moved file rather than loosened to
+    `len(files) > 0`."""
     files = cnfl._glob_files(cnfl._DEFAULT_FORWARD_GLOBS, cnfl._REPO_ROOT)
-    expected = [os.path.normpath(os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp"))]
+    expected = sorted(
+        os.path.normpath(os.path.join(cnfl._REPO_ROOT, rel))
+        for rel in cnfl._EXPECTED_REAL_FORWARD_FILES
+    )
     assert [os.path.normpath(f) for f in files] == expected, (
         f"expected the default forward-composition glob to match exactly "
-        f"{expected}, got {files} -- a forward-composition file was added or "
-        f"removed without updating this cell's exact-match assertion"
+        f"{expected}, got {files} -- a forward-composition file was added, "
+        f"removed, or moved without updating _EXPECTED_REAL_FORWARD_FILES "
+        f"and/or _DEFAULT_FORWARD_GLOBS"
     )
     code = cnfl.main()
     assert code == 0, (
         "the real forward-composition tree must pass the CI check end-to-end "
         "under the unmodified default glob and allowlist"
     )
+
+
+def test_a_scratch_forward_sites_cpp_naming_a_banned_leaf_is_caught_by_the_widened_glob():
+    """Mutation proof for the S3.2 widening above: `src/forward_sites.cpp` sits
+    outside `src/forward/` and was, before this pass, entirely outside
+    _DEFAULT_FORWARD_GLOBS' scan root -- a direct banned-leaf call from it would
+    have passed this check with nothing to catch it (the exact hole this pass
+    closes). Proven here the same way every other mechanism cell in this suite
+    proves its point -- a constructed scratch file at the real relative path,
+    scanned under the real (module-default) globs, never the real production
+    tree -- so this cell fails loudly if the widening in
+    check_no_forward_leaf_calls.py is ever reverted or narrowed back to
+    `src/forward/**` alone."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "src/forward_sites.cpp", "auto d = DynamicScaleReciprocal(dn);\n")
+        code = cnfl.main(
+            globs=cnfl._DEFAULT_FORWARD_GLOBS,
+            allowlist=cnfl._DEFAULT_ALLOWLIST,
+            repo_root=tmp,
+        )
+        assert code == 1, (
+            "a banned leaf named directly in src/forward_sites.cpp must fail the "
+            "check under the module's own default globs/allowlist -- if this "
+            "passes, the S3.2 widening of _DEFAULT_FORWARD_GLOBS stopped "
+            "covering this file"
+        )
