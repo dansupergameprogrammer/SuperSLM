@@ -267,15 +267,42 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 // requant composite for RequantTokenCodeWide.
 
 int64_t MaxAbsReduceWide(const int64_t* x, size_t n) {
-	int64_t d = 0;
+	// Widen to the UNSIGNED magnitude before comparing, not `-x[i]` (ac34677 S1):
+	// negating INT64_MIN is signed-integer overflow (UB), and on this toolchain it
+	// wraps back to INT64_MIN, which fails the `a > d` test and silently drops the
+	// row's largest-magnitude element from the reduction. At int64 there is no
+	// wider built-in type to widen into the way the int32 sibling above does; the
+	// unsigned two's-complement negate (`~x + 1`, the same form RequantTokenCodeWide
+	// already uses below) is defined for every int64_t, including INT64_MIN, whose
+	// magnitude 2^63 has no int64_t representation but has an exact uint64_t one.
+	uint64_t d = 0;
 	for (size_t i = 0; i < n; ++i) {
-		int64_t a = x[i] < 0 ? -x[i] : x[i];
+		const uint64_t a = x[i] < 0 ? (~static_cast<uint64_t>(x[i]) + 1u) : static_cast<uint64_t>(x[i]);
 		if (a > d) d = a;
 	}
-	return d < 1 ? 1 : d;  // all-zero-row guard, exact on that class
+	if (d < 1) d = 1;  // all-zero-row guard, exact on that class
+	// Saturating narrow back to int64_t: every row this composition actually
+	// produces is far below this ceiling (RequantChainChecked's own C29 domain
+	// check rejects anything past 2^31), so this clamp only fires on a magnitude
+	// that does not fit int64_t's positive range at all (reachable only from an
+	// INT64_MIN element, whose true magnitude is 2^63). Clamping to INT64_MAX
+	// keeps the result unambiguously > 2^31 rather than wrapping into a value C29
+	// could misread as in-domain.
+	return d > static_cast<uint64_t>(INT64_MAX) ? INT64_MAX : static_cast<int64_t>(d);
 }
 
 void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_min) {
+	// n == 0 is in-contract (ac34677 S3): neither this primitive's header nor
+	// NarrowRowChecked's contract documents an n >= 1 precondition, and reading
+	// x[0] unconditionally is a null-pointer dereference on an empty row. Defined
+	// as (0, 0), matching MaxAbsReduceWide's own n == 0 convention (the empty
+	// reduction); NarrowRowChecked's C35 check accepts (0, 0) trivially and its
+	// subsequent NarrowAccumulatorToI32 call is a no-op loop over zero elements.
+	if (n == 0) {
+		*out_max = 0;
+		*out_min = 0;
+		return;
+	}
 	int64_t mx = x[0];
 	int64_t mn = x[0];
 	for (size_t i = 1; i < n; ++i) {

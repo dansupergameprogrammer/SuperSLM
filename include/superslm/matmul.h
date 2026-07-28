@@ -9,11 +9,9 @@
 //
 // Standard library only -- no float on the reproducible path (Layer 1, D-SLM13).
 //
-// THIS FILE IS THE S2.5 CONTRACT STEP (red-first TDD): the declarations below are the
-// approved API surface (design §3). Bodies in matmul.cpp are STUBS -- they compile and
-// link but assert(false) when called. The scalar reference construction (design §5) is
-// implemented at the next build step (Brunel green), against Curie's red suite authored
-// from this contract.
+// The declarations below are the approved API surface (design §3). Bodies in
+// matmul.cpp are real constructions, including the scalar reference (design §5),
+// green in the standing suite (S2.5).
 #ifndef SUPERSLM_MATMUL_H
 #define SUPERSLM_MATMUL_H
 
@@ -73,9 +71,10 @@ void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32)
 
 // C17 -- the per-tensor accumulator-width choice, recorded in the artifact (design §4,
 // owed registration -- not yet a format field; see design §13). Every currently-scoped
-// candidate is Int32 per design §8's derivation; no Int64 candidate exists yet, and the
-// int64-domain MaxAbsReduceWide/RequantTokenCodeWide overloads Int64 would require are
-// not built by this sub-slot (design §13).
+// candidate is Int32 per design §8's derivation; no Int64 candidate exists yet. The
+// int64-domain MaxAbsReduceWide/RequantTokenCodeWide overloads an Int64 candidate would
+// require ARE built (intmath.h, S3a §7.2/F-S3-7) -- this enum has no Int64-consuming
+// caller yet, which is the part still owed.
 enum class MatmulAccumWidth : int32_t { Int32 = 0, Int64 = 1 };
 
 // design §5 -- the scalar reference construction, exposed for verification only. The

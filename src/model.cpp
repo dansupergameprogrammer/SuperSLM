@@ -570,16 +570,13 @@ int64_t RdI64(const uint8_t* p) noexcept { return static_cast<int64_t>(RdU64(p))
 // pass over these closes F22/F23/F24 and every future site the same section
 // value would otherwise reach unchecked.
 //
-// CompositionConstants (KVC1) SiLU (m, e): the mandatory no-UB floor, exact
-// from source (silu_lut.cpp:20-39) and sufficient against all three of
-// SiluSigmoidQ15's UB sites. The tighter C29 swept envelope
-// (`-shift in [15,19]`, i.e. `e in [-36,-32]`) is an inline source comment,
-// not a recorded sweep, and is deliberately NOT enforced here — S-HARDEN-1
-// ships the floor only; narrowing it is a follow-on data edit gated on a
-// recorded S2.4 §10 sweep (Charpy Finding 2, D-SLM142).
-constexpr int64_t kCompositionScaleMaxAbsM = (INT64_C(1) << 31) - 1;  // |m| <= 2^31-1
-constexpr int64_t kCompositionScaleMinE = -80;                       // silu_lut.cpp:35 right branch, -shift <= 63
-constexpr int64_t kCompositionScaleMaxE = 7;                         // silu_lut.cpp:35 left branch, term << shift exact
+// CompositionConstants (KVC1) SiLU (m, e): the mandatory no-UB floor
+// (kCompositionScaleMaxAbsM/MinE/MaxE, silu_lut.h — moved there from this
+// anonymous namespace, ac34677 S11, so the runtime no-UB domain predicate in
+// checked_chain_funnel.cpp can pin its own ceiling against the same public
+// constants rather than a duplicated literal). Narrowing the floor further is a
+// follow-on data edit gated on a recorded S2.4 §10 sweep (Charpy Finding 2,
+// D-SLM142).
 
 // WeightScales (WSC1): shift is UB-derived and exact (intmath.h:53,
 // RoundingDivideByPOT's documented exponent domain; shift==32 and any

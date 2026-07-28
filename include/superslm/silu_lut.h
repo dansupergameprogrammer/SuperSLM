@@ -38,6 +38,19 @@ inline constexpr int kSiluLutQIdx = 12;                    // sub-node index fra
 // be RE-DERIVED, because the shift-side pin would still pass against a now-stale overflow point.
 inline constexpr int kSiluLutTermLeftShiftOverflowExponent = 26;
 
+// S-HARDEN-1's load-time no-UB floor for CompositionConstants (KVC1) (m, e)
+// (D-SLM141/D-SLM142), exact from source (silu_lut.cpp:20-39) and sufficient
+// against all three of SiluSigmoidQ15's UB sites. Public (moved out of
+// src/model.cpp's anonymous namespace, ac34677 S11) so the runtime no-UB domain
+// predicate below (checked_chain_funnel.h's CheckSiluCompositionScaleDomain) can
+// pin its own ceiling against this one by static_assert rather than a duplicated
+// literal that could drift out of step with it silently. The tighter C29 swept
+// envelope (`-shift in [15,19]`, i.e. `e in [-36,-32]`) is deliberately NOT
+// enforced here — S-HARDEN-1 ships the floor only.
+inline constexpr int64_t kCompositionScaleMaxAbsM = (INT64_C(1) << 31) - 1;  // |m| <= 2^31-1
+inline constexpr int64_t kCompositionScaleMinE = -80;   // silu_lut.cpp:35 right branch, -shift <= 63
+inline constexpr int64_t kCompositionScaleMaxE = 7;     // silu_lut.cpp:35 left branch, term << shift exact
+
 // sigmoid(code * realscale) in Q15 via the LUT, where realscale = m * 2^e and `code` is the
 // int8 SwiGLU gate value (the codebase's activation format, in [-127, 127]). `table` is
 // kSigmoidLutEntries (= N+1) native-endian int32 Q15 nodes (the caller materializes it from the

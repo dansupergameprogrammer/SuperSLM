@@ -7,15 +7,15 @@
 // NarrowAccumulatorToI32 directly (§7.3's CI source check enforces this
 // structurally on every other forward TU).
 //
-// CheckRoundingDivideByPotExponentDomain (C28) is declared in the header ahead of
-// its own build (§11 S3.2) but is NOT implemented here — S3.1's own scope line
-// names only the two derived-operand predicates for C30 and C34, and C28's site
-// and predicate are S3.2's (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-
-// design-2026-07-28.md §9.2). Its stub body is left unchanged.
+// C28's derived-operand pair predicate is S3.2's own build (Claude/Curie/
+// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §9.2) and is not
+// declared or implemented here (ac34677 S7) — S3.1's own scope line names only the
+// two derived-operand predicates for C30 and C34.
 #include "superslm/checked_chain_funnel.h"
 
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
+#include "superslm/silu_lut.h"
 #include "superslm/trace_hook.h"
 
 namespace superslm {
@@ -26,6 +26,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::ChainInputOutOfDomain: return "ChainInputOutOfDomain";
 		case SslmForwardStatus::LogitNarrowingOverflow: return "LogitNarrowingOverflow";
 		case SslmForwardStatus::IExpConstantsOutOfDomain: return "IExpConstantsOutOfDomain";
+		case SslmForwardStatus::CarriedScaleMantissaOutOfDomain: return "CarriedScaleMantissaOutOfDomain";
+		case SslmForwardStatus::SiluCompositionScaleOutOfDomain: return "SiluCompositionScaleOutOfDomain";
 		case SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain:
 			return "RoundingDivideByPotExponentOutOfDomain";
 		case SslmForwardStatus::TokenIdOutOfRange: return "TokenIdOutOfRange";
@@ -40,14 +42,25 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 
 namespace {
 
-// C26's carried-scale product step, generalized to combine any two canonical
-// CarriedScale operands (SuperSLM_Plan.md C26 row): one C1/C2 high-mul per
-// combination (SaturatingRoundingDoublingHighMul, ties toward +infinity), then
-// renormalize the Q31-style mantissa back into [2^30, 2^31) by an EXACT single
-// shift (no rounding) when the high-mul result lands below the canonical floor.
-// Both operands' mantissas fit int32_t (canonical range is a strict subset of
-// int32's positive range); the high-mul's own product is < 2^62 and int64-safe,
-// matching C26's stated width.
+// C26's carried-scale product step, generalized to combine any two CarriedScale
+// operands (SuperSLM_Plan.md C26 row): one C1/C2 high-mul per combination
+// (SaturatingRoundingDoublingHighMul, ties toward +infinity), then renormalize the
+// Q31-style mantissa back into [2^30, 2^31) by an EXACT single shift (no rounding)
+// when the high-mul result lands below the canonical floor; the high-mul's own
+// product is < 2^62 and int64-safe, matching C26's stated width.
+//
+// **Precondition: both operands' mantissas fit int32_t's own range** (ac34677 S5,
+// corrected — the prior comment here claimed this always held because "canonical
+// range is a strict subset of int32's positive range", which is true of a CANONICAL
+// operand but does not hold of a mid-composition one, and the header
+// (checked_chain_funnel.h's CarriedScale doc) states mid-composition values are not
+// required to stay canonical). An operand outside int32_t's range silently
+// truncates through the unconditional cast below — executed at m = 2^31, one past
+// INT32_MAX, which produced a negative mantissa with no diagnostic. This function
+// does not check the precondition itself (it has no failure return); the caller,
+// RequantChainChecked, checks every operand against it before folding (step 0) and
+// returns CarriedScaleMantissaOutOfDomain rather than calling this function at all
+// when it does not hold.
 CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	const int32_t ma = static_cast<int32_t>(a.m);
 	const int32_t mb = static_cast<int32_t>(b.m);
@@ -60,6 +73,12 @@ CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	return CarriedScale{m, e};
 }
 
+// ac34677 S5's fix: the precondition CombineCarriedScale actually needs, checked
+// before it is ever called with an operand that would violate it.
+bool CarriedScaleMantissaFitsInt32(const CarriedScale& c) {
+	return c.m >= static_cast<int64_t>(kInt32Min) && c.m <= static_cast<int64_t>(kInt32Max);
+}
+
 }  // namespace
 
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
@@ -67,6 +86,20 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  CarriedScale site_constant, int8_t* out_codes,
                                  CarriedScale* out_scale,
                                  std::string_view site, size_t token_index) {
+	// Step 0 (ac34677 S5): every CarriedScale that will reach CombineCarriedScale
+	// below must fit that function's own precondition (mantissa within int32_t's
+	// range) before anything else runs — checked here, ahead of step 1, so a
+	// rejection at this step leaves out_codes and *out_scale untouched exactly like
+	// every other rejection path (step 5 has not run yet).
+	for (const CarriedScale& factor : incoming) {
+		if (!CarriedScaleMantissaFitsInt32(factor)) {
+			return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		}
+	}
+	if (!CarriedScaleMantissaFitsInt32(site_constant)) {
+		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+	}
+
 	// Steps 1-2 (§7.2): MaxAbsReduceWide already returns D' with C20's all-zero-row
 	// guard (D' = max(D, 1)) baked in — same contract shape as the narrow
 	// MaxAbsReduce sibling.
@@ -164,10 +197,52 @@ SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b
 	                                                  : SslmForwardStatus::IExpConstantsOutOfDomain;
 }
 
-SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t, int64_t) {
-	// Not this pass's to implement — S3.2's own build (§9.2 of the test-design
-	// record cited above). Stub body unchanged.
-	return SslmForwardStatus::WorkspaceTooSmall;  // stub
+namespace {
+
+// The runtime no-UB domain's own ceiling on `e`, derived from SiluSigmoidQ15's two
+// shift placements (silu_lut.cpp:21,35): `shift = e + kSiluLutLog2K + kSiluLutQIdx`.
+// The left branch (shift >= 0) is exact only while `term << shift` stays in int64,
+// i.e. strictly below kSiluLutTermLeftShiftOverflowExponent; the right branch
+// (shift < 0) calls RoundingDivideByPOT(int64_t, int), defined only up to
+// kRoundingDivideByPotExponentMaxI64. Named constants, not literals, so a change to
+// either primitive's own domain is caught here at compile time (§5.4).
+constexpr int kSiluCompositionRuntimeMaxE =
+    kSiluLutTermLeftShiftOverflowExponent - kSiluLutLog2K - kSiluLutQIdx - 1;  // 8
+constexpr int kSiluCompositionRuntimeMinE =
+    -(kRoundingDivideByPotExponentMaxI64 + kSiluLutLog2K + kSiluLutQIdx);  // -80
+
+// The mirror §5.4 calls for: proves at compile time that S-HARDEN-1's load-time
+// ceiling (kCompositionScaleMaxE/MinE, silu_lut.h) never exceeds this predicate's
+// own runtime ceiling — the ordering the loader's own model.cpp:605,609 asserts on
+// its own literal, restated here from the runtime side so a change to either the
+// loader's floor or this predicate's domain fails the build instead of drifting
+// silently out of the containment relation §5.4 requires.
+static_assert(kCompositionScaleMaxE <= kSiluCompositionRuntimeMaxE,
+              "the load-time CompositionConstants ceiling on e must not exceed the "
+              "runtime SwiGLU no-UB ceiling (C34, ac34677 S11) — containment would "
+              "otherwise fail on the loader's own accepted upper range");
+static_assert(kCompositionScaleMinE >= kSiluCompositionRuntimeMinE,
+              "the load-time CompositionConstants floor on e must not fall below the "
+              "runtime SwiGLU no-UB floor (C34, ac34677 S11) — containment would "
+              "otherwise fail on the loader's own accepted lower range");
+
+}  // namespace
+
+SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
+	// The no-UB domain itself (§5.4): `|m|` must stay within kCompositionScaleMaxAbsM
+	// (the same symmetric bound SiluSigmoidQ15's `term = code * m` needs to stay
+	// int64-exact, |term| < 2^39, and the same one the loader's own gate uses), and
+	// `e` must keep both of that function's shift placements in range. Wider
+	// than S-HARDEN-1's load-time descriptor on the upper branch by construction
+	// (kSiluCompositionRuntimeMaxE = 8 > kCompositionScaleMaxE = 7) — e = 8 is the
+	// one point of difference §5.4 executes: rejected at load time, accepted here.
+	if (m < -kCompositionScaleMaxAbsM || m > kCompositionScaleMaxAbsM) {
+		return SslmForwardStatus::SiluCompositionScaleOutOfDomain;
+	}
+	if (e < kSiluCompositionRuntimeMinE || e > kSiluCompositionRuntimeMaxE) {
+		return SslmForwardStatus::SiluCompositionScaleOutOfDomain;
+	}
+	return SslmForwardStatus::Ok;
 }
 
 }  // namespace superslm

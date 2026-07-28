@@ -132,24 +132,36 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 
 // --- F-S3-7 / §7.2 wide-row (int64 input width) siblings ---------------------
 //
-// THIS BLOCK IS THE S3.1 CONTRACT STEP (red-first TDD, SuperSLM_S3a_WalkingSkeleton_
-// Plan.md §11 S3.1): the declarations below are the approved API surface (§7.2, §5.5,
-// §4.7's correction). Bodies in intmath.cpp are STUBS -- they compile and link but
-// return a fixed, deliberately wrong value when called. Curie's red suite is authored
-// against this contract in a follow-up pass (Claude/Curie/superslm-s3.1-checked-
-// chain-funnel-test-design-2026-07-28.md §4/§8); the bit-exact port lands at the next
-// build step (Brunel green).
+// The declarations below are the funnel's approved API surface (§7.2, §5.5, §4.7's
+// correction). Bodies are real, bit-exact ports in intmath.cpp, green in the
+// standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
+// 2026-07-28.md §4/§8).
 //
 // These three, plus RequantChainChecked/NarrowRowChecked (checked_chain_funnel.h),
 // are the funnel's leaf set: §7.3's CI source check bans every call to them outside
 // the funnel's own file and the leaf certification TUs.
 
 // C20/F-S3-7 — MaxAbsReduce's construction at int64 (wide composition row) input
-// width: D = max_i |x_i| over the row, each element ALREADY int64 (no widen-before-
-// abs step needed — the row already is the wide type), then the all-zero-row guard
-// D' = max(D, 1). Returns D' in [1, 2^31]. Order-free; every element visited
-// unconditionally. Same contract shape as MaxAbsReduce above, at the wider input
-// width the composition's wide rows carry (matmul.h's int64 accumulator rows).
+// width: D = max_i |x_i| over the row, then the all-zero-row guard D' = max(D, 1).
+// Order-free; every element visited unconditionally. Same contract shape as
+// MaxAbsReduce above, at the wider input width the composition's wide rows carry
+// (matmul.h's int64 accumulator rows).
+//
+// **Returns D' in [1, INT64_MAX], NOT [1, 2^31]** (corrected, ac34677 finding S2:
+// the row {2^40, 3} returns 1099511627776, which the prior text claimed could not
+// happen — directly contradicting the reason the caller exists, since
+// RequantChainChecked's own C29 step rejects precisely when D' > 2^31). A caller
+// that wants an in-domain guarantee reads the return through C29
+// (checked_chain_funnel.cpp), not through this header's own range claim.
+//
+// At int64 there is no wider built-in type to widen into before the abs, unlike
+// the int32 sibling above — the fix (ac34677 finding S1) takes the row's UNSIGNED
+// magnitude instead (defined for every int64_t, including INT64_MIN, whose
+// magnitude 2^63 has no int64_t representation but has an exact uint64_t one),
+// then narrows back to int64_t with a saturating clamp at INT64_MAX so a row
+// whose true magnitude exceeds int64_t's positive range still reports a value
+// unambiguously > 2^31 rather than wrapping into one the C29 domain check could
+// misread as in-domain.
 int64_t MaxAbsReduceWide(const int64_t* x, size_t n);
 
 // New (§5.5, T-1254) — the row's signed max and min, order-free (max and min are each
@@ -158,6 +170,13 @@ int64_t MaxAbsReduceWide(const int64_t* x, size_t n);
 // not its magnitude — a magnitude bound cannot express int32's asymmetric
 // representable range ([-2^31, 2^31-1]), which is exactly why C29's `D' <= 2^31`
 // check cannot gate this narrowing (§5.5).
+//
+// **`n == 0` is in-contract and defined** (ac34677 finding S3): both outputs are
+// written 0 and neither `x[0]` nor any other element is read, matching
+// MaxAbsReduceWide's own n == 0 convention (the empty reduction). Neither this
+// primitive nor NarrowRowChecked (checked_chain_funnel.h) documented an `n >= 1`
+// precondition, and the prior implementation read `x[0]` before testing `n`,
+// which crashed on a null `x` with `n == 0`.
 void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_min);
 
 // C22/F-S3-7 — RequantTokenCode's already-pinned formula, unchanged, at int64 input
@@ -165,6 +184,13 @@ void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_mi
 // 2^(62 - s)), -127, 127). Same 128-bit-intermediate construction as the int32-input
 // overload above; only the input width changes, because the funnel (§7.2's fold,
 // T-1254) never narrows the composition's wide row to int32 before this step.
+//
+// **Total over its whole documented parameter space: every `int64_t x_i` is safe**
+// (ac34677 O1) — the 128-bit composite `|x_i| * 127 * R` overflows into the `> 127`
+// clamp rather than wrapping, traced through the UMul/UMulWide/UShrToU64 chain
+// (intmath.cpp) at the worst case `|x_i| = 2^63`, `R <= 2^32`. `r` and `s` are not
+// independently swept here; they arrive from this same chain's own
+// DynamicScaleReciprocal/NormalizeScale, whose own contracts bound them.
 int8_t RequantTokenCodeWide(int64_t x_i, int64_t r, int s);
 
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) -------

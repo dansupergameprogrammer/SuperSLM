@@ -393,6 +393,30 @@ jobs:
       - name: Fail on any unwrapped member of the derived population
         run: python tools/ci/check_bad_alloc_contract.py --list-unwrapped
 
+  # SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3 (T-200, Sec17.3 cell 5; ac34677
+  # C1): the checked chain funnel's structural half -- no translation unit in
+  # the forward composition may name a funnel leaf (MaxAbsReduce,
+  # MaxAbsReduceWide, RowBoundsWide, NormalizeScale, DynamicScaleReciprocal,
+  # RequantTokenCode, RequantTokenCodeWide, NarrowAccumulatorToI32) directly,
+  # outside the funnel's own file and the leaf certification TUs. Mirrors the
+  # two precedents already CI-wired (tests/check_no_pow_operator.py above,
+  # tools/ci/check_bad_alloc_contract.py's own job): a test step, then the
+  # gate's own explicit `- run:` step. Independent of the bad-alloc-membership-
+  # check job above (which also collects tests/ci/ via pytest) so this gate's
+  # own pass/fail does not depend on that job's environment or ordering.
+  forward-leaf-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: Forward-leaf check's own red suite
+        run: python -m pytest tests/ci/test_check_no_forward_leaf_calls.py -v
+      - name: Fail the build if a forward TU names a funnel leaf directly
+        run: python tests/ci/check_no_forward_leaf_calls.py
+
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
   # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and

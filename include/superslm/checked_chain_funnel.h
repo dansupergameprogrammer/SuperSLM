@@ -9,24 +9,17 @@
 // directly — every other site routes through one of these two (§7.3's CI source check
 // enforces this structurally, banning the leaves from every other forward TU).
 //
-// Also declares the funnel's status vocabulary (SslmForwardStatus) and the two
+// Also declares the funnel's status vocabulary (SslmForwardStatus) and the
 // derived-operand predicates §7.2's second limb names for the runtime-derived
 // operands with no domain predicate of their own: C30's (a call to the already-shipped
-// IExpConstantsInDomain, never an encoded threshold) and C28's (the (q_B, e_a) pair
-// check at the bias-reconciliation site). A third such predicate, C34's, is realized
-// as a test-side oracle standing in for a not-yet-built production wrapper
-// (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §3.3)
-// and is not declared here — it is not part of S3.1's own two (§11 S3.1: "the two
-// derived-operand predicates, C30's being a call to IExpConstantsInDomain rather than
-// a threshold").
+// IExpConstantsInDomain, never an encoded threshold) and C34's (the SwiGLU site's
+// runtime (m, e) gate scale, §5.4). C28's (the (q_B, e_a) pair check at the
+// bias-reconciliation site) is S3.2's own build and is not declared here.
 //
-// THIS FILE IS THE S3.1 CONTRACT STEP (red-first TDD): the declarations below are the
-// approved API surface (§7.2, §5.5, §7.2's second limb). Bodies in
-// src/forward/checked_chain_funnel.cpp are STUBS -- they compile and link but return
-// a fixed, deliberately wrong value when called. Curie's red suite is authored against
-// this contract in a follow-up pass (Claude/Curie/superslm-s3.1-checked-chain-funnel-
-// test-design-2026-07-28.md §4/§8); the real construction lands at the next build step
-// (Brunel green).
+// The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
+// limb). Bodies are real constructions in src/forward/checked_chain_funnel.cpp, green
+// in the standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
+// 2026-07-28.md §4/§8).
 #ifndef SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 #define SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 
@@ -43,7 +36,17 @@ namespace superslm {
 // exponent e, is a little-endian int64", which is why both fields are int64 here
 // rather than a narrower type). Canonical form (artifact-carried) constrains
 // m in [2^30, 2^31); a runtime-derived carried_scale_product (C26) is not required to
-// be canonical mid-composition.
+// hold that tighter range mid-composition.
+//
+// **It IS required to fit int32_t's own representable range**
+// ([INT32_MIN, INT32_MAX]) (ac34677 S5): `CombineCarriedScale`
+// (checked_chain_funnel.cpp) folds two operands through a single int32 high-mul, and
+// an operand outside int32's range is silently truncated by the unconditional
+// narrowing cast — executed at m = 2^31 (one past INT32_MAX), which produced a
+// negative mantissa with no diagnostic. `RequantChainChecked` checks this
+// precondition on `incoming` and `site_constant` before folding either into the
+// running product, returning `CarriedScaleMantissaOutOfDomain` rather than
+// truncating silently.
 struct CarriedScale {
 	int64_t m = 0;
 	int64_t e = 0;
@@ -62,7 +65,9 @@ enum class SslmForwardStatus {
 	ChainInputOutOfDomain,                   // C29 (§7.2 step 3): D' > 2^31 in RequantChainChecked
 	LogitNarrowingOverflow,                  // C35 (§5.5, T-1254): NarrowRowChecked's asymmetric int32 domain check
 	IExpConstantsOutOfDomain,                // C30 (§7.2): IExpConstantsInDomain rejects the derived i-exp constants
-	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4): the (q_B, e_a) pair check fails
+	CarriedScaleMantissaOutOfDomain,         // ac34677 S5: an incoming/site CarriedScale.m does not fit int32_t
+	SiluCompositionScaleOutOfDomain,         // C34 (§5.4): CheckSiluCompositionScaleDomain rejects the derived (m,e)
+	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — owed by S3.2; declared for completeness
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
 	PositionOverCap,                         // owed by S3.6 (§9.1)
 	WorkspaceTooSmall,                       // owed by a later sub-slot
@@ -86,6 +91,9 @@ struct ChainResult {
 // The funnel's first entry point (§7.2): the single checked path into the C19-C22
 // per-token dynamic-scale chain at int64 (wide) row width. Performs, in this order
 // and no other:
+//   0. Every CarriedScale in `incoming`, then `site_constant`, checked against
+//      CombineCarriedScale's own precondition (its mantissa fits int32_t's range) —
+//      else return {CarriedScaleMantissaOutOfDomain} before step 1 runs (ac34677 S5)
 //   1. MaxAbsReduceWide(wide_row, n) -> D
 //   2. D' = max(D, 1)                                                    (C20's guard)
 //   3. C29's domain check: D' <= 2^31, else return {ChainInputOutOfDomain} — this is
@@ -137,23 +145,41 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // C30's own formula and calls this on the result. THIS FUNCTION ENCODES NO THRESHOLD
 // OF ITS OWN — it calls the already-shipped IExpConstantsInDomain (intmath.h:362)
 // on the four values and maps a false result to IExpConstantsOutOfDomain, nothing
-// else. The design's own textual domain rule (§7.2's table, "e >= -60, or e = -61
-// with m >= 1,268,234,713") and IExpConstantsInDomain are currently known to disagree
-// at 79 of 198 swept points (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-
-// design-2026-07-28.md §5, D-SLM318) — which of the two governs S3.3's derivation
-// site is a planner ruling pending as of this writing. This declaration and its stub
-// body take neither side; they exist so the contract is complete.
+// else.
+//
+// **D-SLM348 (2026-07-28) settled the apparent disagreement between the design's
+// textual domain rule (§7.2's table, "e >= -60, or e = -61 with m >= 1,268,234,713")
+// and `IExpConstantsInDomain`, which disagree at 79 of 198 swept points (Claude/Curie/
+// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §5): the shipped
+// predicate is correct, and the design's prose over-generalized the underflow tail
+// (`e in [-31, +8]`) where the predicate's genuine divide-by-zero rejection reads as
+// an extra restriction but is not one, verified against an arbitrary-precision
+// decomposition oracle at every swept point. `IExpConstantsInDomain` is the total,
+// sole domain authority; this function implements that ruling rather than
+// paraphrasing it.**
 SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b,
                                              int64_t q_c);
 
-// C28's derived-operand pair predicate (§7.2 second limb, §4.4). The not-yet-built C28
-// bias-reconciliation site (S3.2) checks this before calling
-// RoundingDivideByPOT(int64_t, int) with the composed exponent q_B + 62 + e_a:
-// 0 <= q_B + 62 + e_a <= 63, else RoundingDivideByPotExponentOutOfDomain. Names
-// kRoundingDivideByPotExponentMinI64 / kRoundingDivideByPotExponentMaxI64
-// (intmath.h:59-60) rather than the literals 0 and 63, so neither side can drift from
-// RoundingDivideByPOT's own domain without failing a compile.
-SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
+// C34's derived-operand predicate (§7.2 second limb, §5.4). The not-yet-built SwiGLU
+// activation site (S3.4) forms the per-token gate scale (m, e) at runtime — never
+// artifact-carried, so no load-time gate stands behind it — and calls this before
+// `SiluSigmoidQ15` (silu_lut.h:48). Encodes the runtime no-UB domain directly:
+// `|m|` must stay within the same symmetric bound `SiluSigmoidQ15`'s
+// `term = code * m` needs to stay int64-exact, and `e` must keep both of that
+// function's shift placements in range. Its upper branch names `kSiluLutTermLeftShiftOverflowExponent`
+// (silu_lut.h) and its lower branch names `kRoundingDivideByPotExponentMaxI64`
+// (intmath.h) — the same two constants the loader's own static_asserts
+// (model.cpp) use, so neither side can drift from the primitive without failing a
+// compile.
+//
+// **The relation to S-HARDEN-1's load-time descriptor (D-SLM142) is CONTAINMENT, not
+// equality, and is deliberate**: every (m, e) the loader accepts is accepted here, and
+// this predicate's domain is strictly wider on the upper branch — `e = 8` is the one
+// point of difference (§5.4, executed), accepted here and rejected at load time. The
+// mirroring static_assert next to this predicate's definition
+// (src/forward/checked_chain_funnel.cpp) proves that ordering at compile time: the
+// load-time ceiling never exceeds this predicate's own ceiling.
+SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 
 }  // namespace superslm
 
