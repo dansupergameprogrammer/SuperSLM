@@ -6,28 +6,6 @@
 // contract commit) against the red suite authored in tests/test_main.cpp
 // (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
 // 2026-07-28.md §11).
-//
-// tests/test_main.cpp's own T-1267 mechanism-pin cell
-// (TestRmsNormSiteC31UsesFloorDivisionMechanismPin) shadow-recompiles this
-// file's text a second time, nested inside its own namespace, in a
-// translation unit where the real `superslm/forward_sites.h` was already
-// included once at file scope -- so that header's own include guard skips
-// its body the second time, and the shadow copy's ONLY declaration of
-// RmsNormSite/EmbedEntry is the out-of-line definition below, with none of
-// the header-declared trailing trace defaults (site/token_index/
-// trace_hook_state, §11 S3.1a) reachable there. `SUPERSLM_FORWARD_SITES_H`
-// being already defined at the #include line below is exactly that
-// condition (tests/ is read-only; this is resolved here, not there): the
-// macro below restates the same three defaults directly on the out-of-line
-// definitions ONLY then. Restating them unconditionally would be an illegal
-// default-argument redefinition on the real, non-shadow compile, where the
-// header's declaration (with those same defaults) is already visible by the
-// time these functions are defined.
-#if defined(SUPERSLM_FORWARD_SITES_H)
-#define SUPERSLM_FORWARD_SITES_RESTATE_TRACE_DEFAULTS 1
-#else
-#define SUPERSLM_FORWARD_SITES_RESTATE_TRACE_DEFAULTS 0
-#endif
 #include "superslm/forward_sites.h"
 
 #include <vector>
@@ -56,19 +34,11 @@ int64_t FloorDivI64(int64_t a, int64_t b) {
 	return (r != 0 && r < 0) ? q - 1 : q;
 }
 
-#if SUPERSLM_FORWARD_SITES_RESTATE_TRACE_DEFAULTS
-SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
-                               CarriedScale /*incoming_scale*/, CarriedScale site_constant,
-                               int8_t* out_codes, CarriedScale* out_scale,
-                               std::string_view site = {}, size_t token_index = 0,
-                               SslmTraceHookState* trace_hook_state = nullptr) {
-#else
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site, size_t token_index,
                                SslmTraceHookState* trace_hook_state) {
-#endif
 	// C31 (§5.1, §6.2 step 1/9): sumsq -> ISqrt(FloorDivI64(...)) ->
 	// max(root,1) -> per-element FloorDivI64(h[i]<<2*NORM_FRAC_BITS, root)*g[i]
 	// -> the funnel, with the incoming span EMPTY. `incoming_scale` is accepted
@@ -125,18 +95,10 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	return RoundingDivideByPOT(b * r_a, static_cast<int>(exponent));
 }
 
-#if SUPERSLM_FORWARD_SITES_RESTATE_TRACE_DEFAULTS
-SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,
-                              size_t hidden_size, CarriedScale site_constant, int8_t* out_codes,
-                              CarriedScale* out_scale, std::string_view site = {},
-                              size_t token_index = 0,
-                              SslmTraceHookState* trace_hook_state = nullptr) {
-#else
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,
                               size_t hidden_size, CarriedScale site_constant, int8_t* out_codes,
                               CarriedScale* out_scale, std::string_view site, size_t token_index,
                               SslmTraceHookState* trace_hook_state) {
-#endif
 	// F-S3-8 (§4.8, §6.1): validate token_id against [0, vocab_size) BEFORE any
 	// row of embed_weights is read -- a host-supplied id, never sanitized
 	// upstream.
