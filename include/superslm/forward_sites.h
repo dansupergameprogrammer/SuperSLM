@@ -122,8 +122,30 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // that carry is built; this declaration states the contract only. The call
 // site composes `clamp(LandingRescale(...), -127, 127)` (§8.1); the clamp is
 // the caller's, matching C33's own clamp-is-the-caller's convention below.
+//
+// `out_saturation_count` (T-518 / D-SLM201 option 2, §8.2; the PREDICATED-
+// INCREMENT half of the saturation counter, staged now per the plan's own
+// "written into the kernel as it is authored, not after" -- §8.2, D-SLM201).
+// The clamp comparison the caller's own `clamp(..., -127, 127)` performs is
+// evaluated once, internally, against this function's own about-to-be-
+// returned raw value -- not a second, independently-derived comparison --
+// and when it is out of `[-127, 127]`, `*out_saturation_count` is
+// INCREMENTED by exactly one (never reset, never assigned): the accumulator
+// is the CALLER's, owned across every call for one sequence (§8.2:
+// "granularity: per sequence"; reset on sequence create / `sslm_seq_reset` is
+// the caller's own responsibility, not this function's). This has NO EFFECT
+// WHATSOEVER on the return value (§8.2's own non-negotiable property) --
+// the raw, unclamped result is identical whether or not counting is
+// requested. Defaults to `nullptr`, in which case nothing is read or
+// written, exactly the convention `RmsNormSite`/`EmbedEntry` already use for
+// their own optional trailing parameters -- every existing call (there are
+// none yet) compiles unchanged. The REPORTING surface -- a field on the
+// decode-step status that exposes this accumulator to the host -- is a
+// separate, deferred obligation (S3.6/S3.7's own decode-step struct; see
+// this pass's build log) and is NOT this parameter's job: this parameter is
+// the counting mechanism only, never a report.
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
-                        int64_t e_t);
+                        int64_t e_t, uint64_t* out_saturation_count = nullptr);
 
 // C33's post-rotation clamp (§5.3, §11 S3.3 §6.2 step 3): `RopeApplyPair`
 // (intmath.h) returns its rotated pair UNCLAMPED and int64-wide by its own

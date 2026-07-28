@@ -99,11 +99,19 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 }
 
 int64_t LandingRescale(int64_t /*branch_code*/, int64_t /*m_a*/, int64_t /*r_t*/,
-                        int64_t /*e_a*/, int64_t /*e_t*/) {
+                        int64_t /*e_a*/, int64_t /*e_t*/,
+                        uint64_t* /*out_saturation_count*/) {
 	return 0;  // stub (S3.3 red-phase) -- matching this campaign's own precedent
 	           // (S3.1/S3.2, a594dd2) for every int64_t-returning function: a
 	           // fixed wrong sentinel so a follow-up red suite fails against the
 	           // real construction rather than compiling against a missing symbol.
+	           // `out_saturation_count` is an output parameter and is therefore
+	           // left untouched on this path too, matching the funnel's own "on
+	           // rejection, neither is touched" convention extended to every
+	           // stub's output parameters in this campaign -- a caller that
+	           // passes a non-null accumulator here sees it unmodified, which is
+	           // itself deliberately wrong the moment a real hostile-value cell
+	           // asserts a nonzero count.
 }
 
 int64_t ClampRopeCode(int64_t /*raw*/) {
