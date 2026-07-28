@@ -21,15 +21,13 @@
 // superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md §9 item 4).
 // The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
 // reconciliation compute, and the embed entry are S3.2's own site-composition
-// functions and are declared in include/superslm/forward_sites.h instead — not here
-// — because this file's own translation unit is the sole entry the §7.3 CI source
-// check's default glob (tests/ci/check_no_forward_leaf_calls.py) currently expects
-// to exist under src/forward/**, pinned by that check's own exact-population
-// assertion. Adding a second real file under src/forward/ would fail that assertion
-// without a matching update to the check itself, which is outside this campaign's
-// writable scope (tests/ is read-only here); forward_sites.cpp is therefore placed
-// at src/forward_sites.cpp, a sibling of src/model.cpp, until a future pass updates
-// the check's own glob/expectation to cover it.
+// functions and are declared in include/superslm/forward_sites.h instead — not
+// here. Their translation unit, src/forward/forward_sites.cpp, now lives
+// under src/forward/ alongside this file's own — tests/ci/
+// check_no_forward_leaf_calls.py's _EXPECTED_REAL_FORWARD_FILES already named
+// that path as the expected post-move population, and its
+// _DEFAULT_FORWARD_GLOBS directory glob (src/forward/**/*.cpp) covers it
+// without needing to change.
 //
 // The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
 // limb). Bodies are real constructions in src/forward/checked_chain_funnel.cpp, green

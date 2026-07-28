@@ -12,29 +12,25 @@
 //
 // The declarations below are the approved API surface (Claude/Curie/
 // superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
-// §4/§9). Bodies in src/forward_sites.cpp are the real construction, green
-// against the red suite authored in tests/test_main.cpp (same record §11).
+// §4/§9). Bodies in src/forward/forward_sites.cpp are the real construction,
+// green against the red suite authored in tests/test_main.cpp (same record
+// §11).
 //
-// PLACEMENT NOTE: this file's own translation unit (src/forward_sites.cpp) is
-// NOT under src/forward/, even though these are forward-composition sites in
-// the plan's own sense. tests/ci/check_no_forward_leaf_calls.py's
-// _DEFAULT_FORWARD_GLOBS names src/forward_sites.cpp explicitly (it is
-// scanned, not exempted) alongside the src/forward/** glob, and its
-// end-to-end test's own _EXPECTED_REAL_FORWARD_FILES (read-only to this
-// campaign) hardcodes this file's CURRENT relative path. Physically
-// relocating it under src/forward/ would require updating that hardcoded set
-// in the same commit — a tests/ edit outside this campaign's writable
-// scope — so the move is routed rather than done (Claude/Brunel's build log
-// for this pass states the same finding, confirmed by execution: moving the
-// file and re-running tests/ci/ regresses that one test from pass to fail).
-// The gate's coverage hole this note originally described is already closed
-// by the explicit glob entry above, independently of whether the move
-// happens.
+// PLACEMENT: this file's own translation unit now lives at
+// src/forward/forward_sites.cpp, under the directory glob
+// tests/ci/check_no_forward_leaf_calls.py's _DEFAULT_FORWARD_GLOBS already
+// scans (src/forward/**/*.cpp). The sibling glob entry that module carries
+// for this file's PRIOR path (src/forward_sites.cpp, a sibling of
+// src/model.cpp) is now redundant with the directory glob rather than wrong
+// (that module's own docstring names this outcome); no tests/ edit was
+// needed to land the move, and none happened here (tests/ is read-only to
+// this campaign).
 #ifndef SUPERSLM_FORWARD_SITES_H
 #define SUPERSLM_FORWARD_SITES_H
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 #include "superslm/checked_chain_funnel.h"
 
@@ -62,9 +58,23 @@ int64_t FloorDivI64(int64_t a, int64_t b);
 // `h`/`g` each have `hidden_size` elements. On Ok, `out_codes` (hidden_size
 // elements) and `*out_scale` are written; on any rejection, neither is touched
 // (the funnel's own convention, §7.2).
+//
+// `site`, `token_index`, and `trace_hook_state` (§11 S3.1a; D-SLM362) are
+// forwarded UNCHANGED to the internal RequantChainChecked call, exactly the
+// three trailing parameters that call already carries (checked_chain_funnel.h).
+// This site's own name is never fixed here — the same composition serves
+// every RMSNorm instance in the per-layer forward (attention-norm, FFN-norm,
+// final-norm), each under its own site string ("layer3.attn_norm",
+// "final_norm", ...) supplied by the caller that knows which one it is
+// (§4.1's naming convention, Claude/Curie/superslm-s3.1a-trace-hook-test-
+// design-2026-07-28.md §4.1). They default to an empty site, index 0, and
+// nullptr so every existing call compiles unchanged and emits no trace record
+// (RequantChainChecked's own default-argument convention, extended here).
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale incoming_scale, CarriedScale site_constant,
-                               int8_t* out_codes, CarriedScale* out_scale);
+                               int8_t* out_codes, CarriedScale* out_scale,
+                               std::string_view site = {}, size_t token_index = 0,
+                               SslmTraceHookState* trace_hook_state = nullptr);
 
 // C24/C25's WSC1 fold-apply dispatch (§4.3, §6.2 step 2/6/10/12): `identity == 1`
 // is the true pass-through (returns `acc` unchanged — no multiply, no shift);
@@ -98,10 +108,22 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // int64 (bound 127), and runs the funnel (RequantChainChecked) with the
 // incoming span EMPTY and `site_constant` as the sole factor (§6.1: "incoming
 // scale empty, site constant composition_constants[\"embed\"]").
+//
+// `site`, `token_index`, and `trace_hook_state` (§11 S3.1a; D-SLM362) are
+// forwarded UNCHANGED to the internal RequantChainChecked call, the same
+// three trailing parameters that call already carries and the same default
+// convention RmsNormSite above uses — an empty site, index 0, and nullptr, so
+// every existing call compiles unchanged and emits no trace record. This
+// entry has exactly one instance in the forward (§4.1's own example names it
+// "embed"); the caller supplies that literal rather than this function fixing
+// it, matching RmsNormSite's own convention rather than special-casing the
+// single-instance site.
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
                               const int8_t* embed_weights, size_t hidden_size,
                               CarriedScale site_constant, int8_t* out_codes,
-                              CarriedScale* out_scale);
+                              CarriedScale* out_scale,
+                              std::string_view site = {}, size_t token_index = 0,
+                              SslmTraceHookState* trace_hook_state = nullptr);
 
 }  // namespace superslm
 
