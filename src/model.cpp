@@ -749,25 +749,29 @@ constexpr int64_t kKvLandingScaleMantissaMax = (int64_t{1} << 31) - 1;        //
 constexpr int64_t kKvLandingReciprocalMin = (int64_t{1} << 31) + 1;           // 2^31 + 1
 constexpr int64_t kKvLandingReciprocalMax = int64_t{1} << 32;                 // 2^32
 
-// e_t (word 1) domain -- §7.2a's own joint bound (Poirot 2026-07-28 finding 3
-// / Popper §3.2/§3.3), checked on BOTH KvLandingScales' and
-// KvLandingReciprocals' own word 1, each independently of whether the other
-// section is present in the same artifact (ValidateKvLandingScalesDomain and
-// ValidateKvLandingReciprocalsDomain below). Commit 1b0bd10 checked only
-// KvLandingScales' e_t; the confirmation review (D-SLM372, correcting
-// D-SLM370(c)'s wrong section name; Poirot's remediation-confirmation review
-// finding B) found that the composite (`LandingRescale`, forward_sites.cpp),
-// called as `landing_rescale_vec(seg, m_a, r_t, e_a, e_t)`
-// (dynamic_engine.py's own unpack: `_m_t, e_t, r_t =
-// model.kv_landing_reciprocals[...]`), reads `e_t` and `r_t` BOTH from
-// KvLandingReciprocals at runtime -- KvLandingScales' own words (`m_target,
-// e_target`) are the composite's landed TARGET scale, never an argument to
-// LandingRescale at all (forward_sites.h's own header comment named both
-// sections in one breath for `(r_t, e_t)`, which is the ambiguity that put
-// commit 1b0bd10's check on the wrong one). The KvLandingReciprocals check is
-// therefore the one that gates the field the runtime composite actually
-// reads; the KvLandingScales check on its own e_t is retained as
-// defense-in-depth against an artifact that carries that section on its own.
+// e_t (word 1 of KvLandingReciprocals) domain -- §7.2a's own joint bound
+// (Poirot 2026-07-28 finding 3 / Popper §3.2/§3.3), checked on
+// KvLandingReciprocals' own word 1 (ValidateKvLandingReciprocalsDomain
+// below). Commit 1b0bd10 checked KvLandingScales' word 1 instead; the
+// confirmation review (D-SLM372, correcting D-SLM370(c)'s wrong section
+// name; Poirot's remediation-confirmation review finding B) found that the
+// composite (`LandingRescale`, forward_sites.cpp), called as
+// `landing_rescale_vec(seg, m_a, r_t, e_a, e_t)` (dynamic_engine.py's own
+// unpack: `_m_t, e_t, r_t = model.kv_landing_reciprocals[...]`), reads
+// `e_t` and `r_t` BOTH from KvLandingReciprocals at runtime -- KvLandingScales'
+// own words (`m_target, e_target`) are the composite's landed TARGET scale,
+// never an argument to LandingRescale at all (forward_sites.h's own header
+// comment named both sections in one breath for `(r_t, e_t)`, which is the
+// ambiguity that put commit 1b0bd10's check on the wrong one). A second
+// remediation round (Poirot a6d6728 second confirmation review, finding 1)
+// found that a floor derived about this RATIO exponent does not bound
+// KvLandingScales' word 1 at all -- that word is an ABSOLUTE per-head scale
+// exponent (`canonical_scale(S_kh)`), a different quantity appearing in no
+// `k` anywhere in the tree, and no artifact carrying KvLandingScales alone
+// can even reach `LandingRescale` (it supplies neither `r_t` nor `e_t`).
+// KvLandingScales' `e_target` therefore carries no domain check here and is
+// restored to pending-consumer status (D-SLM142) until a C++ consumer of it
+// exists.
 // `e_t` drives the composed shift exponent `k = 62 - (e_a - e_t)` and had no
 // domain check anywhere before 1b0bd10, artifact-carried or runtime-derived.
 // `LandingRescale`'s own finding-3 remedy (forward_sites.cpp) now DETECTS an
@@ -802,19 +806,16 @@ constexpr int64_t kKvLandingReciprocalMax = int64_t{1} << 32;                 //
 constexpr int64_t kKvLandingExponentMin = -60;
 
 // KvLandingScales' m_t (word 0) checked against the canonical carried-
-// mantissa range every other KVC1 scale mantissa in this tree already uses,
-// AND its own e_t (word 1) checked against the joint-bound floor derived
-// above, independent of whether a KvLandingReciprocals section is even
-// present in the same artifact -- an artifact carrying ONLY a KvLandingScales
-// section with an extreme e_t is refused here regardless (§7.2a third limb;
-// S3.3; Claude/Curie/superslm-s3.3-attention-interior-test-design-
-// 2026-07-28.md §4.5/§6.5; Poirot 2026-07-28 finding 3). This defense-in-depth
-// check is INDEPENDENT of the field LandingRescale's composite actually
-// consumes at runtime, which is KvLandingReciprocals' own e_t
-// (ValidateKvLandingReciprocalsDomain below; confirmation review D-SLM372,
-// correcting D-SLM370(c)'s wrong section name, and Poirot's remediation-
-// confirmation review finding B) -- both sections' e_t words are checked,
-// against the same floor, each independently of the other's presence.
+// mantissa range every other KVC1 scale mantissa in this tree already uses
+// (§7.2a third limb; S3.3). Its word 1 (`e_target`, the section's own
+// landed TARGET scale exponent -- an ABSOLUTE `canonical_scale(S_kh)`, not
+// the ratio exponent `LandingRescale` consumes) carries no domain check
+// here: no artifact carrying KvLandingScales alone can reach
+// `LandingRescale` at all (it supplies neither that composite's `r_t` nor
+// its `e_t`), and no C++ consumer of `e_target` exists yet, so it is
+// pending-consumer per D-SLM142 (Poirot a6d6728 second confirmation review,
+// finding 1, correcting the `a62de8c`..`a6d6728` retention of a floor
+// derived for a different word).
 SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landing_scales,
                                                std::string* err) {
 	for (const SslmConstantEntry& e : kv_landing_scales.Entries()) {
@@ -825,15 +826,6 @@ SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landi
 				       std::to_string(m_t) + " outside [" +
 				       std::to_string(kKvLandingScaleMantissaMin) + "," +
 				       std::to_string(kKvLandingScaleMantissaMax) + "]";
-			}
-			return SslmModelStatus::KvLandingScaleOutOfDomain;
-		}
-		const int64_t e_t = SslmKeyedConstants::Value(e, 1);
-		if (e_t < kKvLandingExponentMin) {
-			if (err) {
-				*err = "KvLandingScales entry \"" + std::string(e.name) + "\" e_t=" +
-				       std::to_string(e_t) + " below the joint-bound floor " +
-				       std::to_string(kKvLandingExponentMin);
 			}
 			return SslmModelStatus::KvLandingScaleOutOfDomain;
 		}

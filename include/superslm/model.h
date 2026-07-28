@@ -160,19 +160,19 @@ enum class SslmModelStatus {
 	                              // Enforced by ValidateBiasesDomain (model.cpp), wired into
 	                              // ValidateSectionValues (S3.2's green phase).
 	KvLandingScaleOutOfDomain,   // KvLandingScales entry's m_t (word 0) outside [kKvLandingScaleMantissaMin,
-	                              // kKvLandingScaleMantissaMax], OR its own e_t (word 1) below
-	                              // kKvLandingExponentMin (Sec7.2a third limb, S3.3; Poirot 2026-07-28
-	                              // finding 3). Enforced by ValidateKvLandingScalesDomain (model.cpp), wired
-	                              // into ValidateSectionValues.
+	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). Its word 1
+	                              // (e_target) carries no check here -- pending-consumer per D-SLM142
+	                              // (Poirot a6d6728 second confirmation review, finding 1). Enforced by
+	                              // ValidateKvLandingScalesDomain (model.cpp), wired into
+	                              // ValidateSectionValues.
 	KvLandingReciprocalOutOfDomain, // KvLandingReciprocals entry's e_t (word 1) below kKvLandingExponentMin,
 	                              // OR its R_t (word 2) outside [kKvLandingReciprocalMin,
 	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3; Poirot 2026-07-28
 	                              // finding 3; confirmation review D-SLM372, correcting D-SLM370(c)'s wrong
 	                              // section name -- e_t is the field LandingRescale's composite actually
-	                              // reads from THIS section at runtime; KvLandingScaleOutOfDomain's own e_t
-	                              // check above is defense-in-depth for an artifact carrying that section
-	                              // alone). Enforced by ValidateKvLandingReciprocalsDomain (model.cpp), wired
-	                              // into ValidateSectionValues.
+	                              // reads from THIS section at runtime). Enforced by
+	                              // ValidateKvLandingReciprocalsDomain (model.cpp), wired into
+	                              // ValidateSectionValues.
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
