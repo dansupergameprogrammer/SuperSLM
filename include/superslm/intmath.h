@@ -500,6 +500,32 @@ inline constexpr int kProbFracBits = 15;
 // diagnostic that its own inputs were rejected. A caller that genuinely
 // does not need to know whether a row's constants were trustworthy discards
 // the outcome explicitly, `(void)SoftmaxRowQ15(...)`, rather than silently.
+//
+// **Also enforces the row's real per-element peak against `M = q_b*q_b + q_c`
+// (Popper 2026-07-28 Null 1, fixed here rather than only at the gate).**
+// `CheckSoftmaxRowWidthDomain`'s own contract states `M` bounds every row
+// element only under the ratio `2*q_b >= q_ln2 - 1`, and that predicate has
+// no `q_ln2` parameter with which to check it -- so a `q_c >= 0`, in-ceiling
+// `M` the gate accepts can still be an unsound stand-in for a row that is off
+// that ratio (the gate cannot observe this; only the row's own evaluated
+// values can). This kernel recomputes `M` from its own `q_b`/`q_c` arguments,
+// at the same 128-bit width the gate uses, and treats any element whose real
+// evaluated value falls outside `[0, M]` as untrustworthy exactly like a
+// kBad* construction -- it contributes 0 to `total` and the return value is
+// false. A row whose closed-form `M` is not itself usable (not representable
+// in int64_t, or `<= 0`) makes every element of that row untrustworthy, since
+// there is then no bound left to check against. This is what makes `total`
+// provably bounded whenever the caller followed the documented contract
+// (gate before kernel): every summed term is `<= M`, and the gate's own sum
+// check already proved `width * M <= INT64_MAX` for the same `M` -- so
+// `total` cannot overflow `int64_t`, and the `exps[k] << kProbFracBits`
+// numerator shift below cannot overflow either (`M <= kSoftmaxRowMaxSafeExponent`
+// is the gate's own ceiling check, so `exps[k] << kProbFracBits <= 2^47 << 15
+// == 2^62`, safely inside `int64_t`). A caller that skips the gate and calls
+// this kernel directly still gets the per-element bound, but not the width
+// bound -- `total` can still overflow on an ungated, sufficiently wide row,
+// exactly as this function's own contract has always stated ("this function
+// itself performs no width check of its own").
 [[nodiscard]] bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
                                   int64_t q_c, int64_t* out_probs);
 

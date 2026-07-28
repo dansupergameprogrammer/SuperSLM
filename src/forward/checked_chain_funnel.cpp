@@ -384,6 +384,22 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
 // IExpConstantsInDomain already uses internally, rather than re-deriving a
 // second int64 guard in front of the first.
 SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width) {
+	// **`q_c >= 0`, checked first (Poirot/Popper 2026-07-28, this pass).**
+	// Both Null 2 witnesses (`checked_chain_funnel.h`'s own comment above)
+	// reach `M <= 0` by having a NEGATIVE `q_c` cancel against `q_b*q_b` --
+	// `q_b=10, q_c=-100` gives `M=0`, and the sign-asymmetry witness reaches
+	// `M<0` the same way. Rejecting `q_c < 0` outright removes that
+	// cancellation at its source: with `q_c >= 0`, `M = q_b*q_b + q_c >= 0`
+	// unconditionally (a non-negative square plus a non-negative addend),
+	// so the sum check below can never see a negative `m` and the
+	// signed-to-`size_t` cast Null 2's second bullet exploited
+	// (`INT64_MAX / m` with `m < 0`) is no longer reachable through this
+	// function -- not patched, removed. `q_c` is checked in plain int64_t
+	// (no overflow risk: a signed comparison against 0 needs no wide
+	// arithmetic).
+	if (q_c < 0) {
+		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+	}
 	const S128 m128 = S128Add(S128Mul(q_b, q_b), S128FromI64(q_c));
 	// Representable in int64_t AND within the ratified ceiling -- both
 	// judged at 128-bit width so neither test can itself overflow the way
@@ -394,15 +410,23 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 	const int64_t m = static_cast<int64_t>(m128.lo);
 	// The sum `width * M` is checked without forming it (an overflowing
 	// multiply is itself UB), mirroring the comment this predicate's own
-	// declaration specifies. `m` is now known representable within the
-	// ceiling above -- it is NOT proven non-negative by that check alone,
-	// since `q_c` is signed and `S128Ge` only bounds the upper side against
-	// the ceiling, not the lower side against zero. The reachable input
-	// class this predicate is exercised against never produces a negative
-	// `m` (0 of 28,386 canonical mantissa-domain (q_b, q_c) derivation
-	// points yield q_b^2 + q_c < 0), so this remains the only class this
-	// function has ever been checked against -- an unreached m < 0 is not
-	// covered by anything below, and this comment no longer claims it is.
+	// declaration specifies. `m` is now PROVEN non-negative by the `q_c >= 0`
+	// guard above (not merely unreached-on-the-checked-population, as the
+	// prior version of this comment claimed) -- a non-negative square plus a
+	// non-negative addend cannot be negative, in exact 128-bit arithmetic,
+	// for any `q_b`.
+	//
+	// **This bound is necessary but not sufficient for the row's real
+	// safety** (Popper 2026-07-28 Null 1): `M` is the closed form's value at
+	// the row's shifted-max element (`q = 0`), and it bounds every OTHER
+	// element only under the ratio `2*q_b >= q_ln2 - 1` (intmath.h:414) --
+	// this predicate has no `q_ln2` parameter with which to check that ratio,
+	// so a `q_c >= 0`, in-ceiling `M` can still be an unsound stand-in for a
+	// row that is off that ratio. `SoftmaxRowQ15` (intmath.cpp) closes that
+	// gap independently: it recomputes this same `M` from its own `q_b`/
+	// `q_c` arguments and enforces it as a real ceiling against the row's
+	// ACTUAL evaluated per-element values -- the observation this
+	// closed-form predicate structurally cannot make.
 	if (m != 0 && width > static_cast<size_t>(INT64_MAX / m)) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
 	}

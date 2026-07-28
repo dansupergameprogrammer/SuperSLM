@@ -280,14 +280,34 @@ inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kPro
 
 // C32/D-SLM366's own derived-operand predicate (§7.2 second limb; §11 S3.3
 // §6.2). The built C32 softmax row kernel (SoftmaxRowQ15, intmath.h) calls
-// this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed form)
-// must satisfy `M <= kSoftmaxRowMaxSafeExponent` (the numerator) AND
+// this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed form,
+// the row's own i-exp value at the shifted-max element) must satisfy
+// `q_c >= 0`, `M <= kSoftmaxRowMaxSafeExponent` (the numerator), AND
 // `width * M <= INT64_MAX` (the sum). `M` is formed and judged at 128-bit
 // width (Poirot 2026-07-28 finding 1) rather than in int64, which is the
-// exact re-derivation intmath.h:391-395 names as unsafe (D-SLM81); the sum
-// check runs afterward, without overflowing itself, on the now-known-safe
-// int64 `m` (e.g. `m == 0 || width <= static_cast<size_t>(INT64_MAX / m)`).
-// Returns SoftmaxRowWidthOutOfDomain on either failure, Ok otherwise.
+// exact re-derivation intmath.h:391-395 names as unsafe (D-SLM81).
+//
+// **`q_c >= 0` (Popper 2026-07-28 Null 2, both bullets), and it is
+// necessary but not sufficient.** With `q_c` non-negative, `M = q_b*q_b + q_c`
+// can never be driven to zero or negative by a `q_c` that cancels against
+// `q_b*q_b` -- the mechanism both witnesses in Null 2 use (`q_b=10, q_c=-100`
+// gives `M=0` while a real row element reaches ~9x10^16 past the ceiling) --
+// and it makes `m` provably non-negative before the sum check below runs, so
+// the sum check's own `INT64_MAX / m` can never see a negative divisor (the
+// signed-to-`size_t` cast Null 2's second bullet exploited). It is NOT
+// sufficient on its own: `M` bounding every OTHER row element is a claim that
+// holds only under the ratio `2*q_b >= q_ln2 - 1` (intmath.h:414), and this
+// predicate has no `q_ln2` parameter with which to check that ratio (Popper
+// Null 1) -- a `q_c >= 0` row can still be off that ratio. `SoftmaxRowQ15`
+// (intmath.cpp) closes that remaining gap: it independently recomputes this
+// same `M` from the call's own `q_b`/`q_c` and enforces it as a real
+// per-element ceiling against the row's ACTUAL evaluated values, which this
+// closed-form predicate cannot observe.
+//
+// The sum check runs after the `q_c >= 0` and ceiling tests, without
+// overflowing itself, on the now-known-non-negative int64 `m`
+// (`m == 0 || width <= static_cast<size_t>(INT64_MAX / m)`). Returns
+// SoftmaxRowWidthOutOfDomain on any failure, Ok otherwise.
 SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
 
 // C33's own position-cap guard (§11 S3.3's own gate line: "a position ==

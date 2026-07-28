@@ -539,9 +539,33 @@ bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 	// C32 (§5.2, §11 S3.3 §6.2 step 5): ShiftByMax -> per-element
 	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
 	// kernel with CheckSoftmaxRowWidthDomain(q_b, q_c, width) before calling
-	// it; this function performs no width check of its own, matching every
+	// it; this function performs no WIDTH check of its own, matching every
 	// other funnel-adjacent compute in this tree (the domain check and the
-	// compute are separate calls).
+	// compute are separate calls). It DOES independently enforce the
+	// per-element peak below (Popper 2026-07-28 Null 1) -- that is not a
+	// width check, it is the one thing only this function can observe: the
+	// row's real, computed values.
+	//
+	// M = q_b*q_b + q_c, the same closed form CheckSoftmaxRowWidthDomain
+	// (checked_chain_funnel.cpp) forms and judges, recomputed here at the
+	// same 128-bit width from this call's own q_b/q_c so this kernel does
+	// not trust that the caller invoked -- or correctly implemented -- that
+	// gate. The gate's own contract states M bounds every row element other
+	// than the shifted-max one only under the ratio 2*q_b >= q_ln2 - 1
+	// (intmath.h:414), a precondition the gate has no q_ln2 parameter to
+	// check; this kernel does not attempt that ratio either. What it does
+	// instead is refuse to accumulate any element whose REAL evaluated
+	// value exceeds M, which needs no ratio precondition because it is a
+	// direct observation of the data rather than a claim about it.
+	const S128 m128 = SAdd(SMul(q_b, q_b), SFromI64(q_c));
+	// Usable as a per-element ceiling only if it is representable in
+	// int64_t and strictly positive -- a non-positive or unrepresentable M
+	// is not a real row peak (no legitimate i-exp magnitude is <= 0), so a
+	// row whose M fails this test gets no per-element bound to check
+	// against and every element of it is untrustworthy.
+	const bool m_usable = SGe(SFromI64(INT64_MAX), m128) && SGe(m128, SFromI64(1));
+	const int64_t m = m_usable ? SShrToI64(m128, 0) : 0;
+
 	std::vector<int64_t> shifted(width);
 	ShiftByMax(scores, width, shifted.data());
 
@@ -565,10 +589,27 @@ bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 			exps[k] = 0;
 			continue;
 		}
-		exps[k] = IExpEvaluate(construction);
+		const int64_t value = IExpEvaluate(construction);
+		// Popper 2026-07-28 Null 1, closed here: a well-formed construction
+		// can still evaluate far past M off the gate's unstated ratio
+		// (kSoftmaxRowOffRatioWitness reaches ~9x10^16 past the D-SLM367
+		// ceiling with M == 0). Refusing any element outside [0, M] is the
+		// direct, precondition-free check the closed-form gate cannot make.
+		if (!m_usable || value < 0 || value > m) {
+			all_well_formed = false;
+			exps[k] = 0;
+			continue;
+		}
+		exps[k] = value;
 		total += exps[k];
 	}
-	const int64_t denom = total > 1 ? total : 1;  // guards the all-clipped row exactly
+	// `denom` can no longer silently absorb a wrapped-negative `total`: every
+	// summed term above is proven `<= m` (a value CheckSoftmaxRowWidthDomain
+	// itself bounds to kSoftmaxRowMaxSafeExponent, 2^47), so `total` stays
+	// within int64_t whenever the caller followed the documented gate-before-
+	// kernel contract, and `max(total, 1)` guards only the genuine
+	// all-clipped/all-refused row (every e[k] == 0) it was always meant to.
+	const int64_t denom = total > 1 ? total : 1;
 	for (size_t k = 0; k < width; ++k) {
 		out_probs[k] = (exps[k] << kProbFracBits) / denom;  // both operands non-negative
 	}
