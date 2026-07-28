@@ -732,8 +732,10 @@ SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& biases, std::stri
 // KvLandingScales'/KvLandingReciprocals' load-time value-domain descriptors
 // (SuperSLM_S3a_WalkingSkeleton_Plan.md §7.2a third limb, §8.1; S3.3;
 // Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §4.5/§6.5). `R_t` IS, by the plan's own text, "C27's reciprocal" of the
-// target mantissa -- so any artifact-carried value outside what
+// §4.5/§6.5). `R_t` IS, by the plan's own text, "C19's reciprocal" of the
+// target mantissa (DynamicScaleReciprocal, intmath.h -- C19, not C27; C27
+// names LandingRescale's own composite, which CONSUMES this reciprocal
+// rather than being it) -- so any artifact-carried value outside what
 // `DynamicScaleReciprocal` can ever produce is definitionally not a
 // reciprocal of anything. Curie's record derives the bound by execution,
 // calling the real primitive at its own domain's two endpoints:
@@ -747,14 +749,53 @@ constexpr int64_t kKvLandingScaleMantissaMax = (int64_t{1} << 31) - 1;        //
 constexpr int64_t kKvLandingReciprocalMin = (int64_t{1} << 31) + 1;           // 2^31 + 1
 constexpr int64_t kKvLandingReciprocalMax = int64_t{1} << 32;                 // 2^32
 
+// e_t (word 1) domain -- §7.2a's own joint bound (Poirot 2026-07-28 finding
+// 3 / Popper §3.2/§3.3): `m_t` (word 0) is the ONLY field the check below
+// used to enforce, and `LandingRescale` (forward_sites.cpp) never reads
+// `m_t` at all -- there is no `m_t` parameter in its signature. The field it
+// DOES read from this section, `e_t`, drives the composed shift exponent
+// `k = 62 - (e_a - e_t)` and had no domain check anywhere, artifact-carried
+// or runtime-derived. `LandingRescale`'s own finding-3 remedy
+// (forward_sites.cpp) now DETECTS an extreme composed exponent at runtime
+// rather than silently narrowing it, so this load-time floor is a second,
+// independent line of defense -- it keeps a hostile artifact from reaching
+// that runtime path in the first place, for the exponent range this
+// composite can still answer without needing the runtime detection at all.
+//
+// Derived, not guessed: `e_a` (the incoming carried-scale exponent shared by
+// the K/V branches) is produced ONLY by the currently-wired path that can
+// feed this composite -- RmsNormSite's own fold (forward_sites.cpp) --
+// bounded by that fold's own arithmetic: `running.e = site_constant.e +
+// d_prime_factor.e + 31` (CombineCarriedScale), possibly one further -1 on
+// renormalization. `site_constant.e` is CompositionConstants' own checked
+// exponent word, `[kCompositionScaleMinE, kCompositionScaleMaxE]` =
+// `[-80, 7]` (ValidateCompositionConstantsDomain, this file).
+// `d_prime_factor.e = -ns.s`, and `NormalizeScale`'s own contract bounds `s`
+// in `[-1, 30]` (intmath.h), so `d_prime_factor.e` is in `[-30, 1]`. Summed:
+// `e_a` in `[-80 - 30 + 31 - 1, 7 + 1 + 31]` = `[-80, 39]`.
+//
+// The left-shift branch of `LandingRescale` (k < 0, i.e. `e_a - e_t > 62`)
+// carries its magnitude (this site's own documented worst case, ~2^90-2^91,
+// forward_sites.cpp's own U128 comment) in a 128-bit intermediate whose
+// remaining headroom is `128 - 91 = 37` bits. At `e_a`'s own worst case
+// (39), the shift stays within that headroom exactly down to
+// `e_t = 39 - 62 - 37 = -60`; below it, the left shift can lose bits the
+// same way the reachable witness (`e_t = -1000`) does. `e_t` therefore
+// carries a FLOOR only -- there is no equivalent risk on the round-divide
+// branch (k >= 0), which floors correctly to 0 for arbitrarily large k
+// (LandingRescale's own comment), so no upper bound is derived here.
+constexpr int64_t kKvLandingScaleExponentMin = -60;
+
 // KvLandingScales' m_t (word 0) checked against the canonical carried-
-// mantissa range every other KVC1 scale mantissa in this tree already uses;
+// mantissa range every other KVC1 scale mantissa in this tree already uses,
+// AND e_t (word 1) checked against the joint-bound floor derived above --
+// the field LandingRescale actually consumes from this section (§7.2a third
+// limb; S3.3; Claude/Curie/superslm-s3.3-attention-interior-test-design-
+// 2026-07-28.md §4.5/§6.5; Poirot 2026-07-28 finding 3).
 // KvLandingReciprocals' R_t (word 2) checked against the exact domain
-// `DynamicScaleReciprocal` can ever produce (§7.2a third limb; S3.3;
-// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §4.5/§6.5) -- this is ValidateBiasesDomain's own S3.2 precedent, applied
-// identically here: walk every element of every entry, checked before any
-// narrowing.
+// `DynamicScaleReciprocal` can ever produce -- this is ValidateBiasesDomain's
+// own S3.2 precedent, applied identically here: walk every element of every
+// entry, checked before any narrowing.
 SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landing_scales,
                                                std::string* err) {
 	for (const SslmConstantEntry& e : kv_landing_scales.Entries()) {
@@ -765,6 +806,15 @@ SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landi
 				       std::to_string(m_t) + " outside [" +
 				       std::to_string(kKvLandingScaleMantissaMin) + "," +
 				       std::to_string(kKvLandingScaleMantissaMax) + "]";
+			}
+			return SslmModelStatus::KvLandingScaleOutOfDomain;
+		}
+		const int64_t e_t = SslmKeyedConstants::Value(e, 1);
+		if (e_t < kKvLandingScaleExponentMin) {
+			if (err) {
+				*err = "KvLandingScales entry \"" + std::string(e.name) + "\" e_t=" +
+				       std::to_string(e_t) + " below the joint-bound floor " +
+				       std::to_string(kKvLandingScaleExponentMin);
 			}
 			return SslmModelStatus::KvLandingScaleOutOfDomain;
 		}

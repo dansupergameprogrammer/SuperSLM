@@ -160,8 +160,10 @@ enum class SslmModelStatus {
 	                              // Enforced by ValidateBiasesDomain (model.cpp), wired into
 	                              // ValidateSectionValues (S3.2's green phase).
 	KvLandingScaleOutOfDomain,   // KvLandingScales entry's m_t (word 0) outside [kKvLandingScaleMantissaMin,
-	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). Enforced by
-	                              // ValidateKvLandingScalesDomain (model.cpp), wired into ValidateSectionValues.
+	                              // kKvLandingScaleMantissaMax], OR its e_t (word 1) below
+	                              // kKvLandingScaleExponentMin (Sec7.2a third limb, S3.3; Poirot 2026-07-28
+	                              // finding 3). Enforced by ValidateKvLandingScalesDomain (model.cpp), wired
+	                              // into ValidateSectionValues.
 	KvLandingReciprocalOutOfDomain, // KvLandingReciprocals entry's R_t (word 2) outside [kKvLandingReciprocalMin,
 	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3). Enforced by
 	                              // ValidateKvLandingReciprocalsDomain (model.cpp), wired into ValidateSectionValues.
