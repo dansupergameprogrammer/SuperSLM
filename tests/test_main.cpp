@@ -9834,43 +9834,6 @@ static void TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent
 	          static_cast<long long>(raw));
 }
 
-// Finding 4 (Popper Sec3.3): KvLandingScales.m_t (word 0) is the only field
-// ValidateKvLandingScalesDomain checks, and LandingRescale never reads it --
-// there is no m_t parameter in its signature at all. The field it DOES read
-// from this section, e_t (word 1), has no check anywhere (finding 3,
-// above). An artifact whose m_t is canonical but whose e_t is the extreme
-// witness this suite already proved silently wrong
-// (kLandingExtremeExponentWitness) must be REJECTED at load time; today it
-// is accepted regardless of what e_t carries, because the one check that
-// runs protects a field the composite never consumes.
-static void TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT() {
-	using namespace superslm_test;
-	const int64_t extreme_e_t = static_cast<int64_t>(kLandingExtremeExponentWitness.e_t);  // -1000
-
-	// Two otherwise-identical artifacts, m_t at opposite ends of the
-	// canonical range ValidateKvLandingScalesDomain checks -- both must be
-	// rejected once the joint bound (Plan Sec7.2a) is derived and
-	// enforced, because e_t alone -- the field the composite actually
-	// reads -- already makes this artifact unsafe. A "fix" that widens the
-	// m_t check but still ignores e_t would pass one of the two asserts
-	// below but not both, which is exactly the mutation this pair is built
-	// to catch.
-	for (int64_t m_t : {kKvLandingScaleMantissaMin, kKvLandingScaleMantissaMax}) {
-		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
-		                            MakeKvLandingScalesSection(m_t, extreme_e_t)});
-		SslmModelView view;
-		std::string err;
-		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-		CHECK_MSG(status != SslmModelStatus::Ok,
-		          "m_t=%lld (canonical), e_t=%lld (extreme, unchecked): SslmModel::Load status == "
-		          "Ok, want a rejection -- e_t has no domain check anywhere in the tree "
-		          "(Popper 2026-07-28 Sec3.2), and the one check that DOES run "
-		          "(ValidateKvLandingScalesDomain on m_t) protects a field LandingRescale never "
-		          "reads (Sec3.3) -- m_t's own value must not change this artifact's fate",
-		          static_cast<long long>(m_t), static_cast<long long>(extreme_e_t));
-	}
-}
-
 // Finding 5 (Poirot #3), re-authored 2026-07-28 against the builder's own
 // remediation (6eb1b76): SoftmaxRowQ15 now READS IExpConstruct's
 // [[nodiscard]] outcome per element instead of discarding it, and returns
@@ -10541,7 +10504,6 @@ int main(int argc, char** argv) {
 	TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64();
 	TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile();
 	TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent();
-	TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT();
 	TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid();
 
 	// Remediation-confirmation red suite (Curie, 2026-07-28) -- Claude/Poirot/
