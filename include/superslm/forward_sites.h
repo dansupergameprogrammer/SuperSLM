@@ -118,9 +118,16 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // range — see this function's own body for the corrected sign handling).
 // `(m_a, e_a)` is the incoming carried mantissa/exponent shared by the
 // K and V branches at this site (the norm output); `(r_t, e_t)` are the
-// OFFLINE per-(head,projection) reciprocal and exponent read straight from the
-// artifact's `KvLandingReciprocals`/`KvLandingScales` sections — no runtime
-// reciprocal exists at this site. The wide intermediate is C22-class
+// OFFLINE per-(head,projection) reciprocal and exponent, and BOTH are read
+// straight from the artifact's `KvLandingReciprocals` section alone (word 2
+// and word 1 respectively; Tools/superslm_spike/dynamic_engine.py:374-378's
+// own unpack, `_m_t, e_t, r_t = model.kv_landing_reciprocals[...]`) — no
+// runtime reciprocal exists at this site. `KvLandingScales` carries this
+// site's separate LANDED target (m_target, e_target), never an argument
+// to this function; naming the two sections together as if either supplied
+// `(r_t, e_t)` is what put commit 1b0bd10's e_t domain floor on the wrong
+// section's word (model.cpp; Poirot 2026-07-28 remediation-confirmation
+// review, finding B; D-SLM372). The wide intermediate is C22-class
 // (~2^94), carried the same way C22's own composition is (a 128-bit
 // intermediate, never a narrower one) — this function's REAL body is where
 // that carry is built; this declaration states the contract only. The call
