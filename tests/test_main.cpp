@@ -8459,6 +8459,139 @@ static void TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision() 
 	}
 }
 
+// T-1267 (D-SLM360): pins RmsNormSite's own USE of FloorDivI64 -- a mechanism
+// claim the very next test's own comment (below) proves CANNOT be discharged
+// by any assertion on out_codes or *out_scale: floor-vs-truncation divergence
+// in FloorDivI64 is unobservable at this site's int8 resolution (closed-form
+// bound -- minimum reachable |floor_q| 516 against a needed magnitude below
+// 254 -- and independently a 500,000-trial randomized search, zero hits).
+// D-SLM360 files the residual as a checkable mechanism claim instead: mutate
+// FloorDivI64 to truncate and confirm SOME cell that exercises RmsNormSite
+// fails. This is that cell -- built the moment that requirement could not be
+// met by strengthening the existing output-level assertion, which the
+// preceding correction already proved is not possible at this resolution.
+//
+// RmsNormSite's own wide-row construction
+// (`FloorDivI64(h[i]<<2*NORM_FRAC_BITS, root) * g[i]`) is never exposed by its
+// public signature -- only out_codes/*out_scale escape, and both are proven
+// invariant to the primitive's own correctness (see the correction below).
+// This namespace recovers the private wide row by shadow-recompiling
+// src/forward_sites.cpp's own, unmodified, CURRENT file content a second time
+// into this translation unit, under a distinct namespace
+// (test_shadow_c31::superslm) so its symbols never collide with the real,
+// library-linked ::superslm::* copy every other test in this file already
+// exercises. This reads src/forward_sites.cpp; it never writes it --
+// tests/ remains this campaign's only writable surface.
+//
+// The one substitution active while this second copy is compiled renames
+// RmsNormSite's own call to RequantChainChecked to a hand-written spy
+// (RequantChainCheckedSpy, just below, same namespace) that captures the
+// exact `wide_row` pointer RmsNormSite passes -- full int64 precision, before
+// RequantChainChecked's own quantization ever runs -- then forwards the call
+// UNCHANGED to the real ::superslm::RequantChainChecked, so ChainResult/
+// out_codes/*out_scale come back exactly as the real funnel computes them
+// (this shadow only observes; it never alters what gets computed or
+// returned). FloorDivI64 itself is deliberately NOT renamed: this second
+// copy's own FloorDivI64 is this pass's read of the CURRENT file content,
+// mutated or not, and it is exactly what test_shadow_c31::superslm::
+// RmsNormSite calls to build its wide row -- so a mutation to that function's
+// body changes the captured wide_row precisely as it would change the real,
+// otherwise-unobservable, production RmsNormSite's own internal one.
+namespace test_shadow_c31 {
+
+using ::superslm::CarriedScale;
+using ::superslm::ChainResult;
+using ::superslm::ISqrt;
+using ::superslm::MultiplyByQuantizedMultiplier;
+using ::superslm::RoundingDivideByPOT;
+using ::superslm::SslmForwardStatus;
+using ::superslm::SslmTraceHookState;
+
+// Reset by the test before each RmsNormSite call under test; captures the
+// wide_row of the LAST RequantChainChecked-slot invocation this shadow copy
+// made (RmsNormSite makes exactly one per call; EmbedEntry -- unused here,
+// but recompiled alongside it below -- would make its own if exercised).
+struct CapturedChainCall {
+	std::vector<int64_t> wide_row;
+	bool called = false;
+};
+inline CapturedChainCall g_captured_chain_call;
+
+inline ChainResult RequantChainCheckedSpy(const int64_t* wide_row, size_t n,
+                                           std::span<const CarriedScale> incoming,
+                                           CarriedScale site_constant, int8_t* out_codes,
+                                           CarriedScale* out_scale,
+                                           std::string_view site = {}, size_t token_index = 0,
+                                           SslmTraceHookState* trace_hook_state = nullptr) {
+	g_captured_chain_call.wide_row.assign(wide_row, wide_row + n);
+	g_captured_chain_call.called = true;
+	return ::superslm::RequantChainChecked(wide_row, n, incoming, site_constant, out_codes,
+	                                        out_scale, site, token_index, trace_hook_state);
+}
+
+#define RequantChainChecked RequantChainCheckedSpy
+#include "../src/forward_sites.cpp"
+#undef RequantChainChecked
+
+}  // namespace test_shadow_c31
+
+// Sec4.2's mechanism residual (D-SLM360, filed T-1267): RmsNormSite's own use
+// of FloorDivI64, pinned at the wide-row level (before quantization) via the
+// shadow copy above, against the SAME kC31SiteElements witness the next test
+// uses -- its `floor_wide` values are independently derived (test-design
+// record Sec3.2/Sec6: computed by executing the vendored Python reference,
+// never by calling FloorDivI64 itself), so a mutated FloorDivI64 cannot drag
+// both sides of this comparison the same way it drags a comparison that
+// calls FloorDivI64 on both ends.
+static void TestRmsNormSiteC31UsesFloorDivisionMechanismPin() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	std::vector<int8_t> h(kC31SiteHiddenSize, 0);
+	std::vector<int32_t> g(kC31SiteHiddenSize, 0);
+	for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+		const C31SiteElement& e = kC31SiteElements[i];
+		h[static_cast<size_t>(e.index)] = static_cast<int8_t>(e.h);
+		g[static_cast<size_t>(e.index)] = e.g;
+	}
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	const CarriedScale incoming_scale{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	test_shadow_c31::g_captured_chain_call = test_shadow_c31::CapturedChainCall{};
+
+	std::vector<int8_t> out_codes(kC31SiteHiddenSize, INT8_C(-99));  // poison
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};              // poison
+	auto result = test_shadow_c31::superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize,
+	                                                       incoming_scale, site_constant,
+	                                                       out_codes.data(), &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "RmsNormSite (shadow copy, T-1267) status == %s, want Ok",
+	          superslm::SslmForwardStatusName(result));
+	CHECK_MSG(test_shadow_c31::g_captured_chain_call.called,
+	          "RmsNormSite must reach RequantChainChecked exactly once per call -- "
+	          "the funnel-slot spy (T-1267) was never invoked");
+	if (result == SslmForwardStatus::Ok && test_shadow_c31::g_captured_chain_call.called) {
+		const std::vector<int64_t>& wide = test_shadow_c31::g_captured_chain_call.wide_row;
+		CHECK_MSG(wide.size() == static_cast<size_t>(kC31SiteHiddenSize),
+		          "captured wide_row size == %zu, want %d", wide.size(), kC31SiteHiddenSize);
+		if (wide.size() == static_cast<size_t>(kC31SiteHiddenSize)) {
+			for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
+				const C31SiteElement& e = kC31SiteElements[i];
+				const size_t idx = static_cast<size_t>(e.index);
+				CHECK_MSG(wide[idx] == e.floor_wide,
+				          "RmsNormSite's own internal wide_row[%d] == %lld, want %lld "
+				          "(the independently-derived floor-based value, diverges=%s -- "
+				          "T-1267's mechanism pin on the site's actual USE of "
+				          "FloorDivI64, checked before RequantChainChecked's own "
+				          "quantization ever runs)",
+				          e.index, static_cast<long long>(wide[idx]), e.floor_wide,
+				          e.diverges ? "true" : "false");
+			}
+		}
+	}
+}
+
 // Sec4.2 (C31, Sec5.1): the RMSNorm site's own composition, against a
 // reachable (h, root) witness at H=1536. The oracle is the ALREADY-SHIPPED
 // funnel (RequantChainChecked, S3.1), fed the floor-based wide row Curie's
@@ -9367,6 +9500,7 @@ int main(int argc, char** argv) {
 	//     Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-
 	//     design-2026-07-28.md Sec4/Sec9. ---
 	TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision();
+	TestRmsNormSiteC31UsesFloorDivisionMechanismPin();
 	TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel();
 	TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel();
 	TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix();

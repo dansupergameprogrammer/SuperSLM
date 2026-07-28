@@ -105,7 +105,7 @@ _DEFAULT_FORWARD_GLOBS = (
 # today, without the assertion itself needing to change shape again.
 _EXPECTED_REAL_FORWARD_FILES = (
     "src/forward/checked_chain_funnel.cpp",
-    "src/forward_sites.cpp",
+    "src/forward/forward_sites.cpp",
 )
 
 # Relative-to-repo-root paths permitted to name a banned leaf directly. Only a
