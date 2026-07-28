@@ -7,10 +7,12 @@
 // NarrowAccumulatorToI32 directly (§7.3's CI source check enforces this
 // structurally on every other forward TU).
 //
-// C28's derived-operand pair predicate is S3.2's own build (Claude/Curie/
-// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §9.2) and is not
-// declared or implemented here (ac34677 S7) — S3.1's own scope line names only the
-// two derived-operand predicates for C30 and C34.
+// C28's derived-operand pair predicate (CheckRoundingDivideByPotExponentDomain) is
+// S3.2's own build (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-
+// test-design-2026-07-28.md §9 item 4). It is declared in the header above and its
+// body below is a STUB, re-staged from its original S3.1 header-contract
+// declaration (32aca0c) — the real 0 <= q_B + 62 + e_a <= 63 comparison is not
+// implemented in this pass.
 #include "superslm/checked_chain_funnel.h"
 
 #include "superslm/intmath.h"
@@ -271,6 +273,15 @@ static_assert(kCompositionScaleMinE >= kSiluCompositionRuntimeMinE,
               "otherwise fail on the loader's own accepted lower range");
 
 }  // namespace
+
+SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t /*q_B*/, int64_t /*e_a*/) {
+	// STUB (S3.2 red-phase): encodes neither branch of 0 <= q_B + 62 + e_a <= 63.
+	// Returns the same sentinel S3.1's original stub for this function used
+	// (WorkspaceTooSmall) -- a status neither of this predicate's two real
+	// outcomes (Ok, RoundingDivideByPotExponentOutOfDomain) ever is, so every
+	// cell fails on an actual value mismatch rather than coincidentally passing.
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
 
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
 	// The no-UB domain itself (§5.4): `|m|` must stay within kCompositionScaleMaxAbsM

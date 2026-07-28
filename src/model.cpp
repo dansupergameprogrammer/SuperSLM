@@ -108,6 +108,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::WeightScaleShiftOutOfDomain: return "WeightScaleShiftOutOfDomain";
 		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
 		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
+		case SslmModelStatus::BiasCodeOutOfDomain: return "BiasCodeOutOfDomain";
 		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
 		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
 	}
@@ -699,6 +700,30 @@ SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::str
 	return SslmModelStatus::Ok;
 }
 
+// BIA1's load-time value-domain descriptor (SuperSLM_S3a_WalkingSkeleton_Plan.md
+// §7.2a third limb, §4.4; S3.2; Claude/Curie/superslm-s3.2-weightless-and-
+// projection-sites-test-design-2026-07-28.md §3.4/§4.7). Curie's record derives
+// the bound by execution: R_a's maximum over the C19 reciprocal's own domain is
+// 2^32, so keeping B[j]*R_a inside int64 requires |B[j]| <= floor((2^63-1) / 2^32)
+// == INT32_MAX, verified tight (one past it does not fit).
+//
+// THIS IS A STUB (S3.2 red-phase): it does not compare any element against that
+// bound and always accepts. It is written this way, rather than as a fixed-wrong
+// rejection (the sentinel style every other stub in this campaign uses), because
+// this function is wired into ValidateSectionValues below, which every existing
+// SslmModel::Load call already exercises on every artifact carrying a Biases
+// section -- an unconditionally-rejecting stub would fail every currently-green
+// fixture that loads one, not only the not-yet-authored hostile-value cell this
+// stub is staged for. A permissive stub changes nothing about today's passing
+// suite and still fails unmistakably the moment Curie's real hostile-value cell
+// (an artifact with one bias code at 2^31, one past the derived bound) asserts
+// SslmModel::Load returns BiasCodeOutOfDomain and gets Ok instead. S3.2's green
+// phase replaces this body with the real |B[j]| <= INT32_MAX comparison over
+// every element of every tensor in `biases`.
+SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& /*biases*/, std::string* /*err*/) {
+	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+}
+
 // S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
 // "enforced at a named API" -- this is that API. The two blobs are parsed by
 // entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
@@ -741,6 +766,10 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	}
 	if (view.has_rope_tables) {
 		const SslmModelStatus s = ValidateRopeTablesDomain(view.rope_tables, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_biases) {
+		const SslmModelStatus s = ValidateBiasesDomain(view.biases, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.

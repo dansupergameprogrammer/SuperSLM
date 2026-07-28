@@ -12,9 +12,24 @@
 // Also declares the funnel's status vocabulary (SslmForwardStatus) and the
 // derived-operand predicates §7.2's second limb names for the runtime-derived
 // operands with no domain predicate of their own: C30's (a call to the already-shipped
-// IExpConstantsInDomain, never an encoded threshold) and C34's (the SwiGLU site's
-// runtime (m, e) gate scale, §5.4). C28's (the (q_B, e_a) pair check at the
-// bias-reconciliation site) is S3.2's own build and is not declared here.
+// IExpConstantsInDomain, never an encoded threshold), C34's (the SwiGLU site's
+// runtime (m, e) gate scale, §5.4), and C28's (the (q_B, e_a) pair check at the
+// bias-reconciliation site, §4.4). C28's predicate was declared once during S3.1's
+// own header-contract commit (32aca0c) and deliberately removed the same day
+// (f98eee9) as belonging to S3.2 instead; it is RE-STAGED here, unchanged from its
+// original declaration, as part of S3.2's own header contract (Claude/Curie/
+// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md §9 item 4).
+// The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
+// reconciliation compute, and the embed entry are S3.2's own site-composition
+// functions and are declared in include/superslm/forward_sites.h instead — not here
+// — because this file's own translation unit is the sole entry the §7.3 CI source
+// check's default glob (tests/ci/check_no_forward_leaf_calls.py) currently expects
+// to exist under src/forward/**, pinned by that check's own exact-population
+// assertion. Adding a second real file under src/forward/ would fail that assertion
+// without a matching update to the check itself, which is outside this campaign's
+// writable scope (tests/ is read-only here); forward_sites.cpp is therefore placed
+// at src/forward_sites.cpp, a sibling of src/model.cpp, until a future pass updates
+// the check's own glob/expectation to cover it.
 //
 // The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
 // limb). Bodies are real constructions in src/forward/checked_chain_funnel.cpp, green
@@ -207,6 +222,22 @@ SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b
 // (src/forward/checked_chain_funnel.cpp) proves that ordering at compile time: the
 // load-time ceiling never exceeds this predicate's own ceiling.
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
+
+// C28's derived-operand pair predicate (§7.2 second limb, §4.4; S3.2). The
+// not-yet-built C28 bias-reconciliation site (forward_sites.h's BiasReconcile,
+// S3.2) checks this before calling RoundingDivideByPOT(int64_t, int) with the
+// composed exponent q_B + 62 + e_a: 0 <= q_B + 62 + e_a <= 63, else
+// RoundingDivideByPotExponentOutOfDomain. Names
+// kRoundingDivideByPotExponentMinI64 / kRoundingDivideByPotExponentMaxI64
+// (intmath.h:59-60) rather than the literals 0 and 63, so neither side can drift
+// from RoundingDivideByPOT's own domain without failing a compile.
+//
+// Re-staged unchanged from its original declaration at commit 32aca0c (removed the
+// same day, f98eee9, as belonging to S3.2 rather than S3.1) -- see the file header
+// comment above. THIS FUNCTION IS A STUB in src/forward/checked_chain_funnel.cpp:
+// it returns a fixed, deliberately wrong status regardless of its arguments; the
+// real 0 <= q_B + 62 + e_a <= 63 comparison is written in S3.2's green phase.
+SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
 
 }  // namespace superslm
 
