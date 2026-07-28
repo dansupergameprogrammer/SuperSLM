@@ -14,7 +14,13 @@
 // identity and `sslm_stats` counters at kernel-phase boundaries). That hook
 // carries execution-shape telemetry; this one carries the numeric chain/landing
 // records the reference's own trace produces. Neither this file nor any site it
-// touches builds the master plan's instrument (§10.3).
+// touches builds the master plan's instrument (§10.3). Being a different
+// instrument does not exempt this one from §3's Layer-1-wide "no global state"
+// law, which is not scoped to the profiling hook -- it is scoped to all of
+// Layer 1 (Claude/Vitruvius/SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md
+// Sec3/Sec4, D-SLM353). That is why the hook's state below is owned per model
+// handle (SslmModelView::trace_hook, model.h) and threaded as an explicit
+// parameter, never held in a process-wide static.
 //
 // Read-only by construction: installing a hook adds a notification after a
 // site's own arithmetic has already produced its outputs. No hook call
@@ -76,29 +82,44 @@ struct SslmKvLandingTraceRecord {
 using SslmTraceHookFn = void (*)(const SslmChainTraceRecord*,
                                   const SslmKvLandingTraceRecord*, void* user);
 
-// Installs (or, with fn == nullptr, uninstalls) the process-wide trace hook.
-// `user` is opaque and passed back unchanged on every call; it is discarded
-// (reset to nullptr) when fn is nullptr, so a stale user pointer never survives
-// past an uninstall.
-void SslmSetTraceHook(SslmTraceHookFn fn, void* user);
+// Per-model trace-hook state (D-SLM353, corrected storage): a function
+// pointer + opaque user pointer, exactly the same pair the process-global it
+// replaces used to hold, now owned by the model handle instead of a file
+// static. Two model handles never share one instance -- each carries its own
+// (SslmModelView::trace_hook, model.h) -- so installing a hook through one
+// handle cannot install, uninstall, or redirect another handle's hook.
+// Default-constructed to "no hook installed", the same state
+// `SslmSetTraceHook(state, nullptr, nullptr)` produces.
+struct SslmTraceHookState {
+	SslmTraceHookFn fn = nullptr;
+	void* user = nullptr;
+};
 
-// True when a hook is currently installed. Emission sites branch on this
-// before doing any work to build a record, so with no hook installed a site
-// performs no extra computation and touches no sink (§11 S3.1a's third red
-// cell: "a forward with no hook installed emits no records and touches no
-// sink").
-bool SslmTraceHookInstalled() noexcept;
+// Installs (or, with fn == nullptr, uninstalls) the trace hook carried by
+// `state` -- the caller's own model handle's trace-hook state, never a
+// process-wide static. `user` is opaque and passed back unchanged on every
+// call through this same `state`; it is discarded (reset to nullptr) when fn
+// is nullptr, so a stale user pointer never survives past an uninstall.
+void SslmSetTraceHook(SslmTraceHookState& state, SslmTraceHookFn fn, void* user);
 
-// Invokes the installed hook, if any, with a chain record (the K/V-landing
-// pointer is passed as nullptr). No-op when no hook is installed. Emission
-// sites call through this rather than touching the hook state directly, so the
-// "installed" check and the call are always the same path.
-void SslmEmitChainTrace(const SslmChainTraceRecord& record);
+// True when `state` currently carries an installed hook. Emission sites
+// branch on this before doing any work to build a record, so with no hook
+// installed a site performs no extra computation and touches no sink (§11
+// S3.1a's third red cell: "a forward with no hook installed emits no records
+// and touches no sink").
+bool SslmTraceHookInstalled(const SslmTraceHookState& state) noexcept;
+
+// Invokes the hook installed in `state`, if any, with a chain record (the
+// K/V-landing pointer is passed as nullptr). No-op when `state` carries no
+// hook. Emission sites call through this rather than touching `state.fn`
+// directly, so the "installed" check and the call are always the same path.
+void SslmEmitChainTrace(const SslmTraceHookState& state, const SslmChainTraceRecord& record);
 
 // The K/V-landing sibling of SslmEmitChainTrace, for S3.3's landing sites.
 // Declared now so the schema and the emission seam are both pinned in this
 // sub-slot; no production call site exists yet.
-void SslmEmitKvLandingTrace(const SslmKvLandingTraceRecord& record);
+void SslmEmitKvLandingTrace(const SslmTraceHookState& state,
+                             const SslmKvLandingTraceRecord& record);
 
 }  // namespace superslm
 

@@ -25,6 +25,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/tokenizer.h"
+#include "superslm/trace_hook.h"
 
 namespace superslm {
 
@@ -355,6 +356,20 @@ struct SslmModelView {
 	TokenizerView tokenizer;
 	bool has_tokenizer = false;
 
+	// The numeric-record trace hook's own state (D-SLM353): owned here, per
+	// model handle, instead of a process-wide static -- the corrected reading
+	// of SuperSLM_S3a_WalkingSkeleton_Plan.md §3's Layer-1-wide no-global-state
+	// law applied to the mechanism trace_hook.h builds (Claude/Vitruvius/
+	// SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md). Not populated by
+	// SslmModel::Load and not gated by a `has_*` flag -- a default-constructed
+	// SslmTraceHookState{} is already a fully valid "no hook installed" state,
+	// not a partial-load state like the sections above. A caller reaches this
+	// field through the view it already holds and passes it to
+	// RequantChainChecked/NarrowRowChecked (checked_chain_funnel.h) to get
+	// trace emission scoped to this one handle; two model views never share
+	// fn/user state.
+	SslmTraceHookState trace_hook;
+
 	SslmModelView() = default;
 	SslmModelView(SslmModelView&& other) noexcept { MoveFrom(other); }
 	SslmModelView& operator=(SslmModelView&& other) noexcept {
@@ -397,6 +412,7 @@ private:
 		has_kv_landing_reciprocals = other.has_kv_landing_reciprocals;
 		tokenizer = std::move(other.tokenizer);
 		has_tokenizer = other.has_tokenizer;
+		trace_hook = other.trace_hook;
 		backing_ = std::move(other.backing_);
 
 		// Clear the source. Every member above except `sigmoid_lut` is a
@@ -417,6 +433,7 @@ private:
 		other.has_kv_landing_scales = false;
 		other.has_kv_landing_reciprocals = false;
 		other.has_tokenizer = false;
+		other.trace_hook = SslmTraceHookState{};
 	}
 
 	SslmArtifact backing_;  // owns the file bytes every view above points into

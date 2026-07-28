@@ -28,6 +28,8 @@
 #include <span>
 #include <string_view>
 
+#include "superslm/trace_hook.h"
+
 namespace superslm {
 
 // A carried (mantissa, exponent) dynamic-scale pair: value == m * 2^e. This is the
@@ -111,20 +113,30 @@ struct ChainResult {
 // fields this call cannot derive from its own arguments -- the caller names its
 // site and the token it is processing. They default to an empty site and index 0
 // so every existing call compiles unchanged; a caller that wants trace coverage
-// passes its real site name and token index. Whenever a trace hook is installed
-// (SslmTraceHookInstalled), and only then, RequantChainChecked builds one
-// SslmChainTraceRecord from the values it has already computed -- `wide_row`,
-// `n`, the D'/Dn/s/R intermediates, `out_codes`, and the folded `*out_scale` --
-// and emits it through SslmEmitChainTrace, strictly after every write above.
+// passes its real site name and token index.
+//
+// `trace_hook_state` (D-SLM353's corrected storage) is the caller's own model
+// handle's trace-hook state (SslmModelView::trace_hook, model.h) -- never a
+// process-wide static. It defaults to nullptr so every existing call compiles
+// unchanged and gets no tracing; a caller that wants trace coverage passes
+// `&model_view.trace_hook`. Whenever `trace_hook_state` is non-null AND it
+// carries an installed hook (SslmTraceHookInstalled), and only then,
+// RequantChainChecked builds one SslmChainTraceRecord from the values it has
+// already computed -- `wide_row`, `n`, the D'/Dn/s/R intermediates,
+// `out_codes`, and the folded `*out_scale` -- and emits it through
+// SslmEmitChainTrace on that same state, strictly after every write above.
 // This block reads outputs already finalized above; it writes none of them, and
 // it does not run at all when no hook is installed. That ordering is what makes
 // installing the hook produce the identical ChainResult, out_codes, and
-// *out_scale as not installing it (§10.3's instrumentation axis).
+// *out_scale as not installing it (§10.3's instrumentation axis). Because the
+// state lives on the model handle the caller passes in, two callers driving two
+// different handles never observe or disturb each other's hook.
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
                                  CarriedScale* out_scale,
-                                 std::string_view site = {}, size_t token_index = 0);
+                                 std::string_view site = {}, size_t token_index = 0,
+                                 SslmTraceHookState* trace_hook_state = nullptr);
 
 // The funnel's second entry point (§7.2, T-1254): the one narrowing genuinely owed —
 // the head's int32 logits (C16's tie-break, §10.1's digest format). Performs, in this
@@ -138,7 +150,16 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 //   3. NarrowAccumulatorToI32 — genuinely sound: every element has just been proven,
 //      individually and by its own sign, to lie in int32's representable range
 // On Ok, `out_i32` (n elements) is written; on rejection it is not touched.
-SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32);
+//
+// `trace_hook_state` is accepted for interface symmetry with
+// RequantChainChecked and for the same per-model reason (D-SLM353): the
+// funnel's two entry points share one storage rule, and a future site added
+// here emits through the caller's own model handle rather than a process
+// static. No production path in this build emits a trace record from
+// NarrowRowChecked -- the parameter is unused today and defaults to nullptr so
+// every existing call compiles unchanged.
+SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32,
+                                    SslmTraceHookState* trace_hook_state = nullptr);
 
 // C30's derived-operand predicate (§7.2 second limb). The not-yet-built C30
 // derivation site (S3.3) forms (q_ln2, q_b, q_c) from a per-query carried scale via

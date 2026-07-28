@@ -85,7 +85,8 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
                                  CarriedScale* out_scale,
-                                 std::string_view site, size_t token_index) {
+                                 std::string_view site, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state) {
 	// Step 0 (ac34677 S5): every CarriedScale that will reach CombineCarriedScale
 	// below must fit that function's own precondition (mantissa within int32_t's
 	// range) before anything else runs — checked here, ahead of step 1, so a
@@ -151,8 +152,10 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	// the just-written *out_scale. It writes none of them, and does not run
 	// at all when no hook is installed, so ChainResult/out_codes/*out_scale
 	// are identical whether or not a hook is installed (§10.3's
-	// instrumentation axis).
-	if (SslmTraceHookInstalled()) {
+	// instrumentation axis). `trace_hook_state` is the caller's own model
+	// handle's state (D-SLM353) -- a null pointer (no handle passed) means no
+	// tracing, exactly like a handle whose hook is uninstalled.
+	if (trace_hook_state != nullptr && SslmTraceHookInstalled(*trace_hook_state)) {
 		SslmChainTraceRecord record;
 		record.site = site;
 		record.token_index = token_index;
@@ -164,13 +167,19 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 		record.codes = std::span<const int8_t>(out_codes, n);
 		record.m_out = running.m;
 		record.e_out = running.e;
-		SslmEmitChainTrace(record);
+		SslmEmitChainTrace(*trace_hook_state, record);
 	}
 
 	return ChainResult{SslmForwardStatus::Ok};
 }
 
-SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32) {
+SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32,
+                                    SslmTraceHookState* trace_hook_state) {
+	// trace_hook_state is accepted for interface symmetry with
+	// RequantChainChecked (checked_chain_funnel.h; D-SLM353) -- no production
+	// path here emits a trace record yet.
+	(void)trace_hook_state;
+
 	// Step 1 (§7.2, §5.5): the row's signed extremes — NOT MaxAbsReduceWide, which
 	// expresses only magnitude and cannot see the asymmetric int32 target range.
 	int64_t row_max = 0;

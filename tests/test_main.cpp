@@ -7830,27 +7830,31 @@ static void TestRequantChainCheckedHookInstalledProducesIdenticalOutputs() {
 
 	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
 
+	superslm::SslmTraceHookState hook_state;
+
 	int8_t codes_no_hook[4] = {0, 0, 0, 0};
 	CarriedScale scale_no_hook{};
 	auto result_no_hook = superslm::RequantChainChecked(
 	    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen, std::span<const CarriedScale>{},
-	    site_constant, codes_no_hook, &scale_no_hook, "s3.1a_reduced_probe", /*token_index=*/7);
-	CHECK_MSG(!superslm::SslmTraceHookInstalled(),
-	          "no hook installed yet -- SslmTraceHookInstalled() must read false");
+	    site_constant, codes_no_hook, &scale_no_hook, "s3.1a_reduced_probe", /*token_index=*/7,
+	    &hook_state);
+	CHECK_MSG(!superslm::SslmTraceHookInstalled(hook_state),
+	          "no hook installed yet -- SslmTraceHookInstalled(state) must read false");
 
 	std::vector<ChainTraceSinkRecord> sink;
-	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink);
-	CHECK_MSG(superslm::SslmTraceHookInstalled(), "SslmSetTraceHook must install the hook");
+	superslm::SslmSetTraceHook(hook_state, &ChainTraceSinkHookFn, &sink);
+	CHECK_MSG(superslm::SslmTraceHookInstalled(hook_state), "SslmSetTraceHook must install the hook");
 
 	int8_t codes_with_hook[4] = {0, 0, 0, 0};
 	CarriedScale scale_with_hook{};
 	auto result_with_hook = superslm::RequantChainChecked(
 	    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen, std::span<const CarriedScale>{},
 	    site_constant, codes_with_hook, &scale_with_hook, "s3.1a_reduced_probe",
-	    /*token_index=*/7);
+	    /*token_index=*/7, &hook_state);
 
-	superslm::SslmSetTraceHook(nullptr, nullptr);
-	CHECK_MSG(!superslm::SslmTraceHookInstalled(), "SslmSetTraceHook(nullptr,...) must uninstall");
+	superslm::SslmSetTraceHook(hook_state, nullptr, nullptr);
+	CHECK_MSG(!superslm::SslmTraceHookInstalled(hook_state),
+	          "SslmSetTraceHook(state, nullptr,...) must uninstall");
 
 	CHECK_MSG(result_with_hook.status == result_no_hook.status,
 	          "installing the hook must not change RequantChainChecked's status: %s (hook) "
@@ -7902,8 +7906,9 @@ static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookIn
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 
+	superslm::SslmTraceHookState hook_state;
 	std::vector<ChainTraceSinkRecord> sink;
-	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink);
+	superslm::SslmSetTraceHook(hook_state, &ChainTraceSinkHookFn, &sink);
 
 	const CarriedScale site_constant{INT64_C(1073741824), 0};
 	int8_t out_codes[1] = {INT8_C(-99)};
@@ -7911,9 +7916,9 @@ static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookIn
 	auto result = superslm::RequantChainChecked(kWideOverC29DomainRow, kWideOverC29DomainRowLen,
 	                                              std::span<const CarriedScale>{}, site_constant,
 	                                              out_codes, &out_scale, "s3.1a_reduced_probe_reject",
-	                                              /*token_index=*/3);
+	                                              /*token_index=*/3, &hook_state);
 
-	superslm::SslmSetTraceHook(nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_state, nullptr, nullptr);
 
 	CHECK_MSG(result.status == superslm::SslmForwardStatus::ChainInputOutOfDomain,
 	          "a D'=2^31+1 row must still be rejected with a hook installed: got %s",
@@ -7950,17 +7955,26 @@ static void TestTraceHookCrossModelHandleIsolation() {
 
 	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
 
+	// Two independent SslmTraceHookState instances, standing in for two model
+	// handles' own SslmModelView::trace_hook fields (D-SLM353's corrected
+	// storage) -- the actual model handle threading the comment above calls
+	// for, without constructing a full SslmModelView for this reduced,
+	// funnel-level cell.
+	superslm::SslmTraceHookState hook_state_a;
+	superslm::SslmTraceHookState hook_state_b;
+
 	std::vector<ChainTraceSinkRecord> sink_a;
 	std::vector<ChainTraceSinkRecord> sink_b;
 
 	// Install "on handle A" and drive one emitting call attributed to it.
-	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_state_a, &ChainTraceSinkHookFn, &sink_a);
 	{
 		int8_t out_codes[4] = {0, 0, 0, 0};
 		CarriedScale out_scale{};
 		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
 		                                std::span<const CarriedScale>{}, site_constant, out_codes,
-		                                &out_scale, "isolation_probe_handle_a", /*token_index=*/1);
+		                                &out_scale, "isolation_probe_handle_a", /*token_index=*/1,
+		                                &hook_state_a);
 	}
 	CHECK_MSG(sink_a.size() == 1,
 	          "handle A's own call must land exactly one record in handle A's own sink; got %zu",
@@ -7972,13 +7986,14 @@ static void TestTraceHookCrossModelHandleIsolation() {
 
 	// Install "on handle B", independently of handle A -- under a model-scoped
 	// design this must not touch handle A's own hook state at all.
-	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink_b);
+	superslm::SslmSetTraceHook(hook_state_b, &ChainTraceSinkHookFn, &sink_b);
 	{
 		int8_t out_codes[4] = {0, 0, 0, 0};
 		CarriedScale out_scale{};
 		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
 		                                std::span<const CarriedScale>{}, site_constant, out_codes,
-		                                &out_scale, "isolation_probe_handle_b", /*token_index=*/2);
+		                                &out_scale, "isolation_probe_handle_b", /*token_index=*/2,
+		                                &hook_state_b);
 	}
 	CHECK_MSG(sink_b.size() == 1,
 	          "handle B's own call must land exactly one record in handle B's own sink; got %zu",
@@ -7996,9 +8011,11 @@ static void TestTraceHookCrossModelHandleIsolation() {
 		CarriedScale out_scale{};
 		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
 		                                std::span<const CarriedScale>{}, site_constant, out_codes,
-		                                &out_scale, "isolation_probe_handle_a_second", /*token_index=*/3);
+		                                &out_scale, "isolation_probe_handle_a_second", /*token_index=*/3,
+		                                &hook_state_a);
 	}
-	superslm::SslmSetTraceHook(nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_state_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_state_b, nullptr, nullptr);
 
 	CHECK_MSG(sink_a.size() == 2,
 	          "cross-model isolation (D-SLM353): handle A's SECOND call must land in handle A's "
