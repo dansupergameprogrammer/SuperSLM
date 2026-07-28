@@ -476,7 +476,27 @@ inline constexpr int kProbFracBits = 15;
 // calling it — this function itself performs no width check, matching every
 // other funnel-adjacent compute in this tree (the domain check and the compute
 // are separate calls). `scores`/`out_probs` each have `width` elements.
-void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
+//
+// **Returns whether every row element's i-exp construction was WELL-FORMED**
+// (Poirot 2026-07-28 finding 3): CheckSoftmaxRowWidthDomain bounds q_b and
+// q_c but takes no q_ln2 parameter, so it is not a sufficient precondition
+// for this kernel -- IExpConstruct can still answer kBadQ, kBadQLn2, or
+// kBadQB for an accepted (q_b, q_c) pair (150 reachable (m, e) points
+// degenerate to q_ln2 == 0, the coarse-scale underflow tail). The prior body
+// discarded IExpConstruct's own [[nodiscard]] outcome ((void)IExpConstruct)
+// and evaluated the untouched default construction anyway, silently
+// emitting an all-zero probability row where the reference raises. This
+// function now reads that outcome per element: a kBad* element contributes
+// 0 to exps/total (the reference's own raise has no well-defined numeric
+// substitute here, so the row's other elements are still computed) and the
+// return value is false. kOk and kNotRepresentable are both well-formed
+// decompositions (this header's own IExpConstruct doc: "*out is filled ...
+// for kOk and for kNotRepresentable alike") and are evaluated exactly as
+// before. A caller that wants to know whether a row's constants were
+// trustworthy reads the return value; a caller that does not (matching
+// every existing call in this tree, which predates this return value) may
+// still discard it.
+bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
                     int64_t q_c, int64_t* out_probs);
 
 }  // namespace superslm

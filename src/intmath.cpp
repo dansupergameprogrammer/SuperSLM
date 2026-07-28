@@ -534,7 +534,7 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 
 // --- §6.2/§5.2 C32 softmax row (arm A) ----------------------------------------
 
-void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
+bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
                     int64_t* out_probs) {
 	// C32 (§5.2, §11 S3.3 §6.2 step 5): ShiftByMax -> per-element
 	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
@@ -547,9 +547,24 @@ void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 
 	std::vector<int64_t> exps(width);
 	int64_t total = 0;
+	bool all_well_formed = true;
 	for (size_t k = 0; k < width; ++k) {
 		IExpConstruction construction;
-		(void)IExpConstruct(shifted[k], q_ln2, q_b, q_c, &construction);
+		// Poirot 2026-07-28 finding 3: the outcome is [[nodiscard]] and is
+		// now read, not thrown away. kOk and kNotRepresentable both leave a
+		// well-formed construction (IExpConstruct's own doc) and are
+		// evaluated exactly as before; the three kBad* outcomes leave the
+		// default-constructed {0,0,0} untouched, and evaluating that (the
+		// prior behaviour) silently produced 0 rather than surfacing the
+		// refusal -- this element instead contributes 0 to the sum directly
+		// and marks the row untrustworthy, without evaluating a construction
+		// IExpConstruct never validated.
+		const IExpDomain d = IExpConstruct(shifted[k], q_ln2, q_b, q_c, &construction);
+		if (d == IExpDomain::kBadQ || d == IExpDomain::kBadQLn2 || d == IExpDomain::kBadQB) {
+			all_well_formed = false;
+			exps[k] = 0;
+			continue;
+		}
 		exps[k] = IExpEvaluate(construction);
 		total += exps[k];
 	}
@@ -557,6 +572,7 @@ void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 	for (size_t k = 0; k < width; ++k) {
 		out_probs[k] = (exps[k] << kProbFracBits) / denom;  // both operands non-negative
 	}
+	return all_well_formed;
 }
 
 }  // namespace superslm
