@@ -26,6 +26,7 @@
 #include "sslm_model_hostile_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_silu_lut_real_vectors_fixtures.h"
+#include "sslm_s3_1_c30_iexp_domain_sweep_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -7109,6 +7110,187 @@ static void TestRejectsNonZeroSectionDescriptorReservedField() {
 	CHECK(err.message.find("reserved") != std::string::npos);
 }
 
+// --- SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.1 (T-200, board T-132, Sec7.2's
+//     C30 derived-operand predicate; D-SLM318): the differential cell the plan asks
+//     for ("the design's C30 site and IExpConstantsInDomain agree at every point,
+//     e = -62, e = -61 and e = -60 included explicitly") is realized here against the
+//     ALREADY-SHIPPED IExpConstantsInDomain -- the not-yet-built production wrapper
+//     ("the design's C30 site") that would call it from the attention interior is
+//     S3.3's build (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
+//     2026-07-28.md Sec3.2 names this substitution explicitly, and names that once
+//     the wrapper exists a thin delegation cell is still owed). The (q_ln2, q_b, q_c)
+//     triples are C30's own derivation (iexp_scale_constants), called from the
+//     vendored reference by tests/gen_s3_1_c30_iexp_domain_sweep_fixtures.py -- never
+//     re-derived in this file. ---
+static void TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep() {
+	using namespace superslm_test;
+	int checked = 0;
+	for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
+		const C30IExpDomainSweepCase& c = kC30IExpDomainSweepCases[i];
+		if (!c.derivation_ok) continue;  // C30's OWN construction-domain rejection (a
+		                                  // different, upstream guard than the one under
+		                                  // test here) -- nothing to call the predicate with.
+		// The q=0 representative is valid only where the shortcut's own precondition
+		// holds (intmath.h: "2*q_b >= q_ln2 - 1 ... The first dominates"); verify it
+		// rather than assume it, per every row the generator emitted.
+		CHECK_MSG(c.shortcut_condition_holds,
+		          "m=%lld e=%d: the q=0 shortcut's own precondition (2*q_b >= q_ln2-1) does "
+		          "not hold for this row -- q=0 alone cannot stand in for the full per-element "
+		          "sweep IExpConstantsInDomain's cost note requires here",
+		          c.m, c.e);
+		bool actual = IExpConstantsInDomain(0, c.q_ln2, c.q_b, c.q_c);
+		CHECK_MSG(actual == c.expected_in_domain,
+		          "m=%lld e=%d q_ln2=%lld q_b=%lld q_c=%lld: IExpConstantsInDomain(0, ...) "
+		          "returned %s, want %s (arbitrary-precision oracle)",
+		          c.m, c.e, c.q_ln2, c.q_b, c.q_c,
+		          actual ? "true" : "false", c.expected_in_domain ? "true" : "false");
+		++checked;
+	}
+	CHECK_MSG(checked > 0, "no sweep row had a valid C30 derivation to check -- fixture regressed");
+}
+
+// The three named disagreement points (D-SLM318's table), asserted explicitly and by
+// name rather than only swept generically above -- T-1254's own discipline extended
+// to this cell (a required-green witness stated in the open, not just implied by a
+// loop). Both mantissa extremes at each e, so the mantissa-conditional branch at
+// e=-61 is pinned on both sides of its own m >= 1,268,234,713 threshold.
+static void TestC30DomainDisagreementPointsAreExplicitlyPinned() {
+	using namespace superslm_test;
+	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
+	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1
+	auto find_case = [](int64_t m, int e) -> const C30IExpDomainSweepCase& {
+		for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
+			if (kC30IExpDomainSweepCases[i].m == m && kC30IExpDomainSweepCases[i].e == e) {
+				return kC30IExpDomainSweepCases[i];
+			}
+		}
+		std::abort();  // fixture regressed -- a named point must be present
+	};
+
+	// e = -62: OUT of domain at both mantissas (D-SLM318: e >= -77 is the wrong,
+	// permissive threshold this strip wrongly admits), but by TWO DIFFERENT
+	// mechanisms -- found by execution, not assumed. At the high mantissa the derived
+	// (q_ln2, q_b, q_c) fit int64 and IExpConstantsInDomain itself rejects on
+	// representability. At the LOW mantissa, q_c itself overflows int64 during C30's
+	// own derivation (the generator's derivation_ok guard) -- there is no valid int64
+	// triple to call the predicate with at all, so "OUT of domain" here rests on the
+	// derivation site's own upstream construction guard (S3.3's, not yet built), not
+	// on IExpConstantsInDomain. Both are asserted for what they are.
+	{
+		const auto& hi = find_case(kMHigh, -62);
+		CHECK(hi.derivation_ok);
+		CHECK_MSG(!IExpConstantsInDomain(0, hi.q_ln2, hi.q_b, hi.q_c),
+		          "m=2^31-1 e=-62 must be OUT of domain via IExpConstantsInDomain's own "
+		          "representability check");
+
+		const auto& lo = find_case(kMLow, -62);
+		CHECK_MSG(!lo.derivation_ok,
+		          "m=2^30 e=-62: expected the derivation itself to be unable to form a "
+		          "valid int64 (q_ln2,q_b,q_c) triple at this point (q_c overflows int64 "
+		          "during C30's own construction) -- if this now succeeds, the fixture's "
+		          "int64-fit boundary moved and this cell's routed finding is stale");
+		CHECK_MSG(!lo.expected_in_domain,
+		          "m=2^30 e=-62 must still read OUT of domain overall, via the "
+		          "construction-domain rejection rather than IExpConstantsInDomain");
+	}
+	// e = -61: the mantissa-conditional case. Low mantissa (2^30 < 1,268,234,713) is
+	// OUT; high mantissa (2^31-1 >= 1,268,234,713) is IN. A scalar threshold (D-SLM77's
+	// e >= -61) cannot express this split; only the shipped predicate does.
+	{
+		const auto& lo = find_case(kMLow, -61);
+		const auto& hi = find_case(kMHigh, -61);
+		CHECK(lo.derivation_ok && hi.derivation_ok);
+		CHECK_MSG(!IExpConstantsInDomain(0, lo.q_ln2, lo.q_b, lo.q_c),
+		          "m=2^30 e=-61 must be OUT of domain (below the mantissa threshold)");
+		CHECK_MSG(IExpConstantsInDomain(0, hi.q_ln2, hi.q_b, hi.q_c),
+		          "m=2^31-1 e=-61 must be IN domain (at/above the mantissa threshold "
+		          "1,268,234,713) -- the case no scalar e-only threshold can express");
+	}
+	// e = -60: IN domain at both mantissas (the corrected floor's own boundary).
+	for (int64_t m : {kMLow, kMHigh}) {
+		const auto& c = find_case(m, -60);
+		CHECK(c.derivation_ok);
+		CHECK_MSG(IExpConstantsInDomain(0, c.q_ln2, c.q_b, c.q_c),
+		          "m=%lld e=-60 must be IN domain (the current-truth floor)", m);
+	}
+}
+
+// --- SuperSLM_S3a_WalkingSkeleton_Plan.md Sec5.4, Sec7.2 (C34's derived-operand
+//     predicate), Sec11 S3.1: the CONTAINMENT relation between the load-time
+//     descriptor (already shipped, S-HARDEN-1) and the runtime no-UB domain the
+//     not-yet-built C34 predicate would encode. There is no production entry point
+//     for "the runtime predicate" itself (verified: no function of that shape is
+//     declared anywhere under include/superslm/ or src/) -- S3.2/S3.3's build. What
+//     IS real today is the load-time half (SslmModel::Load, driven below through the
+//     shipped MakeKvc1CompositionSection/BuildArtifact fixtures already exercising
+//     e=7/-80 accept and e=8/-81 reject elsewhere in this file) and the two NAMED
+//     constants the runtime predicate would check against
+//     (kSiluLutTermLeftShiftOverflowExponent, kRoundingDivideByPotExponentMaxI64,
+//     both already shipped, both public). This test computes the runtime no-UB
+//     domain's own oracle from those two real constants -- the exact formula Sec5.4
+//     specifies (shift = e + kSiluLutLog2K + kSiluLutQIdx on the upper branch,
+//     -e - kSiluLutLog2K - kSiluLutQIdx on the lower) -- and asserts CONTAINMENT
+//     against the real, executed load-time verdict at all four named boundary
+//     points plus their immediate neighbours, exactly as Sec5.4's own executed probe
+//     does. The oracle function below is TEST CODE ONLY: it stands in for the
+//     not-yet-built production predicate and is not a claim that any production
+//     entry point exists. ---
+static bool C34RuntimeNoUbDomainOracle(int e) {
+	using namespace superslm;
+	const int shift_upper = e + kSiluLutLog2K + kSiluLutQIdx;
+	const int shift_lower = -e - kSiluLutLog2K - kSiluLutQIdx;
+	return shift_upper < kSiluLutTermLeftShiftOverflowExponent &&
+	       shift_lower <= kRoundingDivideByPotExponentMaxI64;
+}
+
+static bool C34LoadTimeAcceptsE(int64_t e) {
+	using namespace superslm_test;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                             MakeKvc1CompositionSection(/*m=*/0, e)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	return status == SslmModelStatus::Ok;
+}
+
+static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
+	// Containment, swept: every e the real load-time gate accepts, the runtime no-UB
+	// oracle also accepts. Never asserted the other way (the runtime domain is
+	// deliberately wider -- Sec5.4's whole point).
+	for (int e = -85; e <= 15; ++e) {
+		if (C34LoadTimeAcceptsE(e)) {
+			CHECK_MSG(C34RuntimeNoUbDomainOracle(e),
+			          "e=%d: load-time ACCEPTS but the runtime no-UB oracle rejects -- "
+			          "containment violated (Sec5.4)",
+			          e);
+		}
+	}
+
+	// The four named boundary points, pinned by their EXECUTED disposition (Sec5.4):
+	// e=7 both accept; e=8 the one point of difference (runtime accepts, load
+	// rejects); e=9 both reject (the overflow point itself, shift==26); e=-80 both
+	// accept (the shared exact lower endpoint), e=-81 both reject.
+	CHECK_MSG(C34LoadTimeAcceptsE(7) && C34RuntimeNoUbDomainOracle(7),
+	          "e=7: both must accept (the load-time ceiling, shift 24)");
+	CHECK_MSG(!C34LoadTimeAcceptsE(8) && C34RuntimeNoUbDomainOracle(8),
+	          "e=8: load-time must reject and the runtime oracle must accept -- the one "
+	          "point of difference Sec5.4 executes");
+	CHECK_MSG(!C34LoadTimeAcceptsE(9) && !C34RuntimeNoUbDomainOracle(9),
+	          "e=9: both must reject (shift==26, the overflow point itself)");
+	CHECK_MSG(C34LoadTimeAcceptsE(-80) && C34RuntimeNoUbDomainOracle(-80),
+	          "e=-80: both must accept (the shared exact lower endpoint)");
+	CHECK_MSG(!C34LoadTimeAcceptsE(-81) && !C34RuntimeNoUbDomainOracle(-81),
+	          "e=-81: both must reject");
+
+	// The load-time ceiling's own static_assert names the overflow point exactly:
+	// shift(7) = 7+17 = 24 < 26 (the overflow exponent) -- confirmed live against the
+	// real named constants rather than restated as a literal.
+	CHECK(7 + superslm::kSiluLutLog2K + superslm::kSiluLutQIdx <
+	      superslm::kSiluLutTermLeftShiftOverflowExponent);
+	CHECK(9 + superslm::kSiluLutLog2K + superslm::kSiluLutQIdx ==
+	      superslm::kSiluLutTermLeftShiftOverflowExponent);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -7538,6 +7720,20 @@ int main(int argc, char** argv) {
 	// --- S-HARDEN-8 (F12, §4.2/§4.3, T-412): the generic section-descriptor
 	//     `reserved` field, untested until this cell. ---
 	TestRejectsNonZeroSectionDescriptorReservedField();
+
+	// --- S3.1 (T-200, board T-132, §7.2, D-SLM318): the C30 derived-operand
+	//     predicate's oracle-pinning cell. The full "design's C30 site" differential
+	//     cell against a production wrapper is blocked (no such wrapper exists yet,
+	//     S3.3's build) -- see Claude/Curie/superslm-s3.1-checked-chain-funnel-test-
+	//     design-2026-07-28.md Sec3.2 for the routed finding. ---
+	TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep();
+	TestC30DomainDisagreementPointsAreExplicitlyPinned();
+
+	// --- S3.1 (§5.4, §7.2, D-SLM318): the C34 derived-operand predicate's
+	//     containment cell, realized against the real load-time gate and the two
+	//     real named constants -- see the test-design record for what remains
+	//     blocked on the not-yet-built runtime predicate itself. ---
+	TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
