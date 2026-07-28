@@ -9,6 +9,7 @@
 // (SuperSLM_Plan.md §15; §17 Coverage Model) and appended here.
 
 #include "superslm/artifact.h"
+#include "superslm/checked_chain_funnel.h"
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
 #include "superslm/model.h"
@@ -27,6 +28,7 @@
 #include "sslm_sil1_hostile_fixtures.h"
 #include "sslm_silu_lut_real_vectors_fixtures.h"
 #include "sslm_s3_1_c30_iexp_domain_sweep_fixtures.h"
+#include "sslm_s3_1_wide_intmath_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -2926,6 +2928,77 @@ static void TestRequantTokenCode() {
 		          static_cast<int>(c.expected));
 		CHECK_MSG(got >= -127 && got <= 127, "%s: RequantTokenCode(%d, %lld, %d) == %d, out of [-127, 127]",
 		          c.label, c.x_i, static_cast<long long>(c.r), c.s, static_cast<int>(got));
+	}
+}
+
+// --- F-S3-7 / Sec11 S3.1: wide-row (int64 input width) siblings --------------
+//
+// MaxAbsReduceWide / RowBoundsWide / RequantTokenCodeWide now have a real
+// declared, linking production entry point (include/superslm/intmath.h,
+// commit 32aca0c) with a deliberately-wrong stub body (src/intmath.cpp:270-281:
+// MaxAbsReduceWide and RequantTokenCodeWide return 0 unconditionally,
+// RowBoundsWide writes 0 to both output parameters unconditionally). Every
+// cell below therefore fails RED on an actual value mismatch against these
+// stubs today, and is specified completely against
+// Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
+// Sec4.1/Sec4.2/Sec4.3.
+
+static void TestMaxAbsReduceWide() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kMaxAbsWideCasesCount; ++i) {
+		const MaxAbsWideCase& c = kMaxAbsWideCases[i];
+		int64_t got = superslm::MaxAbsReduceWide(c.data, c.n);
+		CHECK_MSG(got == c.expected, "%s: MaxAbsReduceWide(n=%zu) == %lld, want %lld", c.label, c.n,
+		          static_cast<long long>(got), static_cast<long long>(c.expected));
+	}
+
+	// Order-independence, checked directly rather than only via matching
+	// expected values -- mirrors TestMaxAbsReduce's own discipline at the
+	// narrow width, widened.
+	int64_t perm_a = superslm::MaxAbsReduceWide(kMaxAbsWideData8, 5);
+	int64_t perm_b = superslm::MaxAbsReduceWide(kMaxAbsWideData9, 5);
+	int64_t perm_c = superslm::MaxAbsReduceWide(kMaxAbsWideData10, 5);
+	CHECK_MSG(perm_a == perm_b && perm_b == perm_c,
+	          "MaxAbsReduceWide is not order-independent: perm_a=%lld perm_b=%lld perm_c=%lld",
+	          static_cast<long long>(perm_a), static_cast<long long>(perm_b),
+	          static_cast<long long>(perm_c));
+}
+
+static void TestRowBoundsWide() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kRowBoundsWideCasesCount; ++i) {
+		const RowBoundsWideCase& c = kRowBoundsWideCases[i];
+		int64_t got_max = INT64_C(0xdeadbeef);
+		int64_t got_min = INT64_C(0xdeadbeef);
+		superslm::RowBoundsWide(c.data, c.n, &got_max, &got_min);
+		CHECK_MSG(got_max == c.expected_max, "%s: RowBoundsWide(n=%zu).out_max == %lld, want %lld",
+		          c.label, c.n, static_cast<long long>(got_max), static_cast<long long>(c.expected_max));
+		CHECK_MSG(got_min == c.expected_min, "%s: RowBoundsWide(n=%zu).out_min == %lld, want %lld",
+		          c.label, c.n, static_cast<long long>(got_min), static_cast<long long>(c.expected_min));
+	}
+
+	// Order-independence on the two permuted in-range rows: both permutations
+	// of the same multiset must report the identical (max, min) pair.
+	int64_t max_a = 0, min_a = 0, max_b = 0, min_b = 0;
+	superslm::RowBoundsWide(kRowBoundsInRangeRowPermA, 4, &max_a, &min_a);
+	superslm::RowBoundsWide(kRowBoundsInRangeRowPermB, 4, &max_b, &min_b);
+	CHECK_MSG(max_a == max_b && min_a == min_b,
+	          "RowBoundsWide is not order-independent: (max_a=%lld,min_a=%lld) vs (max_b=%lld,min_b=%lld)",
+	          static_cast<long long>(max_a), static_cast<long long>(min_a), static_cast<long long>(max_b),
+	          static_cast<long long>(min_b));
+}
+
+static void TestRequantTokenCodeWide() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kRequantWideCasesCount; ++i) {
+		const RequantWideCase& c = kRequantWideCases[i];
+		int8_t got = superslm::RequantTokenCodeWide(c.x_i, c.r, c.s);
+		CHECK_MSG(got == c.expected, "%s: RequantTokenCodeWide(%lld, %lld, %d) == %d, want %d", c.label,
+		          static_cast<long long>(c.x_i), static_cast<long long>(c.r), c.s, static_cast<int>(got),
+		          static_cast<int>(c.expected));
+		CHECK_MSG(got >= -127 && got <= 127,
+		          "%s: RequantTokenCodeWide(%lld, %lld, %d) == %d, out of [-127, 127]", c.label,
+		          static_cast<long long>(c.x_i), static_cast<long long>(c.r), c.s, static_cast<int>(got));
 	}
 }
 
@@ -7291,6 +7364,253 @@ static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
 	      superslm::kSiluLutTermLeftShiftOverflowExponent);
 }
 
+// ---------------------------------------------------------------------------
+// SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.1 -- the funnel's two entry
+// points, now that the header contract lands (commit 32aca0c,
+// include/superslm/checked_chain_funnel.h). Every function under test here has
+// a deliberately-wrong stub body (src/forward/checked_chain_funnel.cpp:
+// unconditional WorkspaceTooSmall, outputs untouched) -- a status none of
+// these cells' own expected outcomes ever is, so every cell below fails on a
+// genuine value mismatch, never a compile or link error. Fixtures:
+// Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
+// Sec4.4/Sec4.5, tests/sslm_s3_1_wide_intmath_fixtures.h.
+// ---------------------------------------------------------------------------
+
+static void TestRequantChainCheckedT1254Witness() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::ChainResult;
+	using superslm::SslmForwardStatus;
+	// Canonical (m in [2^30, 2^31)), neutral site constant -- not itself under
+	// test here; only the wide row and the resulting codes are pinned by
+	// T-1254.
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	for (size_t i = 0; i < kFunnelWitnessRowsCount; ++i) {
+		const FunnelWitnessRow& c = kFunnelWitnessRows[i];
+		int8_t out_codes[4] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};  // poison
+		CarriedScale out_scale{/*m=*/INT64_C(-99), /*e=*/INT64_C(-99)};              // poison
+		ChainResult result = superslm::RequantChainChecked(c.row, c.n, std::span<const CarriedScale>{},
+		                                                     site_constant, out_codes, &out_scale);
+		CHECK_MSG(result.status == SslmForwardStatus::Ok,
+		          "%s: RequantChainChecked status == %s, want Ok (T-1254 required-green witness)",
+		          c.label, superslm::SslmForwardStatusName(result.status));
+		for (size_t j = 0; j < c.n && j < 4; ++j) {
+			CHECK_MSG(out_codes[j] == c.expected_codes[j],
+			          "%s: RequantChainChecked out_codes[%zu] == %d, want %d (T-1254 witness, "
+			          "matches _requant_row_int64/intmath.requant_token_code)",
+			          c.label, j, static_cast<int>(out_codes[j]), static_cast<int>(c.expected_codes[j]));
+		}
+		CHECK_MSG(out_scale.m != INT64_C(-99) || out_scale.e != INT64_C(-99),
+		          "%s: RequantChainChecked must write *out_scale on Ok (still the poison value)", c.label);
+	}
+}
+
+static void TestRequantChainCheckedRejectsOverC29Domain() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	// Sec11 S3.1's own named red cell: "a wide row at D' = 2^31 + 1 returns
+	// ChainInputOutOfDomain ... and computes nothing."
+	const CarriedScale site_constant{INT64_C(1073741824), 0};
+	int8_t out_codes[1] = {INT8_C(-99)};             // poison
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};  // poison
+	auto result = superslm::RequantChainChecked(kWideOverC29DomainRow, kWideOverC29DomainRowLen,
+	                                              std::span<const CarriedScale>{}, site_constant, out_codes,
+	                                              &out_scale);
+	CHECK_MSG(result.status == superslm::SslmForwardStatus::ChainInputOutOfDomain,
+	          "D' = 2^31+1: RequantChainChecked status == %s, want ChainInputOutOfDomain",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "D' = 2^31+1: out_codes must be untouched on rejection (\"computes nothing\")");
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "D' = 2^31+1: *out_scale must be untouched on rejection (\"computes nothing\")");
+}
+
+static void TestNarrowRowCheckedT1254Witness() {
+	using namespace superslm_test;
+	// Positive-extreme row: max element is 2^31, one past INT32_MAX -- C35
+	// must reject.
+	{
+		int32_t out_i32[4] = {INT32_C(-99), INT32_C(-99), INT32_C(-99), INT32_C(-99)};  // poison
+		auto status =
+		    superslm::NarrowRowChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen, out_i32);
+		CHECK_MSG(status == superslm::SslmForwardStatus::LogitNarrowingOverflow,
+		          "positive-extreme witness row: NarrowRowChecked status == %s, want "
+		          "LogitNarrowingOverflow (T-1254)",
+		          superslm::SslmForwardStatusName(status));
+		CHECK_MSG(out_i32[0] == INT32_C(-99),
+		          "positive-extreme witness row: out_i32 must be untouched on rejection");
+	}
+	// Negated-extreme row: min element is exactly -2^31 == INT32_MIN, max is
+	// 2^30 -- both within [INT32_MIN, INT32_MAX] -- C35 must accept, and every
+	// element narrows to its exact value, unchanged (NarrowAccumulatorToI32's
+	// own soundness, once C35 has proven every element in range).
+	{
+		int32_t out_i32[4] = {0, 0, 0, 0};
+		auto status =
+		    superslm::NarrowRowChecked(kWideT1254WitnessNegatedRow, kWideT1254WitnessRowLen, out_i32);
+		CHECK_MSG(status == superslm::SslmForwardStatus::Ok,
+		          "negated-extreme witness row: NarrowRowChecked status == %s, want Ok (T-1254)",
+		          superslm::SslmForwardStatusName(status));
+		CHECK_MSG(out_i32[0] == INT32_C(-2147483648),
+		          "negated-extreme witness row: out_i32[0] == %d, want INT32_MIN (T-1254)", out_i32[0]);
+		for (size_t j = 0; j < kWideT1254WitnessRowLen; ++j) {
+			CHECK_MSG(out_i32[j] == static_cast<int32_t>(kWideT1254WitnessNegatedRow[j]),
+			          "negated-extreme witness row: out_i32[%zu] == %d, want %d (exact narrowing)", j,
+			          out_i32[j], static_cast<int32_t>(kWideT1254WitnessNegatedRow[j]));
+		}
+	}
+}
+
+// The plan's own named negative control (Sec5.5, Sec11 S3.1): "C35 replaced
+// by C29's magnitude check must fail this cell by accepting the positive
+// row." Computed directly from the row's own values -- NOT via
+// MaxAbsReduceWide, itself a red-phase stub elsewhere in this file, so this
+// control does not depend on the very primitive under test to make its point.
+// There is exactly one production NarrowRowChecked to call (Sec7.3's funnel
+// discipline), so the "replaced" predicate is realized as a test-side
+// computation standing in for it, mirroring TestC34RuntimeDomainOracle...'s
+// own oracle-substitution pattern (Sec3.3).
+static bool C29StyleMagnitudeCheckWouldAcceptRow(const int64_t* row, size_t n) {
+	int64_t d = 0;
+	for (size_t i = 0; i < n; ++i) {
+		const int64_t v = row[i];
+		const int64_t av = v < 0 ? -v : v;  // safe: no fixture row here carries INT64_MIN
+		if (av > d) d = av;
+	}
+	const int64_t d_prime = d > 1 ? d : 1;
+	return d_prime <= INT64_C(2147483648);  // C29's own D' <= 2^31 magnitude bound
+}
+
+static void TestNarrowRowCheckedC35VsC29NegativeControl() {
+	using namespace superslm_test;
+	const bool c29_would_accept =
+	    C29StyleMagnitudeCheckWouldAcceptRow(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen);
+	CHECK_MSG(c29_would_accept,
+	          "C29's own D' <= 2^31 magnitude check must ACCEPT the positive-extreme witness row "
+	          "(D' == 2^31 exactly) -- if this is false, the negative control's own premise (a "
+	          "magnitude bound cannot see this row's overflow) no longer holds and must be "
+	          "re-derived before this cell means anything");
+
+	int64_t max_element = kWideT1254WitnessPositiveRow[0];
+	for (size_t i = 1; i < kWideT1254WitnessRowLen; ++i) {
+		if (kWideT1254WitnessPositiveRow[i] > max_element) max_element = kWideT1254WitnessPositiveRow[i];
+	}
+	CHECK_MSG(max_element > superslm::kInt32Max,
+	          "the witness row's max element (%lld) must exceed INT32_MAX for this negative control "
+	          "to demonstrate anything -- this is C35's real rejection reason, proven live by "
+	          "TestNarrowRowCheckedT1254Witness's own LogitNarrowingOverflow expectation on this "
+	          "same row",
+	          static_cast<long long>(max_element));
+	// The discrimination itself: a magnitude-only substitute for C35 says
+	// ACCEPT on this row (c29_would_accept, above); the real, asymmetric C35
+	// check must say REJECT on the same row, proven live elsewhere in this
+	// file. A predicate that agreed with the magnitude check here would prove
+	// nothing beyond what C29 already proves -- this is the exact case
+	// Sec5.5 names as inexpressible by any scalar magnitude bound.
+	CHECK_MSG(c29_would_accept && max_element > superslm::kInt32Max,
+	          "the negative control's two halves must both hold simultaneously: a magnitude bound "
+	          "accepts this row while the row is genuinely out of C35's asymmetric range");
+}
+
+// ---------------------------------------------------------------------------
+// Sec7.2's second limb, C30: the derivation-site predicate wrapper. Ruled
+// 2026-07-28 (Claude/Vitruvius/SuperSLM_S3.1_C30DomainRule_Ruling-2026-07-28.md):
+// IExpConstantsInDomain is the total, sole domain authority at every e; the
+// closed-form "e >= -60" clause is a corollary valid only in the overflow
+// tail and does not extend to the underflow tail (e roughly [-31,+8]), where
+// IExpConstantsInDomain correctly rejects via its own q_ln2 < 1 guard. The
+// wrapper's contract (include/superslm/checked_chain_funnel.h) is to call
+// IExpConstantsInDomain and encode no threshold of its own -- these cells
+// assert exactly that, against the already-generated sweep fixture whose
+// expected_in_domain field is the ruled oracle throughout (never the textual
+// corollary). The stub (src/forward/checked_chain_funnel.cpp) returns
+// WorkspaceTooSmall unconditionally, matching neither Ok nor
+// IExpConstantsOutOfDomain, so every cell below is a genuine value-mismatch
+// red today.
+// ---------------------------------------------------------------------------
+
+static void TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep() {
+	using namespace superslm_test;
+	int checked = 0;
+	for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
+		const C30IExpDomainSweepCase& c = kC30IExpDomainSweepCases[i];
+		if (!c.derivation_ok) continue;  // C30's own construction-domain rejection -- no valid
+		                                  // int64 triple exists to call the wrapper with.
+		CHECK_MSG(c.shortcut_condition_holds,
+		          "m=%lld e=%d: the q=0 shortcut's own precondition does not hold for this row",
+		          c.m, c.e);
+		const superslm::SslmForwardStatus expected = c.expected_in_domain
+		                                                  ? superslm::SslmForwardStatus::Ok
+		                                                  : superslm::SslmForwardStatus::IExpConstantsOutOfDomain;
+		const superslm::SslmForwardStatus got =
+		    superslm::CheckIExpConstantsDomain(0, c.q_ln2, c.q_b, c.q_c);
+		CHECK_MSG(got == expected,
+		          "m=%lld e=%d q_ln2=%lld q_b=%lld q_c=%lld: CheckIExpConstantsDomain(0, ...) == %s, "
+		          "want %s (D-SLM348's ruling: IExpConstantsInDomain is the total domain authority, "
+		          "never the textual e>=-60 corollary outside its overflow-tail scope)",
+		          c.m, c.e, c.q_ln2, c.q_b, c.q_c, superslm::SslmForwardStatusName(got),
+		          superslm::SslmForwardStatusName(expected));
+		++checked;
+	}
+	CHECK_MSG(checked > 0, "no sweep row had a valid C30 derivation to check -- fixture regressed");
+}
+
+// The three named disagreement points (D-SLM318's table), through the wrapper
+// rather than the bare primitive -- mirrors
+// TestC30DomainDisagreementPointsAreExplicitlyPinned's own direct-call cell,
+// realized here against the funnel's actual entry point now that it exists.
+static void TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned() {
+	using namespace superslm_test;
+	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
+	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1
+	auto find_case = [](int64_t m, int e) -> const C30IExpDomainSweepCase& {
+		for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
+			if (kC30IExpDomainSweepCases[i].m == m && kC30IExpDomainSweepCases[i].e == e) {
+				return kC30IExpDomainSweepCases[i];
+			}
+		}
+		std::abort();  // fixture regressed -- a named point must be present
+	};
+
+	// e = -62: the high-mantissa case is representable and must reject via
+	// the wrapper. The low-mantissa case has no valid int64 triple to call
+	// the wrapper with at all (S3.3's own upstream construction guard, not
+	// this wrapper's) and is pinned directly against the oracle in
+	// TestC30DomainDisagreementPointsAreExplicitlyPinned rather than
+	// re-asserted here.
+	{
+		const auto& hi = find_case(kMHigh, -62);
+		CHECK(hi.derivation_ok);
+		CHECK_MSG(superslm::CheckIExpConstantsDomain(0, hi.q_ln2, hi.q_b, hi.q_c) ==
+		              superslm::SslmForwardStatus::IExpConstantsOutOfDomain,
+		          "m=2^31-1 e=-62 must be IExpConstantsOutOfDomain via the wrapper");
+	}
+	// e = -61: the mantissa-conditional case -- no scalar e-only threshold
+	// can express this split; only the shipped predicate, called by the
+	// wrapper, does.
+	{
+		const auto& lo = find_case(kMLow, -61);
+		const auto& hi = find_case(kMHigh, -61);
+		CHECK(lo.derivation_ok && hi.derivation_ok);
+		CHECK_MSG(superslm::CheckIExpConstantsDomain(0, lo.q_ln2, lo.q_b, lo.q_c) ==
+		              superslm::SslmForwardStatus::IExpConstantsOutOfDomain,
+		          "m=2^30 e=-61 must be IExpConstantsOutOfDomain via the wrapper (below the "
+		          "mantissa threshold)");
+		CHECK_MSG(superslm::CheckIExpConstantsDomain(0, hi.q_ln2, hi.q_b, hi.q_c) ==
+		              superslm::SslmForwardStatus::Ok,
+		          "m=2^31-1 e=-61 must be Ok via the wrapper (at/above the mantissa threshold "
+		          "1,268,234,713)");
+	}
+	// e = -60: Ok at both mantissas (the corrected floor's own boundary).
+	for (int64_t m : {kMLow, kMHigh}) {
+		const auto& c = find_case(m, -60);
+		CHECK(c.derivation_ok);
+		CHECK_MSG(superslm::CheckIExpConstantsDomain(0, c.q_ln2, c.q_b, c.q_c) ==
+		              superslm::SslmForwardStatus::Ok,
+		          "m=%lld e=-60 must be Ok via the wrapper (the current-truth floor)", m);
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -7532,6 +7852,19 @@ int main(int argc, char** argv) {
 	TestDynamicScaleReciprocalDenseSample();
 	TestRequantTokenCode();
 	TestIntmathPipelineComposition();
+
+	// --- Curie's S3.1 wide-row (int64 input width) red suite (F-S3-7). ---
+	TestMaxAbsReduceWide();
+	TestRowBoundsWide();
+	TestRequantTokenCodeWide();
+
+	// --- Curie's S3.1 checked-chain-funnel red suite (T-200, T-1254). ---
+	TestRequantChainCheckedT1254Witness();
+	TestRequantChainCheckedRejectsOverC29Domain();
+	TestNarrowRowCheckedT1254Witness();
+	TestNarrowRowCheckedC35VsC29NegativeControl();
+	TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep();
+	TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned();
 
 	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();

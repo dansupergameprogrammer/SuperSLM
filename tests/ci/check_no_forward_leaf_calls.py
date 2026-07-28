@@ -20,21 +20,23 @@ scan (Sec7.3, verbatim) -- over-inclusive on a comment or a string literal
 naming a leaf is an accepted false-positive, not a soundness gap, because the
 rule is a ban, not a classifier.
 
-WHERE THIS STANDS AS OF S3.1's AUTHORING (2026-07-28, T-200): no
-forward-composition source exists in D:\\SuperSLM yet -- the site-composition
-sources this check polices land in S3.2-S3.9 (Claude/Plans/
-SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11). _DEFAULT_FORWARD_GLOBS therefore
-resolves to zero files against the real tree today, and main()'s end-to-end
-run against it is a vacuous pass (test_check_no_forward_leaf_calls.py's own
-`test_main_end_to_end_against_the_real_default_glob_is_currently_vacuous`
-names this explicitly, per StandardsDocument Sec4's requirement that a new
-check be validated against an independently-found population before it is
-trusted -- a vacuous production scan proves nothing, so every other cell in
-that suite drives this module directly against constructed fixture files
-standing in for "a forward TU," never relying on the real (currently empty)
-glob for its own vitality). The moment Brunel's build lands a forward-
-composition source directory, this module's defaults should be pointed at it
-and the funnel's real file added to _DEFAULT_ALLOWLIST by relative path.
+WHERE THIS STANDS AS OF THE S3.1 HEADER-CONTRACT BUILD (2026-07-28, commit
+32aca0c, T-200): `src/forward/checked_chain_funnel.cpp` now exists and
+_DEFAULT_FORWARD_GLOBS resolves to exactly that one real file against the
+tree. main()'s end-to-end run against it is no longer vacuous --
+test_check_no_forward_leaf_calls.py's own
+`test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous`
+asserts the real, exact population and that the real tree passes -- though
+that cell proves the WIRING (the real glob and allowlist agree on the real
+file), not the MECHANISM (a real banned-leaf call being caught): the funnel's
+own file is allowlisted, and `scan_files` skips reading an allowlisted path's
+content at all, so every mechanism cell still drives this module against
+constructed fixture files standing in for "a forward TU," per
+StandardsDocument Sec4's population-validation requirement. The site-
+composition sources for S3.2-S3.9 (Claude/Plans/
+SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11) still land under the same glob as
+they are built; no further default change is anticipated for those, since the
+glob root already covers `src/forward/**`.
 """
 from __future__ import annotations
 

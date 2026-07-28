@@ -174,25 +174,45 @@ def test_nested_leaf_call_inside_an_expression_is_still_found():
         assert leaves_hit == ["NormalizeScale", "RequantTokenCode"]
 
 
-# --- Present truth: the real (currently nonexistent) forward directory. ---
+# --- Present truth: the real forward directory, now that it exists. ---
 
 
-def test_main_end_to_end_against_the_real_default_glob_is_currently_vacuous():
-    """As of 2026-07-28 (T-200, S3.1's authoring) no forward-composition source
-    exists in the real D:\\SuperSLM tree -- Sec11 places it at S3.2-S3.9, still
-    open. The default glob therefore matches zero real files and this end-to-end
-    call passes vacuously. This is the current, honest state of the production
-    wiring, not a claim that the check has been proven against real forward
-    sources -- every cell above proves the mechanism against constructed
-    fixtures instead, per StandardsDocument Sec4's population-validation
-    requirement. This test must be revisited (a companion cell added asserting
-    the glob is now NONEMPTY) the moment a forward-composition source lands."""
+def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
+    """UPDATED 2026-07-28 (S3.1 header-contract build, commit 32aca0c): this cell
+    used to name and assert a vacuous pass (no forward-composition source existed
+    in the real tree yet, Sec11 placing it at S3.2-S3.9). That premise no longer
+    holds -- `src/forward/checked_chain_funnel.cpp` now exists and is the exact
+    file the default glob was written in anticipation of. This test asserts the
+    real, current state instead of the historical one: the default glob matches a
+    nonempty, exact population (never grows silently uncounted -- a second real
+    forward-composition file landing without a matching update here is caught by
+    the equality assertion, not just a >0 check), and the real production tree
+    passes the check end-to-end.
+
+    The funnel's own file passes here because `scan_files` skips reading an
+    allowlisted path's content entirely (short-circuits on the path match before
+    opening the file) -- so this cell does not, and cannot, prove the allowlist
+    exempts real banned-leaf content; that half is proven by
+    `test_the_funnels_own_file_and_leaf_certification_tus_pass_the_allowlist_control`
+    against constructed scratch content standing in for it, per
+    StandardsDocument Sec4's population-validation requirement (a vacuous
+    production scan proves nothing; every other cell in this suite drives the
+    mechanism directly). What this cell proves that the scratch cells cannot is
+    that the real glob and the real allowlist, unmodified, agree on the real file
+    that exists today -- the wiring, not the mechanism.
+
+    Revisit again the moment a second real forward-composition file lands: this
+    exact-match assertion will fail, correctly, and should be updated to name the
+    new file rather than loosened to `len(files) > 0`."""
     files = cnfl._glob_files(cnfl._DEFAULT_FORWARD_GLOBS, cnfl._REPO_ROOT)
-    assert files == [], (
-        "the default forward-composition glob now matches real file(s) -- S3.2 or later "
-        "has landed a forward-composition source. This test's own vacuous-pass premise no "
-        "longer holds: add a companion assertion that the real files are clean, and update "
-        "this test's docstring rather than deleting it."
+    expected = [os.path.normpath(os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp"))]
+    assert [os.path.normpath(f) for f in files] == expected, (
+        f"expected the default forward-composition glob to match exactly "
+        f"{expected}, got {files} -- a forward-composition file was added or "
+        f"removed without updating this cell's exact-match assertion"
     )
     code = cnfl.main()
-    assert code == 0
+    assert code == 0, (
+        "the real forward-composition tree must pass the CI check end-to-end "
+        "under the unmodified default glob and allowlist"
+    )
