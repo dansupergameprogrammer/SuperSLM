@@ -23,10 +23,13 @@
 // sites-test-design-2026-07-28.md §9 item 4). C32's predicate
 // (CheckSoftmaxRowWidthDomain) and its named ceiling
 // (kSoftmaxRowMaxSafeExponent) are S3.3's own header contract (Claude/Curie/
-// superslm-s3.3-attention-interior-test-design-2026-07-28.md §6.2, §11) and
-// are STUB/deliberately-wrong as staged here (see each declaration's own
-// comment) — a follow-up Brunel pass replaces the stub with the real
-// comparison once Curie's S3.3 red suite is authored against it.
+// superslm-s3.3-attention-interior-test-design-2026-07-28.md §6.2, §11); its
+// body is real, at 128-bit width (Poirot 2026-07-28 finding 1's fix, closing
+// the int64-overflow re-derivation the green-phase construction shipped
+// with). This file also declares CheckPositionOverCap (Board T-1308), a
+// standalone predicate stub for S3.3's own still-unbuilt position-cap gate
+// (§11 S3.3's gate line) so a follow-up Curie pass can attach a red cell
+// against a real, callable symbol.
 // The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
 // reconciliation compute, and the embed entry are S3.2's own site-composition
 // functions and are declared in include/superslm/forward_sites.h instead — not
@@ -95,10 +98,11 @@ enum class SslmForwardStatus {
 	IExpConstantsOutOfDomain,                // C30 (§7.2): IExpConstantsInDomain rejects the derived i-exp constants
 	CarriedScaleMantissaOutOfDomain,         // ac34677 S5 / 380b75f N1: an incoming/site/running CarriedScale.m does not fit int32_t
 	SiluCompositionScaleOutOfDomain,         // C34 (§5.4): CheckSiluCompositionScaleDomain rejects the derived (m,e)
-	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — owed by S3.2; declared for completeness
-	SoftmaxRowWidthOutOfDomain,              // C32/D-SLM366 (§7.2 second limb) — owed by S3.3, §11 S3.3 §6.2
+	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — S3.2's own build
+	SoftmaxRowWidthOutOfDomain,              // C32/D-SLM366 (§7.2 second limb) — S3.3's own build, §11 S3.3 §6.2
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
-	PositionOverCap,                         // owed by S3.6 (§9.1)
+	PositionOverCap,                         // CheckPositionOverCap (this file) declares the predicate, S3.3;
+	                                          // wiring it into a forward call site is owed by S3.6 (§9.1, T-1308)
 	WorkspaceTooSmall,                       // owed by a later sub-slot
 	KvCapacityExhausted,                     // owed by S3.7 (§9.4) — defined and resumable
 	KvPrecisionUnsupported,                  // owed by S3.7 (§14.4)
@@ -273,13 +277,31 @@ SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_
 inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kProbFracBits;
 
 // C32/D-SLM366's own derived-operand predicate (§7.2 second limb; §11 S3.3
-// §6.2). The not-yet-built C32 softmax row kernel (SoftmaxRowQ15, intmath.h)
-// calls this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed
-// form) must satisfy `M <= kSoftmaxRowMaxSafeExponent` (the numerator) AND
-// `width * M <= INT64_MAX` (the sum), the second checked without overflowing
-// the check itself (e.g. `M == 0 || width <= static_cast<size_t>(INT64_MAX /
-// M)`). Returns SoftmaxRowWidthOutOfDomain on either failure, Ok otherwise.
+// §6.2). The built C32 softmax row kernel (SoftmaxRowQ15, intmath.h) calls
+// this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed form)
+// must satisfy `M <= kSoftmaxRowMaxSafeExponent` (the numerator) AND
+// `width * M <= INT64_MAX` (the sum). `M` is formed and judged at 128-bit
+// width (Poirot 2026-07-28 finding 1) rather than in int64, which is the
+// exact re-derivation intmath.h:391-395 names as unsafe (D-SLM81); the sum
+// check runs afterward, without overflowing itself, on the now-known-safe
+// int64 `m` (e.g. `m == 0 || width <= static_cast<size_t>(INT64_MAX / m)`).
+// Returns SoftmaxRowWidthOutOfDomain on either failure, Ok otherwise.
 SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
+
+// C33's own position-cap guard (§11 S3.3's own gate line: "a position ==
+// context_cap is rejected before a table read"; Board T-1308). `position` is
+// a host/runtime-supplied sequence position; `context_cap` is the artifact's
+// own config field (model.h). Rejects when `position` is outside
+// `[0, context_cap)` -- the cap is an EXCLUSIVE upper bound, matching the
+// plan's own "position == context_cap is rejected" wording (equality with
+// the cap is already one past the last valid slot). Declared here, in this
+// file's own §7.2 second-limb predicate family, so a follow-up Curie pass
+// can attach a red cell against a real, callable symbol rather than the bare
+// `PositionOverCap` enumerator this tree carried with no function behind it.
+// Wiring this into an actual forward call site against a loaded model's real
+// context_cap remains S3.6's own job (§9.1); this predicate only makes the
+// comparison callable.
+SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap);
 
 }  // namespace superslm
 

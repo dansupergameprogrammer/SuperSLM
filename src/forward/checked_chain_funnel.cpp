@@ -110,6 +110,62 @@ bool CarriedScaleMantissaFitsInt32(const CarriedScale& c) {
 	return c.m >= static_cast<int64_t>(kInt32Min) && c.m <= static_cast<int64_t>(kInt32Max);
 }
 
+// CheckSoftmaxRowWidthDomain's own portable 128-bit facility (Poirot
+// 2026-07-28 finding 1's fix): forming `q_b*q_b + q_c` must not reproduce the
+// exact int64 overflow intmath.h:391-395 documents as unsafe for a caller to
+// re-derive (D-SLM81). Signed 128-bit, two's-complement -- mirroring
+// intmath.cpp's own private S128 facility and forward_sites.cpp's own U128
+// precedent for the identical reason: neither is reachable across this
+// file's translation-unit boundary, and both of those own comments make the
+// same point about their own local copies (a small, self-contained facility
+// per TU, not a shared instance).
+struct S128 { uint64_t lo, hi; };  // two's complement
+
+inline S128 S128FromI64(int64_t v) {
+	return S128{static_cast<uint64_t>(v), v < 0 ? ~uint64_t{0} : uint64_t{0}};
+}
+
+inline S128 S128Mul(int64_t a, int64_t b) {
+	const uint64_t ua = a < 0 ? (~static_cast<uint64_t>(a) + 1u) : static_cast<uint64_t>(a);
+	const uint64_t ub = b < 0 ? (~static_cast<uint64_t>(b) + 1u) : static_cast<uint64_t>(b);
+	const uint64_t ll = (ua & 0xFFFFFFFFull) * (ub & 0xFFFFFFFFull);
+	const uint64_t lh = (ua & 0xFFFFFFFFull) * (ub >> 32);
+	const uint64_t hl = (ua >> 32) * (ub & 0xFFFFFFFFull);
+	const uint64_t hh = (ua >> 32) * (ub >> 32);
+	const uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFull) + (hl & 0xFFFFFFFFull);
+	const uint64_t lo = (ll & 0xFFFFFFFFull) | (mid << 32);
+	const uint64_t hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+	S128 r{lo, hi};
+	if ((a < 0) ^ (b < 0)) {  // two's-complement negate
+		r.lo = ~r.lo;
+		r.hi = ~r.hi;
+		if (++r.lo == 0) ++r.hi;
+	}
+	return r;
+}
+
+inline S128 S128Add(S128 a, S128 b) {
+	const uint64_t lo = a.lo + b.lo;
+	const uint64_t carry = (lo < a.lo) ? 1u : 0u;
+	return S128{lo, a.hi + b.hi + carry};
+}
+
+inline bool S128Ge(S128 a, S128 b) {  // signed a >= b
+	const int64_t ah = static_cast<int64_t>(a.hi), bh = static_cast<int64_t>(b.hi);
+	if (ah != bh) return ah > bh;
+	return a.lo >= b.lo;
+}
+
+// Representable in int64_t iff sign-extending the low 64 bits reproduces the
+// full 128-bit value -- the same test SShrToI64's own callers rely on
+// implicitly elsewhere in this tree, made explicit here because this
+// predicate needs the yes/no rather than a narrowed value.
+inline bool S128FitsI64(S128 v) {
+	const int64_t lo_signed = static_cast<int64_t>(v.lo);
+	const uint64_t expected_hi = lo_signed < 0 ? ~uint64_t{0} : uint64_t{0};
+	return v.hi == expected_hi;
+}
+
 }  // namespace
 
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
@@ -308,27 +364,63 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
 	return SslmForwardStatus::Ok;
 }
 
-// S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-attention-interior-test-
-// design-2026-07-28.md §6.2, §11): unconditionally returns WorkspaceTooSmall,
-// a status none of this predicate's own real outcomes (Ok,
-// SoftmaxRowWidthOutOfDomain) ever is — matching this campaign's own
-// SslmForwardStatus-returning stub convention (a594dd2). A follow-up Brunel
-// pass replaces this body with the real
-// `M = q_b*q_b + q_c; M <= kSoftmaxRowMaxSafeExponent && width * M <=
-// INT64_MAX` comparison.
+// S3.3's own green-phase construction (Claude/Curie/superslm-s3.3-attention-
+// interior-test-design-2026-07-28.md §6.2, §11). D-SLM365's closed form:
+// M = q_b^2 + q_c is the row's own i-exp value at q = 0, where ShiftByMax
+// puts the row maximum -- the numerator ceiling C32's Q15 divide needs.
+// D-SLM367 ruled kSoftmaxRowMaxSafeExponent (2^47) as the numerator bound on
+// every path (§3).
+//
+// **Poirot 2026-07-28 finding 1 (CRITICAL), fixed here.** Forming
+// `q_b*q_b + q_c` in int64 is the exact computation intmath.h:391-395
+// documents as unsafe for a caller to perform ("the obvious check ...
+// squares base in int64 and itself overflows once q_b exceeds ~3.04e9 ...
+// Callers therefore use this predicate; they do not re-derive it",
+// D-SLM81) -- this function was that re-derivation. 108 points over the
+// canonical mantissa domain produce a fully int64_t-representable
+// (q_b, q_c) pair whose sum is not, wrapping the guard's own threshold
+// negative and defeating both limbs at once. The fix, per the same comment's
+// own instruction: evaluate at 128-bit width, the same domain
+// IExpConstantsInDomain already uses internally, rather than re-deriving a
+// second int64 guard in front of the first.
 SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width) {
-	// D-SLM365's closed form: M = q_b^2 + q_c is the row's own i-exp value at
-	// q = 0, where ShiftByMax puts the row maximum -- the numerator ceiling
-	// C32's Q15 divide needs. D-SLM367 ruled kSoftmaxRowMaxSafeExponent (2^47)
-	// as the numerator bound on every path (§3). The sum `width * M` is
-	// checked without forming it (an overflowing multiply is itself UB),
-	// mirroring the comment this predicate's own declaration specifies.
-	const int64_t m = q_b * q_b + q_c;
-	if (m > kSoftmaxRowMaxSafeExponent) {
+	const S128 m128 = S128Add(S128Mul(q_b, q_b), S128FromI64(q_c));
+	// Representable in int64_t AND within the ratified ceiling -- both
+	// judged at 128-bit width so neither test can itself overflow the way
+	// the int64 re-derivation did.
+	if (!S128FitsI64(m128) || !S128Ge(S128FromI64(kSoftmaxRowMaxSafeExponent), m128)) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
 	}
+	const int64_t m = static_cast<int64_t>(m128.lo);
+	// The sum `width * M` is checked without forming it (an overflowing
+	// multiply is itself UB), mirroring the comment this predicate's own
+	// declaration specifies. `m` is now known representable and
+	// non-negative-or-zero within the ceiling above, so this division is
+	// exactly as safe as it was before the fix.
 	if (m != 0 && width > static_cast<size_t>(INT64_MAX / m)) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+	}
+	return SslmForwardStatus::Ok;
+}
+
+// C33's own position-cap guard (§11 S3.3's own gate line: "a position ==
+// context_cap is rejected before a table read"; Board T-1308). Declared here,
+// in this file's own §7.2 second-limb predicate family, so a follow-up Curie
+// pass can attach a red cell against a real, callable symbol -- T-1308 named
+// the absence of any callable predicate or stub at either sub-slot (S3.3 or
+// S3.6) as the blocker itself, not merely a routing question (no `tests/`
+// edit accompanies this declaration; tests/ stays read-only to this
+// campaign). `position` is a host/runtime-supplied sequence position;
+// `context_cap` is the artifact's own config field (model.h). Rejects when
+// `position` is outside `[0, context_cap)` -- the cap is an EXCLUSIVE upper
+// bound, matching the plan's own "position == context_cap is rejected"
+// wording (equality with the cap is already one past the last valid slot).
+// Wiring this into an actual forward call site against a loaded model's real
+// context_cap remains S3.6's own job (§9.1); this predicate only makes the
+// comparison callable.
+SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap) {
+	if (position < 0 || position >= context_cap) {
+		return SslmForwardStatus::PositionOverCap;
 	}
 	return SslmForwardStatus::Ok;
 }
