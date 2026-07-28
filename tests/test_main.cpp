@@ -34,6 +34,7 @@
 #include "sslm_s3_2_fixtures.h"
 #include "sslm_s3_3_fixtures.h"
 #include "sslm_s3_3_red_regression_fixtures.h"
+#include "sslm_s3_3_rope_application_site_fixtures.h"
 #include "sslm_c32_softmax_row_width_gate_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
@@ -10151,6 +10152,213 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 	          static_cast<long long>(-w.m_magnitude), w.width, superslm::SslmForwardStatusName(negative_status));
 }
 
+// ---------------------------------------------------------------------------
+// S3.3 -- the RoPE APPLICATION SITE (Claude/Plans/SuperSLM_S3a_WalkingSkeleton_
+// Plan.md Sec6.2 step 3, Sec11 S3.3's own gate line; D-SLM376, D-SLM383).
+//
+// D-SLM376 (2026-07-28): the C++ tree ships `RopeApplyPair` (the rotation
+// kernel, intmath.h) and `ClampRopeCode` (C33's post-rotation clamp,
+// forward_sites.h), and, separately, `CheckPositionOverCap` (this file's own
+// sibling predicate, checked_chain_funnel.h/.cpp, real and correct). NO
+// production symbol composes the three into the RoPE application SITE
+// Sec6.2 step 3 specifies: read the absolute position's ROP1 row, rotate
+// every (even, odd) pair of a head row, clamp each component -- with
+// CheckPositionOverCap wired as the composition's FIRST act, so a position
+// `>= context_cap` is rejected before any ROP1 row is read (the "never a
+// table read" ordering constraint, Sec6.2 step 3 / Sec11 S3.3's gate line /
+// Sec13 dim 11's own guard-vitality table). Confirmed by direct search
+// (grep -rn "RopeApplyPair|ClampRopeCode|CheckPositionOverCap" include/ src/)
+// and by reading checked_chain_funnel.h, forward_sites.h whole: no function
+// anywhere in include/superslm calls RopeApplyPair together with
+// CheckPositionOverCap, and no function takes a "position" parameter and a
+// head row together.
+//
+// Per this suite's own established S3.3 precedent (Claude/Curie/
+// superslm-s3.3-attention-interior-test-design-2026-07-28.md Sec2, "Why a
+// test-owned stand-in is rejected"): authoring a compiling C++ cell against a
+// not-yet-declared site symbol would fail the whole translation unit to
+// compile, which fails every cell in this file for the SAME reason rather
+// than failing one cell for ITS OWN reason -- the exact discipline this
+// campaign's exit condition is held to. The site's own feature-oracle cell,
+// its "never a table read" ordering cell, and its guard-vitality (ASan) cell
+// are therefore NOT authored here as compiling C++ -- they are fully
+// specified, ready to drop in, in this campaign's own test-design record
+// (Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
+// Sec6), which also names the exact signature owed.
+//
+// What IS authored below, real and executed against already-shipped
+// primitives (the Sec5 pattern this campaign's prior passes already
+// established): CheckPositionOverCap's own boundary matrix (built, correct,
+// and until this pass exercised by zero C++ cells -- only a Python text-scan
+// proving its header comment no longer calls it a "stub"); RopeApplyPair +
+// ClampRopeCode composed, pairwise, exactly as the site's own contract
+// states (Sec6.2 step 3) and exactly as the reference's `_rotate_rows`
+// composes them (dynamic_engine.py:243-252), at position 0 and position
+// (context_cap - 1) -- Sec13 dim 6's own named cell, "RoPE at position 0 and
+// context_cap-1"; and the ROP1 artifact round-trip, proving the table the
+// site will read is carried byte-for-byte through the real loader.
+// ---------------------------------------------------------------------------
+
+// Sec6.2 step 3 / Sec11 S3.3's gate line / Sec13 dim 5,11: `CheckPositionOverCap`
+// rejects with PositionOverCap for every position outside `[0, context_cap)` --
+// an EXCLUSIVE upper bound (position == context_cap is one past the last valid
+// slot, matching the plan's own wording). Real, already-shipped, already-correct
+// (Poirot ad6bd09-s3.3-remediation-confirmation-review-2026-07-28.md finding D)
+// -- this cell is the first C++ exercise of it directly, closing the gap that
+// only a Python source-text-scan (tests/ci/check_checked_chain_funnel_position_
+// cap_not_a_stub.py) had ever driven it before this pass.
+static void TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps() {
+	using superslm::SslmForwardStatus;
+	struct Point {
+		int64_t position;
+		int64_t context_cap;
+		bool in_domain;
+		const char* label;
+	};
+	const Point points[] = {
+	    // context_cap == 1: the minimal legal cap -- only position 0 is valid.
+	    {0, 1, true, "cap=1, position=0 (only valid slot)"},
+	    {1, 1, false, "cap=1, position=1 (== cap, one past the last valid slot)"},
+	    {-1, 1, false, "cap=1, position=-1"},
+	    // A realistic cap (the pinned RoPE table's own context_cap, 128).
+	    {0, superslm_test::kRopeSitePinnedContextCap, true, "cap=128, position=0"},
+	    {superslm_test::kRopeSitePinnedContextCap - 1, superslm_test::kRopeSitePinnedContextCap, true,
+	     "cap=128, position=127 (context_cap - 1, the last valid slot)"},
+	    {superslm_test::kRopeSitePinnedContextCap, superslm_test::kRopeSitePinnedContextCap, false,
+	     "cap=128, position=128 (== cap, one past the last valid slot)"},
+	    {superslm_test::kRopeSitePinnedContextCap + 1, superslm_test::kRopeSitePinnedContextCap, false,
+	     "cap=128, position=129 (> cap)"},
+	    {-1, superslm_test::kRopeSitePinnedContextCap, false, "cap=128, position=-1"},
+	    // Full int64 extremes, at a realistic cap -- a host/runtime-supplied
+	    // position is untrusted input, and the check must not special-case a
+	    // magnitude anywhere near overflow.
+	    {INT64_MAX, superslm_test::kRopeSitePinnedContextCap, false, "cap=128, position=INT64_MAX"},
+	    {INT64_MIN, superslm_test::kRopeSitePinnedContextCap, false, "cap=128, position=INT64_MIN"},
+	};
+	for (const Point& p : points) {
+		const auto status = superslm::CheckPositionOverCap(p.position, p.context_cap);
+		if (p.in_domain) {
+			CHECK_MSG(status == SslmForwardStatus::Ok,
+			          "%s: CheckPositionOverCap(position=%lld, context_cap=%lld) == %s, want Ok",
+			          p.label, static_cast<long long>(p.position), static_cast<long long>(p.context_cap),
+			          superslm::SslmForwardStatusName(status));
+		} else {
+			CHECK_MSG(status == SslmForwardStatus::PositionOverCap,
+			          "%s: CheckPositionOverCap(position=%lld, context_cap=%lld) == %s, want PositionOverCap",
+			          p.label, static_cast<long long>(p.position), static_cast<long long>(p.context_cap),
+			          superslm::SslmForwardStatusName(status));
+		}
+	}
+}
+
+// Sec6.2 step 3 / Sec13 dim 6 ("RoPE at position 0 and context_cap-1"): composes
+// the real, already-shipped `RopeApplyPair` + `ClampRopeCode` pairwise over one
+// fixture case, exactly as the (not-yet-built) site's own contract states and
+// exactly as the reference's `_rotate_rows` composes them (dynamic_engine.py:
+// 243-252, read at source): pairs are (row[2*i], row[2*i+1]) -- interleaved
+// even/odd, never a first-half/second-half split.
+static void CheckRopeSitePositionCase(const superslm_test::RopeSitePositionCase& c) {
+	using superslm::RopeApplyPair;
+	using superslm::ClampRopeCode;
+	int64_t got[128];
+	for (int i = 0; i < superslm_test::kRopeSitePinnedPairs; ++i) {
+		const int32_t x = static_cast<int32_t>(c.row[2 * i]);
+		const int32_t y = static_cast<int32_t>(c.row[2 * i + 1]);
+		const int32_t cos_q30 = static_cast<int32_t>(c.cos_row[i]);
+		const int32_t sin_q30 = static_cast<int32_t>(c.sin_row[i]);
+		const auto rotated = RopeApplyPair(x, y, cos_q30, sin_q30);
+		got[2 * i] = ClampRopeCode(rotated.x);
+		got[2 * i + 1] = ClampRopeCode(rotated.y);
+	}
+	for (int i = 0; i < superslm_test::kRopeSitePinnedHeadDim; ++i) {
+		CHECK_MSG(got[i] == c.expected_out[i],
+		          "%s: pair-composed RopeApplyPair+ClampRopeCode at element %d == %lld, want %lld "
+		          "(reference: tests/reference/superslm_spike/rope.py's rope_apply_pair, via "
+		          "tests/gen_s3_3_rope_application_site_fixtures.py)",
+		          c.label, i, static_cast<long long>(got[i]), static_cast<long long>(c.expected_out[i]));
+	}
+}
+
+static void TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives() {
+	CheckRopeSitePositionCase(superslm_test::kRopeSitePositionZeroCase);
+	CheckRopeSitePositionCase(superslm_test::kRopeSitePositionCapMinusOneCase);
+}
+
+// Sec13.1 cell 9's sibling join for the RoPE table itself: the real, pinned
+// cos/sin rows the site will eventually read are carried byte-for-byte
+// through the real `SslmModel::Load`, at every row a small (context_cap=4)
+// artifact declares -- proving the artifact-carries-the-real-table half of
+// the site's own join independently of the site itself (which does not yet
+// exist to be driven end to end).
+static superslm_test::FixtureSection MakeRop1SectionMultiRow(int32_t context_cap, int32_t pairs,
+                                                               const int64_t* cos_flat, const int64_t* sin_flat) {
+	using namespace superslm_test;
+	std::vector<ManifestTensorSpec> tensors = {
+	    {"cos", {static_cast<uint32_t>(context_cap), static_cast<uint32_t>(pairs)}},
+	    {"sin", {static_cast<uint32_t>(context_cap), static_cast<uint32_t>(pairs)}},
+	};
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	const size_t n = static_cast<size_t>(context_cap) * static_cast<size_t>(pairs);
+	for (size_t i = 0; i < n; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
+		       static_cast<uint64_t>(cos_flat[i]));
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8,
+		       static_cast<uint64_t>(sin_flat[i]));
+	}
+	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+}
+
+static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
+	using namespace superslm_test;
+	const int32_t cap = kRopeSiteRoundTripContextCap;
+	const int32_t pairs = kRopeSiteRoundTripPairs;
+
+	Cfg1Spec spec{};
+	spec.context_cap = static_cast<uint32_t>(cap);
+	spec.head_dim = static_cast<uint32_t>(kRopeSiteRoundTripHeadDim);
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	FixtureSection rope_tables =
+	    MakeRop1SectionMultiRow(cap, pairs, kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the round-trip fixture (real pinned RoPE table rows, context_cap=%d, head_dim=%d) failed to "
+	          "load: got %s (%s)",
+	          cap, kRopeSiteRoundTripHeadDim, SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_rope_tables, "a successfully loaded artifact must expose its RopeTables view");
+	if (!view.has_rope_tables) return;
+
+	const SslmTensorView* cos = view.rope_tables.Tensor("cos");
+	const SslmTensorView* sin = view.rope_tables.Tensor("sin");
+	CHECK_MSG(cos != nullptr && sin != nullptr, "the loaded RopeTables view is missing \"cos\" or \"sin\"");
+	if (cos == nullptr || sin == nullptr) return;
+	CHECK(cos->elem_count == static_cast<uint64_t>(cap) * static_cast<uint64_t>(pairs));
+	CHECK(sin->elem_count == static_cast<uint64_t>(cap) * static_cast<uint64_t>(pairs));
+
+	for (int64_t position = 0; position < cap; ++position) {
+		for (int32_t col = 0; col < pairs; ++col) {
+			const size_t idx = static_cast<size_t>(position) * static_cast<size_t>(pairs) + static_cast<size_t>(col);
+			const int64_t got_cos = ReadRawI64LE(cos->data + idx * 8);
+			const int64_t got_sin = ReadRawI64LE(sin->data + idx * 8);
+			CHECK_MSG(got_cos == kRopeSiteRoundTripCosFlat[idx],
+			          "position=%lld col=%d: loaded ROP1 cos element == %lld, want %lld (the real pinned "
+			          "reference table's own value)",
+			          static_cast<long long>(position), col, static_cast<long long>(got_cos),
+			          static_cast<long long>(kRopeSiteRoundTripCosFlat[idx]));
+			CHECK_MSG(got_sin == kRopeSiteRoundTripSinFlat[idx],
+			          "position=%lld col=%d: loaded ROP1 sin element == %lld, want %lld (the real pinned "
+			          "reference table's own value)",
+			          static_cast<long long>(position), col, static_cast<long long>(got_sin),
+			          static_cast<long long>(kRopeSiteRoundTripSinFlat[idx]));
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -10692,6 +10900,18 @@ int main(int argc, char** argv) {
 	TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability();
 	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
 	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
+
+	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383; Claude/Curie/
+	// superslm-s3.3-rope-application-site-test-design-2026-07-28.md). The
+	// site itself does not exist yet (no production symbol composes
+	// CheckPositionOverCap + the ROP1 table read + RopeApplyPair +
+	// ClampRopeCode) -- see the record's Sec2/Sec6 for the fully specified,
+	// ready-to-drop-in blocked cells (the feature oracle, the "never a table
+	// read" ordering cell, and the guard-vitality ASan cell). What compiles
+	// today, real and green, against already-shipped primitives:
+	TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps();
+	TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives();
+	TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
