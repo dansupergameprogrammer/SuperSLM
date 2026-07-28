@@ -107,10 +107,16 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // C27's K/V landing composite (§8.1, §11 S3.3 §6.1): the reference's
 // `residual_reconcile(branch_code, m_a, r_t, e_a, e_t)` — the reciprocal-side
 // reconciliation that lands a K/V branch value at its site's static per-head
-// scale. Composition (not yet ported anywhere in this tree):
+// scale. This function's own body (forward_sites.cpp) is that composition,
+// real and green — not yet CALLED from any production forward call site in
+// this tree (S3.4+ wires the actual call site in; this declaration states
+// the contract, and the .cpp file is where it is already built):
 //   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
-// C3's tie rule (ties away from zero), load-bearing here because branch_code is
-// signed. `(m_a, e_a)` is the incoming carried mantissa/exponent shared by the
+// C3's tie rule (ties away from zero), load-bearing here because branch_code
+// AND m_a are both signed (Popper 2026-07-28 §3.1: a mid-composition carried
+// mantissa is NOT positive by construction, only required to fit int32_t's
+// range — see this function's own body for the corrected sign handling).
+// `(m_a, e_a)` is the incoming carried mantissa/exponent shared by the
 // K and V branches at this site (the norm output); `(r_t, e_t)` are the
 // OFFLINE per-(head,projection) reciprocal and exponent read straight from the
 // artifact's `KvLandingReciprocals`/`KvLandingScales` sections — no runtime
@@ -126,9 +132,19 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // "written into the kernel as it is authored, not after" -- §8.2, D-SLM201).
 // The clamp comparison the caller's own `clamp(..., -127, 127)` performs is
 // evaluated once, internally, against this function's own about-to-be-
-// returned raw value -- not a second, independently-derived comparison --
-// and when it is out of `[-127, 127]`, `*out_saturation_count` is
-// INCREMENTED by exactly one (never reset, never assigned): the accumulator
+// returned raw value -- not a second, independently-derived comparison.
+// **Neither e_t nor e_a carries a domain check anywhere in this tree**
+// (Popper 2026-07-28 §3.2): an extreme composed exponent drives the negative-k
+// branch's left shift past the 128-bit carry's own width, which would
+// otherwise narrow to a silently wrong small `raw` with the counter never
+// told. This function detects that loss internally (shift-then-verify) and
+// counts it as a clamp event even when the narrowed `raw` itself does not
+// look out of range -- the return value stays exactly as unreliable in that
+// class as it always was (caller-ensures, like every other funnel-adjacent
+// compute in this tree), but the counter is not fooled by it. Whenever the
+// return value itself IS out of `[-127, 127]`, or this internal detection
+// fires, `*out_saturation_count` is INCREMENTED by exactly one (never reset,
+// never assigned): the accumulator
 // is the CALLER's, owned across every call for one sequence (§8.2:
 // "granularity: per sequence"; reset on sequence create / `sslm_seq_reset` is
 // the caller's own responsibility, not this function's). This has NO EFFECT

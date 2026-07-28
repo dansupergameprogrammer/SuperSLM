@@ -90,6 +90,17 @@ inline uint64_t U128ShrToU64(U128 v, int k) {
 	return (v.lo >> k) | (v.hi << (64 - k));
 }
 
+// Logical right shift by k in [0, 127], keeping the full 128-bit result
+// (LandingRescale's finding-3 remedy: shifting a value left then right by
+// the same amount and comparing to the original is how a lost-bits left
+// shift is DETECTED without needing wider-than-128-bit arithmetic).
+inline U128 U128Shr(U128 v, int k) {
+	if (k <= 0) return v;
+	if (k >= 128) return U128{0, 0};
+	if (k >= 64) return U128{v.hi >> (k - 64), 0};
+	return U128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
+}
+
 }  // namespace
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
@@ -169,42 +180,84 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	// C27's residual_reconcile (§8.1, dynamic_engine.py-vendored formula):
 	//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
 	// with a negative composite exponent an EXACT left shift (no rounding).
-	// `m_a`/`r_t` are positive by construction (m_a: the incoming norm-output
-	// carried mantissa, canonical; r_t: KvLandingReciprocals' offline
-	// reciprocal), so the product's sign is `branch_code`'s alone -- work in
-	// magnitude (matching C22's own requant composite convention, intmath.cpp),
-	// apply C3's away-from-zero tie rule, then reapply the sign.
-	const bool negative = branch_code < 0;
-	const uint64_t abs_branch =
-	    negative ? (~static_cast<uint64_t>(branch_code) + 1u) : static_cast<uint64_t>(branch_code);
-	const U128 magnitude =
-	    U128MulSmall(U128Mul64(abs_branch, static_cast<uint64_t>(m_a)), static_cast<uint64_t>(r_t));
+	// `r_t` is positive by construction (KvLandingReciprocals' offline
+	// reciprocal, checked at load time -- ValidateKvLandingReciprocalsDomain,
+	// model.cpp). `m_a` is NOT (Popper 2026-07-28 §3.1, finding 2): a
+	// mid-composition carried mantissa need only fit int32_t's own range
+	// (checked_chain_funnel.h's CarriedScale doc), no sign, and a negative one
+	// is reachable through the already-wired RmsNormSite/RequantChainChecked
+	// path from an artifact-legal CompositionConstants entry -- the prior
+	// unconditional `static_cast<uint64_t>(m_a)` treated it as always positive
+	// and was wrong by ~13 orders of magnitude on a negative witness, while
+	// also falsely incrementing the saturation counter. The product's sign is
+	// `branch_code`'s XOR `m_a`'s -- work in magnitude on both (matching C22's
+	// own requant composite convention, intmath.cpp), apply C3's
+	// away-from-zero tie rule, then reapply the combined sign.
+	const bool branch_negative = branch_code < 0;
+	const bool m_a_negative = m_a < 0;
+	const bool negative = branch_negative != m_a_negative;
+	const uint64_t abs_branch = branch_negative ? (~static_cast<uint64_t>(branch_code) + 1u)
+	                                             : static_cast<uint64_t>(branch_code);
+	const uint64_t abs_m_a =
+	    m_a_negative ? (~static_cast<uint64_t>(m_a) + 1u) : static_cast<uint64_t>(m_a);
+	const U128 magnitude = U128MulSmall(U128Mul64(abs_branch, abs_m_a), static_cast<uint64_t>(r_t));
 
 	const int64_t k = 62 - (e_a - e_t);
 	int64_t raw;
+	// Popper 2026-07-28 §3.2 / finding 3: neither e_t nor e_a carries a domain
+	// check anywhere in this tree, and an extreme composed exponent drives
+	// the negative-k branch's shift amount past the 128-bit carry's own
+	// width. The prior code narrowed `U128Shl`'s own saturating-to-zero
+	// result straight into `raw`, returning a silently wrong 0 with the
+	// saturation counter untouched -- exactly the class the counter exists to
+	// catch (D-SLM201). `magnitude_exceeds_clamp` records that loss so the
+	// counter is not fooled by it, independent of what `raw` narrows to.
+	bool magnitude_exceeds_clamp = false;
 	if (k >= 0) {
 		// round_half_away_from_zero(magnitude / 2^k) == floor((2*magnitude + 2^k) / 2^(k+1)),
 		// both terms carried in the same 128-bit space as `magnitude` itself
 		// (a plain `uint64_t{1} << k` is undefined behaviour once k >= 64,
-		// which this site's own operand ranges reach routinely).
+		// which this site's own operand ranges reach routinely). Correct for
+		// arbitrarily large k: an oversized divisor floors to 0 exactly
+		// (U128ShrToU64 and U128OneShl each saturate to 0 for a shift >= 128,
+		// which is the true answer when 2^k already exceeds the 128-bit
+		// magnitude), so this branch needs no loss detection of its own.
 		const U128 doubled = U128Add(magnitude, magnitude);
 		const U128 rounded = U128Add(doubled, U128OneShl(static_cast<int>(k)));
 		raw = static_cast<int64_t>(U128ShrToU64(rounded, static_cast<int>(k) + 1));
 	} else {
-		// A negative composite exponent is an exact left shift -- no rounding.
-		// The shift is performed in 128-bit space, then narrowed: correct
-		// whenever the true result fits int64 (caller-ensures, matching every
-		// other funnel-adjacent compute in this tree).
-		raw = static_cast<int64_t>(U128Shl(magnitude, static_cast<int>(-k)).lo);
+		// A negative composite exponent is an exact left shift -- no
+		// rounding. Detect bit loss by shifting back and comparing to the
+		// pre-shift magnitude: a mismatch (or a shift amount that itself
+		// reaches or exceeds the 128-bit width, for a nonzero magnitude)
+		// means the true, left-shifted magnitude no longer fits the 128-bit
+		// carry -- which, at this site's own realistic magnitude (~2^90-2^91,
+		// this file's own U128 comment above), is already far past the
+		// [-127, 127] clamp before it is even shifted further left. `raw`
+		// itself stays the (possibly wrapped) low 64 bits of whatever the
+		// shift produced, matching this function's own caller-ensures
+		// convention for out-of-domain magnitude (forward_sites.h: "correct
+		// whenever the true result fits int64").
+		const int shift = static_cast<int>(-k);
+		const U128 shifted = U128Shl(magnitude, shift);
+		if (shift >= 128) {
+			magnitude_exceeds_clamp = (magnitude.lo != 0 || magnitude.hi != 0);
+		} else {
+			const U128 verify = U128Shr(shifted, shift);
+			magnitude_exceeds_clamp = (verify.lo != magnitude.lo || verify.hi != magnitude.hi) ||
+			                           shifted.hi != 0 || shifted.lo > 127;
+		}
+		raw = static_cast<int64_t>(shifted.lo);
 	}
 	if (negative) raw = -raw;
 
 	// T-518 / D-SLM201 option 2, §8.2: the predicated-increment half. The
 	// clamp comparison the caller's own `clamp(LandingRescale(...), -127, 127)`
 	// performs is evaluated here, once, against this function's own
-	// about-to-be-returned raw value -- and increments `*out_saturation_count`
-	// by exactly one when it fires. This has no effect whatsoever on `raw`.
-	if (out_saturation_count != nullptr && (raw < -127 || raw > 127)) {
+	// about-to-be-returned raw value, OR-ed with the internal loss detection
+	// above -- and increments `*out_saturation_count` by exactly one when
+	// either fires. This has no effect whatsoever on `raw`.
+	if (out_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
 		*out_saturation_count += 1;
 	}
 	return raw;
