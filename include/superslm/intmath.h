@@ -492,12 +492,16 @@ inline constexpr int kProbFracBits = 15;
 // return value is false. kOk and kNotRepresentable are both well-formed
 // decompositions (this header's own IExpConstruct doc: "*out is filled ...
 // for kOk and for kNotRepresentable alike") and are evaluated exactly as
-// before. A caller that wants to know whether a row's constants were
-// trustworthy reads the return value; a caller that does not (matching
-// every existing call in this tree, which predates this return value) may
-// still discard it.
-bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
-                    int64_t q_c, int64_t* out_probs);
+// before. **`[[nodiscard]]`, matching this header's own stated doctrine**
+// (IExpConstruct's own declaration above: "load-bearing, not decoration.
+// Without it the outcome can be dropped and the untouched `*out` read
+// anyway"). The same shape applies here one level up: a caller who drops
+// this return value gets a plausible-looking `out_probs` row with no
+// diagnostic that its own inputs were rejected. A caller that genuinely
+// does not need to know whether a row's constants were trustworthy discards
+// the outcome explicitly, `(void)SoftmaxRowQ15(...)`, rather than silently.
+[[nodiscard]] bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
+                                  int64_t q_c, int64_t* out_probs);
 
 }  // namespace superslm
 
