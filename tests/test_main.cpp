@@ -33,6 +33,7 @@
 #include "sslm_s3_1_wide_intmath_fixtures.h"
 #include "sslm_s3_2_fixtures.h"
 #include "sslm_s3_3_fixtures.h"
+#include "sslm_s3_3_red_regression_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -9726,6 +9727,184 @@ static void TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGamma
 	}
 }
 
+// ---------------------------------------------------------------------------
+// S3.3 red-regression suite (Curie, 2026-07-28). The suite above is green at
+// c314a64 and wrong: two independent seats confirmed six defects BY
+// EXECUTION that the suite above never samples --
+// Claude/Poirot/c314a64-s3.3-attention-interior-review-2026-07-28.md and
+// Claude/Popper/superslm-c27-kv-landing-domain-bounds-debunk-2026-07-28.md.
+// Every cell below fails against the shipped c314a64 code for its own
+// reason and asserts the vendored reference's own value
+// (tests/reference/superslm_spike/intmath.py, run directly by
+// gen_s3_3_red_regression_fixtures.py -- never re-implemented) where a
+// reference value exists.
+//
+// Test-design record:
+// Claude/Curie/superslm-s3.3-attention-interior-red-regression-2026-07-28.md
+// ---------------------------------------------------------------------------
+
+// Finding 1 (CRITICAL, Poirot #1): CheckSoftmaxRowWidthDomain forms
+// `q_b*q_b + q_c` in int64 (checked_chain_funnel.cpp:326) -- the exact
+// computation intmath.h:391-395 documents as unsafe for a caller to perform
+// ("the obvious check ... squares base in int64 and itself overflows ...
+// Callers therefore use this predicate; they do not re-derive it",
+// D-SLM81). The witness (m=2^30, e=-61) is one of 108 points in the
+// canonical mantissa domain where (q_b, q_c) is fully int64-representable
+// but q_b*q_b + q_c is not -- the predicate's own threshold computation
+// overflows, and the row it exists to refuse is accepted.
+static void TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64() {
+	using namespace superslm_test;
+	const auto& w = kSoftmaxRowOverflowWitness;
+	const auto status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- q_b*q_b + q_c (arbitrary-precision) exceeds both "
+	          "INT64_MAX and kSoftmaxRowMaxSafeExponent (2^47), but the predicate forms this sum in "
+	          "int64 and overflows, wrapping into a value no width exceeds "
+	          "(Poirot 2026-07-28 finding 1, D-SLM81)",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(status));
+}
+
+// Finding 2 (Popper Sec3.1): LandingRescale casts m_a to uint64_t
+// unconditionally (forward_sites.cpp:172-181) on a comment claiming it is
+// "positive by construction"; a mid-composition carried mantissa need only
+// fit int32_t's range (checked_chain_funnel.h), so a negative m_a is
+// reachable through the already-wired RmsNormSite/RequantChainChecked path
+// from an artifact-legal CompositionConstants entry. The mutation this cell
+// targets: the SAME operands with m_a's sign flipped must flip
+// residual_reconcile's own result (it is odd-symmetric in m_a) -- the
+// shipped sign handling does not, and falsely reports a clamp event that
+// never happened.
+static void TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile() {
+	using namespace superslm_test;
+	const auto& w = kLandingNegativeMaWitness;
+
+	const int64_t raw_pos = superslm::LandingRescale(w.branch_code, w.m_a_pos, w.r_t, w.e_a, w.e_t);
+	CHECK_MSG(raw_pos == w.correct_raw_pos,
+	          "positive-sign control: LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%d, "
+	          "e_t=%d) == %lld, want %lld (residual_reconcile)",
+	          static_cast<long long>(w.branch_code), static_cast<long long>(w.m_a_pos),
+	          static_cast<long long>(w.r_t), w.e_a, w.e_t, static_cast<long long>(raw_pos),
+	          static_cast<long long>(w.correct_raw_pos));
+
+	uint64_t count = 0;
+	const int64_t raw_neg =
+	    superslm::LandingRescale(w.branch_code, w.m_a_neg, w.r_t, w.e_a, w.e_t, &count);
+	CHECK_MSG(raw_neg == w.correct_raw_neg,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%d, e_t=%d) == %lld, want "
+	          "%lld (residual_reconcile) -- the shipped uint64_t cast of m_a on a false 'positive by "
+	          "construction' precondition (Popper 2026-07-28 Sec3.1)",
+	          static_cast<long long>(w.branch_code), static_cast<long long>(w.m_a_neg),
+	          static_cast<long long>(w.r_t), w.e_a, w.e_t, static_cast<long long>(raw_neg),
+	          static_cast<long long>(w.correct_raw_neg));
+	CHECK_MSG(count == 0,
+	          "the correct result (%lld) does not saturate the [-127, 127] clamp, so the saturation "
+	          "counter must not fire -- count == %llu, want 0 (the shipped, wrongly-magnituded raw "
+	          "value DOES exceed the clamp range, so it falsely increments the counter -- a clamp "
+	          "event that never happened is reported as one)",
+	          static_cast<long long>(w.correct_raw_neg), static_cast<unsigned long long>(count));
+}
+
+// Finding 3 (Popper Sec3.2): neither KVC1 landing exponent word (e_t, e_a)
+// has any domain check anywhere in the tree -- artifact-carried or
+// runtime-derived. An extreme e_t drives U128Shl's left-shift saturation
+// (k = -938 at this witness), which silently returns 0 rather than the
+// true, astronomically large magnitude -- and because `raw` comes back as
+// 0, the saturation check (raw < -127 || raw > 127) never fires. This is
+// the exact class D-SLM201's counter exists to catch, defeated by the same
+// bug that produces the wrong answer.
+static void TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent() {
+	using namespace superslm_test;
+	const auto& w = kLandingExtremeExponentWitness;
+
+	uint64_t count = 0;
+	const int64_t raw = superslm::LandingRescale(w.branch_code, w.m_a, w.r_t, w.e_a, w.e_t, &count);
+	CHECK_MSG(count == 1,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%d, e_t=%d): "
+	          "*out_saturation_count == %llu, want 1 -- the true residual_reconcile result at this "
+	          "operand set is a %d-bit %s integer, whose magnitude the [-127, 127] clamp must "
+	          "saturate, so the counter must fire (D-SLM201, Popper 2026-07-28 Sec3.2). The shipped "
+	          "result was raw=%lld -- a silently wrong 0, indistinguishable from a legitimately "
+	          "near-zero branch value, because U128Shl saturates the left shift to {0,0} once the "
+	          "shift count exceeds 127",
+	          static_cast<long long>(w.branch_code), static_cast<long long>(w.m_a),
+	          static_cast<long long>(w.r_t), w.e_a, w.e_t, static_cast<unsigned long long>(count),
+	          w.reference_bit_length, w.reference_positive ? "positive" : "negative",
+	          static_cast<long long>(raw));
+}
+
+// Finding 4 (Popper Sec3.3): KvLandingScales.m_t (word 0) is the only field
+// ValidateKvLandingScalesDomain checks, and LandingRescale never reads it --
+// there is no m_t parameter in its signature at all. The field it DOES read
+// from this section, e_t (word 1), has no check anywhere (finding 3,
+// above). An artifact whose m_t is canonical but whose e_t is the extreme
+// witness this suite already proved silently wrong
+// (kLandingExtremeExponentWitness) must be REJECTED at load time; today it
+// is accepted regardless of what e_t carries, because the one check that
+// runs protects a field the composite never consumes.
+static void TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT() {
+	using namespace superslm_test;
+	const int64_t extreme_e_t = static_cast<int64_t>(kLandingExtremeExponentWitness.e_t);  // -1000
+
+	// Two otherwise-identical artifacts, m_t at opposite ends of the
+	// canonical range ValidateKvLandingScalesDomain checks -- both must be
+	// rejected once the joint bound (Plan Sec7.2a) is derived and
+	// enforced, because e_t alone -- the field the composite actually
+	// reads -- already makes this artifact unsafe. A "fix" that widens the
+	// m_t check but still ignores e_t would pass one of the two asserts
+	// below but not both, which is exactly the mutation this pair is built
+	// to catch.
+	for (int64_t m_t : {kKvLandingScaleMantissaMin, kKvLandingScaleMantissaMax}) {
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingScalesSection(m_t, extreme_e_t)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status != SslmModelStatus::Ok,
+		          "m_t=%lld (canonical), e_t=%lld (extreme, unchecked): SslmModel::Load status == "
+		          "Ok, want a rejection -- e_t has no domain check anywhere in the tree "
+		          "(Popper 2026-07-28 Sec3.2), and the one check that DOES run "
+		          "(ValidateKvLandingScalesDomain on m_t) protects a field LandingRescale never "
+		          "reads (Sec3.3) -- m_t's own value must not change this artifact's fate",
+		          static_cast<long long>(m_t), static_cast<long long>(extreme_e_t));
+	}
+}
+
+// Finding 5 (Poirot #3): SoftmaxRowQ15 discards IExpConstruct's
+// [[nodiscard]] outcome ((void)IExpConstruct, src/intmath.cpp:552), and
+// CheckSoftmaxRowWidthDomain does not take q_ln2, so no gate anywhere in
+// the shipped surface covers the kBadQLn2 outcome. The witness (m=2^30,
+// e=-10) is one of 150 reachable (m, e) points where the real
+// iexp_scale_constants degenerates to (q_ln2, q_b, q_c) = (0, 0, 0) -- the
+// coarse-scale underflow tail. The property this cell pins: a triple the
+// width-domain gate accepts must also form a valid i-exp construction at
+// its own row maximum (q=0, where ShiftByMax always puts it) -- it does
+// not.
+static void TestSoftmaxWidthGateAcceptsATripleWhoseIExpConstructionIsInvalid() {
+	using namespace superslm_test;
+	const auto& w = kSoftmaxQLn2ZeroWitness;
+
+	const auto width_status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(width_status == superslm::SslmForwardStatus::Ok,
+	          "premise: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want Ok -- "
+	          "if this no longer holds, this witness needs re-deriving",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(width_status));
+
+	superslm::IExpConstruction construction;
+	const superslm::IExpDomain d = superslm::IExpConstruct(0, w.q_ln2, w.q_b, w.q_c, &construction);
+	CHECK_MSG(d == superslm::IExpDomain::kOk,
+	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == Ok, but IExpConstruct(q=0, "
+	          "q_ln2=%lld, q_b=%lld, q_c=%lld) == %d (kBadQLn2, want kOk) -- the width-domain gate is "
+	          "not a sufficient precondition for SoftmaxRowQ15, and no other gate covers q_ln2 "
+	          "anywhere in the shipped surface (Poirot 2026-07-28 finding 3); SoftmaxRowQ15 itself "
+	          "discards this exact outcome (src/intmath.cpp:552) rather than checking it",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          static_cast<long long>(w.q_ln2), static_cast<long long>(w.q_b),
+	          static_cast<long long>(w.q_c), static_cast<int>(d));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -10248,6 +10427,14 @@ int main(int argc, char** argv) {
 	TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary();
 	TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
 	TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow();
+
+	// S3.3 red-regression suite (Curie, 2026-07-28) -- Claude/Curie/
+	// superslm-s3.3-attention-interior-red-regression-2026-07-28.md.
+	TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64();
+	TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile();
+	TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent();
+	TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT();
+	TestSoftmaxWidthGateAcceptsATripleWhoseIExpConstructionIsInvalid();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
