@@ -10,8 +10,8 @@
 // rejected, never repaired.
 //
 // `BuildSil1` is written directly against the spec's field table, independent
-// of `src/model.cpp` (the code under test — currently a red-first stub that
-// leaves `out` at `SslmSigmoidLut{}` defaults and reports Ok unconditionally).
+// of `src/model.cpp` (the code under test) — derived from the spec, never from
+// reading the parser's own implementation.
 // A rejection cell takes `MakeMinimalValidSil1()` and mutates exactly one field
 // via `Sil1*Off`/`PutU32` (from sslm_fixtures.h), so the byte buffer differs
 // from a valid SIL1 blob in exactly the one way the cell names.

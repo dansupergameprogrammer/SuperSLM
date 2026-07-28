@@ -9,23 +9,32 @@ membership.py's temp-file discipline (every scratch file is created under
 tempfile.mkdtemp(), never written into the working tree, and removed in a
 `finally`).
 
-WHY SCRATCH FIXTURES, NOT THE REAL FORWARD DIRECTORY. As of S3.1's authoring
-(2026-07-28) no forward-composition source exists in D:\\SuperSLM -- Sec11
-places the site-composition sources this check polices at S3.2-S3.9, still
-open. The three cells the plan's own S3.1 red-cell list names --
+WHY SCRATCH FIXTURES, NOT THE REAL FORWARD DIRECTORY. The mechanism cells below
+(the eight banned-leaf rule-coverage cells, the input-coverage cell, and the
+allowlist-control cell) drive the check against constructed scratch
+directories standing in for "a forward TU," never against the real
+src/forward/ tree -- exactly as check_no_pow_operator.py's own self-test
+stands in for "a generator that reintroduced **" with a scratch copy rather
+than editing the real generator. This holds independent of whether real
+forward-composition source exists: a real, unmodified
+src/forward/checked_chain_funnel.cpp is not expected to name a banned leaf, so
+scanning it alone could never show the check FAILING on a fault it exists to
+catch (StandardsDocument Sec4's population-validation requirement -- a check
+shown only to pass on unchanged input is not shown to catch anything). The
+three cells the plan's own S3.1 red-cell list names --
 
     "a forward TU naming a leaf directly fails the CI check; a scratch TU
     added to the forward target and naming a banned leaf also fails it (input
     coverage); the funnel's own file and the leaf certification TUs pass
     (allowlist control)"
 
--- are realized here against constructed scratch directories standing in for
-"a forward TU" and "the forward target," exactly as check_no_pow_operator.py's
-own self-test stands in for "a generator that reintroduced **" with a scratch
-copy rather than editing the real generator. The one cell this suite cannot
-realize against the real tree -- because there is no real forward-composition
-directory yet -- is named and left for a follow-up once Brunel's build lands
-one (see check_no_forward_leaf_calls.py's own module docstring).
+-- are realized here against those constructed scratch directories. The one
+cell the scratch-only suite cannot realize is that the real glob and the real
+allowlist, unmodified, agree on the real file that exists today -- the WIRING,
+not the mechanism; that cell is realized separately, against the real tree, by
+this module's own test_main_end_to_end_against_the_real_default_glob_is_no_
+longer_vacuous (see its own docstring for why it is kept apart from the
+mechanism cells above).
 """
 
 import os

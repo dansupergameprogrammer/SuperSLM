@@ -61,21 +61,27 @@ BANNED_LEAVES = (
     "NarrowAccumulatorToI32",
 )
 
-# Not yet real (see module docstring): the anticipated forward-composition source
-# location. Resolves to zero files against the tree as of this writing.
+# The forward-composition source root (Sec11): src/forward/checked_chain_funnel.cpp
+# is the one real file under it as of the S3.1 header-contract build (2026-07-28,
+# commit 32aca0c); S3.2-S3.9's site-composition sources land under the same glob
+# root as they are built (see module docstring).
 _DEFAULT_FORWARD_GLOBS = (
     "src/forward/**/*.cpp",
     "src/forward/**/*.h",
 )
 
-# Relative-to-repo-root paths permitted to name a banned leaf directly: the funnel's
-# own implementation file (not yet authored; named here so the allowlist is ready
-# the moment it lands) plus the leaf certification TUs that already exist.
+# Relative-to-repo-root paths permitted to name a banned leaf directly. Only a
+# path _DEFAULT_FORWARD_GLOBS can match is meaningful here: scan_files's
+# allowlist is consulted solely against the files main() globs in, so an entry
+# outside src/forward/** is never reached by the default scan and would read
+# as protection while providing none (Poirot ac34677 review finding N4). The
+# leaf certification TUs and tests/test_main.cpp's own direct calls into the
+# funnel's leaves live outside that glob root; a caller that needs them
+# allowlisted supplies them explicitly to scan_files (see
+# test_check_no_forward_leaf_calls.py's allowlist-control cells), rather than
+# carrying them here where they can never be consulted.
 _DEFAULT_ALLOWLIST = (
     "src/forward/checked_chain_funnel.cpp",
-    "include/superslm/checked_chain_funnel.h",
-    "tests/test_main.cpp",
-    "tests/cert_intmath.cpp",
 )
 
 _LEAF_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}

@@ -2935,13 +2935,12 @@ static void TestRequantTokenCode() {
 
 // --- F-S3-7 / Sec11 S3.1: wide-row (int64 input width) siblings --------------
 //
-// MaxAbsReduceWide / RowBoundsWide / RequantTokenCodeWide now have a real
-// declared, linking production entry point (include/superslm/intmath.h,
-// commit 32aca0c) with a deliberately-wrong stub body (src/intmath.cpp:270-281:
-// MaxAbsReduceWide and RequantTokenCodeWide return 0 unconditionally,
-// RowBoundsWide writes 0 to both output parameters unconditionally). Every
-// cell below therefore fails RED on an actual value mismatch against these
-// stubs today, and is specified completely against
+// MaxAbsReduceWide / RowBoundsWide / RequantTokenCodeWide have real, shipped
+// bodies (src/intmath.cpp:270-281 and neighbouring lines), fixed against the
+// INT64_MIN signed-overflow and n==0 read-before-check defects Poirot's
+// ac34677 review found (S1, S3) -- the unsigned-magnitude form and the
+// defined-empty-reduction early return are both in place. Every cell below is
+// specified completely against
 // Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
 // Sec4.1/Sec4.2/Sec4.3.
 
@@ -3179,13 +3178,10 @@ static void TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily() {
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S2.6-amendment red suite for IExpConstantsInDomain (D-SLM78/79/81;
+// Curie's S2.6-amendment suite for IExpConstantsInDomain (D-SLM78/79/81;
 // Claude/Loki/softmax-s2.6-strike-2026-07-21.md; Claude/Curie/
-// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). This primitive, and
-// IExpFromConstants's new internal domain assert, do not exist in src/intmath.cpp /
-// include/superslm/intmath.h yet -- every cell below fails to compile
-// (IExpConstantsInDomain is undeclared) until Brunel lands the extraction. That is
-// the expected, documented RED state.
+// superslm-s2.6-softmax-iexp-domain-test-design-2026-07-21.md). This primitive
+// is declared and shipped in src/intmath.cpp / include/superslm/intmath.h.
 //
 // The two accessor cells originally here (TestIExpShiftMatchesIndependentlyDerivedZ,
 // TestIExpBaseMatchesIndependentlyDerivedBase, against IExpShift/IExpBase) were
@@ -3198,9 +3194,9 @@ static void TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily() {
 // Every expected value in sslm_iexp_domain_fixtures.h is computed by
 // tests/gen_iexp_domain_fixtures.py, transcribing IExpFromConstants's documented
 // five-line decomposition directly in Python arbitrary precision -- never by
-// calling the primitives under test (which do not exist) and never by
-// re-deriving the bound in fixed-width int64 (the exact shape of the D-SLM81
-// defect this amendment fixes).
+// calling the primitives under test and never by re-deriving the bound in
+// fixed-width int64 (the exact shape of the D-SLM81 defect this amendment
+// fixes).
 // ---------------------------------------------------------------------------
 
 static void TestIExpConstantsInDomainAcrossCorpus() {
@@ -6874,23 +6870,23 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 }
 
 // ---------------------------------------------------------------------------
-// Curie's S-HARDEN-7 red suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
+// Curie's S-HARDEN-7 suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
 // Design-2026-07-23.md §3; T-411): the "throws only std::bad_alloc" contract.
 // Every cell below is authored against the corrected, four-condition
 // membership rule's population of EIGHTEEN sites (§3.1's table) -- not the
 // twelve, ten, six, or seven a hand enumeration found across earlier passes
 // of the design.
 //
-// None of the eighteen sites is wrapped yet: src/*.cpp still has no *Impl
-// split and no catch-and-rethrow wrap, and nothing in src/*.cpp calls
-// superslm_test::MaybeThrowInjectedFault() (tests/support/bad_alloc_injection.h).
-// Every cell below therefore arms the seam, calls the site's real public
-// entry point with a minimal, safe argument, and observes that the seam was
-// never consulted -- the production function ran its real (unwrapped) logic
-// and returned or threw normally, without ever seeing the injected fault.
-// That is the documented RED state: S-HARDEN-7's rename-and-wrap (design
-// §3.1) is what wires MaybeThrowInjectedFault() into each site's *Impl body,
-// at which point every cell below goes green with no change to this file.
+// The rename-and-wrap has landed: every site's public entry point is now a
+// thin wrapper (src/bad_alloc_wrap.h's WrapBadAllocContract) around an
+// internal *Impl body, and each *Impl body consults
+// superslm_test::MaybeThrowInjectedFault() (tests/support/bad_alloc_injection.h)
+// via internal::MaybeThrowInjectedBadAllocFault() -- a no-op in a release
+// build (SUPERSLM_ENABLE_BAD_ALLOC_INJECTION is defined only for the
+// superslm_test_injection target the test binary links, CMakeLists.txt).
+// Every cell below arms the seam, calls the site's real public entry point
+// with a minimal, safe argument, and asserts the injected fault crossed as
+// std::bad_alloc.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -6916,10 +6912,9 @@ void CheckBadAllocContractSite(const char* site_name, Callable&& call_site) {
 	DisarmInjectedFault();
 	CHECK_MSG(threw_bad_alloc,
 	          "%s must convert an injected std::length_error into std::bad_alloc "
-	          "(S-HARDEN-7 design §3.1) -- observed %s; RED until the rename-and-wrap "
-	          "lands and this site's *Impl body calls MaybeThrowInjectedFault()",
+	          "(S-HARDEN-7 design §3.1) -- observed %s",
 	          site_name,
-	          threw_nothing ? "no exception at all (the seam is not yet consulted)"
+	          threw_nothing ? "no exception at all (the seam was not consulted)"
 	                        : (threw_other ? "a non-bad_alloc exception (unconverted)"
 	                                       : "bad_alloc"));
 }
@@ -6960,13 +6955,11 @@ static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
 	LastWrapClause clause = g_last_wrap_clause;
 	DisarmInjectedFault();
 	CHECK_MSG(threw_bad_alloc,
-	          "OpenFromMemory did not propagate an injected std::bad_alloc unchanged -- "
-	          "RED until the rename-and-wrap lands");
+	          "OpenFromMemory did not propagate an injected std::bad_alloc unchanged");
 	CHECK_MSG(clause == LastWrapClause::kBadAllocClause,
 	          "OpenFromMemory's wrap must take the catch(const std::bad_alloc&){throw;} "
-	          "clause specifically -- marker read %s; RED until the wrap helper sets "
-	          "g_last_wrap_clause",
-	          clause == LastWrapClause::kNone ? "kNone (the wrap helper does not exist yet)"
+	          "clause specifically -- marker read %s",
+	          clause == LastWrapClause::kNone ? "kNone (the wrap helper's marker was never set)"
 	          : clause == LastWrapClause::kGeneralClause ? "kGeneralClause (wrong branch)"
 	                                                      : "kBadAllocClause");
 }
@@ -7411,12 +7404,10 @@ static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
 
 // ---------------------------------------------------------------------------
 // SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.1 -- the funnel's two entry
-// points, now that the header contract lands (commit 32aca0c,
-// include/superslm/checked_chain_funnel.h). Every function under test here has
-// a deliberately-wrong stub body (src/forward/checked_chain_funnel.cpp:
-// unconditional WorkspaceTooSmall, outputs untouched) -- a status none of
-// these cells' own expected outcomes ever is, so every cell below fails on a
-// genuine value mismatch, never a compile or link error. Fixtures:
+// points (RequantChainChecked, NarrowRowChecked), shipped in
+// src/forward/checked_chain_funnel.cpp against the header contract
+// (include/superslm/checked_chain_funnel.h). Every cell below drives the real
+// construction, not a stub. Fixtures:
 // Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
 // Sec4.4/Sec4.5, tests/sslm_s3_1_wide_intmath_fixtures.h.
 // ---------------------------------------------------------------------------
@@ -7508,9 +7499,10 @@ static void TestNarrowRowCheckedT1254Witness() {
 
 // The plan's own named negative control (Sec5.5, Sec11 S3.1): "C35 replaced
 // by C29's magnitude check must fail this cell by accepting the positive
-// row." Computed directly from the row's own values -- NOT via
-// MaxAbsReduceWide, itself a red-phase stub elsewhere in this file, so this
-// control does not depend on the very primitive under test to make its point.
+// row." Computed directly from the row's own values, never via
+// MaxAbsReduceWide, so this control does not depend on the very primitive
+// under test to make its point -- a negative control that called the
+// primitive it substitutes for would no longer be independent of it.
 // There is exactly one production NarrowRowChecked to call (Sec7.3's funnel
 // discipline), so the "replaced" predicate is realized as a test-side
 // computation standing in for it, mirroring TestC34RuntimeDomainOracle...'s
@@ -7563,15 +7555,12 @@ static void TestNarrowRowCheckedC35VsC29NegativeControl() {
 // IExpConstantsInDomain is the total, sole domain authority at every e; the
 // closed-form "e >= -60" clause is a corollary valid only in the overflow
 // tail and does not extend to the underflow tail (e roughly [-31,+8]), where
-// IExpConstantsInDomain correctly rejects via its own q_ln2 < 1 guard. The
-// wrapper's contract (include/superslm/checked_chain_funnel.h) is to call
-// IExpConstantsInDomain and encode no threshold of its own -- these cells
-// assert exactly that, against the already-generated sweep fixture whose
-// expected_in_domain field is the ruled oracle throughout (never the textual
-// corollary). The stub (src/forward/checked_chain_funnel.cpp) returns
-// WorkspaceTooSmall unconditionally, matching neither Ok nor
-// IExpConstantsOutOfDomain, so every cell below is a genuine value-mismatch
-// red today.
+// IExpConstantsInDomain correctly rejects via its own q_ln2 < 1 guard.
+// CheckIExpConstantsDomain (src/forward/checked_chain_funnel.cpp) implements
+// the ruled contract: it calls IExpConstantsInDomain and encodes no threshold
+// of its own. These cells assert exactly that, against the already-generated
+// sweep fixture whose expected_in_domain field is the ruled oracle throughout
+// (never the textual corollary).
 // ---------------------------------------------------------------------------
 
 static void TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep() {
@@ -7934,6 +7923,97 @@ static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookIn
 	          sink.size());
 }
 
+// D-SLM353 / Claude/Vitruvius/SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md
+// Sec6: the cross-model isolation cell the ruling names as what is required
+// before Sec13 dimension 3's not-applicable reason can be re-asserted --
+// "each model handle owns its own trace-hook state; no state is shared across
+// model handles."
+//
+// EXPECTED RED against today's implementation. src/trace_hook.cpp:13-14 holds
+// exactly one process-wide (fn, user) pair, so installing a hook for one
+// model handle silently redirects every OTHER handle's already-installed
+// hook to the newest installation. Today's SslmSetTraceHook/
+// SslmTraceHookInstalled/SslmEmitChainTrace/SslmEmitKvLandingTrace take no
+// model parameter at all (Poirot ac34677 review, finding S8) -- that omission
+// is exactly the defect this cell exists to catch: "handle A" and "handle B"
+// below are represented by two independent (hook fn, sink) pairs, standing in
+// for the per-model trace state the ruling's corrected storage requires
+// (Sec3: "hook state is owned by the model handle... never through a
+// process-wide static"). Once that storage lands, a hook installed through
+// handle A's own accessor must not be reachable, or disturbable, from any
+// call made through handle B, and vice versa; this cell must then be updated
+// to thread an actual model handle through each half instead of standing in
+// with two sinks.
+static void TestTraceHookCrossModelHandleIsolation() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	std::vector<ChainTraceSinkRecord> sink_a;
+	std::vector<ChainTraceSinkRecord> sink_b;
+
+	// Install "on handle A" and drive one emitting call attributed to it.
+	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink_a);
+	{
+		int8_t out_codes[4] = {0, 0, 0, 0};
+		CarriedScale out_scale{};
+		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+		                                std::span<const CarriedScale>{}, site_constant, out_codes,
+		                                &out_scale, "isolation_probe_handle_a", /*token_index=*/1);
+	}
+	CHECK_MSG(sink_a.size() == 1,
+	          "handle A's own call must land exactly one record in handle A's own sink; got %zu",
+	          sink_a.size());
+	CHECK_MSG(sink_b.empty(),
+	          "handle A's own call must not emit into handle B's sink before handle B's hook is "
+	          "ever installed; got %zu",
+	          sink_b.size());
+
+	// Install "on handle B", independently of handle A -- under a model-scoped
+	// design this must not touch handle A's own hook state at all.
+	superslm::SslmSetTraceHook(&ChainTraceSinkHookFn, &sink_b);
+	{
+		int8_t out_codes[4] = {0, 0, 0, 0};
+		CarriedScale out_scale{};
+		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+		                                std::span<const CarriedScale>{}, site_constant, out_codes,
+		                                &out_scale, "isolation_probe_handle_b", /*token_index=*/2);
+	}
+	CHECK_MSG(sink_b.size() == 1,
+	          "handle B's own call must land exactly one record in handle B's own sink; got %zu",
+	          sink_b.size());
+	CHECK_MSG(sink_a.size() == 1,
+	          "installing a hook on handle B must not emit into handle A's sink, and must not "
+	          "retroactively change what handle A already recorded; got %zu",
+	          sink_a.size());
+
+	// The cell's crux: drive a SECOND call attributed to handle A, without
+	// touching either hook again. Handle A's own hook must still be the one
+	// that fires -- installing on B must not have redirected A's emissions.
+	{
+		int8_t out_codes[4] = {0, 0, 0, 0};
+		CarriedScale out_scale{};
+		superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+		                                std::span<const CarriedScale>{}, site_constant, out_codes,
+		                                &out_scale, "isolation_probe_handle_a_second", /*token_index=*/3);
+	}
+	superslm::SslmSetTraceHook(nullptr, nullptr);
+
+	CHECK_MSG(sink_a.size() == 2,
+	          "cross-model isolation (D-SLM353): handle A's SECOND call must land in handle A's "
+	          "own sink (size 2), not handle B's -- got sink_a.size()=%zu. A count that stayed "
+	          "at 1 means installing handle B's hook silently redirected handle A's own, "
+	          "already-installed hook -- exactly the process-global leak Sec13 dimension 3's "
+	          "corrected reason requires be false.",
+	          sink_a.size());
+	CHECK_MSG(sink_b.size() == 1,
+	          "cross-model isolation (D-SLM353): handle B's sink must not grow from handle A's "
+	          "second call -- got sink_b.size()=%zu, want 1. A count of 2 means handle A's call "
+	          "was silently emitted through handle B's hook instead of its own.",
+	          sink_b.size());
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -8197,6 +8277,11 @@ int main(int argc, char** argv) {
 	TestRequantChainCheckedHookInstalledProducesIdenticalOutputs();
 	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
 
+	// --- D-SLM353 / SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md Sec6:
+	//     the cross-model isolation cell. EXPECTED RED against the current
+	//     process-global trace hook storage. ---
+	TestTraceHookCrossModelHandleIsolation();
+
 	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();
 	TestISqrtTrace();
@@ -8356,8 +8441,8 @@ int main(int argc, char** argv) {
 
 	// --- S-HARDEN-7 (F5, §3, T-411): the "throws only std::bad_alloc" contract,
 	//     all eighteen sites of the corrected, four-condition membership rule's
-	//     derived population (design §3.1's table). Red until the rename-and-wrap
-	//     lands and each site's *Impl body consults the test-only injection seam
+	//     derived population (design §3.1's table). The rename-and-wrap has
+	//     landed; each site's *Impl body consults the test-only injection seam
 	//     (tests/support/bad_alloc_injection.h). ---
 	TestBadAllocContractOpenFromMemory();
 	TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific();

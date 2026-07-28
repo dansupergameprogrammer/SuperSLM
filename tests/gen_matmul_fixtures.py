@@ -4,9 +4,10 @@ fixtures (Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md).
 
 Every golden here is computed by ARBITRARY-PRECISION PYTHON INTEGER ARITHMETIC
 (Python's native `int` is unbounded) reproducing the scalar reference construction
-pinned in SuperSLM_matmul_subslot_design-2026-07-20.md S5 — never by calling any
-C++ implementation (there is none yet: src/matmul.cpp is a red-phase stub) and
-never hand-computed. This is the independent oracle S5 requires. Composition/
+pinned in SuperSLM_matmul_subslot_design-2026-07-20.md S5 — never by calling the
+C++ implementation under test (src/matmul.cpp) and never hand-computed. This is
+the independent oracle S5 requires, so a defect shared between the C++
+construction and this generator cannot cancel out. Composition/
 pipeline goldens additionally cross the shipped Python reference `intmath.py`
 (the same pinned reference gen_intmath_fixtures.py uses), so the composition-
 regression cell (S12 dim 8) is checked against a SECOND independent computation,
@@ -391,10 +392,10 @@ emit("// GENERATED FILE. Do not hand-edit.")
 emit("//")
 emit("// Produced by tests/gen_matmul_fixtures.py. Every golden here is computed by")
 emit("// arbitrary-precision Python integer arithmetic reproducing the design's scalar")
-emit("// reference (SuperSLM_matmul_subslot_design-2026-07-20.md S5), independent of any")
-emit("// C++ implementation -- src/matmul.cpp has none yet (red-phase stub). Composition")
-emit("// cases additionally cross the pinned Python intmath.py reference. Re-running the")
-emit("// generator must reproduce this file byte-for-byte.")
+emit("// reference (SuperSLM_matmul_subslot_design-2026-07-20.md S5), never by calling")
+emit("// the C++ implementation under test (src/matmul.cpp) and never hand-computed.")
+emit("// Composition cases additionally cross the pinned Python intmath.py reference.")
+emit("// Re-running the generator must reproduce this file byte-for-byte.")
 emit("//")
 emit("// Test-design record:")
 emit("// Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md")

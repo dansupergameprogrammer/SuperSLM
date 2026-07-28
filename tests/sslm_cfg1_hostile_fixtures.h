@@ -10,9 +10,9 @@
 // loads, runs, and is not the source model").
 //
 // `BuildCfg1` is written directly against the spec's field table, independent of
-// `src/model.cpp` (the code under test — currently a red-first stub that leaves
-// `out` at `SslmModelConfig{}` defaults and reports Ok unconditionally). A
-// rejection cell takes `MakeMinimalValidCfg1()` and mutates exactly one field via
+// `src/model.cpp` (the code under test) — derived from the spec, never from
+// reading the parser's own implementation. A rejection cell takes
+// `MakeMinimalValidCfg1()` and mutates exactly one field via
 // `Cfg1*Off`/`PutU32`/`PutU64` (from sslm_fixtures.h), so the byte buffer differs
 // from a valid CFG1 blob in exactly the one way the cell names.
 //

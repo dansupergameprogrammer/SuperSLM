@@ -2,10 +2,10 @@
 //
 // Produced by tests/gen_matmul_fixtures.py. Every golden here is computed by
 // arbitrary-precision Python integer arithmetic reproducing the design's scalar
-// reference (SuperSLM_matmul_subslot_design-2026-07-20.md S5), independent of any
-// C++ implementation -- src/matmul.cpp has none yet (red-phase stub). Composition
-// cases additionally cross the pinned Python intmath.py reference. Re-running the
-// generator must reproduce this file byte-for-byte.
+// reference (SuperSLM_matmul_subslot_design-2026-07-20.md S5), never by calling
+// the C++ implementation under test (src/matmul.cpp) and never hand-computed.
+// Composition cases additionally cross the pinned Python intmath.py reference.
+// Re-running the generator must reproduce this file byte-for-byte.
 //
 // Test-design record:
 // Claude/Curie/superslm-s2.5-matmul-test-design-2026-07-20.md

@@ -19,8 +19,8 @@
 // RopeTables/ROP1/int64) share one manifest layout; only the magic and the
 // element size differ. `BuildManifest` is written directly against the spec's
 // field table (docs/sslm_format.md "Tensor-manifest blob"), independent of
-// `src/model.cpp` (the code under test — currently a red-first stub that
-// leaves `out` empty and reports Ok). A rejection cell takes a small
+// `src/model.cpp` (the code under test) — derived from the spec, never from
+// reading the parser's own implementation. A rejection cell takes a small
 // spec-faithful manifest and mutates exactly one descriptor or header field
 // via `ManifestDesc*Off`/`Put32`/`Put64` (from sslm_fixtures.h), so the byte
 // buffer differs from a valid manifest in exactly the one way the cell names.

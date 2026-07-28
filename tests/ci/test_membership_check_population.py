@@ -22,6 +22,8 @@ such clang++ is available -- an environment gap is not a population defect.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -187,36 +189,51 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The production gate itself (design Sec3.1: "tools/ci/check_bad_alloc_
-# contract.py or the build seat's equivalent placement") does not exist yet.
-# This is the genuine RED cell design Sec3.3 step 1 commissions: "Red -- the
-# membership-check job, run before any wrap exists. Add the job; run it
-# against current [HEAD]; confirm it fails, naming exactly the eighteen
-# sites." The reference tool above proves the POPULATION is derivable and
-# stable; this test proves the CI GATE that must reproduce that population
-# and report it (never a subset, never a superset) has not been built.
+# The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
+# is built, and design Sec3.3's rename-and-wrap has landed for every one of
+# the eighteen derived members (src/bad_alloc_wrap.h's WrapBadAllocContract,
+# included by all five src/*.cpp files the population's members live in). The
+# reference tool above (derive_bad_alloc_membership.py) proves the POPULATION
+# is derivable and stable; the cells below confirm the CI GATE that reproduces
+# that population reports it correctly and, now that every member is wrapped,
+# reports zero unwrapped members and exits 0 -- design Sec3.3 step 3's other
+# half (the RED-state half, "confirm it fails naming exactly the eighteen
+# sites," was proven at the design's own authoring and is not re-proven here;
+# re-creating that state would mean reverting the shipped wrap).
 #
-# Expected CLI contract for the build seat's tool, so this test can be
-# updated to invoke it once it exists: `tools/ci/check_bad_alloc_contract.py
-# --list-unwrapped` prints one `header:line:name` row per currently-unwrapped
-# member of the derived population (identical rows to
-# tests/ci/bad_alloc_membership_expected.txt) and exits 1 if any exist, 0 if
-# none do (step 3's "fail, naming every unwrapped member").
+# CLI contract: `tools/ci/check_bad_alloc_contract.py --list-unwrapped` prints
+# one `header:line:name` row per currently-unwrapped member of the derived
+# population and exits 1 if any exist, 0 if none do.
 # ---------------------------------------------------------------------------
 
 
-def test_production_membership_check_tool_does_not_exist_yet():
-    """RED: T-411's own CI gate. Fails today because the tool has not been
-    built -- this is expected and does not require clang++ to demonstrate."""
+def test_production_membership_check_tool_exists():
+    """T-411's CI gate is built and wired into .github/workflows/tests.yml."""
     repo_root = dbam._REPO_ROOT
     tool_path = os.path.join(repo_root, "tools", "ci", "check_bad_alloc_contract.py")
     assert os.path.isfile(tool_path), (
-        "tools/ci/check_bad_alloc_contract.py does not exist yet -- this is the "
-        "RED state design Sec3.3 step 1 commissions before any of the eighteen "
-        "sites is wrapped. Once the build seat adds it, this test's replacement "
-        "must invoke it with --list-unwrapped, parse its reported rows, and "
-        "assert they equal tests/ci/bad_alloc_membership_expected.txt exactly -- "
-        "not a subset, not a superset (StandardsDocument Sec4's population-"
-        "validation requirement) -- and separately, after all eighteen sites are "
-        "wrapped, that it reports zero unwrapped members and exits 0."
+        "tools/ci/check_bad_alloc_contract.py must exist -- design Sec3.1's "
+        "membership-check CI gate."
+    )
+
+
+@requires_clang
+def test_production_membership_check_reports_zero_unwrapped_members():
+    """S-HARDEN-7's rename-and-wrap has landed for every one of the eighteen
+    sites, so the gate's own --list-unwrapped must report none, and exit 0."""
+    repo_root = dbam._REPO_ROOT
+    tool_path = os.path.join(repo_root, "tools", "ci", "check_bad_alloc_contract.py")
+    result = subprocess.run(
+        [sys.executable, tool_path, "--list-unwrapped"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"check_bad_alloc_contract.py --list-unwrapped must exit 0 once every "
+        f"derived member is wrapped; got exit {result.returncode}, stdout:\n"
+        f"{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "OK" in result.stdout, (
+        f"expected the tool's own OK confirmation in stdout; got:\n{result.stdout}"
     )

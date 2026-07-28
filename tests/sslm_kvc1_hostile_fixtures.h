@@ -12,9 +12,9 @@
 // KvLandingScales, KvLandingReciprocals) share one KVC1 layout; only the
 // section type's REQUIRED value_words (2 or 3, ExpectedValueWords in
 // model.h) differs. `BuildKvc1` is written directly against the spec's field
-// table, independent of `src/model.cpp` (the code under test — currently a
-// red-first stub that leaves `out` empty and reports Ok). A rejection cell
-// takes a small spec-faithful KVC1 blob and mutates exactly one header or
+// table, independent of `src/model.cpp` (the code under test) — derived from
+// the spec, never from reading the parser's own implementation. A rejection
+// cell takes a small spec-faithful KVC1 blob and mutates exactly one header or
 // descriptor field via `ConstantsDesc*Off`/`PutU32`/`PutU64` (from
 // sslm_fixtures.h), so the byte buffer differs from a valid blob in exactly
 // the one way the cell names.

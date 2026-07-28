@@ -4,18 +4,20 @@
 // rows.
 //
 // NOT a generator output, unlike sslm_intmath_fixtures.h and
-// sslm_s3_1_c30_iexp_domain_sweep_fixtures.h. Every wide MaxAbsReduceWide/
-// RequantTokenCodeWide case here is the SAME data already generated and
+// sslm_s3_1_c30_iexp_domain_sweep_fixtures.h. Most wide MaxAbsReduceWide/
+// RequantTokenCodeWide cases here are the SAME data already generated and
 // witnessed at int32 input width in sslm_intmath_fixtures.h (kMaxAbsCases,
 // kRequantCases), reused unchanged because the formula and the expected outputs
 // do not change when the input's C++ type widens from int32_t to int64_t --
 // only the value domain the parameter can carry does (SuperSLM_S3a_
-// WalkingSkeleton_Plan.md Sec11 S3.1, Sec4.7's correction). No new derivation
-// happens in this file; hand-authoring it is not exempt from that rule, it
-// simply has nothing left to derive. RowBoundsWide is new (Sec5.5) and its
-// fixture is constructed directly from the design's own T-1254 witness rows,
-// which are pinned in the plan text verbatim (Sec11 S3.1, "the strike's own
-// witness (T-1254), required green").
+// WalkingSkeleton_Plan.md Sec11 S3.1, Sec4.7's correction). The exception is
+// two RequantTokenCodeWide cases below (wide_only_exceeds_int32_range_pos/neg,
+// x_i = +/-3000000000): the int32-width generator has no case outside int32's
+// own domain to reuse, so these are hand-derived directly from C22's
+// clamp-saturate rule at a magnitude no int32 input could ever carry.
+// RowBoundsWide is new (Sec5.5) and its fixture is constructed directly from
+// the design's own T-1254 witness rows, which are pinned in the plan text
+// verbatim (Sec11 S3.1, "the strike's own witness (T-1254), required green").
 //
 // Test-design record:
 // Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
@@ -96,7 +98,7 @@ inline constexpr MaxAbsWideCase kMaxAbsWideCases[] = {
 	{"order_perm_b", kMaxAbsWideData9, 5, INT64_C(100)},
 	{"order_perm_c_shuffled", kMaxAbsWideData10, 5, INT64_C(100)},
 };
-inline constexpr size_t kMaxAbsWideCasesCount = 13;
+inline constexpr size_t kMaxAbsWideCasesCount = sizeof(kMaxAbsWideCases) / sizeof(kMaxAbsWideCases[0]);
 
 // --- New (Sec5.5): RowBoundsWide --------------------------------------------
 //
@@ -136,7 +138,8 @@ inline constexpr RowBoundsWideCase kRowBoundsWideCases[] = {
 	{"in_range_perm_a", kRowBoundsInRangeRowPermA, 4, INT64_C(100), INT64_C(-200)},
 	{"in_range_perm_b", kRowBoundsInRangeRowPermB, 4, INT64_C(100), INT64_C(-200)},
 };
-inline constexpr size_t kRowBoundsWideCasesCount = 5;
+inline constexpr size_t kRowBoundsWideCasesCount =
+    sizeof(kRowBoundsWideCases) / sizeof(kRowBoundsWideCases[0]);
 
 // --- C22 at int64 input width: RequantTokenCodeWide -------------------------
 //
@@ -180,7 +183,8 @@ inline constexpr RequantWideCase kRequantWideCases[] = {
 	{"wide_only_exceeds_int32_range_pos", INT64_C(3000000000), INT64_C(4294967296), 0, INT8_C(127)},
 	{"wide_only_exceeds_int32_range_neg", INT64_C(-3000000000), INT64_C(4294967296), 0, INT8_C(-127)},
 };
-inline constexpr size_t kRequantWideCasesCount = 21;
+inline constexpr size_t kRequantWideCasesCount =
+    sizeof(kRequantWideCases) / sizeof(kRequantWideCases[0]);
 
 // --- Funnel-level witness rows (RequantChainChecked / NarrowRowChecked) -----
 //

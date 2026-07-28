@@ -28,12 +28,12 @@ does -- rather than computing the decomposition anyway in Python's unbounded int
 domain).
 
 -- using Python's arbitrary-precision integers, NEVER by calling the C++ primitives
-under test (which do not exist yet) and never by re-deriving the bound in fixed-width
-int64 arithmetic (that re-derivation is exactly the defect D-SLM81 names: `base**2`
-alone overflows int64 once q_b exceeds ~3.04e9). This script is therefore an
-independent oracle in the same sense gen_intmath_fixtures.py's calls into the pinned
-Python reference are: the formula is transcribed from the documented contract, not
-recovered from either the extraction under test or its stub.
+under test and never by re-deriving the bound in fixed-width int64 arithmetic (that
+re-derivation is exactly the defect D-SLM81 names: `base**2` alone overflows int64
+once q_b exceeds ~3.04e9). This script is therefore an independent oracle in the
+same sense gen_intmath_fixtures.py's calls into the pinned Python reference are: the
+formula is transcribed from the documented contract, never recomputed from the
+C++ implementation under test.
 
 Re-running this script must reproduce sslm_iexp_domain_fixtures.h byte-for-byte.
 
