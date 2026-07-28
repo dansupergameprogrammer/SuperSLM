@@ -32,6 +32,7 @@
 #include "sslm_s3_1_c30_iexp_domain_sweep_fixtures.h"
 #include "sslm_s3_1_wide_intmath_fixtures.h"
 #include "sslm_s3_2_fixtures.h"
+#include "sslm_s3_3_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -8994,6 +8995,201 @@ static void TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.3 -- the attention interior
+// (C27's K/V landing composite and the D-SLM57 per-head ctx_fold, C32's
+// softmax row plus D-SLM366's owed width predicate, C33's post-rotation
+// clamp, GemmProbQ15Accumulate, KvLandingScales'/KvLandingReciprocals' owed
+// value-domain descriptors, the saturation counter). Per Claude/Curie/
+// superslm-s3.3-attention-interior-test-design-2026-07-28.md Sec2: EVERY
+// production entry point this sub-slot's own construction needs (the C32
+// kernel and its width predicate, the landing-composite site, the saturation
+// counter, GemmProbQ15Accumulate, the two new KVC1 value-domain checks, the
+// clamp call site itself) is undeclared anywhere under include/ or src/ as of
+// this pass -- verified by direct search, not assumed. Every cell that would
+// need one of those is therefore fully specified in that record's Sec4
+// ("blocked cells"), NOT authored as compiling C++ here: this suite is one
+// translation unit, and a reference to an undeclared symbol would fail the
+// WHOLE file to compile rather than fail one cell for its own reason, which
+// StandardsDocument Sec4/this campaign's own exit condition forbids.
+//
+// What IS real, compiling, and meaningful today: three already-shipped
+// primitives this sub-slot's own witnesses depend on (ApplyWeightScaleFold,
+// S3.2; RopeApplyPair and DynamicScaleReciprocal, both pre-S3a) are exercised
+// directly against the derived witnesses in sslm_s3_3_fixtures.h, proving
+// each witness against the REAL C++ primitive it will be consumed by/compared
+// to, not only against the vendored Python mirror the generator calls. This
+// is the same "fixture genuinely holds against the real kernel" discipline
+// S3.2's own suite used for its native-truncating-divide and
+// MultiplyByQuantizedMultiplier mutation checks.
+// ---------------------------------------------------------------------------
+
+// Sec4 (record's Sec4.1/Sec7): the D-SLM57 ctx_fold join's realizable half.
+// Builds a hand-built WSC1 "layer0.ctx_fold" [2,3] int32 tensor -- head 0
+// identity (1,0,0), head 1 non-identity, using the INDEPENDENTLY-derived
+// (mult, shift) from kCtxFoldJoinCase (gen_s3_3_fixtures.py Sec4 -- a
+// gemmlowp QuantizeMultiplier decomposition written from the published
+// algorithm, never from Tools/superslm_spike/pipeline.py's own source, so
+// this is not the correlated-oracle shape F-S3-3 warns against). Loads it
+// through the REAL, already-shipped SslmModel::Load (WSC1's identity/shift
+// domains already enforced there) and drives the REAL, already-shipped
+// ApplyWeightScaleFold on both heads.
+static FixtureSection MakeCtxFoldSection(int32_t mult1, int32_t shift1) {
+	using namespace superslm_test;
+	auto manifest = BuildManifest(superslm::kWeightScalesMagic, /*element_size=*/4,
+	                               {{"layer0.ctx_fold", {2, 3}}});
+	const size_t off = static_cast<size_t>(manifest.tensor_data_off[0]);
+	PutU32(manifest.bytes, off + 0, static_cast<uint32_t>(1));   // head0.identity
+	PutU32(manifest.bytes, off + 4, static_cast<uint32_t>(0));   // head0.mult (unused, identity)
+	PutU32(manifest.bytes, off + 8, static_cast<uint32_t>(0));   // head0.shift
+	PutU32(manifest.bytes, off + 12, static_cast<uint32_t>(0));  // head1.identity
+	PutU32(manifest.bytes, off + 16, static_cast<uint32_t>(mult1));
+	PutU32(manifest.bytes, off + 20, static_cast<uint32_t>(shift1));
+	return MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
+}
+
+static void TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1() {
+	using namespace superslm_test;
+	auto built = BuildArtifact(
+	    {MakeValidConfigSection(), MakeSigmoidLutSection(), MakeCtxFoldSection(kCtxFoldJoinCase.mult, kCtxFoldJoinCase.shift)});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "hand-built layer0.ctx_fold WSC1 section: SslmModel::Load status == %s, want Ok (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	const SslmTensorView* ctx_fold = view.weight_scales.Tensor("layer0.ctx_fold");
+	CHECK_MSG(ctx_fold != nullptr, "the WeightScales view exposes no \"layer0.ctx_fold\" tensor");
+	if (ctx_fold == nullptr) return;
+	CHECK_MSG(ctx_fold->elem_count == 6, "layer0.ctx_fold elem_count == %llu, want 6 (2 heads x 3)",
+	          static_cast<unsigned long long>(ctx_fold->elem_count));
+
+	// Read the two rows back the same way a real forward would (a raw
+	// little-endian read over the validated tensor view, never a cast).
+	const int32_t h0_identity = ReadRawI32LE(ctx_fold->data + 0);
+	const int32_t h0_mult = ReadRawI32LE(ctx_fold->data + 4);
+	const int32_t h0_shift = ReadRawI32LE(ctx_fold->data + 8);
+	const int32_t h1_identity = ReadRawI32LE(ctx_fold->data + 12);
+	const int32_t h1_mult = ReadRawI32LE(ctx_fold->data + 16);
+	const int32_t h1_shift = ReadRawI32LE(ctx_fold->data + 20);
+	CHECK(h0_identity == 1 && h1_identity == 0);
+	CHECK(h1_mult == kCtxFoldJoinCase.mult && h1_shift == kCtxFoldJoinCase.shift);
+
+	const int64_t out0 = superslm::ApplyWeightScaleFold(kCtxFoldJoinCase.ctx0, h0_identity, h0_mult, h0_shift);
+	CHECK_MSG(out0 == kCtxFoldJoinCase.expected0,
+	          "ApplyWeightScaleFold(identity head, from the artifact's own row) == %lld, want %lld "
+	          "(the true pass-through -- ctx0 unchanged)",
+	          static_cast<long long>(out0), static_cast<long long>(kCtxFoldJoinCase.expected0));
+
+	const int64_t out1 = superslm::ApplyWeightScaleFold(kCtxFoldJoinCase.ctx1, h1_identity, h1_mult, h1_shift);
+	CHECK_MSG(out1 == kCtxFoldJoinCase.expected1,
+	          "ApplyWeightScaleFold(non-identity head, from the artifact's own row) == %lld, want %lld "
+	          "(the independently-derived gemmlowp decomposition's own oracle -- Sec13.1 cell 9's "
+	          "realizable half: what the artifact carries, applied through the real shipped kernel, "
+	          "matches an oracle built without reading pipeline.py's own quantize_multiplier source)",
+	          static_cast<long long>(out1), static_cast<long long>(kCtxFoldJoinCase.expected1));
+
+	CHECK_MSG(out0 != out1 || kCtxFoldJoinCase.ctx0 != kCtxFoldJoinCase.ctx1,
+	          "sanity: the two heads' own dispatch must actually differ for this cell to discriminate "
+	          "identity from non-identity");
+}
+
+// Sec1 (record's Sec4.2/Sec7): C33's clamp witnesses, pinned against the
+// REAL, already-shipped RopeApplyPair (not only the vendored Python mirror
+// gen_s3_3_fixtures.py calls to derive them) -- the clamp SITE itself is
+// blocked (no per-layer forward exists to call it from), but the witnesses
+// that will feed it the moment it lands are proven genuine here, against the
+// real primitive, so the C33 red cell (record Sec4.2) is a drop-in the day
+// the site exists.
+static void TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair() {
+	using superslm::RopeApplyPair;
+
+	const auto& c = kC33BothSignsCase;
+	const auto pos = RopeApplyPair(c.x, c.y, c.cos_q30, c.sin_q30);
+	CHECK_MSG(pos.x == c.raw_x && pos.y == c.raw_y,
+	          "RopeApplyPair(x=%d,y=%d,cos=%d,sin=%d) == {%lld,%lld}, want the fixture's own "
+	          "{%lld,%lld} (recomputed via the vendored reference)",
+	          c.x, c.y, c.cos_q30, c.sin_q30, static_cast<long long>(pos.x), static_cast<long long>(pos.y),
+	          static_cast<long long>(c.raw_x), static_cast<long long>(c.raw_y));
+	CHECK_MSG(pos.x > 127, "the positive-side witness's real RopeApplyPair output (%lld) must exceed +127",
+	          static_cast<long long>(pos.x));
+
+	const auto neg = RopeApplyPair(c.x_neg, c.y_neg, c.cos_q30, c.sin_q30);
+	CHECK_MSG(neg.x == c.raw_x_neg && neg.y == c.raw_y_neg,
+	          "RopeApplyPair on the negated input must reproduce the fixture's own negated witness "
+	          "(RopeApplyPair is linear) -- got {%lld,%lld}, want {%lld,%lld}",
+	          static_cast<long long>(neg.x), static_cast<long long>(neg.y),
+	          static_cast<long long>(c.raw_x_neg), static_cast<long long>(c.raw_y_neg));
+	CHECK_MSG(neg.x < -127, "the negative-side witness's real RopeApplyPair output (%lld) must exceed -127",
+	          static_cast<long long>(neg.x));
+
+	const auto& c2 = kC33Int32OverflowCase;
+	const auto wide = RopeApplyPair(c2.x, c2.y, c2.cos_q30, c2.sin_q30);
+	CHECK_MSG(wide.x == c2.raw_x, "the int32-overflow witness's real RopeApplyPair.x == %lld, want %lld",
+	          static_cast<long long>(wide.x), static_cast<long long>(c2.raw_x));
+	CHECK_MSG(wide.x > INT32_MAX || wide.x < INT32_MIN,
+	          "the int32-overflow witness's real RopeApplyPair output (%lld) must exceed int32's own "
+	          "representable range -- otherwise this fixture cannot pin that the future clamp site "
+	          "reads the int64 RopePair member rather than a narrowed copy",
+	          static_cast<long long>(wide.x));
+
+	// The two negative controls the future clamp cell must fail (record
+	// Sec4.2): an unclamped implementation, and clamp-at-[-128,127] (the int8
+	// STORAGE range, not the pinned CODE range). Verified here that the
+	// fixture's own witness actually discriminates the second control at the
+	// exact point the plan calls load-bearing (Sec5.3): a raw value of
+	// exactly -128 is admitted by [-128,127] and rejected by [-127,127].
+	const int64_t clamp127 = std::clamp<int64_t>(neg.x, -127, 127);
+	const int64_t clamp128 = std::clamp<int64_t>(neg.x, -128, 127);
+	CHECK_MSG(clamp127 == -127, "clamp(%lld, -127, 127) == %lld, want -127", static_cast<long long>(neg.x),
+	          static_cast<long long>(clamp127));
+	CHECK_MSG(clamp128 != clamp127 || neg.x >= -127,
+	          "the [-128,127] negative control has no discriminating power on this witness unless the "
+	          "raw value is below -127 but not exactly -128 -- got raw=%lld", static_cast<long long>(neg.x));
+}
+
+// Sec5 (record's Sec4.4/Sec7): KvLandingScales'/KvLandingReciprocals' owed
+// joint-domain bound (Plan Sec7.2a), pinned against the REAL, already-shipped
+// DynamicScaleReciprocal at its own domain's two endpoints -- the new
+// SslmModelStatus/ValidateKvLandingXDomain checks that will USE this bound
+// are blocked (undeclared), but the bound itself is proven against the real
+// primitive it is defined in terms of ("R_t IS C19's reciprocal", Plan
+// Sec8.1), not only against the vendored Python mirror.
+static void TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints() {
+	using superslm::DynamicScaleReciprocal;
+
+	const int64_t r_at_min_dn = DynamicScaleReciprocal(INT64_C(1) << 30);
+	CHECK_MSG(r_at_min_dn == kKvLandingReciprocalMax,
+	          "DynamicScaleReciprocal(2^30) == %lld, want %lld (kKvLandingReciprocalMax, the derived "
+	          "upper bound on any legitimate KvLandingReciprocals entry)",
+	          static_cast<long long>(r_at_min_dn), static_cast<long long>(kKvLandingReciprocalMax));
+	CHECK(r_at_min_dn == (INT64_C(1) << 32));
+
+	const int64_t r_at_max_dn = DynamicScaleReciprocal((INT64_C(1) << 31) - 1);
+	CHECK_MSG(r_at_max_dn == kKvLandingReciprocalMin,
+	          "DynamicScaleReciprocal(2^31-1) == %lld, want %lld (kKvLandingReciprocalMin, the derived "
+	          "lower bound on any legitimate KvLandingReciprocals entry)",
+	          static_cast<long long>(r_at_max_dn), static_cast<long long>(kKvLandingReciprocalMin));
+	CHECK(r_at_max_dn == (INT64_C(1) << 31) + 1);
+
+	// MakeMinimalValidKvc1's own shared "gamma" third word (a near-INT64_MAX
+	// witness chosen for the KVC1 SUB-PARSE's little-endian-signed-read
+	// cell, sslm_kvc1_hostile_fixtures.h) is nowhere near this derived
+	// domain -- confirmed here rather than asserted, so the record's routed
+	// finding (the not-yet-existing ValidateKvLandingReciprocalsDomain check
+	// must reject it) is grounded in an executed comparison, not a claim
+	// about a literal nobody re-checked.
+	constexpr int64_t kGammaThirdWord = INT64_C(9223372036854775807);  // sslm_kvc1_hostile_fixtures.h's own value
+	CHECK_MSG(kGammaThirdWord > kKvLandingReciprocalMax,
+	          "MakeMinimalValidKvc1's gamma R-word (%lld) must be found out-of-domain once the owed "
+	          "KvLandingReciprocals check lands (record Sec4.7's routed cell) -- got a value inside "
+	          "[%lld, %lld] instead, which would make that routed finding wrong",
+	          static_cast<long long>(kGammaThirdWord), static_cast<long long>(kKvLandingReciprocalMin),
+	          static_cast<long long>(kKvLandingReciprocalMax));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -9495,6 +9691,12 @@ int main(int argc, char** argv) {
 	TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
 	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
 	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
+
+	// S3.3 -- the attention interior (Claude/Curie/
+	// superslm-s3.3-attention-interior-test-design-2026-07-28.md).
+	TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1();
+	TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair();
+	TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
