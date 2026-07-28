@@ -28,6 +28,7 @@ _CHECKED_FILES = (
     "superslm_spike/intmath.py",
     "superslm_spike/rope.py",
     "superslm_spike/rope_tables_pinned.json",
+    "superslm_spike/pipeline_prob_width_ceiling.py",
 )
 
 _ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{64}|PENDING)`\s*\|\s*$", re.MULTILINE)
