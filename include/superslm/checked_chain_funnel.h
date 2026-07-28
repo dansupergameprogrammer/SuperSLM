@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace superslm {
 
@@ -97,10 +98,25 @@ struct ChainResult {
 // `wide_row` has `n` elements. `incoming` is C26's left-associated product inputs so
 // far; `site_constant` is the artifact's KVC1 entry for this site. On Ok, `out_codes`
 // (n elements) and `*out_scale` are written; on any rejection, neither is touched.
+//
+// `site` and `token_index` (§11 S3.1a; trace_hook.h) are the SslmChainTraceRecord
+// fields this call cannot derive from its own arguments -- the caller names its
+// site and the token it is processing. They default to an empty site and index 0
+// so every existing call compiles unchanged; a caller that wants trace coverage
+// passes its real site name and token index. Whenever a trace hook is installed
+// (SslmTraceHookInstalled), and only then, RequantChainChecked builds one
+// SslmChainTraceRecord from the values it has already computed -- `wide_row`,
+// `n`, the D'/Dn/s/R intermediates, `out_codes`, and the folded `*out_scale` --
+// and emits it through SslmEmitChainTrace, strictly after every write above.
+// This block reads outputs already finalized above; it writes none of them, and
+// it does not run at all when no hook is installed. That ordering is what makes
+// installing the hook produce the identical ChainResult, out_codes, and
+// *out_scale as not installing it (§10.3's instrumentation axis).
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
-                                 CarriedScale* out_scale);
+                                 CarriedScale* out_scale,
+                                 std::string_view site = {}, size_t token_index = 0);
 
 // The funnel's second entry point (§7.2, T-1254): the one narrowing genuinely owed —
 // the head's int32 logits (C16's tie-break, §10.1's digest format). Performs, in this

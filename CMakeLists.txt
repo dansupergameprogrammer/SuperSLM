@@ -18,6 +18,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/silu_lut.cpp
 	src/matmul.cpp
 	src/proof_manifest.cpp
+	src/trace_hook.cpp
 	src/forward/checked_chain_funnel.cpp
 )
 

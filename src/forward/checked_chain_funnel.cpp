@@ -16,6 +16,7 @@
 
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
+#include "superslm/trace_hook.h"
 
 namespace superslm {
 
@@ -64,7 +65,8 @@ CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
-                                 CarriedScale* out_scale) {
+                                 CarriedScale* out_scale,
+                                 std::string_view site, size_t token_index) {
 	// Steps 1-2 (§7.2): MaxAbsReduceWide already returns D' with C20's all-zero-row
 	// guard (D' = max(D, 1)) baked in — same contract shape as the narrow
 	// MaxAbsReduce sibling.
@@ -108,6 +110,29 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	fold_in(site_constant);
 	fold_in(d_prime_factor);
 	*out_scale = running;
+
+	// §11 S3.1a's instrumentation seam (trace_hook.h), attached to this
+	// already-green funnel per the sub-slot's own routing option. Runs
+	// strictly after every write above and reads only what those writes
+	// already produced -- wide_row/n, d_prime, ns.dn/ns.s, r, out_codes, and
+	// the just-written *out_scale. It writes none of them, and does not run
+	// at all when no hook is installed, so ChainResult/out_codes/*out_scale
+	// are identical whether or not a hook is installed (§10.3's
+	// instrumentation axis).
+	if (SslmTraceHookInstalled()) {
+		SslmChainTraceRecord record;
+		record.site = site;
+		record.token_index = token_index;
+		record.x_int = std::span<const int64_t>(wide_row, n);
+		record.d_prime = d_prime;
+		record.dn = ns.dn;
+		record.s = ns.s;
+		record.r = r;
+		record.codes = std::span<const int8_t>(out_codes, n);
+		record.m_out = running.m;
+		record.e_out = running.e;
+		SslmEmitChainTrace(record);
+	}
 
 	return ChainResult{SslmForwardStatus::Ok};
 }
