@@ -47,8 +47,10 @@ namespace superslm {
 // narrowing cast — executed at m = 2^31 (one past INT32_MAX), which produced a
 // negative mantissa with no diagnostic. `RequantChainChecked` checks this
 // precondition on `incoming` and `site_constant` before folding either into the
-// running product, returning `CarriedScaleMantissaOutOfDomain` rather than
-// truncating silently.
+// running product, AND on the running product itself after every fold step
+// (380b75f review N1: `running` is the fold's own left operand on every combine
+// after the first, and the entry check alone never sees it), returning
+// `CarriedScaleMantissaOutOfDomain` rather than truncating silently.
 struct CarriedScale {
 	int64_t m = 0;
 	int64_t e = 0;
@@ -67,7 +69,7 @@ enum class SslmForwardStatus {
 	ChainInputOutOfDomain,                   // C29 (§7.2 step 3): D' > 2^31 in RequantChainChecked
 	LogitNarrowingOverflow,                  // C35 (§5.5, T-1254): NarrowRowChecked's asymmetric int32 domain check
 	IExpConstantsOutOfDomain,                // C30 (§7.2): IExpConstantsInDomain rejects the derived i-exp constants
-	CarriedScaleMantissaOutOfDomain,         // ac34677 S5: an incoming/site CarriedScale.m does not fit int32_t
+	CarriedScaleMantissaOutOfDomain,         // ac34677 S5 / 380b75f N1: an incoming/site/running CarriedScale.m does not fit int32_t
 	SiluCompositionScaleOutOfDomain,         // C34 (§5.4): CheckSiluCompositionScaleDomain rejects the derived (m,e)
 	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — owed by S3.2; declared for completeness
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
@@ -104,7 +106,11 @@ struct ChainResult {
 //   5. RequantTokenCodeWide(x_i, r, s) per element, directly on the int64 row — the
 //      row is NEVER narrowed to int32 (T-1254's fold; NarrowAccumulatorToI32 does not
 //      appear in this list)
-//   6. carried_scale_product, in C26's pinned LEFT-ASSOCIATED order
+//   6. carried_scale_product, in C26's pinned LEFT-ASSOCIATED order — the fold's own
+//      running product is checked against CombineCarriedScale's precondition after
+//      every combine (380b75f review N1), else return {CarriedScaleMantissaOutOfDomain};
+//      this check runs before step 5's per-element write (the two steps do not depend
+//      on each other's output), so this rejection also leaves out_codes untouched
 // `wide_row` has `n` elements. `incoming` is C26's left-associated product inputs so
 // far; `site_constant` is the artifact's KVC1 entry for this site. On Ok, `out_codes`
 // (n elements) and `*out_scale` are written; on any rejection, neither is touched.
@@ -151,15 +157,14 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 //      individually and by its own sign, to lie in int32's representable range
 // On Ok, `out_i32` (n elements) is written; on rejection it is not touched.
 //
-// `trace_hook_state` is accepted for interface symmetry with
-// RequantChainChecked and for the same per-model reason (D-SLM353): the
-// funnel's two entry points share one storage rule, and a future site added
-// here emits through the caller's own model handle rather than a process
-// static. No production path in this build emits a trace record from
-// NarrowRowChecked -- the parameter is unused today and defaults to nullptr so
-// every existing call compiles unchanged.
-SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32,
-                                    SslmTraceHookState* trace_hook_state = nullptr);
+// No production path in this build emits a trace record from
+// NarrowRowChecked, so it carries no `trace_hook_state` parameter (380b75f
+// review N4: a parameter a caller can set with no effect and no diagnostic is
+// worse than no parameter at all). When S3.3 gives this entry point a trace
+// emission, the parameter is added then, threaded through the caller's own
+// model handle the same way RequantChainChecked's already is (D-SLM353) --
+// not before, and not as a knob that does nothing in the meantime.
+SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32);
 
 // C30's derived-operand predicate (§7.2 second limb). The not-yet-built C30
 // derivation site (S3.3) forms (q_ln2, q_b, q_c) from a per-query carried scale via

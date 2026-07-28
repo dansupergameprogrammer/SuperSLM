@@ -58,9 +58,30 @@ namespace {
 // truncates through the unconditional cast below — executed at m = 2^31, one past
 // INT32_MAX, which produced a negative mantissa with no diagnostic. This function
 // does not check the precondition itself (it has no failure return); the caller,
-// RequantChainChecked, checks every operand against it before folding (step 0) and
-// returns CarriedScaleMantissaOutOfDomain rather than calling this function at all
-// when it does not hold.
+// RequantChainChecked, checks every operand against it before folding (step 0), and
+// checks the fold's own running product after every combine (380b75f review N1),
+// returning CarriedScaleMantissaOutOfDomain rather than calling this function again
+// -- or trusting its result -- when the precondition does not hold.
+//
+// **The renormalization's `m < 2^30` comparison is signed, and that is not a second
+// defect** (380b75f review N1's own question, resolved by construction below): a
+// negative high-mul result is always less than the positive floor, so it is
+// unconditionally doubled regardless of how large its magnitude already is --
+// executed at `CombineCarriedScale({INT32_MIN, 0}, {INT32_MAX, 0})`, which doubles
+// an already-int32-representable m = -2147483647 into m = -4294967294. But
+// doubling m and decrementing e in lockstep is EXACT and value-preserving
+// (`m * 2^e` is unchanged by the transform, in int64 arithmetic, whichever sign m
+// carries) -- the redundant double changes nothing this function itself computes
+// wrong. The only place the doubled value can do damage is the NEXT combine's
+// unconditional `static_cast<int32_t>` above, which is exactly the precondition
+// this function has always documented and exactly what the caller now checks
+// after every fold step, on `running`, before it is ever used as that next
+// operand. A magnitude-aware comparison here would suppress this specific
+// witness's overflow without removing the underlying gap: any other pair of
+// operands whose high-mul lands further outside [-2^30, 2^30) still doubles into
+// a value the same caller-side check must catch regardless. The fix belongs on
+// the channel every case funnels through -- the caller's own check on `running` --
+// not on this comparison.
 CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	const int32_t ma = static_cast<int32_t>(a.m);
 	const int32_t mb = static_cast<int32_t>(b.m);
@@ -73,8 +94,11 @@ CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	return CarriedScale{m, e};
 }
 
-// ac34677 S5's fix: the precondition CombineCarriedScale actually needs, checked
-// before it is ever called with an operand that would violate it.
+// ac34677 S5's fix: the precondition CombineCarriedScale actually needs. Checked
+// on every `incoming` factor and `site_constant` before folding starts (step 0),
+// and on the fold's own running product after every combine (380b75f review N1) --
+// `running` is CombineCarriedScale's left operand on every fold after the first,
+// and step 0 alone never sees it.
 bool CarriedScaleMantissaFitsInt32(const CarriedScale& c) {
 	return c.m >= static_cast<int64_t>(kInt32Min) && c.m <= static_cast<int64_t>(kInt32Max);
 }
@@ -117,32 +141,49 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	const NormalizedScale ns = NormalizeScale(d_prime);
 	const int64_t r = DynamicScaleReciprocal(ns.dn);
 
-	// Step 5: RequantTokenCodeWide per element, directly on the int64 row — never
-	// narrowed to int32 first (T-1254's fold).
-	for (size_t i = 0; i < n; ++i) {
-		out_codes[i] = RequantTokenCodeWide(wide_row[i], r, ns.s);
-	}
-
-	// Step 6: carried_scale_product in C26's pinned LEFT-ASSOCIATED order — the
+	// Step 6's own carried_scale_product, computed here -- ahead of step 5's
+	// per-element write below -- in C26's pinned LEFT-ASSOCIATED order: the
 	// incoming carried scale(s) first, then the site constant, then this token's
 	// own D'-factor. D' itself is already exact and canonical from NormalizeScale's
 	// own decomposition (Dn = D' << s for s >= 0, or D' >> 1 at the single s == -1
 	// case), so D' == Dn * 2^(-s) with no further rounding: the D'-factor is
 	// CarriedScale{ns.dn, -ns.s} exactly, needing no separate derivation.
+	//
+	// 380b75f review N1: step 0 above checks every `incoming` factor and
+	// `site_constant` against CombineCarriedScale's own precondition, but never
+	// `running` -- the fold's own left operand on every combine after the first,
+	// and exactly what step 0 cannot see because it does not exist until the fold
+	// runs. Checked here instead, after every fold step and before `running` is
+	// ever used as the next combine's operand or written to `*out_scale`: a fold
+	// whose own product drifts out of int32_t's range is rejected with the same
+	// CarriedScaleMantissaOutOfDomain status step 0 uses. Computing and validating
+	// the fold before step 5's loop -- rather than after, where the pinned step
+	// order would otherwise place it -- means this rejection path leaves out_codes
+	// untouched exactly like every other rejection (step 5 has not run yet); step
+	// 5 and step 6 do not depend on each other's outputs, so reordering their
+	// computation changes nothing step 5 itself does.
 	const CarriedScale d_prime_factor{ns.dn, -static_cast<int64_t>(ns.s)};
 	bool have_running = false;
+	bool fold_in_domain = true;
 	CarriedScale running{};
 	auto fold_in = [&](const CarriedScale& next) {
-		if (!have_running) {
-			running = next;
-			have_running = true;
-		} else {
-			running = CombineCarriedScale(running, next);
-		}
+		if (!fold_in_domain) return;
+		running = have_running ? CombineCarriedScale(running, next) : next;
+		have_running = true;
+		fold_in_domain = CarriedScaleMantissaFitsInt32(running);
 	};
 	for (const CarriedScale& factor : incoming) fold_in(factor);
 	fold_in(site_constant);
 	fold_in(d_prime_factor);
+	if (!fold_in_domain) {
+		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+	}
+
+	// Step 5: RequantTokenCodeWide per element, directly on the int64 row — never
+	// narrowed to int32 first (T-1254's fold).
+	for (size_t i = 0; i < n; ++i) {
+		out_codes[i] = RequantTokenCodeWide(wide_row[i], r, ns.s);
+	}
 	*out_scale = running;
 
 	// §11 S3.1a's instrumentation seam (trace_hook.h), attached to this
@@ -173,13 +214,7 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	return ChainResult{SslmForwardStatus::Ok};
 }
 
-SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32,
-                                    SslmTraceHookState* trace_hook_state) {
-	// trace_hook_state is accepted for interface symmetry with
-	// RequantChainChecked (checked_chain_funnel.h; D-SLM353) -- no production
-	// path here emits a trace record yet.
-	(void)trace_hook_state;
-
+SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32) {
 	// Step 1 (§7.2, §5.5): the row's signed extremes — NOT MaxAbsReduceWide, which
 	// expresses only magnitude and cannot see the asymmetric int32 target range.
 	int64_t row_max = 0;

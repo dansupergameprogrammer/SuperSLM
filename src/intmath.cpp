@@ -295,9 +295,11 @@ void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_mi
 	// n == 0 is in-contract (ac34677 S3): neither this primitive's header nor
 	// NarrowRowChecked's contract documents an n >= 1 precondition, and reading
 	// x[0] unconditionally is a null-pointer dereference on an empty row. Defined
-	// as (0, 0), matching MaxAbsReduceWide's own n == 0 convention (the empty
-	// reduction); NarrowRowChecked's C35 check accepts (0, 0) trivially and its
-	// subsequent NarrowAccumulatorToI32 call is a no-op loop over zero elements.
+	// as (0, 0) -- the shared wide-row convention at n == 0 is "no element is
+	// read", not "returns 0" (380b75f review N5: MaxAbsReduceWide's own n == 0
+	// result is 1, from its all-zero-row guard). NarrowRowChecked's C35 check
+	// accepts (0, 0) trivially and its subsequent NarrowAccumulatorToI32 call is
+	// a no-op loop over zero elements.
 	if (n == 0) {
 		*out_max = 0;
 		*out_min = 0;

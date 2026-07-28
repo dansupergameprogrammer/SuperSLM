@@ -172,9 +172,11 @@ int64_t MaxAbsReduceWide(const int64_t* x, size_t n);
 // check cannot gate this narrowing (§5.5).
 //
 // **`n == 0` is in-contract and defined** (ac34677 finding S3): both outputs are
-// written 0 and neither `x[0]` nor any other element is read, matching
-// MaxAbsReduceWide's own n == 0 convention (the empty reduction). Neither this
-// primitive nor NarrowRowChecked (checked_chain_funnel.h) documented an `n >= 1`
+// written 0 and neither `x[0]` nor any other element is read -- the convention
+// this wide-row primitive family shares at `n == 0` is "no element is read",
+// not "returns 0" (380b75f review N5: MaxAbsReduceWide's own `n == 0` result is
+// 1, from its all-zero-row guard, not 0). Neither this primitive nor
+// NarrowRowChecked (checked_chain_funnel.h) documented an `n >= 1`
 // precondition, and the prior implementation read `x[0]` before testing `n`,
 // which crashed on a null `x` with `n == 0`.
 void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_min);
