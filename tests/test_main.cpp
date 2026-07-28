@@ -5454,6 +5454,23 @@ static int RunCrashProbe(const std::string& name) {
 		            static_cast<long long>(out_max), static_cast<long long>(out_min));
 		return 0;
 	}
+	// N5, second half (Poirot 380b75f review): the S3 crash probe above drives
+	// RowBoundsWide directly; nothing drove NarrowRowChecked(nullptr, 0, out) --
+	// the actual caller the S3 finding was raised against, and the one path a
+	// null-row call reaches in production. NarrowRowChecked calls RowBoundsWide
+	// internally (checked_chain_funnel.cpp), so this probe also exercises S3's
+	// own fix at one further remove.
+	if (name == "narrow_row_checked_zero_len_null_ptr") {
+		int32_t out_i32[1] = {0};
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe narrow_row_checked_zero_len_null_ptr: calling "
+		            "NarrowRowChecked with a null wide-row pointer and n=0 (no n >= 1 "
+		            "precondition is documented on this entry point, N5)\n");
+		std::fflush(stdout);
+		superslm::NarrowRowChecked(nullptr, /*n=*/0, out_i32);
+		std::printf("PROBE DID NOT CRASH\n");
+		return 0;
+	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
 }
@@ -5515,6 +5532,27 @@ static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
 	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
 	          "RowBoundsWide(nullptr, 0, &out_max, &out_min) must not crash in any build "
 	          "configuration -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+}
+
+// N5, second half (Poirot 380b75f review): "the crash probe covers RowBoundsWide
+// directly; nothing drives NarrowRowChecked(nullptr, 0, out), which is the caller
+// the finding was raised against." This cell drives that exact call.
+// NarrowRowChecked(nullptr, 0, out_i32) resolves through three steps today: (1)
+// RowBoundsWide(nullptr, 0, ...) -- the S3 cell above's own case, already fixed
+// to return (0,0) without touching x; (2) the (0,0) result is trivially within
+// [INT32_MIN, INT32_MAX], so C35's own check accepts; (3) NarrowAccumulatorToI32
+// loops zero times over a null row, writing nothing. None of the three steps
+// dereferences a null pointer at n == 0, so this cell asserts kRanNoCrash
+// unconditionally, mirroring the sibling cell's own reasoning and the same
+// "n == 0 is in-contract, not a caller-ensures violation" convention.
+static void TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash() {
+	static const char* kProbeName = "narrow_row_checked_zero_len_null_ptr";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "NarrowRowChecked(nullptr, 0, out_i32) must not crash in any build configuration "
+	          "-- outcome was %s, child output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
 }
 
@@ -7328,30 +7366,34 @@ static void TestC30DomainDisagreementPointsAreExplicitlyPinned() {
 
 // --- SuperSLM_S3a_WalkingSkeleton_Plan.md Sec5.4, Sec7.2 (C34's derived-operand
 //     predicate), Sec11 S3.1: the CONTAINMENT relation between the load-time
-//     descriptor (already shipped, S-HARDEN-1) and the runtime no-UB domain the
-//     not-yet-built C34 predicate would encode. There is no production entry point
-//     for "the runtime predicate" itself (verified: no function of that shape is
-//     declared anywhere under include/superslm/ or src/) -- S3.2/S3.3's build. What
-//     IS real today is the load-time half (SslmModel::Load, driven below through the
-//     shipped MakeKvc1CompositionSection/BuildArtifact fixtures already exercising
-//     e=7/-80 accept and e=8/-81 reject elsewhere in this file) and the two NAMED
-//     constants the runtime predicate would check against
-//     (kSiluLutTermLeftShiftOverflowExponent, kRoundingDivideByPotExponentMaxI64,
-//     both already shipped, both public). This test computes the runtime no-UB
-//     domain's own oracle from those two real constants -- the exact formula Sec5.4
-//     specifies (shift = e + kSiluLutLog2K + kSiluLutQIdx on the upper branch,
-//     -e - kSiluLutLog2K - kSiluLutQIdx on the lower) -- and asserts CONTAINMENT
-//     against the real, executed load-time verdict at all four named boundary
-//     points plus their immediate neighbours, exactly as Sec5.4's own executed probe
-//     does. The oracle function below is TEST CODE ONLY: it stands in for the
-//     not-yet-built production predicate and is not a claim that any production
-//     entry point exists. ---
-static bool C34RuntimeNoUbDomainOracle(int e) {
+//     descriptor (already shipped, S-HARDEN-1) and the runtime no-UB domain C34's
+//     production predicate encodes.
+//
+//     CheckSiluCompositionScaleDomain (declared checked_chain_funnel.h:203, defined
+//     src/forward/checked_chain_funnel.cpp:240) is real and is what every cell below
+//     calls -- CLOSING the prior round's own finding (Poirot 380b75f review, N3):
+//     the containment cell used to call a test-local reimplementation instead of the
+//     production predicate, which let the two diverge with no failure. The formula
+//     below (IndependentSiluCompositionEDomainFormula) is retained ONLY as an
+//     independently-derived cross-check, computed from the same two named public
+//     constants the predicate's own shift-placement reasoning uses
+//     (kSiluLutTermLeftShiftOverflowExponent, kRoundingDivideByPotExponentMaxI64) --
+//     it is never itself the thing under test; every assertion below is against
+//     CheckSiluCompositionScaleDomain's own return value. ---
+static bool IndependentSiluCompositionEDomainFormula(int e) {
 	using namespace superslm;
 	const int shift_upper = e + kSiluLutLog2K + kSiluLutQIdx;
 	const int shift_lower = -e - kSiluLutLog2K - kSiluLutQIdx;
 	return shift_upper < kSiluLutTermLeftShiftOverflowExponent &&
 	       shift_lower <= kRoundingDivideByPotExponentMaxI64;
+}
+
+// The |m| axis's own independent formula (checked_chain_funnel.h:184-203's own
+// documented bound): the same symmetric kCompositionScaleMaxAbsM ceiling
+// SiluSigmoidQ15's term = code*m needs, a real public constant (silu_lut.h),
+// pinned equal to kInt32Max by model.cpp's own static_assert.
+static bool IndependentSiluCompositionMDomainFormula(int64_t m) {
+	return m >= -superslm::kCompositionScaleMaxAbsM && m <= superslm::kCompositionScaleMaxAbsM;
 }
 
 static bool C34LoadTimeAcceptsE(int64_t e) {
@@ -7364,16 +7406,19 @@ static bool C34LoadTimeAcceptsE(int64_t e) {
 	return status == SslmModelStatus::Ok;
 }
 
-static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
-	// Containment, swept: every e the real load-time gate accepts, the runtime no-UB
-	// oracle also accepts. Never asserted the other way (the runtime domain is
+static void TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor() {
+	using superslm::CheckSiluCompositionScaleDomain;
+	using superslm::SslmForwardStatus;
+	// Containment, swept: every e the real load-time gate accepts, the real
+	// production predicate also accepts at m=0 (in-domain on the |m| axis
+	// throughout). Never asserted the other way (the runtime domain is
 	// deliberately wider -- Sec5.4's whole point).
 	for (int e = -85; e <= 15; ++e) {
 		if (C34LoadTimeAcceptsE(e)) {
-			CHECK_MSG(C34RuntimeNoUbDomainOracle(e),
-			          "e=%d: load-time ACCEPTS but the runtime no-UB oracle rejects -- "
-			          "containment violated (Sec5.4)",
-			          e);
+			CHECK_MSG(CheckSiluCompositionScaleDomain(0, e) == SslmForwardStatus::Ok,
+			          "e=%d: load-time ACCEPTS but CheckSiluCompositionScaleDomain(0, e) == %s "
+			          "-- containment violated (Sec5.4)",
+			          e, superslm::SslmForwardStatusName(CheckSiluCompositionScaleDomain(0, e)));
 		}
 	}
 
@@ -7381,16 +7426,19 @@ static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
 	// e=7 both accept; e=8 the one point of difference (runtime accepts, load
 	// rejects); e=9 both reject (the overflow point itself, shift==26); e=-80 both
 	// accept (the shared exact lower endpoint), e=-81 both reject.
-	CHECK_MSG(C34LoadTimeAcceptsE(7) && C34RuntimeNoUbDomainOracle(7),
+	CHECK_MSG(C34LoadTimeAcceptsE(7) && CheckSiluCompositionScaleDomain(0, 7) == SslmForwardStatus::Ok,
 	          "e=7: both must accept (the load-time ceiling, shift 24)");
-	CHECK_MSG(!C34LoadTimeAcceptsE(8) && C34RuntimeNoUbDomainOracle(8),
-	          "e=8: load-time must reject and the runtime oracle must accept -- the one "
+	CHECK_MSG(!C34LoadTimeAcceptsE(8) && CheckSiluCompositionScaleDomain(0, 8) == SslmForwardStatus::Ok,
+	          "e=8: load-time must reject and the runtime predicate must accept -- the one "
 	          "point of difference Sec5.4 executes");
-	CHECK_MSG(!C34LoadTimeAcceptsE(9) && !C34RuntimeNoUbDomainOracle(9),
+	CHECK_MSG(!C34LoadTimeAcceptsE(9) &&
+	              CheckSiluCompositionScaleDomain(0, 9) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
 	          "e=9: both must reject (shift==26, the overflow point itself)");
-	CHECK_MSG(C34LoadTimeAcceptsE(-80) && C34RuntimeNoUbDomainOracle(-80),
+	CHECK_MSG(C34LoadTimeAcceptsE(-80) &&
+	              CheckSiluCompositionScaleDomain(0, -80) == SslmForwardStatus::Ok,
 	          "e=-80: both must accept (the shared exact lower endpoint)");
-	CHECK_MSG(!C34LoadTimeAcceptsE(-81) && !C34RuntimeNoUbDomainOracle(-81),
+	CHECK_MSG(!C34LoadTimeAcceptsE(-81) &&
+	              CheckSiluCompositionScaleDomain(0, -81) == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
 	          "e=-81: both must reject");
 
 	// The load-time ceiling's own static_assert names the overflow point exactly:
@@ -7400,6 +7448,69 @@ static void TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor() {
 	      superslm::kSiluLutTermLeftShiftOverflowExponent);
 	CHECK(9 + superslm::kSiluLutLog2K + superslm::kSiluLutQIdx ==
 	      superslm::kSiluLutTermLeftShiftOverflowExponent);
+}
+
+// N3 (Poirot 380b75f review): "the design's own sweep is realized on one of its two
+// axes" -- Sec5.4 specifies the differential cell swept over BOTH m in {2^30,
+// 2^31-1} and e in [-90, +12], both branch selections; the shipped cell (above)
+// swept e alone at m fixed to 0, a value in neither of the design's two named
+// mantissas, and never varied m at all. This cell realizes the missing axis:
+// CheckSiluCompositionScaleDomain(m, e) against the independently-derived formula
+// (both axes), across the design's own named sweep. Both named mantissas are
+// within kCompositionScaleMaxAbsM (2^30 comfortably, 2^31-1 exactly at the
+// boundary), so the |m| branch never fires within this sweep -- expected agreement
+// reduces to the e-formula alone for both mantissas, which this cell confirms
+// rather than assumes, closing the possibility of an m/e coupling bug the
+// design's own two-axis sweep exists to catch.
+static void TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep() {
+	using superslm::CheckSiluCompositionScaleDomain;
+	using superslm::SslmForwardStatus;
+	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
+	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1, == kCompositionScaleMaxAbsM
+	int checked = 0;
+	for (int64_t m : {kMLow, kMHigh}) {
+		CHECK(IndependentSiluCompositionMDomainFormula(m));  // both named mantissas are in-domain on the |m| axis
+		for (int e = -90; e <= 12; ++e) {
+			const bool expected_ok = IndependentSiluCompositionEDomainFormula(e);
+			const auto status = CheckSiluCompositionScaleDomain(m, e);
+			CHECK_MSG((status == SslmForwardStatus::Ok) == expected_ok,
+			          "m=%lld e=%d: CheckSiluCompositionScaleDomain == %s, want %s (independent "
+			          "e-domain formula, Sec5.4's own design sweep)",
+			          static_cast<long long>(m), e, superslm::SslmForwardStatusName(status),
+			          expected_ok ? "Ok" : "SiluCompositionScaleOutOfDomain");
+			++checked;
+		}
+	}
+	CHECK_MSG(checked == 2 * 103, "sweep must cover both named mantissas across e in [-90,12] "
+	                              "(103 values each) -- got %d checks, fixture regressed",
+	          checked);
+}
+
+// N3's other half: the predicate's entire |m| branch
+// (m < -kCompositionScaleMaxAbsM || m > kCompositionScaleMaxAbsM) had no cell of any
+// kind (380b75f review); Sec11 S3.1's own red-cell list names "a (m,e) outside C34's
+// no-UB domain is rejected" as required. e is held at 0 (comfortably in-domain)
+// throughout, isolating the assertion to the |m| axis alone.
+static void TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound() {
+	using superslm::CheckSiluCompositionScaleDomain;
+	using superslm::SslmForwardStatus;
+	using superslm::kCompositionScaleMaxAbsM;
+
+	CHECK_MSG(CheckSiluCompositionScaleDomain(kCompositionScaleMaxAbsM, 0) == SslmForwardStatus::Ok,
+	          "m == kCompositionScaleMaxAbsM (the positive boundary, in-domain): must accept");
+	CHECK_MSG(CheckSiluCompositionScaleDomain(kCompositionScaleMaxAbsM + 1, 0) ==
+	              SslmForwardStatus::SiluCompositionScaleOutOfDomain,
+	          "m == kCompositionScaleMaxAbsM + 1: must reject SiluCompositionScaleOutOfDomain "
+	          "(the |m| branch this cell exists to cover)");
+	CHECK_MSG(CheckSiluCompositionScaleDomain(-kCompositionScaleMaxAbsM, 0) == SslmForwardStatus::Ok,
+	          "m == -kCompositionScaleMaxAbsM (the negative boundary, in-domain): must accept");
+	// The bound is symmetric on kCompositionScaleMaxAbsM (== kInt32Max), NOT on
+	// kInt32Min -- INT32_MIN is one past the negative boundary and must reject,
+	// the asymmetric case a naive int32-range check would miss.
+	CHECK_MSG(CheckSiluCompositionScaleDomain(superslm::kInt32Min, 0) ==
+	              SslmForwardStatus::SiluCompositionScaleOutOfDomain,
+	          "m == INT32_MIN (one past -kCompositionScaleMaxAbsM, since the bound is symmetric "
+	          "on kInt32Max rather than kInt32Min): must reject SiluCompositionScaleOutOfDomain");
 }
 
 // ---------------------------------------------------------------------------
@@ -7775,6 +7886,109 @@ static void TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendor
 	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 }
 
+// N1 (Poirot 380b75f confirmation review): step 0 (checked_chain_funnel.cpp:90-102)
+// checks every `incoming` factor and `site_constant` against
+// CarriedScaleMantissaFitsInt32 before the fold runs, but never checks `running` --
+// the fold's own left operand on every combine after the first, and exactly what
+// CombineCarriedScale receives. CombineCarriedScale's renormalization
+// (`if (m < (int64_t{1} << 30)) { m <<= 1; ... }`) is a SIGNED comparison, so a
+// negative high-mul result is doubled rather than renormalized, and the next fold's
+// unconditional `static_cast<int32_t>(a.m)` silently truncates whatever that
+// produced. This cell pins the header's own documented promise
+// (checked_chain_funnel.h:42-51: "returning CarriedScaleMantissaOutOfDomain rather
+// than truncating silently") against the two in-domain endpoint factors the
+// reviewer's own probe used (P1/P2): both accepted by step 0, both exactly at the
+// endpoints the precondition names, and their fold's own high-mul result is
+// {m=-4294967294} -- outside int32 -- which the next fold's cast turns into {m=2}.
+static void TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	// Reviewer's own executed witness (380b75f review Sec4, P1/P2): both factors
+	// are individually in-domain (each fits int32_t exactly, at its own endpoint),
+	// so step 0 accepts both; only their FOLDED PRODUCT escapes int32.
+	const CarriedScale incoming[] = {
+	    CarriedScale{/*m=*/INT64_C(-2147483648), /*e=*/0},  // INT32_MIN, endpoint-in-domain
+	    CarriedScale{/*m=*/INT64_C(2147483647), /*e=*/0},   // INT32_MAX, endpoint-in-domain
+	};
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};  // canonical, neutral
+
+	int8_t out_codes[kWideT1254WitnessRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};  // poison
+	auto result = superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+	                                              std::span<const CarriedScale>(incoming, 2),
+	                                              site_constant, out_codes, &out_scale);
+
+	CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	          "RequantChainChecked({INT32_MIN,0},{INT32_MAX,0}) status == %s, want "
+	          "CarriedScaleMantissaOutOfDomain (checked_chain_funnel.h:42-51's own documented "
+	          "promise) -- both factors are individually in-domain, so this can only be caught "
+	          "by checking the FOLDED running product, which step 0 does not do today; a "
+	          "status of Ok here means the fold's own out-of-int32 result silently truncated "
+	          "through CombineCarriedScale's unconditional cast instead of being rejected "
+	          "(380b75f review Sec4, P1/P2: folds to out_scale={m=2, e=91})",
+	          superslm::SslmForwardStatusName(result.status));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "on the documented CarriedScaleMantissaOutOfDomain rejection, out_codes must be "
+	          "untouched (\"computes nothing\", same contract every other rejection path holds)");
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "on the documented CarriedScaleMantissaOutOfDomain rejection, *out_scale must be "
+	          "untouched -- got {m=%lld, e=%lld} (the review's own witness: an unguarded fold "
+	          "silently produces {m=2, e=91} here instead of leaving the poison value alone)",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+}
+
+// N1's compounding half: CarriedScaleMantissaOutOfDomain appears zero times in
+// tests/ (380b75f review Sec4) -- an entirely new status and an entirely new
+// funnel step (step 0) shipped with no cell of any kind, even for the case step 0
+// ALREADY guards today (a single `incoming` factor whose own mantissa does not fit
+// int32_t, never mind the running-product gap the cell above pins). This cell is
+// independent of the gap above: it exercises step 0's existing, already-correct
+// per-operand check, and is expected to pass today.
+static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	// A single `incoming` factor one past INT32_MAX -- step 0's own precondition
+	// check (CarriedScaleMantissaFitsInt32) should catch this before any fold runs.
+	{
+		const CarriedScale incoming[] = {CarriedScale{/*m=*/INT64_C(2147483648), /*e=*/0}};
+		int8_t out_codes[kWideT1254WitnessRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto result = superslm::RequantChainChecked(
+		    kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+		    std::span<const CarriedScale>(incoming, 1), site_constant, out_codes, &out_scale);
+		CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+		          "incoming[0].m == INT32_MAX+1: RequantChainChecked status == %s, want "
+		          "CarriedScaleMantissaOutOfDomain (step 0's own per-operand check)",
+		          superslm::SslmForwardStatusName(result.status));
+		CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+		          "incoming[0].m == INT32_MAX+1: out_codes and *out_scale must be untouched on "
+		          "rejection");
+	}
+	// site_constant one past INT32_MIN on the negative side -- the sibling operand
+	// step 0 also checks.
+	{
+		const CarriedScale site_out_of_domain{/*m=*/INT64_C(-2147483649), /*e=*/0};
+		int8_t out_codes[kWideT1254WitnessRowLen] = {INT8_C(-99), INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto result = superslm::RequantChainChecked(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen,
+		                                              std::span<const CarriedScale>{}, site_out_of_domain,
+		                                              out_codes, &out_scale);
+		CHECK_MSG(result.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+		          "site_constant.m == INT32_MIN-1: RequantChainChecked status == %s, want "
+		          "CarriedScaleMantissaOutOfDomain (step 0's own per-operand check)",
+		          superslm::SslmForwardStatusName(result.status));
+		CHECK_MSG(out_codes[0] == INT8_C(-99) && out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+		          "site_constant.m == INT32_MIN-1: out_codes and *out_scale must be untouched on "
+		          "rejection");
+	}
+}
+
 // S9: the trace instrument's REDUCED funnel-level form (Sec11 S3.1a's own
 // Cell 1 and Cell 3, narrowed to the one production call site the hook is
 // wired to today -- RequantChainChecked itself, per the routing option
@@ -7934,21 +8148,20 @@ static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookIn
 // "each model handle owns its own trace-hook state; no state is shared across
 // model handles."
 //
-// EXPECTED RED against today's implementation. src/trace_hook.cpp:13-14 holds
-// exactly one process-wide (fn, user) pair, so installing a hook for one
-// model handle silently redirects every OTHER handle's already-installed
-// hook to the newest installation. Today's SslmSetTraceHook/
-// SslmTraceHookInstalled/SslmEmitChainTrace/SslmEmitKvLandingTrace take no
-// model parameter at all (Poirot ac34677 review, finding S8) -- that omission
-// is exactly the defect this cell exists to catch: "handle A" and "handle B"
-// below are represented by two independent (hook fn, sink) pairs, standing in
-// for the per-model trace state the ruling's corrected storage requires
-// (Sec3: "hook state is owned by the model handle... never through a
-// process-wide static"). Once that storage lands, a hook installed through
-// handle A's own accessor must not be reachable, or disturbable, from any
-// call made through handle B, and vice versa; this cell must then be updated
-// to thread an actual model handle through each half instead of standing in
-// with two sinks.
+// GREEN as of commit 380b75f: the trace hook's storage was converted from a
+// process-wide static to per-handle state (SslmModelView::trace_hook, model.h;
+// SslmTraceHookState, trace_hook.h), and SslmSetTraceHook/SslmTraceHookInstalled/
+// SslmEmitChainTrace/SslmEmitKvLandingTrace all take that state as an explicit
+// parameter rather than touching a file static. "handle A" and "handle B" below
+// are represented by two independent (hook fn, sink) pairs standing in for the
+// per-model trace state each SslmModelView::trace_hook now carries; a hook
+// installed through handle A's own accessor is not reachable, or disturbable,
+// from any call made through handle B, and vice versa. This cell is
+// mutation-checked, not merely observed passing: reverting
+// src/trace_hook.cpp to the prior process-global (fn, user) pair while keeping
+// this cell's own two-state-instance call shape makes it fail at exactly its
+// crux assertions (Poirot 380b75f review, M6) -- confirming the cell would
+// catch a regression back to shared storage, not just that it passes today.
 static void TestTraceHookCrossModelHandleIsolation() {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
@@ -8029,6 +8242,58 @@ static void TestTraceHookCrossModelHandleIsolation() {
 	          "second call -- got sink_b.size()=%zu, want 1. A count of 2 means handle A's call "
 	          "was silently emitted through handle B's hook instead of its own.",
 	          sink_b.size());
+}
+
+// N6 (Poirot 380b75f review): SslmModelAccess::LoadImpl (src/model.cpp:764) opens
+// with `out = SslmModelView{}`, whose move-assign runs MoveFrom and copies a
+// default-constructed (no-hook) trace_hook over whatever `out` already carried.
+// Loading a new artifact onto a view that already has a hook installed therefore
+// uninstalls it, with no return value and no diagnostic; model.h:359-370 says only
+// "Not populated by SslmModel::Load", which reads as "left alone" rather than
+// "cleared."
+//
+// PINNED HERE: clearing is the correct behaviour, and is pinned rather than
+// changed. Every other rejection path in this same function resets `out` to a
+// fresh SslmModelView with the identical comment "fail closed -- never a partial
+// view" (src/model.cpp); the unconditional reset at Load's own entry is the same
+// discipline applied to the success path -- a caller of Load always receives a
+// wholly fresh view, artifact state and any caller-attached instrumentation both
+// reset, never a view that is part fresh (the new artifact's sections) and part
+// stale (a hook installed against whatever was loaded before). Preserving the
+// hook across a reload would require Load to special-case exactly one field
+// during its own reset, which nothing in the design or the plan asks for. A
+// caller that wants trace coverage across a reload reinstalls the hook after
+// Load returns, the same way it would attach the hook the first time.
+static void TestSslmModelLoadClearsPreviouslyInstalledTraceHook() {
+	using namespace superslm_test;
+	using superslm::SslmChainTraceRecord;
+	using superslm::SslmKvLandingTraceRecord;
+
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "first Load must succeed: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+
+	int dummy_user = 0;
+	superslm::SslmSetTraceHook(
+	    view.trace_hook,
+	    +[](const SslmChainTraceRecord*, const SslmKvLandingTraceRecord*, void*) {}, &dummy_user);
+	CHECK_MSG(superslm::SslmTraceHookInstalled(view.trace_hook),
+	          "SslmSetTraceHook must install the hook before the reload under test");
+
+	// Re-Load a second, independently-built valid artifact onto the SAME view.
+	auto built2 = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
+	status = SslmModel::Load(built2.bytes.data(), built2.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "second Load (same view) must succeed: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+
+	CHECK_MSG(!superslm::SslmTraceHookInstalled(view.trace_hook),
+	          "SslmModel::Load must clear a previously-installed trace hook on the view it loads "
+	          "into (pinned as the correct behaviour -- Load always produces a wholly fresh view, "
+	          "matching the \"fail closed, never a partial view\" reset every other path in this "
+	          "function already uses) -- got the hook still installed after a second Load");
 }
 
 int main(int argc, char** argv) {
@@ -8295,9 +8560,22 @@ int main(int argc, char** argv) {
 	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
 
 	// --- D-SLM353 / SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md Sec6:
-	//     the cross-model isolation cell. EXPECTED RED against the current
-	//     process-global trace hook storage. ---
+	//     the cross-model isolation cell -- storage is model-scoped and green
+	//     (Poirot 380b75f review O4; mutation-checked against a reversion to
+	//     process-global storage by M6, which fails this cell's own two crux
+	//     assertions). ---
 	TestTraceHookCrossModelHandleIsolation();
+
+	// --- Poirot review 380b75f (2026-07-28) test-coverage findings: N1 (the
+	//     funnel's own running product, RED against today's unguarded fold);
+	//     N5's second half (a null-row cell for NarrowRowChecked); N6 (Load
+	//     clears a previously-installed trace hook, pinned as the correct
+	//     behaviour). Curie's own record: Claude/Curie/superslm-s3.1-checked-
+	//     chain-funnel-test-design-2026-07-28.md Sec12. ---
+	TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated();
+	TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain();
+	TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash();
+	TestSslmModelLoadClearsPreviouslyInstalledTraceHook();
 
 	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
 	TestISqrt();
@@ -8495,11 +8773,14 @@ int main(int argc, char** argv) {
 	TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep();
 	TestC30DomainDisagreementPointsAreExplicitlyPinned();
 
-	// --- S3.1 (§5.4, §7.2, D-SLM318): the C34 derived-operand predicate's
-	//     containment cell, realized against the real load-time gate and the two
-	//     real named constants -- see the test-design record for what remains
-	//     blocked on the not-yet-built runtime predicate itself. ---
-	TestC34RuntimeDomainOracleContainsTheShippedLoadTimeDescriptor();
+	// --- S3.1 (§5.4, §7.2, D-SLM318): the C34 derived-operand predicate
+	//     (CheckSiluCompositionScaleDomain, checked_chain_funnel.h/.cpp) is real
+	//     and every cell below calls it directly -- N3 (Poirot 380b75f review)
+	//     closed: the containment cell used to call a test-local
+	//     reimplementation instead. ---
+	TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor();
+	TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep();
+	TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
