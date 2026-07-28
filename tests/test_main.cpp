@@ -8475,77 +8475,58 @@ static void TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision() 
 // (`FloorDivI64(h[i]<<2*NORM_FRAC_BITS, root) * g[i]`) is never exposed by its
 // public signature -- only out_codes/*out_scale escape, and both are proven
 // invariant to the primitive's own correctness (see the correction below).
-// This namespace recovers the private wide row by shadow-recompiling
-// src/forward_sites.cpp's own, unmodified, CURRENT file content a second time
-// into this translation unit, under a distinct namespace
-// (test_shadow_c31::superslm) so its symbols never collide with the real,
-// library-linked ::superslm::* copy every other test in this file already
-// exercises. This reads src/forward_sites.cpp; it never writes it --
-// tests/ remains this campaign's only writable surface.
-//
-// The one substitution active while this second copy is compiled renames
-// RmsNormSite's own call to RequantChainChecked to a hand-written spy
-// (RequantChainCheckedSpy, just below, same namespace) that captures the
-// exact `wide_row` pointer RmsNormSite passes -- full int64 precision, before
-// RequantChainChecked's own quantization ever runs -- then forwards the call
-// UNCHANGED to the real ::superslm::RequantChainChecked, so ChainResult/
-// out_codes/*out_scale come back exactly as the real funnel computes them
-// (this shadow only observes; it never alters what gets computed or
-// returned). FloorDivI64 itself is deliberately NOT renamed: this second
-// copy's own FloorDivI64 is this pass's read of the CURRENT file content,
-// mutated or not, and it is exactly what test_shadow_c31::superslm::
-// RmsNormSite calls to build its wide row -- so a mutation to that function's
-// body changes the captured wide_row precisely as it would change the real,
-// otherwise-unobservable, production RmsNormSite's own internal one.
-namespace test_shadow_c31 {
+// This cell recovers the wide row from the emitted trace record instead
+// (S3.1a, trace_hook.h; D-SLM362, wired into RmsNormSite/EmbedEntry per
+// Claude/Brunel/superslm-s3.2-forward-move-and-trace-emission-build-2026-07-28.md
+// Job 2): RmsNormSite forwards its trailing site/token_index/trace_hook_state
+// parameters, unchanged, into its own internal RequantChainChecked call, and
+// that call's own emission block (checked_chain_funnel.cpp:205,
+// `record.x_int = std::span<const int64_t>(wide_row, n)`) builds the trace
+// record's `x_int` from the SAME `wide_row` pointer RmsNormSite passed in --
+// full int64 precision, strictly after every write RequantChainChecked itself
+// performs (checked_chain_funnel.h's own documented emission-ordering
+// contract) and never altering it. This is the real, library-linked
+// ::superslm::RmsNormSite -- no shadow recompile of production source, no
+// spy substituted for RequantChainChecked. The hook installed below only
+// observes what the site already computed; `x_int` is copied into owned
+// storage before the call returns, since the span is a non-owning view valid
+// only for the duration of the hook call (trace_hook.h's own documented
+// lifetime).
+namespace test_t1267_trace_capture {
 
-using ::superslm::CarriedScale;
-using ::superslm::ChainResult;
-using ::superslm::ISqrt;
-using ::superslm::MultiplyByQuantizedMultiplier;
-using ::superslm::RoundingDivideByPOT;
-using ::superslm::SslmForwardStatus;
-using ::superslm::SslmTraceHookState;
-
-// Reset by the test before each RmsNormSite call under test; captures the
-// wide_row of the LAST RequantChainChecked-slot invocation this shadow copy
-// made (RmsNormSite makes exactly one per call; EmbedEntry -- unused here,
-// but recompiled alongside it below -- would make its own if exercised).
-struct CapturedChainCall {
-	std::vector<int64_t> wide_row;
+struct CapturedRecord {
+	std::vector<int64_t> x_int;
 	bool called = false;
 };
-inline CapturedChainCall g_captured_chain_call;
+inline CapturedRecord g_captured;
 
-inline ChainResult RequantChainCheckedSpy(const int64_t* wide_row, size_t n,
-                                           std::span<const CarriedScale> incoming,
-                                           CarriedScale site_constant, int8_t* out_codes,
-                                           CarriedScale* out_scale,
-                                           std::string_view site = {}, size_t token_index = 0,
-                                           SslmTraceHookState* trace_hook_state = nullptr) {
-	g_captured_chain_call.wide_row.assign(wide_row, wide_row + n);
-	g_captured_chain_call.called = true;
-	return ::superslm::RequantChainChecked(wide_row, n, incoming, site_constant, out_codes,
-	                                        out_scale, site, token_index, trace_hook_state);
+// Matches SslmTraceHookFn exactly (trace_hook.h). Exactly one of the two
+// record pointers is non-null per call -- for RmsNormSite's own chain-funnel
+// emission, the chain record, with the K/V-landing pointer null
+// (trace_hook.h's own per-call contract) -- and this pin only reads that one.
+inline void CaptureChainTrace(const superslm::SslmChainTraceRecord* chain,
+                               const superslm::SslmKvLandingTraceRecord* /*kv*/, void* user) {
+	(void)user;
+	if (chain != nullptr) {
+		g_captured.x_int.assign(chain->x_int.begin(), chain->x_int.end());
+		g_captured.called = true;
+	}
 }
 
-#define RequantChainChecked RequantChainCheckedSpy
-#include "../src/forward_sites.cpp"
-#undef RequantChainChecked
-
-}  // namespace test_shadow_c31
+}  // namespace test_t1267_trace_capture
 
 // Sec4.2's mechanism residual (D-SLM360, filed T-1267): RmsNormSite's own use
 // of FloorDivI64, pinned at the wide-row level (before quantization) via the
-// shadow copy above, against the SAME kC31SiteElements witness the next test
-// uses -- its `floor_wide` values are independently derived (test-design
-// record Sec3.2/Sec6: computed by executing the vendored Python reference,
-// never by calling FloorDivI64 itself), so a mutated FloorDivI64 cannot drag
-// both sides of this comparison the same way it drags a comparison that
-// calls FloorDivI64 on both ends.
+// emitted trace record above, against the SAME kC31SiteElements witness the
+// next test uses -- its `floor_wide` values are independently derived
+// (test-design record Sec3.2/Sec6: computed by executing the vendored Python
+// reference, never by calling FloorDivI64 itself), so a mutated FloorDivI64
+// cannot drag both sides of this comparison the same way it drags a
+// comparison that calls FloorDivI64 on both ends.
 static void TestRmsNormSiteC31UsesFloorDivisionMechanismPin() {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
 
 	std::vector<int8_t> h(kC31SiteHiddenSize, 0);
 	std::vector<int32_t> g(kC31SiteHiddenSize, 0);
@@ -8558,33 +8539,39 @@ static void TestRmsNormSiteC31UsesFloorDivisionMechanismPin() {
 	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
 	const CarriedScale incoming_scale{/*m=*/INT64_C(1073741824), /*e=*/0};
 
-	test_shadow_c31::g_captured_chain_call = test_shadow_c31::CapturedChainCall{};
+	test_t1267_trace_capture::g_captured = test_t1267_trace_capture::CapturedRecord{};
+	SslmTraceHookState trace_hook_state{};
+	superslm::SslmSetTraceHook(trace_hook_state, &test_t1267_trace_capture::CaptureChainTrace,
+	                            /*user=*/nullptr);
 
 	std::vector<int8_t> out_codes(kC31SiteHiddenSize, INT8_C(-99));  // poison
 	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};              // poison
-	auto result = test_shadow_c31::superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize,
-	                                                       incoming_scale, site_constant,
-	                                                       out_codes.data(), &out_scale);
+	auto result = superslm::RmsNormSite(h.data(), g.data(), kC31SiteHiddenSize, incoming_scale,
+	                                      site_constant, out_codes.data(), &out_scale,
+	                                      /*site=*/"t1267.rmsnorm_c31", /*token_index=*/0,
+	                                      &trace_hook_state);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
-	          "RmsNormSite (shadow copy, T-1267) status == %s, want Ok",
+	          "RmsNormSite (T-1267, traced) status == %s, want Ok",
 	          superslm::SslmForwardStatusName(result));
-	CHECK_MSG(test_shadow_c31::g_captured_chain_call.called,
-	          "RmsNormSite must reach RequantChainChecked exactly once per call -- "
-	          "the funnel-slot spy (T-1267) was never invoked");
-	if (result == SslmForwardStatus::Ok && test_shadow_c31::g_captured_chain_call.called) {
-		const std::vector<int64_t>& wide = test_shadow_c31::g_captured_chain_call.wide_row;
+	CHECK_MSG(test_t1267_trace_capture::g_captured.called,
+	          "RmsNormSite must reach RequantChainChecked exactly once per call and emit a "
+	          "chain trace record through the installed hook -- the trace-record capture "
+	          "(T-1267) was never invoked");
+	if (result == SslmForwardStatus::Ok && test_t1267_trace_capture::g_captured.called) {
+		const std::vector<int64_t>& wide = test_t1267_trace_capture::g_captured.x_int;
 		CHECK_MSG(wide.size() == static_cast<size_t>(kC31SiteHiddenSize),
-		          "captured wide_row size == %zu, want %d", wide.size(), kC31SiteHiddenSize);
+		          "captured trace record's x_int size == %zu, want %d", wide.size(),
+		          kC31SiteHiddenSize);
 		if (wide.size() == static_cast<size_t>(kC31SiteHiddenSize)) {
 			for (size_t i = 0; i < kC31SiteElementsCount; ++i) {
 				const C31SiteElement& e = kC31SiteElements[i];
 				const size_t idx = static_cast<size_t>(e.index);
 				CHECK_MSG(wide[idx] == e.floor_wide,
-				          "RmsNormSite's own internal wide_row[%d] == %lld, want %lld "
-				          "(the independently-derived floor-based value, diverges=%s -- "
-				          "T-1267's mechanism pin on the site's actual USE of "
-				          "FloorDivI64, checked before RequantChainChecked's own "
-				          "quantization ever runs)",
+				          "RmsNormSite's own internal wide_row[%d], read from the emitted "
+				          "trace record's x_int, == %lld, want %lld (the independently-"
+				          "derived floor-based value, diverges=%s -- T-1267's mechanism pin "
+				          "on the site's actual USE of FloorDivI64, checked before "
+				          "RequantChainChecked's own quantization ever runs)",
 				          e.index, static_cast<long long>(wide[idx]), e.floor_wide,
 				          e.diverges ? "true" : "false");
 			}
