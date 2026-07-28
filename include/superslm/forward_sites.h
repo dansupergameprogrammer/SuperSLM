@@ -1,20 +1,27 @@
-// SuperSLM S3.2 site compositions — the weightless and projection sites
-// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2; C31, C24/C25, C28, F-S3-8).
+// SuperSLM S3.2/S3.3 site compositions — the weightless/projection sites and
+// the attention-interior's landing/clamp sites
+// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
+// F-S3-8, C27, C33).
 //
 // Declares the RMSNorm site (C31's floor-divide construction, §5.1), the WSC1
 // identity/near-identity fold-apply dispatch (C24/C25), the C28 bias-
-// reconciliation compute (§4.4), and the embed entry with its host-supplied
-// token-id validation (F-S3-8, §4.8). C28's own (q_B, e_a) domain predicate,
-// CheckRoundingDivideByPotExponentDomain, is declared in checked_chain_funnel.h
-// instead — it is a derived-operand predicate in the funnel's own §7.2 second-limb
-// family, not a site composition, and re-stages a declaration that already lived
-// there once (see that header's own comment).
+// reconciliation compute (§4.4), the embed entry with its host-supplied
+// token-id validation (F-S3-8, §4.8), the K/V landing composite's rescale
+// (C27, §8.1), and C33's post-rotation clamp (§5.3). C28's own (q_B, e_a)
+// domain predicate, CheckRoundingDivideByPotExponentDomain, and C32's own
+// softmax-row width predicate, CheckSoftmaxRowWidthDomain, are declared in
+// checked_chain_funnel.h instead — both are derived-operand predicates in the
+// funnel's own §7.2 second-limb family, not site compositions.
 //
-// The declarations below are the approved API surface (Claude/Curie/
-// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
-// §4/§9). Bodies in src/forward/forward_sites.cpp are the real construction,
-// green against the red suite authored in tests/test_main.cpp (same record
-// §11).
+// The S3.2 declarations' bodies (RmsNormSite, ApplyWeightScaleFold,
+// BiasReconcile, EmbedEntry, FloorDivI64) are the real green construction
+// (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
+// 2026-07-28.md §4/§9). The S3.3 declarations below (LandingRescale,
+// ClampRopeCode) are deliberately-wrong red-first STUBS, staged from
+// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
+// §6.1/§6.3/§11 — a follow-up Curie pass authors the red suite that compiles
+// and fails against them; a later Brunel pass replaces each body with its
+// real composition.
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob
@@ -98,6 +105,35 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // no such check, matching every other funnel-adjacent compute in this tree
 // (the domain check and the compute are separate calls).
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
+
+// C27's K/V landing composite (§8.1, §11 S3.3 §6.1): the reference's
+// `residual_reconcile(branch_code, m_a, r_t, e_a, e_t)` — the reciprocal-side
+// reconciliation that lands a K/V branch value at its site's static per-head
+// scale. Composition (not yet ported anywhere in this tree):
+//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
+// C3's tie rule (ties away from zero), load-bearing here because branch_code is
+// signed. `(m_a, e_a)` is the incoming carried mantissa/exponent shared by the
+// K and V branches at this site (the norm output); `(r_t, e_t)` are the
+// OFFLINE per-(head,projection) reciprocal and exponent read straight from the
+// artifact's `KvLandingReciprocals`/`KvLandingScales` sections — no runtime
+// reciprocal exists at this site. The wide intermediate is C22-class
+// (~2^94), carried the same way C22's own composition is (a 128-bit
+// intermediate, never a narrower one) — this function's REAL body is where
+// that carry is built; this declaration states the contract only. The call
+// site composes `clamp(LandingRescale(...), -127, 127)` (§8.1); the clamp is
+// the caller's, matching C33's own clamp-is-the-caller's convention below.
+int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
+                        int64_t e_t);
+
+// C33's post-rotation clamp (§5.3, §11 S3.3 §6.2 step 3): `RopeApplyPair`
+// (intmath.h) returns its rotated pair UNCLAMPED and int64-wide by its own
+// header's own contract ("clamping to the activation format is the caller's
+// (site composition)") — this is that caller. Clamps `raw` (one component of
+// a `RopePair`) to the pinned code range `[-127, 127]`, NOT the int8 storage
+// range `[-128, 127]` — the two ranges differ at exactly the one value -128,
+// and the design's own discriminating fixture (§5.3) exists to catch an
+// implementation that clamps at the wrong one.
+int64_t ClampRopeCode(int64_t raw);
 
 // The forward's entry (C23, §6.1, F-S3-8): validates `token_id` against
 // `[0, vocab_size)` BEFORE any row of `embed_weights` is read (§4.8's standing

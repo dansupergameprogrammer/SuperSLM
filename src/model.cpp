@@ -109,6 +109,8 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
 		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
 		case SslmModelStatus::BiasCodeOutOfDomain: return "BiasCodeOutOfDomain";
+		case SslmModelStatus::KvLandingScaleOutOfDomain: return "KvLandingScaleOutOfDomain";
+		case SslmModelStatus::KvLandingReciprocalOutOfDomain: return "KvLandingReciprocalOutOfDomain";
 		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
 		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
 	}
@@ -727,6 +729,50 @@ SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& biases, std::stri
 	return SslmModelStatus::Ok;
 }
 
+// KvLandingScales'/KvLandingReciprocals' load-time value-domain descriptors
+// (SuperSLM_S3a_WalkingSkeleton_Plan.md §7.2a third limb, §8.1; S3.3;
+// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
+// §4.5/§6.5). `R_t` IS, by the plan's own text, "C27's reciprocal" of the
+// target mantissa -- so any artifact-carried value outside what
+// `DynamicScaleReciprocal` can ever produce is definitionally not a
+// reciprocal of anything. Curie's record derives the bound by execution,
+// calling the real primitive at its own domain's two endpoints:
+//   DynamicScaleReciprocal(2^30)     == 4294967296  (== 2^32, the max)
+//   DynamicScaleReciprocal(2^31 - 1) == 2147483649  (== 2^31 + 1, the min)
+// `kKvLandingScaleMantissaMin/Max` is the canonical carried-mantissa range
+// every other KVC1 scale mantissa in this tree already uses (the funnel's own
+// CombineCarriedScale precondition; the format's canonical-scale convention).
+constexpr int64_t kKvLandingScaleMantissaMin = int64_t{1} << 30;              // 2^30
+constexpr int64_t kKvLandingScaleMantissaMax = (int64_t{1} << 31) - 1;        // 2^31 - 1
+constexpr int64_t kKvLandingReciprocalMin = (int64_t{1} << 31) + 1;           // 2^31 + 1
+constexpr int64_t kKvLandingReciprocalMax = int64_t{1} << 32;                 // 2^32
+
+// THESE ARE STUBS (S3.3 red-phase): each accepts every entry unconditionally,
+// rather than comparing any element against its derived bound. Written this
+// way, rather than as a fixed-wrong rejection (the sentinel style every
+// SslmForwardStatus-returning stub in this tree uses), because both are wired
+// into ValidateSectionValues below, which every existing SslmModel::Load call
+// already exercises on any artifact carrying a KvLandingScales/
+// KvLandingReciprocals section -- an unconditionally-rejecting stub would fail
+// every currently-green fixture that loads one (including
+// TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips and
+// MakeMinimalValidKvc1's own gamma row, tests/test_main.cpp), not only the
+// not-yet-authored hostile-value cell each stub is staged for. This is
+// ValidateBiasesDomain's own S3.2 precedent, applied identically here. A
+// follow-up Brunel pass replaces each body with the real
+// `kKvLandingScaleMantissaMin <= m_t <= kKvLandingScaleMantissaMax` /
+// `kKvLandingReciprocalMin <= R_t <= kKvLandingReciprocalMax` comparison over
+// every entry.
+SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& /*kv_landing_scales*/,
+                                               std::string* /*err*/) {
+	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+}
+
+SslmModelStatus ValidateKvLandingReciprocalsDomain(
+    const SslmKeyedConstants& /*kv_landing_reciprocals*/, std::string* /*err*/) {
+	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+}
+
 // S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
 // "enforced at a named API" -- this is that API. The two blobs are parsed by
 // entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
@@ -755,9 +801,12 @@ SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::s
 // AFTER every present section's structural sub-parse has already succeeded
 // (Load's section loop) and BEFORE `out` is exposed to the caller — the
 // boundary where an artifact value enters and can still be refused.
-// KvLandingScales/KvLandingReciprocals are deliberately not checked here
-// (D-SLM142: pending-consumer rows — no consumer exists in the tree yet, so
-// no true domain exists to declare).
+// KvLandingScales/KvLandingReciprocals are now wired below
+// (ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain) as part
+// of S3.3's own header contract -- D-SLM142's "pending-consumer" status is
+// superseded (S3.3 is the C27 consumer); both are STUBS as staged (see each
+// function's own comment) and enforce no bound in practice until the S3.3
+// green phase.
 SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* err) {
 	if (view.has_composition_constants) {
 		const SslmModelStatus s = ValidateCompositionConstantsDomain(view.composition_constants, err);
@@ -773,6 +822,14 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	}
 	if (view.has_biases) {
 		const SslmModelStatus s = ValidateBiasesDomain(view.biases, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_kv_landing_scales) {
+		const SslmModelStatus s = ValidateKvLandingScalesDomain(view.kv_landing_scales, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_kv_landing_reciprocals) {
+		const SslmModelStatus s = ValidateKvLandingReciprocalsDomain(view.kv_landing_reciprocals, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.

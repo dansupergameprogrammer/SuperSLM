@@ -451,6 +451,34 @@ struct RopePair {
 // it (`dynamic_engine.py`: rotate at width, then clamp to int8).
 RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30);
 
+// --- §6.2/§5.2 C32 softmax row (arm A) ----------------------------------------
+//
+// The runtime primitive only. C30's derivation site (the not-yet-built call
+// forming (q_ln2, q_b, q_c) from a per-query carried scale) and C32/D-SLM366's
+// own width predicate (CheckSoftmaxRowWidthDomain, checked_chain_funnel.h) are
+// declared elsewhere; this is the row kernel the funnel's own predicate gates.
+
+// C32's own probability fixed-point width (SuperSLM_S3a_WalkingSkeleton_Plan.md
+// §5.2: "PROB_FRAC_BITS = 15"). Named so kSoftmaxRowMaxSafeExponent
+// (checked_chain_funnel.h) and SoftmaxRowQ15 below derive from the same
+// quantity rather than each restating 15 as a bare literal.
+inline constexpr int kProbFracBits = 15;
+
+// C32 — arm-A softmax row normalization (§5.2, §11 S3.3 §6.2 step 5):
+//   s[k]   = ShiftByMax(scores)                                    (above)
+//   e[k]   = IExpEvaluate(IExpConstruct(s[k], q_ln2, q_b, q_c))     (C7/C8/C9)
+//   total  = Sum_k e[k]                                             (int64)
+//   p[k]   = (e[k] << kProbFracBits) / max(total, 1)                (both operands
+//            non-negative: floor == truncate)
+// `max(total, 1)` guards the all-clipped row exactly (every e[k] is then 0, so
+// every p[k] is 0). The caller gates this kernel with
+// CheckSoftmaxRowWidthDomain(q_b, q_c, width) (checked_chain_funnel.h) BEFORE
+// calling it — this function itself performs no width check, matching every
+// other funnel-adjacent compute in this tree (the domain check and the compute
+// are separate calls). `scores`/`out_probs` each have `width` elements.
+void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
+                    int64_t q_c, int64_t* out_probs);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_INTMATH_H

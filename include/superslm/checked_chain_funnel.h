@@ -13,12 +13,20 @@
 // derived-operand predicates §7.2's second limb names for the runtime-derived
 // operands with no domain predicate of their own: C30's (a call to the already-shipped
 // IExpConstantsInDomain, never an encoded threshold), C34's (the SwiGLU site's
-// runtime (m, e) gate scale, §5.4), and C28's (the (q_B, e_a) pair check at the
-// bias-reconciliation site, §4.4). C28's predicate was declared once during S3.1's
-// own header-contract commit (32aca0c) and deliberately removed the same day
-// (f98eee9) as belonging to S3.2 instead; it is RE-STAGED here, unchanged from its
-// original declaration, as part of S3.2's own header contract (Claude/Curie/
-// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md §9 item 4).
+// runtime (m, e) gate scale, §5.4), C28's (the (q_B, e_a) pair check at the
+// bias-reconciliation site, §4.4), and C32/D-SLM366's (the softmax row's own
+// numerator/sum width check, §11 S3.3 §6.2, §3). C28's predicate was declared
+// once during S3.1's own header-contract commit (32aca0c) and deliberately
+// removed the same day (f98eee9) as belonging to S3.2 instead; it is
+// RE-STAGED here, unchanged from its original declaration, as part of S3.2's
+// own header contract (Claude/Curie/superslm-s3.2-weightless-and-projection-
+// sites-test-design-2026-07-28.md §9 item 4). C32's predicate
+// (CheckSoftmaxRowWidthDomain) and its named ceiling
+// (kSoftmaxRowMaxSafeExponent) are S3.3's own header contract (Claude/Curie/
+// superslm-s3.3-attention-interior-test-design-2026-07-28.md §6.2, §11) and
+// are STUB/deliberately-wrong as staged here (see each declaration's own
+// comment) — a follow-up Brunel pass replaces the stub with the real
+// comparison once Curie's S3.3 red suite is authored against it.
 // The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
 // reconciliation compute, and the embed entry are S3.2's own site-composition
 // functions and are declared in include/superslm/forward_sites.h instead — not
@@ -30,9 +38,11 @@
 // without needing to change.
 //
 // The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
-// limb). Bodies are real constructions in src/forward/checked_chain_funnel.cpp, green
-// in the standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
-// 2026-07-28.md §4/§8).
+// limb). Every body except CheckSoftmaxRowWidthDomain is a real construction in
+// src/forward/checked_chain_funnel.cpp, green in the standing suite
+// (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
+// §4/§8); CheckSoftmaxRowWidthDomain is S3.3's own deliberately-wrong stub (see
+// its own declaration comment and src/forward/checked_chain_funnel.cpp).
 #ifndef SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 #define SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 
@@ -41,6 +51,7 @@
 #include <span>
 #include <string_view>
 
+#include "superslm/intmath.h"  // kProbFracBits (kSoftmaxRowMaxSafeExponent's derivation)
 #include "superslm/trace_hook.h"
 
 namespace superslm {
@@ -85,6 +96,7 @@ enum class SslmForwardStatus {
 	CarriedScaleMantissaOutOfDomain,         // ac34677 S5 / 380b75f N1: an incoming/site/running CarriedScale.m does not fit int32_t
 	SiluCompositionScaleOutOfDomain,         // C34 (§5.4): CheckSiluCompositionScaleDomain rejects the derived (m,e)
 	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — owed by S3.2; declared for completeness
+	SoftmaxRowWidthOutOfDomain,              // C32/D-SLM366 (§7.2 second limb) — owed by S3.3, §11 S3.3 §6.2
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
 	PositionOverCap,                         // owed by S3.6 (§9.1)
 	WorkspaceTooSmall,                       // owed by a later sub-slot
@@ -235,6 +247,39 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 // comment above. The real 0 <= q_B + 62 + e_a <= 63 comparison is written in
 // src/forward/checked_chain_funnel.cpp (S3.2's green phase).
 SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
+
+// C32/D-SLM366's own numerator ceiling (§7.2 second limb; §14.1; §11 S3.3 §6.2,
+// §3; T-1304, D-SLM365/366/367). D-SLM365 derives a softmax row's largest i-exp
+// value in closed form as `M = q_b*q_b + q_c` (the value at `q = 0`, where
+// `ShiftByMax` puts the row maximum); D-SLM366 finds the shipped
+// `IExpConstantsInDomain` does not cover the numerator/sum widths this needs.
+//
+// **RULED BY DAN (D-SLM367, 2026-07-28): `2^47` on every path** —
+// `(2**62) >> PROB_FRAC_BITS`, the value `Tools/superslm_spike/pipeline.py`'s
+// own `_guard_probability_width` already enforced (option C over D-SLM365's
+// own `INT64_MAX >> PROB_FRAC_BITS` = 2^48-1, and over shipping 2^47 without
+// touching the Python reference). Both Python paths now refuse against one
+// named constant, `pipeline.PROB_WIDTH_CEILING`; this is the C++ side's own
+// name for the same quantity. **No `static_assert` can tie the two across the
+// C++/Python language boundary** — the tie this tree's `static_assert`
+// convention (kRoundingDivideByPotExponentMaxI64, kSiluLutTermLeftShiftOverflow
+// Exponent) uses is unavailable here, so the tie is BY NAME AND CITATION only:
+// this constant's own name and its D-SLM367 citation, kept in step with
+// `pipeline.PROB_WIDTH_CEILING` by hand. A future edit to either side is not
+// caught by this build; it is caught only by re-reading this comment.
+// `kProbFracBits` (intmath.h) is PROB_FRAC_BITS itself, so the derivation
+// below stays tied to the same shift width C32's own composition uses,
+// verified equal to 2^47 at authoring (2^62 >> 15 == 2^47, exactly).
+inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kProbFracBits;
+
+// C32/D-SLM366's own derived-operand predicate (§7.2 second limb; §11 S3.3
+// §6.2). The not-yet-built C32 softmax row kernel (SoftmaxRowQ15, intmath.h)
+// calls this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed
+// form) must satisfy `M <= kSoftmaxRowMaxSafeExponent` (the numerator) AND
+// `width * M <= INT64_MAX` (the sum), the second checked without overflowing
+// the check itself (e.g. `M == 0 || width <= static_cast<size_t>(INT64_MAX /
+// M)`). Returns SoftmaxRowWidthOutOfDomain on either failure, Ok otherwise.
+SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
 
 }  // namespace superslm
 

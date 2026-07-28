@@ -170,4 +170,15 @@ void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32)
 	}
 }
 
+// F-S3-6/C32 -- S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-attention-
+// interior-test-design-2026-07-28.md §6.4, §11). `out_ctx` is left untouched
+// on every call, matching this campaign's own convention for a void kernel
+// with an output parameter (see intmath.cpp's SoftmaxRowQ15 stub for the
+// same shape). A follow-up Brunel pass replaces this body with the real
+// `out_ctx[d] = Sum_k probs[k] * values[k*head_dim + d]` accumulation.
+void GemmProbQ15Accumulate(const int64_t* /*probs*/, const int8_t* /*values*/,
+                            size_t /*width*/, size_t /*head_dim*/, int64_t* /*out_ctx*/) {
+	// stub -- writes nothing
+}
+
 }  // namespace superslm

@@ -13,6 +13,11 @@
 // re-staged from its original S3.1 header-contract declaration (32aca0c), and
 // its body below is the real 0 <= q_B + 62 + e_a <= 63 comparison (S3.2 green
 // phase).
+//
+// C32/D-SLM366's derived-operand predicate (CheckSoftmaxRowWidthDomain) is
+// S3.3's own header contract (Claude/Curie/superslm-s3.3-attention-interior-
+// test-design-2026-07-28.md §6.2, §11) and its body below is a
+// deliberately-wrong STUB — see its own comment.
 #include "superslm/checked_chain_funnel.h"
 
 #include "superslm/intmath.h"
@@ -32,6 +37,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::SiluCompositionScaleOutOfDomain: return "SiluCompositionScaleOutOfDomain";
 		case SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain:
 			return "RoundingDivideByPotExponentOutOfDomain";
+		case SslmForwardStatus::SoftmaxRowWidthOutOfDomain: return "SoftmaxRowWidthOutOfDomain";
 		case SslmForwardStatus::TokenIdOutOfRange: return "TokenIdOutOfRange";
 		case SslmForwardStatus::PositionOverCap: return "PositionOverCap";
 		case SslmForwardStatus::WorkspaceTooSmall: return "WorkspaceTooSmall";
@@ -301,6 +307,19 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
 		return SslmForwardStatus::SiluCompositionScaleOutOfDomain;
 	}
 	return SslmForwardStatus::Ok;
+}
+
+// S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-attention-interior-test-
+// design-2026-07-28.md §6.2, §11): unconditionally returns WorkspaceTooSmall,
+// a status none of this predicate's own real outcomes (Ok,
+// SoftmaxRowWidthOutOfDomain) ever is — matching this campaign's own
+// SslmForwardStatus-returning stub convention (a594dd2). A follow-up Brunel
+// pass replaces this body with the real
+// `M = q_b*q_b + q_c; M <= kSoftmaxRowMaxSafeExponent && width * M <=
+// INT64_MAX` comparison.
+SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t /*q_b*/, int64_t /*q_c*/,
+                                              size_t /*width*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;  // stub
 }
 
 }  // namespace superslm

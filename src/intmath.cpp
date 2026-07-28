@@ -531,4 +531,17 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 	                RoundingDivideByPOTImpl<int64_t>(yr, ROPE_FRAC_BITS)};
 }
 
+// --- §6.2/§5.2 C32 softmax row (arm A) -- S3.3 red-phase STUB -----------------
+
+void SoftmaxRowQ15(const int64_t* /*scores*/, size_t /*width*/, int64_t /*q_ln2*/,
+                    int64_t /*q_b*/, int64_t /*q_c*/, int64_t* /*out_probs*/) {
+	// Stub (S3.3 red-phase): `out_probs` is left untouched on every call, matching
+	// this campaign's own convention (a594dd2) for a void kernel with an output
+	// parameter -- the funnel's "on rejection, neither is touched" convention has
+	// no rejection path here (this function has no status return), so the stub's
+	// only available deliberately-wrong shape is to write nothing at all. A
+	// follow-up Brunel pass replaces this body with the real composition
+	// (ShiftByMax -> per-element IExpConstruct/IExpEvaluate -> sum -> divide).
+}
+
 }  // namespace superslm

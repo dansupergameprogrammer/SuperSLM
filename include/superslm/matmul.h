@@ -9,9 +9,13 @@
 //
 // Standard library only -- no float on the reproducible path (Layer 1, D-SLM13).
 //
-// The declarations below are the approved API surface (design §3). Bodies in
-// matmul.cpp are real constructions, including the scalar reference (design §5),
-// green in the standing suite (S2.5).
+// The declarations below are the approved API surface (design §3). Every body
+// except GemmProbQ15Accumulate is a real construction, including the scalar
+// reference (design §5), green in the standing suite (S2.5).
+// GemmProbQ15Accumulate is S3.3's own header contract (§4.6, §11 S3.3 §6.4;
+// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
+// §6.4) and is a deliberately-wrong STUB as staged here — see its own
+// declaration comment and matmul.cpp.
 #ifndef SUPERSLM_MATMUL_H
 #define SUPERSLM_MATMUL_H
 
@@ -87,6 +91,25 @@ enum class MatmulAccumWidth : int32_t { Int32 = 0, Int64 = 1 };
 // `weights` each have `in_channels` elements; every intermediate is int64, both int8
 // factors widened to int64 before the multiply, no saturation, no rounding.
 int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t in_channels);
+
+// F-S3-6/C32 (SuperSLM_S3a_WalkingSkeleton_Plan.md §4.6, §11 S3.3 §6.4) — the
+// probability x value context accumulate: `out_ctx[d] = Sum_k probs[k] *
+// values[k*head_dim + d]`. `probs` are C32's Q15 row-normalized probabilities
+// (each row sums to at most 2^15 by construction, kProbFracBits, intmath.h);
+// `values` are int8 codes. Exact int64 accumulation, no saturation, no
+// rounding: the derived bound is `|Sum_k p_k*v_k| <= 2^15 * 127 < 2^22`,
+// INDEPENDENT of context length (matching C27's own stated bound), so no
+// per-tensor width choice is owed and int64 accumulation is far more than
+// sufficient. Same no-order-pin property as GemmInt8AccumulateRow above:
+// exact int64 products are exactly associative and commutative, so any
+// traversal order must produce the bit-identical `out_ctx`.
+//
+// Caller ensures (contract, not runtime-checked -- the same convention as
+// GemmInt8AccumulateRow above): `probs` has `width` elements; `values` has
+// `width * head_dim` elements, row-major (`values[k*head_dim + d]` is key
+// k's value-vector element d); `out_ctx` has `head_dim` elements.
+void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t width,
+                            size_t head_dim, int64_t* out_ctx);
 
 }  // namespace superslm
 

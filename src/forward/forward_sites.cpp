@@ -1,11 +1,14 @@
-// SuperSLM S3.2 site compositions — the green-phase construction.
+// SuperSLM S3.2/S3.3 site compositions.
 //
 // See include/superslm/forward_sites.h for the contract
-// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2; C31, C24/C25, C28, F-S3-8).
-// The real bodies below replace the S3.2 red-phase stubs (S3.2's header-
-// contract commit) against the red suite authored in tests/test_main.cpp
+// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
+// F-S3-8, C27, C33). The S3.2 bodies (FloorDivI64, RmsNormSite,
+// ApplyWeightScaleFold, BiasReconcile, EmbedEntry) are the real green
+// construction against the red suite authored in tests/test_main.cpp
 // (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
-// 2026-07-28.md §11).
+// 2026-07-28.md §11). The S3.3 bodies below (LandingRescale, ClampRopeCode)
+// are deliberately-wrong red-first STUBS (S3.3's header-contract commit) —
+// see each function's own comment.
 #include "superslm/forward_sites.h"
 
 #include <vector>
@@ -93,6 +96,18 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// every other funnel-adjacent compute in this tree.
 	const int64_t exponent = q_b + 62 + e_a;
 	return RoundingDivideByPOT(b * r_a, static_cast<int>(exponent));
+}
+
+int64_t LandingRescale(int64_t /*branch_code*/, int64_t /*m_a*/, int64_t /*r_t*/,
+                        int64_t /*e_a*/, int64_t /*e_t*/) {
+	return 0;  // stub (S3.3 red-phase) -- matching this campaign's own precedent
+	           // (S3.1/S3.2, a594dd2) for every int64_t-returning function: a
+	           // fixed wrong sentinel so a follow-up red suite fails against the
+	           // real construction rather than compiling against a missing symbol.
+}
+
+int64_t ClampRopeCode(int64_t /*raw*/) {
+	return 0;  // stub (S3.3 red-phase) -- same convention as LandingRescale above.
 }
 
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,
