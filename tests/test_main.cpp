@@ -9190,6 +9190,542 @@ static void TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDoma
 	          static_cast<long long>(kKvLandingReciprocalMax));
 }
 
+// ---------------------------------------------------------------------------
+// The header contract landed (D:\SuperSLM@169265d/c4ee594). Every cell below
+// was fully specified in the test-design record's Sec6-Sec8 as blocked on an
+// undeclared symbol; each now compiles, links, and fails against the
+// deliberately-wrong stub it is authored against (LandingRescale/
+// ClampRopeCode return 0 unconditionally and never touch an output
+// parameter; CheckSoftmaxRowWidthDomain always returns WorkspaceTooSmall;
+// SoftmaxRowQ15/GemmProbQ15Accumulate write nothing;
+// ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain always
+// return Ok) -- each for its own reason, verified individually below rather
+// than assumed from the stub's own doc comment.
+//
+// Dan's ruling (T-1304/D-SLM367): the C32 numerator ceiling is 2^47 on every
+// path. This suite reads that ruling through kSoftmaxRowMaxSafeExponent
+// (checked_chain_funnel.h) -- via kC32WidthDomainCases' own
+// `ok_under_2pow47` field, which IS that ruling -- never as a re-typed
+// literal. The band witness (record Sec4.2/Sec3) is now asserted REJECTED,
+// per the coordinator's explicit correction to this suite's own prior draft.
+// ---------------------------------------------------------------------------
+
+// Record Sec6.1: C27's K/V landing composite, feature oracle against the
+// same `kLandingCompositeCases` witnesses Sec4.3 derived (the regeneration
+// gate already proves both named negative controls -- per-key-token-
+// reciprocal, two-rounding scale-product -- diverge from `correct` on the
+// two discriminating rows; asserting LandingRescale equals `correct`
+// therefore already has full discriminating power against either wrong
+// construction, without re-implementing them a second time in C++).
+static void TestLandingRescaleFeatureOracleAgainstResidualReconcileWitnesses() {
+	using namespace superslm_test;
+	for (size_t i = 0; i < kLandingCompositeCasesCount; ++i) {
+		const LandingCompositeCase& c = kLandingCompositeCases[i];
+		const int64_t raw = superslm::LandingRescale(c.branch_code, c.m_b, c.r_h, c.e_b, c.e_h);
+		CHECK_MSG(raw == c.correct_raw,
+		          "%s: LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%d, e_t=%d) == %lld, "
+		          "want %lld (residual_reconcile's own pinned formula, C3 away-from-zero)",
+		          c.label, static_cast<long long>(c.branch_code), static_cast<long long>(c.m_b),
+		          static_cast<long long>(c.r_h), c.e_b, c.e_h, static_cast<long long>(raw),
+		          static_cast<long long>(c.correct_raw));
+		const int64_t clamped = std::clamp<int64_t>(raw, -127, 127);
+		CHECK_MSG(clamped == c.correct,
+		          "%s: clamp(LandingRescale(...), -127, 127) == %lld, want %lld (Sec8.1's own "
+		          "composition: the clamp is the caller's, matching C33's)",
+		          c.label, static_cast<long long>(clamped), static_cast<long long>(c.correct));
+	}
+}
+
+// Record Sec7 (T-518/D-SLM201 option 2, Sec8.2; coordinator ruling 3): three
+// named cells on `LandingRescale`'s own `out_saturation_count` half, plus the
+// non-negotiable invariance property. Every witness below uses
+// `m_a=2^30, r_t=2^32, e_a=e_t=0`, at which `residual_reconcile`'s divide is
+// EXACT (numerator == branch_code * 2^62, denominator == 2^62, no rounding)
+// -- confirmed by direct execution of the vendored reference at generation
+// time (gen_s3_3_fixtures.py's own record, Sec4.3's derivation script run
+// interactively) -- so `LandingRescale`'s raw return is exactly
+// `branch_code` and the clamp fires iff `|branch_code| > 127`, giving exact,
+// hand-verifiable saturation counts rather than a derived-and-hoped-for one.
+namespace {
+constexpr int64_t kSatCounterMA = INT64_C(1) << 30;
+constexpr int64_t kSatCounterRT = INT64_C(1) << 32;
+}  // namespace
+
+// Sec7's first cell: a hand-constructed landing input with a KNOWN number of
+// clamped elements across a KNOWN set of (head, projection) sites -- here,
+// five sequential calls sharing one accumulator, standing in for five sites
+// of one landing composite. Two saturate (128, -128 -- one past each bound);
+// three do not (127, -127 -- the in-band boundary controls; 50, comfortably
+// interior). The reported VALUE is asserted, not merely that it fires
+// (Sec8.2: "the counter's reported value is asserted, not only its firing").
+static void TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements() {
+	struct Site {
+		int64_t branch_code;
+		bool expect_clamp;
+	};
+	const Site sites[] = {
+	    {127, false},   // exactly at the pinned code bound -- in-band control
+	    {128, true},    // one past the bound -- must fire
+	    {-127, false},  // exactly at the negative bound -- in-band control
+	    {-128, true},   // one past the negative bound -- must fire
+	    {50, false},    // comfortably interior
+	};
+	uint64_t count = 0;
+	for (const Site& s : sites) {
+		const int64_t raw = superslm::LandingRescale(s.branch_code, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+		CHECK_MSG(raw == s.branch_code,
+		          "LandingRescale(%lld, m_a=2^30, r_t=2^32, e_a=e_t=0) == %lld, want %lld exactly "
+		          "(this witness's own divide is exact, no rounding)",
+		          static_cast<long long>(s.branch_code), static_cast<long long>(raw),
+		          static_cast<long long>(s.branch_code));
+	}
+	CHECK_MSG(count == 2,
+	          "*out_saturation_count after 5 sites (2 saturating: 128, -128) == %llu, want 2 -- the "
+	          "reported VALUE, not merely that the counter fired",
+	          static_cast<unsigned long long>(count));
+}
+
+// Sec7's second cell: multi-token monotone accumulation -- the accumulated
+// count after N tokens equals the sum of the per-token counts, and no
+// intermediate checkpoint reports a count for a site not yet executed
+// (Sec13 dim 8's "counter x layer budget" crossing, realized without a
+// layer-budget mechanism by simply checking the running total at each
+// checkpoint rather than only at the end).
+static void TestLandingRescaleSaturationCounterMonotoneAcrossTokens() {
+	uint64_t count = 0;
+
+	// "Token" 1: one site, saturates. Running total after: 1.
+	superslm::LandingRescale(200, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	CHECK_MSG(count == 1, "after token 1 (1 saturating site): count == %llu, want 1",
+	          static_cast<unsigned long long>(count));
+
+	// "Token" 2: three sites, two saturate. Running total after: 1 + 2 == 3.
+	superslm::LandingRescale(300, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	superslm::LandingRescale(-300, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	superslm::LandingRescale(10, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	CHECK_MSG(count == 3, "after token 2 (cumulative +2 saturating): count == %llu, want 3 (1 + 2)",
+	          static_cast<unsigned long long>(count));
+
+	// "Token" 3: two sites, neither saturates. Running total unchanged: 3.
+	superslm::LandingRescale(20, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	superslm::LandingRescale(-20, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	CHECK_MSG(count == 3,
+	          "after token 3 (0 saturating sites, monotone -- must not decrease or reset): count == "
+	          "%llu, want 3 (the accumulated total is per-sequence, never per-token)",
+	          static_cast<unsigned long long>(count));
+}
+
+// Sec7's third cell: a whole row where EVERY element saturates, so an
+// off-by-one in the predicate's placement (e.g. incrementing before the
+// comparison, or skipping the row's last element) is visible as a count that
+// is not exactly the row length.
+static void TestLandingRescaleSaturationCounterWholeRowClamp() {
+	uint64_t count = 0;
+	const int64_t row[] = {500, -500, 200, -1000};  // every element saturates
+	for (int64_t branch_code : row) {
+		superslm::LandingRescale(branch_code, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	}
+	CHECK_MSG(count == 4,
+	          "a 4-element row where every element saturates: count == %llu, want exactly 4 -- an "
+	          "off-by-one in the predicate's placement would report 3 or 5",
+	          static_cast<unsigned long long>(count));
+}
+
+// Sec8.2's own non-negotiable property, asserted directly: the saturation
+// count has NO EFFECT WHATSOEVER on the return value. Same input, once with
+// `out_saturation_count == nullptr` and once with a real accumulator; the
+// two raw results must be bit-identical, on both a saturating and a
+// non-saturating branch_code.
+static void TestLandingRescaleSaturationCountHasNoEffectOnReturnValue() {
+	const int64_t no_counter_interior = superslm::LandingRescale(50, kSatCounterMA, kSatCounterRT, 0, 0, nullptr);
+	uint64_t count = 0;
+	const int64_t with_counter_interior =
+	    superslm::LandingRescale(50, kSatCounterMA, kSatCounterRT, 0, 0, &count);
+	CHECK_MSG(no_counter_interior == with_counter_interior,
+	          "LandingRescale(50, ...) == %lld with no counter, %lld with one -- the counter must have "
+	          "no effect whatsoever on the return value (Sec8.2)",
+	          static_cast<long long>(no_counter_interior), static_cast<long long>(with_counter_interior));
+
+	const int64_t no_counter_saturating =
+	    superslm::LandingRescale(500, kSatCounterMA, kSatCounterRT, 0, 0, nullptr);
+	uint64_t count2 = 0;
+	const int64_t with_counter_saturating =
+	    superslm::LandingRescale(500, kSatCounterMA, kSatCounterRT, 0, 0, &count2);
+	CHECK_MSG(no_counter_saturating == with_counter_saturating,
+	          "LandingRescale(500, ...) == %lld with no counter, %lld with one -- must agree even on a "
+	          "SATURATING branch_code, where the counter is actually active",
+	          static_cast<long long>(no_counter_saturating), static_cast<long long>(with_counter_saturating));
+	CHECK_MSG(count2 == 1, "the counting call above must still have counted (count2 == %llu, want 1)",
+	          static_cast<unsigned long long>(count2));
+}
+
+// Record Sec6.3: C33's post-rotation clamp. `ClampRopeCode` is now the real
+// caller-side site; asserted against the same witnesses Sec4.1 already
+// pinned genuine against the real RopeApplyPair, above.
+static void TestClampRopeCodeAgainstC33Witnesses() {
+	using superslm::ClampRopeCode;
+
+	const auto& c = kC33BothSignsCase;
+	CHECK_MSG(ClampRopeCode(c.raw_x) == 127, "ClampRopeCode(%lld) == %lld, want 127",
+	          static_cast<long long>(c.raw_x), static_cast<long long>(ClampRopeCode(c.raw_x)));
+	CHECK_MSG(ClampRopeCode(c.raw_x_neg) == -127,
+	          "ClampRopeCode(%lld) == %lld, want -127 (not -128 -- the pinned CODE range, not the int8 "
+	          "STORAGE range, Sec5.3's own load-bearing distinction)",
+	          static_cast<long long>(c.raw_x_neg), static_cast<long long>(ClampRopeCode(c.raw_x_neg)));
+
+	const auto& c2 = kC33Int32OverflowCase;
+	CHECK_MSG(ClampRopeCode(c2.raw_x) == 127,
+	          "ClampRopeCode(%lld) == %lld, want 127 -- a implementation that narrows to int32 before "
+	          "clamping would wrap this value negative first and return -127 instead",
+	          static_cast<long long>(c2.raw_x), static_cast<long long>(ClampRopeCode(c2.raw_x)));
+}
+
+// Record Sec6.2: C32/D-SLM366's width predicate, now read against
+// `kSoftmaxRowMaxSafeExponent` (via each case's own `ok_under_2pow47` field
+// -- Dan's ruling, T-1304/D-SLM367) rather than either superseded candidate.
+static bool ExpectedSoftmaxRowWidthOk(const superslm_test::C32WidthDomainCase& c) {
+	if (!c.ok_under_2pow47) return false;
+	if (c.row_max <= 0) return true;
+	return static_cast<uint64_t>(c.width) <=
+	       static_cast<uint64_t>(INT64_MAX) / static_cast<uint64_t>(c.row_max);
+}
+
+static void TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCase() {
+	using namespace superslm_test;
+	using superslm::CheckSoftmaxRowWidthDomain;
+	using superslm::SslmForwardStatus;
+
+	for (size_t i = 0; i < kC32WidthDomainCasesCount; ++i) {
+		const C32WidthDomainCase& c = kC32WidthDomainCases[i];
+		const auto status = CheckSoftmaxRowWidthDomain(c.q_b, c.q_c, c.width);
+		const bool expect_ok = ExpectedSoftmaxRowWidthOk(c);
+		CHECK_MSG(expect_ok ? status == SslmForwardStatus::Ok
+		                    : status == SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+		          "%s: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) status == %s, want %s "
+		          "(row_max=%lld against kSoftmaxRowMaxSafeExponent, D-SLM367's ratified 2^47)",
+		          c.label, static_cast<long long>(c.q_b), static_cast<long long>(c.q_c), c.width,
+		          superslm::SslmForwardStatusName(status),
+		          expect_ok ? "Ok" : "SoftmaxRowWidthOutOfDomain", static_cast<long long>(c.row_max));
+	}
+
+	// The routed band case (record Sec3/Sec4.2): the coordinator's own
+	// ruling directs this suite to assert REJECTION now that 2^47 is the
+	// shipped threshold on every path -- the case is `ok_under_2pow48m1` but
+	// NOT `ok_under_2pow47`, so `kC32BandCase.ok_under_2pow47` alone already
+	// carries the correct verdict.
+	CHECK_MSG(!kC32BandCase.ok_under_2pow47,
+	          "the band witness's own fixture field must read ok_under_2pow47==false under the "
+	          "ratified threshold, or this cell's own premise is stale");
+	const auto band_status =
+	    CheckSoftmaxRowWidthDomain(kC32BandCase.q_b, kC32BandCase.q_c, kC32BandCase.width);
+	CHECK_MSG(band_status == SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "the band witness (row_max=%lld, between the two superseded candidate thresholds): "
+	          "CheckSoftmaxRowWidthDomain status == %s, want SoftmaxRowWidthOutOfDomain -- REJECTED, "
+	          "per D-SLM367's ruling that 2^47 is the shipped ceiling on every path",
+	          static_cast<long long>(kC32BandCase.row_max), superslm::SslmForwardStatusName(band_status));
+}
+
+// Record Sec6.2: the softmax row kernel itself. The oracle is composed from
+// the SAME already-certified primitives the kernel's own pinned pseudocode
+// names (ShiftByMax -> IExpConstruct/IExpEvaluate per element -> sum ->
+// Q15 divide) -- C32's pinned formula IS this composition, so driving the
+// real primitives directly computes the statistic's definition, not a
+// recode of SoftmaxRowQ15's own internals (matching S3.2's RmsNormSite
+// precedent, which used the already-shipped funnel as its own site's
+// oracle).
+static void TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	const C32WidthDomainCase* accept_case = nullptr;
+	for (size_t i = 0; i < kC32WidthDomainCasesCount; ++i) {
+		if (std::strcmp(kC32WidthDomainCases[i].label, "accept_realistic_width") == 0) {
+			accept_case = &kC32WidthDomainCases[i];
+			break;
+		}
+	}
+	CHECK_MSG(accept_case != nullptr, "kC32WidthDomainCases must carry an 'accept_realistic_width' case");
+	if (accept_case == nullptr) return;
+
+	constexpr size_t kWidth = 3;
+	const int64_t raw_scores[kWidth] = {10, 5, 0};
+
+	int64_t shifted[kWidth];
+	ShiftByMax(raw_scores, kWidth, shifted);
+
+	int64_t expected_e[kWidth];
+	int64_t expected_total = 0;
+	for (size_t i = 0; i < kWidth; ++i) {
+		IExpConstruction construction;
+		const IExpDomain d =
+		    IExpConstruct(shifted[i], accept_case->q_ln2, accept_case->q_b, accept_case->q_c, &construction);
+		CHECK_MSG(d == IExpDomain::kOk, "IExpConstruct(shifted[%zu]=%lld) domain == %d, want kOk", i,
+		          static_cast<long long>(shifted[i]), static_cast<int>(d));
+		expected_e[i] = IExpEvaluate(construction);
+		expected_total += expected_e[i];
+	}
+	int64_t expected_probs[kWidth];
+	for (size_t i = 0; i < kWidth; ++i) {
+		expected_probs[i] = (expected_e[i] << kProbFracBits) / std::max<int64_t>(expected_total, 1);
+	}
+
+	int64_t out_probs[kWidth] = {INT64_C(-99), INT64_C(-99), INT64_C(-99)};  // poison
+	SoftmaxRowQ15(raw_scores, kWidth, accept_case->q_ln2, accept_case->q_b, accept_case->q_c, out_probs);
+
+	for (size_t i = 0; i < kWidth; ++i) {
+		CHECK_MSG(out_probs[i] == expected_probs[i],
+		          "SoftmaxRowQ15(...)[%zu] == %lld, want %lld (ShiftByMax -> IExpConstruct/IExpEvaluate "
+		          "-> sum -> Q15 divide, composed from the already-certified primitives directly)",
+		          i, static_cast<long long>(out_probs[i]), static_cast<long long>(expected_probs[i]));
+	}
+}
+
+// Record Sec6.4: `GemmProbQ15Accumulate`'s feature oracle plus its
+// order-freedom certification (Sec4.6 of the plan: "the same accumulate
+// under permuted summation orders ... bit-identical"), plus the two named
+// width extremes (a row whose mass is entirely on one key; a row spread
+// across many keys).
+static void TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification() {
+	using superslm::GemmProbQ15Accumulate;
+
+	// Feature oracle: width=2, head_dim=2. key0=[3,-3], key1=[7,1].
+	{
+		const int64_t probs[2] = {100, 200};
+		const int8_t values[4] = {3, -3, 7, 1};
+		int64_t out_ctx[2] = {INT64_C(-99), INT64_C(-99)};  // poison
+		GemmProbQ15Accumulate(probs, values, 2, 2, out_ctx);
+		CHECK_MSG(out_ctx[0] == 1700, "out_ctx[0] == %lld, want 1700 (100*3 + 200*7)",
+		          static_cast<long long>(out_ctx[0]));
+		CHECK_MSG(out_ctx[1] == -100, "out_ctx[1] == %lld, want -100 (100*-3 + 200*1)",
+		          static_cast<long long>(out_ctx[1]));
+	}
+
+	// Order-freedom certification: the SAME two (prob, value-row) pairs, key
+	// order reversed. Exact int64 addition is commutative and associative,
+	// so the result must be bit-identical to the un-reversed call above.
+	{
+		const int64_t probs_rev[2] = {200, 100};
+		const int8_t values_rev[4] = {7, 1, 3, -3};
+		int64_t out_ctx_rev[2] = {INT64_C(-99), INT64_C(-99)};  // poison
+		GemmProbQ15Accumulate(probs_rev, values_rev, 2, 2, out_ctx_rev);
+		CHECK_MSG(out_ctx_rev[0] == 1700,
+		          "permuted-order out_ctx[0] == %lld, want 1700 (bit-identical to the un-permuted call)",
+		          static_cast<long long>(out_ctx_rev[0]));
+		CHECK_MSG(out_ctx_rev[1] == -100,
+		          "permuted-order out_ctx[1] == %lld, want -100 (bit-identical to the un-permuted call)",
+		          static_cast<long long>(out_ctx_rev[1]));
+	}
+
+	// Width extreme 1: mass entirely on one key (width=8, head_dim=1).
+	{
+		const int64_t probs[8] = {INT64_C(32768), 0, 0, 0, 0, 0, 0, 0};
+		const int8_t values[8] = {7, -1, -1, -1, -1, -1, -1, -1};  // only key 0's value matters
+		int64_t out_ctx[1] = {INT64_C(-99)};  // poison
+		GemmProbQ15Accumulate(probs, values, 8, 1, out_ctx);
+		CHECK_MSG(out_ctx[0] == INT64_C(229376), "mass-on-one-key out_ctx[0] == %lld, want 229376 (32768*7)",
+		          static_cast<long long>(out_ctx[0]));
+	}
+
+	// Width extreme 2: spread across many keys (width=64, head_dim=1),
+	// probabilities summing to exactly 2^15 (C32's own row-sum bound).
+	{
+		constexpr size_t kWidth = 64;
+		int64_t probs[kWidth];
+		int8_t values[kWidth];
+		int64_t expected = 0;
+		for (size_t k = 0; k < kWidth; ++k) {
+			probs[k] = 512;  // 64 * 512 == 32768 == 2^15
+			values[k] = static_cast<int8_t>(static_cast<int>(k % 3) - 1);  // -1, 0, 1 repeating
+			expected += probs[k] * static_cast<int64_t>(values[k]);
+		}
+		int64_t out_ctx[1] = {INT64_C(-99)};  // poison
+		GemmProbQ15Accumulate(probs, values, kWidth, 1, out_ctx);
+		CHECK_MSG(out_ctx[0] == expected,
+		          "spread-across-%zu-keys out_ctx[0] == %lld, want %lld (exact int64 sum over the whole "
+		          "row, C27's own stated bound |Sum p_k*v_k| <= 2^15*127 << int64)",
+		          kWidth, static_cast<long long>(out_ctx[0]), static_cast<long long>(expected));
+	}
+}
+
+// Record Sec6.5: KvLandingScales'/KvLandingReciprocals' owed value-domain
+// descriptors (Plan Sec7.2a's third limb). Section builders on the exact
+// "one otherwise-valid v2 artifact, one hostile section" pattern
+// `MakeBia1Section` (S3.2, above) already established, reusing `BuildKvc1`
+// (sslm_kvc1_hostile_fixtures.h) since both section types ARE KVC1 tables.
+static FixtureSection MakeKvLandingScalesSection(int64_t m_t, int64_t e_t) {
+	using namespace superslm_test;
+	auto kvc1 = BuildKvc1(/*declared_value_words=*/2, {{"layer0.k_head0", {m_t, e_t}}});
+	return MakeSection(SslmSectionType::KvLandingScales, SslmDtype::Raw, kvc1.bytes, /*alignment=*/64);
+}
+
+static FixtureSection MakeKvLandingReciprocalsSection(int64_t m_t, int64_t e_t, int64_t r_t) {
+	using namespace superslm_test;
+	auto kvc1 = BuildKvc1(/*declared_value_words=*/3, {{"layer0.k_head0", {m_t, e_t, r_t}}});
+	return MakeSection(SslmSectionType::KvLandingReciprocals, SslmDtype::Raw, kvc1.bytes, /*alignment=*/64);
+}
+
+static void TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary() {
+	using namespace superslm_test;
+	// Reject: one past each bound.
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingScalesSection(kKvLandingScaleMantissaMin - 1, 0)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingScaleOutOfDomain,
+		          "m_t=%lld (one below the canonical minimum): SslmModel::Load status == %s, want "
+		          "KvLandingScaleOutOfDomain (%s)",
+		          static_cast<long long>(kKvLandingScaleMantissaMin - 1), SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(!view.has_kv_landing_scales,
+		          "hostile KvLandingScales view exposed on a rejected Load — a view MUST NOT be exposed");
+	}
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingScalesSection(kKvLandingScaleMantissaMax + 1, 0)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingScaleOutOfDomain,
+		          "m_t=%lld (one above the canonical maximum): SslmModel::Load status == %s, want "
+		          "KvLandingScaleOutOfDomain (%s)",
+		          static_cast<long long>(kKvLandingScaleMantissaMax + 1), SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(!view.has_kv_landing_scales,
+		          "hostile KvLandingScales view exposed on a rejected Load — a view MUST NOT be exposed");
+	}
+	// Accept-at-bound, both endpoints — the off-by-one control every
+	// S-HARDEN-1 boundary matrix carries (record Sec13 dim 4).
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingScalesSection(kKvLandingScaleMantissaMin, 0)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok, "m_t at the canonical minimum: status == %s, want Ok (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(view.has_kv_landing_scales);
+	}
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingScalesSection(kKvLandingScaleMantissaMax, 0)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok, "m_t at the canonical maximum: status == %s, want Ok (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(view.has_kv_landing_scales);
+	}
+}
+
+static void TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
+	using namespace superslm_test;
+	// Reject: one past each bound. m_t/e_t held at a safe, in-domain value
+	// throughout (only R_t, word 2, is under test here).
+	{
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(),
+		     MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin, 0, kKvLandingReciprocalMin - 1)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingReciprocalOutOfDomain,
+		          "R_t=%lld (one below the derived minimum): SslmModel::Load status == %s, want "
+		          "KvLandingReciprocalOutOfDomain (%s)",
+		          static_cast<long long>(kKvLandingReciprocalMin - 1), SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(!view.has_kv_landing_reciprocals,
+		          "hostile KvLandingReciprocals view exposed on a rejected Load — a view MUST NOT be "
+		          "exposed");
+	}
+	{
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(),
+		     MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin, 0, kKvLandingReciprocalMax + 1)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingReciprocalOutOfDomain,
+		          "R_t=%lld (one above the derived maximum): SslmModel::Load status == %s, want "
+		          "KvLandingReciprocalOutOfDomain (%s)",
+		          static_cast<long long>(kKvLandingReciprocalMax + 1), SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(!view.has_kv_landing_reciprocals,
+		          "hostile KvLandingReciprocals view exposed on a rejected Load — a view MUST NOT be "
+		          "exposed");
+	}
+	// Accept-at-bound, both endpoints.
+	{
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(),
+		     MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin, 0, kKvLandingReciprocalMin)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok, "R_t at the derived minimum: status == %s, want Ok (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(view.has_kv_landing_reciprocals);
+	}
+	{
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(),
+		     MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin, 0, kKvLandingReciprocalMax)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok, "R_t at the derived maximum: status == %s, want Ok (%s)",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(view.has_kv_landing_reciprocals);
+	}
+}
+
+// Record Sec4.5/Sec6.5: "the correction of MakeMinimalValidKvc1's near-
+// INT64_MAX acceptance" (plan Sec7.2a's own text), realized as a cell rather
+// than an edit to the shared fixture (editing it would break unrelated,
+// already-green KVC1 sub-parse cells that hardcode its exact literal
+// values, test-design record Sec4.5). `MakeMinimalValidKvc1`'s own gamma
+// row -- reused here UNMODIFIED, wrapped as a KvLandingScales/
+// KvLandingReciprocals section instead of CompositionConstants -- is
+// definitively out of domain on both section types (gamma's mantissa is
+// 2^62-1, and even alpha/beta's own mantissas are out of the canonical
+// [2^30,2^31) range; gamma's own R-word is INT64_MAX), so this cell is
+// overdetermined to fail once the real check lands -- exactly the
+// correction owed.
+static void TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow() {
+	using namespace superslm_test;
+	{
+		auto m = MakeMinimalValidKvc1(/*value_words=*/2);
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeSection(SslmSectionType::KvLandingScales, SslmDtype::Raw, m.bytes,
+		                                        /*alignment=*/64)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingScaleOutOfDomain,
+		          "MakeMinimalValidKvc1(2)'s own alpha/beta/gamma rows, wrapped as KvLandingScales: "
+		          "SslmModel::Load status == %s, want KvLandingScaleOutOfDomain (%s) -- the correction "
+		          "of this fixture's near-INT64_MAX acceptance",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(!view.has_kv_landing_scales);
+	}
+	{
+		auto m = MakeMinimalValidKvc1(/*value_words=*/3);
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeSection(SslmSectionType::KvLandingReciprocals, SslmDtype::Raw,
+		                                        m.bytes, /*alignment=*/64)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingReciprocalOutOfDomain,
+		          "MakeMinimalValidKvc1(3)'s own alpha/beta/gamma rows, wrapped as KvLandingReciprocals: "
+		          "SslmModel::Load status == %s, want KvLandingReciprocalOutOfDomain (%s) -- the "
+		          "correction of this fixture's near-INT64_MAX acceptance",
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(!view.has_kv_landing_reciprocals);
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -9697,6 +10233,21 @@ int main(int argc, char** argv) {
 	TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1();
 	TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair();
 	TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints();
+
+	// S3.3, second pass -- the header contract landed; the blocked cells are
+	// now authored (record Sec6-Sec8).
+	TestLandingRescaleFeatureOracleAgainstResidualReconcileWitnesses();
+	TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements();
+	TestLandingRescaleSaturationCounterMonotoneAcrossTokens();
+	TestLandingRescaleSaturationCounterWholeRowClamp();
+	TestLandingRescaleSaturationCountHasNoEffectOnReturnValue();
+	TestClampRopeCodeAgainstC33Witnesses();
+	TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCase();
+	TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle();
+	TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification();
+	TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary();
+	TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
+	TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
