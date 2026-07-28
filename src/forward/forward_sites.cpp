@@ -217,14 +217,28 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 		// round_half_away_from_zero(magnitude / 2^k) == floor((2*magnitude + 2^k) / 2^(k+1)),
 		// both terms carried in the same 128-bit space as `magnitude` itself
 		// (a plain `uint64_t{1} << k` is undefined behaviour once k >= 64,
-		// which this site's own operand ranges reach routinely). Correct for
-		// arbitrarily large k: an oversized divisor floors to 0 exactly
-		// (U128ShrToU64 and U128OneShl each saturate to 0 for a shift >= 128,
-		// which is the true answer when 2^k already exceeds the 128-bit
-		// magnitude), so this branch needs no loss detection of its own.
+		// which this site's own operand ranges reach routinely). An oversized
+		// divisor floors the QUOTIENT to 0 correctly (2^k already exceeding
+		// the 128-bit magnitude means the true quotient is 0), but a SMALL k
+		// gives no such guarantee: this site's own documented magnitude
+		// (~2^90-2^91, the U128 comment above) divided by a small 2^(k+1)
+		// leaves a true quotient that itself does not fit int64 -- and the
+		// prior code narrowed that quotient straight into `raw` via
+		// `U128ShrToU64`, which silently drops any bits above position 63
+		// rather than detecting them. The pinned witness (branch_code=100,
+		// m_a=-2147483647, r_t=2147483649, e_a=2, e_t=-60) is exactly this:
+		// a 69-bit true quotient narrows to an in-band, wrong-sign `raw=100`
+		// with the saturation counter silent (Poirot 2026-07-28 finding 1).
+		// Fixed the same way the negative-k branch below already detects
+		// loss: keep the full 128-bit quotient (`U128Shr`, not
+		// `U128ShrToU64`) and flag whenever its high word is nonzero -- that
+		// is the true "does not fit int64" condition, independent of what
+		// `raw`'s narrowed low word happens to wrap to.
 		const U128 doubled = U128Add(magnitude, magnitude);
 		const U128 rounded = U128Add(doubled, U128OneShl(static_cast<int>(k)));
-		raw = static_cast<int64_t>(U128ShrToU64(rounded, static_cast<int>(k) + 1));
+		const U128 quotient = U128Shr(rounded, static_cast<int>(k) + 1);
+		magnitude_exceeds_clamp = (quotient.hi != 0) || quotient.lo > 127;
+		raw = static_cast<int64_t>(quotient.lo);
 	} else {
 		// A negative composite exponent is an exact left shift -- no
 		// rounding. Detect bit loss by shifting back and comparing to the
