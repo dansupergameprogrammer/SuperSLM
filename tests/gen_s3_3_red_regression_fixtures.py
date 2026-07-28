@@ -150,6 +150,40 @@ def _build_qln2_zero_witness() -> dict:
 
 
 # =====================================================================
+# New finding A (Critical) -- Claude/Poirot/ad6bd09-s3.3-remediation-
+# confirmation-review-2026-07-28.md. LandingRescale's round-divide branch
+# (k >= 0, forward_sites.cpp's `raw = static_cast<int64_t>(U128ShrToU64(...))`)
+# narrows a >64-bit true quotient with NO loss detection of its own -- the
+# identical class the left-shift branch's own fix (commit 3bbb11e) closed,
+# left open on this branch, whose own comment claims the opposite ("this
+# branch needs no loss detection of its own"). Witness: branch_code=100,
+# m_a=-2^31+1, r_t=2^31+1, e_a=2, e_t=-60 (k=0) -- one of 111 rows the
+# review's own probe found where the true residual_reconcile result is a
+# 69-bit integer and the shipped narrowing returns a value INSIDE
+# [-127, 127]: the wrong answer is indistinguishable from an ordinary
+# activation code, so the symptom alone cannot catch it -- only the
+# saturation counter can, and it does not fire.
+# =====================================================================
+
+
+def _build_round_divide_in_band_witness() -> dict:
+    branch_code, m_a, r_t, e_a, e_t = 100, -2147483647, 2147483649, 2, -60
+    k = 62 - (e_a - e_t)
+    assert k >= 0, (
+        "this witness must land on the round-divide branch (k >= 0), or it no longer pins finding A"
+    )
+    reference = im.residual_reconcile(branch_code, m_a, r_t, e_a, e_t)
+    assert abs(reference) > 127, (
+        "the reference's true magnitude must exceed the clamp range, or this witness no longer "
+        "pins 'the saturation counter must fire but does not'"
+    )
+    return {
+        "branch_code": branch_code, "m_a": m_a, "r_t": r_t, "e_a": e_a, "e_t": e_t,
+        "reference_bit_length": reference.bit_length(), "reference_positive": reference > 0,
+    }
+
+
+# =====================================================================
 # Emission
 # =====================================================================
 
@@ -163,6 +197,7 @@ def generate() -> str:
     neg_ma = _build_negative_ma_witness()
     extreme_et = _build_extreme_et_witness()
     qln2_zero = _build_qln2_zero_witness()
+    round_divide_in_band = _build_round_divide_in_band_witness()
 
     lines = [
         "// GENERATED FILE. Do not hand-edit.",
@@ -171,15 +206,19 @@ def generate() -> str:
         "// the six S3.3 attention-interior defects confirmed by execution against",
         "// the green build at D:\\SuperSLM@c314a64 (Claude/Poirot/c314a64-s3.3-",
         "// attention-interior-review-2026-07-28.md; Claude/Popper/superslm-c27-kv-",
-        "// landing-domain-bounds-debunk-2026-07-28.md). iexp_scale_constants/",
-        "// residual_reconcile values are computed by CALLING the vendored reference",
-        "// (tests/reference/superslm_spike/intmath.py), never re-derived from its",
-        "// formula in this module.",
+        "// landing-domain-bounds-debunk-2026-07-28.md), PLUS one new finding a",
+        "// remediation of those six introduced (Claude/Poirot/ad6bd09-s3.3-",
+        "// remediation-confirmation-review-2026-07-28.md finding A). iexp_scale_",
+        "// constants/residual_reconcile values are computed by CALLING the vendored",
+        "// reference (tests/reference/superslm_spike/intmath.py), never re-derived",
+        "// from its formula in this module.",
         "//",
         "// Re-running this script must reproduce this file byte-for-byte.",
         "//",
         "// Test-design record:",
         "// Claude/Curie/superslm-s3.3-attention-interior-red-regression-2026-07-28.md",
+        "// Claude/Curie/superslm-s3.3-remediation-confirmation-red-regression-",
+        "// 2026-07-28.md",
         "#ifndef SUPERSLM_TESTS_SSLM_S3_3_RED_REGRESSION_FIXTURES_H",
         "#define SUPERSLM_TESTS_SSLM_S3_3_RED_REGRESSION_FIXTURES_H",
         "",
@@ -256,6 +295,31 @@ def generate() -> str:
         f"\t/*m=*/{qln2_zero['m']}LL, /*e=*/{qln2_zero['e']},",
         f"\t/*q_ln2=*/{qln2_zero['q_ln2']}LL, /*q_b=*/{qln2_zero['q_b']}LL, /*q_c=*/{qln2_zero['q_c']}LL,",
         f"\t/*width=*/{qln2_zero['width']}u,",
+        "};",
+        "",
+        "// --- New finding A (Critical, Poirot ad6bd09 remediation-confirmation",
+        "// review): LandingRescale's round-divide branch (k >= 0) narrows a",
+        "// >64-bit true quotient with no loss detection, and the shipped raw",
+        "// result lands INSIDE [-127, 127] -- an in-band code indistinguishable",
+        "// from an ordinary activation (forward_sites.cpp) ---",
+        "",
+        "struct LandingRoundDivideInBandWitness {",
+        "\tint64_t branch_code, m_a, r_t; int e_a, e_t;",
+        "\t// The true reference (residual_reconcile) does not fit int64_t. What",
+        "\t// this suite asserts is that its magnitude exceeds the clamp range",
+        "\t// (127), so the saturation counter must fire -- the shipped `raw` the",
+        "\t// test itself computes and prints on failure is the dangerous part:",
+        "\t// it is INSIDE the clamp band, not merely wrong.",
+        "\tint reference_bit_length;",
+        "\tbool reference_positive;",
+        "};",
+        "",
+        "inline constexpr LandingRoundDivideInBandWitness kLandingRoundDivideInBandWitness = {",
+        f"\t/*branch_code=*/{round_divide_in_band['branch_code']}LL, "
+        f"/*m_a=*/{round_divide_in_band['m_a']}LL, /*r_t=*/{round_divide_in_band['r_t']}LL, "
+        f"/*e_a=*/{round_divide_in_band['e_a']}, /*e_t=*/{round_divide_in_band['e_t']},",
+        f"\t/*reference_bit_length=*/{round_divide_in_band['reference_bit_length']}, "
+        f"/*reference_positive=*/{_fmt_bool(round_divide_in_band['reference_positive'])},",
         "};",
         "",
         "}  // namespace superslm_test",

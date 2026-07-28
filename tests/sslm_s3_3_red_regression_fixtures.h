@@ -4,15 +4,19 @@
 // the six S3.3 attention-interior defects confirmed by execution against
 // the green build at D:\SuperSLM@c314a64 (Claude/Poirot/c314a64-s3.3-
 // attention-interior-review-2026-07-28.md; Claude/Popper/superslm-c27-kv-
-// landing-domain-bounds-debunk-2026-07-28.md). iexp_scale_constants/
-// residual_reconcile values are computed by CALLING the vendored reference
-// (tests/reference/superslm_spike/intmath.py), never re-derived from its
-// formula in this module.
+// landing-domain-bounds-debunk-2026-07-28.md), PLUS one new finding a
+// remediation of those six introduced (Claude/Poirot/ad6bd09-s3.3-
+// remediation-confirmation-review-2026-07-28.md finding A). iexp_scale_
+// constants/residual_reconcile values are computed by CALLING the vendored
+// reference (tests/reference/superslm_spike/intmath.py), never re-derived
+// from its formula in this module.
 //
 // Re-running this script must reproduce this file byte-for-byte.
 //
 // Test-design record:
 // Claude/Curie/superslm-s3.3-attention-interior-red-regression-2026-07-28.md
+// Claude/Curie/superslm-s3.3-remediation-confirmation-red-regression-
+// 2026-07-28.md
 #ifndef SUPERSLM_TESTS_SSLM_S3_3_RED_REGRESSION_FIXTURES_H
 #define SUPERSLM_TESTS_SSLM_S3_3_RED_REGRESSION_FIXTURES_H
 
@@ -85,6 +89,28 @@ inline constexpr SoftmaxQLn2ZeroWitness kSoftmaxQLn2ZeroWitness = {
 	/*m=*/1073741824LL, /*e=*/-10,
 	/*q_ln2=*/0LL, /*q_b=*/0LL, /*q_c=*/0LL,
 	/*width=*/3u,
+};
+
+// --- New finding A (Critical, Poirot ad6bd09 remediation-confirmation
+// review): LandingRescale's round-divide branch (k >= 0) narrows a
+// >64-bit true quotient with no loss detection, and the shipped raw
+// result lands INSIDE [-127, 127] -- an in-band code indistinguishable
+// from an ordinary activation (forward_sites.cpp) ---
+
+struct LandingRoundDivideInBandWitness {
+	int64_t branch_code, m_a, r_t; int e_a, e_t;
+	// The true reference (residual_reconcile) does not fit int64_t. What
+	// this suite asserts is that its magnitude exceeds the clamp range
+	// (127), so the saturation counter must fire -- the shipped `raw` the
+	// test itself computes and prints on failure is the dangerous part:
+	// it is INSIDE the clamp band, not merely wrong.
+	int reference_bit_length;
+	bool reference_positive;
+};
+
+inline constexpr LandingRoundDivideInBandWitness kLandingRoundDivideInBandWitness = {
+	/*branch_code=*/100LL, /*m_a=*/-2147483647LL, /*r_t=*/2147483649LL, /*e_a=*/2, /*e_t=*/-60,
+	/*reference_bit_length=*/69, /*reference_positive=*/false,
 };
 
 }  // namespace superslm_test

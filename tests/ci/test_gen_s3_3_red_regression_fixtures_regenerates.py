@@ -50,11 +50,12 @@ def test_the_gate_has_something_to_lose_a_nonvacuous_floor():
     for needle in (
         "kSoftmaxRowOverflowWitness", "kLandingNegativeMaWitness",
         "kLandingExtremeExponentWitness", "kSoftmaxQLn2ZeroWitness",
+        "kLandingRoundDivideInBandWitness",
     ):
         assert needle in committed, f"expected witness group {needle!r} missing from the committed header"
     assert len(committed) > 1500, (
         f"the committed header is only {len(committed)} bytes -- suspiciously small for a "
-        f"fixture claiming four distinct witness groups"
+        f"fixture claiming five distinct witness groups"
     )
 
 
@@ -88,3 +89,15 @@ def test_qln2_zero_witness_genuinely_degenerates_via_the_real_derivation():
     w = gen._build_qln2_zero_witness()
     assert w["q_ln2"] == 0
     assert w["q_b"] == 0 and w["q_c"] == 0
+
+
+def test_round_divide_in_band_witness_lands_on_the_round_divide_branch_and_exceeds_the_clamp():
+    import intmath as im  # the vendored reference, already on sys.path via gen module import
+
+    w = gen._build_round_divide_in_band_witness()
+    k = 62 - (w["e_a"] - w["e_t"])
+    assert k >= 0, "this witness must land on LandingRescale's round-divide branch (k >= 0)"
+    reference = im.residual_reconcile(w["branch_code"], w["m_a"], w["r_t"], w["e_a"], w["e_t"])
+    assert abs(reference) > 127
+    assert (reference > 0) == w["reference_positive"]
+    assert reference.bit_length() == w["reference_bit_length"]

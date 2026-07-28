@@ -9926,6 +9926,93 @@ static void TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid() {
 	          static_cast<long long>(w.q_c));
 }
 
+// ---------------------------------------------------------------------------
+// Remediation-confirmation red suite (Curie, 2026-07-28). Claude/Poirot/
+// ad6bd09-s3.3-remediation-confirmation-review-2026-07-28.md confirmed by
+// execution that the pass which closed the six findings above introduced two
+// more, in the same shape: the operand that is checked is the one that was
+// easy to reach, and the operand that determines the answer is the one left
+// open. Every cell below fails against the shipped ad6bd09 code for its own
+// reason and asserts the vendored reference's own value
+// (tests/reference/superslm_spike/intmath.py, run directly by
+// gen_s3_3_red_regression_fixtures.py -- never re-implemented) where a
+// reference value exists.
+//
+// Test-design record:
+// Claude/Curie/superslm-s3.3-remediation-confirmation-red-regression-
+// 2026-07-28.md
+// ---------------------------------------------------------------------------
+
+// New finding A (CRITICAL, Poirot ad6bd09 review): LandingRescale's
+// round-divide branch (k >= 0, forward_sites.cpp:216-227) narrows a >64-bit
+// true quotient through U128ShrToU64 with NO loss detection of its own --
+// the identical class the left-shift branch's own fix (commit 3bbb11e)
+// closed, left open here. That fix's own comment claims the opposite: "this
+// branch needs no loss detection of its own." The witness below is one of
+// 111 rows (Poirot's probe, this pass) where the true residual_reconcile
+// result is a 69-bit integer and the shipped narrowing's low 64 bits land
+// INSIDE [-127, 127] -- an ordinary-looking activation code with the WRONG
+// SIGN, which is exactly why the symptom alone cannot catch this class:
+// only the saturation counter can, and today it does not fire.
+static void TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss() {
+	using namespace superslm_test;
+	const auto& w = kLandingRoundDivideInBandWitness;
+
+	uint64_t count = 0;
+	const int64_t raw =
+	    superslm::LandingRescale(w.branch_code, w.m_a, w.r_t, w.e_a, w.e_t, &count);
+	CHECK_MSG(count == 1,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%d, e_t=%d): "
+	          "*out_saturation_count == %llu, want 1 -- the true residual_reconcile result at this "
+	          "operand set is a %d-bit %s integer, far outside the [-127, 127] clamp, so the counter "
+	          "must fire (D-SLM201). The shipped result was raw=%lld -- an IN-BAND code "
+	          "indistinguishable from an ordinary activation (and, at this exact witness, the WRONG "
+	          "SIGN too), because the round-divide branch (k=%lld >= 0) narrows the true >64-bit "
+	          "quotient through U128ShrToU64 with no loss detection, unlike its sibling left-shift "
+	          "branch (Poirot 2026-07-28 remediation-confirmation review, finding A)",
+	          static_cast<long long>(w.branch_code), static_cast<long long>(w.m_a),
+	          static_cast<long long>(w.r_t), w.e_a, w.e_t, static_cast<unsigned long long>(count),
+	          w.reference_bit_length, w.reference_positive ? "positive" : "negative",
+	          static_cast<long long>(raw), static_cast<long long>(62 - (w.e_a - w.e_t)));
+}
+
+// New finding B (Significant, Poirot ad6bd09 review): LandingRescale reads
+// its `e_t` argument from KvLandingReciprocals word 1
+// (Tools/superslm_spike/dynamic_engine.py:374-378: `_m_t, e_t, r_t =
+// model.kv_landing_reciprocals[...]`), never from KvLandingScales. Commit
+// 1b0bd10's load-time floor landed on KvLandingScales word 1 instead --
+// finding 4's fix, verified above, closes that section, but the field the
+// composite actually consumes, KvLandingReciprocals' own e_t, carries no
+// domain check anywhere in the tree. An artifact whose R_t (the section's
+// only checked word) is canonical but whose e_t is the same extreme
+// witness this suite already proved silently wrong
+// (kLandingExtremeExponentWitness.e_t) must be REJECTED at load time; today
+// it is accepted regardless of what e_t carries, because no check anywhere
+// reads word 1 of this section.
+static void TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT() {
+	using namespace superslm_test;
+	const int64_t extreme_e_t = static_cast<int64_t>(kLandingExtremeExponentWitness.e_t);  // -1000
+
+	for (int64_t r_t : {kKvLandingReciprocalMin, kKvLandingReciprocalMax}) {
+		auto built = BuildArtifact(
+		    {MakeValidConfigSection(), MakeSigmoidLutSection(),
+		     MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin, extreme_e_t, r_t)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status != SslmModelStatus::Ok,
+		          "m_t=%lld (canonical, unchecked either way), e_t=%lld (extreme, unchecked "
+		          "anywhere in the tree), R_t=%lld (canonical, the section's only checked word): "
+		          "SslmModel::Load status == Ok, want a rejection -- LandingRescale's own e_t "
+		          "operand is read from KvLandingReciprocals word 1, not KvLandingScales "
+		          "(Tools/superslm_spike/dynamic_engine.py:374-378), and no check anywhere in this "
+		          "tree validates it there (Poirot 2026-07-28 remediation-confirmation review, "
+		          "finding B) -- R_t's own value must not change this artifact's fate",
+		          static_cast<long long>(kKvLandingScaleMantissaMin), static_cast<long long>(extreme_e_t),
+		          static_cast<long long>(r_t));
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -10456,6 +10543,11 @@ int main(int argc, char** argv) {
 	TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent();
 	TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT();
 	TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid();
+
+	// Remediation-confirmation red suite (Curie, 2026-07-28) -- Claude/Poirot/
+	// ad6bd09-s3.3-remediation-confirmation-review-2026-07-28.md.
+	TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss();
+	TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
