@@ -141,7 +141,7 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	const NormalizedScale ns = NormalizeScale(d_prime);
 	const int64_t r = DynamicScaleReciprocal(ns.dn);
 
-	// Step 6's own carried_scale_product, computed here -- ahead of step 5's
+	// Step 5's own carried_scale_product, computed here -- ahead of step 6's
 	// per-element write below -- in C26's pinned LEFT-ASSOCIATED order: the
 	// incoming carried scale(s) first, then the site constant, then this token's
 	// own D'-factor. D' itself is already exact and canonical from NormalizeScale's
@@ -157,11 +157,11 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 	// ever used as the next combine's operand or written to `*out_scale`: a fold
 	// whose own product drifts out of int32_t's range is rejected with the same
 	// CarriedScaleMantissaOutOfDomain status step 0 uses. Computing and validating
-	// the fold before step 5's loop -- rather than after, where the pinned step
-	// order would otherwise place it -- means this rejection path leaves out_codes
-	// untouched exactly like every other rejection (step 5 has not run yet); step
-	// 5 and step 6 do not depend on each other's outputs, so reordering their
-	// computation changes nothing step 5 itself does.
+	// the fold before step 6's loop -- rather than after, in the order the two
+	// steps' own numbering might otherwise suggest -- means this rejection path
+	// leaves out_codes untouched exactly like every other rejection (step 6 has
+	// not run yet); step 5 and step 6 do not depend on each other's outputs, so
+	// running the fold first changes nothing step 6 itself does.
 	const CarriedScale d_prime_factor{ns.dn, -static_cast<int64_t>(ns.s)};
 	bool have_running = false;
 	bool fold_in_domain = true;
@@ -179,7 +179,7 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 		return ChainResult{SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
 	}
 
-	// Step 5: RequantTokenCodeWide per element, directly on the int64 row — never
+	// Step 6: RequantTokenCodeWide per element, directly on the int64 row — never
 	// narrowed to int32 first (T-1254's fold).
 	for (size_t i = 0; i < n; ++i) {
 		out_codes[i] = RequantTokenCodeWide(wide_row[i], r, ns.s);
@@ -257,7 +257,7 @@ constexpr int kSiluCompositionRuntimeMinE =
 
 // The mirror §5.4 calls for: proves at compile time that S-HARDEN-1's load-time
 // ceiling (kCompositionScaleMaxE/MinE, silu_lut.h) never exceeds this predicate's
-// own runtime ceiling — the ordering the loader's own model.cpp:605,609 asserts on
+// own runtime ceiling — the ordering the loader's own model.cpp:602,606 asserts on
 // its own literal, restated here from the runtime side so a change to either the
 // loader's floor or this predicate's domain fails the build instead of drifting
 // silently out of the containment relation §5.4 requires.

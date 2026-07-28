@@ -27,7 +27,7 @@ inline constexpr int kSiluLutLog2K = 5;                    // k = log2(N / 2X) =
 inline constexpr int kSiluLutQIdx = 12;                    // sub-node index fractional bits (§5, §7)
 
 // S-HARDEN-1 (D-SLM142): named so the KVC1 (m,e) no-UB floor's upper bound on `e`
-// (src/model.cpp `kCompositionScaleMaxE`) can be pinned by `static_assert` to the exact
+// (this header's own `kCompositionScaleMaxE`, below) can be pinned by `static_assert` to the exact
 // shift at which SiluSigmoidQ15's left branch (`term << shift`, src/silu_lut.cpp) overflows
 // int64 — 26, given |term| < 2^38 from |code| <= 127 (< 2^7) and |m| bounded by the floor's own
 // `kCompositionScaleMaxAbsM`. A prose-only bound (a comment citing "26") is checked by

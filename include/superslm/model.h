@@ -363,11 +363,28 @@ struct SslmModelView {
 	// SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md). Not populated by
 	// SslmModel::Load and not gated by a `has_*` flag -- a default-constructed
 	// SslmTraceHookState{} is already a fully valid "no hook installed" state,
-	// not a partial-load state like the sections above. A caller reaches this
-	// field through the view it already holds and passes it to
-	// RequantChainChecked/NarrowRowChecked (checked_chain_funnel.h) to get
-	// trace emission scoped to this one handle; two model views never share
-	// fn/user state.
+	// not a partial-load state like the sections above.
+	//
+	// **Load CLEARS whatever hook state this field already carries, on every
+	// call, success or rejection alike.** `SslmModelAccess::LoadImpl`
+	// (src/model.cpp) resets `out` -- this field included -- to
+	// `SslmModelView{}` defaults before it opens the artifact, and again on
+	// any rejection path; nothing re-installs the hook afterward. A caller
+	// who installs a hook on a handle and then re-Loads a new artifact into
+	// that same handle (to swap models) loses trace coverage silently -- the
+	// call succeeds, the reload is fail-closed and correct (§11
+	// reject-over-degrade: never a partial view), but the hook is gone with
+	// no diagnostic of its own, because it is caller-installed state rather
+	// than artifact-parsed state and Load's fail-closed reset does not
+	// distinguish the two. A caller that wants tracing to survive a reload
+	// re-installs the hook after `Load` returns.
+	//
+	// A caller reaches this field through the view it already holds and
+	// passes it to RequantChainChecked (checked_chain_funnel.h) to get trace
+	// emission scoped to this one handle; two model views never share
+	// fn/user state. NarrowRowChecked (checked_chain_funnel.h) takes no
+	// trace_hook_state parameter -- no production path emits a trace record
+	// from it yet.
 	SslmTraceHookState trace_hook;
 
 	SslmModelView() = default;

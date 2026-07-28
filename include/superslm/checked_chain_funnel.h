@@ -103,14 +103,15 @@ struct ChainResult {
 //   3. C29's domain check: D' <= 2^31, else return {ChainInputOutOfDomain} — this is
 //      C21's own domain check for NormalizeScale, entitling step 4 and nothing else
 //   4. NormalizeScale(D') -> DynamicScaleReciprocal — both already int64-domain
-//   5. RequantTokenCodeWide(x_i, r, s) per element, directly on the int64 row — the
+//   5. carried_scale_product, in C26's pinned LEFT-ASSOCIATED order — the fold's own
+//      running product is checked against CombineCarriedScale's precondition after
+//      every combine (380b75f review N1), else return {CarriedScaleMantissaOutOfDomain}.
+//      Computed here, ahead of step 6's per-element write, because the two steps do
+//      not depend on each other's output and a fold rejection must leave out_codes
+//      untouched, which is only true if the fold runs first
+//   6. RequantTokenCodeWide(x_i, r, s) per element, directly on the int64 row — the
 //      row is NEVER narrowed to int32 (T-1254's fold; NarrowAccumulatorToI32 does not
 //      appear in this list)
-//   6. carried_scale_product, in C26's pinned LEFT-ASSOCIATED order — the fold's own
-//      running product is checked against CombineCarriedScale's precondition after
-//      every combine (380b75f review N1), else return {CarriedScaleMantissaOutOfDomain};
-//      this check runs before step 5's per-element write (the two steps do not depend
-//      on each other's output), so this rejection also leaves out_codes untouched
 // `wide_row` has `n` elements. `incoming` is C26's left-associated product inputs so
 // far; `site_constant` is the artifact's KVC1 entry for this site. On Ok, `out_codes`
 // (n elements) and `*out_scale` are written; on any rejection, neither is touched.
@@ -169,7 +170,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // C30's derived-operand predicate (§7.2 second limb). The not-yet-built C30
 // derivation site (S3.3) forms (q_ln2, q_b, q_c) from a per-query carried scale via
 // C30's own formula and calls this on the result. THIS FUNCTION ENCODES NO THRESHOLD
-// OF ITS OWN — it calls the already-shipped IExpConstantsInDomain (intmath.h:362)
+// OF ITS OWN — it calls the already-shipped IExpConstantsInDomain (intmath.h:427)
 // on the four values and maps a false result to IExpConstantsOutOfDomain, nothing
 // else.
 //
@@ -189,7 +190,7 @@ SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b
 // C34's derived-operand predicate (§7.2 second limb, §5.4). The not-yet-built SwiGLU
 // activation site (S3.4) forms the per-token gate scale (m, e) at runtime — never
 // artifact-carried, so no load-time gate stands behind it — and calls this before
-// `SiluSigmoidQ15` (silu_lut.h:48). Encodes the runtime no-UB domain directly:
+// `SiluSigmoidQ15` (silu_lut.h:61). Encodes the runtime no-UB domain directly:
 // `|m|` must stay within the same symmetric bound `SiluSigmoidQ15`'s
 // `term = code * m` needs to stay int64-exact, and `e` must keep both of that
 // function's shift placements in range. Its upper branch names `kSiluLutTermLeftShiftOverflowExponent`
