@@ -9871,38 +9871,59 @@ static void TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOf
 	}
 }
 
-// Finding 5 (Poirot #3): SoftmaxRowQ15 discards IExpConstruct's
-// [[nodiscard]] outcome ((void)IExpConstruct, src/intmath.cpp:552), and
-// CheckSoftmaxRowWidthDomain does not take q_ln2, so no gate anywhere in
-// the shipped surface covers the kBadQLn2 outcome. The witness (m=2^30,
-// e=-10) is one of 150 reachable (m, e) points where the real
+// Finding 5 (Poirot #3), re-authored 2026-07-28 against the builder's own
+// remediation (6eb1b76): SoftmaxRowQ15 now READS IExpConstruct's
+// [[nodiscard]] outcome per element instead of discarding it, and returns
+// `bool` -- false whenever any element's construction is kBadQ/kBadQLn2/
+// kBadQB (intmath.h:480-498's own documented contract). This is the fix the
+// finding asked for, at the KERNEL: CheckSoftmaxRowWidthDomain deliberately
+// still does not take q_ln2 (it bounds q_b/q_c only; the header comment
+// beside SoftmaxRowQ15's declaration states this is not a sufficient
+// precondition BY DESIGN, and the kernel itself is the caller's own signal).
+// The suite's prior cell asserted the pre-fix SYMPTOM directly
+// (IExpConstruct(...) == kOk) -- an assertion no correct implementation can
+// satisfy, since q_ln2 == 0 is genuinely invalid (intmath.h: "q_ln2 == 0
+// divides by zero below"). Re-authored to assert the PROPERTY instead: on
+// this witness, the composed path must REFUSE, observably, at the kernel.
+//
+// Witness: m=2^30, e=-10, one of 150 reachable (m, e) points where the real
 // iexp_scale_constants degenerates to (q_ln2, q_b, q_c) = (0, 0, 0) -- the
-// coarse-scale underflow tail. The property this cell pins: a triple the
-// width-domain gate accepts must also form a valid i-exp construction at
-// its own row maximum (q=0, where ShiftByMax always puts it) -- it does
-// not.
-static void TestSoftmaxWidthGateAcceptsATripleWhoseIExpConstructionIsInvalid() {
+// coarse-scale underflow tail.
+//
+// Vitality (executed 2026-07-28, disposable git worktree at 1b0bd10, the
+// commit immediately before 6eb1b76): the pre-fix SoftmaxRowQ15 returned
+// `void` and discarded IExpConstruct's outcome, so this witness produced
+// `out_probs == {0, 0, 0}` with NO observable refusal signal at all -- a
+// silently-plausible zero row, not a rejection. A cell asserting an
+// explicit refusal genuinely could not have been expressed against that
+// code, let alone pass; the bool return this cell requires is exactly what
+// 6eb1b76 added.
+static void TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid() {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxQLn2ZeroWitness;
 
+	// Grounding, not the pin: CheckSoftmaxRowWidthDomain is documented to
+	// deliberately not cover q_ln2 (intmath.h:480-498), so it still accepts
+	// this triple -- the kernel is where the refusal is now observable.
 	const auto width_status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
 	CHECK_MSG(width_status == superslm::SslmForwardStatus::Ok,
-	          "premise: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want Ok -- "
-	          "if this no longer holds, this witness needs re-deriving",
+	          "premise: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want Ok "
+	          "(this predicate is documented to not cover q_ln2 by design -- if this no longer "
+	          "holds, either the design changed or this witness needs re-deriving)",
 	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
 	          superslm::SslmForwardStatusName(width_status));
 
-	superslm::IExpConstruction construction;
-	const superslm::IExpDomain d = superslm::IExpConstruct(0, w.q_ln2, w.q_b, w.q_c, &construction);
-	CHECK_MSG(d == superslm::IExpDomain::kOk,
-	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == Ok, but IExpConstruct(q=0, "
-	          "q_ln2=%lld, q_b=%lld, q_c=%lld) == %d (kBadQLn2, want kOk) -- the width-domain gate is "
-	          "not a sufficient precondition for SoftmaxRowQ15, and no other gate covers q_ln2 "
-	          "anywhere in the shipped surface (Poirot 2026-07-28 finding 3); SoftmaxRowQ15 itself "
-	          "discards this exact outcome (src/intmath.cpp:552) rather than checking it",
-	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
-	          static_cast<long long>(w.q_ln2), static_cast<long long>(w.q_b),
-	          static_cast<long long>(w.q_c), static_cast<int>(d));
+	std::vector<int64_t> scores(w.width, 0);
+	std::vector<int64_t> out_probs(w.width, INT64_C(-99));  // poison
+	const bool well_formed =
+	    superslm::SoftmaxRowQ15(scores.data(), w.width, w.q_ln2, w.q_b, w.q_c, out_probs.data());
+	CHECK_MSG(!well_formed,
+	          "SoftmaxRowQ15(width=%zu, q_ln2=%lld, q_b=%lld, q_c=%lld) returned true (well-formed), "
+	          "want false -- every element's IExpConstruct(q=0, q_ln2=0, ...) == kBadQLn2 (q_ln2 == 0 "
+	          "has no valid decomposition), so the kernel must report the row untrustworthy rather "
+	          "than silently succeeding (Poirot 2026-07-28 finding 3; fixed at intmath.cpp by 6eb1b76)",
+	          w.width, static_cast<long long>(w.q_ln2), static_cast<long long>(w.q_b),
+	          static_cast<long long>(w.q_c));
 }
 
 int main(int argc, char** argv) {
@@ -10434,7 +10455,7 @@ int main(int argc, char** argv) {
 	TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile();
 	TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent();
 	TestKvLandingScalesLoadRejectsAnExtremeUncheckedExponentRegardlessOfMT();
-	TestSoftmaxWidthGateAcceptsATripleWhoseIExpConstructionIsInvalid();
+	TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
