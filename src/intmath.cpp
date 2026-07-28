@@ -259,6 +259,27 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
 }
 
+// --- F-S3-7 / §7.2 wide-row (int64 input width) siblings — STUB (S3.1 red-phase) ---
+//
+// Deliberately-wrong sentinel bodies so the follow-up red suite (Claude/Curie/
+// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §4) compiles, links,
+// and FAILS against these three primitives' real semantics. Brunel replaces each body
+// with the bit-exact wide-width port in the S3.1 green phase (same construction as
+// the int32-input sibling above, at int64 input width).
+
+int64_t MaxAbsReduceWide(const int64_t*, size_t) {
+	return 0;  // stub (violates the D' >= 1 postcondition on purpose)
+}
+
+void RowBoundsWide(const int64_t*, size_t, int64_t* out_max, int64_t* out_min) {
+	*out_max = 0;  // stub
+	*out_min = 0;  // stub
+}
+
+int8_t RequantTokenCodeWide(int64_t, int64_t, int) {
+	return 0;  // stub
+}
+
 // --- §6.3 nonlinear scalar primitives (i-sqrt C4/C5/C6, i-exp C7/C8/C9) --------
 
 namespace {
