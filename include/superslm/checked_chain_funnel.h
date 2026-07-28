@@ -224,9 +224,9 @@ SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 
 // C28's derived-operand pair predicate (§7.2 second limb, §4.4; S3.2). The
-// not-yet-built C28 bias-reconciliation site (forward_sites.h's BiasReconcile,
-// S3.2) checks this before calling RoundingDivideByPOT(int64_t, int) with the
-// composed exponent q_B + 62 + e_a: 0 <= q_B + 62 + e_a <= 63, else
+// C28 bias-reconciliation site (forward_sites.h's BiasReconcile) checks this
+// before calling RoundingDivideByPOT(int64_t, int) with the composed exponent
+// q_B + 62 + e_a: 0 <= q_B + 62 + e_a <= 63, else
 // RoundingDivideByPotExponentOutOfDomain. Names
 // kRoundingDivideByPotExponentMinI64 / kRoundingDivideByPotExponentMaxI64
 // (intmath.h:59-60) rather than the literals 0 and 63, so neither side can drift
@@ -234,9 +234,8 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 //
 // Re-staged unchanged from its original declaration at commit 32aca0c (removed the
 // same day, f98eee9, as belonging to S3.2 rather than S3.1) -- see the file header
-// comment above. THIS FUNCTION IS A STUB in src/forward/checked_chain_funnel.cpp:
-// it returns a fixed, deliberately wrong status regardless of its arguments; the
-// real 0 <= q_B + 62 + e_a <= 63 comparison is written in S3.2's green phase.
+// comment above. The real 0 <= q_B + 62 + e_a <= 63 comparison is written in
+// src/forward/checked_chain_funnel.cpp (S3.2's green phase).
 SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
 
 }  // namespace superslm

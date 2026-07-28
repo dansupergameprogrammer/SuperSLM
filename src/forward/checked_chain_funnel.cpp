@@ -9,10 +9,10 @@
 //
 // C28's derived-operand pair predicate (CheckRoundingDivideByPotExponentDomain) is
 // S3.2's own build (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-
-// test-design-2026-07-28.md §9 item 4). It is declared in the header above and its
-// body below is a STUB, re-staged from its original S3.1 header-contract
-// declaration (32aca0c) — the real 0 <= q_B + 62 + e_a <= 63 comparison is not
-// implemented in this pass.
+// test-design-2026-07-28.md §9 item 4). It is declared in the header above,
+// re-staged from its original S3.1 header-contract declaration (32aca0c), and
+// its body below is the real 0 <= q_B + 62 + e_a <= 63 comparison (S3.2 green
+// phase).
 #include "superslm/checked_chain_funnel.h"
 
 #include "superslm/intmath.h"
@@ -274,13 +274,16 @@ static_assert(kCompositionScaleMinE >= kSiluCompositionRuntimeMinE,
 
 }  // namespace
 
-SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t /*q_B*/, int64_t /*e_a*/) {
-	// STUB (S3.2 red-phase): encodes neither branch of 0 <= q_B + 62 + e_a <= 63.
-	// Returns the same sentinel S3.1's original stub for this function used
-	// (WorkspaceTooSmall) -- a status neither of this predicate's two real
-	// outcomes (Ok, RoundingDivideByPotExponentOutOfDomain) ever is, so every
-	// cell fails on an actual value mismatch rather than coincidentally passing.
-	return SslmForwardStatus::WorkspaceTooSmall;
+SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a) {
+	// C28's own derived-operand pair predicate (§7.2 second limb, §4.4; S3.2):
+	// 0 <= q_B + 62 + e_a <= 63, named against RoundingDivideByPOT's own int64
+	// exponent domain constants rather than the literals 0 and 63, so neither
+	// side can drift from the primitive without failing a compile.
+	const int64_t k = q_B + 62 + e_a;
+	if (k < kRoundingDivideByPotExponentMinI64 || k > kRoundingDivideByPotExponentMaxI64) {
+		return SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain;
+	}
+	return SslmForwardStatus::Ok;
 }
 
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {

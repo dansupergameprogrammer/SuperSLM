@@ -705,23 +705,26 @@ SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::str
 // projection-sites-test-design-2026-07-28.md §3.4/§4.7). Curie's record derives
 // the bound by execution: R_a's maximum over the C19 reciprocal's own domain is
 // 2^32, so keeping B[j]*R_a inside int64 requires |B[j]| <= floor((2^63-1) / 2^32)
-// == INT32_MAX, verified tight (one past it does not fit).
-//
-// THIS IS A STUB (S3.2 red-phase): it does not compare any element against that
-// bound and always accepts. It is written this way, rather than as a fixed-wrong
-// rejection (the sentinel style every other stub in this campaign uses), because
-// this function is wired into ValidateSectionValues below, which every existing
-// SslmModel::Load call already exercises on every artifact carrying a Biases
-// section -- an unconditionally-rejecting stub would fail every currently-green
-// fixture that loads one, not only the not-yet-authored hostile-value cell this
-// stub is staged for. A permissive stub changes nothing about today's passing
-// suite and still fails unmistakably the moment Curie's real hostile-value cell
-// (an artifact with one bias code at 2^31, one past the derived bound) asserts
-// SslmModel::Load returns BiasCodeOutOfDomain and gets Ok instead. S3.2's green
-// phase replaces this body with the real |B[j]| <= INT32_MAX comparison over
-// every element of every tensor in `biases`.
-SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& /*biases*/, std::string* /*err*/) {
-	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+// == INT32_MAX, verified tight (one past it does not fit). Walked the same way as
+// ValidateRopeTablesDomain above: every element of every tensor in `biases`,
+// stored as int64, checked before any narrowing.
+constexpr int64_t kBia1MagnitudeBound = kInt32Max;
+
+SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& biases, std::string* err) {
+	for (const SslmTensorView& t : biases.Tensors()) {
+		for (uint64_t i = 0; i < t.elem_count; ++i) {
+			const int64_t v = RdI64(t.data + i * 8);
+			if (v < -kBia1MagnitudeBound || v > kBia1MagnitudeBound) {
+				if (err) {
+					*err = "Biases tensor \"" + std::string(t.name) + "\" element " + std::to_string(i) +
+					       "=" + std::to_string(v) + " outside [-" + std::to_string(kBia1MagnitudeBound) +
+					       "," + std::to_string(kBia1MagnitudeBound) + "]";
+				}
+				return SslmModelStatus::BiasCodeOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
 }
 
 // S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,

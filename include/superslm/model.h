@@ -156,10 +156,9 @@ enum class SslmModelStatus {
 	WeightScaleIdentityNotBool,  // WSC1 identity column not in {0,1}
 	RopeTableEntryOutOfDomain,   // ROP1 element outside [-2^30, 2^30] (RopeApplyPair's yr-addition safety bound)
 	BiasCodeOutOfDomain,         // BIA1 element |B[j]| exceeds the C28 magnitude bound (Sec7.2a third limb,
-	                              // Sec4.4 -- B[j]*R_a must stay in int64, derived bound |B[j]| <= INT32_MAX,
-	                              // owed by S3.2). ValidateBiasesDomain (model.cpp) is a STUB as of S3.2's
-	                              // header contract -- it does not yet enforce this bound (see its own
-	                              // comment); this member exists so the contract compiles and is complete.
+	                              // Sec4.4 -- B[j]*R_a must stay in int64, derived bound |B[j]| <= INT32_MAX).
+	                              // Enforced by ValidateBiasesDomain (model.cpp), wired into
+	                              // ValidateSectionValues (S3.2's green phase).
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)

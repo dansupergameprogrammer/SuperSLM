@@ -10,28 +10,26 @@
 // family, not a site composition, and re-stages a declaration that already lived
 // there once (see that header's own comment).
 //
-// THIS FILE IS S3.2's HEADER-CONTRACT STEP (red-first TDD, matching the S3.1/
-// S2.1 precedent): the declarations below are the approved API surface (Claude/
-// Curie/superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
-// §4/§9). Bodies in src/forward_sites.cpp are STUBS — they compile and link but
-// return a fixed, deliberately wrong value when called. Curie's red suite is
-// authored against this contract in a follow-up pass; the real construction
-// lands at the next build step (Brunel green).
+// The declarations below are the approved API surface (Claude/Curie/
+// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
+// §4/§9). Bodies in src/forward_sites.cpp are the real construction, green
+// against the red suite authored in tests/test_main.cpp (same record §11).
 //
 // PLACEMENT NOTE: this file's own translation unit (src/forward_sites.cpp) is
-// deliberately NOT under src/forward/, even though these are forward-composition
-// sites in the plan's own sense. tests/ci/check_no_forward_leaf_calls.py's
-// _DEFAULT_FORWARD_GLOBS scans src/forward/**, and its own end-to-end test
-// (test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous,
-// read-only to this campaign) asserts that glob matches EXACTLY ONE file,
-// src/forward/checked_chain_funnel.cpp. Adding a second real file under
-// src/forward/ would fail that exact-population assertion without a matching
-// update to the check itself, which is out of this campaign's writable scope.
-// Placing these sites at src/forward_sites.cpp (a sibling of src/model.cpp)
-// keeps that test's assertion true; a future pass that owns tests/ can widen
-// the check's glob/allowlist to bring this file under its coverage once the
-// real construction is written, so a direct leaf call from a site composition
-// is caught the same way one from the funnel's own file would be.
+// NOT under src/forward/, even though these are forward-composition sites in
+// the plan's own sense. tests/ci/check_no_forward_leaf_calls.py's
+// _DEFAULT_FORWARD_GLOBS names src/forward_sites.cpp explicitly (it is
+// scanned, not exempted) alongside the src/forward/** glob, and its
+// end-to-end test's own _EXPECTED_REAL_FORWARD_FILES (read-only to this
+// campaign) hardcodes this file's CURRENT relative path. Physically
+// relocating it under src/forward/ would require updating that hardcoded set
+// in the same commit — a tests/ edit outside this campaign's writable
+// scope — so the move is routed rather than done (Claude/Brunel's build log
+// for this pass states the same finding, confirmed by execution: moving the
+// file and re-running tests/ci/ regresses that one test from pass to fail).
+// The gate's coverage hole this note originally described is already closed
+// by the explicit glob entry above, independently of whether the move
+// happens.
 #ifndef SUPERSLM_FORWARD_SITES_H
 #define SUPERSLM_FORWARD_SITES_H
 
