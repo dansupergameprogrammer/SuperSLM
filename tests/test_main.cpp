@@ -34,6 +34,7 @@
 #include "sslm_s3_2_fixtures.h"
 #include "sslm_s3_3_fixtures.h"
 #include "sslm_s3_3_red_regression_fixtures.h"
+#include "sslm_c32_softmax_row_width_gate_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -9976,6 +9977,180 @@ static void TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardl
 	}
 }
 
+// ---------------------------------------------------------------------------
+// C32 softmax-row width-gate red suite (Curie, 2026-07-28). Popper's attack
+// (Claude/Popper/superslm-c32-softmax-denominator-2026-07-28.md) killed the
+// claim that `total` is safe and that the shipped
+// `CheckSoftmaxRowWidthDomain(q_b, q_c, width)` correctly gates it, by three
+// independent, executed mechanisms, each producing a triple the gate accepts
+// (`Ok`) that is unsound: (1) the closed-form proxy `M = q_b*q_b + q_c` is
+// not a valid upper bound on the row's real i-exp values outside an
+// undocumented ratio the gate has no parameter to check; (2) `M == 0` skips
+// the sum-width check entirely, at any width; (3) `M < 0` defeats the sum
+// check through a signed-to-size_t cast, at any width. Every cell below
+// asserts the PROPERTY -- this row must be refused, and no row may be
+// reported well-formed while carrying an out-of-range probability -- not one
+// particular internal formula, so a correct re-shaping of the predicate
+// (e.g. taking q_ln2 and checking the shortcut ratio, or gating on the row's
+// real computed peak the way tests/reference/superslm_spike's own
+// _vec_softmax does) greens every cell here and a second proxy does not.
+//
+// Test-design record:
+// Claude/Curie/superslm-c32-softmax-row-width-gate-test-design-2026-07-28.md
+// ---------------------------------------------------------------------------
+
+// Defect 1 (Popper Null 1): CheckSoftmaxRowWidthDomain must not accept a
+// triple whose row REALLY carries an element this many orders of magnitude
+// past the D-SLM367 ceiling (2^47) -- the closed form M it actually checks
+// (== 0 on this witness) is not a valid stand-in for that real peak off the
+// undocumented shortcut ratio `2*q_b >= q_ln2 - 1`, and the predicate has no
+// q_ln2 parameter with which to check that ratio. This cell targets the gate
+// alone, before any kernel call, so a fix that rejects here (rather than
+// only downstream at the kernel) is recognized as sound.
+static void TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling() {
+	using namespace superslm_test;
+	const auto& w = kSoftmaxRowOffRatioWitness;
+
+	const auto status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(status != superslm::SslmForwardStatus::Ok,
+	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want a rejection -- "
+	          "this row's real per-element i-exp peak (computed by the vendored reference's "
+	          "i_exp_from_constants) exceeds PROB_WIDTH_CEILING (2^47) by roughly 9x10^16, but the "
+	          "gate's own closed-form proxy M = q_b*q_b + q_c == 0 on this witness and is not a valid "
+	          "stand-in for that peak off the undocumented shortcut ratio the gate cannot check "
+	          "(Popper 2026-07-28 Null 1)",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(status));
+}
+
+// Defect 1 + the end-state consequence (Popper Null 1/Null 3), pinned as one
+// composed property so a fix is free to catch this witness at either stage:
+// the row must never reach a state where SoftmaxRowQ15 reports it
+// well-formed while ANY reported probability falls outside the format's own
+// [0, 32768] range (kProbFracBits == 15). `total` is independently
+// replayed here from the same shipped IExpConstruct/IExpEvaluate primitives
+// SoftmaxRowQ15 itself calls (SoftmaxRowQ15 does not expose its internal
+// accumulator) and bit-compared against the vendored reference's
+// exact-precision sum, wrapped to int64_t -- grounding "genuinely overflows"
+// in execution, not assertion.
+static void TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability() {
+	using namespace superslm_test;
+	using superslm::IExpConstruct;
+	using superslm::IExpConstruction;
+	using superslm::IExpDomain;
+	using superslm::IExpEvaluate;
+	const auto& w = kSoftmaxRowOffRatioWitness;
+
+	// Grounding: replay the same accumulation SoftmaxRowQ15's own loop
+	// performs, bit-compared against the vendored reference's exact-precision
+	// sum wrapped to int64_t (Popper Null 3).
+	int64_t replayed_total = 0;
+	for (size_t k = 0; k < w.width; ++k) {
+		IExpConstruction c;
+		const IExpDomain d = IExpConstruct(w.scores[k], w.q_ln2, w.q_b, w.q_c, &c);
+		CHECK_MSG(d == IExpDomain::kOk || d == IExpDomain::kNotRepresentable,
+		          "grounding: IExpConstruct(scores[%zu]=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) domain "
+		          "== %d, want kOk or kNotRepresentable -- this witness's own premise (every element "
+		          "individually constructs) no longer holds",
+		          k, static_cast<long long>(w.scores[k]), static_cast<long long>(w.q_ln2),
+		          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), static_cast<int>(d));
+		replayed_total += IExpEvaluate(c);
+	}
+	CHECK_MSG(replayed_total == w.exact_total_wrapped_i64,
+	          "grounding: replayed int64 total (via the real shipped IExpConstruct/IExpEvaluate) == "
+	          "%lld, want %lld (the vendored reference's exact-precision sum, two's-complement "
+	          "wrapped) -- SoftmaxRowQ15's own accumulation must genuinely overflow int64 on this "
+	          "witness, not merely be asserted to",
+	          static_cast<long long>(replayed_total), static_cast<long long>(w.exact_total_wrapped_i64));
+
+	// The property: gate, then kernel -- if the gate accepts, the kernel must
+	// never report well-formed alongside an out-of-range probability. Any of
+	// three outcomes is sound: the gate rejects; the kernel reports
+	// !well_formed; or the kernel reports well_formed with every probability
+	// inside [0, 32768]. Only "gate Ok, kernel well_formed, an out-of-range
+	// probability" is the defect.
+	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	std::vector<int64_t> out_probs(w.width, INT64_C(-99));  // poison
+	bool well_formed = false;
+	if (gate_status == superslm::SslmForwardStatus::Ok) {
+		well_formed =
+		    superslm::SoftmaxRowQ15(w.scores, w.width, w.q_ln2, w.q_b, w.q_c, out_probs.data());
+	}
+	bool any_out_of_range = false;
+	for (size_t k = 0; k < w.width; ++k) {
+		if (out_probs[k] < 0 || out_probs[k] > (INT64_C(1) << superslm::kProbFracBits)) {
+			any_out_of_range = true;
+		}
+	}
+	const bool sound = gate_status != superslm::SslmForwardStatus::Ok || !well_formed || !any_out_of_range;
+	CHECK_MSG(sound,
+	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == Ok, then "
+	          "SoftmaxRowQ15(...) returned well_formed=%d with out_probs={%lld, %lld, %lld} -- a "
+	          "probability outside [0, %lld] reported alongside well_formed==true must be impossible "
+	          "(Popper 2026-07-28 Null 3: denom collapses to 1 because the wrapped negative total is "
+	          "indistinguishable from a genuine all-clipped row, then exps[k] << kProbFracBits "
+	          "overflows a second, independent time)",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width, (int)well_formed,
+	          static_cast<long long>(out_probs[0]), static_cast<long long>(out_probs[1]),
+	          static_cast<long long>(out_probs[2]), static_cast<long long>(INT64_C(1) << superslm::kProbFracBits));
+}
+
+// Defect 2 (Popper Null 2, first bullet): the m == 0 short-circuit
+// (`m != 0 && width > ...`) that skips the sum-width check entirely must not
+// be a width=3 coincidence -- the same (q_b, q_c) pair must still be refused
+// at a width near the artifact format's own admitted context_cap ceiling
+// (uint32_t, model.h + model.cpp:463's non-zero-only load-time validation).
+static void TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth() {
+	using namespace superslm_test;
+	const auto& w = kSoftmaxRowMZeroWideWitness;
+
+	const auto status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(status != superslm::SslmForwardStatus::Ok,
+	          "CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want a rejection -- "
+	          "M = q_b*q_b + q_c == 0 for this (q_b, q_c) pair (kSoftmaxRowOffRatioWitness's own "
+	          "unsound premise), and the `m != 0` guard skips the sum-width check unconditionally, "
+	          "at ANY width up to the artifact format's own admitted context_cap ceiling "
+	          "(Popper 2026-07-28 Null 2)",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(status));
+}
+
+// Defect 3 (Popper Null 2, second bullet): the sum limb must not become MORE
+// permissive when M's sign flips negative at fixed magnitude. A positive M
+// of magnitude m_magnitude (the largest value representable under the
+// D-SLM367 ceiling, 2^47 - 1) is genuinely rejected by the sum limb at
+// `width` (independently confirmed below, not assumed) -- a negative M of
+// the SAME magnitude must not be treated as safer than its positive
+// counterpart, since a computed "peak" can never legitimately be negative
+// and a negative M carries no more assurance than a positive one of equal
+// size.
+static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude() {
+	using namespace superslm_test;
+	const auto& w = kSoftmaxRowSignAsymmetryWitness;
+
+	// q_b = 0 isolates M = q_c, so the same magnitude is realized on both
+	// signs by flipping q_c's own sign alone.
+	const auto positive_status =
+	    superslm::CheckSoftmaxRowWidthDomain(/*q_b=*/0, /*q_c=*/w.m_magnitude, w.width);
+	CHECK_MSG(positive_status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "control: CheckSoftmaxRowWidthDomain(q_b=0, q_c=%lld, width=%zu) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- this positive-M control must itself be genuinely "
+	          "rejected by the sum limb (width was derived from INT64_MAX // m_magnitude), or the "
+	          "asymmetry this cell targets is not actually demonstrated",
+	          static_cast<long long>(w.m_magnitude), w.width, superslm::SslmForwardStatusName(positive_status));
+
+	const auto negative_status =
+	    superslm::CheckSoftmaxRowWidthDomain(/*q_b=*/0, /*q_c=*/-w.m_magnitude, w.width);
+	CHECK_MSG(negative_status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "CheckSoftmaxRowWidthDomain(q_b=0, q_c=%lld, width=%zu) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain (matching the positive-M control of the SAME magnitude at "
+	          "the SAME width, which is genuinely rejected) -- the negative-M sum check "
+	          "(`INT64_MAX / m` with m < 0, cast to size_t) wraps to a huge unsigned value and passes "
+	          "`width > (huge value)` trivially, defeating the check the positive-sign case correctly "
+	          "enforces (Popper 2026-07-28 Null 2, second bullet)",
+	          static_cast<long long>(-w.m_magnitude), w.width, superslm::SslmForwardStatusName(negative_status));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -10510,6 +10685,13 @@ int main(int argc, char** argv) {
 	// ad6bd09-s3.3-remediation-confirmation-review-2026-07-28.md.
 	TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss();
 	TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT();
+
+	// C32 softmax-row width-gate red suite (Curie, 2026-07-28) -- Claude/Popper/
+	// superslm-c32-softmax-denominator-2026-07-28.md.
+	TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling();
+	TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability();
+	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
+	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
