@@ -15,9 +15,8 @@
 // phase).
 //
 // C32/D-SLM366's derived-operand predicate (CheckSoftmaxRowWidthDomain) is
-// S3.3's own header contract (Claude/Curie/superslm-s3.3-attention-interior-
-// test-design-2026-07-28.md §6.2, §11) and its body below is a
-// deliberately-wrong STUB — see its own comment.
+// S3.3's own green-phase construction (Claude/Curie/superslm-s3.3-attention-
+// interior-test-design-2026-07-28.md §6.2, §11) — see its own comment.
 #include "superslm/checked_chain_funnel.h"
 
 #include "superslm/intmath.h"
@@ -317,9 +316,21 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
 // pass replaces this body with the real
 // `M = q_b*q_b + q_c; M <= kSoftmaxRowMaxSafeExponent && width * M <=
 // INT64_MAX` comparison.
-SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t /*q_b*/, int64_t /*q_c*/,
-                                              size_t /*width*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;  // stub
+SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width) {
+	// D-SLM365's closed form: M = q_b^2 + q_c is the row's own i-exp value at
+	// q = 0, where ShiftByMax puts the row maximum -- the numerator ceiling
+	// C32's Q15 divide needs. D-SLM367 ruled kSoftmaxRowMaxSafeExponent (2^47)
+	// as the numerator bound on every path (§3). The sum `width * M` is
+	// checked without forming it (an overflowing multiply is itself UB),
+	// mirroring the comment this predicate's own declaration specifies.
+	const int64_t m = q_b * q_b + q_c;
+	if (m > kSoftmaxRowMaxSafeExponent) {
+		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+	}
+	if (m != 0 && width > static_cast<size_t>(INT64_MAX / m)) {
+		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+	}
+	return SslmForwardStatus::Ok;
 }
 
 }  // namespace superslm

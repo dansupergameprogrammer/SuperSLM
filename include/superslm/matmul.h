@@ -10,12 +10,11 @@
 // Standard library only -- no float on the reproducible path (Layer 1, D-SLM13).
 //
 // The declarations below are the approved API surface (design §3). Every body
-// except GemmProbQ15Accumulate is a real construction, including the scalar
-// reference (design §5), green in the standing suite (S2.5).
-// GemmProbQ15Accumulate is S3.3's own header contract (§4.6, §11 S3.3 §6.4;
-// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §6.4) and is a deliberately-wrong STUB as staged here — see its own
-// declaration comment and matmul.cpp.
+// is a real construction, including the scalar reference (design §5), green
+// in the standing suite (S2.5). GemmProbQ15Accumulate is S3.3's own
+// construction (§4.6, §11 S3.3 §6.4; Claude/Curie/superslm-s3.3-attention-
+// interior-test-design-2026-07-28.md §6.4) — see its own declaration comment
+// and matmul.cpp.
 #ifndef SUPERSLM_MATMUL_H
 #define SUPERSLM_MATMUL_H
 

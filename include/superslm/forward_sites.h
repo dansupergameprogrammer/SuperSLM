@@ -17,11 +17,9 @@
 // BiasReconcile, EmbedEntry, FloorDivI64) are the real green construction
 // (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
 // 2026-07-28.md §4/§9). The S3.3 declarations below (LandingRescale,
-// ClampRopeCode) are deliberately-wrong red-first STUBS, staged from
+// ClampRopeCode) are likewise real green constructions, against
 // Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §6.1/§6.3/§11 — a follow-up Curie pass authors the red suite that compiles
-// and fails against them; a later Brunel pass replaces each body with its
-// real composition.
+// §6.1/§6.3/§11's own red suite.
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob

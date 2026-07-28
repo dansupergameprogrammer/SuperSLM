@@ -3,12 +3,11 @@
 // See include/superslm/forward_sites.h for the contract
 // (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
 // F-S3-8, C27, C33). The S3.2 bodies (FloorDivI64, RmsNormSite,
-// ApplyWeightScaleFold, BiasReconcile, EmbedEntry) are the real green
-// construction against the red suite authored in tests/test_main.cpp
-// (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
-// 2026-07-28.md §11). The S3.3 bodies below (LandingRescale, ClampRopeCode)
-// are deliberately-wrong red-first STUBS (S3.3's header-contract commit) —
-// see each function's own comment.
+// ApplyWeightScaleFold, BiasReconcile, EmbedEntry) and the S3.3 bodies below
+// (LandingRescale, ClampRopeCode) are the real green construction against the
+// red suite authored in tests/test_main.cpp (Claude/Curie/
+// superslm-s3.2-weightless-and-projection-sites-test-design-2026-07-28.md
+// §11; superslm-s3.3-attention-interior-test-design-2026-07-28.md §11/§12).
 #include "superslm/forward_sites.h"
 
 #include <vector>
@@ -23,6 +22,73 @@ namespace {
 // §5.1's own pinned integer — the normalization divide and the per-element
 // wide-row divide both shift by 2*NORM_FRAC_BITS).
 constexpr int kNormFracBits = 16;
+
+// --- LandingRescale's own portable 128-bit facility ---------------------------
+//
+// C27's landing composite (§8.1) forms `branch_code * m_a * r_t`, a magnitude
+// derived (Claude/Brunel build log, this campaign) as reaching ~2^90-2^91 at
+// this site's own realistic operand ranges (m_a canonical in [2^30, 2^31),
+// r_t in [2^31+1, 2^32], branch_code up to the §4.7 projection-accumulator
+// bound ~2^27) — and int64 is left almost immediately: at the DOMAIN'S OWN
+// minimum operand values, |branch_code| >= 4 already overflows int64's
+// representable range. A genuine, never-narrowed wide intermediate is
+// therefore not a conservative choice here, it is the only correct one. This
+// is a small, self-contained unsigned-magnitude facility (matching
+// intmath.cpp's own portable-128-bit precedent, not the same instance —
+// that one lives in an anonymous namespace private to that translation
+// unit): 91 bits of headroom below the 128-bit ceiling comfortably covers
+// this site's own derived magnitude.
+struct U128 {
+	uint64_t lo = 0, hi = 0;
+};
+
+inline U128 U128Mul64(uint64_t a, uint64_t b) {
+	const uint64_t ll = (a & 0xFFFFFFFFull) * (b & 0xFFFFFFFFull);
+	const uint64_t lh = (a & 0xFFFFFFFFull) * (b >> 32);
+	const uint64_t hl = (a >> 32) * (b & 0xFFFFFFFFull);
+	const uint64_t hh = (a >> 32) * (b >> 32);
+	const uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFull) + (hl & 0xFFFFFFFFull);
+	const uint64_t lo = (ll & 0xFFFFFFFFull) | (mid << 32);
+	const uint64_t hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+	return U128{lo, hi};
+}
+
+// 128 * small-u64 -> 128; caller guarantees the true product fits 128 bits
+// (it does here: at most ~2^91, far below the 2^128 ceiling this widening
+// assumes, so `a.hi * b`'s own overflow is unreachable for any operand this
+// site ever forms).
+inline U128 U128MulSmall(U128 a, uint64_t b) {
+	const U128 lo_part = U128Mul64(a.lo, b);
+	const uint64_t hi_part = a.hi * b;
+	return U128{lo_part.lo, lo_part.hi + hi_part};
+}
+
+inline U128 U128Add(U128 a, U128 b) {
+	const uint64_t lo = a.lo + b.lo;
+	const uint64_t carry = (lo < a.lo) ? 1u : 0u;
+	return U128{lo, a.hi + b.hi + carry};
+}
+
+// Logical left shift by k in [0, 127]; k outside that range saturates to 0
+// (the identically-shaped convention U128ShrToU64 below uses), since no
+// caller here ever needs a k this large to be meaningful.
+inline U128 U128Shl(U128 v, int k) {
+	if (k <= 0) return v;
+	if (k >= 128) return U128{0, 0};
+	if (k >= 64) return U128{0, v.lo << (k - 64)};
+	return U128{v.lo << k, (v.hi << k) | (v.lo >> (64 - k))};
+}
+
+inline U128 U128OneShl(int k) { return U128Shl(U128{1, 0}, k); }
+
+// Logical right shift by k in [0, 127]; the result is assumed (by every
+// caller here) to fit in 64 bits.
+inline uint64_t U128ShrToU64(U128 v, int k) {
+	if (k <= 0) return v.lo;
+	if (k >= 128) return 0;
+	if (k >= 64) return v.hi >> (k - 64);
+	return (v.lo >> k) | (v.hi << (64 - k));
+}
 
 }  // namespace
 
@@ -98,24 +164,58 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	return RoundingDivideByPOT(b * r_a, static_cast<int>(exponent));
 }
 
-int64_t LandingRescale(int64_t /*branch_code*/, int64_t /*m_a*/, int64_t /*r_t*/,
-                        int64_t /*e_a*/, int64_t /*e_t*/,
-                        uint64_t* /*out_saturation_count*/) {
-	return 0;  // stub (S3.3 red-phase) -- matching this campaign's own precedent
-	           // (S3.1/S3.2, a594dd2) for every int64_t-returning function: a
-	           // fixed wrong sentinel so a follow-up red suite fails against the
-	           // real construction rather than compiling against a missing symbol.
-	           // `out_saturation_count` is an output parameter and is therefore
-	           // left untouched on this path too, matching the funnel's own "on
-	           // rejection, neither is touched" convention extended to every
-	           // stub's output parameters in this campaign -- a caller that
-	           // passes a non-null accumulator here sees it unmodified, which is
-	           // itself deliberately wrong the moment a real hostile-value cell
-	           // asserts a nonzero count.
+int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
+                        uint64_t* out_saturation_count) {
+	// C27's residual_reconcile (§8.1, dynamic_engine.py-vendored formula):
+	//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
+	// with a negative composite exponent an EXACT left shift (no rounding).
+	// `m_a`/`r_t` are positive by construction (m_a: the incoming norm-output
+	// carried mantissa, canonical; r_t: KvLandingReciprocals' offline
+	// reciprocal), so the product's sign is `branch_code`'s alone -- work in
+	// magnitude (matching C22's own requant composite convention, intmath.cpp),
+	// apply C3's away-from-zero tie rule, then reapply the sign.
+	const bool negative = branch_code < 0;
+	const uint64_t abs_branch =
+	    negative ? (~static_cast<uint64_t>(branch_code) + 1u) : static_cast<uint64_t>(branch_code);
+	const U128 magnitude =
+	    U128MulSmall(U128Mul64(abs_branch, static_cast<uint64_t>(m_a)), static_cast<uint64_t>(r_t));
+
+	const int64_t k = 62 - (e_a - e_t);
+	int64_t raw;
+	if (k >= 0) {
+		// round_half_away_from_zero(magnitude / 2^k) == floor((2*magnitude + 2^k) / 2^(k+1)),
+		// both terms carried in the same 128-bit space as `magnitude` itself
+		// (a plain `uint64_t{1} << k` is undefined behaviour once k >= 64,
+		// which this site's own operand ranges reach routinely).
+		const U128 doubled = U128Add(magnitude, magnitude);
+		const U128 rounded = U128Add(doubled, U128OneShl(static_cast<int>(k)));
+		raw = static_cast<int64_t>(U128ShrToU64(rounded, static_cast<int>(k) + 1));
+	} else {
+		// A negative composite exponent is an exact left shift -- no rounding.
+		// The shift is performed in 128-bit space, then narrowed: correct
+		// whenever the true result fits int64 (caller-ensures, matching every
+		// other funnel-adjacent compute in this tree).
+		raw = static_cast<int64_t>(U128Shl(magnitude, static_cast<int>(-k)).lo);
+	}
+	if (negative) raw = -raw;
+
+	// T-518 / D-SLM201 option 2, §8.2: the predicated-increment half. The
+	// clamp comparison the caller's own `clamp(LandingRescale(...), -127, 127)`
+	// performs is evaluated here, once, against this function's own
+	// about-to-be-returned raw value -- and increments `*out_saturation_count`
+	// by exactly one when it fires. This has no effect whatsoever on `raw`.
+	if (out_saturation_count != nullptr && (raw < -127 || raw > 127)) {
+		*out_saturation_count += 1;
+	}
+	return raw;
 }
 
-int64_t ClampRopeCode(int64_t /*raw*/) {
-	return 0;  // stub (S3.3 red-phase) -- same convention as LandingRescale above.
+int64_t ClampRopeCode(int64_t raw) {
+	// C33 (§5.3): clamp to the pinned CODE range [-127, 127] -- NOT the int8
+	// storage range [-128, 127]; the two differ at exactly the value -128.
+	if (raw > 127) return 127;
+	if (raw < -127) return -127;
+	return raw;
 }
 
 SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t* embed_weights,

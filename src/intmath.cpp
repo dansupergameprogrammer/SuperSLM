@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include <vector>
 
 namespace superslm {
 namespace {
@@ -531,17 +532,31 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 	                RoundingDivideByPOTImpl<int64_t>(yr, ROPE_FRAC_BITS)};
 }
 
-// --- §6.2/§5.2 C32 softmax row (arm A) -- S3.3 red-phase STUB -----------------
+// --- §6.2/§5.2 C32 softmax row (arm A) ----------------------------------------
 
-void SoftmaxRowQ15(const int64_t* /*scores*/, size_t /*width*/, int64_t /*q_ln2*/,
-                    int64_t /*q_b*/, int64_t /*q_c*/, int64_t* /*out_probs*/) {
-	// Stub (S3.3 red-phase): `out_probs` is left untouched on every call, matching
-	// this campaign's own convention (a594dd2) for a void kernel with an output
-	// parameter -- the funnel's "on rejection, neither is touched" convention has
-	// no rejection path here (this function has no status return), so the stub's
-	// only available deliberately-wrong shape is to write nothing at all. A
-	// follow-up Brunel pass replaces this body with the real composition
-	// (ShiftByMax -> per-element IExpConstruct/IExpEvaluate -> sum -> divide).
+void SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
+                    int64_t* out_probs) {
+	// C32 (§5.2, §11 S3.3 §6.2 step 5): ShiftByMax -> per-element
+	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
+	// kernel with CheckSoftmaxRowWidthDomain(q_b, q_c, width) before calling
+	// it; this function performs no width check of its own, matching every
+	// other funnel-adjacent compute in this tree (the domain check and the
+	// compute are separate calls).
+	std::vector<int64_t> shifted(width);
+	ShiftByMax(scores, width, shifted.data());
+
+	std::vector<int64_t> exps(width);
+	int64_t total = 0;
+	for (size_t k = 0; k < width; ++k) {
+		IExpConstruction construction;
+		(void)IExpConstruct(shifted[k], q_ln2, q_b, q_c, &construction);
+		exps[k] = IExpEvaluate(construction);
+		total += exps[k];
+	}
+	const int64_t denom = total > 1 ? total : 1;  // guards the all-clipped row exactly
+	for (size_t k = 0; k < width; ++k) {
+		out_probs[k] = (exps[k] << kProbFracBits) / denom;  // both operands non-negative
+	}
 }
 
 }  // namespace superslm

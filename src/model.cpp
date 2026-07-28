@@ -747,30 +747,46 @@ constexpr int64_t kKvLandingScaleMantissaMax = (int64_t{1} << 31) - 1;        //
 constexpr int64_t kKvLandingReciprocalMin = (int64_t{1} << 31) + 1;           // 2^31 + 1
 constexpr int64_t kKvLandingReciprocalMax = int64_t{1} << 32;                 // 2^32
 
-// THESE ARE STUBS (S3.3 red-phase): each accepts every entry unconditionally,
-// rather than comparing any element against its derived bound. Written this
-// way, rather than as a fixed-wrong rejection (the sentinel style every
-// SslmForwardStatus-returning stub in this tree uses), because both are wired
-// into ValidateSectionValues below, which every existing SslmModel::Load call
-// already exercises on any artifact carrying a KvLandingScales/
-// KvLandingReciprocals section -- an unconditionally-rejecting stub would fail
-// every currently-green fixture that loads one (including
-// TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips and
-// MakeMinimalValidKvc1's own gamma row, tests/test_main.cpp), not only the
-// not-yet-authored hostile-value cell each stub is staged for. This is
-// ValidateBiasesDomain's own S3.2 precedent, applied identically here. A
-// follow-up Brunel pass replaces each body with the real
-// `kKvLandingScaleMantissaMin <= m_t <= kKvLandingScaleMantissaMax` /
-// `kKvLandingReciprocalMin <= R_t <= kKvLandingReciprocalMax` comparison over
-// every entry.
-SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& /*kv_landing_scales*/,
-                                               std::string* /*err*/) {
-	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+// KvLandingScales' m_t (word 0) checked against the canonical carried-
+// mantissa range every other KVC1 scale mantissa in this tree already uses;
+// KvLandingReciprocals' R_t (word 2) checked against the exact domain
+// `DynamicScaleReciprocal` can ever produce (§7.2a third limb; S3.3;
+// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
+// §4.5/§6.5) -- this is ValidateBiasesDomain's own S3.2 precedent, applied
+// identically here: walk every element of every entry, checked before any
+// narrowing.
+SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landing_scales,
+                                               std::string* err) {
+	for (const SslmConstantEntry& e : kv_landing_scales.Entries()) {
+		const int64_t m_t = SslmKeyedConstants::Value(e, 0);
+		if (m_t < kKvLandingScaleMantissaMin || m_t > kKvLandingScaleMantissaMax) {
+			if (err) {
+				*err = "KvLandingScales entry \"" + std::string(e.name) + "\" m_t=" +
+				       std::to_string(m_t) + " outside [" +
+				       std::to_string(kKvLandingScaleMantissaMin) + "," +
+				       std::to_string(kKvLandingScaleMantissaMax) + "]";
+			}
+			return SslmModelStatus::KvLandingScaleOutOfDomain;
+		}
+	}
+	return SslmModelStatus::Ok;
 }
 
-SslmModelStatus ValidateKvLandingReciprocalsDomain(
-    const SslmKeyedConstants& /*kv_landing_reciprocals*/, std::string* /*err*/) {
-	return SslmModelStatus::Ok;  // stub -- deliberately does not check the bound
+SslmModelStatus ValidateKvLandingReciprocalsDomain(const SslmKeyedConstants& kv_landing_reciprocals,
+                                                    std::string* err) {
+	for (const SslmConstantEntry& e : kv_landing_reciprocals.Entries()) {
+		const int64_t r_t = SslmKeyedConstants::Value(e, 2);
+		if (r_t < kKvLandingReciprocalMin || r_t > kKvLandingReciprocalMax) {
+			if (err) {
+				*err = "KvLandingReciprocals entry \"" + std::string(e.name) + "\" R_t=" +
+				       std::to_string(r_t) + " outside [" +
+				       std::to_string(kKvLandingReciprocalMin) + "," +
+				       std::to_string(kKvLandingReciprocalMax) + "]";
+			}
+			return SslmModelStatus::KvLandingReciprocalOutOfDomain;
+		}
+	}
+	return SslmModelStatus::Ok;
 }
 
 // S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
@@ -802,11 +818,9 @@ SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::s
 // (Load's section loop) and BEFORE `out` is exposed to the caller — the
 // boundary where an artifact value enters and can still be refused.
 // KvLandingScales/KvLandingReciprocals are now wired below
-// (ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain) as part
-// of S3.3's own header contract -- D-SLM142's "pending-consumer" status is
-// superseded (S3.3 is the C27 consumer); both are STUBS as staged (see each
-// function's own comment) and enforce no bound in practice until the S3.3
-// green phase.
+// (ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain), S3.3's
+// green-phase construction -- D-SLM142's "pending-consumer" status is
+// superseded (S3.3 is the C27 consumer).
 SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* err) {
 	if (view.has_composition_constants) {
 		const SslmModelStatus s = ValidateCompositionConstantsDomain(view.composition_constants, err);

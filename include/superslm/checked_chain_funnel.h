@@ -38,11 +38,11 @@
 // without needing to change.
 //
 // The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
-// limb). Every body except CheckSoftmaxRowWidthDomain is a real construction in
-// src/forward/checked_chain_funnel.cpp, green in the standing suite
-// (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
-// §4/§8); CheckSoftmaxRowWidthDomain is S3.3's own deliberately-wrong stub (see
-// its own declaration comment and src/forward/checked_chain_funnel.cpp).
+// limb). Every body, including CheckSoftmaxRowWidthDomain (S3.3's own
+// construction, §6.2), is real in src/forward/checked_chain_funnel.cpp, green
+// in the standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-
+// test-design-2026-07-28.md §4/§8; superslm-s3.3-attention-interior-test-
+// design-2026-07-28.md §6.2).
 #ifndef SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 #define SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 

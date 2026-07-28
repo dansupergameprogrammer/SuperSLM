@@ -170,15 +170,24 @@ void NarrowAccumulatorToI32(const int64_t* wide_row, size_t n, int32_t* out_i32)
 	}
 }
 
-// F-S3-6/C32 -- S3.3 red-phase STUB (Claude/Curie/superslm-s3.3-attention-
-// interior-test-design-2026-07-28.md §6.4, §11). `out_ctx` is left untouched
-// on every call, matching this campaign's own convention for a void kernel
-// with an output parameter (see intmath.cpp's SoftmaxRowQ15 stub for the
-// same shape). A follow-up Brunel pass replaces this body with the real
-// `out_ctx[d] = Sum_k probs[k] * values[k*head_dim + d]` accumulation.
-void GemmProbQ15Accumulate(const int64_t* /*probs*/, const int8_t* /*values*/,
-                            size_t /*width*/, size_t /*head_dim*/, int64_t* /*out_ctx*/) {
-	// stub -- writes nothing
+// F-S3-6/C32 (Claude/Curie/superslm-s3.3-attention-interior-test-design-
+// 2026-07-28.md §6.4, §11): the probability x value context accumulate.
+void GemmProbQ15Accumulate(const int64_t* probs, const int8_t* values, size_t width,
+                            size_t head_dim, int64_t* out_ctx) {
+	// out_ctx[d] = Sum_k probs[k] * values[k*head_dim + d]. Exact int64
+	// accumulation, no saturation, no rounding (F-S3-6's derived bound:
+	// |Sum_k p_k*v_k| <= 2^15*127 < 2^22, independent of context length --
+	// far inside int64, so no intermediate can overflow).
+	for (size_t d = 0; d < head_dim; ++d) {
+		out_ctx[d] = 0;
+	}
+	for (size_t k = 0; k < width; ++k) {
+		const int64_t p = probs[k];
+		const int8_t* row = values + k * head_dim;
+		for (size_t d = 0; d < head_dim; ++d) {
+			out_ctx[d] += p * static_cast<int64_t>(row[d]);
+		}
+	}
 }
 
 }  // namespace superslm

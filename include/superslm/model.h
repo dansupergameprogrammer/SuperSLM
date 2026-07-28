@@ -160,11 +160,11 @@ enum class SslmModelStatus {
 	                              // Enforced by ValidateBiasesDomain (model.cpp), wired into
 	                              // ValidateSectionValues (S3.2's green phase).
 	KvLandingScaleOutOfDomain,   // KvLandingScales entry's m_t (word 0) outside [kKvLandingScaleMantissaMin,
-	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). ValidateKvLandingScalesDomain
-	                              // (model.cpp) is a STUB as of S3.3's header contract (see its own comment).
+	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). Enforced by
+	                              // ValidateKvLandingScalesDomain (model.cpp), wired into ValidateSectionValues.
 	KvLandingReciprocalOutOfDomain, // KvLandingReciprocals entry's R_t (word 2) outside [kKvLandingReciprocalMin,
-	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3). ValidateKvLandingReciprocalsDomain
-	                              // (model.cpp) is a STUB as of S3.3's header contract (see its own comment).
+	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3). Enforced by
+	                              // ValidateKvLandingReciprocalsDomain (model.cpp), wired into ValidateSectionValues.
 	// --- S-HARDEN-2 tokenizer joins (F18, F6, F7, F15) ---
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
@@ -345,14 +345,11 @@ struct SslmModelView {
 	// KvLandingScales/KvLandingReciprocals (C27): parsed structurally like
 	// every other keyed-constant section. S3.3 is the C27 consumer D-SLM142
 	// named ("a future slot adds their domain descriptor when the C27
-	// consumer lands") and stages their domain descriptors
+	// consumer lands") and closes it: their domain descriptors
 	// (KvLandingScaleOutOfDomain/KvLandingReciprocalOutOfDomain,
 	// ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain,
-	// model.cpp) as part of its own header contract -- both are STUBS as
-	// staged (deliberately permissive, matching ValidateBiasesDomain's own
-	// S3.2 precedent; see each function's own comment), so
-	// SslmModel::Load still leaves their carried values unchecked in
-	// practice until the S3.3 green phase replaces the stub bodies.
+	// model.cpp) are wired into SslmModel::Load, which now rejects a carried
+	// value outside either derived bound.
 	SslmKeyedConstants kv_landing_scales;
 	bool has_kv_landing_scales = false;
 
