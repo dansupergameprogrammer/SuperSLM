@@ -505,4 +505,39 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	return result.status;
 }
 
+// STUB (T-1347): declared and stubbed by the test-design pass authoring
+// S3.5's red suite (Claude/Curie/superslm-s3.5-residual-and-layer-loop-
+// test-design-2026-07-29.md), following the same declare-and-stub sequence
+// RopeApplySite and MlpActSite used (D-SLM384/385/386; T-1345). Returns
+// WorkspaceTooSmall unconditionally -- a status none of this site's real
+// outcomes ever is, matching the established stub convention. Calls
+// nothing, reads nothing, and writes nothing to out_codes/out_scale. The
+// build seat replaces this body with the real four-step composition the
+// header's own doc comment states.
+SslmForwardStatus ResidualReconcileSite(const int8_t* /*branch_code*/, CarriedScale /*branch_scale*/,
+                                          const int8_t* /*stream_code*/, CarriedScale /*stream_scale*/,
+                                          size_t /*hidden_size*/, CarriedScale /*site_constant*/,
+                                          int8_t* /*out_codes*/, CarriedScale* /*out_scale*/,
+                                          std::string_view /*site*/, size_t /*token_index*/,
+                                          SslmTraceHookState* /*trace_hook_state*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
+
+// STUB (T-1347): same convention as ResidualReconcileSite above. Returns
+// WorkspaceTooSmall unconditionally, touching neither `seq` nor `workspace`
+// -- this is deliberate, not an oversight: the red suite's own budget=0 and
+// resume/workspace cells depend on the STUB leaving every out-param
+// untouched, exactly as every other declare-and-stub site in this file
+// does on rejection. The build seat replaces this body with the real
+// per-layer composition the header's own doc comment states.
+SslmForwardStatus RunLayerLoop(SequenceLayerState& /*seq*/, const LayerWeights* /*layers*/,
+                                 uint32_t /*num_hidden_layers*/, uint32_t /*layer_budget*/,
+                                 size_t /*hidden_size*/, size_t /*head_dim*/,
+                                 size_t /*intermediate_size*/, int64_t /*context_cap*/,
+                                 const SslmTensorManifest& /*rope_tables*/, uint8_t* /*workspace*/,
+                                 size_t /*workspace_size*/, std::string_view /*site_prefix*/,
+                                 size_t /*token_index*/, SslmTraceHookState* /*trace_hook_state*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
+
 }  // namespace superslm

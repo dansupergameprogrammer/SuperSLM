@@ -111,7 +111,18 @@ enum class SslmForwardStatus {
 	WorkspaceTooSmall,                       // owed by a later sub-slot
 	KvCapacityExhausted,                     // owed by S3.7 (§9.4) — defined and resumable
 	KvPrecisionUnsupported,                  // owed by S3.7 (§14.4)
-	InvalidLayerBudget,                      // owed by S3.6 (§9.3)
+	InvalidLayerBudget,                      // owed by S3.5 (§9.3, §11 S3.5 "C26, §9.3" --
+	                                          // this comment previously read "owed by S3.6";
+	                                          // §9.3's own two budget-axis contracts are decided
+	                                          // inside S3.5's own sub-slot header ("### S3.5 --
+	                                          // Residual reconciliation and the layer loop (C26,
+	                                          // §9.3)"), and §11 S3.5's own gate line ("budget
+	                                          // invariance green at every enumerated budget")
+	                                          // names this enumerator directly, while §11 S3.6's
+	                                          // sub-slot text (C16, §9.1) never mentions the
+	                                          // budget axis at all -- corrected by the S3.5
+	                                          // test-design pass (Claude/Curie/superslm-s3.5-
+	                                          // residual-and-layer-loop-test-design-2026-07-29.md)
 	// --- Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md ---
 	RopeTableTensorMissing,                  // Critical 1: RopeApplySite's ROP1 manifest carries no
 	                                          // "cos" or no "sin" tensor -- SslmTensorManifest::Tensor

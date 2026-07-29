@@ -325,6 +325,217 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
                               std::string_view site = {}, size_t token_index = 0,
                               SslmTraceHookState* trace_hook_state = nullptr);
 
+// --- S3.5: the mid-token residual, C26's residual-reconciliation site, and
+// the layer loop (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.5; §9.3; master
+// plan §7; C26/D-SLM57; Claude/Curie/superslm-s3.5-residual-and-layer-loop-
+// test-design-2026-07-29.md). ---------------------------------------------
+
+// §9.3's mid-token residual (master plan §7, "the mid-token residual buffer
+// and layer-position marker"): the sequence's own suspended state between
+// layer-budget micro-steps. Lives in the sequence's own state, NEVER the
+// per-call workspace -- a residual parked in shared scratch is a lifetime
+// hazard and makes a sequence's bits depend on what else shared the
+// workspace (master plan §8.2/W1).
+//
+// `hidden_codes` is caller-owned, `hidden_size` elements: the residual
+// stream's own int8 codes. `hidden_scale` is the residual's own carried
+// (m, e). `layer_index` is the layer-position marker -- the next layer
+// RunLayerLoop resumes at, `0 <= layer_index <= num_hidden_layers`.
+// `layer_index == num_hidden_layers` means the current token is complete;
+// starting a fresh token resets it to 0 (§9.3: "a sequence resting between
+// whole tokens carries a marker at layer 0 and a zero-length residual" --
+// realized here as `layer_index == 0`, `hidden_codes` not yet meaningful).
+struct SequenceLayerState {
+	int8_t* hidden_codes = nullptr;
+	CarriedScale hidden_scale;
+	uint32_t layer_index = 0;
+};
+
+// C26's residual-reconciliation site (§6.2 step 8 "attn_residual", §6.3 step
+// 13 "mlp_residual" -- "as (8)": the SAME function serves both, the caller
+// supplying which via `site`, matching RmsNormSite's own multi-instance
+// convention). Matches the vendored reference's `residual_reconcile`
+// (tests/reference/superslm_spike/intmath.py:431-446), reusing the
+// ALREADY-SHIPPED `LandingRescale` for its exact arithmetic -- C27's own
+// residual_reconcile call and this one are the SAME primitive at different
+// call sites (§8.1's static offline reciprocal there; here, a reciprocal
+// derived at runtime from the STREAM's own mantissa, step 1 below) -- then
+// folds the result through the funnel's already-proven left-associated
+// order (D-SLM57).
+//
+// Performs, in this order and no other:
+//   1. r_h = DynamicScaleReciprocal(stream_scale.m) -- C19, over the
+//      STREAM's own mantissa, never the branch's (§6.2 step 8's own text:
+//      "R_h = C19 over the stream mantissa").
+//   2. per element i: reconciled[i] = LandingRescale(branch_code[i],
+//      branch_scale.m, r_h, branch_scale.e, stream_scale.e, nullptr) --
+//      rescales the branch value into the stream's own scale, UNCLAMPED
+//      (no saturation counting at this site -- T-518's counter is C27's
+//      landing composite's own, not this one's).
+//   3. wide[i] = reconciled[i] + (int64_t)stream_code[i] -- the wide add,
+//      both operands now nominally at the stream's own scale.
+//   4. RequantChainChecked(wide, hidden_size, /*incoming=*/{stream_scale},
+//      site_constant, out_codes, out_scale, site, token_index,
+//      trace_hook_state) -- the funnel's own left-associated fold of
+//      {stream_scale, site_constant, D'-factor} (D-SLM57; RequantChainChecked
+//      step 5), the SAME primitive every other funnel-based site already
+//      uses. This is the D-SLM57 association-order pin AT THIS SITE: a right-
+//      associated implementation of this call (or one that pre-folds
+//      stream_scale and site_constant outside the funnel in a different
+//      order) diverges from the funnel's own proven left-associated result
+//      (superslm-s3.5-residual-and-layer-loop-test-design-2026-07-29.md §3's
+//      witness triple).
+//
+// `branch_code`/`stream_code` each have `hidden_size` elements. `site_constant`
+// is the artifact's KVC1 CompositionConstants entry for this residual site
+// (`composition_constants["layerL.attn_residual"]` /
+// `"layerL.mlp_residual"`, the trace-hook site-naming convention extended to
+// this site, §4.1). On Ok, `out_codes`/`*out_scale` are written; on any
+// rejection, neither is touched (§7.2's convention).
+SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale branch_scale,
+                                          const int8_t* stream_code, CarriedScale stream_scale,
+                                          size_t hidden_size, CarriedScale site_constant,
+                                          int8_t* out_codes, CarriedScale* out_scale,
+                                          std::string_view site = {}, size_t token_index = 0,
+                                          SslmTraceHookState* trace_hook_state = nullptr);
+
+// One layer's fully-resolved constants -- weights, WSC1 folds, and KVC1 site
+// constants -- for RunLayerLoop below. Caller-resolved: RunLayerLoop performs
+// NO WGT1/KVC1-by-name lookup of its own. This is deliberate, not an
+// oversight -- D-SLM422 (SuperSLM_S3a_WalkingSkeleton_Plan.md §13.2, R5)
+// found NO naming or shape convention committed anywhere in this repository
+// for WGT1's per-layer projection tensors (q_proj/k_proj/v_proj/o_proj/
+// gate_proj/up_proj/down_proj), while noting S3.4 and S3.5 are the first
+// sub-slots scheduled to consume one. S3.4's MlpActSite resolved this by
+// taking already-materialized code arrays, never a tensor name; RunLayerLoop
+// does the same, at the whole-layer granularity, so authoring this sub-slot's
+// red suite does not require inventing the missing naming convention --
+// whichever later piece resolves a loaded artifact's WGT1 tensors into a
+// `LayerWeights[]` (the host-facing entry point, S3.6/S3.7's own scope or an
+// unassigned one) is a separate, downstream obligation this declaration does
+// not discharge and does not block on.
+//
+// All weight matrices are row-major [out_channels, in_channels] (WGT1's own
+// layout, matmul.h). `hidden_size == num_attention_heads * head_dim`; this
+// test-design pass's own fixtures exercise the MHA-degenerate case
+// (`num_key_value_heads == num_attention_heads`, §13 dim 4's own accepted
+// case) only -- GQA grouping is not this sub-slot's own red cell and is
+// unexercised here.
+struct LayerWeights {
+	const int32_t* attn_norm_gain;  // hidden_size
+	CarriedScale attn_norm_site_constant;
+
+	// q/k/v/o projections (§6.2 step 2/6/7): GemmInt8Accumulate against the
+	// weight matrix, then the shared WSC1 fold (`proj_identity`/`proj_mult`/
+	// `proj_shift`) -- one fold config per layer, reused at every projection
+	// site this test-design pass's own fixture exercises (a real, plan-
+	// sanctioned degenerate case, not an invented shortcut: WSC1 `identity`
+	// heads are themselves a real composition, §6.2 item 2). q_proj/o_proj
+	// then funnel (RequantChainChecked, via `q_site_constant`/
+	// `o_site_constant`); k_proj/v_proj do NOT funnel -- they land at the
+	// static per-head scale through `LandingRescale` (§8.1), using
+	// `kv_landing_r_t`/`kv_landing_e_t` (KvLandingReciprocals'/KvLandingScales'
+	// own (r_t, e_t) for this head).
+	const int8_t* q_weight;
+	const int8_t* k_weight;
+	const int8_t* v_weight;
+	const int8_t* o_weight;
+	int32_t proj_identity;
+	int32_t proj_mult;
+	int32_t proj_shift;
+	CarriedScale q_site_constant;
+	CarriedScale o_site_constant;
+	int64_t kv_landing_r_t;
+	int64_t kv_landing_e_t;
+
+	// The D-SLM57 per-head ctx_fold dispatch (§6.2 step 6): WSC1's
+	// `layer{L}.ctx_fold` row for this head, applied via ApplyWeightScaleFold
+	// (C24/C25) to the raw GemmProbQ15Accumulate context-accumulate value,
+	// before the funnel (empty incoming, per §6.2 step 6's own text).
+	int32_t ctx_fold_identity;
+	int32_t ctx_fold_mult;
+	int32_t ctx_fold_shift;
+	CarriedScale ctx_fold_site_constant;
+
+	CarriedScale attn_residual_site_constant;
+
+	// C30's per-query i-exp constants (§7.2 second limb). The C30 DERIVATION
+	// SITE that would compute these from a runtime per-query carried scale is
+	// not yet built anywhere in this tree (Claude/Curie/superslm-s3.3-
+	// attention-interior-test-design-2026-07-28.md §9: "still blocked -- no
+	// site exists"). RunLayerLoop's own gate (§11 S3.5) does not depend on
+	// that derivation existing, so this fixture supplies pre-derived,
+	// domain-checked constants directly -- the same substitution every other
+	// blocked-site cell in this suite already makes for an unbuilt
+	// derivation.
+	int64_t q_ln2;
+	int64_t q_b_iexp;
+	int64_t q_c_iexp;
+
+	const int32_t* mlp_norm_gain;  // hidden_size
+	CarriedScale mlp_norm_site_constant;
+	const int8_t* gate_weight;  // intermediate_size x hidden_size
+	const int8_t* up_weight;    // intermediate_size x hidden_size
+	const int8_t* down_weight;  // hidden_size x intermediate_size
+	CarriedScale mlp_act_site_constant;
+	CarriedScale down_site_constant;
+	CarriedScale mlp_residual_site_constant;
+};
+
+// S3a's layer loop (§9.3, §11 S3.5): advances `seq` through up to
+// `layer_budget` layers of its CURRENT token, composing, per layer and in
+// this order (§6.2/§6.3): attn_norm (RmsNormSite) -> q/k/v projections
+// (GemmInt8Accumulate + ApplyWeightScaleFold; q funnels through
+// RequantChainChecked, k/v land at the static per-head scale through
+// LandingRescale, §8.1) -> RoPE on q and k (RopeApplySite) -> attention
+// (GemmInt8Accumulate for the score row, SoftmaxRowQ15, GemmProbQ15Accumulate
+// for the context accumulate -- §6.2 step 5; no separate named site exists
+// for this composition anywhere in this tree, so RunLayerLoop is where it is
+// first composed, matching §3.4 of the plan's own text: "No C++ code in
+// D:\SuperSLM performs... an attention pass... S3a is the first slot with a
+// forward pass in it") -> the ctx_fold dispatch (ApplyWeightScaleFold) ->
+// o_proj (as q_proj) -> attn_residual (ResidualReconcileSite) -> mlp_norm ->
+// gate/up projections -> MlpActSite -> down_proj -> mlp_residual
+// (ResidualReconcileSite) -> the resume-point update (`seq.layer_index += 1`
+// per completed layer).
+//
+// Two contracts decided at §9.3, not invented here:
+//   - `layer_budget == 0` is `InvalidLayerBudget`, and `seq` is left
+//     bit-identical to its pre-call state -- `hidden_codes`, `hidden_scale`,
+//     AND `layer_index` are all untouched. A step that consumes a call,
+//     advances nothing, and returns "pending" is a host-visible livelock
+//     (§11's reject-over-silently-degrade law).
+//   - There is no `all` sentinel. "Every layer" is spelled
+//     `layer_budget == num_hidden_layers`.
+//
+// The residual (`seq.hidden_codes`/`hidden_scale`) lives in `seq`'s OWN
+// state, never in `workspace` -- poison-filling `workspace` between two
+// calls that together advance the SAME sequence across a layer boundary must
+// not change the final output (master plan §8.2/W1; this sub-slot's own red
+// cell).
+//
+// This function performs NO WGT1/KVC1-by-name resolution (see LayerWeights'
+// own header comment) and reads `context_cap`-worth of K/V state through
+// NO accessor of its own -- S3.7's `KeyRow`-style accessor (§9.4) does not
+// exist yet, so this test-design pass's own fixtures exercise `context_cap
+// == 1` (a single position, no multi-token K/V history) -- the accessor's
+// eventual backing is a separate, later obligation this declaration does not
+// invent.
+//
+// `layers` has `num_hidden_layers` entries. `rope_tables` is the loaded ROP1
+// view, shared across every layer (ROP1 is model-wide, never per-layer).
+// `site_prefix`/`token_index`/`trace_hook_state` are forwarded into every
+// internal funnel call, with each site's own per-layer name appended (e.g.
+// `"layer0.attn_norm"`) -- the same convention RmsNormSite's own doc
+// comment states, extended across the whole loop.
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t intermediate_size,
+                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
+                                 uint8_t* workspace, size_t workspace_size,
+                                 std::string_view site_prefix = {}, size_t token_index = 0,
+                                 SslmTraceHookState* trace_hook_state = nullptr);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_FORWARD_SITES_H
