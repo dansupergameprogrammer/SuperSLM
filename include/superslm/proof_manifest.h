@@ -13,16 +13,17 @@
 //
 // §17.3 cell 4: "Config geometry x tensor shapes... Where these are
 // converter-only proofs they are recorded in the §13 item 7 manifest; where
-// runtime code depends on them they are rejected at load." No runtime kernel in
-// this tree yet consumes num_attention_heads/num_key_value_heads/head_dim (S3's
-// forward path does not exist), so this geometry check is NOT wired into
-// SslmModel::Load -- doing so today would reject artifacts that satisfy every
-// existing S-HARDEN-1/-2 fixture's Cfg1Spec defaults (which do not happen to
-// satisfy hidden_size == heads * head_dim) for a relation nothing at runtime yet
-// depends on. It lives here, in the manifest path, until S3 gives it a runtime
-// consumer -- exactly the sequencing SuperSLM_Plan.md §19's S-HARDEN preamble
-// states ("S3's forward path is what turns two of them from parser defects into
-// out-of-range model indices").
+// runtime code depends on them they are rejected at load." S3.3 gave the
+// relation its runtime consumer, so as of b2a3a91 this geometry check IS wired
+// into SslmModel::Load, via ValidateConfigGeometryJoin in model.cpp (board
+// T-1335, D-SLM425). The functions here remain the independently unit-tested
+// core; the loader wraps them rather than re-deriving the arithmetic.
+//
+// This comment previously recorded that wiring it would reject artifacts built
+// from the S-HARDEN-1/-2 Cfg1Spec defaults, which did not satisfy
+// hidden_size == heads * head_dim. That forecast was correct: wiring it failed
+// 58 checks across ~45 call sites. The defaults were the defect and were
+// repaired at 905daf6 -- the check was not weakened (D-SLM426).
 #ifndef SUPERSLM_PROOF_MANIFEST_H
 #define SUPERSLM_PROOF_MANIFEST_H
 
