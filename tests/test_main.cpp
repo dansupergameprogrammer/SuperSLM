@@ -9683,6 +9683,63 @@ static void TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTh
 	}
 }
 
+// D-SLM393 / audit F3 (Claude/Mendeleev/superslm-s3.3-attention-interior-
+// coverage-audit-2026-07-28.md Sec2 row 9, Sec4 F3): kKvLandingExponentMin
+// (src/model.cpp:806, the e_t floor derived there, -60) had no boundary-
+// exact accept/reject pair -- only the extreme witness e_t=-1000 above
+// (TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT)
+// proved the guard is reachable and fires, which a floor placed at any of
+// many wrong values would also pass. This cell is the accept-at-bound /
+// reject-one-past-bound pair every other S-HARDEN-1 boundary in this file
+// already carries -- the direct template is the R_t cell immediately above
+// (TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary).
+// m_t and R_t are held at canonical in-domain values throughout; only e_t
+// (word 1) is under test. The literal -60 is not exposed as a test fixture
+// constant (unlike kKvLandingReciprocalMin/Max, which are generated into
+// tests/sslm_s3_3_fixtures.h) -- it is asserted directly against the
+// production derivation's own comment at src/model.cpp:790-806, per this
+// cell's audit specification.
+static void TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast() {
+	using namespace superslm_test;
+	constexpr int64_t kExponentFloor = -60;  // src/model.cpp:806, kKvLandingExponentMin.
+
+	// Reject: one past the floor (e_t == -61).
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin,
+		                                                             kExponentFloor - 1,
+		                                                             kKvLandingReciprocalMin)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::KvLandingReciprocalOutOfDomain,
+		          "e_t=%lld (one below the derived floor -60), R_t=%lld (canonical): "
+		          "SslmModel::Load status == %s, want KvLandingReciprocalOutOfDomain (%s)",
+		          static_cast<long long>(kExponentFloor - 1),
+		          static_cast<long long>(kKvLandingReciprocalMin), SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(!view.has_kv_landing_reciprocals,
+		          "hostile KvLandingReciprocals view exposed on a rejected Load — a view MUST NOT be "
+		          "exposed");
+	}
+	// Accept-at-bound (e_t == -60 exactly).
+	{
+		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+		                            MakeKvLandingReciprocalsSection(kKvLandingScaleMantissaMin,
+		                                                             kExponentFloor,
+		                                                             kKvLandingReciprocalMin)});
+		SslmModelView view;
+		std::string err;
+		auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok,
+		          "e_t=%lld (at the derived floor, exactly), R_t=%lld (canonical): "
+		          "SslmModel::Load status == %s, want Ok (%s)",
+		          static_cast<long long>(kExponentFloor), static_cast<long long>(kKvLandingReciprocalMin),
+		          SslmModelStatusName(status), err.c_str());
+		CHECK(view.has_kv_landing_reciprocals);
+	}
+}
+
 // Record Sec4.5/Sec6.5: "the correction of MakeMinimalValidKvc1's near-
 // INT64_MAX acceptance" (plan Sec7.2a's own text), realized as a cell rather
 // than an edit to the shared fixture (editing it would break unrelated,
@@ -11081,6 +11138,7 @@ int main(int argc, char** argv) {
 	TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification();
 	TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary();
 	TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
+	TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast();
 	TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow();
 
 	// S3.3 red-regression suite (Curie, 2026-07-28) -- Claude/Curie/
