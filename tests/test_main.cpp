@@ -10653,6 +10653,242 @@ static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
 }
 
 // ---------------------------------------------------------------------------
+// §13.1 cell 4 (D-SLM410, D-SLM420-D-SLM423, board T-1333): the config-geometry
+// x tensor-shape join at SslmModel::Load. R1-R3 (config-geometry) and R4
+// (ROP1<->CFG1) each get their own hostile cell below, plus the positive
+// control the plan names. Every symbol asserted against
+// (ConfigGeometryKvHeadsExceedsHeads/ConfigGeometryHeadsNotDivisibleByKv/
+// ConfigGeometryHiddenSizeMismatch/RopeTablesShapeMismatchConfig,
+// ValidateConfigGeometryJoin/ValidateRopeTablesShapeAgainstConfig wired into
+// ValidateSectionValues) was declared and stubbed at commit 6bb6b92
+// (Claude/Brunel/superslm-s3.3-configgeometry-join-cell4-symbols-stub-build-
+// 2026-07-28.md); both stub bodies unconditionally return Ok and read none of
+// their parameters, so every hostile cell below fails against that Ok status
+// -- never against a compile error -- until the real logic lands. R5 (WGT1)
+// is not-applicable (§13.2, D-SLM422/D-SLM423) and owes no cell.
+//
+// Every cell shares one coherent base config (hidden_size=4096,
+// num_attention_heads=32, num_key_value_heads=8, head_dim=128, context_cap=4)
+// under which R1, R2, R3, and R4 all independently hold, and each hostile
+// cell mutates exactly one field or tensor away from it -- isolating the one
+// relation the cell names, per Curie's mutation-pin discipline
+// (StandardsDocument §"Pin the documented claim"). head_dim=128 and
+// context_cap=4 are chosen to match kRopeSiteRoundTripHeadDim/
+// -ContextCap/-Pairs/-CosFlat/-SinFlat exactly, so the ROP1 tensors are the
+// same real, already-committed reference table the round-trip test above
+// carries, not fabricated data.
+// ---------------------------------------------------------------------------
+
+// The shared base: R1 (4096 == 32*128), R2 (32 % 8 == 0), R3 (8 <= 32), and R4
+// (context_cap=4, head_dim=128 -> pairs=64, matching
+// kRopeSiteRoundTripContextCap/-Pairs) all hold. Only num_attention_heads and
+// context_cap are moved off Cfg1Spec{}'s own defaults (24, 8192); every other
+// field, including head_dim=128, is already Cfg1Spec{}'s default.
+static Cfg1Spec MakeCell4CoherentCfg1Spec() {
+	Cfg1Spec spec{};
+	spec.num_attention_heads = 32;
+	spec.context_cap = static_cast<uint32_t>(kRopeSiteRoundTripContextCap);
+	return spec;
+}
+
+// A ROP1 (RopeTables) section whose "cos" and "sin" tensors carry
+// independently chosen element counts -- MakeRop1SectionMultiRow above always
+// gives both tensors the same shape, which cannot express "one tensor wrong,
+// the other correct," the case D-SLM421's independent-per-tensor ruling
+// requires a cell to prove.
+static superslm_test::FixtureSection MakeRop1SectionAsymmetric(uint32_t cos_elem_count, uint32_t sin_elem_count,
+                                                                 const int64_t* cos_flat, const int64_t* sin_flat) {
+	using namespace superslm_test;
+	std::vector<ManifestTensorSpec> tensors = {
+	    {"cos", {cos_elem_count}},
+	    {"sin", {sin_elem_count}},
+	};
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	for (uint32_t i = 0; i < cos_elem_count; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(cos_flat[i]));
+	}
+	for (uint32_t i = 0; i < sin_elem_count; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(sin_flat[i]));
+	}
+	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+}
+
+// Positive control: every relation holds, Load accepts the artifact, and the
+// one forward capability S3.3 itself ships today -- RopeApplySite, since
+// S3.5's layer loop does not yet exist to run a whole-model forward -- runs
+// against the loaded view. This is what stops a real R1-R4 implementation
+// from rejecting a conformant artifact; it is not itself a hostile cell and
+// is expected to stay green both before and after the real logic lands.
+static void TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
+	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "§13.1 cell 4 positive control: hidden_size=4096, heads=32, kv_heads=8, head_dim=128 (R1/R2/R3 "
+	          "all hold) and ROP1 \"cos\"/\"sin\" each at context_cap*(head_dim/2)=256 elements (R4 holds) must "
+	          "load Ok: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK(view.has_config);
+	CHECK(view.has_rope_tables);
+
+	int8_t row[kRopeSiteRoundTripHeadDim];
+	for (int i = 0; i < kRopeSiteRoundTripHeadDim; ++i) row[i] = static_cast<int8_t>((i % 7) - 3);
+	int8_t out_row[kRopeSiteRoundTripHeadDim];
+	SslmForwardStatus fwd = RopeApplySite(row, static_cast<size_t>(kRopeSiteRoundTripHeadDim), /*position=*/0,
+	                                       static_cast<int64_t>(kRopeSiteRoundTripContextCap), view.rope_tables,
+	                                       out_row);
+	CHECK_MSG(fwd == SslmForwardStatus::Ok,
+	          "§13.1 cell 4 positive control, \"and the forward runs\" (plan §11 S3.3): RopeApplySite at "
+	          "position 0 against the loaded, conformant ROP1 view must succeed: got %s",
+	          SslmForwardStatusName(fwd));
+}
+
+// R1: hidden_size (4097) != num_attention_heads * head_dim (32 * 128 = 4096),
+// one past the exact product, with R2/R3/R4 all held.
+static void TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	spec.hidden_size = spec.num_attention_heads * spec.head_dim + 1;  // 4097
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
+	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::ConfigGeometryHiddenSizeMismatch,
+	          "§13.1 cell 4, R1: hidden_size=4097 != num_attention_heads(32)*head_dim(128)=4096, R2/R3/R4 all "
+	          "held: got %s, want ConfigGeometryHiddenSizeMismatch (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(err.find("4097") != std::string::npos && err.find("4096") != std::string::npos,
+	          "diagnostic does not name both the declared hidden_size (4097) and the expected product (4096): "
+	          "\"%s\"",
+	          err.c_str());
+}
+
+// R2: num_attention_heads (32) % num_key_value_heads (7) != 0, with kv_heads
+// still <= heads (R3 held) and hidden_size still == heads*head_dim (R1 held)
+// and ROP1 still conformant (R4 held).
+static void TestCell4LoadRejectsHeadsNotDivisibleByKvHeads() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	spec.num_key_value_heads = 7;  // 32 % 7 == 4 != 0; 7 <= 32 still holds
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
+	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv,
+	          "§13.1 cell 4, R2: num_attention_heads(32) %% num_key_value_heads(7) == 4 != 0, R1/R3/R4 all "
+	          "held: got %s, want ConfigGeometryHeadsNotDivisibleByKv (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(err.find("32") != std::string::npos && err.find("7") != std::string::npos,
+	          "diagnostic does not name both num_attention_heads (32) and num_key_value_heads (7): \"%s\"",
+	          err.c_str());
+}
+
+// R3: num_key_value_heads (33) > num_attention_heads (32). CheckConfigGeometry
+// checks KvHeadsExceedsHeads before HeadsNotDivisibleByKv
+// (src/proof_manifest.cpp), so this cell also leaves R2 (32 % 33 != 0)
+// failing at the same time -- the same precedent the existing
+// TestConfigGeometryRejectsKvHeadsExceedsHeads pure-function cell already
+// establishes (heads=8, kv_heads=16). R1 and R4 are held.
+static void TestCell4LoadRejectsKvHeadsExceedsHeads() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	spec.num_key_value_heads = 33;  // > 32
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(kRopeSiteRoundTripContextCap, kRopeSiteRoundTripPairs,
+	                                                      kRopeSiteRoundTripCosFlat, kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads,
+	          "§13.1 cell 4, R3: num_key_value_heads(33) > num_attention_heads(32), R1/R4 held: got %s, want "
+	          "ConfigGeometryKvHeadsExceedsHeads (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(err.find("33") != std::string::npos && err.find("32") != std::string::npos,
+	          "diagnostic does not name both num_key_value_heads (33) and num_attention_heads (32): \"%s\"",
+	          err.c_str());
+}
+
+// R4a: "cos" carries 512 elements -- context_cap(4)*head_dim(128), exactly the
+// plan's own pre-D-SLM421 wrong bound (the factor-of-two error the fold
+// corrected) -- while "sin" carries the correct 256 (context_cap*(head_dim/2))
+// via the real, pinned kRopeSiteRoundTripSinFlat table. R1/R2/R3 held.
+static void TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	const uint32_t wrong_cos_elems =
+	    static_cast<uint32_t>(kRopeSiteRoundTripContextCap) * static_cast<uint32_t>(kRopeSiteRoundTripHeadDim);
+	const uint32_t correct_sin_elems =
+	    static_cast<uint32_t>(kRopeSiteRoundTripContextCap) * static_cast<uint32_t>(kRopeSiteRoundTripPairs);
+	std::vector<int64_t> cos_wrong(wrong_cos_elems, INT64_C(1073741824));  // in-domain filler; the length is the defect
+	FixtureSection rope_tables =
+	    MakeRop1SectionAsymmetric(wrong_cos_elems, correct_sin_elems, cos_wrong.data(), kRopeSiteRoundTripSinFlat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::RopeTablesShapeMismatchConfig,
+	          "§13.1 cell 4, R4a: \"cos\" elem_count=512 (context_cap*head_dim, the plan's pre-D-SLM421 wrong "
+	          "bound) against context_cap=4/head_dim=128 (expected context_cap*(head_dim/2)=256), \"sin\" "
+	          "correct at 256: got %s, want RopeTablesShapeMismatchConfig (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(err.find("cos") != std::string::npos,
+	          "diagnostic does not name the offending tensor \"cos\": \"%s\"", err.c_str());
+}
+
+// R4b: the mirror of R4a -- "sin" carries the wrong 512, "cos" carries the
+// correct 256 via kRopeSiteRoundTripCosFlat. Proves the two tensors are
+// checked independently (D-SLM421): a correct "cos" does not mask a
+// malformed "sin".
+static void TestCell4LoadRejectsRopeSinShapeMismatchWithCosCorrect() {
+	using namespace superslm_test;
+	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	const uint32_t correct_cos_elems =
+	    static_cast<uint32_t>(kRopeSiteRoundTripContextCap) * static_cast<uint32_t>(kRopeSiteRoundTripPairs);
+	const uint32_t wrong_sin_elems =
+	    static_cast<uint32_t>(kRopeSiteRoundTripContextCap) * static_cast<uint32_t>(kRopeSiteRoundTripHeadDim);
+	std::vector<int64_t> sin_wrong(wrong_sin_elems, INT64_C(1073741824));  // in-domain filler; the length is the defect
+	FixtureSection rope_tables =
+	    MakeRop1SectionAsymmetric(correct_cos_elems, wrong_sin_elems, kRopeSiteRoundTripCosFlat, sin_wrong.data());
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::RopeTablesShapeMismatchConfig,
+	          "§13.1 cell 4, R4b: \"sin\" elem_count=512 (context_cap*head_dim, the plan's pre-D-SLM421 wrong "
+	          "bound) against context_cap=4/head_dim=128 (expected context_cap*(head_dim/2)=256), \"cos\" "
+	          "correct at 256: got %s, want RopeTablesShapeMismatchConfig (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(err.find("sin") != std::string::npos,
+	          "diagnostic does not name the offending tensor \"sin\": \"%s\"", err.c_str());
+}
+
+// ---------------------------------------------------------------------------
 // S3.3 -- the RoPE application site's own red suite, against the real,
 // callable RopeApplySite symbol declared and stubbed at commit 13dfcfd
 // (Claude/Brunel/superslm-s3.3-rope-application-site-header-contract-build-
@@ -11611,6 +11847,18 @@ int main(int argc, char** argv) {
 	TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps();
 	TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives();
 	TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow();
+
+	// §13.1 cell 4 -- the config-geometry x tensor-shape join at
+	// SslmModel::Load (D-SLM410, D-SLM420-D-SLM423, board T-1333). Symbols
+	// declared and stubbed at commit 6bb6b92; every hostile cell below is red
+	// against the real symbols' unconditional-Ok stub bodies.
+	TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin();
+	TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim();
+	TestCell4LoadRejectsHeadsNotDivisibleByKvHeads();
+	TestCell4LoadRejectsKvHeadsExceedsHeads();
+	TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect();
+	TestCell4LoadRejectsRopeSinShapeMismatchWithCosCorrect();
+
 	TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne();
 	TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead();
 	TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan();
