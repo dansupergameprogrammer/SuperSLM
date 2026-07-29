@@ -185,10 +185,8 @@ enum class SslmModelStatus {
 	// --- S3.3, Sec11 S3.3 / Sec13.1 cell 4: config-geometry x tensor-shape join
 	// (D-SLM410, D-SLM421, D-SLM423, board T-1333). ValidateConfigGeometryJoin
 	// and ValidateRopeTablesShapeAgainstConfig (model.cpp), wired into
-	// ValidateSectionValues, are declared stubs as of this addition -- each
-	// always returns Ok, so no artifact is yet rejected for any of the four
-	// relations below. The comparisons themselves are T-1333's remaining,
-	// unbuilt obligation.
+	// ValidateSectionValues, reject a hostile artifact for each of the four
+	// relations below.
 	ConfigGeometryKvHeadsExceedsHeads,   // R3: num_key_value_heads > num_attention_heads
 	ConfigGeometryHeadsNotDivisibleByKv, // R2: num_attention_heads % num_key_value_heads != 0
 	ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim

@@ -10,6 +10,7 @@
 // silent partial view. Standard library only (D-SLM13).
 #include "superslm/model.h"
 #include "superslm/intmath.h"       // S-HARDEN-1 (D-SLM142): pin the value gate's bounds to their source
+#include "superslm/proof_manifest.h"  // S3.3 §13.1 cell 4 R1-R3 (T-1333): CheckConfigGeometry/ConfigGeometryStatus
 #include "superslm/silu_lut.h"      // kSiluLutLog2K/kSiluLutQIdx/kSiluLutTermLeftShiftOverflowExponent
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable — S-HARDEN-1 (F20/F22)
 #include "superslm/tokenizer.h"     // S-HARDEN-2 (F18/F6/F7/F15): the tokenizer join
@@ -906,46 +907,81 @@ SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::s
 }
 
 // S3.3, Sec11 S3.3 / Sec13.1 cell 4, R1-R3 (D-SLM410, D-SLM423, board T-1333).
-// Declared and wired into ValidateSectionValues below so a test-author
-// dispatch can author §13.1 cell 4's R1-R3 red cells against a real,
-// compilable target. STUB: this body returns Ok unconditionally and reads
-// none of `config`'s fields -- it performs no check. The fold that declared
-// this symbol (Claude/Vitruvius/superslm-s3.3-configgeometry-join-cell4-
-// gaps-fold-2026-07-28.md Sec4) specifies the eventual body as a thin wrapper
-// over the existing, already-unit-tested CheckConfigGeometry
+// A thin wrapper over the existing, already-unit-tested CheckConfigGeometry
 // (proof_manifest.h/.cpp), mapping ConfigGeometryResult::status onto
 // ConfigGeometryKvHeadsExceedsHeads/ConfigGeometryHeadsNotDivisibleByKv/
-// ConfigGeometryHiddenSizeMismatch and forwarding `.diagnostic` into `*err`;
-// writing that mapping is T-1333's remaining, unbuilt obligation, not this
-// declaration's.
+// ConfigGeometryHiddenSizeMismatch and forwarding `.diagnostic` into `*err`,
+// per the fold that declared this symbol (Claude/Vitruvius/superslm-s3.3-
+// configgeometry-join-cell4-gaps-fold-2026-07-28.md Sec4). CheckConfigGeometry's
+// own Zero* arms are unreachable through this call site -- ParseConfigImpl's
+// BadConfigDim already rejects a zero num_attention_heads/num_key_value_heads
+// upstream of ValidateSectionValues -- and are left structurally unreachable
+// here rather than given a defensive mapping, per the fold's own note that
+// either choice satisfies the plan's zero-boundary requirement.
 SslmModelStatus ValidateConfigGeometryJoin(const SslmModelConfig& config, std::string* err) {
-	(void)config;
-	if (err) err->clear();
-	return SslmModelStatus::Ok;
+	const ConfigGeometryResult result = CheckConfigGeometry(
+	    config.hidden_size, config.num_attention_heads, config.num_key_value_heads, config.head_dim);
+	switch (result.status) {
+		case ConfigGeometryStatus::Ok:
+			if (err) err->clear();
+			return SslmModelStatus::Ok;
+		case ConfigGeometryStatus::KvHeadsExceedsHeads:
+			if (err) *err = result.diagnostic;
+			return SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads;
+		case ConfigGeometryStatus::HeadsNotDivisibleByKv:
+			if (err) *err = result.diagnostic;
+			return SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv;
+		case ConfigGeometryStatus::HiddenSizeGeometryMismatch:
+			if (err) *err = result.diagnostic;
+			return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
+		case ConfigGeometryStatus::ZeroAttentionHeads:
+		case ConfigGeometryStatus::ZeroKeyValueHeads:
+			// Unreachable through SslmModel::Load: ParseConfigImpl's BadConfigDim
+			// already rejects a zero num_attention_heads/num_key_value_heads
+			// before ValidateSectionValues runs. A direct, off-Load caller of
+			// CheckConfigGeometry can still reach these arms; mapped to the same
+			// diagnostic-carrying rejection as every other non-Ok status rather
+			// than left to fall through.
+			if (err) *err = result.diagnostic;
+			return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
+	}
+	if (err) *err = "ValidateConfigGeometryJoin: unrecognized ConfigGeometryStatus";
+	return SslmModelStatus::ConfigGeometryHiddenSizeMismatch;
 }
 
 // S3.3, Sec11 S3.3 / Sec13.1 cell 4, R4 -- the ROP1<->CFG1 join itself
-// (D-SLM410, D-SLM421, D-SLM423, board T-1333). Declared and wired into
-// ValidateSectionValues below so a test-author dispatch can author §13.1
-// cell 4's R4 red cells against a real, compilable target. STUB: this body
-// returns Ok unconditionally and reads none of its parameters -- it performs
-// no check. The fold that declared this symbol (Claude/Vitruvius/superslm-
-// s3.3-configgeometry-join-cell4-gaps-fold-2026-07-28.md Sec4) specifies the
-// eventual body as resolving `rope_tables.Tensor("cos")` / `Tensor("sin")`
-// the same way RopeApplySite does (forward_sites.cpp), then for each tensor
-// that is present, checking `elem_count == uint64_t(context_cap) *
-// (head_dim / 2)` independently, returning RopeTablesShapeMismatchConfig
-// with a diagnostic naming the tensor, its actual elem_count, and the
-// expected value on mismatch -- an absent tensor is not this check's
-// concern (RopeApplySite's own RopeTableTensorMissing covers it at forward
-// time, D-SLM81/D-SLM413). Writing that body is T-1333's remaining, unbuilt
-// obligation, not this declaration's.
+// (D-SLM410, D-SLM421, D-SLM423, board T-1333). Resolves `rope_tables.
+// Tensor("cos")` / `Tensor("sin")` the same way RopeApplySite does
+// (forward_sites.cpp), then for each tensor that is present, checks
+// `elem_count == uint64_t(context_cap) * (head_dim / 2)` independently,
+// returning RopeTablesShapeMismatchConfig with a diagnostic naming the
+// tensor, its actual elem_count, and the expected value on mismatch. An
+// absent tensor is not this check's concern -- RopeApplySite's own
+// RopeTableTensorMissing covers it at forward time (D-SLM81/D-SLM413); this
+// function bounds the shape of whichever tensor is present, it does not
+// assert presence.
 SslmModelStatus ValidateRopeTablesShapeAgainstConfig(const SslmTensorManifest& rope_tables,
                                                       uint32_t context_cap, uint32_t head_dim,
                                                       std::string* err) {
-	(void)rope_tables;
-	(void)context_cap;
-	(void)head_dim;
+	const uint64_t expected = static_cast<uint64_t>(context_cap) * static_cast<uint64_t>(head_dim / 2);
+	const SslmTensorView* cos = rope_tables.Tensor("cos");
+	if (cos != nullptr && cos->elem_count != expected) {
+		if (err) {
+			*err = "RopeTables \"cos\" elem_count (" + std::to_string(cos->elem_count) +
+			       ") != context_cap * (head_dim / 2) (" + std::to_string(context_cap) + " * (" +
+			       std::to_string(head_dim) + " / 2) = " + std::to_string(expected) + ")";
+		}
+		return SslmModelStatus::RopeTablesShapeMismatchConfig;
+	}
+	const SslmTensorView* sin = rope_tables.Tensor("sin");
+	if (sin != nullptr && sin->elem_count != expected) {
+		if (err) {
+			*err = "RopeTables \"sin\" elem_count (" + std::to_string(sin->elem_count) +
+			       ") != context_cap * (head_dim / 2) (" + std::to_string(context_cap) + " * (" +
+			       std::to_string(head_dim) + " / 2) = " + std::to_string(expected) + ")";
+		}
+		return SslmModelStatus::RopeTablesShapeMismatchConfig;
+	}
 	if (err) err->clear();
 	return SslmModelStatus::Ok;
 }
@@ -989,13 +1025,11 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 		const SslmModelStatus s = ValidateTokenizerVocabSizeJoin(view, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
-	// S3.3, §13.1 cell 4 (D-SLM410, D-SLM423, T-1333): the config-geometry x
-	// tensor-shape join. Both callees are stubs (declared above) as of this
-	// wiring -- each always returns Ok, so this call changes no artifact's
-	// accept/reject outcome yet. The double-guard on the second call matches
-	// ValidateTokenizerVocabSizeJoin's own pattern above: both sections must
-	// be present and individually valid before their cross-section relation
-	// is meaningful.
+	// S3.3, §13.1 cell 4 (D-SLM410, D-SLM421, D-SLM423, T-1333): the
+	// config-geometry x tensor-shape join. The double-guard on the second
+	// call matches ValidateTokenizerVocabSizeJoin's own pattern above: both
+	// sections must be present and individually valid before their
+	// cross-section relation is meaningful.
 	if (view.has_config) {
 		const SslmModelStatus s = ValidateConfigGeometryJoin(view.config, err);
 		if (s != SslmModelStatus::Ok) return s;
