@@ -5477,6 +5477,101 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
 	}
+	// Critical 1 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md):
+	// RopeApplySite dereferences its "cos"/"sin" tensor lookup (forward_sites.cpp:
+	// 329-330) with no null check before the read at :342-343. SslmTensorManifest::
+	// Tensor returns nullptr when the name is absent (model.h:206-207's own contract),
+	// and a zero-tensor ROP1 manifest loads Ok (ParseImpl bounds tensor_count only
+	// ABOVE kMaxTensors; ValidateRopeTablesDomain walks whatever tensors are present
+	// and requires no particular name) -- so a real, successfully loaded model can
+	// carry has_rope_tables == true with Tensor("cos") == nullptr. A genuine null-
+	// pointer dereference, isolated here because it faults the process -- a cell that
+	// crashes the runner is not a usable red (this suite's own established death-test
+	// convention, S2.5).
+	if (name == "rope_apply_site_null_cos_tensor_deref") {
+		using namespace superslm_test;
+		Cfg1Spec spec{};
+		spec.head_dim = 8;
+		spec.context_cap = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, /*tensors=*/{});
+		FixtureSection rope_tables =
+		    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+		SslmModelView view;
+		std::string err;
+		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		if (status != SslmModelStatus::Ok || !view.has_rope_tables ||
+		    view.rope_tables.Tensor("cos") != nullptr) {
+			std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d cos_tensor_is_null=%d) "
+			            "-- the fixture no longer reaches the state this probe requires\n",
+			            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables),
+			            static_cast<int>(view.has_rope_tables && view.rope_tables.Tensor("cos") == nullptr));
+			return 3;
+		}
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe rope_apply_site_null_cos_tensor_deref: calling RopeApplySite against "
+		            "a loaded, zero-tensor ROP1 manifest (Tensor(\"cos\") == nullptr) -- Critical 1, "
+		            "src/forward/forward_sites.cpp:329-330,342-343\n");
+		std::fflush(stdout);
+		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		const auto forward_status =
+		    superslm::RopeApplySite(row, 8, /*position=*/0, /*context_cap=*/1, view.rope_tables, out_row);
+		std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
+		            superslm::SslmForwardStatusName(forward_status));
+		return 0;
+	}
+	// Critical 2 (Poirot fa3189a review): the position guard bounds `position` against
+	// the caller's `context_cap`, never against the ROP1 tensors' own extent
+	// (forward_sites.cpp:316-343) -- `row_offset` consults neither `cos->elem_count`
+	// nor `cos->shape`. A `position` the caller's `context_cap` legally admits, but far
+	// past a real, loaded tensor's actual row count, reads unmapped heap memory. This
+	// probe mirrors the review's own executed reproduction exactly (position=268435456,
+	// context_cap=2147483647, a genuine CFG1-admissible u32 value, against a real
+	// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) -- isolated here
+	// because it faults the process.
+	if (name == "rope_apply_site_position_far_past_tensor_extent") {
+		using namespace superslm_test;
+		Cfg1Spec spec{};
+		spec.head_dim = 8;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		std::vector<ManifestTensorSpec> tensors = {{"cos", {1, 4}}, {"sin", {1, 4}}};
+		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+		for (size_t i = 0; i < 4; ++i) {
+			PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
+			       static_cast<uint64_t>(INT64_C(1073741824)));  // identity cos row
+			PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8, 0);  // sin row
+		}
+		FixtureSection rope_tables =
+		    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+		SslmModelView view;
+		std::string err;
+		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		if (status != SslmModelStatus::Ok || !view.has_rope_tables) {
+			std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d) -- the fixture no "
+			            "longer reaches the state this probe requires\n",
+			            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables));
+			return 3;
+		}
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe rope_apply_site_position_far_past_tensor_extent: calling "
+		            "RopeApplySite(head_dim=8, position=268435456, context_cap=2147483647) against a "
+		            "real, loaded 1-row ROP1 tensor -- Critical 2, src/forward/forward_sites.cpp:"
+		            "316-343\n");
+		std::fflush(stdout);
+		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+		const auto forward_status = superslm::RopeApplySite(row, 8, /*position=*/268435456,
+		                                                     /*context_cap=*/2147483647, view.rope_tables,
+		                                                     out_row);
+		std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
+		            superslm::SslmForwardStatusName(forward_status));
+		return 0;
+	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
 }
@@ -10686,6 +10781,142 @@ static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
 	          SslmForwardStatusName(forward_status));
 }
 
+// ---------------------------------------------------------------------------
+// Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md -- the
+// remediation red suite for Critical 1, Critical 2, and Significant 5. The
+// C32 kernel-half pin (Significant 3) lives above, in the C32 red suite
+// section, next to its own gate-half siblings.
+// Claude/Curie/fa3189a-s3.3-rope-site-and-c32-softmax-remediation-test-design-
+// 2026-07-28.md.
+// ---------------------------------------------------------------------------
+
+// Critical 1: RopeApplySite dereferences its "cos"/"sin" tensor lookup with no
+// null check (forward_sites.cpp:329-330,342-343). Routed through the crash-probe
+// child (this suite's established death-test convention, S2.5) because the
+// current shipped code genuinely faults the process on this input -- a cell
+// that crashes the runner is not a usable red.
+static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull() {
+	static const char* kProbeName = "rope_apply_site_null_cos_tensor_deref";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "RopeApplySite against a loaded ROP1 manifest carrying no \"cos\"/\"sin\" tensor must "
+	          "return a defined status, not fault the process (Critical 1) -- a null Tensor(\"cos\")/"
+	          "Tensor(\"sin\") is a real, reachable load-time outcome (SslmTensorManifest::Tensor "
+	          "returns nullptr for an absent name, model.h:206-207) -- outcome was %s, child output "
+	          "was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+}
+
+// Critical 2, the fault half: a `position` the caller's `context_cap` legally
+// admits, but far past a real, loaded tensor's actual row count, reads unmapped
+// heap memory -- reproduced exactly as the review's own executed probe
+// (position=268435456, context_cap=2147483647, a genuine CFG1-admissible u32
+// value). Routed through the crash-probe child for the same reason as the cell
+// above.
+static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory() {
+	static const char* kProbeName = "rope_apply_site_position_far_past_tensor_extent";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "RopeApplySite at a position the caller-supplied context_cap admits, but the loaded ROP1 "
+	          "tensor's own row count does not, must return a defined status, not fault the process "
+	          "(Critical 2) -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+}
+
+// Critical 2, the quieter near-miss half: a `position` just ONE row past the
+// tensor's real row count, still inside a legitimate `context_cap`, is a small,
+// memory-SAFE offset (still inside the same manifest allocation SslmModel::Load
+// itself produced -- deliberately not the unmapped-memory case the two crash-
+// probe cells above pin, so this cell needs no isolation). RopeApplySite has no
+// way to know it has read past the tensor's own validated extent, and returns
+// Ok anyway: the site's caller-ensures safety argument ("every element already
+// cleared ValidateRopeTablesDomain's bound at load time") does not survive a
+// read outside the tensor the loader actually validated (Poirot fa3189a review,
+// Critical 2's own text).
+//
+// This is the sibling the review's finding names directly: the existing
+// TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan cell above
+// cannot fail for this defect class, because its own fixture sets
+// context_cap == the tensor's row count (1), so CheckPositionOverCap's own
+// bound intercepts position=1 before any tensor read is attempted -- it proves
+// a different, also-true property (the position-cap guard fires before a table
+// read when the two bounds happen to agree), not this one. This cell sets
+// context_cap ABOVE the tensor's row count, so CheckPositionOverCap does NOT
+// intercept, and the read past the tensor's own extent actually happens.
+static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap() {
+	using namespace superslm_test;
+
+	const int32_t tensor_rows = 1;
+	const int32_t pairs = 4;
+	const int32_t head_dim = pairs * 2;
+	std::vector<int64_t> cos_flat(static_cast<size_t>(pairs), INT64_C(1073741824));  // identity row (2^30)
+	std::vector<int64_t> sin_flat(static_cast<size_t>(pairs), 0);
+
+	Cfg1Spec spec{};
+	spec.head_dim = static_cast<uint32_t>(head_dim);
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	FixtureSection rope_tables = MakeRop1SectionMultiRow(tensor_rows, pairs, cos_flat.data(), sin_flat.data());
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "the near-miss fixture (a real 1-row ROP1 tensor) failed to load: got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_rope_tables, "a successfully loaded artifact must expose its RopeTables view");
+	if (!view.has_rope_tables) return;
+
+	// context_cap decoupled from the tensor's real row count (1) -- exactly the join
+	// the loader does not make (Critical 2's own text).
+	const int64_t context_cap = 2;
+	const int64_t position = 1;  // < context_cap, but one row past the tensor's real extent
+
+	int8_t row[8];
+	for (int i = 0; i < head_dim; ++i) row[i] = static_cast<int8_t>((i * 5) - 7);
+	int8_t out_row[8];
+	for (int i = 0; i < head_dim; ++i) out_row[i] = INT8_C(-99);  // poison
+
+	const auto forward_status = RopeApplySite(row, static_cast<size_t>(head_dim), position, context_cap,
+	                                           view.rope_tables, out_row);
+	CHECK_MSG(forward_status != SslmForwardStatus::Ok,
+	          "context_cap=%lld (a legitimate value), position=%lld (one row past the tensor's real row "
+	          "count, %d): RopeApplySite status == %s, want a rejection -- the site bounds position only "
+	          "against context_cap, never against the tensors' own extent (Critical 2), so it silently "
+	          "reads whatever bytes lie past the validated tensor and reports Ok",
+	          static_cast<long long>(context_cap), static_cast<long long>(position), tensor_rows,
+	          SslmForwardStatusName(forward_status));
+}
+
+// Significant 5: forward_sites.h:194-195 asserts a load-time rejection of odd
+// `head_dim` ("load-time-rejected otherwise, per Sec6.2 step 3's own 'head_dim
+// odd is a load-time rejection'") that ParseConfigImpl does not perform
+// (model.cpp:461-464's dimension check is `== 0` only, no parity test anywhere
+// in model.cpp). Per StandardsDocument Sec5.6, a document claiming what the
+// code does not deliver is a code bug; this cell pins the remedy (add the
+// parity rejection to ParseConfigImpl) at the boundary the header's own text
+// names.
+static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
+	using namespace superslm_test;
+
+	Cfg1Spec spec{};
+	spec.head_dim = 1;  // odd -- the rotation pairs elements two at a time
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	auto built = BuildArtifact({config, MakeSigmoidLutSection()});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status != SslmModelStatus::Ok,
+	          "SslmModel::Load with CFG1 head_dim=1 (odd) == %s, want a rejection -- forward_sites.h:"
+	          "194-195's own text claims odd head_dim is load-time-rejected, and ParseConfigImpl "
+	          "(model.cpp:461-464) performs no parity check today (Significant 5)",
+	          SslmModelStatusName(status));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -11242,6 +11473,13 @@ int main(int argc, char** argv) {
 	TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne();
 	TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead();
 	TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan();
+
+	// Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md remediation
+	// red suite (Curie, 2026-07-28).
+	TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull();
+	TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory();
+	TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap();
+	TestParseConfigRejectsOddHeadDimAtLoadTime();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
