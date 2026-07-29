@@ -170,6 +170,12 @@ inline bool S128FitsI64(S128 v) {
 
 }  // namespace
 
+// T-1357 / D-SLM433: the single exported door onto C19, for sites that must
+// derive a reciprocal at runtime from an operand the artifact does not carry.
+// It forwards and does nothing else -- see the header for why exactly one of
+// the eight leaves is opened this way and the other seven are not.
+int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }
+
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,

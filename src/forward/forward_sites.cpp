@@ -524,10 +524,18 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
                                           std::string_view site, size_t token_index,
                                           SslmTraceHookState* trace_hook_state) {
 	// C26 (§6.2 step 8 / §6.3 step 13), the header's four steps in order.
-	// Step 1: the reciprocal is C19 over the STREAM's own mantissa, never the
-	// branch's -- the branch is what gets rescaled INTO the stream's scale, so
-	// the stream's is the target.
-	const int64_t r_h = DynamicScaleReciprocal(stream_scale.m);
+	//
+	// Step 1: C19 over the STREAM's own mantissa, never the branch's -- the
+	// branch is what gets rescaled INTO the stream's scale, so the stream's is
+	// the target. It is taken through the funnel's own exported door
+	// (CarriedScaleReciprocal, checked_chain_funnel.h) rather than the leaf
+	// itself: §7.3's check fires on any site that names one of the eight leaves,
+	// and this was the first site that had to derive a reciprocal at runtime
+	// rather than receive one. T-1357 / D-SLM433 is the ruling, and the door is
+	// its resolution. The leaf's own name is deliberately absent from this
+	// comment too -- the check matches text, not calls, and a site has no
+	// business naming it in either.
+	const int64_t r_h = CarriedScaleReciprocal(stream_scale.m);
 
 	std::vector<int64_t> wide(hidden_size);
 	for (size_t i = 0; i < hidden_size; ++i) {

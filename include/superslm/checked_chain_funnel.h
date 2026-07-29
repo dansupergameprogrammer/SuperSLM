@@ -193,6 +193,26 @@ struct ChainResult {
 // *out_scale as not installing it (§10.3's instrumentation axis). Because the
 // state lives on the model handle the caller passes in, two callers driving two
 // different handles never observe or disturb each other's hook.
+// The ONE door a site may use to obtain C19's reciprocal of a carried mantissa
+// (T-1357, D-SLM433). §7.3's invariant is that no site re-derives the chain's
+// own arithmetic, enforced by banning eight leaf names outside this file's own
+// translation unit. That invariant was written when every site-level reciprocal
+// was either artifact-carried (C27's landing takes `r_t` as a parameter) or
+// internal to the funnel; C26's residual reconciliation (§6.2 step 8) is the
+// first site that must derive one at runtime, from the STREAM's own mantissa,
+// and so could satisfy neither form.
+//
+// This forwards to DynamicScaleReciprocal and does nothing else. It opens
+// exactly ONE of the eight leaves, through a named and auditable door, rather
+// than exempting a whole file: the other seven -- the max-abs reductions, the
+// row bounds, NormalizeScale, both requant primitives and the int32 narrowing
+// -- remain reachable only from inside this translation unit, which is the
+// property that stops a site from reassembling the chain. Dan's ruling,
+// 2026-07-29, over relocating the site into this TU (which would turn a
+// function-level rule into a file-level exemption) and over an allowlist entry
+// (excluded outright: that is weakening the rule to fit a build).
+int64_t CarriedScaleReciprocal(int64_t m);
+
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::span<const CarriedScale> incoming,
                                  CarriedScale site_constant, int8_t* out_codes,
