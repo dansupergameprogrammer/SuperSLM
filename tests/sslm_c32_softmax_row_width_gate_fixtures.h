@@ -43,6 +43,25 @@ inline constexpr SoftmaxRowOffRatioWitness kSoftmaxRowOffRatioWitness = {
 	/*exact_total_wrapped_i64=*/-446744199709551595LL,
 };
 
+// --- Witness 4 (Poirot fa3189a review, Significant 3): the same off-ratio
+// mechanism as witness 1, with q_c >= 0 so CheckSoftmaxRowWidthDomain's own
+// `q_c < 0` rejection does not intercept it before the kernel's per-element
+// check (src/intmath.cpp:598-602) is reached. M = q_b*q_b + q_c is trivially
+// inside the ratified ceiling; the row's real evaluated peak (at scores[1])
+// vastly exceeds it regardless. ---
+
+struct SoftmaxRowOffRatioNonnegativeQcWitness {
+	int64_t q_ln2, q_b, q_c;
+	size_t width;
+	int64_t scores[3];
+};
+
+inline constexpr SoftmaxRowOffRatioNonnegativeQcWitness kSoftmaxRowOffRatioNonnegativeQcWitness = {
+	/*q_ln2=*/3000000001LL, /*q_b=*/10LL, /*q_c=*/0LL,
+	/*width=*/3u,
+	/*scores=*/{0LL, -3000000000LL, -2999999999LL},
+};
+
 // --- Witness 2: the m == 0 short-circuit is independent of width (Popper Null 2,
 // first bullet). Same (q_b, q_c) as witness 1 (M == 0); width near the
 // artifact format's own admitted context_cap ceiling. ---

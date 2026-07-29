@@ -10209,6 +10209,75 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 	          static_cast<long long>(-w.m_magnitude), w.width, superslm::SslmForwardStatusName(negative_status));
 }
 
+// Significant 3 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md):
+// the kernel half of the C32 remediation -- SoftmaxRowQ15's own per-element ceiling
+// check at src/intmath.cpp:598-602, refusing any element whose REAL evaluated value
+// exceeds M -- is pinned by no cell. Every witness above carries q_c <= 0, so
+// CheckSoftmaxRowWidthDomain's own `q_c < 0` rejection (checked_chain_funnel.cpp:
+// 400-402) satisfies TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability
+// unconditionally via a GATE rejection, and the kernel's per-element check is never
+// reached by any cell in this suite. This is the missing off-ratio witness WITH
+// q_c >= 0: the gate accepts it (M = q_b*q_b + q_c is trivially inside the ratified
+// ceiling), so only the kernel's own check stands between this row and a reported
+// well-formed result carrying a value ~9e16 past the D-SLM367 ceiling.
+//
+// This is not a red-before-green cell -- the kernel check already exists and is
+// already correct (D-SLM380). This cell is a coverage pin: it passes today because
+// the shipped check does its job, and it is mutation-proved by deleting
+// src/intmath.cpp:598-602 in a scratch copy outside the repository and confirming
+// this cell (and no other) newly fails.
+static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate() {
+	using namespace superslm_test;
+	using superslm::IExpConstruct;
+	using superslm::IExpConstruction;
+	using superslm::IExpDomain;
+	using superslm::IExpEvaluate;
+	const auto& w = kSoftmaxRowOffRatioNonnegativeQcWitness;
+
+	// Grounding: the gate must accept this witness, or the kernel is never reached and
+	// this cell proves nothing about it.
+	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(gate_status == superslm::SslmForwardStatus::Ok,
+	          "grounding: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want Ok -- "
+	          "this witness's own premise (q_c >= 0 clears the gate's own rejection, so only the "
+	          "kernel's per-element check stands between this row and a reported well-formed result) "
+	          "no longer holds",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(gate_status));
+
+	// Grounding: element k=1 must genuinely evaluate past M through the real shipped
+	// IExpConstruct/IExpEvaluate -- computed by calling them, not asserted.
+	IExpConstruction construction;
+	const IExpDomain d = IExpConstruct(w.scores[1], w.q_ln2, w.q_b, w.q_c, &construction);
+	CHECK_MSG(d == IExpDomain::kOk || d == IExpDomain::kNotRepresentable,
+	          "grounding: IExpConstruct(scores[1]=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) domain == %d, "
+	          "want kOk or kNotRepresentable -- this witness's own premise (element k=1 individually "
+	          "constructs) no longer holds",
+	          static_cast<long long>(w.scores[1]), static_cast<long long>(w.q_ln2),
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), static_cast<int>(d));
+	const int64_t real_value = IExpEvaluate(construction);
+	const int64_t m = w.q_b * w.q_b + w.q_c;
+	CHECK_MSG(real_value > m,
+	          "grounding: the real evaluated i-exp value at scores[1] == %lld, want > M(=%lld) -- this "
+	          "witness's own off-ratio premise no longer holds",
+	          static_cast<long long>(real_value), static_cast<long long>(m));
+
+	// The property this cell exists to pin: SoftmaxRowQ15 must not report this row
+	// well-formed. Deleting src/intmath.cpp:598-602 removes the only check that can
+	// refuse element k=1 here (the gate already accepted; IExpConstruct already
+	// constructed) -- so this assertion is exactly what that deletion flips.
+	std::vector<int64_t> out_probs(w.width, INT64_C(-99));  // poison
+	const bool well_formed =
+	    superslm::SoftmaxRowQ15(w.scores, w.width, w.q_ln2, w.q_b, w.q_c, out_probs.data());
+	CHECK_MSG(!well_formed,
+	          "SoftmaxRowQ15(q_b=%lld, q_c=%lld, q_ln2=%lld) reported well_formed=true for a row whose "
+	          "real evaluated element at k=1 (%lld) exceeds M (%lld) -- the kernel's own per-element "
+	          "ceiling check (src/intmath.cpp:598-602) must refuse this row",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c),
+	          static_cast<long long>(w.q_ln2), static_cast<long long>(real_value),
+	          static_cast<long long>(m));
+}
+
 // ---------------------------------------------------------------------------
 // S3.3 -- the RoPE APPLICATION SITE (Claude/Plans/SuperSLM_S3a_WalkingSkeleton_
 // Plan.md Sec6.2 step 3, Sec11 S3.3's own gate line; D-SLM376, D-SLM383).
@@ -11159,6 +11228,7 @@ int main(int argc, char** argv) {
 	TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability();
 	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
 	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
+	TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate();
 
 	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383, D-SLM384,
 	// D-SLM385; Claude/Curie/superslm-s3.3-rope-application-site-test-design-

@@ -131,16 +131,53 @@ def _build_sign_asymmetry_witness() -> dict:
 
 
 # =====================================================================
+# Witness 4 -- the kernel's own per-element ceiling check
+# (src/intmath.cpp:598-602, D-SLM380) is pinned by nothing (Poirot
+# fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md, Significant 3):
+# every witness above carries `q_c <= 0`, so `CheckSoftmaxRowWidthDomain`'s own
+# `q_c < 0` rejection (checked_chain_funnel.cpp:400-402) satisfies every
+# gate-then-kernel property cell before the kernel is ever reached. Same
+# q_ln2/q_b/scores as witness 1 -- the off-ratio mechanism is identical (at
+# q=0 the shifted-max element returns exactly M; at q=-3000000000 the huge
+# q_ln2 paired with a tiny q_b sends the real evaluated value far past M) --
+# only q_c differs: 0 instead of -100, the smallest change that clears the
+# gate's `q_c >= 0` rejection while leaving M trivially inside the ratified
+# ceiling, so the gate accepts and the kernel is the only thing left standing
+# between this row and a reported well-formed result.
+# =====================================================================
+
+
+def _build_off_ratio_nonnegative_qc_witness() -> dict:
+    q_ln2, q_b, q_c = 3000000001, 10, 0
+    width = 3
+    scores = [0, -3000000000, -2999999999]
+    m = q_b * q_b + q_c
+    assert q_c >= 0, "this witness must clear the gate's own q_c >= 0 rejection"
+    assert 0 <= m <= pc.PROB_WIDTH_CEILING, (
+        f"M must be inside the ratified ceiling so the gate accepts this witness, got M={m}"
+    )
+    exact_values = [im.i_exp_from_constants(s, q_ln2, q_b, q_c) for s in scores]
+    peak = max(exact_values)
+    assert peak > m, (
+        "the witness's real per-element peak must exceed M, or the off-ratio premise this cell "
+        "exists to pin is not actually demonstrated"
+    )
+    return {"q_ln2": q_ln2, "q_b": q_b, "q_c": q_c, "width": width, "scores": scores}
+
+
+# =====================================================================
 # Emission
 # =====================================================================
 
 
 def generate() -> str:
     off_ratio = _build_off_ratio_witness()
+    off_ratio_nonneg_qc = _build_off_ratio_nonnegative_qc_witness()
     m_zero_wide = _build_m_zero_wide_witness()
     sign_asym = _build_sign_asymmetry_witness()
 
     scores_line = ", ".join(f"{s}LL" for s in off_ratio["scores"])
+    nonneg_qc_scores_line = ", ".join(f"{s}LL" for s in off_ratio_nonneg_qc["scores"])
 
     lines = [
         "// GENERATED FILE. Do not hand-edit.",
@@ -186,6 +223,26 @@ def generate() -> str:
         f"\t/*width=*/{off_ratio['width']}u,",
         f"\t/*scores=*/{{{scores_line}}},",
         f"\t/*exact_total_wrapped_i64=*/{off_ratio['exact_total_wrapped_i64']}LL,",
+        "};",
+        "",
+        "// --- Witness 4 (Poirot fa3189a review, Significant 3): the same off-ratio",
+        "// mechanism as witness 1, with q_c >= 0 so CheckSoftmaxRowWidthDomain's own",
+        "// `q_c < 0` rejection does not intercept it before the kernel's per-element",
+        "// check (src/intmath.cpp:598-602) is reached. M = q_b*q_b + q_c is trivially",
+        "// inside the ratified ceiling; the row's real evaluated peak (at scores[1])",
+        "// vastly exceeds it regardless. ---",
+        "",
+        "struct SoftmaxRowOffRatioNonnegativeQcWitness {",
+        "\tint64_t q_ln2, q_b, q_c;",
+        "\tsize_t width;",
+        "\tint64_t scores[3];",
+        "};",
+        "",
+        "inline constexpr SoftmaxRowOffRatioNonnegativeQcWitness kSoftmaxRowOffRatioNonnegativeQcWitness = {",
+        f"\t/*q_ln2=*/{off_ratio_nonneg_qc['q_ln2']}LL, /*q_b=*/{off_ratio_nonneg_qc['q_b']}LL, "
+        f"/*q_c=*/{off_ratio_nonneg_qc['q_c']}LL,",
+        f"\t/*width=*/{off_ratio_nonneg_qc['width']}u,",
+        f"\t/*scores=*/{{{nonneg_qc_scores_line}}},",
         "};",
         "",
         "// --- Witness 2: the m == 0 short-circuit is independent of width (Popper Null 2,",
