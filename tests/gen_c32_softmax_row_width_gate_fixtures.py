@@ -166,6 +166,51 @@ def _build_off_ratio_nonnegative_qc_witness() -> dict:
 
 
 # =====================================================================
+# Witness 5 -- T-1324 (Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
+# confirmation-2026-07-28.md, Significant 4 / D-SLM409): `m_usable`
+# (src/intmath.cpp) admits any M representable in int64_t and >= 1 -- it
+# does not bound M against `kSoftmaxRowMaxSafeExponent` (2**47), the
+# ceiling the header's own contract (intmath.h:521-528) attributes the
+# `exps[k] << kProbFracBits` shift's safety to. A single-element row
+# (width=1, scores=[0]) whose shifted-max element evaluates to EXACTLY M
+# (q=0 gives z=0, base=q_b, so i_exp_from_constants == q_b**2 + q_c == M)
+# isolates the shift from every other moving part: q_b=0 puts the whole
+# magnitude in q_c, chosen far past the safe ceiling but still safely
+# representable in int64_t, so `m_usable`'s existing two conjuncts both
+# pass and only the missing third conjunct stands between this row and a
+# reported well-formed result. Reachable only by a caller that calls the
+# kernel directly without the width gate (CheckSoftmaxRowWidthDomain
+# genuinely rejects this M, grounded below) -- exactly the "ungated
+# caller" case the header's own text names and does not cover for this
+# specific claim.
+# =====================================================================
+
+
+def _build_ungated_shift_overflow_witness() -> dict:
+    q_ln2, q_b, q_c = 3000000001, 0, 1 << 60
+    width = 1
+    scores = [0]
+    m = q_b * q_b + q_c
+    assert m == 1 << 60, f"this witness's own premise (M == 2**60) no longer holds -- got M={m}"
+    assert m > pc.PROB_WIDTH_CEILING, (
+        "M must exceed kSoftmaxRowMaxSafeExponent (2**47), or this witness no longer "
+        "demonstrates an M the safe ceiling would reject"
+    )
+    assert m <= INT64_MAX, (
+        "M must still be representable in int64_t (m_usable's existing, correct conjunct), or "
+        "this witness stops isolating the missing ceiling conjunct from the existing "
+        "representability one"
+    )
+    real_value = im.i_exp_from_constants(scores[0], q_ln2, q_b, q_c)
+    assert real_value == m, (
+        "the shifted-max element (scores[0] == 0, the row's only element) must evaluate to "
+        f"EXACTLY M, or this witness no longer isolates the shift from the row's other "
+        f"arithmetic -- got real_value={real_value}, M={m}"
+    )
+    return {"q_ln2": q_ln2, "q_b": q_b, "q_c": q_c, "width": width, "scores": scores, "m": m}
+
+
+# =====================================================================
 # Emission
 # =====================================================================
 
@@ -175,9 +220,11 @@ def generate() -> str:
     off_ratio_nonneg_qc = _build_off_ratio_nonnegative_qc_witness()
     m_zero_wide = _build_m_zero_wide_witness()
     sign_asym = _build_sign_asymmetry_witness()
+    ungated_shift_overflow = _build_ungated_shift_overflow_witness()
 
     scores_line = ", ".join(f"{s}LL" for s in off_ratio["scores"])
     nonneg_qc_scores_line = ", ".join(f"{s}LL" for s in off_ratio_nonneg_qc["scores"])
+    shift_overflow_scores_line = ", ".join(f"{s}LL" for s in ungated_shift_overflow["scores"])
 
     lines = [
         "// GENERATED FILE. Do not hand-edit.",
@@ -185,7 +232,10 @@ def generate() -> str:
         "// Produced by tests/gen_c32_softmax_row_width_gate_fixtures.py -- witnesses for",
         "// the three C32 softmax-row width-gate defects confirmed by execution against",
         "// the green build at D:\\SuperSLM@1bf6638",
-        "// (Claude/Popper/superslm-c32-softmax-denominator-2026-07-28.md).",
+        "// (Claude/Popper/superslm-c32-softmax-denominator-2026-07-28.md), plus a fifth",
+        "// witness (T-1324, D-SLM409) pinning the missing bound on `e[k] << PROB_FRAC_BITS`",
+        "// that plan Sec14.1 owes (Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-",
+        "// confirmation-2026-07-28.md, Significant 4).",
         "// exact_total_wrapped_i64 and the peak/ceiling comparison are computed by CALLING",
         "// the vendored reference (tests/reference/superslm_spike/intmath.py's",
         "// i_exp_from_constants, pipeline_prob_width_ceiling.py's PROB_WIDTH_CEILING),",
@@ -194,7 +244,9 @@ def generate() -> str:
         "// Re-running this script must reproduce this file byte-for-byte.",
         "//",
         "// Test-design record:",
-        "// Claude/Curie/superslm-c32-softmax-row-width-gate-test-design-2026-07-28.md",
+        "// Claude/Curie/superslm-c32-softmax-row-width-gate-test-design-2026-07-28.md,",
+        "// Claude/Curie/72b0c7f-s3.3-rope-site-and-c32-softmax-confirmation-test-design-",
+        "// 2026-07-28.md",
         "#ifndef SUPERSLM_TESTS_SSLM_C32_SOFTMAX_ROW_WIDTH_GATE_FIXTURES_H",
         "#define SUPERSLM_TESTS_SSLM_C32_SOFTMAX_ROW_WIDTH_GATE_FIXTURES_H",
         "",
@@ -274,6 +326,29 @@ def generate() -> str:
         "inline constexpr SoftmaxRowSignAsymmetryWitness kSoftmaxRowSignAsymmetryWitness = {",
         f"\t/*m_magnitude=*/{sign_asym['m_magnitude']}LL,",
         f"\t/*width=*/{sign_asym['width']}u,",
+        "};",
+        "",
+        "// --- Witness 5 (Poirot 72b0c7f confirmation, Significant 4 / D-SLM409): a",
+        "// single-element row whose shifted-max element evaluates to EXACTLY M, with M",
+        "// chosen past kSoftmaxRowMaxSafeExponent (2**47) but still representable in",
+        "// int64_t -- isolates the missing third m_usable conjunct from its two existing,",
+        "// correct ones. Reachable only by a caller that calls SoftmaxRowQ15 directly",
+        "// without the width gate (CheckSoftmaxRowWidthDomain genuinely rejects this M). ---",
+        "",
+        "struct SoftmaxRowUngatedShiftOverflowWitness {",
+        "\tint64_t q_ln2, q_b, q_c;",
+        "\tsize_t width;",
+        "\tint64_t scores[1];",
+        "\t// M = q_b*q_b + q_c, computed once here so the C++ side never re-derives it.",
+        "\tint64_t m;",
+        "};",
+        "",
+        "inline constexpr SoftmaxRowUngatedShiftOverflowWitness kSoftmaxRowUngatedShiftOverflowWitness = {",
+        f"\t/*q_ln2=*/{ungated_shift_overflow['q_ln2']}LL, /*q_b=*/{ungated_shift_overflow['q_b']}LL, "
+        f"/*q_c=*/{ungated_shift_overflow['q_c']}LL,",
+        f"\t/*width=*/{ungated_shift_overflow['width']}u,",
+        f"\t/*scores=*/{{{shift_overflow_scores_line}}},",
+        f"\t/*m=*/{ungated_shift_overflow['m']}LL,",
         "};",
         "",
         "}  // namespace superslm_test",

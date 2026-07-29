@@ -3,7 +3,10 @@
 // Produced by tests/gen_c32_softmax_row_width_gate_fixtures.py -- witnesses for
 // the three C32 softmax-row width-gate defects confirmed by execution against
 // the green build at D:\SuperSLM@1bf6638
-// (Claude/Popper/superslm-c32-softmax-denominator-2026-07-28.md).
+// (Claude/Popper/superslm-c32-softmax-denominator-2026-07-28.md), plus a fifth
+// witness (T-1324, D-SLM409) pinning the missing bound on `e[k] << PROB_FRAC_BITS`
+// that plan Sec14.1 owes (Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
+// confirmation-2026-07-28.md, Significant 4).
 // exact_total_wrapped_i64 and the peak/ceiling comparison are computed by CALLING
 // the vendored reference (tests/reference/superslm_spike/intmath.py's
 // i_exp_from_constants, pipeline_prob_width_ceiling.py's PROB_WIDTH_CEILING),
@@ -12,7 +15,9 @@
 // Re-running this script must reproduce this file byte-for-byte.
 //
 // Test-design record:
-// Claude/Curie/superslm-c32-softmax-row-width-gate-test-design-2026-07-28.md
+// Claude/Curie/superslm-c32-softmax-row-width-gate-test-design-2026-07-28.md,
+// Claude/Curie/72b0c7f-s3.3-rope-site-and-c32-softmax-confirmation-test-design-
+// 2026-07-28.md
 #ifndef SUPERSLM_TESTS_SSLM_C32_SOFTMAX_ROW_WIDTH_GATE_FIXTURES_H
 #define SUPERSLM_TESTS_SSLM_C32_SOFTMAX_ROW_WIDTH_GATE_FIXTURES_H
 
@@ -91,6 +96,28 @@ struct SoftmaxRowSignAsymmetryWitness {
 inline constexpr SoftmaxRowSignAsymmetryWitness kSoftmaxRowSignAsymmetryWitness = {
 	/*m_magnitude=*/140737488355327LL,
 	/*width=*/99000u,
+};
+
+// --- Witness 5 (Poirot 72b0c7f confirmation, Significant 4 / D-SLM409): a
+// single-element row whose shifted-max element evaluates to EXACTLY M, with M
+// chosen past kSoftmaxRowMaxSafeExponent (2**47) but still representable in
+// int64_t -- isolates the missing third m_usable conjunct from its two existing,
+// correct ones. Reachable only by a caller that calls SoftmaxRowQ15 directly
+// without the width gate (CheckSoftmaxRowWidthDomain genuinely rejects this M). ---
+
+struct SoftmaxRowUngatedShiftOverflowWitness {
+	int64_t q_ln2, q_b, q_c;
+	size_t width;
+	int64_t scores[1];
+	// M = q_b*q_b + q_c, computed once here so the C++ side never re-derives it.
+	int64_t m;
+};
+
+inline constexpr SoftmaxRowUngatedShiftOverflowWitness kSoftmaxRowUngatedShiftOverflowWitness = {
+	/*q_ln2=*/3000000001LL, /*q_b=*/0LL, /*q_c=*/1152921504606846976LL,
+	/*width=*/1u,
+	/*scores=*/{0LL},
+	/*m=*/1152921504606846976LL,
 };
 
 }  // namespace superslm_test

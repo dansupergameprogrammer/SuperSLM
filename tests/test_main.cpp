@@ -10373,6 +10373,91 @@ static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTh
 	          static_cast<long long>(m));
 }
 
+// T-1324 (BLOCKING; D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
+// confirmation-2026-07-28.md, Significant 4): `m_usable` (src/intmath.cpp:566)
+// admits any M representable in int64_t and >= 1 -- it does not bound M against
+// `kSoftmaxRowMaxSafeExponent` (2**47), the ceiling intmath.h:521-528's own
+// contract attributes the `exps[k] << kProbFracBits` shift's safety to. Plan
+// Sec14.1 owes exactly this bound, "on `e[k] << PROB_FRAC_BITS`", before the
+// kernel greens; the kernel has greened and the bound is neither derived nor
+// enforced.
+//
+// A width-gate rejection already exists for this M (CheckSoftmaxRowWidthDomain,
+// checked_chain_funnel.cpp:409) -- this cell reaches the kernel the way the
+// header's own documented "ungated caller" case does: calling SoftmaxRowQ15
+// directly, bypassing the gate. The gate's own rejection is grounded first, so
+// the cell cannot be satisfied by accident of the gate being reachable here too.
+static void TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling() {
+	using namespace superslm_test;
+	using superslm::IExpConstruct;
+	using superslm::IExpConstruction;
+	using superslm::IExpDomain;
+	using superslm::IExpEvaluate;
+	const auto& w = kSoftmaxRowUngatedShiftOverflowWitness;
+
+	// Grounding 1: this M is genuinely outside the ratified ceiling, and the width gate
+	// genuinely rejects it -- so the only way to reach the kernel with this M is to call it
+	// directly, ungated, exactly as the header's own "caller that skips the gate" case
+	// describes. If the gate stopped rejecting this M, the witness would no longer isolate
+	// the ungated-caller path this cell targets.
+	CHECK_MSG(w.m > superslm::kSoftmaxRowMaxSafeExponent,
+	          "grounding: witness M (%lld) is not greater than kSoftmaxRowMaxSafeExponent (%lld) -- "
+	          "this witness's own premise (M exceeds the ratified safe ceiling) no longer holds",
+	          static_cast<long long>(w.m), static_cast<long long>(superslm::kSoftmaxRowMaxSafeExponent));
+	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
+	CHECK_MSG(gate_status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "grounding: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=%zu) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- this witness's own premise (only an ungated direct call "
+	          "can reach the kernel with this M) no longer holds",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), w.width,
+	          superslm::SslmForwardStatusName(gate_status));
+
+	// Grounding 2: the row's single element genuinely constructs and its real evaluated
+	// value genuinely equals M exactly -- computed by calling the real shipped
+	// IExpConstruct/IExpEvaluate, not asserted. This isolates the missing bound: the
+	// element itself is not "off-ratio" or otherwise malformed, it is precisely the row's
+	// own claimed peak, which is the exact value the shift is supposed to be safe up to.
+	IExpConstruction construction;
+	const IExpDomain d = IExpConstruct(w.scores[0], w.q_ln2, w.q_b, w.q_c, &construction);
+	CHECK_MSG(d == IExpDomain::kOk || d == IExpDomain::kNotRepresentable,
+	          "grounding: IExpConstruct(scores[0]=%lld, q_ln2=%lld, q_b=%lld, q_c=%lld) domain == %d, "
+	          "want kOk or kNotRepresentable -- this witness's own premise (the shifted-max element "
+	          "individually constructs) no longer holds",
+	          static_cast<long long>(w.scores[0]), static_cast<long long>(w.q_ln2),
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), static_cast<int>(d));
+	const int64_t real_value = IExpEvaluate(construction);
+	CHECK_MSG(real_value == w.m,
+	          "grounding: the real evaluated i-exp value at scores[0] == %lld, want exactly M (%lld) -- "
+	          "this witness's own premise (the shifted-max element evaluates to exactly M, isolating "
+	          "the shift from the row's other arithmetic) no longer holds",
+	          static_cast<long long>(real_value), static_cast<long long>(w.m));
+
+	// The property this cell exists to pin: a row whose only element's real value is this
+	// far past kSoftmaxRowMaxSafeExponent must not be reported well-formed. `m_usable`'s
+	// existing two conjuncts (representable in int64_t, and >= 1) both pass for this M --
+	// only a third conjunct bounding M against kSoftmaxRowMaxSafeExponent closes this. The
+	// buggy value this defect actually produces (out_probs[0] == 0 for a single-element row,
+	// which must be exactly full scale) is named in the failure message as the concrete
+	// consequence, not asserted directly -- the property this cell pins is the well-formed
+	// flag's own honesty, which is what the documented fix (adding the third conjunct)
+	// closes.
+	std::vector<int64_t> out_probs(w.width, INT64_C(-99));  // poison
+	const bool well_formed =
+	    superslm::SoftmaxRowQ15(w.scores, w.width, w.q_ln2, w.q_b, w.q_c, out_probs.data());
+	const int64_t full_scale = INT64_C(1) << superslm::kProbFracBits;
+	CHECK_MSG(well_formed == false,
+	          "SoftmaxRowQ15(q_b=%lld, q_c=%lld, q_ln2=%lld, width=1) reported well_formed=true for a "
+	          "row whose only element's real value (%lld) equals M (%lld), which exceeds "
+	          "kSoftmaxRowMaxSafeExponent (%lld) -- `m_usable` (src/intmath.cpp:566) must also bound M "
+	          "against this ceiling, or the reported out_probs[0] (%lld) is a wrong answer (a "
+	          "single-element row's probability must be exactly full scale, %lld) delivered under a "
+	          "well-formed flag asserting the answer is trustworthy (plan Sec14.1; D-SLM409)",
+	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c),
+	          static_cast<long long>(w.q_ln2), static_cast<long long>(real_value),
+	          static_cast<long long>(w.m), static_cast<long long>(superslm::kSoftmaxRowMaxSafeExponent),
+	          static_cast<long long>(out_probs[0]), static_cast<long long>(full_scale));
+}
+
 // ---------------------------------------------------------------------------
 // S3.3 -- the RoPE APPLICATION SITE (Claude/Plans/SuperSLM_S3a_WalkingSkeleton_
 // Plan.md Sec6.2 step 3, Sec11 S3.3's own gate line; D-SLM376, D-SLM383).
@@ -10806,6 +10891,18 @@ static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNu
 	          "returns nullptr for an absent name, model.h:206-207) -- outcome was %s, child output "
 	          "was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
+	if (outcome != CrashProbeOutcome::kRanNoCrash) return;
+	// Significant B (Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-confirmation-2026-07-28.md,
+	// plan Sec13 dim 5): "did not fault" alone does not pin WHICH defined status came back --
+	// the probe's own RunCrashProbe branch prints it (superslm::SslmForwardStatusName(forward_status))
+	// into the captured tail, so the exact enumerator is asserted here by name rather than
+	// discarded. A future edit that routes this rejection through any other status (e.g.
+	// RopeTableExtentExceeded) would leave the crash-probe assertion above green while
+	// silently breaking the contract this status name states.
+	CHECK_MSG(tail.find("forward_status=RopeTableTensorMissing") != std::string::npos,
+	          "the probe's captured output does not name RopeTableTensorMissing -- child output "
+	          "was: %s",
+	          tail.c_str());
 }
 
 // Critical 2, the fault half: a `position` the caller's `context_cap` legally
@@ -10823,6 +10920,14 @@ static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingU
 	          "tensor's own row count does not, must return a defined status, not fault the process "
 	          "(Critical 2) -- outcome was %s, child output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
+	if (outcome != CrashProbeOutcome::kRanNoCrash) return;
+	// Significant B: the exact status, not merely "did not fault" -- see the sibling cell
+	// above for the full rationale. The probe's own captured tail already carries
+	// SslmForwardStatusName(forward_status); asserted by name rather than discarded.
+	CHECK_MSG(tail.find("forward_status=RopeTableExtentExceeded") != std::string::npos,
+	          "the probe's captured output does not name RopeTableExtentExceeded -- child output "
+	          "was: %s",
+	          tail.c_str());
 }
 
 // Critical 2, the quieter near-miss half: a `position` just ONE row past the
@@ -10882,13 +10987,29 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 
 	const auto forward_status = RopeApplySite(row, static_cast<size_t>(head_dim), position, context_cap,
 	                                           view.rope_tables, out_row);
-	CHECK_MSG(forward_status != SslmForwardStatus::Ok,
+	// Significant B (plan Sec13 dim 5): the exact status the site's own header names for this
+	// path, not merely "not Ok" -- a future edit that routed this rejection through a
+	// different status (e.g. RopeTableTensorMissing) would satisfy a weaker `!= Ok` check
+	// while breaking the contract this specific enumerator states.
+	CHECK_MSG(forward_status == SslmForwardStatus::RopeTableExtentExceeded,
 	          "context_cap=%lld (a legitimate value), position=%lld (one row past the tensor's real row "
-	          "count, %d): RopeApplySite status == %s, want a rejection -- the site bounds position only "
-	          "against context_cap, never against the tensors' own extent (Critical 2), so it silently "
-	          "reads whatever bytes lie past the validated tensor and reports Ok",
+	          "count, %d): RopeApplySite status == %s, want RopeTableExtentExceeded -- the site bounds "
+	          "position only against context_cap, never against the tensors' own extent (Critical 2), so "
+	          "it silently reads whatever bytes lie past the validated tensor and reports Ok",
 	          static_cast<long long>(context_cap), static_cast<long long>(position), tensor_rows,
 	          SslmForwardStatusName(forward_status));
+
+	// Significant B, second half: the plan's dim 5 also owes "leaves the sequence in the
+	// state the contract names" -- forward_sites.cpp's own comment above CheckPositionOverCap
+	// states out_row stays exactly as the caller left it on rejection ("never a table read");
+	// no cell asserted the poison survives this specific rejection path until now.
+	for (int i = 0; i < head_dim; ++i) {
+		CHECK_MSG(out_row[i] == INT8_C(-99),
+		          "out_row[%d] == %d after a RopeTableExtentExceeded rejection, want the poison "
+		          "value -99 untouched -- the site's own contract states out_row is left exactly "
+		          "as the caller supplied it on rejection",
+		          i, static_cast<int>(out_row[i]));
+	}
 }
 
 // Significant 5: forward_sites.h:194-195 asserts a load-time rejection of odd
@@ -10910,10 +11031,14 @@ static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
 	SslmModelView view;
 	std::string err;
 	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-	CHECK_MSG(status != SslmModelStatus::Ok,
-	          "SslmModel::Load with CFG1 head_dim=1 (odd) == %s, want a rejection -- forward_sites.h:"
-	          "194-195's own text claims odd head_dim is load-time-rejected, and ParseConfigImpl "
-	          "(model.cpp:461-464) performs no parity check today (Significant 5)",
+	// Significant B (plan Sec13 dim 5): the exact status, not merely "not Ok" -- a future
+	// edit that folded the odd-head_dim rejection into the zero-dimension check (BadConfigDim)
+	// would satisfy a weaker `!= Ok` check while breaking the contract this specific
+	// enumerator states.
+	CHECK_MSG(status == SslmModelStatus::BadConfigHeadDimParity,
+	          "SslmModel::Load with CFG1 head_dim=1 (odd) == %s, want BadConfigHeadDimParity -- "
+	          "forward_sites.h:194-195's own text claims odd head_dim is load-time-rejected, and "
+	          "ParseConfigImpl (model.cpp:461-464) performs no parity check today (Significant 5)",
 	          SslmModelStatusName(status));
 }
 
@@ -11460,6 +11585,10 @@ int main(int argc, char** argv) {
 	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
 	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
 	TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate();
+
+	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
+	// c32-softmax-confirmation-test-design-2026-07-28.md.
+	TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling();
 
 	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383, D-SLM384,
 	// D-SLM385; Claude/Curie/superslm-s3.3-rope-application-site-test-design-
