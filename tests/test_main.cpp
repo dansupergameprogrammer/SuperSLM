@@ -11554,12 +11554,15 @@ static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNu
 	          tail.c_str());
 }
 
-// Critical 2, the fault half: a `position` the caller's `context_cap` legally
-// admits, but far past a real, loaded tensor's actual row count, reads unmapped
-// heap memory -- reproduced exactly as the review's own executed probe
-// (position=268435456, context_cap=2147483647, a genuine CFG1-admissible u32
-// value). Routed through the crash-probe child for the same reason as the cell
-// above.
+// Critical 2, the fault half (closed; Poirot fa3189a-s3.3-rope-site-and-c32-
+// softmax-review-2026-07-28.md, confirmed closed by Claude/Poirot/72b0c7f-
+// s3.3-rope-site-and-c32-softmax-confirmation-2026-07-28.md): a `position`
+// the caller's `context_cap` legally admits, but far past a real, loaded
+// tensor's actual row count, previously read unmapped heap memory before the
+// extent guard existed -- reproduced exactly as the review's own executed
+// probe (position=268435456, context_cap=2147483647, a genuine
+// CFG1-admissible u32 value). Routed through the crash-probe child for the
+// same reason as the cell above.
 static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory() {
 	static const char* kProbeName = "rope_apply_site_position_far_past_tensor_extent";
 	std::string tail;
@@ -11652,9 +11655,11 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 	// while breaking the contract this specific enumerator states.
 	CHECK_MSG(forward_status == SslmForwardStatus::RopeTableExtentExceeded,
 	          "context_cap=%lld (a legitimate value), position=%lld (one row past the tensor's real row "
-	          "count, %d): RopeApplySite status == %s, want RopeTableExtentExceeded -- the site bounds "
-	          "position only against context_cap, never against the tensors' own extent (Critical 2), so "
-	          "it silently reads whatever bytes lie past the validated tensor and reports Ok",
+	          "count, %d): RopeApplySite status == %s, want RopeTableExtentExceeded -- Critical 2 "
+	          "(closed; Poirot fa3189a review, confirmed closed by the 72b0c7f confirmation pass): "
+	          "before the fix the site bounded position only against context_cap, never against the "
+	          "tensors' own extent, so it silently read whatever bytes lay past the validated tensor "
+	          "and reported Ok",
 	          static_cast<long long>(context_cap), static_cast<long long>(position), tensor_rows,
 	          SslmForwardStatusName(forward_status));
 

@@ -98,12 +98,14 @@ inline constexpr SoftmaxRowSignAsymmetryWitness kSoftmaxRowSignAsymmetryWitness 
 	/*width=*/99000u,
 };
 
-// --- Witness 5 (Poirot 72b0c7f confirmation, Significant 4 / D-SLM409): a
-// single-element row whose shifted-max element evaluates to EXACTLY M, with M
-// chosen past kSoftmaxRowMaxSafeExponent (2**47) but still representable in
-// int64_t -- isolates the missing third m_usable conjunct from its two existing,
-// correct ones. Reachable only by a caller that calls SoftmaxRowQ15 directly
-// without the width gate (CheckSoftmaxRowWidthDomain genuinely rejects this M). ---
+// --- Witness 5 (Poirot 72b0c7f confirmation, Significant 4 / D-SLM409; T-1324
+// closed at 703dca6, D-SLM412): a single-element row whose shifted-max element
+// evaluates to EXACTLY M, with M chosen past kSoftmaxRowMaxSafeExponent (2**47)
+// but still representable in int64_t -- before the fix, isolated the missing
+// third m_usable conjunct from its two existing, correct ones; the kernel now
+// enforces that conjunct directly (intmath.h:515-528). Reachable only by a
+// caller that calls SoftmaxRowQ15 directly without the width gate
+// (CheckSoftmaxRowWidthDomain genuinely rejects this M). ---
 
 struct SoftmaxRowUngatedShiftOverflowWitness {
 	int64_t q_ln2, q_b, q_c;
