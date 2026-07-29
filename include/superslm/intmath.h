@@ -513,19 +513,24 @@ inline constexpr int kProbFracBits = 15;
 // evaluated value falls outside `[0, M]` as untrustworthy exactly like a
 // kBad* construction -- it contributes 0 to `total` and the return value is
 // false. A row whose closed-form `M` is not itself usable (not representable
-// in int64_t, or `<= 0`) makes every element of that row untrustworthy, since
-// there is then no bound left to check against. This is what makes `total`
-// provably bounded whenever the caller followed the documented contract
-// (gate before kernel): every summed term is `<= M`, and the gate's own sum
-// check already proved `width * M <= INT64_MAX` for the same `M` -- so
-// `total` cannot overflow `int64_t`, and the `exps[k] << kProbFracBits`
-// numerator shift below cannot overflow either (`M <= kSoftmaxRowMaxSafeExponent`
-// is the gate's own ceiling check, so `exps[k] << kProbFracBits <= 2^47 << 15
-// == 2^62`, safely inside `int64_t`). A caller that skips the gate and calls
-// this kernel directly still gets the per-element bound, but not the width
-// bound -- `total` can still overflow on an ungated, sufficiently wide row,
-// exactly as this function's own contract has always stated ("this function
-// itself performs no width check of its own").
+// in int64_t, `<= 0`, or exceeding `kSoftmaxRowMaxSafeExponent`) makes every
+// element of that row untrustworthy, since there is then no bound left to
+// check against. **The third condition is enforced by this kernel itself**
+// (D-SLM409, plan Sec14.1), not merely relied upon from the gate, so the
+// `exps[k] << kProbFracBits` numerator shift below cannot overflow
+// UNCONDITIONALLY -- for any element this kernel keeps, `M <=
+// kSoftmaxRowMaxSafeExponent` gives `exps[k] << kProbFracBits <= 2^47 << 15
+// == 2^62`, safely inside `int64_t`, whether or not the caller invoked
+// `CheckSoftmaxRowWidthDomain` first. `total`'s width/sum bound is a
+// separate claim and remains conditional: it is provably bounded only when
+// the caller followed the documented contract (gate before kernel) -- the
+// gate's own sum check proves `width * M <= INT64_MAX` for the same `M`, so
+// `total` cannot overflow `int64_t` under that contract. A caller that skips
+// the gate and calls this kernel directly still gets the per-element bound
+// (enforced unconditionally, above), but not the width bound -- `total` can
+// still overflow on an ungated, sufficiently wide row, exactly as this
+// function's own contract has always stated ("this function itself performs
+// no width check of its own").
 [[nodiscard]] bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
                                   int64_t q_c, int64_t* out_probs);
 

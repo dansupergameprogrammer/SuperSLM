@@ -23,6 +23,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "superslm/checked_chain_funnel.h"  // kSoftmaxRowMaxSafeExponent (D-SLM409, plan Sec14.1)
+
 namespace superslm {
 namespace {
 
@@ -559,11 +561,24 @@ bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 	// direct observation of the data rather than a claim about it.
 	const S128 m128 = SAdd(SMul(q_b, q_b), SFromI64(q_c));
 	// Usable as a per-element ceiling only if it is representable in
-	// int64_t and strictly positive -- a non-positive or unrepresentable M
-	// is not a real row peak (no legitimate i-exp magnitude is <= 0), so a
-	// row whose M fails this test gets no per-element bound to check
-	// against and every element of it is untrustworthy.
-	const bool m_usable = SGe(SFromI64(INT64_MAX), m128) && SGe(m128, SFromI64(1));
+	// int64_t, strictly positive, AND within the ratified numerator ceiling
+	// (D-SLM409, plan Sec14.1) -- a non-positive or unrepresentable M is not
+	// a real row peak (no legitimate i-exp magnitude is <= 0), and an M past
+	// kSoftmaxRowMaxSafeExponent is exactly what the prior two-conjunct form
+	// of this test admitted: an element could evaluate to exactly M, pass
+	// the `value > m` check below unchanged, and then overflow
+	// `exps[k] << kProbFracBits`, wrapping to a wrong (often zero)
+	// probability returned under `well_formed == true` (executed at
+	// q_b=0, q_c=2^60, width=1: well_formed=true, out_probs[0]=0 where a
+	// single-element row must be full scale). The third conjunct is the
+	// SAME named ceiling CheckSoftmaxRowWidthDomain enforces
+	// (checked_chain_funnel.h), so this kernel's per-element bound now
+	// holds unconditionally -- independent of whether the caller invoked
+	// that gate first. A row whose closed-form M fails any of the three
+	// tests gets no per-element bound to check against and every element of
+	// it is untrustworthy.
+	const bool m_usable = SGe(SFromI64(INT64_MAX), m128) && SGe(m128, SFromI64(1)) &&
+	                       SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128);
 	const int64_t m = m_usable ? SShrToI64(m128, 0) : 0;
 
 	std::vector<int64_t> shifted(width);
