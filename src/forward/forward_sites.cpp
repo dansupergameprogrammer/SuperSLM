@@ -1,8 +1,8 @@
-// SuperSLM S3.2/S3.3 site compositions.
+// SuperSLM S3.2/S3.3/S3.4 site compositions.
 //
 // See include/superslm/forward_sites.h for the contract
-// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
-// F-S3-8, C27, C33). The S3.2 bodies (FloorDivI64, RmsNormSite,
+// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3, §11 S3.4; C31,
+// C24/C25, C28, F-S3-8, C27, C33, C34). The S3.2 bodies (FloorDivI64, RmsNormSite,
 // ApplyWeightScaleFold, BiasReconcile, EmbedEntry) and the S3.3 bodies
 // (LandingRescale, ClampRopeCode, RopeApplySite) are the real green
 // construction against the red suite authored in tests/test_main.cpp
@@ -14,11 +14,16 @@
 // pair) replaces the prior red-first STUB named in D-SLM376, D-SLM383,
 // D-SLM384, D-SLM386, per this build's own record
 // (Claude/Brunel/superslm-s3.3-rope-application-site-body-build-2026-07-28.md).
+// MlpActSite (S3.4, C34, T-1345) is likewise a real green construction here,
+// replacing its own declare-and-stub against
+// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md's red
+// suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
 #include <vector>
 
 #include "superslm/intmath.h"
+#include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
 
 namespace superslm {
 
@@ -441,13 +446,63 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t*
 // prior stub, this file's git history). Calls nothing, reads nothing, and
 // writes nothing to out_codes/out_scale. The build seat replaces this body
 // with the real four-step composition the header's own doc comment states.
-SslmForwardStatus MlpActSite(const int8_t* /*gate_code*/, CarriedScale /*gate_scale*/,
-                              const int8_t* /*up_code*/, CarriedScale /*up_scale*/, size_t /*n*/,
-                              const int32_t* /*sigmoid_lut_table*/, CarriedScale /*site_constant*/,
-                              int8_t* /*out_codes*/, CarriedScale* /*out_scale*/,
-                              std::string_view /*site*/, size_t /*token_index*/,
-                              SslmTraceHookState* /*trace_hook_state*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;
+SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
+                              const int8_t* up_code, CarriedScale up_scale, size_t n,
+                              const int32_t* sigmoid_lut_table, CarriedScale site_constant,
+                              int8_t* out_codes, CarriedScale* out_scale,
+                              std::string_view site, size_t token_index,
+                              SslmTraceHookState* trace_hook_state) {
+	// C34 (§5.4, §6.3 step 11; T-1345), in the header's stated order and no
+	// other. Step 1 is the site's FIRST ACT: the per-token gate scale is
+	// derived at runtime and no load-time gate stands behind it (§7.2 second
+	// limb), so the domain check precedes the primitive rather than trusting
+	// it — the same predicate-before-primitive ordering RopeApplySite's
+	// CheckPositionOverCap establishes as this tree's house convention. On
+	// rejection nothing is written and SiluSigmoidQ15 never evaluates.
+	const SslmForwardStatus domain =
+	    CheckSiluCompositionScaleDomain(gate_scale.m, gate_scale.e);
+	if (domain != SslmForwardStatus::Ok) return domain;
+
+	// The predicate above has already bounded `e` to its own accepted range
+	// (kCompositionScaleMinE = -80 at the low end, and an upper branch pinned
+	// against kSiluLutTermLeftShiftOverflowExponent, §5.4's executed
+	// e = 8 ceiling). SiluSigmoidQ15 takes `int e`, and every value that
+	// reaches this narrowing is inside [-80, 8] by that check — so the
+	// conversion is exact here BECAUSE of step 1's ordering, not by
+	// assumption about the caller.
+	const int gate_e = static_cast<int>(gate_scale.e);
+
+	std::vector<int64_t> wide(n);
+	for (size_t i = 0; i < n; ++i) {
+		// Step 2: C10's fixed-point LUT construction (silu_lut.h), never the
+		// i-exp-sigmoid construction F-S3-1 found the reference computing
+		// before S3.0's reconciliation. Substituting i-exp-sigmoid here
+		// diverges from this construction on real activation codes and, at
+		// least once, on the requantized int8 code downstream — executed, and
+		// pinned as this slot's own negative control (T-1345).
+		const int32_t sig =
+		    SiluSigmoidQ15(sigmoid_lut_table, gate_code[i], gate_scale.m, gate_e);
+		// Step 3: the product's bound is 127 * 2^15 * 127 < 2^29 (§5.4) — far
+		// inside int64, so this is an exact widening product with no
+		// narrowing anywhere on the path.
+		wide[i] = static_cast<int64_t>(gate_code[i]) * static_cast<int64_t>(sig) *
+		          static_cast<int64_t>(up_code[i]);
+	}
+
+	// Step 4: BOTH carried scales fold into the funnel's incoming span, gate
+	// then up — the reference's own list literal at this site
+	// (Tools/superslm_spike/dynamic_engine.py's `mlp_act` chain record passes
+	// [gate_scale[t], up_scale[t]]). Neither scale is dropped and the order is
+	// not free: the span is what the funnel composes into the outgoing carried
+	// scale. `site`/`token_index`/`trace_hook_state` are forwarded unchanged
+	// (§11 S3.1a, D-SLM362) — this site never fixes its own name, so the
+	// caller's own layer-qualified string is exactly what reaches the
+	// emission seam.
+	const CarriedScale incoming[2] = {gate_scale, up_scale};
+	const ChainResult result = RequantChainChecked(
+	    wide.data(), n, std::span<const CarriedScale>{incoming, 2}, site_constant, out_codes,
+	    out_scale, site, token_index, trace_hook_state);
+	return result.status;
 }
 
 }  // namespace superslm

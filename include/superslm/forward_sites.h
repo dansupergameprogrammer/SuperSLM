@@ -31,12 +31,11 @@
 // RopeApplyPair+ClampRopeCode per pair — against
 // Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
 // §6's own red suite; D-SLM376 rules it is built here, in S3.3, as
-// CheckPositionOverCap's own first act. MlpActSite below is declared and
-// stubbed (returns WorkspaceTooSmall unconditionally, this tree's established
-// stub convention) against
-// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md's own red
-// suite — the build seat's job is to replace the stub with the real
-// four-step composition its own doc comment states.
+// CheckPositionOverCap's own first act. MlpActSite below is S3.4's own real
+// green construction — the four-step composition its doc comment states,
+// replacing the declare-and-stub landed with
+// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md's red
+// suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob
@@ -243,13 +242,14 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  const SslmTensorManifest& rope_tables,
                                  int8_t* out_row);
 
-// C34's SwiGLU activation site (§5.4, §6.3 step 11; T-1345). The not-yet-built
-// production body: this declaration and its stub are landed by the test-design
-// pass that authors the site's red suite (Claude/Curie/superslm-s3.4-mlp-act-
-// site-test-design-2026-07-29.md), following the same declare-and-stub
-// sequence the RoPE application site used (D-SLM384/385/386).
+// C34's SwiGLU activation site (§5.4, §6.3 step 11; T-1345). The declaration
+// and a stub were landed first by the test-design pass that authored this
+// site's red suite (Claude/Curie/superslm-s3.4-mlp-act-site-test-design-
+// 2026-07-29.md), following the same declare-and-stub sequence the RoPE
+// application site used (D-SLM384/385/386); the real body below replaced that
+// stub and is green against that suite.
 //
-// The real body performs, in this order and no other (§5.4, §7.2 second limb):
+// The body performs, in this order and no other (§5.4, §7.2 second limb):
 //   1. CheckSiluCompositionScaleDomain(gate_scale.m, gate_scale.e)
 //      (checked_chain_funnel.h) -- the site's documented FIRST ACT, before
 //      SiluSigmoidQ15 is ever called. On rejection, return

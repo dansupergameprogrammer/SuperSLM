@@ -231,8 +231,9 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b,
                                              int64_t q_c);
 
-// C34's derived-operand predicate (§7.2 second limb, §5.4). The not-yet-built SwiGLU
-// activation site (S3.4) forms the per-token gate scale (m, e) at runtime — never
+// C34's derived-operand predicate (§7.2 second limb, §5.4). The SwiGLU activation
+// site (S3.4, forward_sites.h's MlpActSite, built and green as of T-1345) forms
+// the per-token gate scale (m, e) at runtime — never
 // artifact-carried, so no load-time gate stands behind it — and calls this before
 // `SiluSigmoidQ15` (silu_lut.h:61). Encodes the runtime no-UB domain directly:
 // `|m|` must stay within the same symmetric bound `SiluSigmoidQ15`'s
