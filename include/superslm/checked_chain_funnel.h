@@ -112,6 +112,16 @@ enum class SslmForwardStatus {
 	KvCapacityExhausted,                     // owed by S3.7 (§9.4) — defined and resumable
 	KvPrecisionUnsupported,                  // owed by S3.7 (§14.4)
 	InvalidLayerBudget,                      // owed by S3.6 (§9.3)
+	// --- Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md ---
+	RopeTableTensorMissing,                  // Critical 1: RopeApplySite's ROP1 manifest carries no
+	                                          // "cos" or no "sin" tensor -- SslmTensorManifest::Tensor
+	                                          // returns nullptr for an absent name (model.h), and
+	                                          // nothing at load time requires either name to be present.
+	RopeTableExtentExceeded,                 // Critical 2: `position`/`head_dim` address a row or
+	                                          // column past the "cos"/"sin" tensors' own validated
+	                                          // extent -- the caller's `context_cap` is a fact about
+	                                          // CFG1, not about the ROP1 tensors' real shape, and
+	                                          // nothing joins the two at load time.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

@@ -202,9 +202,20 @@ int64_t ClampRopeCode(int64_t raw);
 //      PositionOverCap immediately; `out_row` is untouched and `rope_tables`'
 //      "cos"/"sin" tensors are never read — "never a table read" (§11 S3.3's
 //      own gate line, §6.2 step 3's own text).
-//   2. Read the "cos"/"sin" tensors' row `position` from `rope_tables`
+//   2. Resolve `rope_tables.Tensor("cos")` / `Tensor("sin")`. Either absent
+//      (nullptr) returns RopeTableTensorMissing — no caller can discharge
+//      this precondition, because this function is the one that performs
+//      the lookup (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-
+//      2026-07-28.md, Critical 1).
+//   3. Bound `position` and `head_dim / 2` against `cos`/`sin`'s own
+//      validated `elem_count` — `context_cap` (step 1) is a fact about CFG1,
+//      never a fact about the ROP1 tensors' real shape, and no load-time
+//      join ties the two (same review, Critical 2). Out-of-extent returns
+//      RopeTableExtentExceeded before either tensor's row `position` is
+//      touched.
+//   4. Read the "cos"/"sin" tensors' row `position` from `rope_tables`
 //      (`head_dim / 2` elements each).
-//   3. For each pair `i` in `[0, head_dim/2)`: `RopeApplyPair(row[2i],
+//   5. For each pair `i` in `[0, head_dim/2)`: `RopeApplyPair(row[2i],
 //      row[2i+1], cos_row[i], sin_row[i])` (intmath.h — interleaved even/odd
 //      pairing, matching the reference's own `_rotate_rows`, not a
 //      first-half/second-half split), then `ClampRopeCode` on each
@@ -213,7 +224,10 @@ int64_t ClampRopeCode(int64_t raw);
 // The body is real (forward_sites.cpp), driven green against
 // Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
 // §6's red suite (the feature-oracle cell, the never-a-table-read ordering
-// cell, and the ASan guard-vitality cell).
+// cell, and the ASan guard-vitality cell) and against
+// Claude/Curie/fa3189a-s3.3-rope-site-and-c32-softmax-remediation-test-
+// design-2026-07-28.md's remediation suite (the null-tensor and
+// extent-exceeded cells for Critical 1 and Critical 2).
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,

@@ -321,15 +321,52 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	// Step 2: read the "cos"/"sin" tensors' row `position` (head_dim/2
 	// elements each). `rope_tables` is the loaded ROP1 view -- its "cos"/
 	// "sin" tensors are the declaration's own stated contract (forward_sites.h:
-	// "carrying the 'cos'/'sin' tensors this site reads by row"), caller-
-	// ensures like every other funnel-adjacent compute in this tree; every
+	// "carrying the 'cos'/'sin' tensors this site reads by row"). Every
 	// element already cleared ValidateRopeTablesDomain's |v| <= 2^30 bound at
 	// load time (src/model.cpp), which is RopeApplyPair's own safety
-	// precondition (intmath.cpp:451).
+	// precondition (intmath.cpp:451) -- but that bound is over whatever
+	// elements the tensor actually carries, and neither the tensor's
+	// presence nor its shape is a caller-ensures precondition here: this
+	// function is the one that performs the `Tensor("cos")`/`Tensor("sin")`
+	// lookup, so no caller can discharge it (Poirot fa3189a review, Critical
+	// 1 and Critical 2).
 	const SslmTensorView* cos = rope_tables.Tensor("cos");
 	const SslmTensorView* sin = rope_tables.Tensor("sin");
+	if (cos == nullptr || sin == nullptr) {
+		// Critical 1: a ROP1 manifest with zero tensors, or with tensors
+		// named anything other than "cos"/"sin", loads Ok -- ParseImpl bounds
+		// tensor_count only above kMaxTensors, tensor names are constrained
+		// only to non-empty/in-blob/unique, and ValidateRopeTablesDomain
+		// walks whatever tensors are present with no name requirement.
+		// Tensor() returns nullptr for an absent name (model.h:206-207); a
+		// dereference here with no check is a real, reachable null-pointer
+		// fault, not a caller-ensures violation.
+		return SslmForwardStatus::RopeTableTensorMissing;
+	}
+
 	const size_t pairs = head_dim / 2;
-	const uint64_t row_offset = static_cast<uint64_t>(position) * static_cast<uint64_t>(pairs);
+	// Critical 2: `context_cap` (already cleared above by
+	// CheckPositionOverCap) is a fact the caller supplies about CFG1, and
+	// nothing at load time joins it to the ROP1 tensors' own real shape --
+	// no cross-section check exists in ValidateSectionValues for ROP1
+	// (model.cpp), so `position` and `pairs` are bounded here, directly
+	// against `cos`/`sin`'s own validated `elem_count`, before the row is
+	// touched. `pairs != 0` is guaranteed by CFG1's own head_dim parity and
+	// nonzero checks (ParseConfigImpl, Significant 5's remedy) reaching this
+	// call through a real load, but a direct caller (as this suite's own
+	// crash-probe and unit cells are) is not assumed to have gone through
+	// SslmModel::Load, so the degenerate `pairs == 0` case is rejected here
+	// too rather than divided by.
+	if (pairs == 0 || pairs > cos->elem_count || pairs > sin->elem_count) {
+		return SslmForwardStatus::RopeTableExtentExceeded;
+	}
+	const uint64_t upos = static_cast<uint64_t>(position);
+	const uint64_t cos_rows = cos->elem_count / static_cast<uint64_t>(pairs);
+	const uint64_t sin_rows = sin->elem_count / static_cast<uint64_t>(pairs);
+	if (upos >= cos_rows || upos >= sin_rows) {
+		return SslmForwardStatus::RopeTableExtentExceeded;
+	}
+	const uint64_t row_offset = upos * static_cast<uint64_t>(pairs);
 
 	// Step 3: for each pair i in [0, head_dim/2), RopeApplyPair(row[2i],
 	// row[2i+1], cos_row[i], sin_row[i]) -- interleaved even/odd pairing,
