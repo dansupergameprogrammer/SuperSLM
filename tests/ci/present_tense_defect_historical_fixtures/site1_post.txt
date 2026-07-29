@@ -1,0 +1,12 @@
+	// Critical 1 (closed; Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-
+	// 2026-07-28.md, confirmed closed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-
+	// c32-softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/
+	// "sin" tensor lookup and returns RopeTableTensorMissing before any read, rather
+	// than dereferencing a null pointer. SslmTensorManifest::Tensor returns nullptr
+	// when the name is absent (model.h's own contract), and a zero-tensor ROP1
+	// manifest loads Ok (ParseImpl bounds tensor_count only ABOVE kMaxTensors;
+	// ValidateRopeTablesDomain walks whatever tensors are present and requires no
+	// particular name) -- so a real, successfully loaded model can carry
+	// has_rope_tables == true with Tensor("cos") == nullptr, and this probe proves
+	// the guard intercepts that case rather than faulting. Still isolated here
+	// because a regression that removed the guard would again fault the process --

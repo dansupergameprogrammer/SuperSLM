@@ -1,0 +1,7 @@
+	// would satisfy a weaker `!= Ok` check while breaking the contract this specific
+	// enumerator states.
+	CHECK_MSG(status == SslmModelStatus::BadConfigHeadDimParity,
+	          "SslmModel::Load with CFG1 head_dim=1 (odd) == %s, want BadConfigHeadDimParity -- "
+	          "forward_sites.h:194-195's own text claims odd head_dim is load-time-rejected, and "
+	          "ParseConfigImpl (model.cpp:461-464) performs no parity check today (Significant 5)",
+	          SslmModelStatusName(status));

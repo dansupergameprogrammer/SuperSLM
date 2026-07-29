@@ -1,0 +1,11 @@
+	// Critical 1 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md):
+	// RopeApplySite dereferences its "cos"/"sin" tensor lookup (forward_sites.cpp:
+	// 329-330) with no null check before the read at :342-343. SslmTensorManifest::
+	// Tensor returns nullptr when the name is absent (model.h:206-207's own contract),
+	// and a zero-tensor ROP1 manifest loads Ok (ParseImpl bounds tensor_count only
+	// ABOVE kMaxTensors; ValidateRopeTablesDomain walks whatever tensors are present
+	// and requires no particular name) -- so a real, successfully loaded model can
+	// carry has_rope_tables == true with Tensor("cos") == nullptr. A genuine null-
+	// pointer dereference, isolated here because it faults the process -- a cell that
+	// crashes the runner is not a usable red (this suite's own established death-test
+	// convention, S2.5).

@@ -1,0 +1,8 @@
+// Significant 5: forward_sites.h:194-195 asserts a load-time rejection of odd
+// `head_dim` ("load-time-rejected otherwise, per Sec6.2 step 3's own 'head_dim
+// odd is a load-time rejection'") that ParseConfigImpl does not perform
+// (model.cpp:461-464's dimension check is `== 0` only, no parity test anywhere
+// in model.cpp). Per StandardsDocument Sec5.6, a document claiming what the
+// code does not deliver is a code bug; this cell pins the remedy (add the
+// parity rejection to ParseConfigImpl) at the boundary the header's own text
+// names.

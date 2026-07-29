@@ -1,0 +1,7 @@
+// Critical 1 (closed; confirmed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-c32-
+// softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/"sin"
+// tensor lookup and returns RopeTableTensorMissing before the read that
+// previously dereferenced null on this input. Routed through the crash-probe
+// child (this suite's established death-test convention, S2.5) because a
+// regression here would again fault the process -- a cell that crashes the
+// runner is not a usable red.

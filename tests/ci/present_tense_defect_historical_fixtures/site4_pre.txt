@@ -1,0 +1,7 @@
+// Critical 1: RopeApplySite dereferences its "cos"/"sin" tensor lookup with no
+// null check (forward_sites.cpp:329-330,342-343). Routed through the crash-probe
+// child (this suite's established death-test convention, S2.5) because the
+// current shipped code genuinely faults the process on this input -- a cell
+// that crashes the runner is not a usable red.
+static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull() {
+	static const char* kProbeName = "rope_apply_site_null_cos_tensor_deref";

@@ -1,0 +1,16 @@
+	          "was: %s",
+	          tail.c_str());
+}
+
+// Critical 2, the quieter near-miss half: a `position` just ONE row past the
+// tensor's real row count, still inside a legitimate `context_cap`, is a small,
+// memory-SAFE offset (still inside the same manifest allocation SslmModel::Load
+// itself produced -- deliberately not the unmapped-memory case the two crash-
+// probe cells above pin, so this cell needs no isolation). RopeApplySite has no
+// way to know it has read past the tensor's own validated extent, and returns
+// Ok anyway: the site's caller-ensures safety argument ("every element already
+// cleared ValidateRopeTablesDomain's bound at load time") does not survive a
+// read outside the tensor the loader actually validated (Poirot fa3189a review,
+// Critical 2's own text).
+//
+// This is the sibling the review's finding names directly: the existing

@@ -1,0 +1,10 @@
+	// Critical 2 (closed; Poirot fa3189a review, confirmed closed by the 72b0c7f
+	// confirmation pass): the position guard now bounds `position` against the
+	// ROP1 tensors' own extent, not merely against the caller's `context_cap` --
+	// `row_offset` is checked against `cos->elem_count`/`sin->elem_count` before
+	// either tensor is read. A `position` the caller's `context_cap` legally
+	// admits, but far past a real, loaded tensor's actual row count, would
+	// previously have read unmapped heap memory. This probe mirrors the review's
+	// own executed reproduction exactly (position=268435456,
+	// context_cap=2147483647, a genuine CFG1-admissible u32 value, against a real
+	// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) and proves the

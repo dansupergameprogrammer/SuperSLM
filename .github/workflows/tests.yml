@@ -417,6 +417,40 @@ jobs:
       - name: Fail the build if a forward TU names a funnel leaf directly
         run: python tests/ci/check_no_forward_leaf_calls.py
 
+  # SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 intro, Sec14.12 (D-SLM411, D-SLM414,
+  # D-SLM418; board T-1337): a test-suite comment that cites a review-severity
+  # finding (Critical N / Significant N / Weak N / Structural N) must also show a
+  # resolution marker ("closed", or a cited ticket ID) in the same comment block --
+  # the class that recurred seven times across three review rounds before this
+  # check existed. Mirrors forward-leaf-check's own two-step shape (self-test,
+  # then the gate script) with one difference: the gate step here is NOT wired to
+  # fail the build yet. A real-tree run during this check's own build (Claude/
+  # Brunel/present-tense-defect-comment-check-2026-07-29.md) found several sites
+  # beyond the seven this check was validated against -- at least one, and
+  # possibly several more, look like genuine additional instances of the same
+  # class, and several others look like backreference-only citations (a debug
+  # print or failure-message tag pointing at an already-resolved finding
+  # described in full elsewhere) that this check's lexical rule cannot tell
+  # apart from a fresh claim. Turning this into a hard gate before those sites
+  # are triaged would fail CI immediately over content outside this check-
+  # building pass's writable scope (tests/test_main.cpp and the generator under
+  # tests/ are not this pass's to edit). `continue-on-error: true` keeps the
+  # signal visible in every run's log without blocking merges until that
+  # triage happens and this step is promoted to blocking.
+  present-tense-defect-comment-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: Present-tense-defect-comment check's own red suite and historical-population validation
+        run: python -m pytest tests/ci/test_check_present_tense_defect_comments.py -v
+      - name: Report present-tense defect citations lacking a resolution marker (advisory, not yet blocking)
+        continue-on-error: true
+        run: python tests/ci/check_present_tense_defect_comments.py
+
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
   # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and

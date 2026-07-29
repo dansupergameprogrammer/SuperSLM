@@ -1,0 +1,12 @@
+// Significant 3 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md,
+// closed by this cell): the kernel half of the C32 remediation -- SoftmaxRowQ15's own
+// per-element ceiling check, refusing any element whose REAL evaluated value exceeds
+// M -- was pinned by no cell before this one. Every OTHER witness in this suite
+// carries q_c <= 0, so CheckSoftmaxRowWidthDomain's own `q_c < 0` rejection
+// (checked_chain_funnel.cpp) satisfies TestSoftmaxRowQ15NeverReportsWellFormedWithAn
+// OutOfRangeProbability unconditionally via a GATE rejection, never reaching the
+// kernel's per-element check. THIS cell is the missing off-ratio witness WITH
+// q_c >= 0: the gate accepts it (M = q_b*q_b + q_c is trivially inside the ratified
+// ceiling), so only the kernel's own check stands between this row and a reported
+// well-formed result carrying a value ~9e16 past the D-SLM367 ceiling.
+//
