@@ -318,18 +318,18 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 		return cap_status;
 	}
 
-	// Step 2: read the "cos"/"sin" tensors' row `position` (head_dim/2
-	// elements each). `rope_tables` is the loaded ROP1 view -- its "cos"/
-	// "sin" tensors are the declaration's own stated contract (forward_sites.h:
-	// "carrying the 'cos'/'sin' tensors this site reads by row"). Every
-	// element already cleared ValidateRopeTablesDomain's |v| <= 2^30 bound at
-	// load time (src/model.cpp), which is RopeApplyPair's own safety
-	// precondition (intmath.cpp:451) -- but that bound is over whatever
-	// elements the tensor actually carries, and neither the tensor's
-	// presence nor its shape is a caller-ensures precondition here: this
-	// function is the one that performs the `Tensor("cos")`/`Tensor("sin")`
-	// lookup, so no caller can discharge it (Poirot fa3189a review, Critical
-	// 1 and Critical 2).
+	// forward_sites.h's own 5-step contract, step 2: resolve
+	// `rope_tables.Tensor("cos")` / `Tensor("sin")`. `rope_tables` is the
+	// loaded ROP1 view -- its "cos"/"sin" tensors are the declaration's own
+	// stated contract (forward_sites.h: "carrying the 'cos'/'sin' tensors
+	// this site reads by row"). Every element already cleared
+	// ValidateRopeTablesDomain's |v| <= 2^30 bound at load time
+	// (src/model.cpp), which is RopeApplyPair's own safety precondition
+	// (intmath.cpp) -- but that bound is over whatever elements the tensor
+	// actually carries, and neither the tensor's presence nor its shape is a
+	// caller-ensures precondition here: this function is the one that
+	// performs the `Tensor("cos")`/`Tensor("sin")` lookup, so no caller can
+	// discharge it (Poirot fa3189a review, Critical 1 and Critical 2).
 	const SslmTensorView* cos = rope_tables.Tensor("cos");
 	const SslmTensorView* sin = rope_tables.Tensor("sin");
 	if (cos == nullptr || sin == nullptr) {
@@ -345,6 +345,8 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	}
 
 	const size_t pairs = head_dim / 2;
+	// forward_sites.h's own 5-step contract, step 3: bound `position` and
+	// `head_dim / 2` against `cos`/`sin`'s own validated `elem_count`.
 	// Critical 2: `context_cap` (already cleared above by
 	// CheckPositionOverCap) is a fact the caller supplies about CFG1, and
 	// nothing at load time joins it to the ROP1 tensors' own real shape --
@@ -356,7 +358,22 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	// call through a real load, but a direct caller (as this suite's own
 	// crash-probe and unit cells are) is not assumed to have gone through
 	// SslmModel::Load, so the degenerate `pairs == 0` case is rejected here
-	// too rather than divided by.
+	// too rather than divided by. This is defense-in-depth against the
+	// degenerate zero case only, not a re-derivation of the loader's own
+	// parity check: an odd `head_dim >= 3` (`pairs` odd but nonzero) is NOT
+	// rejected here, and a direct caller supplying one gets a silent
+	// under-write (the trailing unpaired byte of `out_row` is never touched)
+	// under `Ok`. Plan Sec6.2 step 3 places the general parity rejection at
+	// load time ("head_dim odd is a load-time rejection"), which
+	// ParseConfigImpl now performs for every artifact reaching this site
+	// through SslmModel::Load (Significant 5's remedy) -- re-deriving that
+	// same parity check here would duplicate the loader's own validation at
+	// every call site, which this codebase's own doctrine on re-derived
+	// predicates (D-SLM81) argues against. `head_dim` parity for a direct,
+	// off-Load caller is therefore a caller-ensures precondition this
+	// function does not enforce beyond the zero case, matching how
+	// `context_cap`'s own load-derived bound (step 1, above) is trusted
+	// rather than re-validated here.
 	if (pairs == 0 || pairs > cos->elem_count || pairs > sin->elem_count) {
 		return SslmForwardStatus::RopeTableExtentExceeded;
 	}
@@ -368,11 +385,14 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	}
 	const uint64_t row_offset = upos * static_cast<uint64_t>(pairs);
 
-	// Step 3: for each pair i in [0, head_dim/2), RopeApplyPair(row[2i],
-	// row[2i+1], cos_row[i], sin_row[i]) -- interleaved even/odd pairing,
-	// matching the reference's own _rotate_rows, not a first-half/second-half
-	// split -- then ClampRopeCode on each component, written to
-	// out_row[2i]/out_row[2i+1].
+	// forward_sites.h's own 5-step contract, steps 4 and 5, merged into one
+	// loop: step 4 reads each pair's "cos"/"sin" row entry inline
+	// (ReadRopeTableEntryI64 below) rather than as a separate bulk read,
+	// immediately followed by step 5's RopeApplyPair(row[2i], row[2i+1],
+	// cos_row[i], sin_row[i]) for that same pair i in [0, head_dim/2) --
+	// interleaved even/odd pairing, matching the reference's own
+	// _rotate_rows, not a first-half/second-half split -- then ClampRopeCode
+	// on each component, written to out_row[2i]/out_row[2i+1].
 	for (size_t i = 0; i < pairs; ++i) {
 		const int32_t x = static_cast<int32_t>(row[2 * i]);
 		const int32_t y = static_cast<int32_t>(row[2 * i + 1]);
