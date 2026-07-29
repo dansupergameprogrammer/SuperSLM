@@ -432,4 +432,22 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t*
 	return result.status;
 }
 
+// STUB (T-1345): declared and stubbed by the test-design pass authoring the
+// red suite (Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md),
+// following the RoPE application site's own declare-and-stub sequence
+// (D-SLM384/385/386). Returns WorkspaceTooSmall unconditionally -- a status
+// none of this site's real outcomes (Ok, SiluCompositionScaleOutOfDomain)
+// ever is, matching the established stub convention (RopeApplySite's own
+// prior stub, this file's git history). Calls nothing, reads nothing, and
+// writes nothing to out_codes/out_scale. The build seat replaces this body
+// with the real four-step composition the header's own doc comment states.
+SslmForwardStatus MlpActSite(const int8_t* /*gate_code*/, CarriedScale /*gate_scale*/,
+                              const int8_t* /*up_code*/, CarriedScale /*up_scale*/, size_t /*n*/,
+                              const int32_t* /*sigmoid_lut_table*/, CarriedScale /*site_constant*/,
+                              int8_t* /*out_codes*/, CarriedScale* /*out_scale*/,
+                              std::string_view /*site*/, size_t /*token_index*/,
+                              SslmTraceHookState* /*trace_hook_state*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
+
 }  // namespace superslm

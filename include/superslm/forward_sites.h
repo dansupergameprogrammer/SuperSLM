@@ -1,19 +1,24 @@
-// SuperSLM S3.2/S3.3 site compositions — the weightless/projection sites and
-// the attention-interior's landing/clamp sites
-// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3; C31, C24/C25, C28,
-// F-S3-8, C27, C33).
+// SuperSLM S3.2/S3.3/S3.4 site compositions — the weightless/projection
+// sites, the attention-interior's landing/clamp sites, and the MLP half's
+// SwiGLU activation site
+// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3, §11 S3.4; C31,
+// C24/C25, C28, F-S3-8, C27, C33, C34).
 //
 // Declares the RMSNorm site (C31's floor-divide construction, §5.1), the WSC1
 // identity/near-identity fold-apply dispatch (C24/C25), the C28 bias-
 // reconciliation compute (§4.4), the embed entry with its host-supplied
 // token-id validation (F-S3-8, §4.8), the K/V landing composite's rescale
-// (C27, §8.1), C33's post-rotation clamp (§5.3), and the RoPE application
-// site (§6.2 step 3, §11 S3.3's own gate line; D-SLM376, D-SLM383, D-SLM384).
-// C28's own (q_B, e_a) domain predicate, CheckRoundingDivideByPotExponentDomain,
-// and C32's own softmax-row width predicate, CheckSoftmaxRowWidthDomain, are
+// (C27, §8.1), C33's post-rotation clamp (§5.3), the RoPE application
+// site (§6.2 step 3, §11 S3.3's own gate line; D-SLM376, D-SLM383, D-SLM384),
+// and the SwiGLU activation site (§5.4, §6.3 step 11; T-1345). C28's own
+// (q_B, e_a) domain predicate, CheckRoundingDivideByPotExponentDomain, and
+// C32's own softmax-row width predicate, CheckSoftmaxRowWidthDomain, are
 // declared in checked_chain_funnel.h instead — both are derived-operand
 // predicates in the funnel's own §7.2 second-limb family, not site
-// compositions.
+// compositions. C34's own derived-operand predicate,
+// CheckSiluCompositionScaleDomain, is likewise declared in
+// checked_chain_funnel.h and is already real and green (S3.1); MlpActSite
+// below is the site that calls it, not the predicate itself.
 //
 // The S3.2 declarations' bodies (RmsNormSite, ApplyWeightScaleFold,
 // BiasReconcile, EmbedEntry, FloorDivI64) are the real green construction
@@ -26,7 +31,12 @@
 // RopeApplyPair+ClampRopeCode per pair — against
 // Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
 // §6's own red suite; D-SLM376 rules it is built here, in S3.3, as
-// CheckPositionOverCap's own first act.
+// CheckPositionOverCap's own first act. MlpActSite below is declared and
+// stubbed (returns WorkspaceTooSmall unconditionally, this tree's established
+// stub convention) against
+// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md's own red
+// suite — the build seat's job is to replace the stub with the real
+// four-step composition its own doc comment states.
 //
 // PLACEMENT: this file's own translation unit now lives at
 // src/forward/forward_sites.cpp, under the directory glob
@@ -232,6 +242,62 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
                                  int8_t* out_row);
+
+// C34's SwiGLU activation site (§5.4, §6.3 step 11; T-1345). The not-yet-built
+// production body: this declaration and its stub are landed by the test-design
+// pass that authors the site's red suite (Claude/Curie/superslm-s3.4-mlp-act-
+// site-test-design-2026-07-29.md), following the same declare-and-stub
+// sequence the RoPE application site used (D-SLM384/385/386).
+//
+// The real body performs, in this order and no other (§5.4, §7.2 second limb):
+//   1. CheckSiluCompositionScaleDomain(gate_scale.m, gate_scale.e)
+//      (checked_chain_funnel.h) -- the site's documented FIRST ACT, before
+//      SiluSigmoidQ15 is ever called. On rejection, return
+//      SiluCompositionScaleOutOfDomain immediately; out_codes/out_scale are
+//      untouched and SiluSigmoidQ15 never evaluates -- the same
+//      predicate-before-primitive ordering RopeApplySite's own
+//      CheckPositionOverCap-before-table-read establishes as this tree's
+//      house convention (§11 S3.3's own gate line).
+//   2. For each i in [0, n): sig[i] = SiluSigmoidQ15(sigmoid_lut_table,
+//      gate_code[i], gate_scale.m, gate_scale.e) -- C10's fixed-point LUT
+//      construction (silu_lut.h:61), NEVER the i-exp-sigmoid construction
+//      F-S3-1 found the reference computing before S3.0's own reconciliation
+//      (this pinning is the reason the slot exists: an implementation
+//      substituting i-exp-sigmoid here diverges from this construction on
+//      real activation codes and, downstream, on at least one requantized
+//      int8 code -- executed, Claude/Curie/superslm-s3.4-mlp-act-site-
+//      test-design-2026-07-29.md's own negative control).
+//   3. wide[i] = (int64_t)gate_code[i] * (int64_t)sig[i] * (int64_t)up_code[i]
+//      -- the product's bound is 127 * 2^15 * 127 < 2^29 (§5.4), comfortably
+//      int64-exact.
+//   4. RequantChainChecked(wide, n, incoming={gate_scale, up_scale},
+//      site_constant, out_codes, out_scale, site, token_index,
+//      trace_hook_state) -- BOTH the gate and up carried scales fold into
+//      the funnel's incoming span (Tools/superslm_spike/dynamic_engine.py:
+//      546-548's own `_chain_record_vec(model, f"{prefix}.mlp_act", t, wide,
+//      [gate_scale[t], up_scale[t]], trace)` -- neither scale is dropped, and
+//      the order is gate then up, matching the reference's own list literal).
+//
+// `gate_code`/`up_code` each have `n` elements (`n == intermediate_size`).
+// `gate_scale` is the runtime-derived per-token gate scale that both
+// SiluSigmoidQ15's domain check and the funnel's fold consume -- never an
+// artifact constant (§5.4). `sigmoid_lut_table` is the caller's materialized
+// SIL1 table (`kSiluLutN + 1` native-endian int32 Q15 nodes), the same table
+// every other SiluSigmoidQ15 caller in this tree already supplies. On Ok,
+// `out_codes` (n elements) and `*out_scale` are written; on any rejection,
+// neither is touched (the funnel's own convention, §7.2, extended here to
+// this site's own domain check).
+//
+// `site`, `token_index`, and `trace_hook_state` (§11 S3.1a) are forwarded
+// unchanged to the internal RequantChainChecked call, the same convention
+// RmsNormSite/EmbedEntry already use -- an empty site, index 0, and nullptr,
+// so every existing call compiles unchanged and emits no trace record.
+SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
+                              const int8_t* up_code, CarriedScale up_scale, size_t n,
+                              const int32_t* sigmoid_lut_table, CarriedScale site_constant,
+                              int8_t* out_codes, CarriedScale* out_scale,
+                              std::string_view site = {}, size_t token_index = 0,
+                              SslmTraceHookState* trace_hook_state = nullptr);
 
 // The forward's entry (C23, §6.1, F-S3-8): validates `token_id` against
 // `[0, vocab_size)` BEFORE any row of `embed_weights` is read (§4.8's standing

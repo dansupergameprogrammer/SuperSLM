@@ -11708,6 +11708,257 @@ static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
 	          SslmModelStatusName(status));
 }
 
+// ---------------------------------------------------------------------------
+// S3.4 -- the SwiGLU activation site (C34, §5.4, §6.3 step 11; T-1345;
+// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md). The
+// three cells below are the first C++ exercise of a real, declared,
+// deliberately-wrong MlpActSite (WorkspaceTooSmall stub, this file's own
+// declare-and-stub convention, matching the RoPE application site's
+// precedent D-SLM384/385/386).
+// ---------------------------------------------------------------------------
+
+// §3's feature-oracle cell (test-design record §3, §5): the site's whole
+// composition -- CheckSiluCompositionScaleDomain, SiluSigmoidQ15 per element,
+// the wide product, then the funnel folding BOTH gate_scale and up_scale --
+// against the already-shipped LUT (kSiluLutGoldenTable) and the
+// already-shipped funnel (RequantChainChecked), never a recode of the site's
+// own steps. Mutation-verified by execution (test-design record §5,
+// `mlp_act_fold_mutation_proof.py`, out-of-repo scratch, vendored intmath.py
+// port of the identical C++ funnel math): dropping up_scale from the fold
+// leaves out_codes IDENTICAL (0/64 differ) but changes out_scale from
+// (2^30, 8) to (2^30, -4) -- this cell's own out_scale assertion below kills
+// that mutation. Evaluating the sigmoid on up_code instead of gate_code
+// changes out_codes at 54/64 elements -- this cell's own out_codes assertion
+// kills that mutation. Changing site_constant from (2^30, 0) to
+// (1234567890, 3) leaves out_codes unchanged but moves out_scale to
+// (1234567890, 11) -- again caught by the out_scale assertion. Every
+// discriminating property this cell needs is therefore proven to fail on a
+// real, executed mutant, not asserted by argument.
+static void TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut() {
+	using superslm::CarriedScale;
+	using superslm::SiluSigmoidQ15;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr size_t kN = 64;
+	int8_t gate_code[kN];
+	int8_t up_code[kN];
+	for (size_t i = 0; i < kN; ++i) {
+		gate_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 41 + 13) % 255) - 127);
+		up_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 17 + 5) % 255) - 127);
+	}
+
+	// (m, e) = (2^30, -34): silu_lut.cpp's own header comment names "-shift
+	// measured in [15,19] over the full calibrated corpus", and
+	// shift = e + kSiluLutLog2K(5) + kSiluLutQIdx(12) = e + 17, so
+	// -shift in [15,19] <=> e in [-36,-32]; -34 is the midpoint of that real,
+	// executed corpus range.
+	const CarriedScale gate_scale{/*m=*/INT64_C(1073741824), /*e=*/-34};
+	const CarriedScale up_scale{/*m=*/INT64_C(1073741824), /*e=*/-18};
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	// Expected: the real, already-shipped C10 LUT composed through the real,
+	// already-shipped funnel, folding BOTH carried scales (Tools/superslm_spike/
+	// dynamic_engine.py:546-548's own `_chain_record_vec(..., wide,
+	// [gate_scale[t], up_scale[t]], trace)` -- gate then up, neither dropped).
+	std::vector<int64_t> wide(kN);
+	for (size_t i = 0; i < kN; ++i) {
+		const int32_t sig =
+		    SiluSigmoidQ15(kSiluLutGoldenTable, gate_code[i], gate_scale.m, gate_scale.e);
+		wide[i] = static_cast<int64_t>(gate_code[i]) * static_cast<int64_t>(sig) *
+		          static_cast<int64_t>(up_code[i]);
+	}
+	const CarriedScale incoming[] = {gate_scale, up_scale};
+	std::vector<int8_t> expected_codes(kN, INT8_C(-99));
+	CarriedScale expected_scale{INT64_C(-99), INT64_C(-99)};
+	auto expected_result =
+	    superslm::RequantChainChecked(wide.data(), kN, std::span<const CarriedScale>{incoming, 2},
+	                                    site_constant, expected_codes.data(), &expected_scale);
+	CHECK_MSG(expected_result.status == SslmForwardStatus::Ok,
+	          "the LUT-based oracle row itself must be accepted by the already-shipped funnel: got %s",
+	          SslmForwardStatusName(expected_result.status));
+
+	std::vector<int8_t> out_codes(kN, INT8_C(-99));
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::MlpActSite(gate_code, gate_scale, up_code, up_scale, kN,
+	                                     kSiluLutGoldenTable, site_constant, out_codes.data(),
+	                                     &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "MlpActSite status == %s, want Ok (red-unimplemented until Brunel's green phase)",
+	          SslmForwardStatusName(result));
+	if (result == SslmForwardStatus::Ok) {
+		for (size_t i = 0; i < kN; ++i) {
+			CHECK_MSG(out_codes[i] == expected_codes[i],
+			          "MlpActSite out_codes[%zu] == %d, want %d (the LUT-and-funnel oracle's own code)",
+			          i, static_cast<int>(out_codes[i]), static_cast<int>(expected_codes[i]));
+		}
+		CHECK_MSG(out_scale.m == expected_scale.m && out_scale.e == expected_scale.e,
+		          "MlpActSite out_scale == (%lld, %lld), want (%lld, %lld) (both gate_scale and "
+		          "up_scale must fold into the funnel's incoming span)",
+		          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e),
+		          static_cast<long long>(expected_scale.m), static_cast<long long>(expected_scale.e));
+	}
+}
+
+// §3/§7.2's ordering-and-vitality cell: CheckSiluCompositionScaleDomain must
+// fire BEFORE SiluSigmoidQ15 ever evaluates, and reject rather than compute
+// (the S3.3 §6.3 ordering-cell precedent, test-design record §3). e=9 is
+// §5.4's own fourth executed boundary point -- both the load-time descriptor
+// and the runtime predicate reject it, AND it is exactly the overflow point
+// of SiluSigmoidQ15's own left-shift branch (shift = e+17 = 26 ==
+// kSiluLutTermLeftShiftOverflowExponent, silu_lut.h). `gate_scale.m` is
+// pinned to kCompositionScaleMaxAbsM (2^31-1, the domain's own worst-case
+// mantissa) rather than an arbitrary in-domain value, because the overflow
+// claim is magnitude-dependent: executed (`mlp_act_ordering_mutation_proof.py`,
+// out-of-repo scratch), at code=127 and this exact m, `term << 26` computes
+// 18302628877110870016 against INT64_MAX's 9223372036854775807 -- genuinely
+// exceeds int64 and wraps (two's complement) to -144115196598681600 rather
+// than trapping. A reads-before-rejecting mutant of this exact fixture would
+// therefore not merely fail an abstract UB argument; it would silently
+// compute a negative garbage `pos_fixed` and feed it onward, which is
+// precisely the failure this ordering guard exists to prevent.
+static void TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr size_t kN = 8;
+	int8_t gate_code[kN];
+	int8_t up_code[kN];
+	for (size_t i = 0; i < kN; ++i) {
+		gate_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 41 + 13) % 255) - 127);
+		up_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 17 + 5) % 255) - 127);
+	}
+	const CarriedScale gate_scale{/*m=*/INT64_C(2147483647) /*2^31-1, kCompositionScaleMaxAbsM*/,
+	                              /*e=*/9};
+	const CarriedScale up_scale{/*m=*/INT64_C(1073741824), /*e=*/-18};
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	std::vector<int8_t> out_codes(kN, INT8_C(-99));
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::MlpActSite(gate_code, gate_scale, up_code, up_scale, kN,
+	                                     kSiluLutGoldenTable, site_constant, out_codes.data(),
+	                                     &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
+	          "MlpActSite(gate_scale.e=9) status == %s, want SiluCompositionScaleOutOfDomain -- the "
+	          "site must call CheckSiluCompositionScaleDomain BEFORE SiluSigmoidQ15 ever evaluates, "
+	          "and reject rather than compute",
+	          SslmForwardStatusName(result));
+	for (size_t i = 0; i < kN; ++i) {
+		CHECK_MSG(out_codes[i] == INT8_C(-99),
+		          "out_codes[%zu] == %d after rejection, want the poison value -99 untouched -- a "
+		          "site that computed SiluSigmoidQ15 before checking the domain would have written "
+		          "through the funnel first",
+		          i, static_cast<int>(out_codes[i]));
+	}
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "out_scale == (%lld, %lld) after rejection, want the poison pair (-99, -99) untouched",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+}
+
+// §4.1 (F-S3-1)'s mandated red cell: "an i-exp-sigmoid implementation fails
+// the site's fixture -- the negative control that makes F-S3-1 unable to
+// recur silently." The witness below is pinned from an out-of-repo scratch
+// execution (test-design record §5, `mlp_act_iexp_mutation_proof.py`):
+// gate_code[60]=60's own sigmoid value differs between the C10 LUT (already
+// proven, per Tools/superslm_spike/tests/test_silu_lut_reference_
+// reconciliation.py Group C, to disagree with the excluded i-exp-sigmoid
+// construction on real activations) and the i-exp-sigmoid construction
+// (computed by the ALREADY-VENDORED, ALREADY-SHIPPED reference
+// `pipeline._vec_sigmoid`/`pipeline.vec_i_exp`, never hand re-derived), and
+// that divergence survives the SAME already-shipped C++ funnel
+// (RequantChainChecked) into a DIFFERENT requantized int8 code at index 60:
+// -64 (LUT) vs -65 (i-exp-sigmoid). Combined with the feature-oracle cell
+// above (which asserts out_codes[60] == -64, the LUT value), this proves
+// -- by execution, not by argument -- that an implementation of MlpActSite
+// substituting i-exp-sigmoid for the LUT at this fixture would fail that
+// cell's own out_codes[60] assertion.
+static void TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr size_t kN = 64;
+	int8_t gate_code[kN];
+	int8_t up_code[kN];
+	for (size_t i = 0; i < kN; ++i) {
+		gate_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 41 + 13) % 255) - 127);
+		up_code[i] = static_cast<int8_t>(((static_cast<int>(i) * 17 + 5) % 255) - 127);
+	}
+
+	// Pinned by `mlp_act_iexp_mutation_proof.py` (out-of-repo scratch,
+	// executed 2026-07-29): pipeline._vec_sigmoid(gate_code, realscale=
+	// 2^30 * 2^-34) at each of the 64 gate codes above -- the i-exp-sigmoid
+	// construction F-S3-1 cites, called through the vendored reference, never
+	// hand re-derived.
+	static const int32_t kIexpSigmoidWitness[kN] = {
+	    0,     284,   3837,  20911, 31439, 32673, 0,     142,   2267,  16384, 30501, 32626, 32768,
+	    95,    1329,  11857, 28931, 32484, 32768, 47,    746,   7956,  26540, 32205, 32768, 0,
+	    424,   5050,  23175, 31795, 32721, 0,     237,   3073,  18938, 31092, 32673, 0,     142,
+	    1805,  14342, 29893, 32531, 32768, 47,    1018,  10039, 27994, 32391, 32768, 0,     563,
+	    6538,  25173, 32067, 32721, 0,     330,   4059,  21368, 31528, 32673, 0,     189};
+
+	const CarriedScale gate_scale{/*m=*/INT64_C(1073741824), /*e=*/-34};
+	const CarriedScale up_scale{/*m=*/INT64_C(1073741824), /*e=*/-18};
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+	const CarriedScale incoming[] = {gate_scale, up_scale};
+
+	std::vector<int64_t> wide_iexp(kN);
+	for (size_t i = 0; i < kN; ++i) {
+		wide_iexp[i] = static_cast<int64_t>(gate_code[i]) *
+		               static_cast<int64_t>(kIexpSigmoidWitness[i]) *
+		               static_cast<int64_t>(up_code[i]);
+	}
+	std::vector<int8_t> codes_iexp(kN, INT8_C(-99));
+	CarriedScale scale_iexp{INT64_C(-99), INT64_C(-99)};
+	auto result_iexp =
+	    superslm::RequantChainChecked(wide_iexp.data(), kN, std::span<const CarriedScale>{incoming, 2},
+	                                    site_constant, codes_iexp.data(), &scale_iexp);
+	CHECK_MSG(result_iexp.status == SslmForwardStatus::Ok,
+	          "the i-exp-sigmoid witness row must itself be accepted by the already-shipped funnel "
+	          "(the divergence this cell proves is a VALUE divergence, not a domain rejection): got %s",
+	          SslmForwardStatusName(result_iexp.status));
+
+	CHECK_MSG(codes_iexp[60] == INT8_C(-65),
+	          "the i-exp-sigmoid witness's own requantized code at index 60 == %d, want -65 -- this "
+	          "pins the executed divergence `mlp_act_iexp_mutation_proof.py` found (LUT: -64, "
+	          "i-exp-sigmoid: -65); if this fails, the pinned witness or the funnel's own behavior "
+	          "has drifted and this cell's discriminating claim needs re-deriving",
+	          static_cast<int>(codes_iexp[60]));
+
+	// The feature-oracle cell above computes the SAME fixture's LUT-based
+	// out_codes[60] independently and asserts it equals the real MlpActSite's
+	// output. Recomputed here too, so this cell stands on its own (not
+	// dependent on execution order) and pins the LUT side of the divergence
+	// directly: the real, already-shipped SiluSigmoidQ15/kSiluLutGoldenTable
+	// at gate_code[60], through the SAME funnel, must NOT equal codes_iexp[60].
+	using superslm::SiluSigmoidQ15;
+	std::vector<int64_t> wide_lut(kN);
+	for (size_t i = 0; i < kN; ++i) {
+		const int32_t sig =
+		    SiluSigmoidQ15(kSiluLutGoldenTable, gate_code[i], gate_scale.m, gate_scale.e);
+		wide_lut[i] = static_cast<int64_t>(gate_code[i]) * static_cast<int64_t>(sig) *
+		              static_cast<int64_t>(up_code[i]);
+	}
+	std::vector<int8_t> codes_lut(kN, INT8_C(-99));
+	CarriedScale scale_lut{INT64_C(-99), INT64_C(-99)};
+	auto result_lut =
+	    superslm::RequantChainChecked(wide_lut.data(), kN, std::span<const CarriedScale>{incoming, 2},
+	                                    site_constant, codes_lut.data(), &scale_lut);
+	CHECK_MSG(result_lut.status == SslmForwardStatus::Ok, "the LUT row must be accepted: got %s",
+	          SslmForwardStatusName(result_lut.status));
+	CHECK_MSG(codes_lut[60] == INT8_C(-64),
+	          "the LUT-based row's own requantized code at index 60 == %d, want -64 (§4.1's own "
+	          "citation of the excluded construction, executed against this fixture)",
+	          static_cast<int>(codes_lut[60]));
+	CHECK_MSG(codes_lut[60] != codes_iexp[60],
+	          "codes_lut[60] (%d) must differ from codes_iexp[60] (%d) -- this is the executed "
+	          "divergence that makes F-S3-1 unable to recur silently: an implementation computing "
+	          "i-exp-sigmoid at this site would produce -65 here, not the LUT's -64, and would "
+	          "therefore fail the feature-oracle cell's own out_codes[60] assertion",
+	          static_cast<int>(codes_lut[60]), static_cast<int>(codes_iexp[60]));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -12293,6 +12544,15 @@ int main(int argc, char** argv) {
 	TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory();
 	TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap();
 	TestParseConfigRejectsOddHeadDimAtLoadTime();
+
+	// S3.4 -- the SwiGLU activation site (C34, §5.4, §6.3 step 11; T-1345;
+	// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md). The
+	// three cells below are the first C++ exercise of a real, declared,
+	// deliberately-wrong MlpActSite (WorkspaceTooSmall stub, this pass's own
+	// declare-and-stub commit).
+	TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut();
+	TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid();
+	TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
