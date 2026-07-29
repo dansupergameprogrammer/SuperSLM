@@ -9147,6 +9147,359 @@ static void TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale() {
 }
 
 // ---------------------------------------------------------------------------
+// SuperSLM_S3a_WalkingSkeleton_Plan.md Sec13.1 cells 2 and 3 (D-SLM417, board
+// T-1336): two cross-component join cells the dimension-ownership sweep found
+// enumerated with no owning sub-slot, assigned to Sec11 S3.2 (already the
+// first consumer of both sections) but never authored while that sub-slot's
+// own header contract landed -- owed against S3.2's already-green production
+// code (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-
+// design-2026-07-28.md; Claude/Brunel/superslm-s3.2-weightless-and-
+// projection-sites-green-build-2026-07-28.md).
+// ---------------------------------------------------------------------------
+
+// Cell 2: converter -> forward, independently parsed. A minimal standalone
+// reader, written directly from docs/sslm_format.md's "Tensor-manifest blob"
+// and "Keyed numeric-constant blob -- KVC1" field tables, sharing no code
+// with SslmTensorManifest::Parse, SslmKeyedConstants::Parse, or
+// SslmModel::Load -- the correlated-oracle risk F-S3-3 names for the context
+// fold, applying identically here (Sec11 S3.2's own text). Reads neither
+// through the C++ loader nor through the converter's/loader's own shared
+// section-writer/reader helpers (BuildManifest/BuildKvc1 below are Curie's
+// own from-spec fixture WRITERS, already independent of src/model.cpp per
+// their own file headers, but they do not parse bytes back -- the read side
+// below is new).
+namespace independent_reader {
+
+inline uint32_t ReadU32(const uint8_t* p) {
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+inline uint64_t ReadU64(const uint8_t* p) {
+	const uint64_t lo = ReadU32(p);
+	const uint64_t hi = ReadU32(p + 4);
+	return lo | (hi << 32);
+}
+
+// Locates a section by SslmSectionType within the artifact's own 64-byte
+// header and section table (docs/sslm_format.md "Byte layout"), independent
+// of SslmArtifact::OpenFromMemory.
+struct FoundSection {
+	uint64_t offset = 0;
+	uint64_t byte_size = 0;
+	bool found = false;
+};
+
+inline FoundSection FindSectionByType(const uint8_t* file, size_t file_len, uint32_t want_type) {
+	FoundSection r;
+	if (file_len < 64) return r;
+	const uint32_t section_count = ReadU32(file + 12);
+	for (uint32_t i = 0; i < section_count; ++i) {
+		const size_t row_off = 64 + static_cast<size_t>(i) * 40;
+		if (row_off + 40 > file_len) break;
+		const uint8_t* row = file + row_off;
+		if (ReadU32(row + 0) == want_type) {
+			r.offset = ReadU64(row + 8);
+			r.byte_size = ReadU64(row + 16);
+			r.found = true;
+			return r;
+		}
+	}
+	return r;
+}
+
+// Independently parses one named int64 tensor out of a WGT1/BIA1/ROP1-shaped
+// manifest section (docs/sslm_format.md "Tensor-manifest blob": 16-byte
+// header, 48-byte descriptors at offset 16, then the name blob, then the
+// data region). `*ok` is false and the return value empty on any structural
+// problem -- the negative-control path a hostile/corrupted tensor takes
+// (this cell's own negative control), never a crash and never a silent wrong
+// answer.
+inline std::vector<int64_t> ReadInt64TensorByName(const uint8_t* section, uint64_t section_len,
+                                                   const uint8_t expected_magic[4],
+                                                   std::string_view tensor_name, bool* ok) {
+	*ok = false;
+	std::vector<int64_t> out;
+	if (section_len < 16) return out;
+	if (std::memcmp(section, expected_magic, 4) != 0) return out;
+	const uint32_t version = ReadU32(section + 4);
+	if (version != 1) return out;
+	const uint32_t tensor_count = ReadU32(section + 8);
+	const uint32_t name_blob_len = ReadU32(section + 12);
+	const uint64_t desc_off = 16;
+	const uint64_t name_blob_off = desc_off + static_cast<uint64_t>(tensor_count) * 48;
+	if (name_blob_off + name_blob_len > section_len) return out;
+	for (uint32_t i = 0; i < tensor_count; ++i) {
+		const uint8_t* d = section + desc_off + static_cast<uint64_t>(i) * 48;
+		const uint32_t name_off = ReadU32(d + 0);
+		const uint32_t name_len = ReadU32(d + 4);
+		const uint64_t data_off = ReadU64(d + 28);
+		const uint64_t elem_count = ReadU64(d + 36);
+		if (static_cast<uint64_t>(name_off) + name_len > name_blob_len) continue;
+		const std::string_view name(reinterpret_cast<const char*>(section + name_blob_off + name_off),
+		                             name_len);
+		if (name != tensor_name) continue;
+		if (data_off < name_blob_off + name_blob_len) return out;  // overlaps the name blob -- reject
+		if (elem_count > (UINT64_MAX / 8)) return out;             // would overflow the bounds check
+		if (data_off + elem_count * 8 > section_len) return out;   // out of bounds -- reject
+		out.resize(static_cast<size_t>(elem_count));
+		for (uint64_t e = 0; e < elem_count; ++e) {
+			out[static_cast<size_t>(e)] = static_cast<int64_t>(ReadU64(section + data_off + e * 8));
+		}
+		*ok = true;
+		return out;
+	}
+	return out;  // name not found
+}
+
+// Independently parses one named entry's int64 tuple out of a KVC1 keyed-
+// constant section (docs/sslm_format.md "Keyed numeric-constant blob": magic,
+// version, entry_count, value_words, name_blob_len, reserved, descriptors,
+// values, name_blob).
+inline std::vector<int64_t> ReadKvc1EntryByName(const uint8_t* section, uint64_t section_len,
+                                                 std::string_view key, bool* ok) {
+	*ok = false;
+	std::vector<int64_t> out;
+	if (section_len < 24) return out;
+	static constexpr uint8_t kKvc1Magic[4] = {'K', 'V', 'C', '1'};
+	if (std::memcmp(section, kKvc1Magic, 4) != 0) return out;
+	const uint32_t version = ReadU32(section + 4);
+	if (version != 1) return out;
+	const uint32_t entry_count = ReadU32(section + 8);
+	const uint32_t value_words = ReadU32(section + 12);
+	const uint32_t name_blob_len = ReadU32(section + 16);
+	if (value_words != 2 && value_words != 3) return out;
+	const uint64_t desc_off = 24;
+	const uint64_t values_off = desc_off + static_cast<uint64_t>(entry_count) * 8;
+	const uint64_t name_blob_off =
+	    values_off + static_cast<uint64_t>(entry_count) * static_cast<uint64_t>(value_words) * 8;
+	if (name_blob_off + name_blob_len > section_len) return out;
+	for (uint32_t i = 0; i < entry_count; ++i) {
+		const uint8_t* d = section + desc_off + static_cast<uint64_t>(i) * 8;
+		const uint32_t name_off = ReadU32(d + 0);
+		const uint32_t name_len = ReadU32(d + 4);
+		if (static_cast<uint64_t>(name_off) + name_len > name_blob_len) continue;
+		const std::string_view name(reinterpret_cast<const char*>(section + name_blob_off + name_off),
+		                             name_len);
+		if (name != key) continue;
+		out.resize(value_words);
+		for (uint32_t w = 0; w < value_words; ++w) {
+			const uint64_t off = values_off + (static_cast<uint64_t>(i) * value_words + w) * 8;
+			out[w] = static_cast<int64_t>(ReadU64(section + off));
+		}
+		*ok = true;
+		return out;
+	}
+	return out;  // key not found
+}
+
+}  // namespace independent_reader
+
+// Builds a BIA1 tensor and a CompositionConstants/bias.q_b KVC1 entry the way
+// tools/convert_model.py emits them (BIA1: a per-layer int64 bias tensor;
+// bias.q_b: the (30, 0) shift-count pair, Sec6.8/Sec14.2), loads the result
+// through the REAL loader for cross-check, then confirms the independent
+// reader above recovers the same values from the same bytes.
+static void TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView() {
+	auto bia1_manifest = BuildManifest(superslm::kBiasesMagic, /*element_size=*/8, {{"layer0.bias", {2}}});
+	const size_t bo = static_cast<size_t>(bia1_manifest.tensor_data_off[0]);
+	PutU64(bia1_manifest.bytes, bo + 0, static_cast<uint64_t>(INT64_C(123456789)));
+	PutU64(bia1_manifest.bytes, bo + 8, static_cast<uint64_t>(INT64_C(-987654321)));
+
+	auto kvc1 = BuildKvc1(/*declared_value_words=*/2, {{"bias.q_b", {30, 0}}});
+
+	auto built =
+	    BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                   MakeSection(SslmSectionType::Biases, SslmDtype::Int64, bia1_manifest.bytes, 64),
+	                   MakeSection(SslmSectionType::CompositionConstants, SslmDtype::Raw, kvc1.bytes, 64)});
+
+	// Ground truth via the real loader -- what this reader's recovered values
+	// are checked AGAINST, never the mechanism being verified.
+	SslmModelView view;
+	std::string err;
+	auto status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "converter-representative fixture failed to load: %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK(view.has_biases);
+	CHECK(view.has_composition_constants);
+
+	// The independent parse.
+	auto bia1_section = independent_reader::FindSectionByType(
+	    built.bytes.data(), built.bytes.size(), static_cast<uint32_t>(SslmSectionType::Biases));
+	CHECK_MSG(bia1_section.found, "independent reader could not locate the Biases section");
+	bool bia1_ok = false;
+	auto bia1_values =
+	    independent_reader::ReadInt64TensorByName(built.bytes.data() + bia1_section.offset, bia1_section.byte_size,
+	                                               superslm::kBiasesMagic, "layer0.bias", &bia1_ok);
+	CHECK_MSG(bia1_ok, "independent reader failed to parse a structurally valid BIA1 tensor");
+	CHECK(bia1_values.size() == 2);
+	if (bia1_values.size() == 2) {
+		CHECK(bia1_values[0] == INT64_C(123456789));
+		CHECK(bia1_values[1] == INT64_C(-987654321));
+	}
+
+	auto cc_section = independent_reader::FindSectionByType(
+	    built.bytes.data(), built.bytes.size(), static_cast<uint32_t>(SslmSectionType::CompositionConstants));
+	CHECK_MSG(cc_section.found, "independent reader could not locate the CompositionConstants section");
+	bool qb_ok = false;
+	auto qb_values = independent_reader::ReadKvc1EntryByName(built.bytes.data() + cc_section.offset,
+	                                                          cc_section.byte_size, "bias.q_b", &qb_ok);
+	CHECK_MSG(qb_ok, "independent reader failed to parse bias.q_b out of a structurally valid KVC1 blob");
+	CHECK(qb_values.size() == 2);
+	if (qb_values.size() == 2) {
+		CHECK(qb_values[0] == INT64_C(30));
+		CHECK(qb_values[1] == INT64_C(0));
+	}
+
+	// Cross-check: what the independent reader recovers matches what
+	// SslmModelView (the C++ loader under test) exposes for the SAME bytes.
+	const superslm::SslmTensorView* loader_tensor = view.biases.Tensor("layer0.bias");
+	CHECK_MSG(loader_tensor != nullptr, "loader's own view does not expose layer0.bias");
+	if (loader_tensor != nullptr && bia1_values.size() == loader_tensor->elem_count) {
+		for (size_t i = 0; i < bia1_values.size(); ++i) {
+			const int64_t loader_value =
+			    static_cast<int64_t>(independent_reader::ReadU64(loader_tensor->data + i * 8));
+			CHECK_MSG(loader_value == bia1_values[i],
+			          "independent reader's BIA1[%zu] == %lld disagrees with SslmModelView's own == %lld", i,
+			          static_cast<long long>(bia1_values[i]), static_cast<long long>(loader_value));
+		}
+	}
+
+	const superslm::SslmConstantEntry* loader_entry = view.composition_constants.Entry("bias.q_b");
+	CHECK_MSG(loader_entry != nullptr, "loader's own view does not expose bias.q_b");
+	if (loader_entry != nullptr && qb_values.size() == loader_entry->value_words) {
+		for (uint32_t w = 0; w < loader_entry->value_words; ++w) {
+			const int64_t loader_value = superslm::SslmKeyedConstants::Value(*loader_entry, w);
+			CHECK_MSG(loader_value == qb_values[w],
+			          "independent reader's bias.q_b[%u] == %lld disagrees with SslmModelView's own == %lld",
+			          w, static_cast<long long>(qb_values[w]), static_cast<long long>(loader_value));
+		}
+	}
+}
+
+// Negative control (this cell's own, Sec11 S3.2's text): a hand-corrupted
+// BIA1 tensor, run through THIS cell's independent reader alone -- never
+// through SslmModel::Load.
+static void TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThroughLoad() {
+	auto bia1_manifest = BuildManifest(superslm::kBiasesMagic, /*element_size=*/8, {{"layer0.bias", {2}}});
+	// Corrupt the tensor's own data_off descriptor field (descriptor 0 starts
+	// at byte 16; data_off is at descriptor offset 28) to point past the end
+	// of the section -- the same defect class ManifestOutOfBounds/
+	// TensorOutOfBounds name in model.h, caught here by the independent reader
+	// alone, not by SslmModel::Load.
+	const size_t desc0_data_off_field = 16 + 28;
+	const uint64_t corrupted = static_cast<uint64_t>(bia1_manifest.bytes.size()) + 1000;
+	PutU64(bia1_manifest.bytes, desc0_data_off_field, corrupted);
+
+	bool ok = false;
+	auto values = independent_reader::ReadInt64TensorByName(
+	    bia1_manifest.bytes.data(), bia1_manifest.bytes.size(), superslm::kBiasesMagic, "layer0.bias", &ok);
+	CHECK_MSG(!ok, "independent reader accepted a BIA1 tensor whose data_off runs past the section");
+	CHECK(values.empty());
+}
+
+// Cell 3: the tokenizer-drive half of the TOK1 x CFG1 join. The load-time
+// rejection half (a mismatched CFG1.vocab_size/TOK1.vocab_count pair,
+// TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch above,
+// S-HARDEN-2) is already closed pre-S3a -- this cell owes only the live
+// half: on a conformant artifact, every id the tokenizer's OWN Encode() can
+// emit is driven through the embed site (EmbedEntry) and asserted to
+// address its OWN, correct embedding row -- never TokenIdOutOfRange, and
+// matching the already-shipped funnel's own codes for that specific row
+// (not merely a non-error status), so a wiring defect that reads the wrong
+// row is caught, not only one that rejects outright.
+static void TestTokenizerDriveEveryEncodedIdAddressesItsOwnValidEmbeddingRow() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using superslm::TokenizerView;
+
+	auto tok1 = MakeMinimalValidTok1();  // vocab_count == 5
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
+
+	SslmArtifact artifact;
+	SslmError aerr;
+	auto astatus = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(astatus == SslmStatus::Ok, "conformant tokenizer fixture's outer artifact failed to load: %s: %s",
+	          SslmStatusName(astatus), aerr.message.c_str());
+	if (astatus != SslmStatus::Ok) return;
+
+	TokenizerView view;
+	std::string terr;
+	const bool opened = TokenizerView::Open(artifact, view, &terr);
+	CHECK_MSG(opened, "TokenizerView::Open failed on the conformant tokenizer fixture: %s", terr.c_str());
+	if (!opened) return;
+
+	// A small reference prompt set reaching every declared id: the three base
+	// bytes (ids 0,1,2), the one BPE merge (id 3), and the one special token
+	// (id 4) -- MakeMinimalValidTok1's own declared vocabulary.
+	constexpr int32_t kVocabSize = 5;  // conformant: == TOK1.vocab_count
+	const char* prompts[] = {"c", "a", "t", "ca", "<eos>", "cat"};
+	bool seen[kVocabSize] = {false, false, false, false, false};
+	for (const char* p : prompts) {
+		for (int32_t id : view.Encode(p)) {
+			if (id >= 0 && id < kVocabSize) seen[id] = true;
+		}
+	}
+	for (int32_t id = 0; id < kVocabSize; ++id) {
+		CHECK_MSG(seen[id],
+		          "reference prompt set does not reach id %d -- every declared id must be reachable "
+		          "for this cell to cover the whole vocabulary",
+		          id);
+	}
+
+	constexpr size_t kHiddenSize = 3;
+	const CarriedScale site_constant{/*m=*/INT64_C(1073741824), /*e=*/0};
+
+	// One distinct embed row per id so a wrong-row read is observable, not
+	// only a wrong status -- the achievement oracle this cell exists to
+	// provide.
+	std::vector<int8_t> embed_weights(static_cast<size_t>(kVocabSize) * kHiddenSize, 0);
+	for (int32_t id = 0; id < kVocabSize; ++id) {
+		for (size_t j = 0; j < kHiddenSize; ++j) {
+			embed_weights[static_cast<size_t>(id) * kHiddenSize + j] =
+			    static_cast<int8_t>(10 * (id + 1) + static_cast<int>(j));
+		}
+	}
+
+	for (int32_t id = 0; id < kVocabSize; ++id) {
+		if (!seen[id]) continue;
+
+		int64_t expected_wide[kHiddenSize];
+		for (size_t j = 0; j < kHiddenSize; ++j) {
+			expected_wide[j] = static_cast<int64_t>(embed_weights[static_cast<size_t>(id) * kHiddenSize + j]);
+		}
+		int8_t expected_codes[kHiddenSize] = {0, 0, 0};
+		CarriedScale expected_scale{};
+		auto expected_result = superslm::RequantChainChecked(
+		    expected_wide, kHiddenSize, std::span<const CarriedScale>{}, site_constant, expected_codes, &expected_scale);
+		CHECK_MSG(expected_result.status == SslmForwardStatus::Ok,
+		          "id %d's own oracle row must be accepted by the already-shipped funnel: got %s", id,
+		          superslm::SslmForwardStatusName(expected_result.status));
+
+		int8_t out_codes[kHiddenSize] = {INT8_C(-99), INT8_C(-99), INT8_C(-99)};
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto status = superslm::EmbedEntry(id, kVocabSize, embed_weights.data(), kHiddenSize, site_constant,
+		                                    out_codes, &out_scale);
+		CHECK_MSG(status != SslmForwardStatus::TokenIdOutOfRange,
+		          "tokenizer-emitted id %d (from the reference prompt set) was rejected as out of "
+		          "range by EmbedEntry against a conformant vocab_size=%d -- the TOK1 x CFG1 join is "
+		          "broken",
+		          id, kVocabSize);
+		CHECK_MSG(status == SslmForwardStatus::Ok, "id %d: EmbedEntry status == %s, want Ok", id,
+		          superslm::SslmForwardStatusName(status));
+		if (status == SslmForwardStatus::Ok) {
+			for (size_t j = 0; j < kHiddenSize; ++j) {
+				CHECK_MSG(out_codes[j] == expected_codes[j],
+				          "id %d: EmbedEntry out_codes[%zu] == %d, want %d (this id's OWN row -- the "
+				          "join's whole point is that every id Encode() emits addresses its own row, "
+				          "not another id's)",
+				          id, j, static_cast<int>(out_codes[j]), static_cast<int>(expected_codes[j]));
+			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SuperSLM_S3a_WalkingSkeleton_Plan.md Sec11 S3.3 -- the attention interior
 // (C27's K/V landing composite and the D-SLM57 per-head ctx_fold, C32's
 // softmax row plus D-SLM366's owed width predicate, C33's post-rotation
@@ -11851,6 +12204,12 @@ int main(int argc, char** argv) {
 	TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
 	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
 	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
+
+	// --- Sec13.1 cells 2 and 3 (D-SLM417, board T-1336): owed against S3.2's
+	//     already-green production code. ---
+	TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView();
+	TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThroughLoad();
+	TestTokenizerDriveEveryEncodedIdAddressesItsOwnValidEmbeddingRow();
 
 	// S3.3 -- the attention interior (Claude/Curie/
 	// superslm-s3.3-attention-interior-test-design-2026-07-28.md).
