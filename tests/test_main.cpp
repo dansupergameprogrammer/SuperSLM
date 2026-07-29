@@ -11836,9 +11836,25 @@ static void TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid()
 
 	std::vector<int8_t> out_codes(kN, INT8_C(-99));
 	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	// T-1346: the LUT table pointer is deliberately NULL, and that is what makes
+	// this cell discriminate rather than merely pass. Asserting the status and
+	// the untouched outputs alone cannot see the ordering this cell exists to
+	// pin: a body that computes SiluSigmoidQ15 first and checks the domain
+	// afterwards still returns SiluCompositionScaleOutOfDomain and still never
+	// reaches the funnel, so all three of those assertions hold under BOTH
+	// orderings -- executed and confirmed against the real body at T-1345's own
+	// build, where moving the check below the sigmoid loop left the suite at
+	// 12,478 checks / 0 failures. A null table gives the ordering an observable
+	// consequence, on the same construction S3.3's RopeApplySite cells use for
+	// its missing-ROP1-tensor rejection (T-1321): a conformant site returns
+	// before the table is ever read, so NULL is never dereferenced; a
+	// reads-before-rejecting site dereferences it and dies. The proof of
+	// discrimination for this cell is therefore a ran-and-crashed mutation, this
+	// tree's established convention for an ordering whose violation is a memory
+	// fault rather than a wrong value.
 	auto result = superslm::MlpActSite(gate_code, gate_scale, up_code, up_scale, kN,
-	                                     kSiluLutGoldenTable, site_constant, out_codes.data(),
-	                                     &out_scale);
+	                                     /*sigmoid_lut_table=*/nullptr, site_constant,
+	                                     out_codes.data(), &out_scale);
 	CHECK_MSG(result == SslmForwardStatus::SiluCompositionScaleOutOfDomain,
 	          "MlpActSite(gate_scale.e=9) status == %s, want SiluCompositionScaleOutOfDomain -- the "
 	          "site must call CheckSiluCompositionScaleDomain BEFORE SiluSigmoidQ15 ever evaluates, "
