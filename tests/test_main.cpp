@@ -3849,10 +3849,18 @@ static void TestWsc1RejectsHostileShiftOutOfDocumentedBound() {
 // hostile values are carried as the int64 bit pattern of INT32_MIN.
 static void TestRop1RejectsHostileCosSinPair() {
 	using namespace superslm_test;
-	std::vector<ManifestTensorSpec> tensors = {{"cos", {1}}, {"sin", {1}}};
+	// Every element carries the hostile value (not just one): SslmModel::Load's ROP1<->CFG1 shape
+	// join (S3.3 §13.1 cell 4, D-SLM420-D-SLM423) now rejects a "cos"/"sin" tensor whose elem_count
+	// disagrees with the default Config's context_cap * (head_dim/2) before the magnitude check this
+	// cell targets ever runs, so the tensor must be sized to kCfg1DefaultRopeElemCount.
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {kCfg1DefaultRopeElemCount}}, {"sin", {kCfg1DefaultRopeElemCount}}};
 	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
-	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]), static_cast<uint64_t>(int64_t{INT32_MIN}));
-	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]), static_cast<uint64_t>(int64_t{INT32_MIN}));
+	for (uint32_t i = 0; i < kCfg1DefaultRopeElemCount; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(int64_t{INT32_MIN}));
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(int64_t{INT32_MIN}));
+	}
 
 	FixtureSection rope_tables =
 	    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
@@ -3908,15 +3916,27 @@ static FixtureSection MakeWsc1Section(int32_t identity, int32_t mult, int32_t sh
 	return MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
 }
 
-// Builds a RopeTables (ROP1) section with "cos"/"sin" single-element tensors —
-// the same construction as TestRop1RejectsHostileCosSinPair above, factored
-// out for the boundary matrix below.
+// Builds a RopeTables (ROP1) section whose "cos"/"sin" tensors each carry
+// kCfg1DefaultRopeElemCount elements (every element set to the one given
+// value) — the same construction as TestRop1RejectsHostileCosSinPair above,
+// factored out for the boundary matrix below. Sized to satisfy R4 against
+// MakeValidConfigSection()'s default context_cap/head_dim (S3.3 §13.1 cell 4,
+// D-SLM420-D-SLM423): a magnitude/domain cell (this helper's only concern)
+// needs every element in a defined, uniform state, not a single element —
+// SslmModel::Load's ROP1<->CFG1 shape join now rejects a "cos"/"sin" tensor
+// whose elem_count disagrees with context_cap * (head_dim/2) before any
+// magnitude check runs, so a single-element tensor paired with the default
+// Config can no longer reach the magnitude check this helper exists to drive.
 static FixtureSection MakeRop1Section(int64_t cos_v, int64_t sin_v) {
 	using namespace superslm_test;
-	std::vector<ManifestTensorSpec> tensors = {{"cos", {1}}, {"sin", {1}}};
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {kCfg1DefaultRopeElemCount}}, {"sin", {kCfg1DefaultRopeElemCount}}};
 	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
-	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]), static_cast<uint64_t>(cos_v));
-	PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]), static_cast<uint64_t>(sin_v));
+	for (uint32_t i = 0; i < kCfg1DefaultRopeElemCount; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(cos_v));
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(sin_v));
+	}
 	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
 }
 
@@ -4263,7 +4283,7 @@ static void TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact() {
 
 	// Config — spot-check against MakeValidConfigSection's Cfg1Spec{} defaults.
 	CHECK(view.config.hidden_size == 4096);
-	CHECK(view.config.num_hidden_layers == 32);
+	CHECK(view.config.num_hidden_layers == 40);
 	CHECK(view.config.vocab_size == 32001);
 	CHECK(view.config.tie_word_embeddings == true);
 	CHECK(view.config.kv_precision == SslmKvPrecision::Int16);
@@ -5496,6 +5516,11 @@ static int RunCrashProbe(const std::string& name) {
 		Cfg1Spec spec{};
 		spec.head_dim = 8;
 		spec.context_cap = 1;
+		// hidden_size must track the overridden head_dim to satisfy R1
+		// (SslmModel::Load's config-geometry join, S3.3 §13.1 cell 4,
+		// D-SLM420-D-SLM423) -- Cfg1Spec{}'s own default (4096) only pairs
+		// with the default head_dim (128).
+		spec.hidden_size = spec.num_attention_heads * spec.head_dim;
 		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
 		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, /*tensors=*/{});
 		FixtureSection rope_tables =
@@ -5542,6 +5567,15 @@ static int RunCrashProbe(const std::string& name) {
 		using namespace superslm_test;
 		Cfg1Spec spec{};
 		spec.head_dim = 8;
+		// context_cap matches the real tensor's own row count (1) below, and
+		// hidden_size tracks the overridden head_dim -- both needed to satisfy
+		// SslmModel::Load's config-geometry/ROP1 join (R1, R4; S3.3 §13.1 cell
+		// 4, D-SLM420-D-SLM423). The probe's own direct RopeApplySite call
+		// below still passes context_cap=2147483647 as an explicit argument,
+		// decoupled from what Load validated -- that decoupling is the point
+		// of this probe and is unaffected by this fixture's own config.
+		spec.context_cap = 1;
+		spec.hidden_size = spec.num_attention_heads * spec.head_dim;
 		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
 		std::vector<ManifestTensorSpec> tensors = {{"cos", {1, 4}}, {"sin", {1, 4}}};
 		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
@@ -6988,28 +7022,41 @@ static void TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact() {
 
 static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact() {
 	using namespace superslm_test;
-	// Cfg1Spec{}'s own defaults: 24 heads * 128 head_dim = 3072 != hidden_size
-	// 4096 -- an incoherent shape by construction, unrelated to this slot; every
-	// existing CFG1 fixture in this suite uses these defaults, which is exactly
-	// why the geometry check is NOT wired into SslmModel::Load (it would break
-	// every one of them for a relation no runtime kernel yet consumes).
-	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
+	// A deliberately incoherent shape, unrelated to this slot: 24 heads * 128
+	// head_dim = 3072 != hidden_size 4096. Built explicitly rather than via
+	// Cfg1Spec{}'s own defaults -- since SslmModel::Load's config-geometry join
+	// landed (S3.3 §13.1 cell 4, D-SLM420-D-SLM423), Cfg1Spec{}'s defaults are
+	// themselves R1-coherent (32*128 == 4096, the sibling coherent-case test's
+	// own explicit values above), so this cell can no longer borrow the shared
+	// default's incoherence and states its own.
+	Cfg1Spec incoherent;
+	incoherent.num_attention_heads = 24;
+	incoherent.head_dim = 128;  // hidden_size stays the default 4096: 24*128=3072 != 4096
+	auto built = BuildArtifact(
+	    {MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(incoherent)), MakeSigmoidLutSection()});
 
-	SslmModelView view;
-	std::string err;
-	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-	CHECK_MSG(status == SslmModelStatus::Ok, "incoherent-geometry-but-otherwise-valid fixture failed to "
-	          "load: got %s (%s)",
-	          SslmModelStatusName(status), err.c_str());
-	if (status != SslmModelStatus::Ok) return;
-
+	// This artifact is deliberately R1-incoherent, so SslmModel::Load itself now
+	// rejects it too (ConfigGeometryHiddenSizeMismatch) -- that is the correct,
+	// intended outcome of cell 4's own obligation, not a regression, and is
+	// exercised by cell 4's own red suite above. This cell's purpose is
+	// different: proving BuildProofManifestJson's "config_geometry" field
+	// reflects CheckConfigGeometry's own independent verdict rather than a
+	// hardcoded "ok" -- which needs only that the artifact is otherwise
+	// structurally valid (OpenFromMemory succeeds), not that SslmModel::Load
+	// accepts it.
 	SslmArtifact artifact;
 	SslmError aerr;
-	SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	const SslmStatus open_status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
+	CHECK_MSG(open_status == SslmStatus::Ok,
+	          "the incoherent-geometry-but-otherwise-valid fixture failed to open (a defect unrelated to "
+	          "this cell's own target): got status %d",
+	          static_cast<int>(open_status));
+	if (open_status != SslmStatus::Ok) return;
+
 	const std::string manifest = BuildProofManifestJson(artifact);
 	CHECK_MSG(manifest.find("\"ok\": false") != std::string::npos,
-	          "proof manifest for Cfg1Spec{}'s incoherent default shape (24*128=3072 != hidden_size 4096) "
-	          "must report config_geometry.ok == false; manifest:\n%s",
+	          "proof manifest for an incoherent shape (24*128=3072 != hidden_size 4096) must report "
+	          "config_geometry.ok == false; manifest:\n%s",
 	          manifest.c_str());
 	CHECK(manifest.find("HiddenSizeGeometryMismatch") != std::string::npos);
 }
@@ -10662,10 +10709,13 @@ static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
 // ValidateConfigGeometryJoin/ValidateRopeTablesShapeAgainstConfig wired into
 // ValidateSectionValues) was declared and stubbed at commit 6bb6b92
 // (Claude/Brunel/superslm-s3.3-configgeometry-join-cell4-symbols-stub-build-
-// 2026-07-28.md); both stub bodies unconditionally return Ok and read none of
-// their parameters, so every hostile cell below fails against that Ok status
-// -- never against a compile error -- until the real logic lands. R5 (WGT1)
-// is not-applicable (§13.2, D-SLM422/D-SLM423) and owes no cell.
+// 2026-07-28.md), then given its real body at commit b2a3a91
+// (Claude/Brunel/superslm-s3.3-configgeometry-join-cell4-r1r4-body-build-
+// 2026-07-28.md): ValidateConfigGeometryJoin wraps the existing, unit-tested
+// CheckConfigGeometry, and ValidateRopeTablesShapeAgainstConfig resolves
+// "cos"/"sin" and bounds each present tensor's elem_count independently. Every
+// hostile cell below is green against that real logic. R5 (WGT1) is
+// not-applicable (§13.2, D-SLM422/D-SLM423) and owes no cell.
 //
 // Every cell shares one coherent base config (hidden_size=4096,
 // num_attention_heads=32, num_key_value_heads=8, head_dim=128, context_cap=4)
@@ -10681,9 +10731,11 @@ static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
 
 // The shared base: R1 (4096 == 32*128), R2 (32 % 8 == 0), R3 (8 <= 32), and R4
 // (context_cap=4, head_dim=128 -> pairs=64, matching
-// kRopeSiteRoundTripContextCap/-Pairs) all hold. Only num_attention_heads and
-// context_cap are moved off Cfg1Spec{}'s own defaults (24, 8192); every other
-// field, including head_dim=128, is already Cfg1Spec{}'s default.
+// kRopeSiteRoundTripContextCap/-Pairs) all hold. Only context_cap is moved off
+// Cfg1Spec{}'s own default (2); num_attention_heads=32 and head_dim=128 are
+// already Cfg1Spec{}'s own defaults (the explicit num_attention_heads
+// assignment below is redundant with the default but kept so this function
+// states its coherent base's geometry explicitly rather than by omission).
 static Cfg1Spec MakeCell4CoherentCfg1Spec() {
 	Cfg1Spec spec{};
 	spec.num_attention_heads = 32;
@@ -11207,6 +11259,14 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 
 	Cfg1Spec spec{};
 	spec.head_dim = static_cast<uint32_t>(head_dim);
+	// spec.context_cap is set to the tensor's own real row count (1) and
+	// spec.hidden_size tracks the overridden head_dim, so SslmModel::Load's
+	// config-geometry/ROP1 join (R1, R4; S3.3 §13.1 cell 4, D-SLM420-D-SLM423)
+	// accepts this fixture -- unrelated to and does not narrow the local
+	// context_cap=2 this cell passes directly to RopeApplySite below, which
+	// stays decoupled from what Load validated (the property this cell proves).
+	spec.context_cap = static_cast<uint32_t>(tensor_rows);
+	spec.hidden_size = spec.num_attention_heads * spec.head_dim;
 	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
 	FixtureSection rope_tables = MakeRop1SectionMultiRow(tensor_rows, pairs, cos_flat.data(), sin_flat.data());
 	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});

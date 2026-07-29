@@ -83,19 +83,33 @@ inline double GetF64LE(const std::vector<uint8_t>& b, size_t off) {
 }
 
 // Every CFG1 field, spec-faithful defaults chosen to be pairwise distinct (no
-// two fields share a baked-in value) so the feature oracle's field-by-field
-// assertions catch an offset swap, not just a zero/nonzero check. `rope_theta`
-// and `rms_norm_eps` are distinctive non-round doubles (docs/sslm_format.md's
-// commission note) to pin the little-endian f64 read.
+// two of the eight dimension fields share a baked-in value) so the feature
+// oracle's field-by-field assertions catch an offset swap, not just a
+// zero/nonzero check. `rope_theta` and `rms_norm_eps` are distinctive
+// non-round doubles (docs/sslm_format.md's commission note) to pin the
+// little-endian f64 read.
+//
+// num_attention_heads, head_dim, and context_cap additionally satisfy every
+// relation SslmModel::Load's config-geometry/ROP1 join checks (S3.3 §13.1
+// cell 4, D-SLM420-D-SLM423): hidden_size == num_attention_heads * head_dim
+// (4096 == 32*128, R1), num_attention_heads % num_key_value_heads == 0
+// (32 % 8 == 0, R2), num_key_value_heads <= num_attention_heads (8 <= 32,
+// R3). context_cap is kept at its smallest legal value (BadConfigDim rejects
+// 0) so a ROP1 section built alongside the default Config — whose "cos"/
+// "sin" tensors must each carry exactly context_cap * (head_dim/2) elements
+// (R4) — stays small (2 * 64 = 128 elements) rather than requiring a
+// multi-hundred-thousand-element fixture. num_hidden_layers was moved off 32
+// (now num_attention_heads's own value) to keep the eight dimension fields
+// pairwise distinct.
 struct Cfg1Spec {
 	uint32_t hidden_size = 4096;
-	uint32_t num_hidden_layers = 32;
-	uint32_t num_attention_heads = 24;
+	uint32_t num_hidden_layers = 40;
+	uint32_t num_attention_heads = 32;
 	uint32_t num_key_value_heads = 8;
 	uint32_t head_dim = 128;
 	uint32_t intermediate_size = 11008;
 	uint32_t vocab_size = 32001;
-	uint32_t context_cap = 8192;
+	uint32_t context_cap = 2;
 	uint32_t tie_word_embeddings = 1;  // true — pin the true case, per commission
 	uint32_t kv_precision = 1;         // Int16 — pin the enum mapping, not just default 0
 	uint32_t kv_block_size = 256;
@@ -106,6 +120,13 @@ struct Cfg1Spec {
 	double rope_theta = 1000000.0;
 	double rms_norm_eps = 1e-6;
 };
+
+// The element count a "cos"/"sin" tensor must carry to satisfy R4 against
+// this spec's own default context_cap (2) and head_dim (128): context_cap *
+// (head_dim / 2) = 2 * 64 = 128. Shared by every fixture that pairs a
+// default-Config artifact with a ROP1 section, so the derivation lives in
+// exactly one place.
+inline constexpr uint32_t kCfg1DefaultRopeElemCount = 128;
 
 // Builds a spec-faithful 84-byte CFG1 blob (docs/sslm_format.md "Config blob —
 // CFG1"): magic, version, the eight dimension fields, the bool/enum fields, the
