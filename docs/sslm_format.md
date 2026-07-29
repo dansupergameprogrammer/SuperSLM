@@ -291,7 +291,7 @@ by a kernel). All little-endian; the total is exactly **84 bytes**.
 | 12 | `u32` | num_hidden_layers | `> 0` |
 | 16 | `u32` | num_attention_heads | `> 0` |
 | 20 | `u32` | num_key_value_heads | `> 0` |
-| 24 | `u32` | head_dim | `> 0` |
+| 24 | `u32` | head_dim | `> 0` and even |
 | 28 | `u32` | intermediate_size | `> 0` |
 | 32 | `u32` | vocab_size | `> 0` |
 | 36 | `u32` | context_cap | `> 0` |
