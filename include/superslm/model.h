@@ -177,6 +177,11 @@ enum class SslmModelStatus {
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
 	TokenizerVocabSizeMismatch,  // TOK1.vocab_count != CFG1.vocab_size -- the two blobs' declared sizes disagree
+	// --- Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md, Significant 5 ---
+	BadConfigHeadDimParity,      // CFG1 head_dim is odd -- RoPE pairs elements two at a time
+	                              // (forward_sites.h's own "head_dim odd is a load-time rejection",
+	                              // Sec6.2 step 3); ParseConfigImpl performed no parity check before
+	                              // this addition.
 };
 
 // Human-readable name for a status, for diagnostics and test messages.

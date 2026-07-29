@@ -113,6 +113,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::KvLandingReciprocalOutOfDomain: return "KvLandingReciprocalOutOfDomain";
 		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
 		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
+		case SslmModelStatus::BadConfigHeadDimParity: return "BadConfigHeadDimParity";
 	}
 	return "Unknown";
 }
@@ -462,6 +463,13 @@ SslmModelStatus ParseConfigImpl(const SslmSectionView& section, SslmModelConfig&
 	    c.num_key_value_heads == 0 || c.head_dim == 0 || c.intermediate_size == 0 ||
 	    c.vocab_size == 0 || c.context_cap == 0 || c.kv_block_size == 0)
 		return Reject(SslmModelStatus::BadConfigDim, err, "a required dimension field is 0");
+
+	// Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md,
+	// Significant 5: RoPE pairs elements two at a time (Sec6.2 step 3), and
+	// forward_sites.h's own contract states "head_dim odd is a load-time
+	// rejection" -- discharged here rather than left as an unchecked claim.
+	if ((c.head_dim % 2) != 0)
+		return Reject(SslmModelStatus::BadConfigHeadDimParity, err, "head_dim is odd -- RoPE pairs elements");
 
 	if (tie > 1)
 		return Reject(SslmModelStatus::BadConfigBool, err, "tie_word_embeddings not in {0,1}");
