@@ -182,6 +182,19 @@ enum class SslmModelStatus {
 	                              // (forward_sites.h's own "head_dim odd is a load-time rejection",
 	                              // Sec6.2 step 3); ParseConfigImpl performed no parity check before
 	                              // this addition.
+	// --- S3.3, Sec11 S3.3 / Sec13.1 cell 4: config-geometry x tensor-shape join
+	// (D-SLM410, D-SLM421, D-SLM423, board T-1333). ValidateConfigGeometryJoin
+	// and ValidateRopeTablesShapeAgainstConfig (model.cpp), wired into
+	// ValidateSectionValues, are declared stubs as of this addition -- each
+	// always returns Ok, so no artifact is yet rejected for any of the four
+	// relations below. The comparisons themselves are T-1333's remaining,
+	// unbuilt obligation.
+	ConfigGeometryKvHeadsExceedsHeads,   // R3: num_key_value_heads > num_attention_heads
+	ConfigGeometryHeadsNotDivisibleByKv, // R2: num_attention_heads % num_key_value_heads != 0
+	ConfigGeometryHiddenSizeMismatch,    // R1: hidden_size != num_attention_heads * head_dim
+	RopeTablesShapeMismatchConfig,       // R4: a present ROP1 "cos"/"sin" tensor's elem_count !=
+	                                      // context_cap * (head_dim / 2), checked independently
+	                                      // per tensor -- the ROP1<->CFG1 join itself
 };
 
 // Human-readable name for a status, for diagnostics and test messages.

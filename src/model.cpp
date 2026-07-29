@@ -114,6 +114,10 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
 		case SslmModelStatus::TokenizerVocabSizeMismatch: return "TokenizerVocabSizeMismatch";
 		case SslmModelStatus::BadConfigHeadDimParity: return "BadConfigHeadDimParity";
+		case SslmModelStatus::ConfigGeometryKvHeadsExceedsHeads: return "ConfigGeometryKvHeadsExceedsHeads";
+		case SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv: return "ConfigGeometryHeadsNotDivisibleByKv";
+		case SslmModelStatus::ConfigGeometryHiddenSizeMismatch: return "ConfigGeometryHiddenSizeMismatch";
+		case SslmModelStatus::RopeTablesShapeMismatchConfig: return "RopeTablesShapeMismatchConfig";
 	}
 	return "Unknown";
 }
@@ -901,6 +905,51 @@ SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::s
 	return SslmModelStatus::Ok;
 }
 
+// S3.3, Sec11 S3.3 / Sec13.1 cell 4, R1-R3 (D-SLM410, D-SLM423, board T-1333).
+// Declared and wired into ValidateSectionValues below so a test-author
+// dispatch can author §13.1 cell 4's R1-R3 red cells against a real,
+// compilable target. STUB: this body returns Ok unconditionally and reads
+// none of `config`'s fields -- it performs no check. The fold that declared
+// this symbol (Claude/Vitruvius/superslm-s3.3-configgeometry-join-cell4-
+// gaps-fold-2026-07-28.md Sec4) specifies the eventual body as a thin wrapper
+// over the existing, already-unit-tested CheckConfigGeometry
+// (proof_manifest.h/.cpp), mapping ConfigGeometryResult::status onto
+// ConfigGeometryKvHeadsExceedsHeads/ConfigGeometryHeadsNotDivisibleByKv/
+// ConfigGeometryHiddenSizeMismatch and forwarding `.diagnostic` into `*err`;
+// writing that mapping is T-1333's remaining, unbuilt obligation, not this
+// declaration's.
+SslmModelStatus ValidateConfigGeometryJoin(const SslmModelConfig& config, std::string* err) {
+	(void)config;
+	if (err) err->clear();
+	return SslmModelStatus::Ok;
+}
+
+// S3.3, Sec11 S3.3 / Sec13.1 cell 4, R4 -- the ROP1<->CFG1 join itself
+// (D-SLM410, D-SLM421, D-SLM423, board T-1333). Declared and wired into
+// ValidateSectionValues below so a test-author dispatch can author §13.1
+// cell 4's R4 red cells against a real, compilable target. STUB: this body
+// returns Ok unconditionally and reads none of its parameters -- it performs
+// no check. The fold that declared this symbol (Claude/Vitruvius/superslm-
+// s3.3-configgeometry-join-cell4-gaps-fold-2026-07-28.md Sec4) specifies the
+// eventual body as resolving `rope_tables.Tensor("cos")` / `Tensor("sin")`
+// the same way RopeApplySite does (forward_sites.cpp), then for each tensor
+// that is present, checking `elem_count == uint64_t(context_cap) *
+// (head_dim / 2)` independently, returning RopeTablesShapeMismatchConfig
+// with a diagnostic naming the tensor, its actual elem_count, and the
+// expected value on mismatch -- an absent tensor is not this check's
+// concern (RopeApplySite's own RopeTableTensorMissing covers it at forward
+// time, D-SLM81/D-SLM413). Writing that body is T-1333's remaining, unbuilt
+// obligation, not this declaration's.
+SslmModelStatus ValidateRopeTablesShapeAgainstConfig(const SslmTensorManifest& rope_tables,
+                                                      uint32_t context_cap, uint32_t head_dim,
+                                                      std::string* err) {
+	(void)rope_tables;
+	(void)context_cap;
+	(void)head_dim;
+	if (err) err->clear();
+	return SslmModelStatus::Ok;
+}
+
 // S-HARDEN-1's schema-value gate (D-SLM141): one pass over the already
 // sub-parsed views, applying each present section's domain descriptor. Runs
 // AFTER every present section's structural sub-parse has already succeeded
@@ -938,6 +987,22 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.
 	{
 		const SslmModelStatus s = ValidateTokenizerVocabSizeJoin(view, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	// S3.3, §13.1 cell 4 (D-SLM410, D-SLM423, T-1333): the config-geometry x
+	// tensor-shape join. Both callees are stubs (declared above) as of this
+	// wiring -- each always returns Ok, so this call changes no artifact's
+	// accept/reject outcome yet. The double-guard on the second call matches
+	// ValidateTokenizerVocabSizeJoin's own pattern above: both sections must
+	// be present and individually valid before their cross-section relation
+	// is meaningful.
+	if (view.has_config) {
+		const SslmModelStatus s = ValidateConfigGeometryJoin(view.config, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_rope_tables && view.has_config) {
+		const SslmModelStatus s = ValidateRopeTablesShapeAgainstConfig(
+		    view.rope_tables, view.config.context_cap, view.config.head_dim, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
 	return SslmModelStatus::Ok;
