@@ -10156,37 +10156,18 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 // S3.3 -- the RoPE APPLICATION SITE (Claude/Plans/SuperSLM_S3a_WalkingSkeleton_
 // Plan.md Sec6.2 step 3, Sec11 S3.3's own gate line; D-SLM376, D-SLM383).
 //
-// D-SLM376 (2026-07-28): the C++ tree ships `RopeApplyPair` (the rotation
-// kernel, intmath.h) and `ClampRopeCode` (C33's post-rotation clamp,
-// forward_sites.h), and, separately, `CheckPositionOverCap` (this file's own
-// sibling predicate, checked_chain_funnel.h/.cpp, real and correct). NO
-// production symbol composes the three into the RoPE application SITE
-// Sec6.2 step 3 specifies: read the absolute position's ROP1 row, rotate
-// every (even, odd) pair of a head row, clamp each component -- with
-// CheckPositionOverCap wired as the composition's FIRST act, so a position
-// `>= context_cap` is rejected before any ROP1 row is read (the "never a
-// table read" ordering constraint, Sec6.2 step 3 / Sec11 S3.3's gate line /
-// Sec13 dim 11's own guard-vitality table). Confirmed by direct search
-// (grep -rn "RopeApplyPair|ClampRopeCode|CheckPositionOverCap" include/ src/)
-// and by reading checked_chain_funnel.h, forward_sites.h whole: no function
-// anywhere in include/superslm calls RopeApplyPair together with
-// CheckPositionOverCap, and no function takes a "position" parameter and a
-// head row together.
+// SUPERSEDED as of D-SLM387 (2026-07-28), retained only to explain why the
+// cells below are ordered as they are. This block described the state at
+// D-SLM376's authoring, when the tree shipped `RopeApplyPair`, `ClampRopeCode`
+// and `CheckPositionOverCap` separately and NO production symbol composed
+// them. That is no longer true: `RopeApplySite` (forward_sites.h, body in
+// src/forward/forward_sites.cpp) is built and green, with
+// CheckPositionOverCap as its first act, and the site's own feature-oracle,
+// "never a table read" ordering, and guard-vitality (ASan) cells ARE authored
+// -- see the block at the next section boundary below. A reader arriving here
+// first should not conclude the site is unbuilt.
 //
-// Per this suite's own established S3.3 precedent (Claude/Curie/
-// superslm-s3.3-attention-interior-test-design-2026-07-28.md Sec2, "Why a
-// test-owned stand-in is rejected"): authoring a compiling C++ cell against a
-// not-yet-declared site symbol would fail the whole translation unit to
-// compile, which fails every cell in this file for the SAME reason rather
-// than failing one cell for ITS OWN reason -- the exact discipline this
-// campaign's exit condition is held to. The site's own feature-oracle cell,
-// its "never a table read" ordering cell, and its guard-vitality (ASan) cell
-// are therefore NOT authored here as compiling C++ -- they are fully
-// specified, ready to drop in, in this campaign's own test-design record
-// (Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
-// Sec6), which also names the exact signature owed.
-//
-// What IS authored below, real and executed against already-shipped
+// What is authored immediately below, real and executed against already-shipped
 // primitives (the Sec5 pattern this campaign's prior passes already
 // established): CheckPositionOverCap's own boundary matrix (built, correct,
 // and until this pass exercised by zero C++ cells -- only a Python text-scan
