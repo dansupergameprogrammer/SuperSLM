@@ -12163,7 +12163,20 @@ struct TwoLayerFixture {
 	superslm::LayerWeights layers[2];
 	// Backing arrays LayerWeights points into -- kept alive for the fixture's
 	// own lifetime.
-	int32_t norm_gain[2] = {65536, 65536};  // Q16 gain == 1.0 (kNormFracBits=16)
+	// T-1356: a Q16 gain of 1.0 (65536) is OUT of C29's chain-input domain at
+	// this composition, by construction rather than by bad luck. RmsNormSite
+	// forms `FloorDivI64(h[i] << 2*NORM_FRAC_BITS, root) * g[i]`, and for a row
+	// whose elements are all at the RMS the first factor is ~2^16, so a unit
+	// Q16 gain lands the wide row at exactly 2^32 -- twice C29's `d_prime >
+	// 2^31` ceiling. Executed at this fixture's own {5,-5}: root == 327680,
+	// wide == +/-4294967296 at gain 65536, +/-2147483648 at 32768 (the ceiling
+	// itself), +/-1073741824 at 16384. The declaring pass could not have seen
+	// this -- the stub returned before any funnel call, so nothing in the suite
+	// ever drove the fixture through C29. Same class as D-SLM426, where a
+	// latent fixture defect stayed silent until a real body first ran against
+	// it. 16384 (Q16 0.25) is chosen over 32768 to sit clear of the boundary
+	// rather than exactly on it.
+	int32_t norm_gain[2] = {16384, 16384};
 	int8_t identity2x2[4] = {1, 0, 0, 1};   // [[1,0],[0,1]] row-major [out,in]
 
 	static TwoLayerFixture Build() {
@@ -12192,7 +12205,7 @@ struct TwoLayerFixture {
 		          "TwoLayerFixture's own minimal artifact failed to load: got %s (%s)",
 		          superslm::SslmModelStatusName(status), err.c_str());
 
-		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/0};
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
 		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
 		for (int l = 0; l < 2; ++l) {
 			superslm::LayerWeights& lw = f.layers[l];
@@ -12233,6 +12246,11 @@ struct TwoLayerFixture {
 			lw.gate_weight = f.identity2x2;
 			lw.up_weight = f.identity2x2;
 			lw.down_weight = f.identity2x2;
+			// T-1355: gate_proj/up_proj each funnel in their own right and so
+			// each carries its own site constant, on the same `canonical`
+			// pattern every other site constant in this fixture uses.
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
 			lw.mlp_act_site_constant = canonical;
 			lw.down_site_constant = canonical;
 			lw.mlp_residual_site_constant = canonical;

@@ -477,6 +477,17 @@ struct LayerWeights {
 	const int8_t* gate_weight;  // intermediate_size x hidden_size
 	const int8_t* up_weight;    // intermediate_size x hidden_size
 	const int8_t* down_weight;  // hidden_size x intermediate_size
+	// T-1355: gate_proj and up_proj each funnel in their own right (§6.3 step
+	// 10, "each with the funnel"), so each owns a KVC1 site constant --
+	// `layerL.gate_proj.requant` and `layerL.up_proj.requant`. The declaring
+	// pass omitted both, which is not a shortcut that still composes: MlpActSite
+	// consumes a per-operand carried scale for each of gate and up, and there is
+	// no other field either scale could come from. Grounded at the reference,
+	// which emits exactly these two chain records
+	// (Tools/superslm_spike/dynamic_engine.py's `{prefix}.gate_proj.requant` and
+	// `{prefix}.up_proj.requant`), never one shared record.
+	CarriedScale gate_site_constant;
+	CarriedScale up_site_constant;
 	CarriedScale mlp_act_site_constant;
 	CarriedScale down_site_constant;
 	CarriedScale mlp_residual_site_constant;

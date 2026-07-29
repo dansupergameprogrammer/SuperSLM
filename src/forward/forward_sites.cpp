@@ -20,10 +20,13 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <string>
 #include <vector>
 
 #include "superslm/intmath.h"
 #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
+#include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
+#include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
 
 namespace superslm {
 
@@ -514,13 +517,45 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 // nothing, reads nothing, and writes nothing to out_codes/out_scale. The
 // build seat replaces this body with the real four-step composition the
 // header's own doc comment states.
-SslmForwardStatus ResidualReconcileSite(const int8_t* /*branch_code*/, CarriedScale /*branch_scale*/,
-                                          const int8_t* /*stream_code*/, CarriedScale /*stream_scale*/,
-                                          size_t /*hidden_size*/, CarriedScale /*site_constant*/,
-                                          int8_t* /*out_codes*/, CarriedScale* /*out_scale*/,
-                                          std::string_view /*site*/, size_t /*token_index*/,
-                                          SslmTraceHookState* /*trace_hook_state*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;
+SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale branch_scale,
+                                          const int8_t* stream_code, CarriedScale stream_scale,
+                                          size_t hidden_size, CarriedScale site_constant,
+                                          int8_t* out_codes, CarriedScale* out_scale,
+                                          std::string_view site, size_t token_index,
+                                          SslmTraceHookState* trace_hook_state) {
+	// C26 (§6.2 step 8 / §6.3 step 13), the header's four steps in order.
+	// Step 1: the reciprocal is C19 over the STREAM's own mantissa, never the
+	// branch's -- the branch is what gets rescaled INTO the stream's scale, so
+	// the stream's is the target.
+	const int64_t r_h = DynamicScaleReciprocal(stream_scale.m);
+
+	std::vector<int64_t> wide(hidden_size);
+	for (size_t i = 0; i < hidden_size; ++i) {
+		// Step 2: the SAME primitive C27's landing composite uses, at a
+		// different call site -- there the reciprocal is the static offline
+		// one, here it is derived from the stream at runtime. Unclamped in the
+		// saturation-counting sense: T-518's counter belongs to C27's landing
+		// site, not to this one, so no counter is passed.
+		const int64_t reconciled =
+		    LandingRescale(static_cast<int64_t>(branch_code[i]), branch_scale.m, r_h,
+		                   branch_scale.e, stream_scale.e, /*out_saturation_count=*/nullptr);
+		// Step 3: the wide add, both operands now nominally at the stream's
+		// own scale.
+		wide[i] = reconciled + static_cast<int64_t>(stream_code[i]);
+	}
+
+	// Step 4: the funnel's own left-associated fold (D-SLM57). The incoming
+	// span is the stream's scale alone -- the branch's scale was already
+	// consumed by the rescale in step 2 and folding it again here would double-
+	// count it. This call IS the association-order pin at this site: a
+	// right-associated fold, or one that pre-combines stream_scale with
+	// site_constant outside the funnel, diverges from what the funnel's own
+	// proven order produces.
+	const CarriedScale incoming[1] = {stream_scale};
+	const ChainResult result = RequantChainChecked(
+	    wide.data(), hidden_size, std::span<const CarriedScale>{incoming, 1}, site_constant,
+	    out_codes, out_scale, site, token_index, trace_hook_state);
+	return result.status;
 }
 
 // STUB (T-1347): same convention as ResidualReconcileSite above. Returns
@@ -530,14 +565,251 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* /*branch_code*/, CarriedSc
 // untouched, exactly as every other declare-and-stub site in this file
 // does on rejection. The build seat replaces this body with the real
 // per-layer composition the header's own doc comment states.
-SslmForwardStatus RunLayerLoop(SequenceLayerState& /*seq*/, const LayerWeights* /*layers*/,
-                                 uint32_t /*num_hidden_layers*/, uint32_t /*layer_budget*/,
-                                 size_t /*hidden_size*/, size_t /*head_dim*/,
-                                 size_t /*intermediate_size*/, int64_t /*context_cap*/,
-                                 const SslmTensorManifest& /*rope_tables*/, uint8_t* /*workspace*/,
-                                 size_t /*workspace_size*/, std::string_view /*site_prefix*/,
-                                 size_t /*token_index*/, SslmTraceHookState* /*trace_hook_state*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;
+namespace {
+
+// One projection: GemmInt8AccumulateRow -> the shared WSC1 fold -> the funnel.
+// §6.2 step 2's own shape, and q_proj/o_proj/gate_proj/up_proj/down_proj all
+// have it -- they differ only in weights, incoming scale, and site constant,
+// never in construction.
+SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale,
+                                    const int8_t* weight, size_t in_channels, size_t out_channels,
+                                    int32_t identity, int32_t mult, int32_t shift,
+                                    CarriedScale site_constant, int8_t* out_codes,
+                                    CarriedScale* out_scale, std::string_view site,
+                                    size_t token_index, SslmTraceHookState* trace_hook_state) {
+	std::vector<int64_t> acc(out_channels);
+	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
+	for (size_t i = 0; i < out_channels; ++i) {
+		acc[i] = ApplyWeightScaleFold(acc[i], identity, mult, shift);
+	}
+	const CarriedScale incoming[1] = {in_scale};
+	const ChainResult result = RequantChainChecked(
+	    acc.data(), out_channels, std::span<const CarriedScale>{incoming, 1}, site_constant,
+	    out_codes, out_scale, site, token_index, trace_hook_state);
+	return result.status;
+}
+
+// Per-layer site names ("layer3.attn_norm"), built here because only the loop
+// knows which layer it is on; the caller's own outer qualifier is preserved
+// ahead of it.
+std::string LayerSite(std::string_view site_prefix, uint32_t layer, const char* suffix) {
+	std::string s;
+	if (!site_prefix.empty()) {
+		s.append(site_prefix);
+		s.push_back('.');
+	}
+	s.append("layer");
+	s.append(std::to_string(layer));
+	s.push_back('.');
+	s.append(suffix);
+	return s;
+}
+
+}  // namespace
+
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t intermediate_size,
+                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
+                                 uint8_t* workspace, size_t workspace_size,
+                                 std::string_view site_prefix, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state) {
+	// §9.3's first decided contract, checked BEFORE anything is read or
+	// written: a budget of 0 consumes a call, advances nothing, and would
+	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
+	// which is exactly what the cell poison-fills to assert.
+	if (layer_budget == 0) return SslmForwardStatus::InvalidLayerBudget;
+
+	// §9.4: the K/V store is caller-supplied memory "sized from
+	// config.context_cap, num_key_value_heads, head_dim, and kv_precision".
+	// That is what `workspace` is here and the only thing this loop takes from
+	// it -- per-site scratch heaps through std::vector, exactly as RmsNormSite
+	// and MlpActSite already do in this same translation unit. The required
+	// size is therefore computed from the parameters rather than chosen here.
+	//
+	// The signature carries no `num_key_value_heads`, so the MHA-degenerate
+	// case is not a fixture choice this body is free to make -- it is forced by
+	// the declared surface, and a GQA loop needs a parameter that does not
+	// exist yet.
+	const size_t num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
+	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
+		return SslmForwardStatus::WorkspaceTooSmall;
+	}
+	const size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers) *
+	                                static_cast<size_t>(context_cap) * num_heads * head_dim * 2u;
+	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+
+	// This sub-slot's declared scope is a single position. §9.4's multi-
+	// position accessor (`KeyRow(layer, kv_head, position)`) is S3.7's and does
+	// not exist; the signature carries no position parameter, so position 0
+	// with a one-key attention row is the only reading the declared surface
+	// admits.
+	const size_t width = 1;
+	const int64_t position = 0;
+
+	int8_t* const kv_base = reinterpret_cast<int8_t*>(workspace);
+
+	std::vector<int8_t> normed(hidden_size), q_codes(hidden_size), o_codes(hidden_size);
+	std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size), ctx_codes(hidden_size);
+	std::vector<int8_t> gate_codes(intermediate_size), up_codes(intermediate_size);
+	std::vector<int8_t> act_codes(intermediate_size), down_codes(hidden_size);
+	std::vector<int8_t> stream_next(hidden_size);
+
+	uint32_t advanced = 0;
+	while (advanced < layer_budget && seq.layer_index < num_hidden_layers) {
+		const uint32_t l = seq.layer_index;
+		const LayerWeights& lw = layers[l];
+		CarriedScale normed_scale{}, q_scale{}, ctx_scale{}, o_scale{};
+		CarriedScale mlp_normed_scale{}, gate_scale{}, up_scale{}, act_scale{}, down_scale{};
+		CarriedScale stream_scale{};
+		SslmForwardStatus st;
+
+		// --- attention half (§6.2) --------------------------------------------
+		st = RmsNormSite(seq.hidden_codes, lw.attn_norm_gain, hidden_size, seq.hidden_scale,
+		                 lw.attn_norm_site_constant, normed.data(), &normed_scale,
+		                 LayerSite(site_prefix, l, "attn_norm"), token_index, trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
+		                      lw.proj_identity, lw.proj_mult, lw.proj_shift, lw.q_site_constant,
+		                      q_codes.data(), &q_scale, LayerSite(site_prefix, l, "q_proj.requant"),
+		                      token_index, trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
+		// through LandingRescale (§8.1), writing straight into the K/V store.
+		int8_t* const k_store =
+		    kv_base + (static_cast<size_t>(l) * static_cast<size_t>(context_cap) * num_heads *
+		               head_dim) * 2u;
+		int8_t* const v_store = k_store + static_cast<size_t>(context_cap) * num_heads * head_dim;
+		{
+			std::vector<int64_t> kacc(hidden_size), vacc(hidden_size);
+			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, hidden_size,
+			                      kacc.data());
+			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, hidden_size,
+			                      vacc.data());
+			for (size_t i = 0; i < hidden_size; ++i) {
+				const int64_t kf =
+				    ApplyWeightScaleFold(kacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
+				const int64_t vf =
+				    ApplyWeightScaleFold(vacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
+				k_store[i] = static_cast<int8_t>(LandingRescale(
+				    kf, normed_scale.m, lw.kv_landing_r_t, normed_scale.e, lw.kv_landing_e_t));
+				v_store[i] = static_cast<int8_t>(LandingRescale(
+				    vf, normed_scale.m, lw.kv_landing_r_t, normed_scale.e, lw.kv_landing_e_t));
+			}
+		}
+
+		// RoPE on q and on the just-landed k, per head (§6.2 step 3).
+		for (size_t h = 0; h < num_heads; ++h) {
+			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
+			                   rope_tables, q_rot.data() + h * head_dim);
+			if (st != SslmForwardStatus::Ok) return st;
+			st = RopeApplySite(k_store + h * head_dim, head_dim, position, context_cap, rope_tables,
+			                   k_rot.data() + h * head_dim);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+		for (size_t i = 0; i < hidden_size; ++i) k_store[i] = k_rot[i];
+
+		// Attention proper (§6.2 step 5). No named site for this composition
+		// exists anywhere in this tree; this is where it is first composed.
+		{
+			std::vector<int64_t> ctx_wide(hidden_size);
+			for (size_t h = 0; h < num_heads; ++h) {
+				std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
+				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_store + h * head_dim, head_dim,
+				                      width, scores.data());
+				// The gate before the kernel, in that order -- the kernel's own
+				// contract states it performs no width check and that `total`'s
+				// bound holds only under this ordering.
+				st = CheckSoftmaxRowWidthDomain(lw.q_b_iexp, lw.q_c_iexp, width);
+				if (st != SslmForwardStatus::Ok) return st;
+				if (!SoftmaxRowQ15(scores.data(), width, lw.q_ln2, lw.q_b_iexp, lw.q_c_iexp,
+				                   probs.data())) {
+					// The kernel refused after its own gate accepted. No status
+					// distinguishes that from the gate's own rejection, so the
+					// gate's is reported rather than inventing an enumerator --
+					// named as an owed distinction in this slot's build record.
+					return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+				}
+				GemmProbQ15Accumulate(probs.data(), v_store + h * head_dim, width, head_dim,
+				                      ctx_acc.data());
+				for (size_t d = 0; d < head_dim; ++d) {
+					ctx_wide[h * head_dim + d] = ApplyWeightScaleFold(
+					    ctx_acc[d], lw.ctx_fold_identity, lw.ctx_fold_mult, lw.ctx_fold_shift);
+				}
+			}
+			// §6.2 step 6: the context funnel takes an EMPTY incoming span --
+			// the per-head static scale was already consumed at the landing.
+			const ChainResult ctx_result = RequantChainChecked(
+			    ctx_wide.data(), hidden_size, std::span<const CarriedScale>{},
+			    lw.ctx_fold_site_constant, ctx_codes.data(), &ctx_scale,
+			    LayerSite(site_prefix, l, "attn_ctx"), token_index, trace_hook_state);
+			if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
+		}
+
+		st = ProjectAndFunnel(ctx_codes.data(), ctx_scale, lw.o_weight, hidden_size, hidden_size,
+		                      lw.proj_identity, lw.proj_mult, lw.proj_shift, lw.o_site_constant,
+		                      o_codes.data(), &o_scale, LayerSite(site_prefix, l, "o_proj.requant"),
+		                      token_index, trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = ResidualReconcileSite(o_codes.data(), o_scale, seq.hidden_codes, seq.hidden_scale,
+		                           hidden_size, lw.attn_residual_site_constant, stream_next.data(),
+		                           &stream_scale, LayerSite(site_prefix, l, "attn_residual"),
+		                           token_index, trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
+		seq.hidden_scale = stream_scale;
+
+		// --- MLP half (§6.3) ---------------------------------------------------
+		st = RmsNormSite(seq.hidden_codes, lw.mlp_norm_gain, hidden_size, seq.hidden_scale,
+		                 lw.mlp_norm_site_constant, normed.data(), &mlp_normed_scale,
+		                 LayerSite(site_prefix, l, "mlp_norm"), token_index, trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.gate_weight, hidden_size,
+		                      intermediate_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
+		                      lw.gate_site_constant, gate_codes.data(), &gate_scale,
+		                      LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
+		                      trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size,
+		                      intermediate_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
+		                      lw.up_site_constant, up_codes.data(), &up_scale,
+		                      LayerSite(site_prefix, l, "up_proj.requant"), token_index,
+		                      trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = MlpActSite(gate_codes.data(), gate_scale, up_codes.data(), up_scale, intermediate_size,
+		                kSiluLutCanonicalTable, lw.mlp_act_site_constant, act_codes.data(),
+		                &act_scale, LayerSite(site_prefix, l, "mlp_act"), token_index,
+		                trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = ProjectAndFunnel(act_codes.data(), act_scale, lw.down_weight, intermediate_size,
+		                      hidden_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
+		                      lw.down_site_constant, down_codes.data(), &down_scale,
+		                      LayerSite(site_prefix, l, "down_proj.requant"), token_index,
+		                      trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = ResidualReconcileSite(down_codes.data(), down_scale, seq.hidden_codes,
+		                           seq.hidden_scale, hidden_size, lw.mlp_residual_site_constant,
+		                           stream_next.data(), &stream_scale,
+		                           LayerSite(site_prefix, l, "mlp_residual"), token_index,
+		                           trace_hook_state);
+		if (st != SslmForwardStatus::Ok) return st;
+		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
+		seq.hidden_scale = stream_scale;
+
+		// §9.3: the resume point, and the ONLY one -- advanced after the MLP
+		// residual, which is where the reference yields.
+		seq.layer_index = l + 1;
+		++advanced;
+	}
+
+	return SslmForwardStatus::Ok;
 }
 
 }  // namespace superslm
