@@ -10942,12 +10942,14 @@ static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingU
 // tensor's real row count, still inside a legitimate `context_cap`, is a small,
 // memory-SAFE offset (still inside the same manifest allocation SslmModel::Load
 // itself produced -- deliberately not the unmapped-memory case the two crash-
-// probe cells above pin, so this cell needs no isolation). RopeApplySite has no
-// way to know it has read past the tensor's own validated extent, and returns
-// Ok anyway: the site's caller-ensures safety argument ("every element already
-// cleared ValidateRopeTablesDomain's bound at load time") does not survive a
-// read outside the tensor the loader actually validated (Poirot fa3189a review,
-// Critical 2's own text).
+// probe cells above pin, so this cell needs no isolation). Before the T-1322
+// remedy, RopeApplySite had no way to know it had read past the tensor's own
+// validated extent and returned Ok: the caller-ensures safety argument ("every
+// element already cleared ValidateRopeTablesDomain's bound at load time") does
+// not survive a read outside the tensor the loader actually validated (Poirot
+// fa3189a review, Critical 2). The site now bounds position/pairs against each
+// tensor's own elem_count and returns RopeTableExtentExceeded, which is what
+// this cell asserts.
 //
 // This is the sibling the review's finding names directly: the existing
 // TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan cell above
