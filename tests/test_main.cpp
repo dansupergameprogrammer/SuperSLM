@@ -5477,17 +5477,20 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
 	}
-	// Critical 1 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md):
-	// RopeApplySite dereferences its "cos"/"sin" tensor lookup (forward_sites.cpp:
-	// 329-330) with no null check before the read at :342-343. SslmTensorManifest::
-	// Tensor returns nullptr when the name is absent (model.h:206-207's own contract),
-	// and a zero-tensor ROP1 manifest loads Ok (ParseImpl bounds tensor_count only
-	// ABOVE kMaxTensors; ValidateRopeTablesDomain walks whatever tensors are present
-	// and requires no particular name) -- so a real, successfully loaded model can
-	// carry has_rope_tables == true with Tensor("cos") == nullptr. A genuine null-
-	// pointer dereference, isolated here because it faults the process -- a cell that
-	// crashes the runner is not a usable red (this suite's own established death-test
-	// convention, S2.5).
+	// Critical 1 (closed; Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-
+	// 2026-07-28.md, confirmed closed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-
+	// c32-softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/
+	// "sin" tensor lookup and returns RopeTableTensorMissing before any read, rather
+	// than dereferencing a null pointer. SslmTensorManifest::Tensor returns nullptr
+	// when the name is absent (model.h's own contract), and a zero-tensor ROP1
+	// manifest loads Ok (ParseImpl bounds tensor_count only ABOVE kMaxTensors;
+	// ValidateRopeTablesDomain walks whatever tensors are present and requires no
+	// particular name) -- so a real, successfully loaded model can carry
+	// has_rope_tables == true with Tensor("cos") == nullptr, and this probe proves
+	// the guard intercepts that case rather than faulting. Still isolated here
+	// because a regression that removed the guard would again fault the process --
+	// a cell that crashes the runner is not a usable red (this suite's own
+	// established death-test convention, S2.5).
 	if (name == "rope_apply_site_null_cos_tensor_deref") {
 		using namespace superslm_test;
 		Cfg1Spec spec{};
@@ -5523,15 +5526,18 @@ static int RunCrashProbe(const std::string& name) {
 		            superslm::SslmForwardStatusName(forward_status));
 		return 0;
 	}
-	// Critical 2 (Poirot fa3189a review): the position guard bounds `position` against
-	// the caller's `context_cap`, never against the ROP1 tensors' own extent
-	// (forward_sites.cpp:316-343) -- `row_offset` consults neither `cos->elem_count`
-	// nor `cos->shape`. A `position` the caller's `context_cap` legally admits, but far
-	// past a real, loaded tensor's actual row count, reads unmapped heap memory. This
-	// probe mirrors the review's own executed reproduction exactly (position=268435456,
+	// Critical 2 (closed; Poirot fa3189a review, confirmed closed by the 72b0c7f
+	// confirmation pass): the position guard now bounds `position` against the
+	// ROP1 tensors' own extent, not merely against the caller's `context_cap` --
+	// `row_offset` is checked against `cos->elem_count`/`sin->elem_count` before
+	// either tensor is read. A `position` the caller's `context_cap` legally
+	// admits, but far past a real, loaded tensor's actual row count, would
+	// previously have read unmapped heap memory. This probe mirrors the review's
+	// own executed reproduction exactly (position=268435456,
 	// context_cap=2147483647, a genuine CFG1-admissible u32 value, against a real
-	// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) -- isolated here
-	// because it faults the process.
+	// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) and proves the
+	// extent guard intercepts it. Still isolated here because a regression that
+	// removed the guard would again fault the process.
 	if (name == "rope_apply_site_position_far_past_tensor_extent") {
 		using namespace superslm_test;
 		Cfg1Spec spec{};
@@ -10304,14 +10310,14 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 	          static_cast<long long>(-w.m_magnitude), w.width, superslm::SslmForwardStatusName(negative_status));
 }
 
-// Significant 3 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md):
-// the kernel half of the C32 remediation -- SoftmaxRowQ15's own per-element ceiling
-// check at src/intmath.cpp:598-602, refusing any element whose REAL evaluated value
-// exceeds M -- is pinned by no cell. Every witness above carries q_c <= 0, so
-// CheckSoftmaxRowWidthDomain's own `q_c < 0` rejection (checked_chain_funnel.cpp:
-// 400-402) satisfies TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability
-// unconditionally via a GATE rejection, and the kernel's per-element check is never
-// reached by any cell in this suite. This is the missing off-ratio witness WITH
+// Significant 3 (Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md,
+// closed by this cell): the kernel half of the C32 remediation -- SoftmaxRowQ15's own
+// per-element ceiling check, refusing any element whose REAL evaluated value exceeds
+// M -- was pinned by no cell before this one. Every OTHER witness in this suite
+// carries q_c <= 0, so CheckSoftmaxRowWidthDomain's own `q_c < 0` rejection
+// (checked_chain_funnel.cpp) satisfies TestSoftmaxRowQ15NeverReportsWellFormedWithAn
+// OutOfRangeProbability unconditionally via a GATE rejection, never reaching the
+// kernel's per-element check. THIS cell is the missing off-ratio witness WITH
 // q_c >= 0: the gate accepts it (M = q_b*q_b + q_c is trivially inside the ratified
 // ceiling), so only the kernel's own check stands between this row and a reported
 // well-formed result carrying a value ~9e16 past the D-SLM367 ceiling.
@@ -10875,11 +10881,13 @@ static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
 // 2026-07-28.md.
 // ---------------------------------------------------------------------------
 
-// Critical 1: RopeApplySite dereferences its "cos"/"sin" tensor lookup with no
-// null check (forward_sites.cpp:329-330,342-343). Routed through the crash-probe
-// child (this suite's established death-test convention, S2.5) because the
-// current shipped code genuinely faults the process on this input -- a cell
-// that crashes the runner is not a usable red.
+// Critical 1 (closed; confirmed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-c32-
+// softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/"sin"
+// tensor lookup and returns RopeTableTensorMissing before the read that
+// previously dereferenced null on this input. Routed through the crash-probe
+// child (this suite's established death-test convention, S2.5) because a
+// regression here would again fault the process -- a cell that crashes the
+// runner is not a usable red.
 static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull() {
 	static const char* kProbeName = "rope_apply_site_null_cos_tensor_deref";
 	std::string tail;
@@ -11012,14 +11020,14 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 	}
 }
 
-// Significant 5: forward_sites.h:194-195 asserts a load-time rejection of odd
-// `head_dim` ("load-time-rejected otherwise, per Sec6.2 step 3's own 'head_dim
-// odd is a load-time rejection'") that ParseConfigImpl does not perform
-// (model.cpp:461-464's dimension check is `== 0` only, no parity test anywhere
-// in model.cpp). Per StandardsDocument Sec5.6, a document claiming what the
-// code does not deliver is a code bug; this cell pins the remedy (add the
-// parity rejection to ParseConfigImpl) at the boundary the header's own text
-// names.
+// Significant 5 (closed; confirmed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-
+// c32-softmax-confirmation-2026-07-28.md): forward_sites.h asserts a load-time
+// rejection of odd `head_dim` ("load-time-rejected otherwise, per Sec6.2 step
+// 3's own 'head_dim odd is a load-time rejection'"), and ParseConfigImpl now
+// performs that parity check, returning BadConfigHeadDimParity. Per
+// StandardsDocument Sec5.6, a document claiming what the code does not deliver
+// is a code bug; this cell pins the remedy at the boundary the header's own
+// text names.
 static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
 	using namespace superslm_test;
 
@@ -11037,8 +11045,10 @@ static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
 	// enumerator states.
 	CHECK_MSG(status == SslmModelStatus::BadConfigHeadDimParity,
 	          "SslmModel::Load with CFG1 head_dim=1 (odd) == %s, want BadConfigHeadDimParity -- "
-	          "forward_sites.h:194-195's own text claims odd head_dim is load-time-rejected, and "
-	          "ParseConfigImpl (model.cpp:461-464) performs no parity check today (Significant 5)",
+	          "forward_sites.h's own text claims odd head_dim is load-time-rejected (Sec6.2 step 3), "
+	          "and ParseConfigImpl (model.cpp) is required to enforce that parity check (Significant "
+	          "5, closed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-c32-softmax-confirmation-"
+	          "2026-07-28.md) -- this failure means that check regressed",
 	          SslmModelStatusName(status));
 }
 
