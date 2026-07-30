@@ -12251,7 +12251,50 @@ struct TwoLayerFixture {
 			// pattern every other site constant in this fixture uses.
 			lw.gate_site_constant = canonical;
 			lw.up_site_constant = canonical;
-			lw.mlp_act_site_constant = canonical;
+			// T-1356: `canonical` here would compound into the SAME
+			// chain-input rejection D-SLM434 already found one site later
+			// (the whole finding this fixture pass closes). Derived by
+			// execution, not tuned: MlpActSite's own funnel call folds THREE
+			// factors left-associated (gate_scale, up_scale, this site
+			// constant -- forward_sites.cpp:504), and the trace hook
+			// (SslmSetTraceHook + ChainTraceSinkHookFn, this suite's own
+			// S3.1a instrumentation) reads the real per-site (dn, s, m_out,
+			// e_out) with no re-implementation needed.
+			//   1. With this field at `canonical` (e=-30), a trace-hooked
+			//      run of RunLayerLoop(budget=1) on this fixture's layer 0
+			//      gives mlp_act e_out=72 (executed) -- gate/up both e=6, so
+			//      the three-factor fold plus this site's own D'=528515072
+			//      (~127*2^15*127, MlpActSite's own documented Q15 product
+			//      bound) drives the OUTPUT nearly 66 exponent-bits above
+			//      its INPUTS. Downstream this composes through down_proj
+			//      (e_out=79) into mlp_residual, whose wide row then reads
+			//      exactly the values Poirot's review recorded --
+			//      branch=(2064898088,79), stream=(1140850688,6) -- and
+			//      rejects C29 (`d_prime > 2^31`), reproducing D-SLM434's
+			//      "each correction moves rejection one site later" exactly.
+			//   2. The +66 drift lives entirely in this ONE site constant's
+			//      own `e`, because CombineCarriedScale's exponent output is
+			//      `a.e + b.e + 31` (checked_chain_funnel.cpp) at each fold
+			//      step, and this constant's own `m` stays at the same
+			//      canonical mantissa (2^30) every other site constant in
+			//      this tree uses -- so shifting only its `e` shifts
+			//      mlp_act's own output `e` by the identical amount, with no
+			//      other combine step touched. Re-running the same
+			//      trace-hooked probe at e=-96 (30+66 below canonical)
+			//      gives mlp_act e_out=6 exactly (executed) -- landing on
+			//      attn_residual's own carried-scale exponent for this same
+			//      fixture, which keeps down_proj (e_out=13) and
+			//      mlp_residual (e_out=20, wide-row d_prime=29550, far
+			//      inside C29's 2^31 ceiling) in domain at every enumerated
+			//      budget and every resume/poison cell (§8 below).
+			// Reproduction: build this commit, install the trace hook on a
+			// RunLayerLoop(budget=1) call over this fixture's layer 0, and
+			// diff mlp_act's own e_out between `canonical` and this value --
+			// the delta is exactly -66, matching the shift applied here.
+			// C34's own domain check (CheckSiluCompositionScaleDomain) is
+			// unaffected: it examines gate_scale (the INPUT), never this
+			// site constant, so no upstream cell's C34 coverage changes.
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
 			lw.down_site_constant = canonical;
 			lw.mlp_residual_site_constant = canonical;
 		}
@@ -12579,15 +12622,26 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	// value directly, rather than reusing ctx1's own literal -- the artifact
 	// section (mult, shift) is reused byte for byte; the numeric input is
 	// this cell's own, real one.
+	//
+	// head_dim=2 in THIS cell's own spec (below), so a single-key head-1
+	// accumulate in the real forward produces TWO wide-row elements (one per
+	// (head, dim) pair, per RunLayerLoop's own `ctx_wide[h*head_dim+d]`
+	// layout), not one -- the same value fold's own gemmlowp dispatch, a
+	// single ratio per WSC1 head entry, applies to both. The sanity
+	// derivation below is widened from a single-dim accumulate to match:
+	// values_h1 repeats the same per-key value across both dims, so both of
+	// head 1's wide-row elements land on the identical, already-verified
+	// 262144/131072 pair (T-1356; a pre-existing head_dim=1 assumption in
+	// this cell's own sanity check, unreachable before this pass).
 	const int64_t probs[1] = {INT64_C(32768)};
-	const int8_t values_h1[1] = {8};
-	int64_t ctx_h1[1] = {0};
-	superslm::GemmProbQ15Accumulate(probs, values_h1, /*width=*/1, /*head_dim=*/1, ctx_h1);
-	CHECK_MSG(ctx_h1[0] == INT64_C(262144),
-	          "sanity: GemmProbQ15Accumulate(probs={2^15}, values={8}) == %lld, want 262144 "
-	          "(32768*8, the exact single-key accumulate this cell's own expected-fold "
-	          "derivation depends on)",
-	          static_cast<long long>(ctx_h1[0]));
+	const int8_t values_h1[2] = {8, 8};
+	int64_t ctx_h1[2] = {0, 0};
+	superslm::GemmProbQ15Accumulate(probs, values_h1, /*width=*/1, /*head_dim=*/2, ctx_h1);
+	CHECK_MSG(ctx_h1[0] == INT64_C(262144) && ctx_h1[1] == INT64_C(262144),
+	          "sanity: GemmProbQ15Accumulate(probs={2^15}, values={8,8}) == {%lld,%lld}, want "
+	          "{262144,262144} (32768*8 per dim, the exact single-key accumulate this cell's own "
+	          "expected-fold derivation depends on)",
+	          static_cast<long long>(ctx_h1[0]), static_cast<long long>(ctx_h1[1]));
 	const int64_t expected_fold_h1 =
 	    superslm::ApplyWeightScaleFold(ctx_h1[0], /*identity=*/0, kCtxFoldJoinCase.mult,
 	                                    kCtxFoldJoinCase.shift);
@@ -12599,9 +12653,9 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 
 	// LayerWeights fixture: 2 heads, head_dim=2, hidden_size=4. Weights
 	// are identity (4x4), matching TwoLayerFixture's own convention.
-	int32_t norm_gain[4] = {65536, 65536, 65536, 65536};
+	int32_t norm_gain[4] = {16384, 16384, 16384, 16384};
 	int8_t identity4x4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-	const CarriedScale canonical{INT64_C(1073741824), 0};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
 	const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
 	superslm::LayerWeights lw{};
 	lw.attn_norm_gain = norm_gain;
@@ -12633,10 +12687,12 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	lw.q_c_iexp = INT64_C(8649804928567);
 	lw.mlp_norm_gain = norm_gain;
 	lw.mlp_norm_site_constant = canonical;
+	lw.gate_site_constant = canonical;
+	lw.up_site_constant = canonical;
 	lw.gate_weight = identity4x4;
 	lw.up_weight = identity4x4;
 	lw.down_weight = identity4x4;
-	lw.mlp_act_site_constant = canonical;
+	lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
 	lw.down_site_constant = canonical;
 	lw.mlp_residual_site_constant = canonical;
 
@@ -12647,14 +12703,18 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	int8_t hidden_codes[4] = {5, -5, 5, -5};
 	SequenceLayerState seq;
 	seq.hidden_codes = hidden_codes;
-	seq.hidden_scale = canonical;
+	// The token's own initial carried scale (e=0), distinct from `canonical`'s
+	// e=-30 (the funnel's near-identity site-constant convention, T-1356) --
+	// TwoLayerFixture's own call sites use the same (m, e=0) pair as the
+	// starting seq.hidden_scale.
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 	uint8_t workspace[128] = {};
 	const auto result =
 	    superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
 	                             /*hidden_size=*/4, /*head_dim=*/2, /*intermediate_size=*/2,
 	                             /*context_cap=*/1, view.rope_tables, workspace,
-	                             sizeof(workspace), /*site_prefix=*/"layer", /*token_index=*/0,
+	                             sizeof(workspace), /*site_prefix=*/{}, /*token_index=*/0,
 	                             &hook_state);
 	superslm::SslmSetTraceHook(hook_state, nullptr, nullptr);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
@@ -12674,23 +12734,53 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	          "one chain-trace record at the ctx_fold funnel call, per this suite's own "
 	          "site-naming convention (§4.1)");
 	if (ctx_record == nullptr) return;
-	CHECK_MSG(ctx_record->x_int.size() == 2,
-	          "layer0.attn_ctx trace record x_int has %zu elements, want 2 (one per head)",
+	// hidden_size=4 (2 heads x head_dim=2): the wide row is one element per
+	// (head, dim) pair (RunLayerLoop's own `ctx_wide[h*head_dim+d]`
+	// layout), not one per head -- corrected from this cell's own
+	// pre-existing "2, one per head" assumption (T-1356; unreachable, hence
+	// unnoticed, before this pass's fixture fix made the call reach `Ok`).
+	CHECK_MSG(ctx_record->x_int.size() == 4,
+	          "layer0.attn_ctx trace record x_int has %zu elements, want 4 (2 heads x "
+	          "head_dim=2, one wide-row element per (head, dim) pair)",
 	          ctx_record->x_int.size());
-	if (ctx_record->x_int.size() != 2) return;
+	if (ctx_record->x_int.size() != 4) return;
 
-	// Head 0 (identity dispatch): what the forward reads must equal head 0's
-	// own raw accumulate, unchanged (ApplyWeightScaleFold(acc, identity=1, ..) == acc).
-	// Head 1 (non-identity): what the forward reads must equal
-	// expected_fold_h1 -- the same independently-derived dispatch value
-	// S3.3's own realizable-half cell already proved equals what the
-	// artifact carries AND the arbitrary-precision oracle.
-	CHECK_MSG(ctx_record->x_int[1] == expected_fold_h1,
-	          "layer0.attn_ctx trace x_int[1] (what the forward reads for head 1) == %lld, want "
-	          "%lld (what the artifact carries, applied through the real ApplyWeightScaleFold, "
-	          "and the arbitrary-precision oracle S3.3's own cell already proved this equals -- "
-	          "the three-way join's third leg)",
-	          static_cast<long long>(ctx_record->x_int[1]), static_cast<long long>(expected_fold_h1));
+	// Head 0 (identity dispatch, dims 0-1): what the forward reads must equal
+	// head 0's own raw accumulate, unchanged
+	// (ApplyWeightScaleFold(acc, identity=1, ..) == acc). Head 1 (non-identity,
+	// dims 2-3): what the forward reads must equal expected_fold_h1 at BOTH
+	// dims -- the same independently-derived dispatch value S3.3's own
+	// realizable-half cell already proved equals what the artifact carries
+	// and the arbitrary-precision oracle, applied uniformly across the head
+	// (one WSC1 (mult, shift) entry per head, not per dim).
+	//
+	// T-1356 (Curie derivation, 2026-07-29): this assertion is RED under the
+	// current RunLayerLoop body, and no fixture constant closes it. Executed:
+	// x_int == {4161536,-4161536,4161536,-4161536} -- head 1 (dims 2-3) reads
+	// IDENTICAL to head 0 (dims 0-1), i.e. pass-through, not the loaded
+	// artifact's own non-identity kCtxFoldJoinCase dispatch. Read at source
+	// (src/forward/forward_sites.cpp:747): `ApplyWeightScaleFold(ctx_acc[d],
+	// lw.ctx_fold_identity, lw.ctx_fold_mult, lw.ctx_fold_shift)` inside the
+	// per-head loop applies the SAME (identity, mult, shift) triple to every
+	// head from `LayerWeights`' own one-per-layer fields; `view.weight_scales`
+	// (the loaded artifact's per-head WSC1 rows) is never referenced anywhere
+	// in this translation unit (grep confirms). `forward_sites.h:451-458`'s own
+	// doc comment on those same three fields reads "WSC1's `layer{L}.ctx_fold`
+	// row for THIS HEAD" -- the declared surface has no per-head axis to carry
+	// that row on, so the composition cannot honor its own header's contract
+	// for any input. This cell's own premise (a hand-built, genuinely
+	// non-identity per-head ctx_fold dispatch, closing §13.1 cell 9's
+	// three-way join) is therefore unrealizable under the current code: no
+	// choice of `lw`/artifact contents changes which triple head 1 receives.
+	// Left red and documented rather than weakened to accept the pass-through
+	// value, which would silently retire the cell's own stated claim.
+	CHECK_MSG(ctx_record->x_int[2] == expected_fold_h1 && ctx_record->x_int[3] == expected_fold_h1,
+	          "layer0.attn_ctx trace x_int[2..3] (what the forward reads for head 1's two dims) "
+	          "== {%lld,%lld}, want {%lld,%lld} (what the artifact carries, applied through the "
+	          "real ApplyWeightScaleFold, and the arbitrary-precision oracle S3.3's own cell "
+	          "already proved this equals -- the three-way join's third leg)",
+	          static_cast<long long>(ctx_record->x_int[2]), static_cast<long long>(ctx_record->x_int[3]),
+	          static_cast<long long>(expected_fold_h1), static_cast<long long>(expected_fold_h1));
 }
 
 int main(int argc, char** argv) {
