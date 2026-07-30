@@ -207,10 +207,10 @@ struct ChainResult {
 // than exempting a whole file: the other seven -- the max-abs reductions, the
 // row bounds, NormalizeScale, both requant primitives and the int32 narrowing
 // -- remain reachable only from inside this translation unit, which is the
-// property that stops a site from reassembling the chain. Dan's ruling,
-// 2026-07-29, over relocating the site into this TU (which would turn a
-// function-level rule into a file-level exemption) and over an allowlist entry
-// (excluded outright: that is weakening the rule to fit a build).
+// property that stops a site from reassembling the chain. Neither relocating
+// the site into this TU nor allowlisting its call site preserves that property:
+// the first converts a function-level rule into a file-level exemption, and the
+// second removes the wall at one point permanently. D-SLM433.
 int64_t CarriedScaleReciprocal(int64_t m);
 
 ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
