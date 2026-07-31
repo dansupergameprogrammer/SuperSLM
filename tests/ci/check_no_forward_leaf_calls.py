@@ -205,17 +205,59 @@ _EXPECTED_DOOR_FUNCTIONS = (
 # (reproduced verbatim in the test file, since this module no longer carries
 # it) and this AST-based one, so the improvement is measured rather than
 # asserted (StandardsDocument Sec4).
+#
+# CORRECTED 2026-07-31 (Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md,
+# Significant 1; T-1383): the paragraph just above this one shipped true; the
+# ORIGINAL `_TOP_LEVEL_FUNCTION_KINDS` docstring (the comment directly below,
+# now corrected in place) shipped a parity claim that was false the moment it
+# was written -- admitting `FunctionDecl` only was argued to exclude a member
+# function "exactly as the prior text scanner's brace-context tag 'other'
+# did," which holds for an IN-CLASS member definition but not for an
+# OUT-OF-LINE one (`Ret S::Door(...) { ... }`), which is not nested inside a
+# struct body at all and which BOTH retired scanners caught. `find_leaf_
+# forwarding_doors` now admits member-function kinds alongside `FunctionDecl`
+# (both in-class and out-of-line member definitions surface as the identical
+# `CXXMethodDecl` kind, confirmed by execution -- indistinguishable by kind
+# alone), guarded so a lambda's own closure-type call operator -- itself a
+# `CXXMethodDecl`, lexically nested inside a `LambdaExpr` -- is never counted
+# as a separate top-level door: that guard is what keeps this widening from
+# regressing `test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_
+# in_real_declared_code` into reporting two doors for one. Population widened
+# to fourteen cases (the nine above, unchanged and re-verified against the
+# fixed mechanism, plus the out-of-line member door this correction targets,
+# plus two further shapes an independent sweep found -- an in-class member
+# door, now also caught as a consequence of the same fix, and a namespace-
+# scope function pointer initialised to a leaf's address, which remains
+# missed by this mechanism and by both retired scanners alike: a `VarDecl`
+# carries no `FunctionDecl`/`CXXMethodDecl` node for either generation to
+# find, so this is documented parity, not a regression, and is not fixed
+# here). See `test_check_no_forward_leaf_calls.py`'s own T-1383 section for
+# all three new cases, each executed against a verbatim reproduction of the
+# mechanism this correction replaces, exactly as the nine cases above are
+# measured against the mechanism T-1381 replaced.
 
 _DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
 
 # The AST node kinds `find_leaf_forwarding_doors` treats as door candidates:
-# ordinary free/namespace-scope functions only. A member function
-# (CXXMethodDecl/CXXConstructorDecl/...) is deliberately never a kind this
-# set admits, which excludes a definition nested inside a struct/class/enum
-# body exactly as the prior text scanner's brace-context tag "other" did --
-# for free, because Clang's own AST already distinguishes a member function
-# from a free one by node kind, with no brace-counting needed here at all.
-_TOP_LEVEL_FUNCTION_KINDS = ("FunctionDecl",)
+# free/namespace-scope functions AND member functions, in-class or defined
+# out-of-line -- both shapes surface as the SAME kind string in Clang's own
+# dump (confirmed by execution: an out-of-line `Ret S::Door(...) { ... }`
+# and an in-class `struct S { Ret Door(...) { ... } };` both produce a
+# `CXXMethodDecl` node carrying a `CompoundStmt` body, indistinguishable by
+# kind alone). (Corrected 2026-07-31, Poirot Significant 1 /T-1383: this set
+# previously admitted `FunctionDecl` only, on a comment claiming parity with
+# the prior text scanner's brace-context tag "other" -- false for an
+# out-of-line member definition, which is not nested inside a struct body at
+# all and was caught by both retired scanners. `find_leaf_forwarding_doors`'
+# own lambda guard below is what keeps this widening from also reporting a
+# lambda's closure-type call operator as a spurious extra door.)
+_TOP_LEVEL_FUNCTION_KINDS = (
+    "FunctionDecl",
+    "CXXMethodDecl",
+    "CXXConstructorDecl",
+    "CXXDestructorDecl",
+    "CXXConversionDecl",
+)
 
 
 class ClangUnavailable(RuntimeError):
@@ -306,27 +348,40 @@ def find_leaf_forwarding_doors(
     are SUPPOSED to). T-1381 (D-SLM464): derived from a real Clang AST dump
     of `path` rather than a hand-rolled text scan -- see the module comment
     above for what this replaced and why. A "top-level function DEFINED" is
-    an AST `FunctionDecl` node (never a member-function kind) located in
-    `path` itself (tracked via the dump's own file-attribution, the same
-    delta-encoded `loc.file`/`includedFrom` walk `derive_bad_alloc_
-    membership.py` already uses) that carries a `CompoundStmt` body -- a
-    declaration with no body (e.g. the header's own prototype) is not a
-    door. Returns names in file order, so the caller gets a stable diff
-    against `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
+    an AST node whose kind is one of `_TOP_LEVEL_FUNCTION_KINDS` (a free or
+    namespace-scope function, or a member function -- in-class or defined
+    out-of-line, indistinguishable by kind alone; corrected 2026-07-31,
+    Poirot Significant 1 / T-1383) located in `path` itself (tracked via the
+    dump's own file-attribution, the same delta-encoded `loc.file`/
+    `includedFrom` walk `derive_bad_alloc_membership.py` already uses) that
+    carries a `CompoundStmt` body -- a declaration with no body (e.g. the
+    header's own prototype, or an out-of-line member's own in-class
+    declaration) is not a door. A candidate lexically nested inside a
+    `LambdaExpr` -- the lambda's own closure-type call operator, which is a
+    `CXXMethodDecl` like any other member function -- is never itself
+    reported as a separate door: T-1383's widening from `FunctionDecl` alone
+    would otherwise also flag that operator, double-counting a leaf call the
+    enclosing door (the function the lambda is defined inside) already
+    accounts for, exactly as
+    `test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_
+    declared_code` requires. Returns names in file order, so the caller gets
+    a stable diff against `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
     root = _run_clang_ast_dump(path, clangxx, include_dir)
     target = os.path.normpath(os.path.abspath(path)).replace("\\", "/")
     state = {"file": None}
     doors: list[str] = []
 
-    def walk(n: object) -> None:
+    def walk(n: object, in_lambda: bool) -> None:
         if not isinstance(n, dict):
             return
+        kind = n.get("kind")
         loc = n.get("loc") or {}
         if "file" in loc:
             state["file"] = loc["file"]
         cur_file = str(state["file"] or "").replace("\\", "/")
         if (
-            n.get("kind") in _TOP_LEVEL_FUNCTION_KINDS
+            not in_lambda
+            and kind in _TOP_LEVEL_FUNCTION_KINDS
             and cur_file
             and os.path.normpath(os.path.abspath(cur_file)).replace("\\", "/") == target
         ):
@@ -337,10 +392,11 @@ def find_leaf_forwarding_doors(
             )
             if body is not None and name not in exclude and name not in doors and _body_calls_leaf(body, leaves):
                 doors.append(name)
+        child_in_lambda = in_lambda or kind == "LambdaExpr"
         for c in n.get("inner") or []:
-            walk(c)
+            walk(c, child_in_lambda)
 
-    walk(root)
+    walk(root, False)
     return doors
 
 

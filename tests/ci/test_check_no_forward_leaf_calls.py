@@ -904,3 +904,226 @@ def test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_declare
             f"expected both the real door and the lambda-hiding one against "
             f"real declared code, got {doors}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T-1383 (Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md, Significant
+# 1; D-SLM469 records the plan/decision-log correction, this section is the
+# code-population correction): the T-1381 AST mechanism admitted `FunctionDecl`
+# only, on a comment claiming this excluded a member function "exactly as the
+# prior text scanner's brace-context tag 'other' did" -- true for an in-class
+# member definition, false for an OUT-OF-LINE one, which both retired
+# scanners caught and the shipped AST mechanism silently missed. The pre-fix
+# mechanism (FunctionDecl-only kind filter, no lambda guard) is reproduced
+# verbatim here, exactly as _old_find_leaf_forwarding_doors_for_comparison and
+# _hardened_text_scan_find_leaf_forwarding_doors_for_comparison preserve the
+# two mechanisms one and two generations further back, so this suite can
+# independently confirm each new population member really was a miss under
+# THIS module's own shipped code at `5eff945`, not merely asserted from the
+# casebook.
+# ---------------------------------------------------------------------------
+
+
+def _pre_t1383_find_leaf_forwarding_doors_for_comparison(
+    path,
+    leaves=cnfl.BANNED_LEAVES,
+    exclude=cnfl._FUNNEL_ENTRY_POINTS,
+    clangxx=cnfl._DEFAULT_CLANGXX,
+    include_dir=cnfl._INCLUDE_DIR,
+):
+    """The AS-SHIPPED-AT-`5eff945` mechanism, reproduced verbatim: kind
+    filter admits `FunctionDecl` only, and the walk carries no lambda guard
+    (both correspondingly widened/added by T-1383 in the module under test).
+    Reproduced rather than imported, since the module under test no longer
+    carries this shape, mirroring how this file already preserves the
+    pre-T-1378 regex scanner and the T-1378 hardened text scanner one and two
+    generations further back."""
+    old_kinds = ("FunctionDecl",)
+    root = cnfl._run_clang_ast_dump(path, clangxx, include_dir)
+    target = os.path.normpath(os.path.abspath(path)).replace("\\", "/")
+    state = {"file": None}
+    doors: list[str] = []
+
+    def walk(n):
+        if not isinstance(n, dict):
+            return
+        loc = n.get("loc") or {}
+        if "file" in loc:
+            state["file"] = loc["file"]
+        cur_file = str(state["file"] or "").replace("\\", "/")
+        if (
+            n.get("kind") in old_kinds
+            and cur_file
+            and os.path.normpath(os.path.abspath(cur_file)).replace("\\", "/") == target
+        ):
+            name = n.get("name")
+            body = next(
+                (c for c in (n.get("inner") or []) if isinstance(c, dict) and c.get("kind") == "CompoundStmt"),
+                None,
+            )
+            if body is not None and name not in exclude and name not in doors and cnfl._body_calls_leaf(body, leaves):
+                doors.append(name)
+        for c in n.get("inner") or []:
+            walk(c)
+
+    walk(root)
+    return doors
+
+
+# Two population members: the out-of-line member door Significant 1 named
+# directly, plus an in-class member door found by this pass's own wider
+# sweep (StandardsDocument Sec4: cast a wider net than the one shape strictly
+# required). Both surface as the identical `CXXMethodDecl` AST kind
+# (confirmed by execution), so the single kind-filter widening in
+# `check_no_forward_leaf_calls.py` fixes both at once.
+_T1383_NEW_SHAPES = {
+    "out_of_line_member_door": (
+        _BASE_FUNNEL_PREFIX
+        + "struct ScaleDoors { static int64_t CarriedScaleDoorTwo(int64_t d); };\n"
+        "int64_t ScaleDoors::CarriedScaleDoorTwo(int64_t d) { return DynamicScaleReciprocal(d); }\n"
+    ),
+    "in_class_member_door": (
+        _BASE_FUNNEL_PREFIX
+        + "struct ScaleDoorsInClass {\n"
+        "    static int64_t CarriedScaleDoorTwo(int64_t d) { return DynamicScaleReciprocal(d); }\n"
+        "};\n"
+    ),
+}
+
+
+@requires_clang
+def test_t1383_new_shapes_were_misses_under_the_5eff945_shipped_mechanism():
+    """Independently confirms each new population member really was invisible
+    to the mechanism as shipped at `5eff945` -- StandardsDocument Sec4's
+    population-validation requirement, applied one generation further: a
+    check shown able to fail on the fault it exists to catch, not merely
+    asserted to. Requires clang (unlike this file's two prior-generation
+    comparison harnesses, both pure text scans): the mechanism being
+    reproduced here for comparison is ITSELF Clang-AST-derived, since T-1381
+    is what T-1383 corrects."""
+    for case_name, content in _T1383_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            old_doors = sorted(_pre_t1383_find_leaf_forwarding_doors_for_comparison(path))
+            assert old_doors == ["CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the 5eff945-shipped mechanism to MISS "
+                f"the second door (finding only CarriedScaleReciprocal), got "
+                f"{old_doors} -- this case is not a valid population member if the "
+                f"shipped mechanism already caught it"
+            )
+
+
+@requires_clang
+def test_t1383_ast_mechanism_catches_the_new_shapes_too():
+    """The fix's own proof: both the out-of-line and in-class member-function
+    doors are caught by the current cnfl.find_leaf_forwarding_doors, by name --
+    measured against the SAME reproduced-verbatim 5eff945 mechanism
+    immediately above, not merely asserted (StandardsDocument Sec4)."""
+    for case_name, content in _T1383_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            new_doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+            assert new_doors == ["CarriedScaleDoorTwo", "CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the fixed mechanism to catch both "
+                f"doors, got {new_doors}"
+            )
+
+
+@requires_clang
+def test_t1383_check_door_count_fails_on_every_new_shape_too():
+    """The wiring cell for the two new shapes: check_door_count, the function
+    the CI gate actually calls, must fail on each -- not merely
+    find_leaf_forwarding_doors in isolation."""
+    for case_name, content in _T1383_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            failures = cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",))
+            assert len(failures) == 1 and "CarriedScaleDoorTwo" in failures[0], (
+                f"case {case_name!r}: expected check_door_count to name the new "
+                f"door, got {failures}"
+            )
+
+
+@requires_clang
+def test_t1383_lambda_regression_control_still_reports_exactly_one_door():
+    """The regression this fix must not reintroduce: widening the kind filter
+    from `FunctionDecl` alone to include member-function kinds must not make
+    a lambda's own closure-type call operator (a `CXXMethodDecl`, lexically
+    nested inside a `LambdaExpr`) count as a SECOND door alongside the
+    function it is defined inside. Re-runs
+    test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_
+    declared_code's exact construction and asserts the count stays at two
+    names total (the pre-existing real door plus the lambda-hiding one), not
+    three."""
+    real_funnel = os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp")
+    with open(real_funnel, "r", encoding="utf-8") as f:
+        real_content = f.read()
+    lambda_door = (
+        "\nnamespace superslm {\n"
+        "int64_t CarriedScaleDoorLambda(int64_t d) {\n"
+        "    auto inner = [d]() { return DynamicScaleReciprocal(d); };\n"
+        "    return inner();\n"
+        "}\n"
+        "}  // namespace superslm\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "checked_chain_funnel_with_lambda_door.cpp", real_content + lambda_door)
+        doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert doors == ["CarriedScaleDoorLambda", "CarriedScaleReciprocal"], (
+            f"expected exactly two doors (no spurious 'operator()' entry from "
+            f"the lambda's own closure type), got {doors}"
+        )
+
+
+# The documented parity case: a namespace-scope function pointer initialised
+# to a leaf's address. Named by the review's own independent sweep as missed
+# by both retired scanners AND the shipped AST mechanism identically -- not a
+# regression, and not fixed by this pass (a `VarDecl` carries no
+# `FunctionDecl`/`CXXMethodDecl` node for either generation of the mechanism
+# to find; catching this shape is a different mechanism entirely, outside
+# this ticket's scope). Executed here, both before and after the fix, so the
+# claim is proven rather than merely asserted in a comment.
+_FUNCTION_POINTER_TO_LEAF = (
+    _BASE_FUNNEL_PREFIX
+    + "int64_t (*CarriedScaleDoorPointer)(int64_t) = &DynamicScaleReciprocal;\n"
+)
+
+
+@requires_clang
+def test_t1383_function_pointer_to_leaf_is_parity_not_regression():
+    """Confirms the function-pointer shape is missed identically by the
+    mechanism as shipped at `5eff945` and by the current (T-1383-fixed) one --
+    parity, not a regression this pass introduces or is expected to close.
+    Requires clang for the same reason as the miss-confirmation test above:
+    the pre-T-1383 comparison harness is itself Clang-AST-derived."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "src/forward/checked_chain_funnel.cpp", _FUNCTION_POINTER_TO_LEAF)
+        old_doors = sorted(_pre_t1383_find_leaf_forwarding_doors_for_comparison(path))
+        assert old_doors == ["CarriedScaleReciprocal"], old_doors
+
+
+@requires_clang
+def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "src/forward/checked_chain_funnel.cpp", _FUNCTION_POINTER_TO_LEAF)
+        new_doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert new_doors == ["CarriedScaleReciprocal"], new_doors
+
+
+def test_t1383_population_count_is_stated():
+    """States, in one place, the total accumulated population this campaign's
+    own exit condition requires: the eleven shapes T-1381 already swept
+    (nine required cases plus two further sweep candidates, all still
+    re-verified against the T-1383-fixed mechanism above and by the existing
+    T-1381 cells, none regressed) plus the two new shapes this pass adds to
+    the test population (out-of-line member door, in-class member door) plus
+    the one further shape this pass's own sweep found and documents as
+    parity rather than fixing (the function-pointer case) -- fourteen shapes
+    total, at least, per StandardsDocument Sec4's population-validation
+    requirement."""
+    t1381_population = len(_POPULATION_CASES) + len(_T1381_NEW_SHAPES) + 1  # +1 string-literal control
+    t1381_further_sweep = 2  # lambda-in-real-code, shadowing variable (documented above, both parity)
+    t1383_new_population = len(_T1383_NEW_SHAPES)
+    t1383_further_sweep = 1  # function pointer to leaf (documented parity, this test file)
+    total = t1381_population + t1381_further_sweep + t1383_new_population + t1383_further_sweep
+    assert total == 9 + 2 + 2 + 1 == 14
