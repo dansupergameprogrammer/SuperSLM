@@ -12982,6 +12982,78 @@ static void TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress() {
 	          "read back through the stored pointer)");
 }
 
+// T-1405 (D-SLM493, Poirot's review of T-1403's remedy,
+// `Claude/Poirot/bb79269-t1403-fixture-nrvo-remedy-review.md` §5): no
+// pre-existing oracle in this suite discriminates the VALUES
+// `TwoLayerFixture` writes into its seven projection weight arrays
+// (`q_weight`/`k_weight`/`v_weight`/`o_weight`/`gate_weight`/`up_weight`/
+// `down_weight`, all aliasing `identity2x2`). Executed control: degenerating
+// `identity2x2` to `{0,0,0,0}` -- the entire attention and MLP stack becoming
+// the zero map -- leaves the suite's decode-level assertions (out_logits,
+// digests, argmax) UNCHANGED (23,088/0, only the construction-address guard
+// above catches it). Traced independently for this cell (probe run against a
+// `bb79269` snapshot, not committed): the actual mechanism is that this
+// fixture's own `norm_gain` (T-1356, deliberately small so RmsNormSite's
+// output stays inside C29's chain-input domain) makes the attention+MLP
+// branch's contribution reconcile to CODE 0 against the residual stream's
+// much larger scale REGARDLESS of whether the projection weights are the
+// identity or the zero map -- so a post-residual assertion cannot see these
+// seven weights no matter how carefully it is written. This cell closes the
+// gap at the site the weights are actually first consumed --
+// `GemmInt8AccumulateRow`, called through the fixture's OWN weight pointers,
+// on BOTH layers -- rather than downstream of the reconciliation that erases
+// them. `TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits`'s
+// own decode-level assertions remain undiscriminating for these seven
+// weights; see this pass's Curie record for why closing that would need a
+// separately-calibrated fixture rather than a new assertion on this one, and
+// the routed follow-up.
+//
+// Oracle: I_2 * x == x, the 2x2 identity matrix's own definition, computed by
+// hand rather than by executing anything under test. `identity2x2` is
+// `{1,0,0,1}` (row-major [out,in]): row 0 is (1,0), row 1 is (0,1), so for
+// ANY input row {a,b}, GemmInt8AccumulateRow must return {a,b} unchanged --
+// {5,-3} is chosen only to avoid the degenerate all-zero input, which would
+// pass under the zero-map weight too and prove nothing.
+//
+// Zero-map acceptance test (D-SLM493's own control, re-executed for this
+// cell against the fixed tree, not asserted here since production sources
+// are read-only to this seat): with `identity2x2` degenerated to
+// `{0,0,0,0}`, every one of the fourteen assertions below fails
+// (`out == {0,0} != {5,-3}`) -- this cell is the closing half of that
+// control.
+static void TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite() {
+	TwoLayerFixture fixture;
+
+	const int8_t kInput[2] = {INT8_C(5), INT8_C(-3)};
+	const int64_t kExpectedA = INT64_C(5);   // I_2 row 0 (1,0) . {5,-3} == 5
+	const int64_t kExpectedB = INT64_C(-3);  // I_2 row 1 (0,1) . {5,-3} == -3
+
+	struct NamedWeight {
+		const char* name;
+		const int8_t* weight;
+	};
+
+	for (int l = 0; l < 2; ++l) {
+		const superslm::LayerWeights& lw = fixture.layers[l];
+		const NamedWeight weights[] = {
+		    {"q_weight", lw.q_weight},       {"k_weight", lw.k_weight},
+		    {"v_weight", lw.v_weight},       {"o_weight", lw.o_weight},
+		    {"gate_weight", lw.gate_weight}, {"up_weight", lw.up_weight},
+		    {"down_weight", lw.down_weight},
+		};
+		for (const auto& nw : weights) {
+			int64_t out[2] = {INT64_C(-99), INT64_C(-99)};
+			superslm::GemmInt8AccumulateRow(kInput, nw.weight, /*in_channels=*/2,
+			                                 /*out_channels=*/2, out);
+			CHECK_MSG(out[0] == kExpectedA && out[1] == kExpectedB,
+			          "layers[%d].%s: GemmInt8AccumulateRow({5,-3}) == {%lld,%lld}, want {5,-3} "
+			          "(I_2 * x == x, hand-derived; fails to {0,0} if this weight degenerates to "
+			          "the zero map -- D-SLM493)",
+			          l, nw.name, (long long)out[0], (long long)out[1]);
+		}
+	}
+}
+
 // §9.3's decided contract: `layer_budget == 0` is `InvalidLayerBudget`, and
 // `seq` is left bit-identical to its pre-call state -- poison-fill the
 // workspace AND the sequence's own hidden_codes/hidden_scale/layer_index,
@@ -15277,6 +15349,7 @@ int main(int argc, char** argv) {
 	// shape fails at the fixture itself rather than surfacing as an
 	// unexplained wrong value three call frames away.
 	TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress();
+	TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
