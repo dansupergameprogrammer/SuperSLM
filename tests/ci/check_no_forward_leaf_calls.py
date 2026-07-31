@@ -243,7 +243,13 @@ _EXPECTED_DOOR_FUNCTIONS = (
 # `test_population_count_is_stated` in that file, which is this population's
 # single source of truth.
 
-_DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
+sys.path.insert(0, _THIS_DIR)
+from _clang_discovery import discover_clangxx  # noqa: E402  (path set above)
+
+# D-SLM528 (T-1494): discovered rather than only read from an already-set
+# environment variable, the same fix as derive_bad_alloc_membership.py's --
+# see _clang_discovery's module docstring for the defect this closes.
+_DEFAULT_CLANGXX = discover_clangxx()
 
 # The AST node kinds `find_leaf_forwarding_doors` treats as door candidates:
 # free/namespace-scope functions AND member functions, in-class or defined
@@ -268,21 +274,31 @@ _TOP_LEVEL_FUNCTION_KINDS = (
 
 
 class ClangUnavailable(RuntimeError):
-    """Raised when clang++ cannot run -Xclang -ast-dump=json at all -- the
-    environment problem, distinct from a genuine population mismatch (mirrors
-    tests/ci/derive_bad_alloc_membership.py's own exception of the same
-    name)."""
+    """Raised when clang++ itself cannot be found -- the environment
+    problem, distinct from a genuine population mismatch and distinct from a
+    found clang++ that failed to complete (T-1508: a toolchain that hangs
+    instead of exiting is not absent, and is raised as RuntimeError, not
+    this). Mirrors tests/ci/derive_bad_alloc_membership.py's own exception of
+    the same name."""
+
+# Wall-clock budget for a single clang++ -ast-dump=json invocation. T-1508:
+# named as a constant rather than a repeated literal so _run_clang_ast_dump's
+# timeout message always states the value it was actually run with.
+_AST_DUMP_TIMEOUT_SECONDS = 180
 
 
 def _run_clang_ast_dump(source_path: str, clangxx: str = _DEFAULT_CLANGXX,
                          include_dir: str | None = None) -> dict:
     """Runs `clangxx -Xclang -ast-dump=json -fsyntax-only` against
-    `source_path` and returns the parsed JSON root. A genuine environment
-    failure (a missing clang++, or a timeout) raises `ClangUnavailable`. A
-    RECOVERABLE semantic error -- an unresolved identifier or an unknown type
-    name, the ordinary case for a scratch fixture with no `#include`s --
-    does NOT raise, even though Clang's own exit code is nonzero in that
-    case (confirmed by execution: `clang++ -fsyntax-only` on
+    `source_path` and returns the parsed JSON root. A missing clang++ raises
+    `ClangUnavailable`. A found clang++ that times out without completing
+    (T-1508 -- e.g. a major-version mismatch hanging inside a
+    standard-library header) raises `RuntimeError`, not `ClangUnavailable`:
+    it was found, so its failure is not an absent toolchain. A RECOVERABLE
+    semantic error -- an unresolved identifier or an unknown type name, the
+    ordinary case for a scratch fixture with no `#include`s -- does NOT
+    raise, even though Clang's own exit code is nonzero in that case
+    (confirmed by execution: `clang++ -fsyntax-only` on
     `int64_t Foo(int64_t m) { return Bar(m); }` with no declarations at all
     exits 1, reporting "unknown type name 'int64_t'" twice, yet still emits
     a complete, valid AST dump on stdout carrying `Foo`'s `FunctionDecl`, its
@@ -297,11 +313,18 @@ def _run_clang_ast_dump(source_path: str, clangxx: str = _DEFAULT_CLANGXX,
         cmd += ["-I", include_dir]
     cmd.append(source_path)
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        proc = subprocess.run(cmd, capture_output=True, timeout=_AST_DUMP_TIMEOUT_SECONDS)
     except FileNotFoundError as e:
         raise ClangUnavailable(f"{clangxx} not found on PATH: {e}") from e
     except subprocess.TimeoutExpired as e:
-        raise ClangUnavailable(f"{clangxx} timed out dumping {source_path}") from e
+        # A found clang++ that hangs rather than exiting is not an absent
+        # toolchain (T-1508): see derive_bad_alloc_membership.py's
+        # run_clang_ast_dump for the defect this closes.
+        raise RuntimeError(
+            f"{clangxx} timed out after {_AST_DUMP_TIMEOUT_SECONDS}s dumping "
+            f"{source_path} -- a toolchain that was found but did not "
+            "complete, not a missing one"
+        ) from e
     try:
         return json.loads(proc.stdout)
     except json.JSONDecodeError as e:

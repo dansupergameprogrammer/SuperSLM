@@ -3,19 +3,22 @@
 # (S-HARDEN-7, design Sec3.1, T-411). One site per line: header:line:name
 # Regenerate with: python tests/ci/derive_bad_alloc_membership.py
 #
-# 18 sites.
+# 19 sites. (T-1475: proof_manifest.h's JsonEscape was promoted out of its
+# anonymous namespace and into the header (T-1449), making it the population's
+# 19th member; wrapped the same rename-and-wrap shape as its siblings.)
 artifact.h:154:OpenFromMemory
 artifact.h:160:OpenFromFile
 artifact.h:168:FingerprintHex
-model.h:182:Parse
-model.h:232:Parse
-model.h:256:ParseConfig
-model.h:279:ParseSigmoidLut
-model.h:441:Load
-proof_manifest.h:85:ComputeTensorEvidence
-proof_manifest.h:101:ComputeWeightScaleEvidence
-proof_manifest.h:108:HashSectionHex
-proof_manifest.h:131:BuildProofManifestJson
+model.h:224:Parse
+model.h:274:Parse
+model.h:298:ParseConfig
+model.h:321:ParseSigmoidLut
+model.h:519:Load
+proof_manifest.h:52:JsonEscape
+proof_manifest.h:101:ComputeTensorEvidence
+proof_manifest.h:117:ComputeWeightScaleEvidence
+proof_manifest.h:124:HashSectionHex
+proof_manifest.h:147:BuildProofManifestJson
 sha256.h:20:Update
 sha256.h:41:Sha256Hash
 sha256.h:45:ToHex

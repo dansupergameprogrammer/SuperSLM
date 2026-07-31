@@ -26,9 +26,11 @@ independently-found population before it is trusted." The four Loki probes
 ARE that independently-found population for the prior rule; this module
 re-derives the population under the CORRECTED rule and this package's own
 test suite (test_membership_check_population.py) confirms it reproduces the
-design's stated eighteen, from the real headers on disk, under three
-independent scan strategies -- the direct re-run of the property the strike
-found false of the prior rule.
+mechanically-derived population -- nineteen as of T-1475 (JsonEscape's
+promotion into proof_manifest.h); design Sec3.1's table itself still states
+eighteen and is owed a matching amendment -- from the real headers on disk,
+under three independent scan strategies: the direct re-run of the property
+the strike found false of the prior rule.
 
 This is a REFERENCE tool, not the CI gate. The CI gate itself
 (design Sec3.1: "tools/ci/check_bad_alloc_contract.py or the build seat's
@@ -42,10 +44,13 @@ Invokes `clang++ -Xclang -ast-dump=json` as a subprocess per scan (no AST
 dump is ever written to a tracked file -- a single header's dump is on the
 order of 100+ MB of JSON, and the point of this module is that the dump is
 reproducible from the headers on demand, not that a snapshot of it is
-committed). Requires a clang++ on PATH capable of `-Xclang -ast-dump=json`
-(pinned per design Sec3.1: ships pre-installed on GitHub's stock
-`ubuntu-latest` runner image; locally, set SUPERSLM_CLANGXX to an explicit
-path if `clang++` does not resolve to one).
+committed). Requires a clang++ capable of `-Xclang -ast-dump=json` (pinned
+per design Sec3.1: ships pre-installed on GitHub's stock `ubuntu-latest`
+runner image, which sets SUPERSLM_CLANGXX explicitly; locally,
+_clang_discovery.discover_clangxx() finds one on PATH or in a short list of
+known install locations without anyone setting the variable -- set
+SUPERSLM_CLANGXX to an explicit path only to override that discovery,
+D-SLM528, T-1494).
 """
 from __future__ import annotations
 
@@ -60,7 +65,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _INCLUDE_DIR = os.path.join(_REPO_ROOT, "include")
 
-_DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
+sys.path.insert(0, _THIS_DIR)
+from _clang_discovery import discover_clangxx  # noqa: E402  (path set above)
+
+# D-SLM528 (T-1494): discovered rather than only read from an already-set
+# environment variable, so this module's own gates run without anyone
+# remembering to export SUPERSLM_CLANGXX -- see _clang_discovery's module
+# docstring for the defect this closes.
+_DEFAULT_CLANGXX = discover_clangxx()
 
 HEADERS = (
     "artifact",
@@ -84,10 +96,18 @@ _FUNC_KINDS = {
 
 _VECTOR_RETURN_RE = re.compile(r"^std::vector<.*>$")
 
+# Wall-clock budget for a single clang++ -ast-dump=json invocation. T-1508:
+# named as a constant rather than a repeated literal so run_clang_ast_dump's
+# timeout message always states the value it was actually run with.
+_AST_DUMP_TIMEOUT_SECONDS = 180
+
 
 class ClangUnavailable(RuntimeError):
-    """Raised when clang++ cannot run -Xclang -ast-dump=json at all -- the
-    environment problem, distinct from a genuine population mismatch."""
+    """Raised when clang++ itself cannot be found -- the environment
+    problem, distinct from a genuine population mismatch and distinct from a
+    found clang++ that failed to complete (T-1508: a toolchain that hangs
+    instead of exiting is not absent, and is raised as RuntimeError, not
+    this)."""
 
 
 def _strip(t: str) -> str:
@@ -226,12 +246,14 @@ def _dedup_sort(hits: list[dict]) -> list[dict]:
 def run_clang_ast_dump(source_path: str, include_dir: str = _INCLUDE_DIR,
                         clangxx: str = _DEFAULT_CLANGXX) -> dict:
     """Run `clangxx -Xclang -ast-dump=json` against `source_path` and return
-    the parsed JSON root. Raises ClangUnavailable if clang++ cannot be
-    invoked at all (missing binary, wrong flag support); a genuine parse
-    error in the source itself raises RuntimeError with clang's stderr."""
+    the parsed JSON root. Raises ClangUnavailable only if the clang++ binary
+    itself cannot be found; a genuine parse error, or a found clang++ that
+    times out without completing (T-1508 -- e.g. a major-version mismatch
+    hanging inside a standard-library header), raises RuntimeError with
+    detail on which it was."""
     cmd = [
         clangxx,
-        "-std=c++17",
+        "-std=c++20",
         "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
         "-I",
         include_dir,
@@ -243,11 +265,21 @@ def run_clang_ast_dump(source_path: str, include_dir: str = _INCLUDE_DIR,
         source_path,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        proc = subprocess.run(cmd, capture_output=True, timeout=_AST_DUMP_TIMEOUT_SECONDS)
     except FileNotFoundError as e:
         raise ClangUnavailable(f"{clangxx} not found on PATH: {e}") from e
     except subprocess.TimeoutExpired as e:
-        raise ClangUnavailable(f"{clangxx} timed out dumping {source_path}") from e
+        # A found clang++ that hangs rather than exiting is not an absent
+        # toolchain (T-1508): classifying it as ClangUnavailable made a
+        # major-version mismatch that hangs inside MSVC's <xstring> under
+        # -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH indistinguishable from
+        # a machine with no clang++ at all, and the clang-gated cells would
+        # SKIP silently instead of failing.
+        raise RuntimeError(
+            f"{clangxx} timed out after {_AST_DUMP_TIMEOUT_SECONDS}s dumping "
+            f"{source_path} -- a toolchain that was found but did not "
+            "complete, not a missing one"
+        ) from e
     if proc.returncode != 0:
         raise RuntimeError(
             f"clang++ AST dump failed for {source_path} (exit {proc.returncode}):\n"

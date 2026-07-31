@@ -154,10 +154,9 @@ def main() -> int:
     if allowlist:
         print(
             f"check_branch_coverage_floors.py: {len(allowlist)} allowlisted branch(es) "
-            "excluded from this run's failures by convention (per-branch allowlisting "
-            "is not yet cross-checked against llvm-cov's per-branch report by this "
-            "gate version; it documents accepted defensive-code gaps for a human "
-            "reviewer).",
+            "loaded (T-1456: this gate version does not cross-check the allowlist "
+            "against llvm-cov's per-branch report, so no failure is actually excluded "
+            "by it -- these entries are documented for a human reviewer only).",
         )
 
     if failures:
