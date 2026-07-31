@@ -117,11 +117,12 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // composed exponent q_B + 62 + e_a must be checked against
 // CheckRoundingDivideByPotExponentDomain (checked_chain_funnel.h) at the call
 // site before this function forms the divide — this function itself performs
-// no such check, matching every other funnel-adjacent compute in this tree
-// that performs no check of its own (the domain check and the compute are
-// separate calls). `SoftmaxRowQ15` (intmath.h) is the one exception to this
-// doctrine: it guards `width == 0` inside its own compute rather than at a
-// separate call-site gate; see its own contract for that guard.
+// no domain check of its own; the domain check and the compute are separate
+// calls. (Several computes in this tree guard their own degenerate-length
+// case inside the kernel instead of relying on a separate call-site gate —
+// `SoftmaxRowQ15`, `RowBoundsWide`, `MaxAbsReduceWide` (intmath.h) — see each
+// one's own contract for its guard; that is a different property from this
+// function's own domain check, which stays the caller's.)
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 
 // C27's K/V landing composite (§8.1, §11 S3.3 §6.1): the reference's
@@ -167,8 +168,8 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // told. This function detects that loss internally (shift-then-verify) and
 // counts it as a clamp event even when the narrowed `raw` itself does not
 // look out of range -- the return value stays exactly as unreliable in that
-// class as it always was (caller-ensures, like every other funnel-adjacent
-// compute in this tree), but the counter is not fooled by it. Whenever the
+// class as it always was (caller-ensures: neither e_t nor e_a is domain-
+// checked here), but the counter is not fooled by it. Whenever the
 // return value itself IS out of `[-127, 127]`, or this internal detection
 // fires, `*out_saturation_count` is INCREMENTED by exactly one (never reset,
 // never assigned): the accumulator

@@ -198,8 +198,7 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// away from zero (C3), which is load-bearing here because B is signed
 	// (§4.4). The composed exponent's domain is the caller's own check
 	// (CheckRoundingDivideByPotExponentDomain, checked_chain_funnel.h) before
-	// this function is ever invoked; it performs no check of its own, matching
-	// every other funnel-adjacent compute in this tree.
+	// this function is ever invoked; it performs no domain check of its own.
 	const int64_t exponent = q_b + 62 + e_a;
 	return RoundingDivideByPOT(b * r_a, static_cast<int>(exponent));
 }
