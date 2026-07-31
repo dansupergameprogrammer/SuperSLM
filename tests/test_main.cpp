@@ -10651,8 +10651,17 @@ static void TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability()
 
 	// Grounding: replay the same accumulation SoftmaxRowQ15's own loop
 	// performs, bit-compared against the vendored reference's exact-precision
-	// sum wrapped to int64_t (Popper Null 3).
-	int64_t replayed_total = 0;
+	// sum wrapped to int64_t (Popper Null 3). Accumulated in uint64_t and
+	// compared by bit pattern: this witness is constructed so the true sum
+	// GENUINELY overflows int64_t (that is the property under test), so
+	// accumulating in a signed int64_t here would itself be the same
+	// signed-integer-overflow UB this pass's own T-1382 finding removed from
+	// production code (found live by the UBSan run T-1382 requires,
+	// `Claude/Poirot/5af6ab5-t1377-t1378-review-2026-07-31.md` §12 item 8).
+	// `uint64_t` addition wraps by definition (no UB at any total), and the
+	// comparison against `exact_total_wrapped_i64` is by identical bit
+	// pattern, so the assertion is unchanged.
+	uint64_t replayed_total_bits = 0;
 	for (size_t k = 0; k < w.width; ++k) {
 		IExpConstruction c;
 		const IExpDomain d = IExpConstruct(w.scores[k], w.q_ln2, w.q_b, w.q_c, &c);
@@ -10662,8 +10671,9 @@ static void TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability()
 		          "individually constructs) no longer holds",
 		          k, static_cast<long long>(w.scores[k]), static_cast<long long>(w.q_ln2),
 		          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c), static_cast<int>(d));
-		replayed_total += IExpEvaluate(c);
+		replayed_total_bits += static_cast<uint64_t>(IExpEvaluate(c));
 	}
+	const int64_t replayed_total = static_cast<int64_t>(replayed_total_bits);
 	CHECK_MSG(replayed_total == w.exact_total_wrapped_i64,
 	          "grounding: replayed int64 total (via the real shipped IExpConstruct/IExpEvaluate) == "
 	          "%lld, want %lld (the vendored reference's exact-precision sum, two's-complement "
@@ -12195,9 +12205,15 @@ static void TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRigh
 // ---------------------------------------------------------------------------
 // T-1377 / D-SLM457 (SuperSLM_S3a_WalkingSkeleton_Plan.md §7.2b, §14.14, §11
 // S3.5, §13 dim 5/6/7): the residual-reconciliation site's own derived-operand
-// predicate. The witness pair below is independently derived (not copied from
-// the code-review casebook's own operands) by direct execution of the real,
-// already-shipped `LandingRescale`/`DynamicScaleReciprocal` -- sweeping
+// predicate. The witness operand pair (`kWitnessBranchM`, `kWitnessBranchE`,
+// `kWitnessBranchCode`) is the casebook's own operand, reused because it is
+// already known to reach the danger zone -- corrected 2026-07-31, Poirot
+// Minor 2: this comment and D-SLM459 previously called the pair
+// "independently derived (not copied from the code-review casebook's own
+// operands)", which is not true of the branch operands. What is genuinely
+// fresh is the `stream_e` boundary (23/24) below, found by this build's own
+// sweep by direct execution of the real, already-shipped
+// `LandingRescale`/`DynamicScaleReciprocal` -- sweeping
 // `stream_scale.e` at a fixed `branch_scale.e = 79` and `branch_code = 127`
 // finds the exact one-exponent-step boundary where the true 128-bit magnitude
 // stops fitting `int64`: at `stream_e = 24` the true value
@@ -12213,12 +12229,13 @@ static void TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRigh
 // ---------------------------------------------------------------------------
 
 namespace {
-// The independently-derived witness operands (see the block comment above).
-// `kWitnessStreamM` is reused from `TestResidualReconcileSiteC26FeatureOracle
-// AgainstTheRealPrimitives`'s own stream mantissa, so `DynamicScaleReciprocal`
-// is exercised at an already-proven-canonical value rather than an invented
-// one; `kWitnessBranchM`/`kWitnessBranchCode`/`kWitnessBranchE` are the
-// operands the sweep was run against.
+// The witness operands (see the block comment above): `kWitnessBranchM`,
+// `kWitnessBranchE`, and `kWitnessBranchCode` are the casebook's own operands,
+// reused rather than independently derived. `kWitnessStreamM` is reused from
+// `TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives`'s own
+// stream mantissa, so `DynamicScaleReciprocal` is exercised at an
+// already-proven-canonical value rather than an invented one. The genuinely
+// fresh part is the `stream_e` boundary the sweep found (below).
 constexpr int64_t kWitnessStreamM = INT64_C(1392366989);
 constexpr int64_t kWitnessBranchM = INT64_C(2064898088);
 constexpr int64_t kWitnessBranchCode = 127;
@@ -12354,6 +12371,102 @@ static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOf
 		          "untouched",
 		          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 	}
+}
+
+// ---------------------------------------------------------------------------
+// T-1380 / D-SLM462/463 (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.5, §13
+// dim 5/6/7, §14.14): the NEGATIVE-`k` half of the same predicate. The
+// witness pair above pins only the `k >= 0` branch (k=6 there); `LandingRescale`
+// computes `magnitude_exceeds_int64` in an independent negative-`k` branch
+// (`forward_sites.cpp`'s own `k < 0` arm), and a witness in one branch pins
+// nothing about the other -- proven by execution (Poirot, Significant 1 of
+// `Claude/Poirot/5af6ab5-t1377-t1378-review-2026-07-31.md`): forcing both
+// negative-`k` assignments to `false` left the suite at 22,835/0, invisible.
+// Operands (plan §11 S3.5, corrected off the unbuildable `stream_e=6/7`
+// pair): `branch_scale={m=2^30, e=56}`, `stream_scale={m=1392366989, e=-40}`,
+// `branch_code=127`, giving `k = 62 - (56 - (-40)) = -34`. This is the
+// clause's own stated negative control: the SHIPPED (guarded) construction
+// must reject, and an UNGUARDED construction at these exact operands must
+// silently ACCEPT and return a wrong value (`out_codes[0] == 0` where a
+// large-magnitude nonzero belonged) for this cell to be discriminating --
+// both confirmed by direct execution against the shipped tree and against an
+// out-of-repo copy with both negative-`k` assignments forced to `false`,
+// not asserted from the source alone (§5.4).
+// ---------------------------------------------------------------------------
+
+namespace {
+constexpr int64_t kNegKBranchM = INT64_C(1) << 30;
+constexpr int64_t kNegKBranchE = 56;
+constexpr int64_t kNegKBranchCode = 127;
+constexpr int64_t kNegKStreamM = INT64_C(1392366989);
+constexpr int64_t kNegKStreamE = -40;
+}  // namespace
+
+// §13 dim 5/6, §14.14: the `LandingRescale`-level half of the negative-`k`
+// witness -- direct call, isolating the flag from the site's own composition.
+static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
+	const int64_t r_h = superslm::DynamicScaleReciprocal(kNegKStreamM);
+	const int64_t k = 62 - (kNegKBranchE - kNegKStreamE);
+	CHECK_MSG(k == -34, "witness sanity: k == %lld, want -34 (negative-k branch)",
+	          (long long)k);
+
+	bool flag = false;  // poisoned -- must become true
+	const int64_t raw =
+	    superslm::LandingRescale(kNegKBranchCode, kNegKBranchM, r_h, kNegKBranchE, kNegKStreamE,
+	                              /*out_saturation_count=*/nullptr, &flag);
+	CHECK_MSG(raw == 0,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%lld, e_t=%lld) == %lld, "
+	          "want 0 (the narrowed low 64 bits of the true, far-out-of-domain magnitude at this "
+	          "negative-k operating point)",
+	          (long long)kNegKBranchCode, (long long)kNegKBranchM, (long long)r_h,
+	          (long long)kNegKBranchE, (long long)kNegKStreamE, (long long)raw);
+	CHECK_MSG(flag,
+	          "out_magnitude_exceeded_int64 == false at the negative-k witness, want true -- k=%lld "
+	          "and the true left-shifted magnitude does not fit int64 here",
+	          (long long)k);
+}
+
+// §11 S3.5's own red cell, §13 dim 5/6/7: the `ResidualReconcileSite`-level
+// half, driven through the real site composition -- the clause's stated
+// negative control. The shipped (guarded) construction must reject; the
+// value the UNGUARDED construction would silently accept
+// (`out_codes[0] == 0`) is asserted directly against a hand-computed
+// unguarded call, so this cell fails if the guard is ever weakened or
+// removed, per the standing discipline that reachability alone is not
+// discrimination (D-INSP-61) -- the pre-fix, unguarded value is asserted
+// as data, not merely described.
+static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr size_t kHidden = 1;
+	const int8_t branch_code[kHidden] = {static_cast<int8_t>(kNegKBranchCode)};
+	const int8_t stream_code[kHidden] = {0};
+	const CarriedScale branch_scale{/*m=*/kNegKBranchM, /*e=*/kNegKBranchE};
+	const CarriedScale stream_scale{/*m=*/kNegKStreamM, /*e=*/kNegKStreamE};
+	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
+
+	std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
+	                                                stream_scale, kHidden, site_constant,
+	                                                out_codes.data(), &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
+	          "ResidualReconcileSite status == %s at the negative-k witness, want "
+	          "ResidualReconciliationMagnitudeOutOfDomain -- an executed revert of both negative-k "
+	          "assignments in LandingRescale returns Ok with out_codes[0]==0 at these exact "
+	          "operands instead (Poirot Significant 1), which is the clause's own stated negative "
+	          "control this cell must catch",
+	          SslmForwardStatusName(result));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched -- the unguarded "
+	          "construction returns 0 here, a silently-accepted wrong value distinct from both the "
+	          "sentinel and a rejection",
+	          static_cast<int>(out_codes[0]));
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) untouched",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 }
 
 namespace {
@@ -14303,6 +14416,10 @@ int main(int argc, char** argv) {
 	// T-1377 / D-SLM457 (§7.2b, §14.14, §11 S3.5's new red cell).
 	TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater();
 	TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain();
+	// T-1380 / D-SLM462/463 (§11 S3.5's negative-k half, the clause's own
+	// stated negative control -- pins the branch the pair above cannot reach).
+	TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness();
+	TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
