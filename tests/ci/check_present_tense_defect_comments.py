@@ -365,13 +365,33 @@ def _line_kind(line: str) -> str:
     The invariant this docstring states -- a blank line breaks a block, and a
     resolution marker in one block cannot satisfy a citation in another -- is
     asserted here in prose and PINNED in
-    `test_check_present_tense_defect_comments.py` by the span-exit and
-    blank-line-control cells T-1557 added. That pairing is deliberate: this
-    paragraph carried the same sentence through four review rounds while being
-    falsifiable in each, because a claim in a docstring cannot fail a build
-    (Poirot b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md, standing
+    `test_check_present_tense_defect_comments.py`, by these cells and no
+    others (T-1564, Poirot
+    83260be-t1560-span-membership-boundary-confirmation-2026-07-31.md Minor 3,
+    which found this paragraph citing a cell that cannot fail):
+
+        blank line breaks inside a span
+            `test_a_resolution_marker_in_one_paragraph_of_a_multiline_string
+             _does_not_clear_an_unrelated_paragraph`
+        block boundary holds leaving a span
+            `test_a_multiline_literal_does_not_merge_with_a_following
+             _single_line_literal`
+        membership, not per-literal starts, is the right key
+            `test_two_single_line_string_literals_still_merge_by_design`
+
+    Each was verified to go red under a mutation that destroys the rule it
+    names. The blank-line control beside the span-exit primary is NOT in this
+    list: its blank line sits outside the span, so it survives every mutation
+    of the blank-line rule and pins nothing. It is kept as a regression guard
+    on the primary's own shape and its docstring says so.
+
+    This pairing is deliberate: this paragraph carried the same sentence
+    through four review rounds while being falsifiable in each, because a
+    claim in a docstring cannot fail a build (Poirot
+    b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md, standing
     routing). Read the cells as the statement of record; if this paragraph and
-    those cells ever disagree, the cells are right."""
+    those cells ever disagree, the cells are right -- which is exactly how the
+    error this paragraph previously contained was found."""
     stripped = line.strip()
     if stripped.startswith("//"):
         return "COMMENT"
@@ -442,26 +462,70 @@ def _iter_blocks(
     STRING through `_line_kind`. A multi-line literal immediately followed by
     a single-line string literal therefore read as one block -- the same
     defect class as T-1553, at the boundary that remedy did not reach. The
-    two shapes that merge ACROSS literals by design still do: single-line to
-    single-line (the bare C string-literal continuation rule) and quoted-`//`
-    to quoted-`//` (`_PY_QUOTED_CPP_COMMENT_PATTERN`), both of which sit
-    wholly outside every span and so compare equal. That is why this break
-    keys on span membership rather than on giving every literal a start line,
-    which would split both and fire false positives across the fixture
-    generators.
+    shapes that merge ACROSS literals by design still do: single-line to
+    single-line (the bare C string-literal continuation rule), quoted-`//` to
+    quoted-`//` (`_PY_QUOTED_CPP_COMMENT_PATTERN`), and bare `//` to
+    quoted-`//` in either order -- both classify COMMENT and the pairing is
+    reachable in `.cpp`/`.h` input, though its measured reach in this tree is
+    zero (T-1564, same casebook Observation). All of them sit wholly outside
+    every span and so compare equal. That is why this break keys on span
+    membership rather than on giving every literal a start line, which would
+    split them and fire false positives across the fixture generators.
 
-    Where two literals share one physical line -- implicit or `+`
+    Where two literals SHARE one physical line -- implicit or `+`
     concatenation whose first literal ends on the same line the second
-    begins -- that line is both inside the first literal's span and a start
-    line of the second, so the literal-start break fires INSIDE the first
-    literal and can separate its own citation from its own resolution marker
-    (T-1558, same casebook Minor 2). This is a false positive rather than a
-    merge, and it is the deliberate choice: a line-granular scanner cannot
-    decompose two literals sharing a physical line, so it must err one way,
-    and a false positive on a blocking gate is loud and self-announcing where
-    the class this module exists to prevent is silent. Reach is zero across
-    the tree measured; if it ever fires, the shape is correct code and the
-    fix is a line break, not a suppression."""
+    begins -- this scanner is line-granular and there is no line boundary
+    between them to break at, so it cannot decompose them at all. What it
+    does instead depends entirely on whether the SECOND literal is multi-line,
+    and the four orderings do not behave alike (T-1562, Poirot
+    83260be-t1560-span-membership-boundary-confirmation-2026-07-31.md
+    Significant 1, which found the earlier text here claiming they did):
+
+        multi-line -> multi-line   SPLITS   (loud: the second literal's own
+                                             start line falls on the shared
+                                             line, so the break fires INSIDE
+                                             the first literal and separates
+                                             its citation from its marker)
+        multi-line -> single-line  MERGES   (silent)
+        single-line -> multi-line  MERGES   (silent)
+        single-line -> single-line MERGES   (silent)
+
+    Only the first errs loud. **The other three are a genuine blind spot of
+    this module's own defect class** -- a resolution marker in one authored
+    literal satisfying an uncited citation in a different one -- and they are
+    silent, which is the failure mode this module exists to prevent. They are
+    not a deliberate trade-off and must not be described as one. The earlier
+    text here asserted the loud behaviour for all four, which read as
+    reassurance in the direction of the module being safer than it is.
+
+    Why they are not simply fixed: a single-line literal produces no tokenize
+    span and therefore no start line, so at line granularity there is nothing
+    to key a break on. Closing them means decomposing a physical line into its
+    constituent literals -- a sub-line rewrite of `_iter_blocks`'s whole
+    contract, and a design call rather than a text fix.
+
+    Reach, measured over the scanned tree: shared-physical-line literal pairs
+    are common (high hundreds; the exact total depends on how adjacent
+    literals are counted and two independent measurements disagreed on it), but
+    **0 of them have a multi-line first literal** -- which both measurements
+    agree on and which is the load-bearing half. So every live instance takes
+    a merging path, and none currently manifests a hit (the gate is green).
+    No total is quoted here on purpose: D-SLM550 retired a self-describing
+    count from this same docstring for drifting, and a number two people
+    derive differently is the same defect wearing a different hat. All four
+    orderings are pinned by cells, so this paragraph is checkable rather than
+    asserted.
+
+    Separately, the span-exit break introduced above fires between a
+    multi-line literal and a single-line literal on the FOLLOWING line, which
+    is the defect shape when they are two authored messages and a **false
+    positive** when they are one authored message written as implicit
+    concatenation (T-1563, same casebook Minor 2). The `+` spelling was
+    already flagged before this change; only the implicit spelling is new.
+    Reach is zero and a false positive on a blocking gate is self-announcing,
+    so it is accepted and named here rather than suppressed -- but it is a
+    real behaviour change against correct, fully-cited code, and if it fires
+    the fix is a line break in the source, not a suppression."""
     python_string_lines: frozenset[int] = frozenset()
     literal_start_lines: frozenset[int] = frozenset()
     if python_string_spans is not None:

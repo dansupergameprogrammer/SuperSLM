@@ -516,9 +516,23 @@ def test_a_multiline_literal_does_not_merge_with_a_following_single_line_literal
 def test_the_span_exit_pair_separated_by_a_blank_line_remains_caught():
     """T-1557 blank-line control for the cell above. A blank line already broke
     this block before the span-membership break existed, so this shape was
-    caught at 28aa351, d2a7eed and b2b00b4 alike. It must stay caught: a remedy
-    that closed the span-exit boundary by disturbing the blank-line rule would
-    pass the primary and regress the mechanism the whole module rests on."""
+    caught at 28aa351, d2a7eed and b2b00b4 alike, and it must stay caught.
+
+    **This cell does NOT pin the blank-line rule, and an earlier version of
+    this docstring claimed it did** (T-1564, Poirot 83260be-t1560-span-
+    membership-boundary-confirmation-2026-07-31.md Minor 3). Measured over
+    seven single mutations of the checker: this cell stayed green under every
+    mutation that destroys the blank-line rule, including removing it
+    altogether. It cannot be otherwise -- the blank line here sits at line 4,
+    OUTSIDE the span at lines 1-3, so no blank-line-inside-a-span rule is
+    exercised, and the generic break is redundant with the span-membership
+    break sitting beside it.
+
+    What actually pins the blank-line rule is
+    `test_a_resolution_marker_in_one_paragraph_of_a_multiline_string_does_not
+    _clear_an_unrelated_paragraph`, which reddens under each of those
+    mutations. This cell is kept as a regression guard on the primary's own
+    shape, which is worth having and is all it is."""
     _label = "Critical" + " 1"
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
@@ -566,40 +580,115 @@ def test_two_single_line_string_literals_still_merge_by_design():
         )
 
 
-def test_two_literals_sharing_one_physical_line_split_loudly_by_design():
-    """T-1558 (same casebook, Minor 2). Where one literal's last physical line
-    is also the next literal's first -- implicit or `+` concatenation -- that
-    line is both inside the first span and a start line of the second, so the
-    literal-start break fires INSIDE the first literal and separates its own
-    citation from its own resolution marker. That is a false positive on a
-    blocking gate.
+def test_shared_physical_line_multiline_then_multiline_splits_loudly():
+    """T-1562 (Poirot 83260be-t1560-span-membership-boundary-confirmation-
+    2026-07-31.md Significant 1). Where one literal's last physical line is
+    also the next literal's first, this scanner is line-granular and there is
+    no line boundary between them to break at. When the SECOND literal is
+    multi-line it contributes its own start line, which falls on the shared
+    line, so the break fires INSIDE the first literal and separates its own
+    citation from its own resolution marker -- a loud false positive.
 
-    It is pinned rather than fixed, deliberately. A line-granular scanner
-    cannot decompose two literals sharing a physical line, so it must err one
-    way; a false positive is loud and self-announcing, where the class this
-    module exists to prevent is silent. Reach is zero across the tree measured.
-    This cell exists so the choice is a recorded, executable one -- if it goes
-    red, someone changed the trade-off, and that is a design call rather than a
-    text fix."""
+    This is the ONLY one of the four shared-line orderings that errs loud. The
+    other three merge silently and are pinned by the cell below. An earlier
+    version of this module's docstring claimed all four split; that claim was
+    false in the reassuring direction, and it is what the finding named."""
     _label = "Critical" + " 1"
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
             tmp,
-            "tests/shared_physical_line_split_test.py",
+            "tests/shared_line_multi_then_multi_test.py",
             f'X = ("""{_label} was found here\n'
             'closed""" """second literal body\n'
             '""")\n',
         )
         hits = cptdc.find_uncited_defect_citations(path)
         assert hits, (
-            f"two literals sharing one physical line are expected to SPLIT -- erring loud on "
-            f"correct, fully-cited code rather than silently merging -- so the {_label} "
-            f"citation is flagged apart from its own 'closed' marker, got {hits}"
+            f"a multi-line literal sharing its last physical line with a following MULTI-line "
+            f"literal is expected to SPLIT, flagging {_label} apart from its own 'closed' "
+            f"marker -- erring loud on correct code. If this merged, the one shared-line "
+            f"ordering that announces itself has gone silent, got {hits}"
         )
-        labels = {label for _, _, block_labels in hits for label in block_labels}
-        assert _label in labels, (
-            f"the split is expected to separate {_label} from its own resolution marker; if "
-            f"this changed, the err-loud trade-off changed with it, got {labels}"
+
+
+def test_the_other_three_shared_physical_line_orderings_merge_silently():
+    """T-1562, the same finding's other half, pinned as a KNOWN BLIND SPOT
+    rather than as a design choice -- because it is not one.
+
+    When the second literal of a shared-line pair is single-line it produces no
+    tokenize span and therefore no start line, so nothing keys a break and the
+    two authored literals become one block. A resolution marker in either then
+    satisfies an uncited citation in the other: this module's own defect class,
+    silent. Shared-line pairs are common in the scanned tree, but **0 of them
+    have a multi-line first literal** -- independently measured twice, agreeing
+    on that zero and disagreeing on the total, so only the zero is stated. Every
+    live instance therefore takes one of these three paths, and none currently
+    manifests a hit.
+
+    Closing them requires decomposing a physical line into its constituent
+    literals, which is a sub-line rewrite of `_iter_blocks`'s contract and a
+    design call rather than a text fix. This cell exists so the blind spot is
+    executable and counted rather than described. **If one of these goes red
+    that is good news** -- something started catching a shape this module
+    currently misses -- and the four-way table in `_iter_blocks`'s docstring
+    needs updating with it.
+
+    Every construction is evaluated before any assertion, so no ordering's
+    result can mask another's."""
+    _label = "Critical" + " 1"
+    constructions = {
+        "multi-line -> single-line": f'X = ("""{_label} was found here\nclosed""" "tail literal")\n',
+        "single-line -> multi-line": f'X = ("lead {_label}" """body\nclosed""")\n',
+        "single-line -> single-line": f'X = ("lead {_label}" "tail closed")\n',
+    }
+    observed = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for i, (name, src) in enumerate(constructions.items()):
+            path = _write(tmp, f"tests/shared_line_blind_{i}_test.py", src)
+            observed[name] = cptdc.find_uncited_defect_citations(path)
+
+    still_blind = [k for k, v in observed.items() if not v]
+    assert len(still_blind) == 3, (
+        f"all three of these shared-physical-line orderings are known to merge silently, "
+        f"missing the {_label} citation entirely. Any that now reports a hit has started "
+        f"catching a shape this module documents as a blind spot -- update the four-way "
+        f"table in `_iter_blocks`'s docstring to match. Observed: {observed}"
+    )
+
+
+def test_an_implicitly_concatenated_multiline_and_single_line_literal_is_a_known_false_positive():
+    """T-1563 (same casebook, Minor 2). The span-exit break T-1557 added fires
+    between a multi-line literal and a single-line literal on the FOLLOWING
+    line. That is the defect shape when they are two authored messages -- and
+    it is also, unchanged, the shape of ONE authored message written as
+    implicit concatenation, where the citation and its resolution marker are
+    parts of a single string value.
+
+    The `+` spelling was already flagged before T-1557 (a line beginning `+ "`
+    classifies OTHER and broke the block anyway), so only the implicit spelling
+    is new. Reach is zero across the scanned tree and a false positive on a
+    blocking gate is self-announcing, so it is accepted and named rather than
+    suppressed. If it fires on real code the fix is a line break in that
+    source, not a change here.
+
+    Pinned so the behaviour change is recorded somewhere that can fail --
+    the finding was that no record named it at all."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/implicit_concat_false_positive_test.py",
+            f'MSG = ("""{_label} was found\n'
+            "here\n"
+            '"""\n'
+            '"closed by T-1234")\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            f"one authored message written as implicit concatenation across a multi-line and a "
+            f"single-line literal is expected to be FLAGGED -- a known, accepted false positive "
+            f"of the span-exit break. If this stopped firing, the span-exit boundary weakened "
+            f"and the {_label} defect shape it exists to catch may have gone with it, got {hits}"
         )
 
 
