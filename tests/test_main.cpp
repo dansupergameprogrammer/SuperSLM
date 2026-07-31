@@ -12547,7 +12547,7 @@ static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
 // value appears only inside a `CHECK_MSG` failure string, which is
 // description. The cell IS discriminating -- an executed revert of both
 // negative-`k` assignments in `LandingRescale` produces exactly this cell's
-// four failures, confirmed by execution -- by the sentinel assertions below,
+// three failures, confirmed by execution -- by the sentinel assertions below,
 // not by the mechanism this comment previously claimed. (Corrected further
 // 2026-07-31, T-1539: this parenthetical and the resolution clause inside
 // the cell's first CHECK_MSG below both said "above", pointing at nothing --
