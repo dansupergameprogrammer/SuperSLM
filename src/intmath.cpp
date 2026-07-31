@@ -554,11 +554,11 @@ bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q
 	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
 	// kernel with CheckSoftmaxRowWidthDomain(q_b, q_c, width) before calling
 	// it; this function guards `width == 0` above but performs no width
-	// upper-bound check of its own, matching every other funnel-adjacent
-	// compute in this tree (the domain check and the compute are separate
-	// calls). It DOES independently enforce the per-element peak below
-	// (Popper 2026-07-28 Null 1) -- that is not a width check, it is the one
-	// thing only this function can observe: the row's real, computed values.
+	// upper-bound check of its own: no compute in this tree checks a width
+	// upper bound of its own. It DOES independently enforce the per-element
+	// peak below (Popper 2026-07-28 Null 1) -- that is not a width check, it
+	// is the one thing only this function can observe: the row's real,
+	// computed values.
 	//
 	// M = q_b*q_b + q_c, the same closed form CheckSoftmaxRowWidthDomain
 	// (checked_chain_funnel.cpp) forms and judges, recomputed here at the

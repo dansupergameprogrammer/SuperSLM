@@ -38,7 +38,6 @@ mechanism cells above).
 """
 
 import os
-import re
 import tempfile
 
 import pytest
@@ -1333,18 +1332,31 @@ def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism()
 
 def _t1_new_shape_containers():
     """Every module-level dict this file uses to enumerate a batch of doors a
-    ticket adds to the population, found by name (`_POPULATION_CASES` or
-    `_T<digits>_NEW_SHAPES`) rather than by a hand-maintained list of which
-    tickets exist. A new `_T1387_NEW_SHAPES`-shaped container is itself its
-    own registration here: defining it at module scope, following the naming
-    convention every prior ticket used, is sufficient for its cells to reach
-    `test_population_count_is_stated` below without that test being edited
-    (T-1467; Poirot 20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md
-    Minor 4). This is what T-1386 needed and did not have: it added a new
-    container outside the hand-written sum below, and the stated total did
-    not move."""
-    pattern = re.compile(r"^(_POPULATION_CASES|_T\d+_NEW_SHAPES)$")
-    return {name: value for name, value in globals().items() if pattern.match(name)}
+    ticket adds to the population, discovered by shape -- a non-empty
+    module-level dict whose keys and values are all `str` (every population
+    container maps a case name to a C++ source string) -- rather than by a
+    hand-maintained list of which tickets exist or by matching the
+    container's own name against a naming convention. A new container is
+    itself its own registration here: defining it at module scope as a dict
+    of C++ source strings is sufficient for its cells to reach
+    `test_population_count_is_stated` below without that test being edited,
+    regardless of what the container is named (T-1467, T-1484; Poirot
+    20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
+    82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 3). This is what
+    T-1386 needed and did not have: it added a new container outside the
+    hand-written sum below, and the stated total did not move. Discovery no
+    longer reads the container's name, so a container named off the
+    `_POPULATION_CASES`/`_T<digits>_NEW_SHAPES` convention is found exactly
+    the same as one that follows it."""
+    return {
+        name: value
+        for name, value in globals().items()
+        if not name.startswith("__")
+        and isinstance(value, dict)
+        and value
+        and all(isinstance(k, str) for k in value)
+        and all(isinstance(v, str) for v in value.values())
+    }
 
 
 def test_population_count_is_stated():
@@ -1361,15 +1373,23 @@ def test_population_count_is_stated():
     least, per StandardsDocument Sec4's population-validation requirement.
 
     `container_total` is derived, not hand-summed: `_t1_new_shape_containers`
-    above discovers every `_POPULATION_CASES`/`_T<digits>_NEW_SHAPES` dict by
-    name and sums `len()` of each, so a new container is caught automatically
-    (T-1467). `further_sweep_total` is NOT derived -- T-1381's `+ 1`
-    string-literal control and the three `_further_sweep` literals below are
-    each a single documented one-off case that was never stored in a
-    container, so `_t1_new_shape_containers` cannot see them; a fifth such
-    literal added without also widening `further_sweep_total` is the one
-    shape this structure still does not catch (documented rather than closed,
-    per T-1467's remedy options; Poirot 20f11c1-...-2026-07-31.md Minor 4)."""
+    above discovers every population container by shape (a non-empty
+    module-level dict of `str` to `str`), so a new container is caught
+    automatically regardless of what it is named (T-1467, T-1484).
+    `further_sweep_total` is NOT derived -- it sums four literals for five
+    documented one-off cases that were never stored in a container, so
+    `_t1_new_shape_containers` cannot see them: T-1381's `+ 1`
+    string-literal control (one case), T-1381's further-sweep `+ 2` (two
+    cases -- lambda-in-real-code and shadowing-variable, both in the same
+    literal), T-1383's `+ 1` function-pointer case, and T-1386's `+ 1`
+    declared-code confirmation. A new one-off case added to this list
+    without also incrementing `further_sweep_total` below is the one shape
+    this structure still does not catch -- inherent to a hand-summed literal
+    bucket rather than a gap in container discovery, and not closed by
+    T-1484's shape-based fix to `_t1_new_shape_containers` (documented
+    rather than closed, per T-1467's remedy options; Poirot
+    20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
+    82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 2, Minor 3)."""
     containers = _t1_new_shape_containers()
     container_total = sum(len(value) for value in containers.values())
     further_sweep_total = (

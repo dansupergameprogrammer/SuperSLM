@@ -474,9 +474,9 @@ inline constexpr int kProbFracBits = 15;
 // every p[k] is 0). The caller gates this kernel with
 // CheckSoftmaxRowWidthDomain(q_b, q_c, width) (checked_chain_funnel.h) BEFORE
 // calling it — this function guards `width == 0` itself (below) but performs
-// no width *upper-bound* check of its own, matching every other
-// funnel-adjacent compute in this tree (the domain check and the compute
-// are separate calls). `scores`/`out_probs` each have `width` elements.
+// no width *upper-bound* check of its own: no compute in this tree checks a
+// width upper bound of its own. `scores`/`out_probs` each have `width`
+// elements.
 //
 // **`width == 0` is guarded in the kernel itself, returning `true`** (D-SLM497;
 // T-1411, whole-tree review b9dcbe0 Significant 1;

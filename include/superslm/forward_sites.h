@@ -118,7 +118,10 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // CheckRoundingDivideByPotExponentDomain (checked_chain_funnel.h) at the call
 // site before this function forms the divide — this function itself performs
 // no such check, matching every other funnel-adjacent compute in this tree
-// (the domain check and the compute are separate calls).
+// that performs no check of its own (the domain check and the compute are
+// separate calls). `SoftmaxRowQ15` (intmath.h) is the one exception to this
+// doctrine: it guards `width == 0` inside its own compute rather than at a
+// separate call-site gate; see its own contract for that guard.
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 
 // C27's K/V landing composite (§8.1, §11 S3.3 §6.1): the reference's
