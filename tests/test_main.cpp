@@ -12476,6 +12476,114 @@ static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
 }
 
+// ---------------------------------------------------------------------------
+// T-1384 (Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md, Significant
+// 2): pins T-1382's production UB fix (forward_sites.cpp:316's unsigned
+// negation) at the exact witness the fix's own comment cites -- reverting
+// EITHER of T-1382's two production fixes left the full suite and the
+// ASan/UBSan sanitizer run green (measured: 22,841/0, exit 0, no sanitizer
+// report), because nothing committed drove `LandingRescale` to a value
+// where the unguarded `raw = -raw;` is undefined behaviour. This cell does:
+// at these exact operands `raw` is exactly INT64_MIN before negation, the
+// one int64_t value negation cannot represent -- `-raw` there is signed-
+// integer-overflow UB on the reverted code (confirmed by direct execution:
+// `forward_sites.cpp:316:22: runtime error: negation of
+// -9223372036854775808 cannot be represented in type 'int64_t'`), and the
+// shipped unsigned-negate-then-cast is well-defined and produces the
+// identical bit pattern (INT64_MIN is its own two's-complement negation).
+// On the `linux-x64-asan` CI leg this cell turns a revert into a hard
+// sanitizer failure; on every other leg (no sanitizer) it pins the exact
+// value the negation is required to produce, since both the guarded and
+// reverted code paths agree on that value absent the sanitizer catching the
+// UB itself -- exactly the two-part pin the casebook's remedy specifies.
+// ---------------------------------------------------------------------------
+static void TestLandingRescaleUnsignedNegationPinsInt64MinWitness() {
+	constexpr int64_t kBranchCode = -2;
+	constexpr int64_t kBranchM = INT64_C(1) << 30;
+	constexpr int64_t kBranchE = 62;
+	constexpr int64_t kStreamE = 0;
+	const int64_t r_t = superslm::DynamicScaleReciprocal(kBranchM);
+	CHECK_MSG(r_t == (INT64_C(1) << 32),
+	          "witness sanity: DynamicScaleReciprocal(2^30) == %lld, want 2^32 (m_a=2^30)",
+	          (long long)r_t);
+
+	bool flag = false;  // poisoned -- must become true
+	const int64_t raw =
+	    superslm::LandingRescale(kBranchCode, kBranchM, r_t, kBranchE, kStreamE,
+	                              /*out_saturation_count=*/nullptr, &flag);
+	CHECK_MSG(raw == INT64_MIN,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%lld, e_t=%lld) == %lld, "
+	          "want INT64_MIN -- the composite exponent k=0 at these operands drives the pre-"
+	          "negation magnitude to exactly 2^63, and a negative branch_code negates it; "
+	          "reverting the unsigned-negation fix makes this exact call undefined behaviour "
+	          "(signed overflow on `-raw`) rather than merely wrong",
+	          (long long)kBranchCode, (long long)kBranchM, (long long)r_t, (long long)kBranchE,
+	          (long long)kStreamE, (long long)raw);
+	CHECK_MSG(flag,
+	          "out_magnitude_exceeded_int64 == false at the INT64_MIN witness, want true -- the "
+	          "true (unshifted) magnitude 2^63 does not fit int64 here");
+}
+
+// T-1382's SECOND production fix -- `ResidualReconcileSite`'s early `continue`
+// on a flagged element (`forward_sites.cpp:592-605`) -- is a DIFFERENT
+// statement than the negation above and is pinned by nothing the cell just
+// above drives: that cell calls `LandingRescale` alone, never reaching
+// `ResidualReconcileSite`'s own add. Executed and confirmed (out-of-tree,
+// this fix reverted alone, negation fix left intact): the suite stays at
+// 22,844/0 under CI's own ASan/UBSan flags -- silent, exactly the class
+// Significant 2 named. This cell reuses the INT64_MIN witness above through
+// the real site composition, with a NEGATIVE `stream_code[0]` so the
+// reverted (unconditional) add would be `INT64_MIN + (-1)`, signed-overflow
+// UB (confirmed by direct execution on the reverted tree: `forward_sites.cpp
+// :606:22: runtime error: signed integer overflow: -9223372036854775808 +
+// -1 cannot be represented in type 'int64_t'`) -- the shipped `continue`
+// never reaches that add at all. The returned status and the untouched
+// sentinel are identical whether the guard is present or reverted (`wide` is
+// a local buffer, discarded either way -- this fix is "observationally
+// inert" exactly as its own comment states), so, matching the LandingRescale
+// cell immediately above, this pins the value/status on every non-sanitizer
+// leg and turns a revert into a hard sanitizer failure on `linux-x64-asan`.
+static void TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	constexpr int64_t kBranchCode = -2;
+	constexpr int64_t kBranchM = INT64_C(1) << 30;
+	constexpr int64_t kBranchE = 62;
+	constexpr int64_t kStreamM = INT64_C(1) << 30;
+	constexpr int64_t kStreamE = 0;
+	CHECK_MSG(superslm::DynamicScaleReciprocal(kStreamM) == (INT64_C(1) << 32),
+	          "witness sanity: DynamicScaleReciprocal(2^30) == %lld, want 2^32 (stream_scale.m=2^30, "
+	          "matching the LandingRescale-level cell's own r_t)",
+	          (long long)superslm::DynamicScaleReciprocal(kStreamM));
+
+	constexpr size_t kHidden = 1;
+	const int8_t branch_code[kHidden] = {static_cast<int8_t>(kBranchCode)};
+	// Negative, unlike every other cell's stream_code -- required for the
+	// reverted (unconditional) add to overflow rather than merely wrap into
+	// an in-domain value: INT64_MIN + a NON-negative addend never overflows.
+	const int8_t stream_code[kHidden] = {-1};
+	const CarriedScale branch_scale{/*m=*/kBranchM, /*e=*/kBranchE};
+	const CarriedScale stream_scale{/*m=*/kStreamM, /*e=*/kStreamE};
+	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
+
+	std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
+	                                                stream_scale, kHidden, site_constant,
+	                                                out_codes.data(), &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
+	          "ResidualReconcileSite status == %s at the INT64_MIN witness (stream_code[0]=-1), want "
+	          "ResidualReconciliationMagnitudeOutOfDomain",
+	          SslmForwardStatusName(result));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched",
+	          static_cast<int>(out_codes[0]));
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) untouched",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+}
+
 namespace {
 
 // A minimal, real, two-layer LayerWeights fixture (hidden_size=2, one
@@ -14427,6 +14535,11 @@ int main(int argc, char** argv) {
 	// stated negative control -- pins the branch the pair above cannot reach).
 	TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness();
 	TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain();
+	// T-1384 (Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md,
+	// Significant 2): pins BOTH of T-1382's production UB fixes at the
+	// INT64_MIN witness -- see each cell's own comment above.
+	TestLandingRescaleUnsignedNegationPinsInt64MinWitness();
+	TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
