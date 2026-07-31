@@ -294,6 +294,97 @@ def test_a_stray_triple_quote_length_run_in_a_cpp_comment_does_not_collapse_the_
         )
 
 
+def test_a_multiline_fstring_citation_is_caught_not_silently_admitted():
+    """T-1545 (Poirot 28aa351-t1544-present-tense-confirmation-2026-07-31.md
+    Significant 1): on Python 3.12+ a multi-line f-string is not a
+    tokenize.STRING token at all -- it is FSTRING_START/MIDDLE/END -- so the
+    prior filter (STRING only) found no span for it, every physical line fell
+    through to `_line_kind`, the opening line starts with `f` rather than a
+    quote character so it (and every following line) classified OTHER, and no
+    block formed: an uncited citation inside a multi-line f-string was
+    silently admitted. Matched against a plain triple-quoted control that
+    differs by exactly the leading `f`, which was already caught before this
+    fix and must remain caught after it."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        fstring_path = _write(
+            tmp,
+            "tests/fstring_site_test.py",
+            "def test_something():\n"
+            f'    x = f"""line1\n'
+            f"    {_label} unresolved\n"
+            '    line3"""\n'
+            "    assert x\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(fstring_path)
+        assert len(hits) == 1, (
+            f"a citation inside a multi-line f-string must be caught, got {hits}"
+        )
+        assert hits[0][2] == [_label]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        control_path = _write(
+            tmp,
+            "tests/plain_site_test.py",
+            "def test_something():\n"
+            '    x = """line1\n'
+            f"    {_label} unresolved\n"
+            '    line3"""\n'
+            "    assert x\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(control_path)
+        assert len(hits) == 1, (
+            f"the plain triple-quoted control (no leading f) must still be caught, got {hits}"
+        )
+        assert hits[0][2] == [_label]
+
+
+def test_a_resolution_marker_in_one_paragraph_of_a_multiline_string_does_not_clear_an_unrelated_paragraph():
+    """T-1545 (Poirot 28aa351-t1544-present-tense-confirmation-2026-07-31.md
+    Significant 2, the prior review's Significant 3 reopened): every physical
+    line a `.py` file's tokenizer places inside one multi-line STRING span
+    was forced to kind STRING regardless of blank lines within it, so the
+    WHOLE span merged into one block -- a resolution marker anywhere inside
+    it silently satisfied a citation anywhere else inside it, however many
+    blank lines separated them, which is exactly what `_line_kind`'s own
+    docstring says must not happen ("a resolution marker written for one
+    comment can never silently satisfy a citation in an unrelated, later
+    block"). A blank line inside the string span now breaks the block the
+    same way a blank line already breaks a `//` comment run, so a genuine
+    uncited citation thirty lines below an unrelated resolved paragraph, in
+    the same docstring, is still flagged."""
+    _label = "Critical" + " 1"
+    filler = "\n".join(f"    filler line {n} of the docstring." for n in range(30))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site_test.py",
+            'def test_something():\n'
+            '    """Module docstring.\n'
+            "\n"
+            "    Significant 5 (closed; fixed 2026-07-01).\n"
+            f"{filler}\n"
+            "\n"
+            f"    {_label}: the guard does not exist and the kernel reads\n"
+            '    unmapped heap memory on every call.\n'
+            '    """\n'
+            "    assert True\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            "an unrelated 'closed' resolution thirty lines above, in the same "
+            f"docstring, must not silently clear the genuine uncited {_label} "
+            f"citation below the blank-line paragraph break, got {hits}"
+        )
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+        significant5_hit = any("Significant 5" in block_labels for _, _, block_labels in hits)
+        assert not significant5_hit, (
+            f"'Significant 5 (closed; ...)' carries its own resolution marker in its own "
+            f"paragraph and must not be flagged, got {hits}"
+        )
+
+
 def test_a_py_file_tokenize_cannot_parse_is_reported_as_a_failure_not_treated_as_clean():
     """T-1538: a `.py` file this check cannot tokenize must not be silently
     scanned as clean (StandardsDocument Sec4) -- scan_files reports it as its
