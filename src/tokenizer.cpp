@@ -499,6 +499,29 @@ bool ReadRanges(const uint8_t* d, size_t sz, size_t& pos, std::vector<Range>& r,
 	if (pos + size_t(cnt) * 8 > sz) { if (err) *err = "UnicodeTables: truncated ranges"; return false; }
 	r.reserve(cnt);
 	for (uint32_t i = 0; i < cnt; ++i) { r.emplace_back(Rd32(d + pos), Rd32(d + pos + 4)); pos += 8; }
+	// T-1416 (whole-tree review b9dcbe0, Minor 4): InRanges binary-searches this
+	// table, and a binary search over an unsorted or overlapping array is
+	// unsound -- silent, deterministic misclassification with no diagnostic,
+	// not memory unsafety (InRanges only ever returns a bool). Same shape as
+	// the vocab offset table's own monotonicity check above: every range must
+	// have lo <= hi, and each range's lo must be strictly past the previous
+	// range's hi, which proves both sorted-by-lo and non-overlapping in one
+	// pass.
+	{
+		uint32_t prev_hi = 0;
+		for (uint32_t i = 0; i < cnt; ++i) {
+			const Range& cur = r[i];
+			if (cur.first > cur.second) {
+				if (err) *err = "UnicodeTables: range lo > hi";
+				return false;
+			}
+			if (i > 0 && cur.first <= prev_hi) {
+				if (err) *err = "UnicodeTables: ranges not sorted or overlapping";
+				return false;
+			}
+			prev_hi = cur.second;
+		}
+	}
 	return true;
 }
 

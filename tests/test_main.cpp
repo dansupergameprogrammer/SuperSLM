@@ -1804,6 +1804,33 @@ static void TestUni1RejectsComposeCountOverflow() {
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated compose");
 }
 
+// T-1416 (whole-tree review b9dcbe0, Minor 4): letter/number/space are binary-
+// searched by InRanges (tokenizer.cpp), which is unsound over an unsorted or
+// overlapping table -- deterministic misclassification with no diagnostic,
+// the exact trust-boundary gap this section's header comment names. The two
+// cells below isolate the two ways ReadRanges' new monotonicity check can
+// fail, mirroring TestUni1RejectsDecompOffsetOutOfRange/NonMonotonic's
+// two-cell shape for the same class of defect on a sibling table.
+static void TestUni1RejectsLetterRangeWithLoGreaterThanHi() {
+	auto uni1 = MakeMinimalValidUni1();
+	// Baseline letter range 0 is ('A'=65, 'Z'=90). Swap to (90, 65) -- a pure
+	// lo > hi violation; range 1 ('a'-'z') is untouched and still valid on its
+	// own, so this isolates the malformed range.
+	PutU32(uni1.bytes, uni1.layout.letter_data_off + 0 * 8, 90);
+	PutU32(uni1.bytes, uni1.layout.letter_data_off + 0 * 8 + 4, 65);
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: range lo > hi");
+}
+
+static void TestUni1RejectsLetterRangesOverlapping() {
+	auto uni1 = MakeMinimalValidUni1();
+	// Baseline letter ranges are ('A'-'Z'=65-90), ('a'-'z'=97-122) -- sorted,
+	// non-overlapping. Pull range 1's lo down to 70, inside range 0's [65,90],
+	// so InRanges' own sortedness precondition breaks while each range is
+	// individually well-formed (lo <= hi on both).
+	PutU32(uni1.bytes, uni1.layout.letter_data_off + 1 * 8, 70);
+	AssertUni1Rejected(uni1.bytes, "UnicodeTables: ranges not sorted or overlapping");
+}
+
 // ---------------------------------------------------------------------------
 // Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input red suite
 // (SuperSLM_Plan.md S2.0a; docs/sslm_format.md "Model sub-formats").
@@ -3887,6 +3914,37 @@ static void TestWsc1RejectsHostileShiftOutOfDocumentedBound() {
 	CHECK_MSG(status == SslmModelStatus::WeightScaleShiftOutOfDomain,
 	          "F23 (S-HARDEN-1, D-SLM141/142): WSC1 shift=32 (documented bound [0,31] is a header comment) "
 	          "through SslmModel::Load: got %s, want WeightScaleShiftOutOfDomain (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(!view.has_weight_scales,
+	          "hostile WeightScales view exposed on a rejected Load — a view MUST NOT be exposed");
+}
+
+// T-1415 (whole-tree review b9dcbe0, Minor 3): WSC1 rows are (identity, mult,
+// shift) int32 triples (docs/sslm_format.md "Weight-scale fold blob"). A
+// tensor whose elem_count is not a multiple of 3 has a trailing partial
+// triple that the prior `elem_count / 3` walk never reached, so its tail
+// elements loaded Ok with no validation. elem_count=4 is one element past the
+// single-row case (shape {3} above): a whole first triple plus one orphan
+// int32 that is neither identity, mult, nor shift of any complete row.
+static void TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree() {
+	using namespace superslm_test;
+	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{4});
+	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
+	PutU32(manifest.bytes, data_off + 0, 0);   // row0 identity = 0 -- in-domain
+	PutU32(manifest.bytes, data_off + 4, 1);   // row0 mult
+	PutU32(manifest.bytes, data_off + 8, 0);   // row0 shift = 0 -- in-domain
+	PutU32(manifest.bytes, data_off + 12, 0);  // the orphan fourth element -- never a validated field
+
+	FixtureSection weight_scales =
+	    MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(), weight_scales});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::WeightScaleTripleCountInvalid,
+	          "T-1415: WSC1 tensor with elem_count=4 (not a multiple of 3, every complete-triple field "
+	          "in-domain) through SslmModel::Load: got %s, want WeightScaleTripleCountInvalid (%s)",
 	          SslmModelStatusName(status), err.c_str());
 	CHECK_MSG(!view.has_weight_scales,
 	          "hostile WeightScales view exposed on a rejected Load — a view MUST NOT be exposed");
@@ -10839,6 +10897,29 @@ static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTh
 	          static_cast<long long>(m));
 }
 
+// T-1411 (whole-tree review b9dcbe0, Significant 1): CheckSoftmaxRowWidthDomain
+// answered Ok at width == 0 (the sum check `width * M <= INT64_MAX` holds
+// vacuously at width 0, and no width floor existed) while SoftmaxRowQ15's own
+// ShiftByMax reads scores[0] unconditionally at that width -- a caller
+// following the documented gate-before-kernel contract to the letter could
+// still crash. This cell pins the GATE's answer, not the crash itself (the
+// standard forbids asserting a deliberate process crash) -- the same shape as
+// TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling
+// above, which likewise proves a gate-only property before any kernel call.
+static void TestCheckSoftmaxRowWidthDomainRejectsZeroWidth() {
+	// A representative in-domain (q_b, q_c) pair (M = 1000000^2 + 250000, well
+	// under kSoftmaxRowMaxSafeExponent) -- every OTHER limb of the gate passes,
+	// isolating width == 0 as the only reason for the expected rejection.
+	const auto status = superslm::CheckSoftmaxRowWidthDomain(/*q_b=*/1000000, /*q_c=*/250000, /*width=*/0);
+	CHECK_MSG(status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "CheckSoftmaxRowWidthDomain(q_b=1000000, q_c=250000, width=0) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- width==0 must be rejected at the gate (T-1411): "
+	          "SoftmaxRowQ15's ShiftByMax reads scores[0] unconditionally and has no defined "
+	          "empty-row result, so a gate that answers Ok here certifies a width the kernel cannot "
+	          "safely accept",
+	          superslm::SslmForwardStatusName(status));
+}
+
 // T-1324 (BLOCKING; D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
 // confirmation-2026-07-28.md, Significant 4): `m_usable` (src/intmath.cpp:566)
 // admits any M representable in int64_t and >= 1 -- it does not bound M against
@@ -14885,6 +14966,10 @@ int main(int argc, char** argv) {
 	TestUni1RejectsComposeTruncated();
 	TestUni1RejectsComposeCountOverflow();
 
+	// T-1416 (whole-tree review b9dcbe0, Minor 4).
+	TestUni1RejectsLetterRangeWithLoGreaterThanHi();
+	TestUni1RejectsLetterRangesOverlapping();
+
 	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite. ---
 	TestWgtMinimalManifestParsesAndRoundTrips();
 	TestBiaMinimalManifestParsesAndRoundTrips();
@@ -15077,6 +15162,7 @@ int main(int argc, char** argv) {
 	//     new SslmModel::Load entry point, not at the two structural parsers. ---
 	TestKvc1RejectsHostileCompositionConstantsScale();
 	TestWsc1RejectsHostileShiftOutOfDocumentedBound();
+	TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree();
 	TestRop1RejectsHostileCosSinPair();
 
 	// --- Mendeleev's 2026-07-22 coverage audit of the gate above: the
@@ -15279,6 +15365,9 @@ int main(int argc, char** argv) {
 	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
 	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
 	TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate();
+
+	// T-1411 (whole-tree review b9dcbe0, Significant 1).
+	TestCheckSoftmaxRowWidthDomainRejectsZeroWidth();
 
 	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
 	// c32-softmax-confirmation-test-design-2026-07-28.md.

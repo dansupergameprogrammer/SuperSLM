@@ -108,6 +108,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::CompositionScaleOutOfDomain: return "CompositionScaleOutOfDomain";
 		case SslmModelStatus::WeightScaleShiftOutOfDomain: return "WeightScaleShiftOutOfDomain";
 		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
+		case SslmModelStatus::WeightScaleTripleCountInvalid: return "WeightScaleTripleCountInvalid";
 		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
 		case SslmModelStatus::BiasCodeOutOfDomain: return "BiasCodeOutOfDomain";
 		case SslmModelStatus::KvLandingScaleOutOfDomain: return "KvLandingScaleOutOfDomain";
@@ -670,6 +671,21 @@ SslmModelStatus ValidateCompositionConstantsDomain(const SslmKeyedConstants& kvc
 // overflow pair, intmath.cpp:146-152).
 SslmModelStatus ValidateWeightScalesDomain(const SslmTensorManifest& wsc, std::string* err) {
 	for (const SslmTensorView& t : wsc.Tensors()) {
+		// T-1415 (whole-tree review b9dcbe0, Minor 3): the section stores rows of
+		// (identity, mult, shift) int32 triples (docs/sslm_format.md "Weight-scale
+		// fold blob"); a tensor whose elem_count is not a multiple of 3 has a
+		// trailing partial triple the prior elem_count/3 walk below never
+		// reached, so its tail elements loaded Ok with no validation and nothing
+		// else in this artifact rejects the malformed geometry (the structural
+		// parse checks shape-product consistency, not triple-ness). Rejected
+		// outright rather than walked partially.
+		if (t.elem_count % 3 != 0) {
+			if (err) {
+				*err = "WeightScales tensor \"" + std::string(t.name) + "\" elem_count=" +
+				       std::to_string(t.elem_count) + " is not a multiple of 3";
+			}
+			return SslmModelStatus::WeightScaleTripleCountInvalid;
+		}
 		const uint64_t rows = t.elem_count / 3;
 		for (uint64_t r = 0; r < rows; ++r) {
 			const int32_t identity = RdI32(t.data + (r * 3 + 0) * 4);

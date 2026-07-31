@@ -477,6 +477,14 @@ inline constexpr int kProbFracBits = 15;
 // other funnel-adjacent compute in this tree (the domain check and the compute
 // are separate calls). `scores`/`out_probs` each have `width` elements.
 //
+// **Precondition: `width >= 1`** (T-1411, whole-tree review b9dcbe0
+// Significant 1). This kernel's own `ShiftByMax` call reads `scores[0]`
+// unconditionally, matching this tree's n==0 convention for a row primitive
+// with no defined empty-row result (ac34677 finding S3: no element is read
+// at n == 0) rather than degrading gracefully at width 0. Every caller must
+// pass a `width` `CheckSoftmaxRowWidthDomain` has already accepted -- that
+// gate rejects `width == 0` for exactly this reason.
+//
 // **Returns whether every row element's i-exp construction was WELL-FORMED**
 // (Poirot 2026-07-28 finding 3): CheckSoftmaxRowWidthDomain bounds q_b and
 // q_c but takes no q_ln2 parameter, so it is not a sufficient precondition

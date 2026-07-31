@@ -415,6 +415,19 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 	if (q_c < 0) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
 	}
+	// T-1411 (whole-tree review b9dcbe0, Significant 1): `width == 0` passed
+	// every check below vacuously (the sum check `width * M <= INT64_MAX`
+	// holds trivially at width 0) and this predicate returned Ok, while
+	// SoftmaxRowQ15's own `ShiftByMax(scores, width, …)` reads `logits[0]`
+	// unconditionally at that width -- an access violation on the exact input
+	// this gate certified. This is the same defect shape the tree fixed once
+	// already at ac34677 finding S3 (RowBoundsWide read `x[0]` before testing
+	// `n`); that fix's family convention is "no element is read at n == 0",
+	// which for a row kernel with no defined empty-row result means the width
+	// floor belongs in the gate rather than a degrade in the kernel.
+	if (width == 0) {
+		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+	}
 	const S128 m128 = S128Add(S128Mul(q_b, q_b), S128FromI64(q_c));
 	// Representable in int64_t AND within the ratified ceiling -- both
 	// judged at 128-bit width so neither test can itself overflow the way

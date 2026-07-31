@@ -396,6 +396,14 @@ inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kPro
 // overflowing itself, on the now-known-non-negative int64 `m`
 // (`m == 0 || width <= static_cast<size_t>(INT64_MAX / m)`). Returns
 // SoftmaxRowWidthOutOfDomain on any failure, Ok otherwise.
+//
+// **`width == 0` is rejected outright (T-1411, whole-tree review b9dcbe0
+// Significant 1).** `SoftmaxRowQ15` (intmath.h) requires `width >= 1` -- its
+// `ShiftByMax` call reads the row's first element unconditionally, matching
+// this tree's n==0 convention (ac34677 finding S3: no element is read at
+// n == 0) rather than defining an empty-row result -- so this gate, which
+// exists to certify a width safe for that kernel, cannot answer Ok at a
+// width the kernel cannot accept.
 SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
 
 // C33's own position-cap guard (§11 S3.3's own gate line: "a position ==

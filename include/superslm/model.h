@@ -193,6 +193,13 @@ enum class SslmModelStatus {
 	RopeTablesShapeMismatchConfig,       // R4: a present ROP1 "cos"/"sin" tensor's elem_count !=
 	                                      // context_cap * (head_dim / 2), checked independently
 	                                      // per tensor -- the ROP1<->CFG1 join itself
+	// --- T-1415 (whole-tree review b9dcbe0, Minor 3) ---
+	WeightScaleTripleCountInvalid,       // WSC1 tensor's elem_count % 3 != 0 -- the section stores
+	                                      // rows of (identity, mult, shift) int32 triples
+	                                      // (docs/sslm_format.md), and ValidateWeightScalesDomain's
+	                                      // prior walk of elem_count / 3 triples left a trailing
+	                                      // partial triple's elements unvalidated. Rejected outright
+	                                      // rather than walked partially.
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
