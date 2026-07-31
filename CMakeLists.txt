@@ -21,6 +21,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/trace_hook.cpp
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
+	src/decode_digest.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})

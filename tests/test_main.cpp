@@ -10,6 +10,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/checked_chain_funnel.h"
+#include "superslm/decode_digest.h"
 #include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
@@ -13926,6 +13927,559 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	          SslmForwardStatusName(result), seq.layer_index);
 }
 
+// --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
+// Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16; §10.1;
+// Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md).
+// Symbols declared and stubbed at this pass's own commit (forward_sites.h/.cpp,
+// decode_digest.h/.cpp); every cell below is red against the real symbols'
+// unconditional-WorkspaceTooSmall (LogitsSite, RunGreedyDecodeLoop),
+// sentinel-(-1) (ArgmaxLowestIndexTieBreak), or all-zero (the two digest
+// functions) stubs. ------------------------------------------------------
+
+namespace {
+
+// Little-endian int32 append -- the exact byte layout decode_digest.h's own
+// doc comment specifies for both digests, assembled here independently of
+// either stub so the expected hash is grounded in §10.1's OWN definition,
+// never in a recode of ComputeTokenDigest/ComputeFinalLogitDigest's future
+// bodies (Curie's own discipline, dimension 10).
+void AppendLE32(std::vector<uint8_t>& out, int32_t v) {
+	const uint32_t u = static_cast<uint32_t>(v);
+	out.push_back(static_cast<uint8_t>(u & 0xFF));
+	out.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+	out.push_back(static_cast<uint8_t>((u >> 16) & 0xFF));
+	out.push_back(static_cast<uint8_t>((u >> 24) & 0xFF));
+}
+
+// §10.1 item 1's own byte layout, assembled by hand from `tokens` and hashed
+// with the already-shipped, already-known-answer-tested Sha256Hash
+// (TestSha256KnownVectors above) -- the independent oracle every
+// ComputeTokenDigest cell below compares against.
+void ExpectedTokenDigest(const std::vector<int32_t>& tokens, uint8_t out[32]) {
+	std::vector<uint8_t> bytes;
+	AppendLE32(bytes, static_cast<int32_t>(tokens.size()));
+	for (int32_t t : tokens) AppendLE32(bytes, t);
+	superslm::Sha256Hash(bytes.data(), bytes.size(), out);
+}
+
+// §10.1 item 2's own byte layout: count-prefixed on `num_positions` only,
+// `vocab_size` int32 logits per row, never re-prefixed per row (decode_
+// digest.h's own reasoning -- vocab_size is an artifact constant, not part
+// of the variable-length axis).
+void ExpectedFinalLogitDigest(const std::vector<int32_t>& logit_rows, size_t num_positions,
+                               size_t vocab_size, uint8_t out[32]) {
+	std::vector<uint8_t> bytes;
+	AppendLE32(bytes, static_cast<int32_t>(num_positions));
+	for (int32_t v : logit_rows) AppendLE32(bytes, v);
+	CHECK(logit_rows.size() == num_positions * vocab_size);
+	superslm::Sha256Hash(bytes.data(), bytes.size(), out);
+}
+
+// S3.6's own head/decode-loop fixture. Reuses TwoLayerFixture's exact
+// geometry (hidden_size=2, num_hidden_layers=2, head_dim=2,
+// intermediate_size=2, context_cap=1) and its already-calibrated per-layer
+// constants unchanged -- the vocab/embedding/head layer added here is new,
+// everything under `layers_fixture` is S3.5's own proven-green construction.
+//
+// `embed_site_constant` is (2^30, e=0) rather than the "canonical" (2^30,
+// e=-30) every per-layer site constant in this tree uses -- DERIVED, not
+// copied: a real EmbedEntry call's dynamic per-token quantization drives its
+// output codes to near the full int8 range for any nonzero row (the
+// mechanism's own point -- D' always normalizes the dominant element to
+// ±127), so the STREAM scale RunLayerLoop's own attn_residual site later
+// folds the o_proj branch into must itself be in this fixture's own
+// calibrated range. Executed: e=-30 here produces `ChainInputOutOfDomain` at
+// layer0.attn_residual for every one of this fixture's three vocabulary
+// entries (reproducible: trace-hook every RunLayerLoop call in this fixture
+// at that constant); e=0 -- the SAME value TestRunLayerLoopAcceptsEvery
+// NonZeroEnumeratedBudget and every other TwoLayerFixture-based RunLayerLoop
+// cell in this suite already uses as their own directly-injected
+// `seq.hidden_scale` -- composes Ok through both full layers for all three
+// vocabulary entries, confirmed by running the real (already-shipped)
+// EmbedEntry/RunLayerLoop/RmsNormSite/GemmInt8AccumulateRow/NarrowRowChecked
+// chain directly (bypassing the still-stubbed LogitsSite/
+// RunGreedyDecodeLoop entirely) and recording every intermediate trace
+// record and final value below. This is fixture engineering under §5.2's
+// "verified at source or by execution" discipline, not the tuning-until-
+// green Curie's own brief warns against (D-SLM434): the CLAIM being tuned
+// for is domain safety of an INPUT construction, never a red cell's own
+// expected VALUE, and every value below is the real, executed result of
+// real, already-green primitives, not adjusted after the fact to make a
+// stub pass.
+struct DecodeLoopFixture {
+	TwoLayerFixture layers_fixture;
+	static constexpr int32_t kVocabSize = 3;
+	static constexpr size_t kHiddenSize = 2;
+	// Row-major [vocab_size=3, hidden_size=2]. Rows 0/1 are the standard
+	// basis vectors; row 2 is their sum -- giving three vocabulary entries an
+	// argmax-discriminating suite can pick among once composed through the
+	// real head.
+	int8_t embed_weights[6] = {1, 0, 0, 1, 1, 1};
+	int8_t head_weights[6] = {1, 0, 0, 1, 1, 1};
+	superslm::CarriedScale embed_site_constant{INT64_C(1073741824), INT64_C(0)};
+	superslm::CarriedScale final_norm_site_constant{INT64_C(1073741824), INT64_C(-30)};
+
+	// Direct-initializes `layers_fixture` (the first member) from the prvalue
+	// TwoLayerFixture::Build() returns, rather than default-constructing this
+	// struct and assigning into it afterward. This is load-bearing, not
+	// stylistic: TwoLayerFixture's own LayerWeights entries hold raw pointers
+	// into ITS OWN sibling member arrays (`norm_gain`, `identity2x2`, etc,
+	// TwoLayerFixture's own header comment shows the pattern:
+	// `lw.attn_norm_gain = f.norm_gain;`). A copy-assignment of one
+	// TwoLayerFixture into an already-constructed one copies those pointer
+	// VALUES verbatim -- they keep pointing at the SOURCE object's arrays,
+	// which is the temporary Build() itself returned and which is destroyed
+	// at the end of the assignment's full expression, leaving every copied
+	// LayerWeights pointer dangling. Direct-initialization of an aggregate's
+	// member from a prvalue is guaranteed-elided (no temporary, no copy) --
+	// confirmed by AddressSanitizer, which caught exactly this
+	// stack-use-after-return when this function instead read `DecodeLoopFixture
+	// f; f.layers_fixture = TwoLayerFixture::Build();`.
+	static DecodeLoopFixture Build() { return DecodeLoopFixture{TwoLayerFixture::Build()}; }
+
+	const int32_t* final_norm_gain() const { return layers_fixture.layers[0].attn_norm_gain; }
+};
+
+// The real, executed truth this fixture's own header comment derives, for
+// every one of its three vocabulary entries, driving a fresh token straight
+// through embed -> both real layers -> final_norm -> the real GEMM+narrow
+// (never through the still-stubbed LogitsSite): logits[0] = {127, 0, 127}
+// (an EXACT TIE between index 0 and index 2 -- C16's own red cell, reached
+// through the real forward rather than a synthetic array); logits[1] =
+// {0, 127, 127} (an exact tie between index 1 and 2); logits[2] =
+// {127, 127, 254} (a clean, untied maximum at index 2). Lowest-index
+// tie-break therefore selects token 0 from vocabulary entry 0's own logits,
+// and token 1 from entry 1's.
+constexpr int32_t kDecodeLoopExpectedLogits[3][3] = {
+    {127, 0, 127},
+    {0, 127, 127},
+    {127, 127, 254},
+};
+constexpr int32_t kDecodeLoopExpectedArgmax[3] = {0, 1, 2};
+
+}  // namespace
+
+// Confirms this test-design pass's own DecodeLoopFixture composes end to end
+// through the REAL (already-shipped, already-green) primitives it chains --
+// EmbedEntry, RunLayerLoop, RmsNormSite, GemmInt8AccumulateRow,
+// NarrowRowChecked -- reproducing exactly the derivation the fixture's own
+// header comment states. This is not a cell against LogitsSite/
+// RunGreedyDecodeLoop (both still stub); it is the fixture's OWN feature
+// oracle, run once per vocabulary entry, so a future reader can re-derive
+// kDecodeLoopExpectedLogits/kDecodeLoopExpectedArgmax by re-running this
+// test rather than by re-reading a comment.
+static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = DecodeLoopFixture::Build();
+	for (int32_t token = 0; token < DecodeLoopFixture::kVocabSize; ++token) {
+		int8_t embed_codes[DecodeLoopFixture::kHiddenSize];
+		CarriedScale embed_scale;
+		auto est = superslm::EmbedEntry(token, DecodeLoopFixture::kVocabSize, fixture.embed_weights,
+		                                 DecodeLoopFixture::kHiddenSize, fixture.embed_site_constant,
+		                                 embed_codes, &embed_scale);
+		CHECK_MSG(est == SslmForwardStatus::Ok, "EmbedEntry(token=%d) status == %s, want Ok", token,
+		          SslmForwardStatusName(est));
+		if (est != SslmForwardStatus::Ok) continue;
+
+		SequenceLayerState seq;
+		seq.hidden_codes = embed_codes;
+		seq.hidden_scale = embed_scale;
+		seq.layer_index = 0;
+		uint8_t workspace[64] = {};
+		const auto lst = superslm::RunLayerLoop(
+		    seq, fixture.layers_fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		    DecodeLoopFixture::kHiddenSize, /*head_dim=*/2, /*intermediate_size=*/2,
+		    /*context_cap=*/1, fixture.layers_fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(lst == SslmForwardStatus::Ok, "RunLayerLoop(token=%d) status == %s, want Ok",
+		          token, SslmForwardStatusName(lst));
+		if (lst != SslmForwardStatus::Ok) continue;
+
+		int8_t final_codes[DecodeLoopFixture::kHiddenSize];
+		CarriedScale final_scale;
+		const auto nst = superslm::RmsNormSite(seq.hidden_codes, fixture.final_norm_gain(),
+		                                        DecodeLoopFixture::kHiddenSize, seq.hidden_scale,
+		                                        fixture.final_norm_site_constant, final_codes,
+		                                        &final_scale, "final_norm");
+		CHECK_MSG(nst == SslmForwardStatus::Ok, "RmsNormSite(\"final_norm\", token=%d) status == %s",
+		          token, SslmForwardStatusName(nst));
+		if (nst != SslmForwardStatus::Ok) continue;
+
+		int64_t wide_logits[DecodeLoopFixture::kVocabSize];
+		superslm::GemmInt8AccumulateRow(final_codes, fixture.head_weights,
+		                                 DecodeLoopFixture::kHiddenSize,
+		                                 DecodeLoopFixture::kVocabSize, wide_logits);
+		int32_t out_logits[DecodeLoopFixture::kVocabSize];
+		const auto narrow_st =
+		    superslm::NarrowRowChecked(wide_logits, DecodeLoopFixture::kVocabSize, out_logits);
+		CHECK_MSG(narrow_st == SslmForwardStatus::Ok, "NarrowRowChecked(token=%d) status == %s",
+		          token, SslmForwardStatusName(narrow_st));
+		for (int32_t v = 0; v < DecodeLoopFixture::kVocabSize; ++v) {
+			CHECK_MSG(out_logits[v] == kDecodeLoopExpectedLogits[token][v],
+			          "token=%d out_logits[%d] == %d, want %d (real forward, re-derive by "
+			          "re-running this test)",
+			          token, v, out_logits[v], kDecodeLoopExpectedLogits[token][v]);
+		}
+		const int32_t argmax =
+		    superslm::ArgmaxLowestIndexTieBreak(out_logits, DecodeLoopFixture::kVocabSize);
+		// ArgmaxLowestIndexTieBreak is itself still a stub (-1 unconditionally)
+		// -- this assertion is this suite's OWN C16 cell, not merely a
+		// diagnostic, and is expected red until the build seat lands the real
+		// scan.
+		CHECK_MSG(argmax == kDecodeLoopExpectedArgmax[token],
+		          "ArgmaxLowestIndexTieBreak over the real logit row for token=%d == %d, want %d "
+		          "(the lowest-index tie-break, C16)",
+		          token, argmax, kDecodeLoopExpectedArgmax[token]);
+	}
+}
+
+// --- LogitsSite (master plan §6.4 steps 14-15; C35's asymmetric narrowing at
+// the head). -----------------------------------------------------------
+
+// Feature oracle: LogitsSite's own two-step composition (GemmInt8AccumulateRow
+// then NarrowRowChecked) against DecodeLoopFixture's vocabulary-entry-2 case,
+// whose wide row (127, 127, 254) is comfortably in int32's domain --
+// `out_logits` must equal the wide row exactly (no narrowing distortion, no
+// requantization -- the head's own logits stay raw int32, §6.4's own text).
+// Kills: a LogitsSite that never calls the real GEMM (returns zeros or the
+// input echoed back), that transposes `head_weights`' row-major layout
+// (would swap the wide row's own elements), or that narrows via a bare
+// NarrowAccumulatorToI32 substituted for NarrowRowChecked (undetectable by
+// THIS cell alone since both agree in-domain -- the next cell is what kills
+// that substitution).
+static void TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	const int8_t final_codes[2] = {127, 127};
+	const int8_t head_weights[6] = {1, 0, 0, 1, 1, 1};  // [vocab=3, hidden=2]
+	int64_t wide_logits[3] = {INT64_C(-99), INT64_C(-99), INT64_C(-99)};
+	int32_t out_logits[3] = {INT32_C(-99), INT32_C(-99), INT32_C(-99)};
+
+	const auto result = superslm::LogitsSite(final_codes, /*hidden_size=*/2, head_weights,
+	                                          /*vocab_size=*/3, wide_logits, out_logits);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "LogitsSite status == %s, want Ok (real composition, currently stubbed "
+	          "WorkspaceTooSmall)",
+	          SslmForwardStatusName(result));
+	if (result != SslmForwardStatus::Ok) return;
+	const int32_t kExpected[3] = {127, 127, 254};
+	for (int i = 0; i < 3; ++i) {
+		CHECK_MSG(out_logits[i] == kExpected[i],
+		          "LogitsSite out_logits[%d] == %d, want %d -- GemmInt8AccumulateRow({127,127}, "
+		          "head_weights) computed independently by hand: row0 dot=127, row1 dot=127, "
+		          "row2 dot=127+127=254",
+		          i, out_logits[i], kExpected[i]);
+	}
+}
+
+// The composition-level narrowing cell (§11 S3.6's own red cell: "a
+// narrowing that would overflow int32 is rejected rather than wrapped").
+// `hidden_size` is chosen so a REAL, legal int8xint8 GEMM row -- every
+// activation and every weight at the true int8 extreme, 127 -- exceeds
+// C35's domain: 127*127 = 16129 per element, and 133,200 * 16129 =
+// 2,148,382,800 > 2^31 (2,147,483,648) by 899,152, while 133,199 elements
+// would still be 2,148,366,671 > 2^31 too (the margin is intentionally wide,
+// not a single-element boundary probe -- C35's OWN exact-boundary witnesses
+// already exist at the funnel level, T-1254; this cell is the SITE's own
+// integration cell, proving LogitsSite actually reaches NarrowRowChecked
+// with the real wide row rather than skipping the check). Kills: a
+// LogitsSite that narrows via a bare NarrowAccumulatorToI32 (would wrap to a
+// negative int32 and return Ok) or that omits the check under any
+// "hidden_size is usually small" assumption.
+static void TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping() {
+	using superslm::SslmForwardStatus;
+
+	constexpr size_t kHiddenSize = 133200;
+	std::vector<int8_t> final_codes(kHiddenSize, INT8_C(127));
+	// vocab_size=1: the single row is all-127, driving every element of
+	// `wide_logits` (here, the one element) to the same overflowing value.
+	std::vector<int8_t> head_weights(kHiddenSize, INT8_C(127));
+	std::vector<int64_t> wide_logits(1, INT64_C(-99));
+	std::vector<int32_t> out_logits(1, INT32_C(-99));
+
+	const auto result = superslm::LogitsSite(final_codes.data(), kHiddenSize, head_weights.data(),
+	                                          /*vocab_size=*/1, wide_logits.data(),
+	                                          out_logits.data());
+	CHECK_MSG(result == SslmForwardStatus::LogitNarrowingOverflow,
+	          "LogitsSite(hidden_size=%zu, all-127 row -- true dot product 2,148,382,800 > 2^31) "
+	          "status == %s, want LogitNarrowingOverflow",
+	          kHiddenSize, SslmForwardStatusName(result));
+	CHECK_MSG(out_logits[0] == INT32_C(-99),
+	          "LogitsSite: out_logits[0] == %d after rejection, want the sentinel -99 untouched "
+	          "(the funnel's own convention, extended to this site)",
+	          out_logits[0]);
+}
+
+// --- ArgmaxLowestIndexTieBreak (master plan §6.8 row C16, D-SLM35: "Lowest
+// token index", PINNED). Purely synthetic arrays, isolated from the head's
+// own composition above so a tie-break defect and a logits-composition
+// defect are two independently-failing cells rather than one bundled cell. --
+
+static void TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie() {
+	// The plan's own mandated red cell, verbatim: "a constructed exact tie in
+	// the logit row selects the lower index."
+	const int32_t logits[4] = {5, 7, 7, 3};
+	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 4);
+	CHECK_MSG(result == 1,
+	          "ArgmaxLowestIndexTieBreak({5,7,7,3}) == %d, want 1 (the FIRST occurrence of the "
+	          "tied maximum 7, not index 2 -- C16's own pinned tie-break)",
+	          result);
+}
+
+static void TestArgmaxLowestIndexTieBreakTieNotAtTheEdges() {
+	// A tie away from both array edges, to kill an implementation that only
+	// special-cases index 0 or the last index.
+	const int32_t logits[4] = {1, 2, 9, 9};
+	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 4);
+	CHECK_MSG(result == 2, "ArgmaxLowestIndexTieBreak({1,2,9,9}) == %d, want 2", result);
+}
+
+static void TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex() {
+	// Kills a magnitude/absolute-value confusion: the tie is between two
+	// NEGATIVE values, and a more-negative distractor (-9) must not win.
+	const int32_t logits[4] = {-5, -1, -1, -9};
+	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 4);
+	CHECK_MSG(result == 1, "ArgmaxLowestIndexTieBreak({-5,-1,-1,-9}) == %d, want 1", result);
+}
+
+static void TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie() {
+	// The non-tied control: exactly one maximum, proving the function finds
+	// the true maximum's own index and is not, say, always returning 0 or
+	// always returning the first index whose value differs from its
+	// neighbour.
+	const int32_t logits[3] = {5, 7, 2};
+	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 3);
+	CHECK_MSG(result == 1, "ArgmaxLowestIndexTieBreak({5,7,2}) == %d, want 1", result);
+}
+
+static void TestArgmaxLowestIndexTieBreakSingleElementRow() {
+	const int32_t logits[1] = {42};
+	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 1);
+	CHECK_MSG(result == 0, "ArgmaxLowestIndexTieBreak({42}) == %d, want 0", result);
+}
+
+// --- RunGreedyDecodeLoop (§9.1's greedy decode loop; §11 S3.6's own
+// stop-condition red cells; §10.1's two digests). ------------------------
+
+namespace {
+
+// Common call shape for the cells below: a single-token prompt, generous
+// buffers, poisoned outputs so an untouched-on-rejection claim is checkable.
+struct DecodeLoopCallFixture {
+	DecodeLoopFixture model;
+	superslm::SequenceLayerState seq{};
+	int8_t hidden_codes[DecodeLoopFixture::kHiddenSize] = {INT8_C(-77), INT8_C(-77)};
+	uint8_t workspace[64];
+	std::vector<int32_t> out_tokens;
+	std::vector<int32_t> out_logit_rows;
+	size_t tokens_produced = 7777;  // poison
+	superslm::SslmDecodeStopReason stop_reason =
+	    static_cast<superslm::SslmDecodeStopReason>(7777);  // poison
+
+	// Direct-initializes `model` (the first member) from the prvalue
+	// DecodeLoopFixture::Build() returns -- the same dangling-pointer hazard
+	// DecodeLoopFixture::Build()'s own comment documents, one level up
+	// (`model.layers_fixture`'s LayerWeights entries point into
+	// `model.layers_fixture`'s own sibling arrays; assigning a fresh
+	// DecodeLoopFixture into an already-constructed one copies those pointer
+	// values as-is, dangling once the RHS temporary is destroyed).
+	static DecodeLoopCallFixture Build(size_t out_capacity) {
+		DecodeLoopCallFixture f{DecodeLoopFixture::Build()};
+		f.seq.hidden_codes = f.hidden_codes;
+		f.seq.hidden_scale = superslm::CarriedScale{INT64_C(-99), INT64_C(-99)};
+		f.seq.layer_index = 0xFFFFFFFFu;  // poison -- this call is never expected to touch it
+		std::memset(f.workspace, 0xEE, sizeof(f.workspace));
+		f.out_tokens.assign(out_capacity, INT32_C(-99));
+		f.out_logit_rows.assign(out_capacity * DecodeLoopFixture::kVocabSize, INT32_C(-99));
+		return f;
+	}
+
+	superslm::SslmForwardStatus Run(const std::vector<int32_t>& prompt_tokens,
+	                                  const std::vector<int32_t>& stop_ids,
+	                                  size_t max_new_tokens) {
+		return superslm::RunGreedyDecodeLoop(
+		    seq, model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
+		    /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
+		    model.layers_fixture.view.rope_tables, prompt_tokens.data(), prompt_tokens.size(),
+		    model.embed_weights, model.embed_site_constant, model.final_norm_gain(),
+		    model.final_norm_site_constant, model.head_weights, DecodeLoopFixture::kVocabSize,
+		    stop_ids.data(), stop_ids.size(), max_new_tokens, workspace, sizeof(workspace),
+		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &tokens_produced,
+		    &stop_reason);
+	}
+
+	void CheckEverythingUntouched(const char* what) const {
+		CHECK_MSG(hidden_codes[0] == INT8_C(-77) && hidden_codes[1] == INT8_C(-77),
+		          "%s: seq.hidden_codes must be left untouched on rejection", what);
+		CHECK_MSG(seq.hidden_scale.m == INT64_C(-99) && seq.hidden_scale.e == INT64_C(-99),
+		          "%s: seq.hidden_scale must be left untouched on rejection", what);
+		CHECK_MSG(seq.layer_index == 0xFFFFFFFFu,
+		          "%s: seq.layer_index must be left untouched on rejection", what);
+		CHECK_MSG(tokens_produced == 7777, "%s: *out_tokens_produced must be left untouched (poison)",
+		          what);
+		CHECK_MSG(stop_reason == static_cast<superslm::SslmDecodeStopReason>(7777),
+		          "%s: *out_stop_reason must be left untouched (poison)", what);
+		for (int32_t t : out_tokens)
+			CHECK_MSG(t == INT32_C(-99), "%s: out_tokens must be left untouched (poison)", what);
+		for (int32_t v : out_logit_rows)
+			CHECK_MSG(v == INT32_C(-99), "%s: out_logit_rows must be left untouched (poison)", what);
+	}
+};
+
+}  // namespace
+
+// §9.1/§13 dim 2/5: a host-supplied PROMPT token id outside [0, vocab_size)
+// is TokenIdOutOfRange, "on the same rule as" a stop id -- checked as each
+// prompt token is embedded, in encounter order, so a bad id after a good
+// prefix still leaves everything untouched (the whole call is rejected, not
+// partially applied). Three boundary values: negative, == vocab_size, and >
+// vocab_size (§13 dim 2's own enumerated set).
+static void TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateChanges() {
+	using superslm::SslmForwardStatus;
+	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
+	for (int32_t bad_id : kBadIds) {
+		auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/4);
+		// A good token followed by the bad one: proves the rejection is not
+		// silently skipped just because a prefix already validated.
+		const auto result = f.Run(/*prompt_tokens=*/{0, bad_id}, /*stop_ids=*/{}, /*max_new_tokens=*/4);
+		CHECK_MSG(result == SslmForwardStatus::TokenIdOutOfRange,
+		          "RunGreedyDecodeLoop(prompt=[0,%d]) status == %s, want TokenIdOutOfRange",
+		          bad_id, SslmForwardStatusName(result));
+		f.CheckEverythingUntouched("bad prompt token id");
+	}
+}
+
+// §9.1/§13 dim 2/5: a host-supplied STOP id outside [0, vocab_size) is
+// TokenIdOutOfRange, checked BEFORE the loop starts -- "a stop id the argmax
+// can never produce is a silently-inert stop condition, never discovered by
+// running the loop." Proven by giving the call a valid one-token prompt and
+// a large `max_new_tokens`: if the check ran only lazily (e.g. only once a
+// produced token happened to be compared against it), this cell would still
+// pass by accident on some implementations; requiring EVERYTHING untouched,
+// including `out_tokens`, is what forces the check to run up front rather
+// than after some tokens are already produced.
+static void TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts() {
+	using superslm::SslmForwardStatus;
+	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
+	for (int32_t bad_id : kBadIds) {
+		auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/5);
+		const auto result =
+		    f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{bad_id}, /*max_new_tokens=*/5);
+		CHECK_MSG(result == SslmForwardStatus::TokenIdOutOfRange,
+		          "RunGreedyDecodeLoop(stop_ids=[%d], max_new_tokens=5) status == %s, want "
+		          "TokenIdOutOfRange -- checked before the loop runs, not lazily",
+		          bad_id, SslmForwardStatusName(result));
+		f.CheckEverythingUntouched("bad stop id");
+	}
+}
+
+// §9.1: "An empty set is legal" and means "run to the max-token count." Also
+// the S3.6 gate's own "produces a token sequence" claim for a plain, no-stop
+// run: DecodeLoopFixture's own token-0 vocabulary entry ties at {127, _,
+// 127} and C16 selects index 0 every time, so a 1-token prompt with an
+// empty stop set and max_new_tokens=3 deterministically produces {0,0,0}.
+static void TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount() {
+	using superslm::SslmForwardStatus;
+	using superslm::SslmDecodeStopReason;
+
+	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/3);
+	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{}, /*max_new_tokens=*/3);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[], max_new_tokens=3) status == %s, "
+	          "want Ok",
+	          SslmForwardStatusName(result));
+	if (result != SslmForwardStatus::Ok) return;
+	CHECK_MSG(f.tokens_produced == 3, "tokens_produced == %zu, want 3", f.tokens_produced);
+	CHECK_MSG(f.stop_reason == SslmDecodeStopReason::MaxTokensReached,
+	          "stop_reason == %d, want MaxTokensReached (no stop id was ever supplied to match)",
+	          static_cast<int>(f.stop_reason));
+	for (size_t i = 0; i < 3; ++i)
+		CHECK_MSG(f.out_tokens[i] == 0, "out_tokens[%zu] == %d, want 0 (this fixture's own "
+		          "deterministic argmax result at every step)", i, f.out_tokens[i]);
+}
+
+// §11 S3.6's own red cell: "a stop set containing the id the forward is
+// constructed to produce terminates at that token, with the token present in
+// the output and in both digests." DecodeLoopFixture's token-0 vocabulary
+// entry deterministically produces token 0 (proven above); stop_ids={0} must
+// therefore terminate after exactly ONE generated token, that token must be
+// 0 and must be the LAST element of out_tokens (§9.1: "appended before the
+// stop test"), and both digests, computed independently via Sha256Hash on a
+// hand-assembled byte buffer per §10.1's own definition, must match.
+static void TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests() {
+	using superslm::SslmForwardStatus;
+	using superslm::SslmDecodeStopReason;
+
+	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/10);
+	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{0}, /*max_new_tokens=*/10);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[0]) status == %s, want Ok",
+	          SslmForwardStatusName(result));
+	if (result != SslmForwardStatus::Ok) return;
+	CHECK_MSG(f.tokens_produced == 1, "tokens_produced == %zu, want 1 (stop must fire at the "
+	          "first produced token, not run to max_new_tokens=10)", f.tokens_produced);
+	CHECK_MSG(f.stop_reason == SslmDecodeStopReason::StopTokenMatched,
+	          "stop_reason == %d, want StopTokenMatched", static_cast<int>(f.stop_reason));
+	CHECK_MSG(f.out_tokens[0] == 0,
+	          "out_tokens[0] == %d, want 0 -- the matched stop token, present in the output "
+	          "(never withheld, §9.1)",
+	          f.out_tokens[0]);
+
+	uint8_t got_token_digest[32];
+	superslm::ComputeTokenDigest(f.out_tokens.data(), f.tokens_produced, got_token_digest);
+	uint8_t want_token_digest[32];
+	ExpectedTokenDigest({0}, want_token_digest);
+	CHECK_MSG(std::memcmp(got_token_digest, want_token_digest, 32) == 0,
+	          "ComputeTokenDigest({0}) != the independently-assembled SHA-256 of the "
+	          "count-prefixed little-endian sequence [1, 0] (%s), stub returns 32 zero bytes",
+	          superslm::ToHex(want_token_digest).c_str());
+
+	uint8_t got_logit_digest[32];
+	superslm::ComputeFinalLogitDigest(f.out_logit_rows.data(), f.tokens_produced,
+	                                   DecodeLoopFixture::kVocabSize, got_logit_digest);
+	uint8_t want_logit_digest[32];
+	const std::vector<int32_t> kExpectedRow0(std::begin(kDecodeLoopExpectedLogits[0]),
+	                                          std::end(kDecodeLoopExpectedLogits[0]));
+	ExpectedFinalLogitDigest(kExpectedRow0, /*num_positions=*/1, DecodeLoopFixture::kVocabSize,
+	                         want_logit_digest);
+	CHECK_MSG(std::memcmp(got_logit_digest, want_logit_digest, 32) == 0,
+	          "ComputeFinalLogitDigest != the independently-assembled SHA-256 of the "
+	          "count-prefixed little-endian row [127, 0, 127] (%s), stub returns 32 zero bytes",
+	          superslm::ToHex(want_logit_digest).c_str());
+	CHECK_MSG(f.out_logit_rows[0] == 127 && f.out_logit_rows[1] == 0 && f.out_logit_rows[2] == 127,
+	          "out_logit_rows[0..2] == {%d,%d,%d}, want {127,0,127} -- the real logit row that "
+	          "produced the matched stop token",
+	          f.out_logit_rows[0], f.out_logit_rows[1], f.out_logit_rows[2]);
+}
+
+// §11 S3.6's own red cell: "a stop set containing an id the run never
+// produces does not terminate early." Token 1 is never producible from a
+// prompt of token 0 (this fixture's own deterministic argmax always returns
+// 0 for that starting point) -- stop_ids={1} must therefore run all the way
+// to max_new_tokens, never matching.
+static void TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly() {
+	using superslm::SslmForwardStatus;
+	using superslm::SslmDecodeStopReason;
+
+	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/4);
+	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{1}, /*max_new_tokens=*/4);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[1], max_new_tokens=4) status == %s, "
+	          "want Ok",
+	          SslmForwardStatusName(result));
+	if (result != SslmForwardStatus::Ok) return;
+	CHECK_MSG(f.tokens_produced == 4,
+	          "tokens_produced == %zu, want 4 -- stop_ids=[1] must never match this fixture's own "
+	          "deterministic all-token-0 output, so the loop must run to max_new_tokens",
+	          f.tokens_produced);
+	CHECK_MSG(f.stop_reason == SslmDecodeStopReason::MaxTokensReached,
+	          "stop_reason == %d, want MaxTokensReached", static_cast<int>(f.stop_reason));
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -14552,6 +15106,25 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
 	TestRunLayerLoopCachesKPostRotationNotPreRotation();
 	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
+
+	// S3.6 -- the head and the greedy decode loop (C16, §9.1; master plan
+	// §6.4; §10.1; T-1389;
+	// Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md).
+	// Symbols declared and stubbed at this pass's own commit; every cell
+	// below is red against the real symbols' stubs.
+	TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits();
+	TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow();
+	TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping();
+	TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie();
+	TestArgmaxLowestIndexTieBreakTieNotAtTheEdges();
+	TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex();
+	TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie();
+	TestArgmaxLowestIndexTieBreakSingleElementRow();
+	TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateChanges();
+	TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts();
+	TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount();
+	TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests();
+	TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

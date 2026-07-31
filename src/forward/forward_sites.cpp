@@ -978,4 +978,48 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	return SslmForwardStatus::Ok;
 }
 
+// STUB (T-1389): declared and stubbed by the test-design pass authoring the
+// S3.6 red suite (Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-
+// design-2026-07-31.md), following this file's own established
+// declare-and-stub sequence (RopeApplySite/MlpActSite/ResidualReconcileSite,
+// D-SLM384/385/386, T-1345). Returns WorkspaceTooSmall unconditionally -- a
+// status neither of this site's real outcomes (Ok, LogitNarrowingOverflow)
+// ever is -- and calls nothing, reads nothing, writes nothing to
+// `out_logits`. The build seat replaces this body with the real two-step
+// composition the header's own doc comment states.
+SslmForwardStatus LogitsSite(const int8_t* /*final_codes*/, size_t /*hidden_size*/,
+                              const int8_t* /*head_weights*/, size_t /*vocab_size*/,
+                              int64_t* /*wide_logits*/, int32_t* /*out_logits*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
+
+// STUB (T-1389): C16's tie-break has no status to return (a pure caller-
+// ensures value function, matching FloorDivI64/ShiftByMax's own shape), so
+// the stub instead returns -1 -- never a valid `[0, n)` index for any n >= 1,
+// so any cell asserting a specific in-range token id fails loudly rather
+// than silently matching by chance. Reads nothing from `logits`.
+int32_t ArgmaxLowestIndexTieBreak(const int32_t* /*logits*/, size_t /*n*/) {
+	return -1;
+}
+
+// STUB (T-1389): same convention as LogitsSite above -- WorkspaceTooSmall
+// unconditionally, none of `seq`/`out_tokens`/`out_logit_rows`/
+// `*out_tokens_produced`/`*out_stop_reason` touched. The build seat replaces
+// this body with the real prefill-then-repeat composition the header's own
+// doc comment states.
+SslmForwardStatus RunGreedyDecodeLoop(
+    SequenceLayerState& /*seq*/, const LayerWeights* /*layers*/, uint32_t /*num_hidden_layers*/,
+    size_t /*hidden_size*/, size_t /*head_dim*/, size_t /*intermediate_size*/,
+    int64_t /*context_cap*/, const SslmTensorManifest& /*rope_tables*/,
+    const int32_t* /*prompt_tokens*/, size_t /*prompt_len*/,
+    const int8_t* /*embed_weights*/, CarriedScale /*embed_site_constant*/,
+    const int32_t* /*final_norm_gain*/, CarriedScale /*final_norm_site_constant*/,
+    const int8_t* /*head_weights*/, int32_t /*vocab_size*/,
+    const int32_t* /*stop_ids*/, size_t /*stop_count*/, size_t /*max_new_tokens*/,
+    uint8_t* /*workspace*/, size_t /*workspace_size*/,
+    int32_t* /*out_tokens*/, int32_t* /*out_logit_rows*/, size_t /*out_tokens_capacity*/,
+    size_t* /*out_tokens_produced*/, SslmDecodeStopReason* /*out_stop_reason*/) {
+	return SslmForwardStatus::WorkspaceTooSmall;
+}
+
 }  // namespace superslm

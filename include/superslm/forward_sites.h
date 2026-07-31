@@ -646,6 +646,144 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  std::string_view site_prefix = {}, size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
+// --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
+// Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16). This is
+// the "host-facing entry point" LayerWeights' own header comment above names
+// as S3.6/S3.7's scope or unassigned -- claimed here. ----------------------
+
+// Master plan §6.4 step 15 ("Logits"): `GemmInt8Accumulate(final_codes,
+// weights[tie ? "embed" : "lm_head"])`, then `NarrowRowChecked`
+// (checked_chain_funnel.h's second entry point) -- never a bare
+// `NarrowAccumulatorToI32`. `final_codes` is step 14's own output
+// (`RmsNormSite` under site "final_norm"; its OWN carried scale is
+// discarded -- "the head consumes codes", §6.4's own text, so this function
+// takes no incoming CarriedScale at all). `head_weights` is a flat,
+// row-major `[vocab_size, hidden_size]` int8 matrix -- tied-vs-dedicated is
+// the CALLER's resolution (CFG1's `tie_word_embeddings`), matching every
+// other site function in this file: EmbedEntry's `embed_weights` is the
+// identical kind of raw, caller-supplied pointer, never a by-name tensor
+// lookup, and this function performs no WGT1/embed-tensor-naming resolution
+// of its own (LayerWeights' own header comment states the same declared-scope
+// convention for the per-layer weights it carries).
+//
+// Performs, in this order and no other:
+//   1. GemmInt8AccumulateRow(final_codes, head_weights, hidden_size,
+//      vocab_size, wide_logits) -- matmul.h's already-shipped, order-free
+//      int64 accumulation (design §4/§11 item 4), one row per vocabulary
+//      entry.
+//   2. NarrowRowChecked(wide_logits, vocab_size, out_logits) -- C35's
+//      asymmetric int32 domain check (checked_chain_funnel.h); on rejection
+//      returns LogitNarrowingOverflow and leaves `out_logits` untouched (the
+//      funnel's own convention, extended here to this site). §6.4's own
+//      derivation: the wide row's bound is `hidden_size * 127 * 127`; at
+//      `hidden_size == 1536` that is 24,774,144, ~86.7x under 2^31 --
+//      comfortable headroom at the model's own geometry, and the reason the
+//      check is PERFORMED rather than assumed is that `hidden_size` is
+//      per-artifact (§6.4) -- a smaller or adversarially-scaled artifact is
+//      not bound by the 1536-wide headroom this comment cites for context.
+//
+// `final_codes` has `hidden_size` elements; `head_weights` has
+// `vocab_size * hidden_size` elements, row-major (row v is the v-th
+// vocabulary logit's own weight vector). `wide_logits` is caller-owned
+// scratch, `vocab_size` elements (the composition's own wide intermediate,
+// matching this file's existing convention of a caller-owned wide-row
+// buffer for every funnel-adjacent site). `out_logits` receives `vocab_size`
+// int32 logits on Ok and is untouched on rejection.
+SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
+                              const int8_t* head_weights, size_t vocab_size,
+                              int64_t* wide_logits, int32_t* out_logits);
+
+// C16 (master plan §6.8 row C16, D-SLM35; §6.4 step 16): the pinned argmax
+// tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same
+// caller-ensures convention as FloorDivI64/ShiftByMax/MaxAbsReduceWide -- an
+// empty logit row is a caller defect, not a runtime-checked one; a
+// conformant artifact's `vocab_size` is load-time rejected at 0, so no
+// production call ever passes `n == 0`). Scans left to right and keeps the
+// FIRST (lowest-index) strict maximum -- a later element equal to the
+// running maximum never replaces it, which is what makes the tie-break
+// lowest-index rather than last-write-wins or highest-index.
+int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n);
+
+// §9.1's two terminal reasons a greedy decode loop stops for a reason OTHER
+// than a rejection. Distinct from SslmForwardStatus (checked_chain_funnel.h),
+// which names rejections; a loop that reaches either of these two reasons
+// is not rejected, it is DONE, and §11 S3.6's own gate text ("terminates on
+// each of the two stop conditions with a status naming which fired")
+// requires the two to be distinguishable from each other and from Ok.
+enum class SslmDecodeStopReason {
+	MaxTokensReached = 0,  // the host's max-token count was reached with no stop id matched
+	StopTokenMatched = 1,  // the produced token is a member of the host's stop-id set
+};
+
+// §9.1's greedy decode loop: "Prefill the prompt in one call; then repeat:
+// one forward over the last token, argmax with C16's tie-break, append,
+// until a stop condition." Prefills `prompt_tokens` (each embedded via
+// EmbedEntry and run through RunLayerLoop with `layer_budget ==
+// num_hidden_layers` -- §9.3's own "every layer" spelling, one WHOLE token
+// per call; this loop's own scope is whole-token stepping, never the
+// layer-range micro-step RunLayerLoop itself also supports), then repeats:
+// embed the last produced (or last prompt) token, RunLayerLoop, RmsNormSite
+// under site "final_norm" (its own carried scale discarded, §6.4 step 14),
+// LogitsSite, ArgmaxLowestIndexTieBreak, append -- until a stop condition.
+//
+// Every host-supplied id -- EVERY element of `prompt_tokens` AND EVERY
+// element of `stop_ids` -- is validated against `[0, vocab_size)` on the
+// IDENTICAL rule EmbedEntry already applies to a single token (§9.1: "on the
+// same rule as a host-supplied prompt token"): rejected with
+// TokenIdOutOfRange. Every stop id is checked BEFORE the loop starts (a stop
+// id the argmax can never produce is a silently-inert stop condition, never
+// discovered by running the loop, §9.1's own reasoning) and every prompt id
+// is checked as each is embedded, in encounter order, so a bad prompt id
+// past a good prefix still leaves everything at and after it untouched.
+// `stop_count == 0` is legal and means "run to `max_new_tokens`" (§9.1: "An
+// empty set is legal"). The produced token is appended to `out_tokens`
+// BEFORE the stop-id test runs (§9.1: "The produced token is appended before
+// the stop test, so a stop token appears in the output sequence"), so a
+// matched stop token is the LAST element of `out_tokens` on
+// `SslmDecodeStopReason::StopTokenMatched`, never withheld.
+//
+// `out_logit_rows` (caller-owned, `out_tokens_capacity * vocab_size`
+// elements) receives, at row i, the full int32 logit row LogitsSite computed
+// immediately before the i-th produced token was selected -- the raw
+// material for §10.1's final-logit digest (decode_digest.h); this function
+// does not itself compute either digest (§10.2's exclusion table is a claim
+// about what participates in the arithmetic and the hash alike, and keeping
+// digesting a separate, pure function of the two output arrays this call
+// already produces is what makes that claim checkable rather than asserted).
+//
+// On Ok, `*out_stop_reason` names which of the two conditions fired,
+// `*out_tokens_produced` is the number of NEWLY produced tokens written to
+// `out_tokens`/`out_logit_rows` (`prompt_tokens` is never echoed into
+// `out_tokens`), and `seq` reflects the sequence's state after the last
+// successfully produced token. On any rejection (a bad prompt id, a bad stop
+// id, or any status RunLayerLoop/LogitsSite themselves can return),
+// `out_tokens`, `out_logit_rows`, `*out_tokens_produced`, and
+// `*out_stop_reason` are all left untouched, and `seq` is left in the state
+// RunLayerLoop's OWN atomic-layer contract already guarantees (§11 S3.5: a
+// rejected layer leaves `seq` exactly as it was before that layer's own
+// attempt).
+//
+// `out_tokens`/`out_logit_rows` have `out_tokens_capacity` (rows, for the
+// latter) elements -- caller-ensures `out_tokens_capacity >= max_new_tokens`
+// (a workspace-sizing question this call does not scope, matching this
+// file's existing caller-ensures convention for buffer sizes throughout).
+// This function performs no per-layer WGT1/KVC1-by-name resolution of its
+// own (LayerWeights' own header comment); `embed_weights`/`head_weights` are
+// the same kind of raw, caller-resolved pointer EmbedEntry/LogitsSite above
+// already take.
+SslmForwardStatus RunGreedyDecodeLoop(
+    SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
+    size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
+    const SslmTensorManifest& rope_tables,
+    const int32_t* prompt_tokens, size_t prompt_len,
+    const int8_t* embed_weights, CarriedScale embed_site_constant,
+    const int32_t* final_norm_gain, CarriedScale final_norm_site_constant,
+    const int8_t* head_weights, int32_t vocab_size,
+    const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens,
+    uint8_t* workspace, size_t workspace_size,
+    int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
+    size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason);
+
 }  // namespace superslm
 
 #endif  // SUPERSLM_FORWARD_SITES_H
