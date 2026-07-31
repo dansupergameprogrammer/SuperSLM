@@ -447,20 +447,24 @@ jobs:
   # resolution marker ("closed", or a cited ticket ID) in the same comment block --
   # the class that recurred seven times across three review rounds before this
   # check existed. Mirrors forward-leaf-check's own two-step shape (self-test,
-  # then the gate script) with one difference: the gate step here is NOT wired to
-  # fail the build yet. A real-tree run during this check's own build (Claude/
-  # Brunel/present-tense-defect-comment-check-2026-07-29.md) found several sites
-  # beyond the seven this check was validated against -- at least one, and
-  # possibly several more, look like genuine additional instances of the same
-  # class, and several others look like backreference-only citations (a debug
-  # print or failure-message tag pointing at an already-resolved finding
-  # described in full elsewhere) that this check's lexical rule cannot tell
-  # apart from a fresh claim. Turning this into a hard gate before those sites
-  # are triaged would fail CI immediately over content outside this check-
-  # building pass's writable scope (tests/test_main.cpp and the generator under
-  # tests/ are not this pass's to edit). `continue-on-error: true` keeps the
-  # signal visible in every run's log without blocking merges until that
-  # triage happens and this step is promoted to blocking.
+  # then the gate script), and is now wired to fail the build (T-1485).
+  # Blocking since (Claude/Brunel/ build log for T-1485): a fresh run of this
+  # check against real HEAD -- derived by executing the check, not enumerated
+  # by hand -- surfaced sixteen flagged blocks. One was a genuine checker
+  # defect: `_iter_blocks` scanned a multi-line Python triple-quoted docstring
+  # only by its opening physical line, hiding a resolution marker that in
+  # fact appeared later in the same docstring; fixed with triple-quote
+  # tracking and its own regression cells (a second, related defect --
+  # a fixture-generator script's list-of-strings convention merging an
+  # embedded `//` comment run into unrelated surrounding code -- was found
+  # and fixed the same way, though it did not change that block's flagged
+  # disposition). The remaining fifteen were true positives: a citation
+  # resolved elsewhere in the same file (a sibling comment block, a
+  # crash-probe printf, a CHECK_MSG string, or a navigational section header)
+  # but not self-contained in its own scanned block. Each got its own
+  # resolution marker. The check is green on a full run
+  # (`python tests/ci/check_present_tense_defect_comments.py`) as of the
+  # commit that removed `continue-on-error` below.
   present-tense-defect-comment-check:
     runs-on: ubuntu-latest
     steps:
@@ -471,8 +475,7 @@ jobs:
       - run: pip install pytest
       - name: Present-tense-defect-comment check's own red suite and historical-population validation
         run: python -m pytest tests/ci/test_check_present_tense_defect_comments.py -v
-      - name: Report present-tense defect citations lacking a resolution marker (advisory, not yet blocking)
-        continue-on-error: true
+      - name: Fail the build if a test-suite comment cites a severity finding with no resolution marker
         run: python tests/ci/check_present_tense_defect_comments.py
 
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
