@@ -349,6 +349,14 @@ struct SequenceLayerState {
 	int8_t* hidden_codes = nullptr;
 	CarriedScale hidden_scale;
 	uint32_t layer_index = 0;
+
+	// §8.2 (T-518 / D-SLM201 option 2): the K/V landing saturation counter,
+	// "granularity: per sequence" -- owned by the caller across every call for
+	// one sequence, exactly like `layer_index`. RunLayerLoop only increments
+	// this (via `LandingRescale`'s own `out_saturation_count` parameter); it
+	// never resets it -- reset on sequence create / `sslm_seq_reset` is the
+	// caller's own responsibility, per LandingRescale's own header.
+	uint64_t kv_saturation_count = 0;
 };
 
 // C26's residual-reconciliation site (§6.2 step 8 "attn_residual", §6.3 step
@@ -445,16 +453,32 @@ struct LayerWeights {
 	int32_t proj_shift;
 	CarriedScale q_site_constant;
 	CarriedScale o_site_constant;
-	int64_t kv_landing_r_t;
-	int64_t kv_landing_e_t;
+	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
+	// KvLandingReciprocals'/KvLandingScales' own per-head rows -- K and V are
+	// separate arrays because §8.1 states the reciprocal/exponent as
+	// per-(head, projection), and the reference reads two distinct artifact
+	// keys per head (`kv_landing_reciprocals[f"{prefix}.k_head{head}"]` and
+	// the matching `v_head{head}` entry). Caller-resolved, like every other
+	// field on this struct: `num_heads` entries each (`num_heads ==
+	// hidden_size / head_dim`).
+	const int64_t* kv_landing_r_t_k;  // num_heads
+	const int64_t* kv_landing_e_t_k;  // num_heads
+	const int64_t* kv_landing_r_t_v;  // num_heads
+	const int64_t* kv_landing_e_t_v;  // num_heads
 
 	// The D-SLM57 per-head ctx_fold dispatch (§6.2 step 6): WSC1's
-	// `layer{L}.ctx_fold` row for this head, applied via ApplyWeightScaleFold
+	// `layer{L}.ctx_fold` row for EACH head, applied via ApplyWeightScaleFold
 	// (C24/C25) to the raw GemmProbQ15Accumulate context-accumulate value,
 	// before the funnel (empty incoming, per §6.2 step 6's own text).
-	int32_t ctx_fold_identity;
-	int32_t ctx_fold_mult;
-	int32_t ctx_fold_shift;
+	// Caller-resolved, `num_heads` entries each.
+	const int32_t* ctx_fold_identity;  // num_heads
+	const int32_t* ctx_fold_mult;      // num_heads
+	const int32_t* ctx_fold_shift;     // num_heads
+	// The funnel's own site constant at the "attn_ctx" call -- ONE per layer
+	// (§6.2 step 6's funnel call folds the whole wide row, every head's
+	// contribution together, in a single call after every head's own
+	// per-head fold above has already run) -- never per-head, unlike the
+	// three fields directly above.
 	CarriedScale ctx_fold_site_constant;
 
 	CarriedScale attn_residual_site_constant;
@@ -497,8 +521,11 @@ struct LayerWeights {
 // `layer_budget` layers of its CURRENT token, composing, per layer and in
 // this order (§6.2/§6.3): attn_norm (RmsNormSite) -> q/k/v projections
 // (GemmInt8Accumulate + ApplyWeightScaleFold; q funnels through
-// RequantChainChecked, k/v land at the static per-head scale through
-// LandingRescale, §8.1) -> RoPE on q and k (RopeApplySite) -> attention
+// RequantChainChecked, k/v land at the static per-(head, projection) scale
+// through `clamp(LandingRescale(...), -127, 127)`, §8.1 -- the clamp is this
+// call site's own, per `LandingRescale`'s header, and reuses `ClampRopeCode`
+// for it, the same pinned `[-127, 127]` code range) -> RoPE on q and k
+// (RopeApplySite) -> attention
 // (GemmInt8Accumulate for the score row, SoftmaxRowQ15, GemmProbQ15Accumulate
 // for the context accumulate -- §6.2 step 5; no separate named site exists
 // for this composition anywhere in this tree, so RunLayerLoop is where it is
@@ -518,6 +545,23 @@ struct LayerWeights {
 //     (§11's reject-over-silently-degrade law).
 //   - There is no `all` sentinel. "Every layer" is spelled
 //     `layer_budget == num_hidden_layers`.
+//
+// `context_cap < 1` is `InvalidContextCap`, checked before the workspace size
+// is computed from it -- `context_cap` sizes the required K/V workspace
+// (`num_hidden_layers * context_cap * num_heads * head_dim * 2`), and every
+// value outside `[1, INT64_MAX]` (zero or negative) is invalid for the same
+// reason: neither is a legitimate count of cache positions. One check covers
+// both, because both violate the identical domain requirement.
+//
+// A layer commits atomically. Every checked call between `attn_norm` and
+// `mlp_residual` (inclusive) can reject; on ANY rejection inside a layer,
+// `seq` is left exactly as it was before that layer's attempt started --
+// `hidden_codes`, `hidden_scale`, AND `layer_index` all untouched, the same
+// property the `layer_budget == 0` cell already requires one level up. §9.3
+// states the resume point is a layer boundary and nowhere else, so no
+// intermediate, mid-layer state may ever become visible in `seq`; a rejection
+// therefore leaves the sequence ready to re-attempt the WHOLE layer, never a
+// partially-applied one.
 //
 // The residual (`seq.hidden_codes`/`hidden_scale`) lives in `seq`'s OWN
 // state, never in `workspace` -- poison-filling `workspace` between two

@@ -133,6 +133,13 @@ enum class SslmForwardStatus {
 	                                          // extent -- the caller's `context_cap` is a fact about
 	                                          // CFG1, not about the ROP1 tensors' real shape, and
 	                                          // nothing joins the two at load time.
+	// --- Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-2026-07-29.md ---
+	InvalidContextCap,                       // Critical 2/3: RunLayerLoop's `context_cap <= 0` --
+	                                          // zero or negative -- both make the required K/V
+	                                          // workspace size computation unsound (zero clears the
+	                                          // size guard entirely; negative wraps the same size_t
+	                                          // product mod 2^64), checked before either size is
+	                                          // formed.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

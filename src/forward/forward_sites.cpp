@@ -628,6 +628,16 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// which is exactly what the cell poison-fills to assert.
 	if (layer_budget == 0) return SslmForwardStatus::InvalidLayerBudget;
 
+	// `context_cap` sizes the K/V workspace below; zero or negative is
+	// invalid for the identical reason (neither is a legitimate count of
+	// cache positions), so one check covers both rather than two separate
+	// guards for the same domain requirement. Checked before the size
+	// product is formed at all: a zero `context_cap` would otherwise zero
+	// that product and clear the workspace-size guard entirely, and a
+	// negative one would wrap the same `static_cast<size_t>` product mod
+	// 2^64 to the same effect (Poirot e4b398c review, Critical 2/3).
+	if (context_cap < 1) return SslmForwardStatus::InvalidContextCap;
+
 	// §9.4: the K/V store is caller-supplied memory "sized from
 	// config.context_cap, num_key_value_heads, head_dim, and kv_precision".
 	// That is what `workspace` is here and the only thing this loop takes from
@@ -643,8 +653,21 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
 		return SslmForwardStatus::WorkspaceTooSmall;
 	}
-	const size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers) *
-	                                static_cast<size_t>(context_cap) * num_heads * head_dim * 2u;
+	// The size product itself, overflow-guarded factor by factor (the same
+	// `product > SIZE_MAX / factor` idiom model.cpp's tensor-shape check
+	// already uses) -- `context_cap` is now known positive, but the product
+	// of four caller-supplied dimensions can still overflow size_t for a
+	// sufficiently large one, and an overflowed product would silently
+	// under-size the same guard C2/C3 exist to keep sound.
+	size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
+	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_heads, head_dim, 2u};
+	for (size_t factor : kv_factors) {
+		if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
+			return SslmForwardStatus::InvalidContextCap;
+		}
+		kv_bytes_needed *= factor;
+	}
+	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
 	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
 
 	// This sub-slot's declared scope is a single position. §9.4's multi-
@@ -662,6 +685,12 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	std::vector<int8_t> gate_codes(intermediate_size), up_codes(intermediate_size);
 	std::vector<int8_t> act_codes(intermediate_size), down_codes(hidden_size);
 	std::vector<int8_t> stream_next(hidden_size);
+	// §9.3/Critical 4: the attention-residual output is staged here rather
+	// than committed into `seq.hidden_codes` mid-layer -- the MLP half reads
+	// it as its own input, and it is committed into `seq` only once, together
+	// with the MLP residual and the resume marker, at the bottom of the loop
+	// body. This is the one extra hidden-size buffer atomicity costs.
+	std::vector<int8_t> attn_stream(hidden_size);
 
 	uint32_t advanced = 0;
 	while (advanced < layer_budget && seq.layer_index < num_hidden_layers) {
@@ -669,7 +698,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		const LayerWeights& lw = layers[l];
 		CarriedScale normed_scale{}, q_scale{}, ctx_scale{}, o_scale{};
 		CarriedScale mlp_normed_scale{}, gate_scale{}, up_scale{}, act_scale{}, down_scale{};
-		CarriedScale stream_scale{};
+		CarriedScale stream_scale{}, attn_stream_scale{};
 		SslmForwardStatus st;
 
 		// --- attention half (§6.2) --------------------------------------------
@@ -696,15 +725,26 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, hidden_size,
 			                      vacc.data());
-			for (size_t i = 0; i < hidden_size; ++i) {
-				const int64_t kf =
-				    ApplyWeightScaleFold(kacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
-				const int64_t vf =
-				    ApplyWeightScaleFold(vacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
-				k_store[i] = static_cast<int8_t>(LandingRescale(
-				    kf, normed_scale.m, lw.kv_landing_r_t, normed_scale.e, lw.kv_landing_e_t));
-				v_store[i] = static_cast<int8_t>(LandingRescale(
-				    vf, normed_scale.m, lw.kv_landing_r_t, normed_scale.e, lw.kv_landing_e_t));
+			for (size_t h = 0; h < num_heads; ++h) {
+				for (size_t d = 0; d < head_dim; ++d) {
+					const size_t i = h * head_dim + d;
+					const int64_t kf = ApplyWeightScaleFold(kacc[i], lw.proj_identity,
+					                                        lw.proj_mult, lw.proj_shift);
+					const int64_t vf = ApplyWeightScaleFold(vacc[i], lw.proj_identity,
+					                                        lw.proj_mult, lw.proj_shift);
+					// §8.1's clamp is this call site's own (LandingRescale's
+					// header states the clamp is the caller's); reuses
+					// ClampRopeCode for the pinned [-127, 127] code range it
+					// already implements. T-518's saturation counter (§8.2) is
+					// wired into seq's own per-sequence accumulator, the one
+					// call in this tree that composes the landing.
+					k_store[i] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					    kf, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+					    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
+					v_store[i] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					    vf, normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
+					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
+				}
 			}
 		}
 
@@ -743,8 +783,12 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 				GemmProbQ15Accumulate(probs.data(), v_store + h * head_dim, width, head_dim,
 				                      ctx_acc.data());
 				for (size_t d = 0; d < head_dim; ++d) {
+					// D-SLM57's per-head dispatch (§6.2 step 6): WSC1's
+					// `layer{L}.ctx_fold` row for THIS head, not one triple
+					// shared across every head.
 					ctx_wide[h * head_dim + d] = ApplyWeightScaleFold(
-					    ctx_acc[d], lw.ctx_fold_identity, lw.ctx_fold_mult, lw.ctx_fold_shift);
+					    ctx_acc[d], lw.ctx_fold_identity[h], lw.ctx_fold_mult[h],
+					    lw.ctx_fold_shift[h]);
 				}
 			}
 			// §6.2 step 6: the context funnel takes an EMPTY incoming span --
@@ -762,16 +806,24 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		                      token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
+		// §9.3/Critical 4: staged into `attn_stream`, NOT committed into
+		// `seq.hidden_codes` here. Committing mid-layer would leave `seq`
+		// carrying this layer's attention residual while `layer_index` still
+		// names the layer as not-yet-run; a rejection anywhere in the MLP
+		// half below would then leave that inconsistent state visible to a
+		// resume, which §9.3's "the ONLY resume point is a layer boundary"
+		// forbids.
 		st = ResidualReconcileSite(o_codes.data(), o_scale, seq.hidden_codes, seq.hidden_scale,
-		                           hidden_size, lw.attn_residual_site_constant, stream_next.data(),
-		                           &stream_scale, LayerSite(site_prefix, l, "attn_residual"),
+		                           hidden_size, lw.attn_residual_site_constant, attn_stream.data(),
+		                           &attn_stream_scale, LayerSite(site_prefix, l, "attn_residual"),
 		                           token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
-		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
-		seq.hidden_scale = stream_scale;
 
 		// --- MLP half (§6.3) ---------------------------------------------------
-		st = RmsNormSite(seq.hidden_codes, lw.mlp_norm_gain, hidden_size, seq.hidden_scale,
+		// Reads the STAGED attention-residual output, not `seq`, which is
+		// still the layer's pre-attention state until the commit at the
+		// bottom of this loop body.
+		st = RmsNormSite(attn_stream.data(), lw.mlp_norm_gain, hidden_size, attn_stream_scale,
 		                 lw.mlp_norm_site_constant, normed.data(), &mlp_normed_scale,
 		                 LayerSite(site_prefix, l, "mlp_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -802,17 +854,26 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		                      trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
-		st = ResidualReconcileSite(down_codes.data(), down_scale, seq.hidden_codes,
-		                           seq.hidden_scale, hidden_size, lw.mlp_residual_site_constant,
+		// Reconciles against the STAGED attention-residual output (the
+		// current stream this layer is still composing), not `seq` --
+		// matching the attn_residual call's own reasoning above.
+		st = ResidualReconcileSite(down_codes.data(), down_scale, attn_stream.data(),
+		                           attn_stream_scale, hidden_size, lw.mlp_residual_site_constant,
 		                           stream_next.data(), &stream_scale,
 		                           LayerSite(site_prefix, l, "mlp_residual"), token_index,
 		                           trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
+
+		// §9.3/Critical 4: the ONE commit point for the whole layer.
+		// `hidden_codes`, `hidden_scale`, AND `layer_index` all move together
+		// here, only once every checked call in the layer has returned Ok --
+		// the same atomicity the `layer_budget == 0` cell already requires
+		// one level up, extended across the whole layer body. A rejection
+		// anywhere above this line returns before any of the three is
+		// touched, so `seq` is left exactly as it was before this layer's
+		// attempt started, ready to re-attempt the WHOLE layer on resume.
 		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
 		seq.hidden_scale = stream_scale;
-
-		// §9.3: the resume point, and the ONLY one -- advanced after the MLP
-		// residual, which is where the reference yields.
 		seq.layer_index = l + 1;
 		++advanced;
 	}

@@ -45,6 +45,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::InvalidLayerBudget: return "InvalidLayerBudget";
 		case SslmForwardStatus::RopeTableTensorMissing: return "RopeTableTensorMissing";
 		case SslmForwardStatus::RopeTableExtentExceeded: return "RopeTableExtentExceeded";
+		case SslmForwardStatus::InvalidContextCap: return "InvalidContextCap";
 	}
 	return "?";
 }

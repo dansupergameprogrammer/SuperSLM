@@ -12163,6 +12163,16 @@ struct TwoLayerFixture {
 	superslm::LayerWeights layers[2];
 	// Backing arrays LayerWeights points into -- kept alive for the fixture's
 	// own lifetime.
+	// T-1374/Significant 4: this fixture's own geometry has exactly one head
+	// (num_attention_heads=1), so the per-head arrays below have one entry
+	// each -- the same value every element used before this struct gained a
+	// head axis, replicated across K and V since this fixture does not
+	// distinguish them.
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
 	// T-1356: a Q16 gain of 1.0 (65536) is OUT of C29's chain-input domain at
 	// this composition, by construction rather than by bad luck. RmsNormSite
 	// forms `FloorDivI64(h[i] << 2*NORM_FRAC_BITS, root) * g[i]`, and for a row
@@ -12207,6 +12217,7 @@ struct TwoLayerFixture {
 
 		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
 		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
 		for (int l = 0; l < 2; ++l) {
 			superslm::LayerWeights& lw = f.layers[l];
 			lw.attn_norm_gain = f.norm_gain;
@@ -12220,11 +12231,13 @@ struct TwoLayerFixture {
 			lw.proj_shift = 0;
 			lw.q_site_constant = canonical;
 			lw.o_site_constant = canonical;
-			lw.kv_landing_r_t = r_t;
-			lw.kv_landing_e_t = 0;
-			lw.ctx_fold_identity = 1;
-			lw.ctx_fold_mult = 0;
-			lw.ctx_fold_shift = 0;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
 			lw.ctx_fold_site_constant = canonical;
 			lw.attn_residual_site_constant = canonical;
 			// A domain-checked, non-degenerate C30 triple (e=-52 against this
@@ -12657,6 +12670,22 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	int8_t identity4x4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
 	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
 	const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+	// T-1374: this fixture does not distinguish K/V or per-head landing
+	// scales, so both heads and both projections reuse the same (r_t, e_t=0)
+	// this cell always used -- kept alive for the call below.
+	const int64_t kv_landing_r_t_arr[2] = {r_t, r_t};
+	const int64_t kv_landing_e_t_arr[2] = {0, 0};
+	// This layer's OWN ctx_fold dispatch is the artifact's real, hand-built
+	// WSC1 layer0.ctx_fold section (loaded above) -- head 0 identity, head 1
+	// kCtxFoldJoinCase's independently-derived non-identity (mult, shift).
+	// RunLayerLoop now reads this per-head row from LayerWeights itself
+	// (T-1374's fix), so these arrays carry the SAME values the artifact
+	// carries, matching this cell's own three-way-join claim: what the
+	// artifact carries == what the forward reads == the arbitrary-precision
+	// oracle.
+	const int32_t ctx_fold_identity_arr[2] = {1, 0};
+	const int32_t ctx_fold_mult_arr[2] = {0, kCtxFoldJoinCase.mult};
+	const int32_t ctx_fold_shift_arr[2] = {0, kCtxFoldJoinCase.shift};
 	superslm::LayerWeights lw{};
 	lw.attn_norm_gain = norm_gain;
 	lw.attn_norm_site_constant = canonical;
@@ -12669,17 +12698,13 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	lw.proj_shift = 0;
 	lw.q_site_constant = canonical;
 	lw.o_site_constant = canonical;
-	lw.kv_landing_r_t = r_t;
-	lw.kv_landing_e_t = 0;
-	// This layer's OWN ctx_fold dispatch is the artifact's real,
-	// hand-built WSC1 layer0.ctx_fold section (loaded above) -- head 0
-	// identity, head 1 non-identity -- so ctx_fold_identity/mult/shift are
-	// UNUSED for this cell (RunLayerLoop reads the per-head row from
-	// view.weight_scales itself, per the header's own contract); left at
-	// harmless defaults.
-	lw.ctx_fold_identity = 1;
-	lw.ctx_fold_mult = 0;
-	lw.ctx_fold_shift = 0;
+	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_k = kv_landing_e_t_arr;
+	lw.kv_landing_r_t_v = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_v = kv_landing_e_t_arr;
+	lw.ctx_fold_identity = ctx_fold_identity_arr;
+	lw.ctx_fold_mult = ctx_fold_mult_arr;
+	lw.ctx_fold_shift = ctx_fold_shift_arr;
 	lw.ctx_fold_site_constant = canonical;
 	lw.attn_residual_site_constant = canonical;
 	lw.q_ln2 = INT64_C(2081104);
@@ -12754,26 +12779,19 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	// and the arbitrary-precision oracle, applied uniformly across the head
 	// (one WSC1 (mult, shift) entry per head, not per dim).
 	//
-	// T-1356 (Curie derivation, 2026-07-29): this assertion is RED under the
-	// current RunLayerLoop body, and no fixture constant closes it. Executed:
-	// x_int == {4161536,-4161536,4161536,-4161536} -- head 1 (dims 2-3) reads
-	// IDENTICAL to head 0 (dims 0-1), i.e. pass-through, not the loaded
-	// artifact's own non-identity kCtxFoldJoinCase dispatch. Read at source
-	// (src/forward/forward_sites.cpp:747): `ApplyWeightScaleFold(ctx_acc[d],
-	// lw.ctx_fold_identity, lw.ctx_fold_mult, lw.ctx_fold_shift)` inside the
-	// per-head loop applies the SAME (identity, mult, shift) triple to every
-	// head from `LayerWeights`' own one-per-layer fields; `view.weight_scales`
-	// (the loaded artifact's per-head WSC1 rows) is never referenced anywhere
-	// in this translation unit (grep confirms). `forward_sites.h:451-458`'s own
-	// doc comment on those same three fields reads "WSC1's `layer{L}.ctx_fold`
-	// row for THIS HEAD" -- the declared surface has no per-head axis to carry
-	// that row on, so the composition cannot honor its own header's contract
-	// for any input. This cell's own premise (a hand-built, genuinely
-	// non-identity per-head ctx_fold dispatch, closing §13.1 cell 9's
-	// three-way join) is therefore unrealizable under the current code: no
-	// choice of `lw`/artifact contents changes which triple head 1 receives.
-	// Left red and documented rather than weakened to accept the pass-through
-	// value, which would silently retire the cell's own stated claim.
+	// T-1356 (Curie derivation, 2026-07-29) found this assertion unreachable,
+	// then reachable-and-failing: `RunLayerLoop` applied the SAME (identity,
+	// mult, shift) triple to every head from `LayerWeights`' own
+	// one-per-layer fields, so head 1 read pass-through
+	// (x_int == {4161536,-4161536,4161536,-4161536}) instead of the loaded
+	// artifact's own non-identity kCtxFoldJoinCase dispatch -- the declared
+	// surface had no per-head axis to carry WSC1's row on, matching neither
+	// its own doc comment ("row for THIS HEAD") nor this cell's premise.
+	// T-1374 gave `LayerWeights` a per-head axis for exactly this field
+	// (`include/superslm/forward_sites.h`); `lw.ctx_fold_identity/mult/shift`
+	// above are now `num_heads`-entry arrays carrying the SAME per-head data
+	// this cell's own artifact loads, so the forward reads what the artifact
+	// carries.
 	CHECK_MSG(ctx_record->x_int[2] == expected_fold_h1 && ctx_record->x_int[3] == expected_fold_h1,
 	          "layer0.attn_ctx trace x_int[2..3] (what the forward reads for head 1's two dims) "
 	          "== {%lld,%lld}, want {%lld,%lld} (what the artifact carries, applied through the "
