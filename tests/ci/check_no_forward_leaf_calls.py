@@ -223,18 +223,23 @@ _EXPECTED_DOOR_FUNCTIONS = (
 # as a separate top-level door: that guard is what keeps this widening from
 # regressing `test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_
 # in_real_declared_code` into reporting two doors for one. Population widened
-# to fourteen cases (the nine above, unchanged and re-verified against the
-# fixed mechanism, plus the out-of-line member door this correction targets,
-# plus two further shapes an independent sweep found -- an in-class member
+# to fourteen cases: the nine T-1381 required (unchanged and re-verified
+# against the fixed mechanism) plus the two further shapes T-1381's own
+# independent sweep already found (a leaf call hidden inside a lambda
+# defined in a door's own body, against real declared code; and a local
+# variable shadowing a leaf's name), both unchanged and re-verified here
+# too, plus the out-of-line member door this correction targets, plus two
+# further shapes an independent sweep found this round -- an in-class member
 # door, now also caught as a consequence of the same fix, and a namespace-
 # scope function pointer initialised to a leaf's address, which remains
 # missed by this mechanism and by both retired scanners alike: a `VarDecl`
 # carries no `FunctionDecl`/`CXXMethodDecl` node for either generation to
 # find, so this is documented parity, not a regression, and is not fixed
-# here). See `test_check_no_forward_leaf_calls.py`'s own T-1383 section for
-# all three new cases, each executed against a verbatim reproduction of the
-# mechanism this correction replaces, exactly as the nine cases above are
-# measured against the mechanism T-1381 replaced.
+# here (9 + 2 + 2 + 1 == 14). See `test_check_no_forward_leaf_calls.py`'s own
+# T-1383 section for all three new cases this correction adds, each executed
+# against a verbatim reproduction of the mechanism this correction replaces,
+# exactly as the nine cases above are measured against the mechanism T-1381
+# replaced.
 
 _DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
 
@@ -356,22 +361,30 @@ def find_leaf_forwarding_doors(
     `includedFrom` walk `derive_bad_alloc_membership.py` already uses) that
     carries a `CompoundStmt` body -- a declaration with no body (e.g. the
     header's own prototype, or an out-of-line member's own in-class
-    declaration) is not a door. A candidate lexically nested inside a
-    `LambdaExpr` -- the lambda's own closure-type call operator, which is a
-    `CXXMethodDecl` like any other member function -- is never itself
-    reported as a separate door: T-1383's widening from `FunctionDecl` alone
-    would otherwise also flag that operator, double-counting a leaf call the
-    enclosing door (the function the lambda is defined inside) already
+    declaration) is not a door. A candidate lexically nested inside ANOTHER
+    candidate -- not only a `LambdaExpr`'s own closure-type call operator,
+    but any function-like body nested inside another, such as a local
+    class's member function declared inside a function body -- is never
+    itself reported as a separate door, whether or not the enclosing
+    candidate itself turns out to be a door (corrected 2026-07-31, Poirot
+    Significant 1 / T-1386: the walk previously suppressed only the
+    `LambdaExpr` shape by name, which left a local class nested inside a
+    function body double-counted -- the identical shape under a different
+    keyword). T-1383's widening from `FunctionDecl` alone would otherwise
+    flag such a nested candidate as its own door, double-counting a leaf call
+    the enclosing door (the function whose body declares it) already
     accounts for, exactly as
     `test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_
-    declared_code` requires. Returns names in file order, so the caller gets
-    a stable diff against `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
+    declared_code` and `test_t1386_local_class_member_inside_function_body_
+    is_not_double_counted` require. Returns names in file order, so the
+    caller gets a stable diff against `_EXPECTED_DOOR_FUNCTIONS` when one
+    changes."""
     root = _run_clang_ast_dump(path, clangxx, include_dir)
     target = os.path.normpath(os.path.abspath(path)).replace("\\", "/")
     state = {"file": None}
     doors: list[str] = []
 
-    def walk(n: object, in_lambda: bool) -> None:
+    def walk(n: object, nested_in_candidate: bool) -> None:
         if not isinstance(n, dict):
             return
         kind = n.get("kind")
@@ -379,12 +392,12 @@ def find_leaf_forwarding_doors(
         if "file" in loc:
             state["file"] = loc["file"]
         cur_file = str(state["file"] or "").replace("\\", "/")
-        if (
-            not in_lambda
-            and kind in _TOP_LEVEL_FUNCTION_KINDS
+        is_candidate = (
+            kind in _TOP_LEVEL_FUNCTION_KINDS
             and cur_file
             and os.path.normpath(os.path.abspath(cur_file)).replace("\\", "/") == target
-        ):
+        )
+        if not nested_in_candidate and is_candidate:
             name = n.get("name")
             body = next(
                 (c for c in (n.get("inner") or []) if isinstance(c, dict) and c.get("kind") == "CompoundStmt"),
@@ -392,9 +405,20 @@ def find_leaf_forwarding_doors(
             )
             if body is not None and name not in exclude and name not in doors and _body_calls_leaf(body, leaves):
                 doors.append(name)
-        child_in_lambda = in_lambda or kind == "LambdaExpr"
+        # Anything lexically inside ANY candidate is nested, regardless of
+        # the construct that carries it down and regardless of whether the
+        # enclosing candidate itself turns out to be a door (T-1386): a
+        # lambda's own closure-type call operator (`CXXMethodDecl` inside a
+        # `LambdaExpr`) and a local class's member function (`CXXMethodDecl`
+        # inside a `CXXRecordDecl`) are the same shape under different
+        # keywords, and both are already accounted for by the enclosing
+        # candidate's own `_body_calls_leaf` walk, which has no regard to
+        # further nesting. `is_candidate` alone (not just `LambdaExpr`) is
+        # what widens the walk into a local class's members without a second
+        # spurious top-level report.
+        child_nested_in_candidate = nested_in_candidate or is_candidate
         for c in n.get("inner") or []:
-            walk(c, child_in_lambda)
+            walk(c, child_nested_in_candidate)
 
     walk(root, False)
     return doors

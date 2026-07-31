@@ -1075,6 +1075,104 @@ def test_t1383_lambda_regression_control_still_reports_exactly_one_door():
         )
 
 
+# ---------------------------------------------------------------------------
+# T-1386 (Poirot 6f575df-t1383-t1384-t1385-review-2026-07-31.md, Significant
+# 1): T-1383's lambda guard suppresses a nested candidate only when it is
+# lexically inside a `LambdaExpr` -- named by AST kind. A local class (a
+# `CXXRecordDecl`) declared inside a function body is the identical shape
+# (a function-like body nested inside an already-counted enclosing door's
+# body) under a different keyword, and the T-1383 guard does not recognize
+# it: the local class's own member function surfaces as a THIRD, spurious
+# door alongside the enclosing function and the pre-existing control door.
+# The member is unreachable outside the enclosing function and its leaf call
+# is already accounted for by the enclosing door's own `_body_calls_leaf`
+# walk, which has no regard to nesting. This is the regression the routed
+# remedy closes by carrying "inside any already-reported candidate" rather
+# than "inside a LambdaExpr" down the walk.
+# ---------------------------------------------------------------------------
+
+_LOCAL_CLASS_IN_FUNCTION_BODY = (
+    _BASE_FUNNEL_PREFIX
+    + "int64_t OuterDoor(int64_t d) {\n"
+    "    struct Helper { static int64_t Go(int64_t x) { return DynamicScaleReciprocal(x); } };\n"
+    "    return Helper::Go(d);\n"
+    "}\n"
+)
+
+
+@requires_clang
+def test_t1386_local_class_member_inside_function_body_is_not_double_counted():
+    """The regression, against an include-free scratch fixture in this
+    suite's own idiom: a local class's member function must not surface as a
+    door of its own alongside the enclosing function that declares it. Before
+    the fix, this reports three names (`CarriedScaleReciprocal`, `Go`,
+    `OuterDoor`); after it, exactly two."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "src/forward/checked_chain_funnel.cpp", _LOCAL_CLASS_IN_FUNCTION_BODY)
+        doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert doors == ["CarriedScaleReciprocal", "OuterDoor"], (
+            f"expected exactly two doors (the local class's member function "
+            f"'Go' is not itself a door -- it is unreachable outside "
+            f"OuterDoor and its leaf call is already counted by OuterDoor's "
+            f"own body), got {doors}"
+        )
+
+
+@requires_clang
+def test_t1386_local_class_member_inside_function_body_is_not_double_counted_with_callee_declared():
+    """The same regression against declared code (the callee is a real,
+    resolved function rather than an `UnresolvedLookupExpr`), so the finding
+    is not an artifact of the include-free fixture convention -- built on a
+    copy of the real production file plus the same appended shape used
+    above."""
+    real_funnel = os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp")
+    with open(real_funnel, "r", encoding="utf-8") as f:
+        real_content = f.read()
+    local_class_door = (
+        "\nnamespace superslm {\n"
+        "int64_t OuterDoorDeclared(int64_t d) {\n"
+        "    struct HelperDeclared { static int64_t Go(int64_t x) { return DynamicScaleReciprocal(x); } };\n"
+        "    return HelperDeclared::Go(d);\n"
+        "}\n"
+        "}  // namespace superslm\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "checked_chain_funnel_with_local_class.cpp", real_content + local_class_door)
+        doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert doors == ["CarriedScaleReciprocal", "OuterDoorDeclared"], (
+            f"expected exactly two doors against declared code (no spurious "
+            f"'Go' entry from the local class's member function), got {doors}"
+        )
+
+
+@requires_clang
+def test_t1386_local_class_inside_lambda_still_not_double_counted():
+    """Regression control for the shape T-1383's own guard already handled
+    correctly (Poirot's independent sweep, 'local class inside a lambda'):
+    a local class declared inside a lambda's body must still not surface as
+    a separate door once the walk carries the generalized 'inside any
+    already-reported candidate' predicate rather than the LambdaExpr-named
+    one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        content = (
+            _BASE_FUNNEL_PREFIX
+            + "int64_t OuterDoor(int64_t d) {\n"
+            "    auto inner = [d]() {\n"
+            "        struct Helper { static int64_t Go(int64_t x) { return DynamicScaleReciprocal(x); } };\n"
+            "        return Helper::Go(d);\n"
+            "    };\n"
+            "    return inner();\n"
+            "}\n"
+        )
+        path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+        doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert doors == ["CarriedScaleReciprocal", "OuterDoor"], (
+            f"expected exactly two doors (neither the lambda's closure "
+            f"operator nor the local class's member function is a separate "
+            f"door), got {doors}"
+        )
+
+
 # The documented parity case: a namespace-scope function pointer initialised
 # to a leaf's address. Named by the review's own independent sweep as missed
 # by both retired scanners AND the shipped AST mechanism identically -- not a
