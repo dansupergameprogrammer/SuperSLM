@@ -410,12 +410,24 @@ jobs:
     # door-count guard (find_leaf_forwarding_doors/check_door_count) is now a
     # Clang-AST derivation over the funnel's one file, replacing the text
     # scanner a second hardened repair still left with three missed shapes.
-    # Pinned to Clang 18, matching bad-alloc-membership-check's own job
-    # (which already proves clang++-18 is present on this exact
-    # ubuntu-latest runner image) -- a floating `clang++` on this job would
-    # conflate releases across runner-image updates the same as an unpinned
-    # CC/CXX would. The whole-tree leaf ban (scan_files) needs no compiler
-    # at all and is unaffected.
+    # Pinned to Clang 18, matching bad-alloc-membership-check's own job's
+    # pin -- a floating `clang++` on this job would conflate releases across
+    # runner-image updates the same as an unpinned CC/CXX would. (Corrected
+    # 2026-07-31, Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md,
+    # Minor 3: this comment previously said the sibling job's pin "already
+    # proves clang++-18 is present on this exact ubuntu-latest runner image"
+    # -- false on two counts. First, that job's own comment above states the
+    # opposite: the binary's presence is taken from the published software
+    # manifest, "not reconfirmed by executing a runner in this design pass."
+    # Second, no job in this workflow has ever started on this repository --
+    # every run aborts before starting on the account's spending limit
+    # (`gh run view`, executed; D-SLM469). The underlying fact (clang++-18
+    # ships on this runner image per its manifest) is still the true basis
+    # for the pin; what was false is the claim that a run had confirmed it.
+    # This job's own first successful run is that confirmation, exactly as
+    # bad-alloc-membership-check's own comment already states for itself.)
+    # The whole-tree leaf ban (scan_files) needs no compiler at all and is
+    # unaffected.
     env:
       SUPERSLM_CLANGXX: clang++-18
     steps:

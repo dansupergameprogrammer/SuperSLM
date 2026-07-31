@@ -12428,13 +12428,20 @@ static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
 
 // §11 S3.5's own red cell, §13 dim 5/6/7: the `ResidualReconcileSite`-level
 // half, driven through the real site composition -- the clause's stated
-// negative control. The shipped (guarded) construction must reject; the
-// value the UNGUARDED construction would silently accept
-// (`out_codes[0] == 0`) is asserted directly against a hand-computed
-// unguarded call, so this cell fails if the guard is ever weakened or
-// removed, per the standing discipline that reachability alone is not
-// discrimination (D-INSP-61) -- the pre-fix, unguarded value is asserted
-// as data, not merely described.
+// negative control. The shipped (guarded) construction must reject: this
+// cell asserts `result == ResidualReconciliationMagnitudeOutOfDomain` and
+// that the sentinel `out_codes[0]`/`out_scale` are left untouched, per the
+// standing discipline that reachability alone is not discrimination
+// (D-INSP-61). (Corrected 2026-07-31, Poirot 5eff945-t1380-t1381-t1382-
+// review-2026-07-31.md, Minor 2: this comment previously claimed the value
+// an unguarded construction would silently accept was "asserted directly
+// against a hand-computed unguarded call" and "asserted as data, not
+// merely described" -- false; the cell contains no unguarded call, and that
+// value appears only inside a `CHECK_MSG` failure string, which is
+// description. The cell IS discriminating -- an executed revert of both
+// negative-`k` assignments in `LandingRescale` produces exactly this cell's
+// four failures, confirmed by execution -- by the sentinel assertion above,
+// not by the mechanism this comment previously claimed.)
 static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;

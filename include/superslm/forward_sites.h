@@ -207,10 +207,12 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // below is the one caller and it checks this flag per element, immediately).
 // Defaults to `nullptr`: every existing call -- none of which passes this new
 // parameter yet -- compiles unchanged and nothing is read or written through
-// it. (Corrected 2026-07-31, Poirot Minor 1: this comment previously claimed
-// "there are none yet outside this pass", which is false -- existing calls
-// are at forward_sites.cpp:807,810 and roughly twenty in tests/test_main.cpp;
-// the true claim is narrower, that none of them passes this parameter.)
+// it. (Corrected 2026-07-31, Poirot 5eff945-t1380-t1381-t1382-review-2026-
+// 07-31.md, Minor 1: the prior correction here cited existing calls by
+// `file:line`, and the citation was stale the moment it was written -- an
+// edit earlier in the same commit had already moved the lines it named. A
+// `file:line` citation inside a source comment goes stale on every edit
+// above it; the claim itself needs no citation at all.)
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
                         int64_t e_t, uint64_t* out_saturation_count = nullptr,
                         bool* out_magnitude_exceeded_int64 = nullptr);
