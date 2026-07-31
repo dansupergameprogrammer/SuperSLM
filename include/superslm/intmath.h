@@ -477,13 +477,19 @@ inline constexpr int kProbFracBits = 15;
 // other funnel-adjacent compute in this tree (the domain check and the compute
 // are separate calls). `scores`/`out_probs` each have `width` elements.
 //
-// **Precondition: `width >= 1`** (T-1411, whole-tree review b9dcbe0
-// Significant 1). This kernel's own `ShiftByMax` call reads `scores[0]`
-// unconditionally, matching this tree's n==0 convention for a row primitive
-// with no defined empty-row result (ac34677 finding S3: no element is read
-// at n == 0) rather than degrading gracefully at width 0. Every caller must
-// pass a `width` `CheckSoftmaxRowWidthDomain` has already accepted -- that
-// gate rejects `width == 0` for exactly this reason.
+// **`width == 0` is guarded in the kernel itself, returning `true`** (D-SLM497;
+// T-1411, whole-tree review b9dcbe0 Significant 1;
+// Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-confirmation-2026-07-31.md
+// Significant 1). Below, `ShiftByMax`'s own `n >= 1` precondition (above: "Undefined
+// on an empty sequence (n >= 1)") is honoured by never calling it at `width == 0`:
+// this kernel returns before touching `scores` or `out_probs` -- vacuous
+// well-formedness over zero row elements, matching this function's own "whether
+// every row element's i-exp construction was well-formed" contract, which holds
+// trivially when there are no elements. `CheckSoftmaxRowWidthDomain`
+// (checked_chain_funnel.h) independently rejects `width == 0` under
+// reject-over-degrade, so a caller following the documented gate-before-kernel
+// contract never reaches this guard; it exists for a caller who invokes this
+// public-header kernel directly, without that gate.
 //
 // **Returns whether every row element's i-exp construction was WELL-FORMED**
 // (Poirot 2026-07-28 finding 3): CheckSoftmaxRowWidthDomain bounds q_b and

@@ -1089,7 +1089,66 @@ def test_t1383_lambda_regression_control_still_reports_exactly_one_door():
 # walk, which has no regard to nesting. This is the regression the routed
 # remedy closes by carrying "inside any already-reported candidate" rather
 # than "inside a LambdaExpr" down the walk.
+#
+# T-1427 (Poirot 9b0f938-t1411-t1415-t1416-t1386-t1388-confirmation-2026-07-31.md
+# Minor 2): T-1386 landed with no population-validation structure of its own --
+# neither a reproduction of the mechanism it replaced (this file's own
+# established idiom, `_old_.../_hardened_text_scan_.../_pre_t1383_...`) nor an
+# entry in the population-count total below. `_pre_t1386_find_leaf_forwarding_
+# doors_for_comparison` and `_T1386_NEW_SHAPES` close that gap the same way
+# the T-1383 section above does.
 # ---------------------------------------------------------------------------
+
+
+def _pre_t1386_find_leaf_forwarding_doors_for_comparison(
+    path,
+    leaves=cnfl.BANNED_LEAVES,
+    exclude=cnfl._FUNNEL_ENTRY_POINTS,
+    clangxx=cnfl._DEFAULT_CLANGXX,
+    include_dir=cnfl._INCLUDE_DIR,
+):
+    """The AS-SHIPPED-AT-`6f575df` mechanism, reproduced verbatim: the nesting
+    guard is `in_lambda`, set only by AST kind `LambdaExpr` (widened by
+    T-1386, in the module under test, to `nested_in_candidate`, set by the
+    walk's own `is_candidate` predicate so any function-like body nested
+    inside another candidate is suppressed, not only a lambda's closure
+    operator). Reproduced rather than imported, since the module under test
+    no longer carries this shape, mirroring how this file already preserves
+    the two mechanism generations further back
+    (`_pre_t1383_find_leaf_forwarding_doors_for_comparison` and older)."""
+    root = cnfl._run_clang_ast_dump(path, clangxx, include_dir)
+    target = os.path.normpath(os.path.abspath(path)).replace("\\", "/")
+    state = {"file": None}
+    doors: list[str] = []
+
+    def walk(n: object, in_lambda: bool) -> None:
+        if not isinstance(n, dict):
+            return
+        kind = n.get("kind")
+        loc = n.get("loc") or {}
+        if "file" in loc:
+            state["file"] = loc["file"]
+        cur_file = str(state["file"] or "").replace("\\", "/")
+        if (
+            not in_lambda
+            and kind in cnfl._TOP_LEVEL_FUNCTION_KINDS
+            and cur_file
+            and os.path.normpath(os.path.abspath(cur_file)).replace("\\", "/") == target
+        ):
+            name = n.get("name")
+            body = next(
+                (c for c in (n.get("inner") or []) if isinstance(c, dict) and c.get("kind") == "CompoundStmt"),
+                None,
+            )
+            if body is not None and name not in exclude and name not in doors and cnfl._body_calls_leaf(body, leaves):
+                doors.append(name)
+        child_in_lambda = in_lambda or kind == "LambdaExpr"
+        for c in n.get("inner") or []:
+            walk(c, child_in_lambda)
+
+    walk(root, False)
+    return doors
+
 
 _LOCAL_CLASS_IN_FUNCTION_BODY = (
     _BASE_FUNNEL_PREFIX
@@ -1098,6 +1157,39 @@ _LOCAL_CLASS_IN_FUNCTION_BODY = (
     "    return Helper::Go(d);\n"
     "}\n"
 )
+
+# The one population member T-1386 adds via this file's established
+# include-free-fixture convention (`_BASE_FUNNEL_PREFIX`, matching
+# `_T1381_NEW_SHAPES`/`_T1383_NEW_SHAPES`'s own shape). The declared-code
+# variant of the identical shape is confirmed separately, against real
+# declared code, immediately below -- it is a further-sweep confirmation
+# that the same shape is not an include-free-fixture artifact (this file's
+# established convention, e.g. T-1381's own lambda-in-real-code sweep
+# candidate), not a second dict member, since its content depends on a file
+# read rather than being a static string.
+_T1386_NEW_SHAPES = {
+    "local_class_in_function_body": _LOCAL_CLASS_IN_FUNCTION_BODY,
+}
+
+
+@requires_clang
+def test_t1386_new_shape_was_a_miss_under_the_pre_t1386_mechanism():
+    """Independently confirms the new population member really was a miss
+    (double-counted, not suppressed) under the mechanism as shipped at
+    `6f575df` -- StandardsDocument Sec4's population-validation requirement,
+    applied one generation further: a check shown able to fail on the fault
+    it exists to catch, not merely asserted to."""
+    for case_name, content in _T1386_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            old_doors = sorted(_pre_t1386_find_leaf_forwarding_doors_for_comparison(path))
+            assert old_doors == ["CarriedScaleReciprocal", "Go", "OuterDoor"], (
+                f"case {case_name!r}: expected the pre-T-1386 mechanism to report "
+                f"THREE doors (the local class's member function double-counted "
+                f"alongside the enclosing function), got {old_doors} -- this case "
+                f"is not a valid population member if the pre-T-1386 mechanism "
+                f"already suppressed it"
+            )
 
 
 @requires_clang
@@ -1142,6 +1234,36 @@ def test_t1386_local_class_member_inside_function_body_is_not_double_counted_wit
         assert doors == ["CarriedScaleReciprocal", "OuterDoorDeclared"], (
             f"expected exactly two doors against declared code (no spurious "
             f"'Go' entry from the local class's member function), got {doors}"
+        )
+
+
+@requires_clang
+def test_t1386_declared_code_shape_was_also_a_miss_under_the_pre_t1386_mechanism():
+    """The declared-code counterpart of `test_t1386_new_shape_was_a_miss_
+    under_the_pre_t1386_mechanism`: T-1427's population validation covers
+    BOTH local-class shapes (Poirot 9b0f938-…-confirmation-2026-07-31.md
+    Minor 2 names both), not only the include-free fixture -- confirming the
+    miss is not an artifact of the include-free convention, the same
+    distinction `test_t1386_local_class_member_inside_function_body_is_not_
+    double_counted_with_callee_declared` draws for the fixed mechanism."""
+    real_funnel = os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp")
+    with open(real_funnel, "r", encoding="utf-8") as f:
+        real_content = f.read()
+    local_class_door = (
+        "\nnamespace superslm {\n"
+        "int64_t OuterDoorDeclared(int64_t d) {\n"
+        "    struct HelperDeclared { static int64_t Go(int64_t x) { return DynamicScaleReciprocal(x); } };\n"
+        "    return HelperDeclared::Go(d);\n"
+        "}\n"
+        "}  // namespace superslm\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "checked_chain_funnel_with_local_class.cpp", real_content + local_class_door)
+        old_doors = sorted(_pre_t1386_find_leaf_forwarding_doors_for_comparison(path))
+        assert old_doors == ["CarriedScaleReciprocal", "Go", "OuterDoorDeclared"], (
+            f"expected the pre-T-1386 mechanism to report THREE doors against "
+            f"declared code too (the local class's member function "
+            f"double-counted alongside the enclosing function), got {old_doors}"
         )
 
 
@@ -1208,20 +1330,36 @@ def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism()
         assert new_doors == ["CarriedScaleReciprocal"], new_doors
 
 
-def test_t1383_population_count_is_stated():
+def test_population_count_is_stated():
     """States, in one place, the total accumulated population this campaign's
     own exit condition requires: the eleven shapes T-1381 already swept
     (nine required cases plus two further sweep candidates, all still
     re-verified against the T-1383-fixed mechanism above and by the existing
-    T-1381 cells, none regressed) plus the two new shapes this pass adds to
-    the test population (out-of-line member door, in-class member door) plus
-    the one further shape this pass's own sweep found and documents as
-    parity rather than fixing (the function-pointer case) -- fourteen shapes
-    total, at least, per StandardsDocument Sec4's population-validation
-    requirement."""
+    T-1381 cells, none regressed) plus the two new shapes T-1383 adds to the
+    test population (out-of-line member door, in-class member door) plus the
+    one further shape T-1383's own sweep found and documents as parity
+    rather than fixing (the function-pointer case) plus the one new shape
+    T-1386 adds (local class member inside a function body) plus its
+    declared-code further-sweep confirmation -- sixteen shapes total, at
+    least, per StandardsDocument Sec4's population-validation requirement.
+    Every term below is `len()` of a counted fixture container except the
+    three `_further_sweep` literals, each of which documents, at its own
+    definition site, the shape(s) it counts -- so a generation that adds
+    cells to an existing container without also widening this total is
+    caught here rather than left behind (Poirot 9b0f938-t1411-t1415-t1416-
+    t1386-t1388-confirmation-2026-07-31.md Minor 2 / T-1427)."""
     t1381_population = len(_POPULATION_CASES) + len(_T1381_NEW_SHAPES) + 1  # +1 string-literal control
     t1381_further_sweep = 2  # lambda-in-real-code, shadowing variable (documented above, both parity)
     t1383_new_population = len(_T1383_NEW_SHAPES)
     t1383_further_sweep = 1  # function pointer to leaf (documented parity, this test file)
-    total = t1381_population + t1381_further_sweep + t1383_new_population + t1383_further_sweep
-    assert total == 9 + 2 + 2 + 1 == 14
+    t1386_new_population = len(_T1386_NEW_SHAPES)
+    t1386_further_sweep = 1  # declared-code confirmation of the same shape (documented above)
+    total = (
+        t1381_population
+        + t1381_further_sweep
+        + t1383_new_population
+        + t1383_further_sweep
+        + t1386_new_population
+        + t1386_further_sweep
+    )
+    assert total == 9 + 2 + 2 + 1 + 1 + 1 == 16

@@ -538,6 +538,18 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30) {
 
 bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b, int64_t q_c,
                     int64_t* out_probs) {
+	// D-SLM497: `width == 0` is guarded here, before `scores` or `out_probs`
+	// is touched. `ShiftByMax` below documents its own `n >= 1` precondition
+	// and this kernel's own contract is "whether every row element's i-exp
+	// construction was well-formed" -- vacuously true over zero elements, so
+	// `true` is the answer that keeps that contract meaningful rather than
+	// silently degrading. `CheckSoftmaxRowWidthDomain` (checked_chain_funnel.h)
+	// independently rejects `width == 0` under reject-over-degrade; this
+	// guard exists for the caller who invokes this public-header kernel
+	// directly, without that gate.
+	if (width == 0) {
+		return true;
+	}
 	// C32 (§5.2, §11 S3.3 §6.2 step 5): ShiftByMax -> per-element
 	// IExpConstruct/IExpEvaluate -> sum -> Q15 divide. The caller gates this
 	// kernel with CheckSoftmaxRowWidthDomain(q_b, q_c, width) before calling

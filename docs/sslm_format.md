@@ -152,11 +152,15 @@ that writes them is `tools/convert_tokenizer.py` / `tools/unicode_tables.py`.
 
 Pinned Unicode data (version recorded in the `Config` section) for NFC and the
 `\p{L}`/`\p{N}`/`\s` classes. A range is an inclusive `(lo, hi)` codepoint pair.
+**Each of the three range tables (`letter`, `number`, `space`) must be sorted by `lo`,
+non-overlapping, and satisfy `lo <= hi` per range** (T-1416) — the loader rejects a
+range table violating any of these at load time, so a producer must emit ranges in
+ascending, non-overlapping order.
 
 | Field | Type | Notes |
 |---|---|---|
 | magic + version | `u8[4]='UNI1'`, `u32=1` | |
-| letter / number / space | each: `u32 count`, `(u32 lo, u32 hi)[count]` | `\p{L}` / `\p{N}` / `\s` ranges |
+| letter / number / space | each: `u32 count`, `(u32 lo, u32 hi)[count]` | `\p{L}` / `\p{N}` / `\s` ranges, sorted by `lo`, non-overlapping, `lo <= hi` |
 | ccc | `u32 count`, `(u32 cp, u32 class)[count]` | nonzero canonical combining classes |
 | decomp | `u32 count`, `u32 cp[count]`, `u32 off[count+1]`, `u32 seq_len`, `u32 seq[seq_len]` | full canonical decomposition (Hangul is algorithmic, not tabled) |
 | compose | `u32 count`, `(u32 a, u32 b, u32 c)[count]` | primary composites `(a,b)→c` |

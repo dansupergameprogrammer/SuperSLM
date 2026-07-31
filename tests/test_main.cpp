@@ -10914,10 +10914,31 @@ static void TestCheckSoftmaxRowWidthDomainRejectsZeroWidth() {
 	CHECK_MSG(status == superslm::SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
 	          "CheckSoftmaxRowWidthDomain(q_b=1000000, q_c=250000, width=0) == %s, want "
 	          "SoftmaxRowWidthOutOfDomain -- width==0 must be rejected at the gate (T-1411): "
-	          "SoftmaxRowQ15's ShiftByMax reads scores[0] unconditionally and has no defined "
-	          "empty-row result, so a gate that answers Ok here certifies a width the kernel cannot "
-	          "safely accept",
+	          "SoftmaxRowQ15's compute path calls ShiftByMax, which documents its own n >= 1 "
+	          "precondition, so a gate that answers Ok here certifies a width that precondition "
+	          "forbids",
 	          superslm::SslmForwardStatusName(status));
+}
+
+// D-SLM497 (Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-confirmation-
+// 2026-07-31.md Significant 1): SoftmaxRowQ15(nullptr, 0, ...) access-violated
+// (0xC0000005) even though T-1411's gate rejects width == 0 -- a caller who
+// invokes this public-header kernel directly, without CheckSoftmaxRowWidthDomain
+// first, could still crash it. The kernel now guards width == 0 itself, before
+// touching `scores` or `out_probs`, and returns true (vacuous well-formedness
+// over zero row elements). This cell calls it with a null `scores` pointer and
+// a null `out_probs` pointer: if the guard is ever removed or reordered past a
+// dereference, this is a crash, not a silent pass.
+static void TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing() {
+	const bool well_formed = superslm::SoftmaxRowQ15(/*scores=*/nullptr, /*width=*/0,
+	                                                  /*q_ln2=*/1, /*q_b=*/1000000,
+	                                                  /*q_c=*/250000, /*out_probs=*/nullptr);
+	CHECK_MSG(well_formed,
+	          "SoftmaxRowQ15(nullptr, width=0, q_ln2=1, q_b=1000000, q_c=250000, nullptr) "
+	          "returned well_formed=false, want true -- D-SLM497: width==0 is vacuous "
+	          "well-formedness over zero row elements, and the guard must return before "
+	          "reading scores or writing out_probs",
+	          well_formed);
 }
 
 // T-1324 (BLOCKING; D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-
@@ -15368,6 +15389,10 @@ int main(int argc, char** argv) {
 
 	// T-1411 (whole-tree review b9dcbe0, Significant 1).
 	TestCheckSoftmaxRowWidthDomainRejectsZeroWidth();
+
+	// D-SLM497 (Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-
+	// confirmation-2026-07-31.md Significant 1).
+	TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing();
 
 	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
 	// c32-softmax-confirmation-test-design-2026-07-28.md.

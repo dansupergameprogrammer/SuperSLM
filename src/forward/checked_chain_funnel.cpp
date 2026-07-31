@@ -420,11 +420,13 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 	// holds trivially at width 0) and this predicate returned Ok, while
 	// SoftmaxRowQ15's own `ShiftByMax(scores, width, …)` reads `logits[0]`
 	// unconditionally at that width -- an access violation on the exact input
-	// this gate certified. This is the same defect shape the tree fixed once
-	// already at ac34677 finding S3 (RowBoundsWide read `x[0]` before testing
-	// `n`); that fix's family convention is "no element is read at n == 0",
-	// which for a row kernel with no defined empty-row result means the width
-	// floor belongs in the gate rather than a degrade in the kernel.
+	// this gate certified. `ShiftByMax` documents its own `n >= 1`
+	// precondition (intmath.h: "Undefined on an empty sequence (n >= 1)");
+	// that precondition is why the width floor belongs here, ahead of the
+	// compute path this gate exists to certify. (D-SLM497 additionally
+	// guards `width == 0` inside `SoftmaxRowQ15` itself, returning `true`;
+	// this gate's rejection stays, under reject-over-degrade, independent of
+	// that guard.)
 	if (width == 0) {
 		return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
 	}
