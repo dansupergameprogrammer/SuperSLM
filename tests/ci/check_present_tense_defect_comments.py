@@ -83,17 +83,41 @@ consecutive line that happened to be a complete Python string starting with
 `"`, whether or not that line's own content was a `//` comment; a five-line
 generated comment was found merged, this way, into an eighteen-line block
 that also swallowed a struct definition and blank-line placeholders between
-witnesses. `_PY_QUOTED_CPP_COMMENT_PATTERN` and the triple-quote tracking in
-`_iter_blocks` fix both: a quoted `//` line now merges only with adjacent
-quoted `//` lines, and a triple-quoted string is tracked as open until its
-own closing marker regardless of what each interior line starts with.
+witnesses. `_PY_QUOTED_CPP_COMMENT_PATTERN` fixes (2): a quoted `//` line
+now merges only with adjacent quoted `//` lines.
+
+TOKENIZE-DERIVED PYTHON STRING SPANS (T-1538). T-1485's fix for (1) tracked a
+`.py` multi-line triple-quoted string by per-physical-line triple-quote
+PARITY -- a line outside a string whose triple-quote count was odd was read
+as opening one, with no whole-file notion of whether a string was already
+open. Any ordinary line carrying an odd count of triple-quote markers --
+including a comment merely naming the delimiter, or this module's own
+`_TRIPLE_QUOTE_MARKERS` tuple declaration -- flipped that parity for the
+remainder of the file: every later docstring's closing line then read as an
+opener and every opening line as a closer, so code was scanned as string
+text and docstring bodies were skipped entirely. Applied to `.cpp`/`.h`
+inputs (no line in C++ ever closes a phantom Python string), one such stray
+run collapsed the rest of the file into a single block, silencing every
+citation below it.
+
+`_iter_blocks` no longer does per-line triple-quote parity tracking at all.
+For a `.py` file, the physical lines that fall inside a multi-line STRING
+token are taken from Python's own `tokenize` module
+(`_python_multiline_string_lines`) -- ground truth, not a heuristic
+re-derived one line at a time -- and `.cpp`/`.h` inputs get no triple-quote
+handling whatsoever, so a stray triple-quote marker inside a C++ comment can
+no longer collapse the file. A `.py` file that `tokenize` cannot parse raises
+`PythonTokenizeError`, which `scan_files` reports as a per-file failure
+rather than silently treating the unparseable file as clean.
 """
 from __future__ import annotations
 
 import glob
+import io
 import os
 import re
 import sys
+import tokenize
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
@@ -138,25 +162,47 @@ _DEFAULT_TEST_GLOBS = (
 # complete Python string literal starting with `"`.
 _PY_QUOTED_CPP_COMMENT_PATTERN = re.compile(r"""^["']//""")
 
-# Python's own multi-line string/docstring delimiters. A physical line that
-# opens one of these without closing it on the same line begins a block that
-# continues, verbatim, across every following physical line -- regardless of
-# what character each of those lines itself starts with -- until a line
-# closes it. This is the shape T-1382/T-1383's own docstrings take (e.g.
-# `"""Pins mutations O and P (... Significant 1 ...\n    evidence): ...\n
-# ... T-1506 ...\n    clause."""`), and without it the per-line classifier
-# below sees only the docstring's opening line (which happens to start with
-# `"` and so passes as STRING) and treats every subsequent line as an
-# ordinary code break -- silently hiding a resolution marker that in fact
-# appears later in the same docstring, and reporting a fragment of it as an
-# uncited citation when the whole, correctly-joined docstring is not one.
-_TRIPLE_QUOTE_MARKERS = ('"""', "'''")
+# Raised when a `.py` file handed to _python_multiline_string_lines cannot be
+# tokenized as Python. A file this check cannot parse must not be silently
+# treated as clean (T-1538; StandardsDocument Sec4) -- scan_files reports this
+# as a per-file failure, the same as a missing file, rather than swallowing it.
+class PythonTokenizeError(Exception):
+    """A `.py` input could not be tokenized; its string spans are unknown."""
+
+
+def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
+    """Physical line numbers (1-based) that fall inside a multi-line STRING
+    token, per Python's own tokenizer -- ground truth for a `.py` file's
+    triple-quoted-string spans (T-1538).
+
+    Replaces this module's earlier per-physical-line triple-quote-PARITY
+    heuristic (T-1485), which carried no whole-file notion of whether a
+    string was already open: any ordinary line outside a string whose
+    triple-quote count was odd -- a comment merely naming the delimiter, or
+    this module's own former `_TRIPLE_QUOTE_MARKERS` declaration -- flipped
+    the tracked polarity for the remainder of the file, so every later
+    docstring's closing line read as an opener and every opening line as a
+    closer. `tokenize` has no such state to desynchronise: each STRING
+    token's own `start`/`end` line numbers come from the interpreter's own
+    lexer, not from re-counting delimiters on each line in isolation."""
+    text = "".join(lines)
+    result: set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
+                result.update(range(tok.start[0], tok.end[0] + 1))
+    except (tokenize.TokenError, SyntaxError, IndentationError, UnicodeDecodeError) as exc:
+        raise PythonTokenizeError(f"could not tokenize as Python: {exc}") from exc
+    return frozenset(result)
 
 
 def _line_kind(line: str) -> str:
-    """Classifies one physical line for block-grouping purposes, for lines
-    OUTSIDE an open multi-line Python string (see `_iter_blocks`). A line is
-    part of a textual block if it is a `//` comment (any indentation), a
+    """Classifies one physical line for block-grouping purposes. `_iter_blocks`
+    calls this for every line except one it already knows, from a `.py` file's
+    tokenize-derived multi-line-string spans, to be inside a Python string
+    literal -- those lines are forced to STRING without consulting this
+    function at all (see `_iter_blocks`). A line is part of a textual block
+    if it is a `//` comment (any indentation), a
     Python-quoted `//` comment line (`_PY_QUOTED_CPP_COMMENT_PATTERN`), or a
     bare C string-literal continuation (the shape this codebase's multi-line
     CHECK_MSG messages take: one quoted string literal per physical line).
@@ -173,24 +219,30 @@ def _line_kind(line: str) -> str:
     return "OTHER"
 
 
-def _iter_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
+def _iter_blocks(
+    lines: list[str], python_string_lines: frozenset[int] | None = None
+) -> list[tuple[int, int, str]]:
     """Every maximal run of same-kind (COMMENT or STRING) contiguous lines, as
     (1-based start line, 1-based end line, merged text). Lines are joined with a
     space so a citation split across a line break -- this codebase's own fixed
     text does this ("...(Significant " / "5, closed by...)") -- is still found as
     one continuous match against the merged text, never only against one line.
 
-    A line that opens a Python triple-quoted string (`_TRIPLE_QUOTE_MARKERS`)
-    without closing it on the same line switches into a verbatim continuation
-    mode: every following physical line joins the same STRING block, whatever
-    its own leading character, until a line carries the closing marker. This
-    keeps a multi-line docstring together as one block the same way the `//`
-    and bare-C-string rules already keep their own multi-line shapes together."""
+    `python_string_lines`, when given, is the set of 1-based physical line
+    numbers a `.py` file's tokenizer places inside a multi-line STRING token
+    (`_python_multiline_string_lines`). Every such line is forced to kind
+    STRING regardless of what character it starts with, which is what keeps a
+    multi-line docstring together as one block the same way the `//` and
+    bare-C-string rules already keep their own multi-line shapes together --
+    without re-deriving "is a string open" from each line's own content the
+    way T-1485's triple-quote-parity tracker did (see
+    `_python_multiline_string_lines`'s docstring for why that desynchronised).
+    `.cpp`/`.h` inputs pass `None`: C++ has no triple-quoted strings, so no
+    line in a C++ file should ever force this state, and none does."""
     blocks: list[tuple[int, int, str]] = []
     start: int | None = None
     kind: str | None = None
     buf: list[str] = []
-    open_triple: str | None = None
 
     def _close() -> None:
         nonlocal start, kind, buf
@@ -201,28 +253,11 @@ def _iter_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
 
-        if open_triple is not None:
-            buf.append(stripped)
-            if open_triple in stripped:
-                open_triple = None
-            continue
+        if python_string_lines is not None and i in python_string_lines:
+            this_kind = "STRING"
+        else:
+            this_kind = _line_kind(line)
 
-        opened: str | None = None
-        for marker in _TRIPLE_QUOTE_MARKERS:
-            if stripped.count(marker) % 2 == 1:
-                opened = marker
-                break
-
-        if opened is not None:
-            if kind != "STRING":
-                _close()
-                start = i
-            kind = "STRING"
-            buf.append(stripped)
-            open_triple = opened
-            continue
-
-        this_kind = _line_kind(line)
         if this_kind in ("COMMENT", "STRING") and this_kind == kind:
             buf.append(stripped)
             continue
@@ -233,16 +268,23 @@ def _iter_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
     return blocks
 
 
-def scan_text(lines: list[str]) -> list[tuple[int, int, list[str]]]:
+def scan_text(lines: list[str], is_python: bool = False) -> list[tuple[int, int, list[str]]]:
     """Every (start_line, end_line, [labels]) block among `lines` that cites at
     least one severity-finding label with no resolution marker anywhere in the
     same block. Driven directly from an in-memory line list -- used both by
     find_uncited_defect_citations (file-backed) and by the historical-population
     validation cells, which replay recovered git-blob text without writing it to
-    disk first. A text scan, not a parsed AST -- see module docstring for why
-    (matches check_no_forward_leaf_calls.py's own convention)."""
+    disk first (all seven recovered sites are `.cpp`-shaped text, so those cells
+    correctly take the `is_python=False` default). A text scan, not a parsed
+    AST -- see module docstring for why (matches check_no_forward_leaf_calls.py's
+    own convention).
+
+    `is_python=True` derives `lines`' multi-line-string spans from `tokenize`
+    (T-1538) rather than skipping triple-quote tracking altogether; may raise
+    `PythonTokenizeError` if `lines` cannot be tokenized as Python."""
+    python_string_lines = _python_multiline_string_lines(lines) if is_python else None
     hits: list[tuple[int, int, list[str]]] = []
-    for start, end, text in _iter_blocks(lines):
+    for start, end, text in _iter_blocks(lines, python_string_lines):
         labels = SEVERITY_LABEL_PATTERN.findall(text)
         if not labels:
             continue
@@ -253,10 +295,12 @@ def scan_text(lines: list[str]) -> list[tuple[int, int, list[str]]]:
 
 
 def find_uncited_defect_citations(path: str) -> list[tuple[int, int, list[str]]]:
-    """File-backed form of scan_text: reads `path` and applies the same rule."""
+    """File-backed form of scan_text: reads `path` and applies the same rule.
+    `.py` paths get tokenize-derived string-span tracking (T-1538); `.cpp`/`.h`
+    paths get none -- C++ has no triple-quoted strings, so none is correct."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
-    return scan_text(lines)
+    return scan_text(lines, is_python=path.endswith(".py"))
 
 
 def _glob_files(globs: tuple[str, ...], repo_root: str) -> list[str]:
@@ -269,7 +313,12 @@ def _glob_files(globs: tuple[str, ...], repo_root: str) -> list[str]:
 def scan_files(file_paths: list[str], repo_root: str = _REPO_ROOT) -> list[str]:
     """Scans every file in `file_paths` (absolute or repo-root-relative).
     Returns one formatted failure string per uncited-defect-citation block,
-    empty if clean."""
+    empty if clean.
+
+    A `.py` file `tokenize` cannot parse is reported as its own failure line
+    (T-1538) rather than skipped or treated as clean -- a file this check
+    cannot parse is a file it cannot vouch for, the same posture as a missing
+    file below."""
     failures: list[str] = []
     for p in file_paths:
         abs_p = p if os.path.isabs(p) else os.path.join(repo_root, p)
@@ -277,7 +326,12 @@ def scan_files(file_paths: list[str], repo_root: str = _REPO_ROOT) -> list[str]:
         if not os.path.isfile(abs_p):
             failures.append(f"{rel}: file not found at {abs_p}")
             continue
-        for start, end, labels in find_uncited_defect_citations(abs_p):
+        try:
+            hits = find_uncited_defect_citations(abs_p)
+        except PythonTokenizeError as exc:
+            failures.append(f"{rel}: {exc}")
+            continue
+        for start, end, labels in hits:
             failures.append(
                 f"{rel}:{start}-{end}: cites {', '.join(sorted(set(labels)))} with no "
                 f"resolution marker ('closed' or a cited T-<id>) in the same comment block"

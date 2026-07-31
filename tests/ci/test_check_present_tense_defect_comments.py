@@ -220,6 +220,91 @@ def test_a_single_line_python_docstring_is_unaffected():
         assert cptdc.find_uncited_defect_citations(path) == []
 
 
+# --- Tokenize-derived Python string spans replace triple-quote parity
+# tracking (T-1538): the parity tracker desynchronised on any ordinary line
+# outside a string carrying an odd triple-quote count, inverting docstring/
+# code polarity for the rest of the file, and had no closing marker at all
+# in `.cpp`/`.h`, where it ran to end of file. ---
+
+
+def test_a_preceding_comment_naming_the_triple_quote_delimiter_does_not_hide_a_later_citation():
+    """T-1538 Significant 1 (Poirot 884ee74-t1485-present-tense-gate-blocking-
+    review-2026-07-31.md): the per-line triple-quote-parity tracker read this
+    file's own leading `#` comment -- which names the delimiter and so carries
+    an odd triple-quote count -- as OPENING a phantom string, inverting every
+    later docstring boundary's polarity for the rest of the file and hiding
+    the uncited citation below entirely. Tokenize-derived spans are immune:
+    a `#` comment is never part of any STRING token."""
+    # Interpolated, not written literally: a bare "Critical 1" on a line
+    # starting with a quote character would itself be an uncited instance of
+    # this exact defect class in THIS module's own source, which this
+    # module's own default globs scan (the Minor 4 self-scan collision
+    # T-1485's real-tree run hit once already; see
+    # test_a_marker_in_a_different_block_does_not_suppress_an_unrelated_
+    # citation's comment above).
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site_test.py",
+            '# The fixture generators write """-delimited blocks.\n'
+            "\n"
+            "def test_something():\n"
+            '    """Pins the mutation this guard exists to catch.\n'
+            "\n"
+            f"    {_label} (Poirot deadbeef.md): the guard does not exist and the\n"
+            '    kernel reads unmapped heap memory on every call."""\n'
+            "    assert True\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert len(hits) == 1, (
+            f"the preceding comment must not suppress the uncited {_label} citation, got {hits}"
+        )
+        assert hits[0][2] == [_label]
+
+
+def test_a_stray_triple_quote_length_run_in_a_cpp_comment_does_not_collapse_the_file():
+    """T-1538 Significant 2 (same casebook): no `.cpp`/`.h` line ever closes a
+    phantom Python string, so the parity tracker's collapse ran to end of
+    file -- an uncited citation followed, anywhere later in the file, by an
+    unrelated block that happens to contain the word "closed" was silenced,
+    because the whole remainder of the file became one block. `.cpp`/`.h`
+    inputs now get no triple-quote handling at all, so the stray `'''` below
+    (an apostrophe-heavy aside, not a string delimiter in C++) must not merge
+    anything across the blank/code lines that separate real comment blocks."""
+    # Interpolated for the same self-scan-collision reason as the test above.
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site.cpp",
+            "// possessives run together: foos''' bar\n"
+            "int x = 0;\n"
+            "int y = 0;\n"
+            "int z = 0;\n"
+            f"// {_label}: the guard does not exist.\n"
+            "int w = 0;\n"
+            "int v = 0;\n"
+            "// unrelated, closed elsewhere\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits == [(5, 5, [_label])], (
+            f"the later, unrelated 'closed' comment must not silence the uncited {_label} "
+            f"citation by way of a file-wide collapse, got {hits}"
+        )
+
+
+def test_a_py_file_tokenize_cannot_parse_is_reported_as_a_failure_not_treated_as_clean():
+    """T-1538: a `.py` file this check cannot tokenize must not be silently
+    scanned as clean (StandardsDocument Sec4) -- scan_files reports it as its
+    own failure line, the same posture as a missing file."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tests/broken.py", 'x = """unterminated triple-quoted string\n')
+        failures = cptdc.scan_files(["tests/broken.py"], repo_root=tmp)
+        assert len(failures) == 1
+        assert "tokeniz" in failures[0].lower(), f"expected a tokenize-failure message, got {failures}"
+
+
 # --- Python-quoted `//` comment lines: a fixture generator that builds
 # multi-line C++ output as one Python string literal per physical line
 # (T-1485). ---
