@@ -119,9 +119,10 @@ bool SslmTraceHookInstalled(const SslmTraceHookState& state) noexcept;
 // directly, so the "installed" check and the call are always the same path.
 void SslmEmitChainTrace(const SslmTraceHookState& state, const SslmChainTraceRecord& record);
 
-// The K/V-landing sibling of SslmEmitChainTrace, for S3.3's landing sites.
-// Declared now so the schema and the emission seam are both pinned in this
-// sub-slot; no production call site exists yet.
+// The K/V-landing sibling of SslmEmitChainTrace. Called by RunLayerLoop's
+// K/V landing loop (forward_sites.cpp; T-1412) — one record per (head,
+// projection) per token, K then V, under the gating the record struct's own
+// comment above states.
 void SslmEmitKvLandingTrace(const SslmTraceHookState& state,
                              const SslmKvLandingTraceRecord& record);
 

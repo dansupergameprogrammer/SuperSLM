@@ -25,6 +25,7 @@
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
+#include "superslm/matmul.h"
 #include "superslm/model.h"
 #include "superslm/trace_hook.h"
 
@@ -62,22 +63,34 @@ superslm_test::FixtureSection MakeRopeSection(int32_t context_cap, int32_t pairs
 
 // The solver's decode fixture. Geometry matches TwoLayerFixture /
 // DecodeLoopFixture exactly (hidden=2, two layers, one head, head_dim=2,
-// intermediate=2, context_cap=1, vocab=3); every weight tensor is its OWN
-// array (no aliasing), so a single-element mutation names one tensor.
+// intermediate=2, context_cap=1, vocab=3). Aliasing, stated exactly
+// (T-1436): the 14 projection weight tensors, the norm gains, the site
+// constants (by-value CarriedScale fields), and the ctx_fold / kv_landing
+// operand arrays are all per-layer, so a single-element mutation of any of
+// them names one tensor in one layer. What still shares an instance is K
+// versus V WITHIN a layer (kv_landing_r_t/e_t and the trace-only targets),
+// matching TwoLayerFixture's own "this fixture does not distinguish K from
+// V" convention — a K-vs-V landing-operand mutation is not attributable and
+// no cell should claim it is.
 struct SolverDecodeFixture {
 	superslm::SslmModelView view;
 	LayerWeights layers[2];
 
-	int64_t kv_landing_r_t_arr[1];
-	int64_t kv_landing_e_t_arr[1] = {0};
+	// T-1436: every per-head operand array below is PER LAYER ([2][1], layer
+	// indexed), so a mutation of any of them names one layer. A prior
+	// revision shared one instance across both layers while the struct
+	// comment claimed no aliasing — the Loki strike's finding; fixed by
+	// delivering the claim rather than weakening it.
+	int64_t kv_landing_r_t_arr[2][1];
+	int64_t kv_landing_e_t_arr[2][1] = {{0}, {0}};
 	// Trace-only landing targets (T-1412): the (m_target, e_target) the
 	// landing record's m_out/e_out carry. This fixture's landed codes sit at
 	// the canonical scale the reciprocal was derived from, exponent 0.
-	int64_t kv_landing_m_target_arr[1] = {INT64_C(1073741824)};
-	int64_t kv_landing_e_target_arr[1] = {0};
-	int32_t ctx_fold_identity_arr[1] = {1};
-	int32_t ctx_fold_mult_arr[1] = {0};
-	int32_t ctx_fold_shift_arr[1] = {0};
+	int64_t kv_landing_m_target_arr[2][1] = {{INT64_C(1073741824)}, {INT64_C(1073741824)}};
+	int64_t kv_landing_e_target_arr[2][1] = {{0}, {0}};
+	int32_t ctx_fold_identity_arr[2][1] = {{1}, {1}};
+	int32_t ctx_fold_mult_arr[2][1] = {{0}, {0}};
+	int32_t ctx_fold_shift_arr[2][1] = {{0}, {0}};
 
 	// Per-layer, per-tensor weight storage. Indexed [layer][tensor], tensor
 	// order: q, k, v, o, gate, up, down.
@@ -145,7 +158,8 @@ struct SolverDecodeFixture {
 		}
 
 		const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
-		kv_landing_r_t_arr[0] = superslm::DynamicScaleReciprocal(canonical.m);
+		kv_landing_r_t_arr[0][0] = superslm::DynamicScaleReciprocal(canonical.m);
+		kv_landing_r_t_arr[1][0] = kv_landing_r_t_arr[0][0];
 		for (int l = 0; l < 2; ++l) {
 			LayerWeights& lw = layers[l];
 			lw.attn_norm_gain = attn_gain[l];
@@ -159,17 +173,17 @@ struct SolverDecodeFixture {
 			lw.proj_shift = 0;
 			lw.q_site_constant = canonical;
 			lw.o_site_constant = CarriedScale{canonical.m, canonical.e + cal.o_e_boost[l]};
-			lw.kv_landing_r_t_k = kv_landing_r_t_arr;
-			lw.kv_landing_e_t_k = kv_landing_e_t_arr;
-			lw.kv_landing_r_t_v = kv_landing_r_t_arr;
-			lw.kv_landing_e_t_v = kv_landing_e_t_arr;
-			lw.kv_landing_m_target_k = kv_landing_m_target_arr;
-			lw.kv_landing_e_target_k = kv_landing_e_target_arr;
-			lw.kv_landing_m_target_v = kv_landing_m_target_arr;
-			lw.kv_landing_e_target_v = kv_landing_e_target_arr;
-			lw.ctx_fold_identity = ctx_fold_identity_arr;
-			lw.ctx_fold_mult = ctx_fold_mult_arr;
-			lw.ctx_fold_shift = ctx_fold_shift_arr;
+			lw.kv_landing_r_t_k = kv_landing_r_t_arr[l];
+			lw.kv_landing_e_t_k = kv_landing_e_t_arr[l];
+			lw.kv_landing_r_t_v = kv_landing_r_t_arr[l];
+			lw.kv_landing_e_t_v = kv_landing_e_t_arr[l];
+			lw.kv_landing_m_target_k = kv_landing_m_target_arr[l];
+			lw.kv_landing_e_target_k = kv_landing_e_target_arr[l];
+			lw.kv_landing_m_target_v = kv_landing_m_target_arr[l];
+			lw.kv_landing_e_target_v = kv_landing_e_target_arr[l];
+			lw.ctx_fold_identity = ctx_fold_identity_arr[l];
+			lw.ctx_fold_mult = ctx_fold_mult_arr[l];
+			lw.ctx_fold_shift = ctx_fold_shift_arr[l];
 			lw.ctx_fold_site_constant = canonical;
 			lw.attn_residual_site_constant = canonical;
 			lw.q_ln2 = INT64_C(2081104);
@@ -510,6 +524,156 @@ int RunQk() {
 	return 0;
 }
 
+// Experiment F (T-1434 fold): the width-1 null-region boundary, proven by
+// total enumeration rather than asserted.
+//
+// Claim under proof: at width = 1, decode output is independent of every
+// value computed between the q_proj funnel and GemmProbQ15Accumulate,
+// because (i) the softmax probability is the constant 32768 for EVERY
+// reachable score, and (ii) a Q15 probability of exactly 32768 makes the
+// context accumulate the identity on the value row. (i) and (ii) are each
+// enumerated over their entire reachable input set at this fixture's
+// geometry (head_dim = 2: |score| <= 2*127*127 = 32258), plus out-of-cell
+// spot extremes. The third check executes the one value-channel ESCAPE from
+// the region: the K landing's saturation counter, which is host-visible
+// state outside the decode-output predicate.
+int RunBoundary() {
+	const int64_t q_ln2 = INT64_C(2081104), q_b = INT64_C(4062246),
+	              q_c = INT64_C(8649804928567);
+
+	// (i) SoftmaxRowQ15 at width 1: every reachable score at head_dim=2.
+	long long checked = 0, bad = 0;
+	for (int64_t s = -32258; s <= 32258; ++s) {
+		int64_t prob = 0;
+		const bool ok = superslm::SoftmaxRowQ15(&s, 1, q_ln2, q_b, q_c, &prob);
+		++checked;
+		if (!ok || prob != 32768) {
+			++bad;
+			if (bad <= 5)
+				std::printf("  COUNTEREXAMPLE score=%" PRId64 " ok=%d prob=%" PRId64 "\n", s,
+				            ok ? 1 : 0, prob);
+		}
+	}
+	// Out-of-cell spot extremes (not reachable at head_dim=2; reachable at
+	// larger geometries).
+	for (int64_t s : {INT64_C(1) << 40, -(INT64_C(1) << 40), INT64_C(1) << 62,
+	                  -(INT64_C(1) << 62)}) {
+		int64_t prob = 0;
+		const bool ok = superslm::SoftmaxRowQ15(&s, 1, q_ln2, q_b, q_c, &prob);
+		++checked;
+		if (!ok || prob != 32768) {
+			++bad;
+			std::printf("  COUNTEREXAMPLE(extreme) score=%" PRId64 " ok=%d prob=%" PRId64 "\n",
+			            s, ok ? 1 : 0, prob);
+		}
+	}
+	std::printf("softmax width-1 sweep: %lld scores checked, %lld counterexamples\n", checked,
+	            bad);
+
+	// (ii) GemmProbQ15Accumulate at prob == 32768: the wide context is the
+	// CONSTANT scalar multiple 32768 * v (the kernel accumulates prob*value
+	// and defers the Q15 normalization to the downstream funnel, which is
+	// scale-invariant), so ctx is injective in v and independent of the
+	// score. Every value pair enumerated. (A first version of this check
+	// asserted ctx == v — wrong, and the enumeration caught it; the corrected
+	// property below is the one the null-region argument actually needs.)
+	long long pairs_checked = 0, pairs_bad = 0;
+	const int64_t unit_prob[1] = {32768};
+	for (int v0 = -127; v0 <= 127; ++v0) {
+		for (int v1 = -127; v1 <= 127; ++v1) {
+			const int8_t values[2] = {static_cast<int8_t>(v0), static_cast<int8_t>(v1)};
+			int64_t ctx[2] = {INT64_C(-999), INT64_C(-999)};
+			superslm::GemmProbQ15Accumulate(unit_prob, values, /*width=*/1, /*head_dim=*/2, ctx);
+			++pairs_checked;
+			if (ctx[0] != INT64_C(32768) * v0 || ctx[1] != INT64_C(32768) * v1) {
+				++pairs_bad;
+				if (pairs_bad <= 5)
+					std::printf("  COUNTEREXAMPLE v={%d,%d} ctx={%" PRId64 ",%" PRId64 "}\n", v0,
+					            v1, ctx[0], ctx[1]);
+			}
+		}
+	}
+	std::printf("ctx-accumulate 32768*v sweep: %lld value pairs checked, %lld counterexamples\n",
+	            pairs_checked, pairs_bad);
+
+	// (iii) The saturation-counter escape: a K-magnitude blowup moves
+	// seq.kv_saturation_count while the compared decode output does not.
+	// (RunDecode's local seq is not returned, so this probe drives
+	// RunLayerLoop directly, clean weights vs saturating k_weight.)
+	int8_t wc[2][7][4];
+	CandidateWeights(wc);
+	int8_t wk[2][7][4];
+	std::memcpy(wk, wc, sizeof(wk));
+	wk[0][1][0] = 127;  // layer0.k[0]: drive the landing past the [-127,127] clamp
+	wk[0][1][1] = 127;
+	uint64_t sat_clean = 0, sat_mut = 0;
+	{
+		SolverDecodeFixture f(wc, kEmbed, kHead, 16384);
+		int8_t hidden[2] = {5, -3};
+		superslm::SequenceLayerState seq{};
+		seq.hidden_codes = hidden;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), INT64_C(0)};
+		uint8_t ws[64];
+		std::memset(ws, 0xEE, sizeof(ws));
+		const auto st = superslm::RunLayerLoop(seq, f.layers, 2, 2, 2, 2, 2, 1,
+		                                       f.view.rope_tables, ws, sizeof(ws));
+		std::printf("  clean RunLayerLoop status=%s\n", superslm::SslmForwardStatusName(st));
+		sat_clean = seq.kv_saturation_count;
+	}
+	{
+		SolverDecodeFixture f(wk, kEmbed, kHead, 16384);
+		int8_t hidden[2] = {5, -3};
+		superslm::SequenceLayerState seq{};
+		seq.hidden_codes = hidden;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), INT64_C(0)};
+		uint8_t ws[64];
+		std::memset(ws, 0xEE, sizeof(ws));
+		const auto st = superslm::RunLayerLoop(seq, f.layers, 2, 2, 2, 2, 2, 1,
+		                                       f.view.rope_tables, ws, sizeof(ws));
+		std::printf("  k-mutated RunLayerLoop status=%s\n", superslm::SslmForwardStatusName(st));
+		sat_mut = seq.kv_saturation_count;
+	}
+	SolverDecodeFixture fc(wc, kEmbed, kHead, 16384);
+	SolverDecodeFixture fk(wk, kEmbed, kHead, 16384);
+	bool decode_moved = false;
+	for (int32_t p = 0; p < 3; ++p) {
+		DecodeResult a = RunDecode(fc, {p}, 3);
+		DecodeResult b = RunDecode(fk, {p}, 3);
+		if (!a.SameOutputAs(b)) decode_moved = true;
+	}
+	std::printf("saturation escape: counter clean=%" PRIu64 " mutated=%" PRIu64
+	            " decode_output_moved=%s\n",
+	            sat_clean, sat_mut, decode_moved ? "YES" : "NO");
+
+	// (iii-b) Decompose the layer-0 landing by direct site calls: where do
+	// the saturations come from, and what does the k-row mutation change?
+	{
+		SolverDecodeFixture f(wc, kEmbed, kHead, 16384);
+		int8_t hidden[2] = {5, -3};
+		std::vector<int8_t> normed(2);
+		CarriedScale normed_scale{};
+		superslm::RmsNormSite(hidden, f.attn_gain[0], 2, CarriedScale{INT64_C(1073741824), 0},
+		                      f.layers[0].attn_norm_site_constant, normed.data(), &normed_scale,
+		                      "probe.attn_norm", 0, nullptr);
+		std::printf("  normed codes={%d,%d} scale=(%" PRId64 ",%" PRId64 ")\n", normed[0],
+		            normed[1], normed_scale.m, normed_scale.e);
+		for (const char* which : {"identity-k", "mutated-k"}) {
+			const int8_t* krow = (which[0] == 'i') ? wc[0][1] : wk[0][1];
+			std::vector<int64_t> kacc(2);
+			superslm::GemmInt8AccumulateRow(normed.data(), krow, 2, 2, kacc.data());
+			for (int i = 0; i < 2; ++i) {
+				uint64_t sat = 0;
+				const int64_t landed = superslm::LandingRescale(
+				    kacc[i], normed_scale.m, f.kv_landing_r_t_arr[0][0], normed_scale.e,
+				    f.kv_landing_e_t_arr[0][0], &sat, nullptr);
+				std::printf("  %s k[%d]: acc=%" PRId64 " landed=%" PRId64 " sat=%" PRIu64 "\n",
+				            which, i, kacc[i], landed, sat);
+			}
+		}
+	}
+	return (bad == 0 && pairs_bad == 0) ? 0 : 1;
+}
+
 #ifdef SOLVER_TRACE_WIRED
 // Experiment E: the trace wiring. (1) hooked run captures per-site records
 // with real site names and whole-token indices; (2) hooked and unhooked
@@ -555,9 +719,10 @@ int main(int argc, char** argv) {
 	if (mode == "candidate") return RunCandidate();
 	if (mode == "mutate") return RunMutate();
 	if (mode == "qk") return RunQk();
+	if (mode == "boundary") return RunBoundary();
 #ifdef SOLVER_TRACE_WIRED
 	if (mode == "trace") return RunTrace();
 #endif
-	std::fprintf(stderr, "usage: %s null|candidate|mutate|qk|trace\n", argv[0]);
+	std::fprintf(stderr, "usage: %s null|candidate|mutate|qk|boundary|trace\n", argv[0]);
 	return 2;
 }
