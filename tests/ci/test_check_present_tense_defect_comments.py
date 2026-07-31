@@ -474,6 +474,135 @@ def test_two_adjacent_string_literals_with_no_blank_line_between_them_do_not_mer
         assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
 
 
+def test_a_multiline_literal_does_not_merge_with_a_following_single_line_literal():
+    """T-1557 (Poirot b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md
+    Significant 1): T-1553's literal-start break was DIRECTIONAL. It closed a
+    block when a tokenizer span BEGAN, and a single-line literal produces no
+    span and therefore no start line -- while still classifying STRING through
+    `_line_kind`. So a multi-line literal carrying a resolution marker,
+    immediately followed by a single-line string literal carrying an uncited
+    citation, still read as ONE block and the citation was silently cleared.
+
+    The reverse ordering was already caught at b2b00b4 (the multi-line
+    literal's own start line broke the block), which is what exposed the
+    asymmetry: the same two literals, same adjacency, opposite order, opposite
+    outcome. This is the primary construction only -- its controls are
+    separate cells below, so a regression here cannot mask them."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/span_exit_multiline_then_single_test.py",
+            'A = """Significant 5 (closed; fixed 2026-07-01).\n'
+            "index of the remediation suite.\n"
+            '"""\n'
+            f'"{_label}: the guard does not exist"\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            f"a multi-line literal's own closed 'Significant 5' must not silently satisfy the "
+            f"uncited {_label} in the distinct single-line literal on the very next line -- the "
+            f"block boundary has to hold leaving a span, not only entering one, got {hits}"
+        )
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+        significant5_hit = any("Significant 5" in block_labels for _, _, block_labels in hits)
+        assert not significant5_hit, (
+            f"the multi-line literal carries its own resolution marker in its own literal and "
+            f"must not be flagged, got {hits}"
+        )
+
+
+def test_the_span_exit_pair_separated_by_a_blank_line_remains_caught():
+    """T-1557 blank-line control for the cell above. A blank line already broke
+    this block before the span-membership break existed, so this shape was
+    caught at 28aa351, d2a7eed and b2b00b4 alike. It must stay caught: a remedy
+    that closed the span-exit boundary by disturbing the blank-line rule would
+    pass the primary and regress the mechanism the whole module rests on."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/span_exit_blank_separated_test.py",
+            'A = """Significant 5 (closed; fixed 2026-07-01).\n'
+            "index of the remediation suite.\n"
+            '"""\n'
+            "\n"
+            f'"{_label}: the guard does not exist"\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, f"the blank-line-separated span-exit pair must remain caught, got {hits}"
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+
+
+def test_two_single_line_string_literals_still_merge_by_design():
+    """T-1557 design control (same casebook, Observation 5). The span-exit
+    break keys on span MEMBERSHIP, not on giving every literal its own start
+    line, and that distinction is load-bearing rather than incidental. Two
+    single-line string literals both sit wholly outside every tokenizer span,
+    so they compare equal and still merge -- which is the bare C string-literal
+    continuation rule this codebase's multi-line CHECK_MSG messages depend on.
+
+    The naive extension of T-1553 -- a start line per literal -- would split
+    this and fire false positives across the fixture generators. This cell goes
+    red if anyone tries it, which is the only reason that reasoning survives in
+    executable form rather than only in a docstring."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/single_line_run_merges_test.py",
+            f'    "{_label}: the guard does not exist "\n'
+            '    "and the kernel reads unmapped heap memory "\n'
+            '    "(closed; fixed 2026-07-01)."\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert not hits, (
+            f"a run of single-line string literals is ONE authored block (the bare C "
+            f"string-literal continuation rule), so the resolution marker on its last line "
+            f"clears the {_label} citation on its first -- splitting them would fire false "
+            f"positives across every fixture generator, got {hits}"
+        )
+
+
+def test_two_literals_sharing_one_physical_line_split_loudly_by_design():
+    """T-1558 (same casebook, Minor 2). Where one literal's last physical line
+    is also the next literal's first -- implicit or `+` concatenation -- that
+    line is both inside the first span and a start line of the second, so the
+    literal-start break fires INSIDE the first literal and separates its own
+    citation from its own resolution marker. That is a false positive on a
+    blocking gate.
+
+    It is pinned rather than fixed, deliberately. A line-granular scanner
+    cannot decompose two literals sharing a physical line, so it must err one
+    way; a false positive is loud and self-announcing, where the class this
+    module exists to prevent is silent. Reach is zero across the tree measured.
+    This cell exists so the choice is a recorded, executable one -- if it goes
+    red, someone changed the trade-off, and that is a design call rather than a
+    text fix."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/shared_physical_line_split_test.py",
+            f'X = ("""{_label} was found here\n'
+            'closed""" """second literal body\n'
+            '""")\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            f"two literals sharing one physical line are expected to SPLIT -- erring loud on "
+            f"correct, fully-cited code rather than silently merging -- so the {_label} "
+            f"citation is flagged apart from its own 'closed' marker, got {hits}"
+        )
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, (
+            f"the split is expected to separate {_label} from its own resolution marker; if "
+            f"this changed, the err-loud trade-off changed with it, got {labels}"
+        )
+
+
 def test_a_py_file_tokenize_cannot_parse_is_reported_as_a_failure_not_treated_as_clean():
     """T-1538: a `.py` file this check cannot tokenize must not be silently
     scanned as clean (StandardsDocument Sec4) -- scan_files reports it as its

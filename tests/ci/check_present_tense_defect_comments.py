@@ -146,9 +146,12 @@ comments and bare-string continuations -- entirely. A resolution marker
 anywhere in a multi-line docstring or module-level string therefore silently
 satisfied a citation anywhere else in the same string, however far apart
 and however many blank lines separated them (confirmed 28aa351 Significant
-2/prior Significant 3: this module's own 112-line docstring is one such
-string, and one `closed` inside it clears six unrelated severity-label
-citations). A blank line now breaks a block the same way inside a
+2/prior Significant 3: this module's own docstring was one such string at
+that commit, and one `closed` inside it cleared six unrelated severity-label
+citations -- T-1559 retired the two present-tense clauses that stood here,
+both false by the time they were read: the line count had moved and the
+docstring had long since been many blocks rather than one). A blank line now
+breaks a block the same way inside a
 tokenizer-forced string span as outside one, so a multi-line string is
 scanned at paragraph granularity -- one block per blank-line-delimited
 paragraph -- consistent with how `//` comment runs and bare C string-literal
@@ -168,8 +171,26 @@ on plain-plain adjacent literals since before T-1545 too, per the same
 finding). `_python_multiline_string_lines` now returns each literal's own
 `(start, end)` line range rather than a flattened set of line numbers, and
 `_iter_blocks` closes the current block whenever a new literal's start line
-is reached, the same way a blank line already closes it -- so two adjacent
-literals with no blank line between them still get two blocks.
+is reached, the same way a blank line already closes it.
+
+TOTAL BOUNDARIES: SPAN MEMBERSHIP, NOT JUST SPAN STARTS (T-1557). The break
+above is directional -- it fires when a span BEGINS and not when one ENDS,
+because a single-line literal produces no span and so contributes no start
+line, while still classifying STRING through `_line_kind`. A multi-line
+literal immediately followed by a single-line string literal therefore still
+read as ONE block, and a resolution marker in the first silently satisfied an
+uncited citation in the second: the same defect class as T-1553, at the one
+boundary that remedy did not reach (Poirot
+b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md Significant 1, found
+latent -- zero live instances, and the reverse ordering was already caught,
+which is what exposed the asymmetry). `_iter_blocks` now carries whether the
+previous line was inside any span and breaks when that changes, so the
+boundary holds in both directions. Two adjacent literals with no blank line
+between them get two blocks whenever at least one of them is multi-line.
+Two SINGLE-line literals still merge, and so do two quoted-`//` lines: both
+sit wholly outside every span, both are deliberate (the bare C string-literal
+continuation rule and `_PY_QUOTED_CPP_COMMENT_PATTERN` respectively), and
+splitting them would fire false positives across the fixture generators.
 """
 from __future__ import annotations
 
@@ -337,10 +358,20 @@ def _line_kind(line: str) -> str:
     regardless of blank lines within it (the shape prior Significant 3 /
     28aa351 Significant 2 named: a resolution marker anywhere in a multi-line
     docstring or module-level string silently satisfied a citation anywhere
-    else in the same string). So the invariant this docstring states -- a
-    blank line breaks a block, and a resolution marker in one block cannot
-    satisfy a citation in another -- holds for every line `_iter_blocks`
-    scans, whether or not this function classified it."""
+    else in the same string), and since T-1557 it breaks on a change of span
+    membership as well, which closes the exit boundary the start-line break
+    left open.
+
+    The invariant this docstring states -- a blank line breaks a block, and a
+    resolution marker in one block cannot satisfy a citation in another -- is
+    asserted here in prose and PINNED in
+    `test_check_present_tense_defect_comments.py` by the span-exit and
+    blank-line-control cells T-1557 added. That pairing is deliberate: this
+    paragraph carried the same sentence through four review rounds while being
+    falsifiable in each, because a claim in a docstring cannot fail a build
+    (Poirot b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md, standing
+    routing). Read the cells as the statement of record; if this paragraph and
+    those cells ever disagree, the cells are right."""
     stripped = line.strip()
     if stripped.startswith("//"):
         return "COMMENT"
@@ -400,8 +431,37 @@ def _iter_blocks(
     an f-string ending on one line immediately followed by a plain
     triple-quoted string starting on the next -- read as a single block, so a
     resolution marker in the first silently satisfied an uncited citation in
-    the second. Only a literal's first line ever triggers this break; every
-    other line inside the same literal's own span behaves exactly as before."""
+    the second.
+
+    Span MEMBERSHIP is part of block identity too, so a line inside any span
+    never merges with a line outside every span (T-1557, Poirot
+    b2b00b4-t1556-adjacency-fold-confirmation-2026-07-31.md Significant 1).
+    The literal-start break above is directional: it closes a block when a
+    span BEGINS, and left the exit unguarded, because a single-line literal
+    produces no span and therefore no start line while still classifying
+    STRING through `_line_kind`. A multi-line literal immediately followed by
+    a single-line string literal therefore read as one block -- the same
+    defect class as T-1553, at the boundary that remedy did not reach. The
+    two shapes that merge ACROSS literals by design still do: single-line to
+    single-line (the bare C string-literal continuation rule) and quoted-`//`
+    to quoted-`//` (`_PY_QUOTED_CPP_COMMENT_PATTERN`), both of which sit
+    wholly outside every span and so compare equal. That is why this break
+    keys on span membership rather than on giving every literal a start line,
+    which would split both and fire false positives across the fixture
+    generators.
+
+    Where two literals share one physical line -- implicit or `+`
+    concatenation whose first literal ends on the same line the second
+    begins -- that line is both inside the first literal's span and a start
+    line of the second, so the literal-start break fires INSIDE the first
+    literal and can separate its own citation from its own resolution marker
+    (T-1558, same casebook Minor 2). This is a false positive rather than a
+    merge, and it is the deliberate choice: a line-granular scanner cannot
+    decompose two literals sharing a physical line, so it must err one way,
+    and a false positive on a blocking gate is loud and self-announcing where
+    the class this module exists to prevent is silent. Reach is zero across
+    the tree measured; if it ever fires, the shape is correct code and the
+    fix is a line break, not a suppression."""
     python_string_lines: frozenset[int] = frozenset()
     literal_start_lines: frozenset[int] = frozenset()
     if python_string_spans is not None:
@@ -421,20 +481,29 @@ def _iter_blocks(
             blocks.append((start, start + len(buf) - 1, " ".join(buf)))
         start, kind, buf = None, None, []
 
+    prev_in_span = False
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
+        in_span = i in python_string_lines
 
-        if i in python_string_lines and stripped:
+        if in_span and stripped:
             this_kind = "STRING"
         else:
             this_kind = _line_kind(line)
 
-        if this_kind in ("COMMENT", "STRING") and this_kind == kind and i not in literal_start_lines:
+        if (
+            this_kind in ("COMMENT", "STRING")
+            and this_kind == kind
+            and i not in literal_start_lines
+            and in_span == prev_in_span
+        ):
             buf.append(stripped)
+            prev_in_span = in_span
             continue
         _close()
         if this_kind in ("COMMENT", "STRING"):
             start, kind, buf = i, this_kind, [stripped]
+        prev_in_span = in_span
     _close()
     return blocks
 
