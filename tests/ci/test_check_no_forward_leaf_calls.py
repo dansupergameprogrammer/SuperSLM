@@ -1589,11 +1589,24 @@ def _t1_failing_assertion(excinfo):
     reliable and the source line is used instead -- the same discipline
     Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md states: "the
     failing assertion is read from pytest's `>` source-line marker, not
-    from surrounding context"."""
+    from surrounding context". Matches on each assertion's subject name
+    alone (`discovered_names`, `name_matched`), not on the full statement
+    text including the comparison operator (T-1518; Poirot
+    da69def-t1514-t1515-confirmation-2026-07-31.md Minor 1): the operator is
+    the part of these statements most likely to be edited -- T-1506 changed
+    it once already -- and matching the whole expression means an operator
+    edit alone, with the subject and the property it breaks unchanged,
+    misattributes the failure to every cell whose namespace happens to
+    contain the now-unmatched text rather than to the one cell whose
+    property the edit actually breaks. Verified against the exact T-1506
+    regression (`name_matched <= pin` reverted to `== pin`): matching the
+    full expression reports 5 red cells, 4 of them spurious
+    `unrecognized failing statement` failures; matching the subject name
+    alone reports exactly the 1 cell whose property the regression breaks."""
     statement = str(excinfo.traceback[-1].statement)
-    if "discovered_names == pin" in statement:
+    if "discovered_names" in statement:
         return "shape-set"
-    if "name_matched <= pin" in statement:
+    if "name_matched" in statement:
         return "name-set"
     raise AssertionError(f"unrecognized failing statement: {statement!r}")
 
