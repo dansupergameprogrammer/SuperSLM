@@ -12315,6 +12315,100 @@ struct TwoLayerFixture {
 	}
 };
 
+// T-1375/Critical 1 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
+// 2026-07-29.md; fixed at fdb4d13). Single layer, one head, hidden_size=2.
+// `saturating_weight` (row0=[2,0], row1=[0,0]) drives dim0's real K/V
+// projection accumulate to 254 (normed[0]=127 landed by RmsNormSite on this
+// fixture's own {5,-5} input, doubled by the weight row) -- outside the
+// pinned [-127,127] code range (§8.1) by exactly the same "positive key
+// becomes negative under a bare cast" defect class the review found
+// (254 bare-casts to -2; §8.1's clamp saturates it to 127). dim1's weight
+// row is all-zero, giving accumulate 0 -- in domain, a same-call negative
+// control for the wired saturation counter (T-518/§8.2). `identity2x2` is
+// the `false` variant: both dims land in domain, the counter's own
+// negative control on its OWN account (not just this cell's dim1).
+struct CriticalOneFixture {
+	superslm::SslmModelView view;
+	superslm::LayerWeights layer{};
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int8_t saturating_weight[4] = {2, 0, 0, 0};
+
+	static CriticalOneFixture Build(bool saturating) {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		CriticalOneFixture f;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 1;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = 1;
+		spec.kv_precision = 0;
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		const int64_t cos_flat[1] = {INT64_C(1073741824)};
+		const int64_t sin_flat[1] = {0};
+		FixtureSection rope =
+		    MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "CriticalOneFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+
+		superslm::LayerWeights& lw = f.layer;
+		lw.attn_norm_gain = f.norm_gain;
+		lw.attn_norm_site_constant = canonical;
+		lw.q_weight = f.identity2x2;
+		lw.k_weight = saturating ? f.saturating_weight : f.identity2x2;
+		lw.v_weight = saturating ? f.saturating_weight : f.identity2x2;
+		lw.o_weight = f.identity2x2;
+		lw.proj_identity = 1;
+		lw.proj_mult = 0;
+		lw.proj_shift = 0;
+		lw.q_site_constant = canonical;
+		lw.o_site_constant = canonical;
+		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+		lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+		lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+		lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+		lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+		lw.ctx_fold_site_constant = canonical;
+		lw.attn_residual_site_constant = canonical;
+		lw.q_ln2 = INT64_C(2081104);
+		lw.q_b_iexp = INT64_C(4062246);
+		lw.q_c_iexp = INT64_C(8649804928567);
+		lw.mlp_norm_gain = f.norm_gain;
+		lw.mlp_norm_site_constant = canonical;
+		lw.gate_weight = f.identity2x2;
+		lw.up_weight = f.identity2x2;
+		lw.down_weight = f.identity2x2;
+		lw.gate_site_constant = canonical;
+		lw.up_site_constant = canonical;
+		lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+		lw.down_site_constant = canonical;
+		lw.mlp_residual_site_constant = canonical;
+		return f;
+	}
+};
+
 }  // namespace
 
 // §9.3's decided contract: `layer_budget == 0` is `InvalidLayerBudget`, and
@@ -12357,6 +12451,93 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	CHECK_MSG(seq.layer_index == 0xFFFFFFFFu,
 	          "RunLayerLoop(layer_budget=0): seq.layer_index must be left exactly as poisoned "
 	          "(the layer-position marker is part of the sequence's own untouched state)");
+}
+
+// T-1375/Critical 2 and 3 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-
+// review-2026-07-29.md; fixed at fdb4d13): `context_cap < 1` now returns
+// `InvalidContextCap`, checked before the K/V workspace size is computed at
+// all -- zero and negative are the same guard because both violate the
+// identical domain requirement (`context_cap` is a count of cache
+// positions). The review's own two witnesses each executed `0xC0000005`
+// (ACCESS_VIOLATION) at the pre-fix code: `context_cap = 0` zeroed the
+// required workspace size, clearing the size guard on a `workspace` that
+// was never null-checked; `context_cap = -(2^62)` wrapped the same `size_t`
+// product mod 2^64 to the same effect. Reverting the guard alone (leaving
+// every other fix in this tree in place) and re-running the FULL suite does
+// NOT reproduce that crash at this call site -- both witnesses instead
+// return `Ok` cleanly (verified by execution; the CHECK_MSG assertions
+// below are what catch it), while an isolated direct call with the
+// identical arguments from a bare `main()` DOES reproduce the review's
+// exact `0xC0000005` (also verified by execution, separately). Both are
+// real: the underlying null/wild-pointer write is still present and still
+// a genuine memory-safety hazard reachable at some call shapes, but
+// whether an optimizing build actually faults on it is undefined-behavior-
+// dependent on the surrounding code, not something this suite can pin
+// reliably -- what this cell pins, and what does not depend on that, is
+// the STATUS: `RunLayerLoop` must refuse before forming the size product,
+// never after.
+static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = TwoLayerFixture::Build();
+
+	// Witness 1 (T-1375/Critical 2): context_cap == 0 zeroes the required
+	// size, clearing the guard on a null, zero-sized workspace -- pre-fix,
+	// the very first K/V landing write at `:704` faulted through `kv_base`.
+	{
+		int8_t hidden_codes[2] = {INT8_C(-77), INT8_C(-77)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-77), INT64_C(-77)};
+		seq.layer_index = 0xFFFFFFFEu;
+		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+		                                             /*layer_budget=*/1, /*hidden_size=*/2,
+		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*context_cap=*/0, fixture.view.rope_tables,
+		                                             /*workspace=*/nullptr, /*workspace_size=*/0);
+		CHECK_MSG(result == SslmForwardStatus::InvalidContextCap,
+		          "RunLayerLoop(context_cap=0, workspace=nullptr, workspace_size=0) status == "
+		          "%s, want InvalidContextCap (pre-fix: an executed 0xC0000005 -- context_cap=0 "
+		          "zeroes the required workspace size, clearing the guard on an unchecked "
+		          "pointer)",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-77) && hidden_codes[1] == INT8_C(-77) &&
+		              seq.hidden_scale.m == INT64_C(-77) && seq.hidden_scale.e == INT64_C(-77) &&
+		              seq.layer_index == 0xFFFFFFFEu,
+		          "RunLayerLoop(context_cap=0): seq must be left exactly as poisoned -- the "
+		          "domain rejection happens before anything is read or written");
+	}
+
+	// Witness 2 (T-1375/Critical 3): a large negative context_cap wraps the
+	// same size_t product mod 2^64 to zero, clearing the guard on a REAL
+	// workspace this time -- pre-fix, `:692`'s v_store pointer landed far
+	// outside the 64-byte allocation below.
+	{
+		int8_t hidden_codes[2] = {INT8_C(-78), INT8_C(-78)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-78), INT64_C(-78)};
+		seq.layer_index = 0xFFFFFFFDu;
+		uint8_t workspace[64];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/2,
+		    /*head_dim=*/2, /*intermediate_size=*/2,
+		    /*context_cap=*/-(INT64_C(1) << 62), fixture.view.rope_tables, workspace,
+		    sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::InvalidContextCap,
+		          "RunLayerLoop(context_cap=-(2^62)) status == %s, want InvalidContextCap "
+		          "(pre-fix: an executed 0xC0000005 -- the size_t product wraps mod 2^64 to "
+		          "zero, clearing the guard and yielding a wild v_store pointer)",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-78) && hidden_codes[1] == INT8_C(-78) &&
+		              seq.hidden_scale.m == INT64_C(-78) && seq.hidden_scale.e == INT64_C(-78) &&
+		              seq.layer_index == 0xFFFFFFFDu,
+		          "RunLayerLoop(context_cap=-(2^62)): seq must be left exactly as poisoned -- "
+		          "the domain rejection happens before anything is read or written");
+	}
 }
 
 // §13 dim 4's budget-axis enumeration: `{0 (rejected, above), 1, L-1, L}`.
@@ -12625,44 +12806,86 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	          superslm::SslmModelStatusName(load_status), err.c_str());
 	if (load_status != superslm::SslmModelStatus::Ok) return;
 
-	// Real attention-derived head-1 context accumulate, engineered to equal
-	// kCtxFoldJoinCase.ctx1 (-536870912) exactly via a single-key
-	// GemmProbQ15Accumulate: probs[0]=2^15 (Q15 one, the only-key case),
-	// values[0]=-16384 is NOT representable in int8 -- ctx1's own magnitude
-	// (2^29) exceeds int8*Q15's real product range, so this cell instead
-	// re-derives ITS OWN real ctx1 within GemmProbQ15Accumulate's actual
-	// bound (|Sum| < 2^22, §4.6) and computes the expected fold from THAT
-	// value directly, rather than reusing ctx1's own literal -- the artifact
-	// section (mult, shift) is reused byte for byte; the numeric input is
-	// this cell's own, real one.
+	// The three-way join's third leg: an oracle for head 1's real context
+	// accumulate, independent of RunLayerLoop's own output. Composed BY HAND
+	// from the same low-level primitives RunLayerLoop itself calls at this
+	// fixture's own inputs -- RmsNormSite, GemmInt8AccumulateRow,
+	// LandingRescale, ClampRopeCode, GemmProbQ15Accumulate,
+	// ApplyWeightScaleFold, each separately tested and pinned elsewhere in
+	// this suite -- never by reading RunLayerLoop's own emitted trace record.
 	//
-	// head_dim=2 in THIS cell's own spec (below), so a single-key head-1
-	// accumulate in the real forward produces TWO wide-row elements (one per
-	// (head, dim) pair, per RunLayerLoop's own `ctx_wide[h*head_dim+d]`
-	// layout), not one -- the same value fold's own gemmlowp dispatch, a
-	// single ratio per WSC1 head entry, applies to both. The sanity
-	// derivation below is widened from a single-dim accumulate to match:
-	// values_h1 repeats the same per-key value across both dims, so both of
-	// head 1's wide-row elements land on the identical, already-verified
-	// 262144/131072 pair (T-1356; a pre-existing head_dim=1 assumption in
-	// this cell's own sanity check, unreachable before this pass).
-	const int64_t probs[1] = {INT64_C(32768)};
-	const int8_t values_h1[2] = {8, 8};
-	int64_t ctx_h1[2] = {0, 0};
-	superslm::GemmProbQ15Accumulate(probs, values_h1, /*width=*/1, /*head_dim=*/2, ctx_h1);
-	CHECK_MSG(ctx_h1[0] == INT64_C(262144) && ctx_h1[1] == INT64_C(262144),
-	          "sanity: GemmProbQ15Accumulate(probs={2^15}, values={8,8}) == {%lld,%lld}, want "
-	          "{262144,262144} (32768*8 per dim, the exact single-key accumulate this cell's own "
-	          "expected-fold derivation depends on)",
-	          static_cast<long long>(ctx_h1[0]), static_cast<long long>(ctx_h1[1]));
-	const int64_t expected_fold_h1 =
-	    superslm::ApplyWeightScaleFold(ctx_h1[0], /*identity=*/0, kCtxFoldJoinCase.mult,
-	                                    kCtxFoldJoinCase.shift);
-	CHECK_MSG(expected_fold_h1 == INT64_C(131072),
-	          "sanity: ApplyWeightScaleFold(262144, non-identity ratio=0.5) == %lld, want 131072 "
-	          "(the independently-derived gemmlowp dispatch, §11 S3.3's own oracle, applied to "
-	          "this cell's own real accumulate)",
-	          static_cast<long long>(expected_fold_h1));
+	// Finding (Poirot e4b398c review Significant 4 / T-1374, build record
+	// 2026-07-29): the PRIOR version of this derivation hand-picked
+	// values_h1={8,8} as head 1's landed V code without deriving it, giving
+	// expected_fold_h1=131072. This fixture's real V branch lands at
+	// +/-127 (ClampRopeCode's saturating clamp, driven by RmsNorm + an
+	// identity-weight projection on this fixture's {5,-5} input), not 8 --
+	// the assumed value was disconnected from what this fixture's own K/V
+	// landing composite actually produces, and the assertion below is what
+	// exposed it once the fixture reached domain (D-SLM445). Re-derived here
+	// by executing the real primitives rather than by re-guessing a literal.
+	int32_t oracle_norm_gain[4] = {16384, 16384, 16384, 16384};
+	int8_t oracle_identity4x4[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+	const CarriedScale oracle_canonical{INT64_C(1073741824), INT64_C(-30)};
+	const int64_t oracle_r_t = superslm::DynamicScaleReciprocal(oracle_canonical.m);
+	const int8_t oracle_hidden_codes[4] = {5, -5, 5, -5};
+	const CarriedScale oracle_seq_scale{INT64_C(1073741824), 0};
+
+	int8_t oracle_normed[4] = {};
+	CarriedScale oracle_normed_scale{};
+	const auto oracle_norm_status =
+	    superslm::RmsNormSite(oracle_hidden_codes, oracle_norm_gain, 4, oracle_seq_scale,
+	                           oracle_canonical, oracle_normed, &oracle_normed_scale);
+	CHECK_MSG(oracle_norm_status == SslmForwardStatus::Ok,
+	          "oracle: RmsNormSite on this fixture's own {5,-5,5,-5} input status == %s, want Ok",
+	          SslmForwardStatusName(oracle_norm_status));
+
+	int64_t oracle_vacc[4] = {};
+	superslm::GemmInt8AccumulateRow(oracle_normed, oracle_identity4x4, 4, 4, oracle_vacc);
+
+	// proj_identity=1/mult=0/shift=0 in this cell's own LayerWeights below,
+	// so ApplyWeightScaleFold(acc, 1, 0, 0) == acc unchanged (pass-through)
+	// -- matching the production call site's own `vf` ahead of landing.
+	int8_t oracle_v_landed[4] = {};
+	for (int i = 0; i < 4; ++i) {
+		const int64_t vf = superslm::ApplyWeightScaleFold(oracle_vacc[i], /*identity=*/1,
+		                                                   /*mult=*/0, /*shift=*/0);
+		oracle_v_landed[i] = static_cast<int8_t>(superslm::ClampRopeCode(superslm::LandingRescale(
+		    vf, oracle_normed_scale.m, oracle_r_t, oracle_normed_scale.e, /*e_t=*/0)));
+	}
+	CHECK_MSG(oracle_v_landed[2] == INT8_C(127) && oracle_v_landed[3] == INT8_C(-127),
+	          "oracle: this fixture's own real landed V code for head 1's two dims == {%d,%d}, "
+	          "want {127,-127} (ClampRopeCode's saturating clamp on this fixture's {5,-5} input "
+	          "-- the value the PRIOR version of this cell assumed to be {8,8} without deriving "
+	          "it)",
+	          oracle_v_landed[2], oracle_v_landed[3]);
+
+	// Single-key softmax row (width=1) is always Q15 one (32768) regardless
+	// of score -- SoftmaxRowQ15's own normalization over exactly one key.
+	const int64_t oracle_probs[1] = {INT64_C(32768)};
+	int64_t oracle_ctx_h1[2] = {0, 0};
+	const int8_t oracle_values_h1[2] = {oracle_v_landed[2], oracle_v_landed[3]};
+	superslm::GemmProbQ15Accumulate(oracle_probs, oracle_values_h1, /*width=*/1, /*head_dim=*/2,
+	                                 oracle_ctx_h1);
+	CHECK_MSG(oracle_ctx_h1[0] == INT64_C(4161536) && oracle_ctx_h1[1] == INT64_C(-4161536),
+	          "oracle: GemmProbQ15Accumulate(probs={2^15}, values={127,-127}) == {%lld,%lld}, "
+	          "want {4161536,-4161536} (32768*127 per dim, the real single-key accumulate this "
+	          "fixture's head 1 produces -- identical in magnitude to head 0's own raw "
+	          "accumulate, by this fixture's own symmetry: identity weights, {5,-5,5,-5} hidden "
+	          "codes repeating every 2 elements)",
+	          static_cast<long long>(oracle_ctx_h1[0]), static_cast<long long>(oracle_ctx_h1[1]));
+
+	const int64_t expected_fold_h1_dim0 = superslm::ApplyWeightScaleFold(
+	    oracle_ctx_h1[0], /*identity=*/0, kCtxFoldJoinCase.mult, kCtxFoldJoinCase.shift);
+	const int64_t expected_fold_h1_dim1 = superslm::ApplyWeightScaleFold(
+	    oracle_ctx_h1[1], /*identity=*/0, kCtxFoldJoinCase.mult, kCtxFoldJoinCase.shift);
+	CHECK_MSG(expected_fold_h1_dim0 == INT64_C(2080768) && expected_fold_h1_dim1 == INT64_C(-2080768),
+	          "oracle: ApplyWeightScaleFold({4161536,-4161536}, non-identity ratio=0.5) == "
+	          "{%lld,%lld}, want {2080768,-2080768} (the independently-derived gemmlowp dispatch, "
+	          "§11 S3.3's own oracle, applied to this fixture's own REAL accumulate -- half of "
+	          "head 0's raw accumulate, matching ratio 0.5)",
+	          static_cast<long long>(expected_fold_h1_dim0),
+	          static_cast<long long>(expected_fold_h1_dim1));
 
 	// LayerWeights fixture: 2 heads, head_dim=2, hidden_size=4. Weights
 	// are identity (4x4), matching TwoLayerFixture's own convention.
@@ -12773,11 +12996,11 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	// Head 0 (identity dispatch, dims 0-1): what the forward reads must equal
 	// head 0's own raw accumulate, unchanged
 	// (ApplyWeightScaleFold(acc, identity=1, ..) == acc). Head 1 (non-identity,
-	// dims 2-3): what the forward reads must equal expected_fold_h1 at BOTH
-	// dims -- the same independently-derived dispatch value S3.3's own
-	// realizable-half cell already proved equals what the artifact carries
-	// and the arbitrary-precision oracle, applied uniformly across the head
-	// (one WSC1 (mult, shift) entry per head, not per dim).
+	// dims 2-3): what the forward reads must equal the oracle's own per-dim
+	// fold above (dim0 and dim1 differ in SIGN -- {2080768,-2080768} -- this
+	// fixture's {5,-5,5,-5} input is not sign-uniform, so neither is head 1's
+	// real accumulate; a uniform expectation across both dims was itself part
+	// of the prior oracle's disconnect from the real forward).
 	//
 	// T-1356 (Curie derivation, 2026-07-29) found this assertion unreachable,
 	// then reachable-and-failing: `RunLayerLoop` applied the SAME (identity,
@@ -12792,13 +13015,145 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	// above are now `num_heads`-entry arrays carrying the SAME per-head data
 	// this cell's own artifact loads, so the forward reads what the artifact
 	// carries.
-	CHECK_MSG(ctx_record->x_int[2] == expected_fold_h1 && ctx_record->x_int[3] == expected_fold_h1,
+	CHECK_MSG(ctx_record->x_int[2] == expected_fold_h1_dim0 &&
+	              ctx_record->x_int[3] == expected_fold_h1_dim1,
 	          "layer0.attn_ctx trace x_int[2..3] (what the forward reads for head 1's two dims) "
 	          "== {%lld,%lld}, want {%lld,%lld} (what the artifact carries, applied through the "
-	          "real ApplyWeightScaleFold, and the arbitrary-precision oracle S3.3's own cell "
-	          "already proved this equals -- the three-way join's third leg)",
+	          "real ApplyWeightScaleFold, and the by-hand oracle above -- the three-way join's "
+	          "third leg)",
 	          static_cast<long long>(ctx_record->x_int[2]), static_cast<long long>(ctx_record->x_int[3]),
-	          static_cast<long long>(expected_fold_h1), static_cast<long long>(expected_fold_h1));
+	          static_cast<long long>(expected_fold_h1_dim0),
+	          static_cast<long long>(expected_fold_h1_dim1));
+}
+
+// T-1375/Critical 1 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
+// 2026-07-29.md; fixed at fdb4d13): the K/V landing composite now composes
+// `ClampRopeCode(LandingRescale(...))` instead of a bare `static_cast<int8_t>`,
+// and `LandingRescale`'s own `out_saturation_count` is wired into
+// `SequenceLayerState::kv_saturation_count`. Two calls: `saturating=true`
+// drives dim0's real K/V accumulate to 254 (outside the pinned [-127,127]
+// code range) via `CriticalOneFixture`'s own weight row, asserting the
+// workspace's own K/V store bytes read the CLAMPED value (127) at dim0 and
+// the counter has advanced by exactly 2 (K dim0 + V dim0, the two landing
+// calls this fixture drives out of domain); `saturating=false` reruns the
+// identical call shape with an all-identity weight (nothing out of domain
+// anywhere in the layer) as the counter's own negative control, asserting
+// it stays at its initial 0. Reading `workspace` directly (not a trace hook)
+// is sound here because `RunLayerLoop`'s own K/V store offset arithmetic
+// (`kv_base + layer*context_cap*num_heads*head_dim*2`, `context_cap=1`,
+// `num_heads=1`, `head_dim=2`, `layer=0`) places k_store at workspace[0..1]
+// and v_store at workspace[2..3] by construction, and V is never
+// subsequently rewritten by RoPE (only K is).
+static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	for (bool saturating : {true, false}) {
+		auto fixture = CriticalOneFixture::Build(saturating);
+		int8_t hidden_codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		uint8_t workspace[64] = {};
+		const auto result = superslm::RunLayerLoop(
+		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::Ok,
+		          "RunLayerLoop(saturating=%d) status == %s, want Ok", saturating ? 1 : 0,
+		          SslmForwardStatusName(result));
+		if (result != SslmForwardStatus::Ok) continue;
+
+		if (saturating) {
+			const int8_t k_store0 = static_cast<int8_t>(workspace[0]);
+			const int8_t v_store0 = static_cast<int8_t>(workspace[2]);
+			CHECK_MSG(k_store0 == INT8_C(127) && v_store0 == INT8_C(127),
+			          "K/V landing at dim0 (real accumulate 254, outside [-127,127]) == "
+			          "{k=%d,v=%d}, want {127,127} (§8.1's clamp saturates; a bare "
+			          "static_cast<int8_t> would wrap 254 to -2, the SAME "
+			          "positive-key-becomes-negative defect class T-1375/Critical 1 found)",
+			          k_store0, v_store0);
+			CHECK_MSG(seq.kv_saturation_count == UINT64_C(2),
+			          "seq.kv_saturation_count after one saturating call == %llu, want 2 "
+			          "(K dim0 + V dim0, the two landing calls this fixture drives outside "
+			          "[-127,127]; dim1's weight row is all-zero and stays in domain)",
+			          static_cast<unsigned long long>(seq.kv_saturation_count));
+		} else {
+			CHECK_MSG(seq.kv_saturation_count == UINT64_C(0),
+			          "seq.kv_saturation_count after an all-in-domain call == %llu, want 0 "
+			          "(T-518's counter must stay silent when nothing saturates -- the "
+			          "negative control for the count-of-2 assertion above)",
+			          static_cast<unsigned long long>(seq.kv_saturation_count));
+		}
+	}
+}
+
+// T-1375/Critical 4 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
+// 2026-07-29.md; fixed at fdb4d13): a layer now commits `hidden_codes`,
+// `hidden_scale`, AND `layer_index` together, only once, at the bottom of
+// the loop body -- so a rejection ANYWHERE between `attn_norm` and
+// `mlp_residual` (inclusive) must leave `seq` exactly as it was before that
+// layer's attempt started. This cell forces a rejection strictly AFTER
+// `attn_residual` (which used to commit early, pre-fix) and strictly
+// BEFORE `mlp_residual`: layer 0's own `mlp_norm_gain` is overridden to the
+// Q16 unit gain (65536), D-SLM434's own documented out-of-C29-domain
+// constant (a separate array from `attn_norm_gain`, so ONLY `mlp_norm`
+// rejects -- `attn_norm`, the K/V landing, RoPE, attention, and
+// `attn_residual` all still run and would have committed under the pre-fix
+// shape). `seq` is poison-fillable to a value distinct from both the
+// pre-call state AND the corrupted post-attn_residual state, so an
+// assertion against the pre-call value alone could not be satisfied by
+// accident.
+static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = TwoLayerFixture::Build();
+	int32_t bad_mlp_gain[2] = {65536, 65536};
+	fixture.layers[0].mlp_norm_gain = bad_mlp_gain;
+
+	const int8_t kInitialCodes[2] = {5, -5};
+	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
+	int8_t hidden_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = kInitialScale;
+	seq.layer_index = 0;
+	uint8_t workspace[64] = {};
+	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                             /*layer_budget=*/1, /*hidden_size=*/2,
+	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*context_cap=*/1, fixture.view.rope_tables,
+	                                             workspace, sizeof(workspace));
+	CHECK_MSG(result != SslmForwardStatus::Ok,
+	          "RunLayerLoop with layer 0's mlp_norm_gain at the Q16 unit gain (65536, out of "
+	          "C29's chain-input domain) status == Ok, want a rejection -- this cell requires "
+	          "the call to actually reject mid-layer, or it proves nothing about atomicity");
+	CHECK_MSG(hidden_codes[0] == kInitialCodes[0] && hidden_codes[1] == kInitialCodes[1],
+	          "RunLayerLoop (mid-layer rejection at mlp_norm, status %s): seq.hidden_codes == "
+	          "{%d,%d}, want the PRE-CALL value {%d,%d} unchanged -- attn_residual runs and "
+	          "produces a real result before mlp_norm rejects; a layer that commits it early "
+	          "(T-1375/Critical 4's pre-fix shape) leaves hidden_codes at the attention-residual's "
+	          "own output instead",
+	          SslmForwardStatusName(result), static_cast<int>(hidden_codes[0]),
+	          static_cast<int>(hidden_codes[1]), static_cast<int>(kInitialCodes[0]),
+	          static_cast<int>(kInitialCodes[1]));
+	CHECK_MSG(seq.hidden_scale.m == kInitialScale.m && seq.hidden_scale.e == kInitialScale.e,
+	          "RunLayerLoop (mid-layer rejection at mlp_norm, status %s): seq.hidden_scale == "
+	          "(%lld,%lld), want the PRE-CALL value (%lld,%lld) unchanged",
+	          SslmForwardStatusName(result), static_cast<long long>(seq.hidden_scale.m),
+	          static_cast<long long>(seq.hidden_scale.e), static_cast<long long>(kInitialScale.m),
+	          static_cast<long long>(kInitialScale.e));
+	CHECK_MSG(seq.layer_index == 0,
+	          "RunLayerLoop (mid-layer rejection at mlp_norm, status %s): seq.layer_index == "
+	          "%u, want 0 unchanged -- the resume marker must still name this layer as "
+	          "not-yet-run, matching hidden_codes/hidden_scale's own untouched state, or a "
+	          "resume re-runs the layer against a stream that already has this layer's "
+	          "attention output folded in",
+	          SslmForwardStatusName(result), seq.layer_index);
 }
 
 int main(int argc, char** argv) {
@@ -13403,10 +13758,13 @@ int main(int argc, char** argv) {
 	TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives();
 	TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
+	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
 	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();
 	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit();
 	TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls();
 	TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold();
+	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
+	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
