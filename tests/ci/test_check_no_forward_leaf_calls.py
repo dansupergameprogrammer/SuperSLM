@@ -1346,11 +1346,19 @@ def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism()
 #: `dict` keyed by non-`str` values escapes the shape predicate above,
 #: because it is absent from both the discovered set and the name-matched
 #: set the assertions below compare (T-1501). `test_population_count_is_stated`
-#: below asserts both discovered sets against this one pin, so a container
-#: that stops being discovered by either net, or any other module-level name
-#: that starts matching either net, turns the cell red instead of silently
-#: changing -- or failing to change -- the total. Registering a population
-#: container is therefore two edits: define the dict, and add its name here.
+#: below asserts the shape-discovered set against this pin for equality, and
+#: the name-matched set against the same pin for containment (`<=`, not
+#: equality -- T-1506): a container that stops being discovered by shape, or
+#: any module-level name that starts matching the name pattern without being
+#: in this pin, turns the cell red instead of silently changing -- or
+#: failing to change -- the total; a container registered here under a name
+#: the pattern does not match is not required to appear in the name-matched
+#: set, so registration does not depend on the naming convention. Registering
+#: a population container is therefore two edits: define the dict, and add
+#: its name here -- for any name, on-convention or not (T-1506; the equality
+#: form of the second assertion briefly made this false for off-convention
+#: names, measured by mutations O and P in Poirot
+#: 066319d-t1501-t1503-confirmation-2026-07-31.md Significant 1).
 _T1_EXPECTED_CONTAINER_NAMES = frozenset(
     {
         "_POPULATION_CASES",
@@ -1388,16 +1396,17 @@ def _t1_new_shape_containers():
     direction is closed by `_T1_CONTAINER_NAME_PATTERN`'s name-based check in
     `test_population_count_is_stated` instead, not by this function (T-1501:
     the union D-SLM523 prescribes, not a single wider predicate). Registering
-    a new container is therefore two edits: define the dict at module scope,
-    and add its name to `_T1_EXPECTED_CONTAINER_NAMES` above -- doing only
-    the first still reaches `test_population_count_is_stated` below through
-    shape-based discovery when the container is a non-empty `str`-keyed
-    dict, but the name-set assertion then fails until the second edit is
-    made (T-1467, T-1484, T-1489, T-1501; Poirot
+    a new container follows the two-edit rule stated in the comment above
+    `_T1_EXPECTED_CONTAINER_NAMES`. Defining the dict alone still reaches
+    `test_population_count_is_stated` below through shape-based discovery
+    when the container is a non-empty `str`-keyed dict, but its name is then
+    missing from the pin, which fails that test's shape-set assertion until
+    the second edit is made (T-1467, T-1484, T-1489, T-1501, T-1506; Poirot
     20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
     82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 3;
     2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1;
-    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1, Minor 1).
+    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1, Minor 1;
+    066319d-t1501-t1503-confirmation-2026-07-31.md Significant 1, Minor 1).
     This is what T-1386 needed and did not have: it added a new container
     outside the hand-written sum below, and the stated total did not move.
     Neither this function's shape check nor `_T1_CONTAINER_NAME_PATTERN`'s
@@ -1434,20 +1443,25 @@ def test_population_count_is_stated():
     above discovers every population container by shape (a non-empty
     module-level dict keyed by `str`, values unconstrained), so a new
     container of that shape is caught automatically regardless of what it is
-    named (T-1467, T-1484, T-1489). Two independent assertions guard that
-    discovery before the sum is taken, per D-SLM523's union (T-1501): the
-    shape-discovered name set against `_T1_EXPECTED_CONTAINER_NAMES`, so a
-    container that stops being a non-empty `str`-keyed dict -- or an
-    unrelated module-level dict that starts being one -- fails this cell
-    rather than silently changing, or failing to change, the total; and the
-    name-matched set (every module-level name matching
-    `_T1_CONTAINER_NAME_PATTERN`) against the same pin, so an on-convention
-    container that is a `list`, a `tuple`, or a `dict` keyed by non-`str`
-    values -- invisible to the shape check because it is never a `str`-keyed
-    dict -- fails this cell too, because its name is new and unlisted
-    (T-1501; measured against mutations constructed on-convention as a
-    `list`, a `tuple`, and an `int`-keyed `dict`, each escaping the shape
-    check alone and each caught by the name check).
+    named (T-1467, T-1484, T-1489, T-1506). Two independent assertions guard
+    that discovery before the sum is taken, per D-SLM523's union (T-1501):
+    the shape-discovered name set against `_T1_EXPECTED_CONTAINER_NAMES` for
+    equality, so a container that stops being a non-empty `str`-keyed dict --
+    or an unrelated module-level dict that starts being one -- fails this
+    cell rather than silently changing, or failing to change, the total; and
+    the name-matched set (every module-level name matching
+    `_T1_CONTAINER_NAME_PATTERN`) against the same pin for containment
+    (`<=`, not equality -- T-1506), so an on-convention container that is a
+    `list`, a `tuple`, or a `dict` keyed by non-`str` values -- invisible to
+    the shape check because it is never a `str`-keyed dict -- fails this
+    cell too, because its name is new and unlisted, while a container
+    registered under a name the pattern does not match is never required to
+    appear in this set and so does not fail it (T-1501, T-1506; measured
+    against mutations constructed on-convention as a `list`, a `tuple`, and
+    an `int`-keyed `dict`, each escaping the shape check alone and each
+    caught by the name check; and against mutations that register an
+    off-convention container by the two-edit rule alone, which require no
+    third edit).
     `further_sweep_total` is NOT derived -- it sums four literals for five
     documented one-off cases that were never stored in a container, so
     neither check above can see them: T-1381's `+ 1` string-literal control
@@ -1477,9 +1491,8 @@ def test_population_count_is_stated():
     name_matched = {
         name for name in globals() if _T1_CONTAINER_NAME_PATTERN.match(name)
     }
-    assert name_matched == _T1_EXPECTED_CONTAINER_NAMES, (
-        name_matched - _T1_EXPECTED_CONTAINER_NAMES,
-        _T1_EXPECTED_CONTAINER_NAMES - name_matched,
+    assert name_matched <= _T1_EXPECTED_CONTAINER_NAMES, (
+        name_matched - _T1_EXPECTED_CONTAINER_NAMES
     )
     container_total = sum(len(value) for value in containers.values())
     further_sweep_total = (
