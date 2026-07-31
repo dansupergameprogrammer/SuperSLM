@@ -38,6 +38,7 @@ mechanism cells above).
 """
 
 import os
+import re
 import tempfile
 
 import pytest
@@ -1331,18 +1332,25 @@ def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism()
 
 
 #: The population containers this file expects `_t1_new_shape_containers` to
-#: discover today. Discovery below is independent of both a container's name
-#: and its values' type (T-1489: a container named exactly on the
-#: `_POPULATION_CASES`/`_T<digits>_NEW_SHAPES` convention but whose values
-#: were not all `str` -- a tuple, a nested dict, `bytes` -- escaped the
-#: value-type-gated predicate T-1484 shipped, the same way a container named
-#: off that convention escaped the name-gated predicate T-1484 replaced;
-#: neither net contained the other). `test_population_count_is_stated` below
-#: asserts the discovered name set against this pin, so a container that
-#: stops being discovered, or any other module-level dict that starts being
-#: discovered, turns the cell red instead of silently changing -- or failing
-#: to change -- the total. Adding a population container is therefore two
-#: edits: define the dict, and add its name here.
+#: discover today, and the population containers this file expects to find by
+#: name. Two independent nets now cover this population (T-1501, the union
+#: D-SLM523 prescribes): `_t1_new_shape_containers` discovers by shape (a
+#: non-empty module-level dict whose keys are all `str`), and
+#: `_T1_CONTAINER_NAME_PATTERN` below discovers by name (any module-level
+#: name matching the `_POPULATION_CASES`/`_T<digits>_NEW_SHAPES` convention,
+#: whatever its type). Neither net alone was a superset of the other: a
+#: container named exactly on the naming convention but whose values were not
+#: all `str` -- a tuple, a nested dict, `bytes` -- escaped the value-type
+#: predicate T-1484 shipped (T-1489 closed that), and a container named
+#: exactly on the naming convention but shaped as a `list`, a `tuple`, or a
+#: `dict` keyed by non-`str` values escapes the shape predicate above,
+#: because it is absent from both the discovered set and the name-matched
+#: set the assertions below compare (T-1501). `test_population_count_is_stated`
+#: below asserts both discovered sets against this one pin, so a container
+#: that stops being discovered by either net, or any other module-level name
+#: that starts matching either net, turns the cell red instead of silently
+#: changing -- or failing to change -- the total. Registering a population
+#: container is therefore two edits: define the dict, and add its name here.
 _T1_EXPECTED_CONTAINER_NAMES = frozenset(
     {
         "_POPULATION_CASES",
@@ -1352,30 +1360,53 @@ _T1_EXPECTED_CONTAINER_NAMES = frozenset(
     }
 )
 
+#: The name half of the union: any module-level name matching this pattern is
+#: a claimed population container regardless of its type or contents. Paired
+#: with `_t1_new_shape_containers`'s shape-based discovery in
+#: `test_population_count_is_stated`, this closes the direction the shape
+#: predicate cannot reach by construction -- an on-convention container that
+#: is a `list`, a `tuple`, or a `dict` keyed by non-`str` values is invisible
+#: to shape-based discovery (it is never a `dict` with all-`str` keys) but
+#: matches this pattern, so it appears in the name-matched set and is absent
+#: from `_T1_EXPECTED_CONTAINER_NAMES`, which fails the assertion below
+#: (T-1501; measured against mutations constructed on-convention as a `list`,
+#: a `tuple`, and an `int`-keyed `dict`).
+_T1_CONTAINER_NAME_PATTERN = re.compile(r"^(_POPULATION_CASES|_T\d+_NEW_SHAPES)$")
+
 
 def _t1_new_shape_containers():
     """Every module-level dict this file uses to enumerate a batch of doors a
     ticket adds to the population, discovered by shape -- a non-empty
     module-level dict whose keys are all `str` (every population container
-    maps a case name to its expected contribution) -- rather than by a
-    hand-maintained list of which tickets exist, by matching the container's
-    own name against a naming convention, or by constraining what its values
-    are (T-1489: the values need not be `str` -- the obvious next population
-    shape pairs a case's source with its expected doors as a tuple, which a
-    value-type constraint would silently exclude). A new container is itself
-    its own registration here: defining it at module scope as a dict keyed by
-    `str` is sufficient for its cells to reach `test_population_count_is_stated`
-    below without that test being edited, regardless of what the container is
-    named or what its values are (T-1467, T-1484, T-1489; Poirot
+    maps a case name to its expected contribution) -- rather than by matching
+    the container's own name against a naming convention, or by constraining
+    what its values are (T-1489: the values need not be `str` -- the obvious
+    next population shape pairs a case's source with its expected doors as a
+    tuple, which a value-type constraint would silently exclude). This
+    function's own net does not reach an on-convention container shaped as a
+    `list`, a `tuple`, or a `dict` keyed by non-`str` values -- that
+    direction is closed by `_T1_CONTAINER_NAME_PATTERN`'s name-based check in
+    `test_population_count_is_stated` instead, not by this function (T-1501:
+    the union D-SLM523 prescribes, not a single wider predicate). Registering
+    a new container is therefore two edits: define the dict at module scope,
+    and add its name to `_T1_EXPECTED_CONTAINER_NAMES` above -- doing only
+    the first still reaches `test_population_count_is_stated` below through
+    shape-based discovery when the container is a non-empty `str`-keyed
+    dict, but the name-set assertion then fails until the second edit is
+    made (T-1467, T-1484, T-1489, T-1501; Poirot
     20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
     82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 3;
-    2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1). This is
-    what T-1386 needed and did not have: it added a new container outside the
-    hand-written sum below, and the stated total did not move. Because
-    neither the name nor the value type gates discovery, `test_population_count_is_stated`'s
-    name-set assertion is what keeps an unrelated module-level `dict[str, str]`
-    from being silently absorbed into the population, and what keeps a
-    genuinely new container from being silently missed."""
+    2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1;
+    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1, Minor 1).
+    This is what T-1386 needed and did not have: it added a new container
+    outside the hand-written sum below, and the stated total did not move.
+    Neither this function's shape check nor `_T1_CONTAINER_NAME_PATTERN`'s
+    name check alone gates discovery completely; run together in
+    `test_population_count_is_stated`, they close the on-convention and the
+    off-convention escapes measured against three prior predicates. A
+    container that is both off-convention in name and outside this
+    function's structural shape -- an off-convention `list`, for instance --
+    is caught by neither check; see that test's own docstring."""
     return {
         name: value
         for name, value in globals().items()
@@ -1402,32 +1433,53 @@ def test_population_count_is_stated():
     `container_total` is derived, not hand-summed: `_t1_new_shape_containers`
     above discovers every population container by shape (a non-empty
     module-level dict keyed by `str`, values unconstrained), so a new
-    container is caught automatically regardless of what it is named or what
-    its values are (T-1467, T-1484, T-1489). The discovered name set is
-    asserted against `_T1_EXPECTED_CONTAINER_NAMES` before the sum is taken,
-    so a container that stops being discovered -- or an unrelated
-    module-level dict that starts being discovered -- fails this cell rather
-    than silently changing, or failing to change, the total (T-1489).
+    container of that shape is caught automatically regardless of what it is
+    named (T-1467, T-1484, T-1489). Two independent assertions guard that
+    discovery before the sum is taken, per D-SLM523's union (T-1501): the
+    shape-discovered name set against `_T1_EXPECTED_CONTAINER_NAMES`, so a
+    container that stops being a non-empty `str`-keyed dict -- or an
+    unrelated module-level dict that starts being one -- fails this cell
+    rather than silently changing, or failing to change, the total; and the
+    name-matched set (every module-level name matching
+    `_T1_CONTAINER_NAME_PATTERN`) against the same pin, so an on-convention
+    container that is a `list`, a `tuple`, or a `dict` keyed by non-`str`
+    values -- invisible to the shape check because it is never a `str`-keyed
+    dict -- fails this cell too, because its name is new and unlisted
+    (T-1501; measured against mutations constructed on-convention as a
+    `list`, a `tuple`, and an `int`-keyed `dict`, each escaping the shape
+    check alone and each caught by the name check).
     `further_sweep_total` is NOT derived -- it sums four literals for five
     documented one-off cases that were never stored in a container, so
-    `_t1_new_shape_containers` cannot see them: T-1381's `+ 1`
-    string-literal control (one case), T-1381's further-sweep `+ 2` (two
-    cases -- lambda-in-real-code and shadowing-variable, both in the same
-    literal), T-1383's `+ 1` function-pointer case, and T-1386's `+ 1`
-    declared-code confirmation. A new one-off case added to this list
-    without also incrementing `further_sweep_total` below is the one shape
-    this structure still does not catch -- inherent to a hand-summed literal
-    bucket rather than a gap in container discovery, and not closed by
-    T-1484's or T-1489's fixes to `_t1_new_shape_containers` (documented
-    rather than closed, per T-1467's remedy options; Poirot
+    neither check above can see them: T-1381's `+ 1` string-literal control
+    (one case), T-1381's further-sweep `+ 2` (two cases -- lambda-in-real-code
+    and shadowing-variable, both in the same literal), T-1383's `+ 1`
+    function-pointer case, and T-1386's `+ 1` declared-code confirmation. A
+    new one-off case added to this list without also incrementing
+    `further_sweep_total` below is a shape this structure does not catch --
+    inherent to a hand-summed literal bucket rather than a gap in container
+    discovery, and not closed by T-1484's, T-1489's, or T-1501's fixes
+    (documented rather than closed, per T-1467's remedy options). A second,
+    independent shape also escapes both checks above: a container that is
+    off-convention in its name and is not a non-empty module-level dict
+    keyed by `str` -- an off-convention `list` or `tuple`, for instance --
+    matches neither the shape predicate nor the name pattern, because it is
+    absent from both sets the two assertions compare (T-1501; Poirot
     20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
     82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 2, Minor 3;
-    2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1)."""
+    2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1;
+    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1)."""
     containers = _t1_new_shape_containers()
     discovered_names = set(containers.keys())
     assert discovered_names == _T1_EXPECTED_CONTAINER_NAMES, (
         discovered_names - _T1_EXPECTED_CONTAINER_NAMES,
         _T1_EXPECTED_CONTAINER_NAMES - discovered_names,
+    )
+    name_matched = {
+        name for name in globals() if _T1_CONTAINER_NAME_PATTERN.match(name)
+    }
+    assert name_matched == _T1_EXPECTED_CONTAINER_NAMES, (
+        name_matched - _T1_EXPECTED_CONTAINER_NAMES,
+        _T1_EXPECTED_CONTAINER_NAMES - name_matched,
     )
     container_total = sum(len(value) for value in containers.values())
     further_sweep_total = (

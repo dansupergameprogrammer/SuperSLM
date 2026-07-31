@@ -120,9 +120,14 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // no domain check of its own; the domain check and the compute are separate
 // calls. (Several computes in this tree guard their own degenerate-length
 // case inside the kernel instead of relying on a separate call-site gate —
-// `SoftmaxRowQ15`, `RowBoundsWide`, `MaxAbsReduceWide` (intmath.h) — see each
-// one's own contract for its guard; that is a different property from this
-// function's own domain check, which stays the caller's.)
+// `SoftmaxRowQ15`, `RowBoundsWide` (intmath.h) — see each one's own contract
+// for its guard; that is a different property from this function's own
+// domain check, which stays the caller's. `MaxAbsReduceWide` is neither of
+// these: it is total over `n`, including `n == 0` — the all-zero-row guard
+// on its accumulated magnitude runs unconditionally and the element loop
+// simply does not execute at `n == 0` — so it has no degenerate-length case
+// to guard and no `n >= 1` precondition for a caller to ensure; see its own
+// contract, intmath.h.)
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 
 // C27's K/V landing composite (§8.1, §11 S3.3 §6.1): the reference's
@@ -699,10 +704,12 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 
 // C16 (master plan §6.8 row C16, D-SLM35; §6.4 step 16): the pinned argmax
 // tie-break -- LOWEST token index. Caller-ensures `n >= 1` (the same
-// caller-ensures convention as FloorDivI64/ShiftByMax/MaxAbsReduceWide -- an
-// empty logit row is a caller defect, not a runtime-checked one; a
-// conformant artifact's `vocab_size` is load-time rejected at 0, so no
-// production call ever passes `n == 0`). Scans left to right and keeps the
+// caller-ensures convention as FloorDivI64/ShiftByMax -- an empty logit row
+// is a caller defect, not a runtime-checked one; a conformant artifact's
+// `vocab_size` is load-time rejected at 0, so no production call ever passes
+// `n == 0`; `MaxAbsReduceWide` does not share this convention -- it is total
+// over `n`, defined and safe at `n == 0`, see intmath.h). Scans left to
+// right and keeps the
 // FIRST (lowest-index) strict maximum -- a later element equal to the
 // running maximum never replaces it, which is what makes the tie-break
 // lowest-index rather than last-write-wins or highest-index.
