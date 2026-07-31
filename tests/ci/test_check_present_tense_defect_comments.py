@@ -84,8 +84,21 @@ def test_a_marker_in_a_different_block_does_not_suppress_an_unrelated_citation()
         path = _write(
             tmp,
             "tests/site.cpp",
-            "// Critical 1 (Poirot deadbeef.md): the guard does not exist.\n"
-            "\n"
+            # One single physical Python line, not one quoted literal per
+            # target line: a quoted literal that opens a physical line with
+            # nothing else on it is itself indistinguishable from a genuine
+            # generated `//`-comment line (see check_present_tense_defect_
+            # comments.py's own _PY_QUOTED_CPP_COMMENT_PATTERN) -- so split
+            # across separate physical lines, THIS fixture's own first
+            # citation reads, to this module scanning its own source under
+            # its default globs, as an uncited "Critical 1" with the "closed"
+            # marker on an unrelated later line (T-1485's real-tree run
+            # caught this). Folding both citations onto one physical source
+            # line keeps them one block for this module's self-scan while the
+            # OUTPUT file `_write` produces is byte-for-byte identical -- two
+            # `//` lines separated by a blank line -- so the test still
+            # exercises exactly the two-block shape it asserts.
+            "// Critical 1 (Poirot deadbeef.md): the guard does not exist.\n\n"
             "// Critical 2 (closed; Poirot deadbeef.md): this one is fixed.\n",
         )
         hits = cptdc.find_uncited_defect_citations(path)
@@ -140,6 +153,118 @@ def test_a_file_with_no_severity_citation_at_all_is_never_flagged():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "tests/site.cpp", "// A perfectly ordinary comment about a passing test.\n")
         assert cptdc.find_uncited_defect_citations(path) == []
+
+
+# --- Python triple-quoted docstrings: joined as one block, not fragmented at
+# the opening line (T-1485). ---
+
+
+def test_a_multiline_python_docstring_is_joined_into_one_block():
+    """T-1485's real-tree run: a Python docstring's OPENING line happens to
+    start with `"` and so passes the plain-STRING check, but every line after
+    it does not start with a quote character at all -- without explicit
+    triple-quote tracking, only the opening line is scanned, silently hiding
+    a resolution marker that in fact appears later in the same docstring."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site_test.py",
+            'def test_something():\n'
+            '    """Pins a mutation (Poirot deadbeef review, Critical 1,\n'
+            '    Execution evidence): the property T-9001 restored, and the\n'
+            '    guard now holds for every case in the pin."""\n'
+            "    assert True\n",
+        )
+        assert cptdc.find_uncited_defect_citations(path) == [], (
+            "the resolution marker T-9001 appears two physical lines below the citation, "
+            "inside the same docstring -- the merged block must still find it"
+        )
+
+
+def test_a_multiline_python_docstring_with_no_marker_anywhere_is_still_flagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site_test.py",
+            'def test_something():\n'
+            '    """The mutation this guard exists to catch (Critical 1\'s own\n'
+            '    text): a regression must fail loudly rather than pass\n'
+            '    silently."""\n'
+            "    assert True\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert len(hits) == 1
+        assert hits[0][2] == ["Critical 1"]
+
+
+def test_a_single_line_python_docstring_is_unaffected():
+    """A one-line docstring (opens and closes its triple-quote on the same
+    physical line) is not swept into an erroneous multi-line continuation --
+    the very next, unrelated line must not be pulled into its block."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/site_test.py",
+            'def test_something():\n'
+            '    """Critical 1 (closed): a one-line docstring."""\n'
+            "    assert True\n",
+        )
+        assert cptdc.find_uncited_defect_citations(path) == []
+
+
+# --- Python-quoted `//` comment lines: a fixture generator that builds
+# multi-line C++ output as one Python string literal per physical line
+# (T-1485). ---
+
+
+def test_a_run_of_python_quoted_cpp_comment_lines_forms_one_block():
+    """tests/gen_*.py's own convention: a Python list of string literals, one
+    per generated-file physical line, where several consecutive elements are
+    themselves quoted `//` comment lines destined for the generated .h/.cpp
+    file. These must merge into one block the same way the equivalent real
+    `//` lines would if read directly from the generated output."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/gen_site_fixtures.py",
+            "lines = [\n"
+            '    "// Witness 1 (Poirot deadbeef review, Critical 1): the same",\n'
+            '    "// off-ratio mechanism as witness 0.",\n'
+            "]\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert len(hits) == 1
+        assert hits[0][2] == ["Critical 1"]
+
+
+def test_a_python_quoted_cpp_comment_run_does_not_swallow_neighboring_code_lines():
+    """T-1485's real-tree run: gen_c32_softmax_row_width_gate_fixtures.py's
+    five-line `//` comment was merged, under the plain bare-quote STRING rule,
+    into an eighteen-line block that also swallowed a struct definition and
+    blank-line placeholders -- because every one of those lines is ALSO,
+    coincidentally, its own complete Python string literal starting with `"`.
+    A quoted `//` line must merge only with adjacent quoted `//` lines, never
+    with a neighboring quoted line that is not itself a `//` line."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/gen_site_fixtures.py",
+            "lines = [\n"
+            '    "};",\n'
+            '    "",\n'
+            '    "// Witness 4 (Poirot deadbeef review, Critical 1): the same",\n'
+            '    "// off-ratio mechanism as witness 1.",\n'
+            '    "",\n'
+            '    "struct Witness4 { int64_t x; };",\n'
+            '    "// Critical 1 (closed): restated for a later, unrelated witness.",\n'
+            "]\n",
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert len(hits) == 1, f"expected exactly the uncited Witness 4 block, got {hits}"
+        assert hits[0][0] == 4 and hits[0][1] == 5, (
+            f"expected the flagged block to span exactly lines 4-5 (the two `// Witness 4` "
+            f"lines), not the surrounding struct/blank-line/later-citation lines: got {hits[0]}"
+        )
 
 
 # --- main()/scan_files() end-to-end and input coverage. ---

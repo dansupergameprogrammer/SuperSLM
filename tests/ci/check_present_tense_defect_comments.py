@@ -67,6 +67,26 @@ tuning against either.
 Modelled on tests/ci/check_no_forward_leaf_calls.py's own conventions: a text
 scan (not a full C++ parse) over a glob-derived file set, a `scan_files` entry
 point returning formatted failure strings, and a `main()` that fails loud.
+
+BLOCK-BOUNDARY HARDENING (T-1485). The first real-tree run of this check found
+two mechanical gaps in `_iter_blocks`, both scoped to `.py` files and both
+fixed here with their own regression cells in the test module: (1) a Python
+multi-line triple-quoted docstring's OPENING line happens to start with `"`
+and so passed the plain-STRING check, but every following line does not start
+with a quote character at all, so only the opening line was ever scanned --
+silently hiding a resolution marker that in fact appeared later in the same
+docstring, and reporting a fragment of a fully-cited docstring as an uncited
+one. (2) `tests/gen_*.py`'s own convention -- a Python list of string
+literals, one per generated-file physical line, used to build multi-line C++
+output text -- was merged as ONE contiguous STRING block for every
+consecutive line that happened to be a complete Python string starting with
+`"`, whether or not that line's own content was a `//` comment; a five-line
+generated comment was found merged, this way, into an eighteen-line block
+that also swallowed a struct definition and blank-line placeholders between
+witnesses. `_PY_QUOTED_CPP_COMMENT_PATTERN` and the triple-quote tracking in
+`_iter_blocks` fix both: a quoted `//` line now merges only with adjacent
+quoted `//` lines, and a triple-quoted string is tracked as open until its
+own closing marker regardless of what each interior line starts with.
 """
 from __future__ import annotations
 
@@ -101,16 +121,52 @@ _DEFAULT_TEST_GLOBS = (
 )
 
 
+
+# A Python source line that is itself a quoted C++ `//` comment line --
+# the shape this codebase's fixture generators use (tests/gen_*.py: a list of
+# Python string literals, one per generated-file physical line, some of which
+# are `//` comments in the OUTPUT file). Every such line starts with a Python
+# quote character immediately followed by `//` (e.g. `"// --- Witness 4 ...",`).
+# Recognized as COMMENT, not the catch-all STRING below, so a run of these
+# merges only with adjacent quoted `//` lines -- never with a neighboring
+# quoted line of ordinary generated code or a blank-line placeholder (`"",`),
+# which is exactly what a real `//` comment run in the generated .h/.cpp file
+# itself would do. Without this, T-1485's own real-tree run found a Python
+# generator's five-line `//` comment merged into an eighteen-line block that
+# also swallowed a struct definition and blank-line separators between them,
+# because every one of those unrelated lines is ALSO, coincidentally, its own
+# complete Python string literal starting with `"`.
+_PY_QUOTED_CPP_COMMENT_PATTERN = re.compile(r"""^["']//""")
+
+# Python's own multi-line string/docstring delimiters. A physical line that
+# opens one of these without closing it on the same line begins a block that
+# continues, verbatim, across every following physical line -- regardless of
+# what character each of those lines itself starts with -- until a line
+# closes it. This is the shape T-1382/T-1383's own docstrings take (e.g.
+# `"""Pins mutations O and P (... Significant 1 ...\n    evidence): ...\n
+# ... T-1506 ...\n    clause."""`), and without it the per-line classifier
+# below sees only the docstring's opening line (which happens to start with
+# `"` and so passes as STRING) and treats every subsequent line as an
+# ordinary code break -- silently hiding a resolution marker that in fact
+# appears later in the same docstring, and reporting a fragment of it as an
+# uncited citation when the whole, correctly-joined docstring is not one.
+_TRIPLE_QUOTE_MARKERS = ('"""', "'''")
+
+
 def _line_kind(line: str) -> str:
-    """Classifies one physical line for block-grouping purposes. A line is part
-    of a textual block if it is a `//` comment (any indentation) or a bare C
-    string-literal continuation (the shape this codebase's multi-line CHECK_MSG
-    messages take: one quoted string literal per physical line). Anything else --
-    code, blank lines -- is a break between blocks, so a resolution marker
-    written for one comment can never silently satisfy a citation in an
-    unrelated, later block."""
+    """Classifies one physical line for block-grouping purposes, for lines
+    OUTSIDE an open multi-line Python string (see `_iter_blocks`). A line is
+    part of a textual block if it is a `//` comment (any indentation), a
+    Python-quoted `//` comment line (`_PY_QUOTED_CPP_COMMENT_PATTERN`), or a
+    bare C string-literal continuation (the shape this codebase's multi-line
+    CHECK_MSG messages take: one quoted string literal per physical line).
+    Anything else -- code, blank lines -- is a break between blocks, so a
+    resolution marker written for one comment can never silently satisfy a
+    citation in an unrelated, later block."""
     stripped = line.strip()
     if stripped.startswith("//"):
+        return "COMMENT"
+    if _PY_QUOTED_CPP_COMMENT_PATTERN.match(stripped):
         return "COMMENT"
     if stripped.startswith('"'):
         return "STRING"
@@ -122,24 +178,58 @@ def _iter_blocks(lines: list[str]) -> list[tuple[int, int, str]]:
     (1-based start line, 1-based end line, merged text). Lines are joined with a
     space so a citation split across a line break -- this codebase's own fixed
     text does this ("...(Significant " / "5, closed by...)") -- is still found as
-    one continuous match against the merged text, never only against one line."""
+    one continuous match against the merged text, never only against one line.
+
+    A line that opens a Python triple-quoted string (`_TRIPLE_QUOTE_MARKERS`)
+    without closing it on the same line switches into a verbatim continuation
+    mode: every following physical line joins the same STRING block, whatever
+    its own leading character, until a line carries the closing marker. This
+    keeps a multi-line docstring together as one block the same way the `//`
+    and bare-C-string rules already keep their own multi-line shapes together."""
     blocks: list[tuple[int, int, str]] = []
     start: int | None = None
     kind: str | None = None
     buf: list[str] = []
+    open_triple: str | None = None
+
+    def _close() -> None:
+        nonlocal start, kind, buf
+        if kind in ("COMMENT", "STRING") and start is not None:
+            blocks.append((start, start + len(buf) - 1, " ".join(buf)))
+        start, kind, buf = None, None, []
+
     for i, line in enumerate(lines, start=1):
+        stripped = line.strip()
+
+        if open_triple is not None:
+            buf.append(stripped)
+            if open_triple in stripped:
+                open_triple = None
+            continue
+
+        opened: str | None = None
+        for marker in _TRIPLE_QUOTE_MARKERS:
+            if stripped.count(marker) % 2 == 1:
+                opened = marker
+                break
+
+        if opened is not None:
+            if kind != "STRING":
+                _close()
+                start = i
+            kind = "STRING"
+            buf.append(stripped)
+            open_triple = opened
+            continue
+
         this_kind = _line_kind(line)
         if this_kind in ("COMMENT", "STRING") and this_kind == kind:
-            buf.append(line.strip())
+            buf.append(stripped)
             continue
-        if kind in ("COMMENT", "STRING") and start is not None:
-            blocks.append((start, i - 1, " ".join(buf)))
+        _close()
         if this_kind in ("COMMENT", "STRING"):
-            start, kind, buf = i, this_kind, [line.strip()]
-        else:
-            start, kind, buf = None, None, []
-    if kind in ("COMMENT", "STRING") and start is not None:
-        blocks.append((start, len(lines), " ".join(buf)))
+            start, kind, buf = i, this_kind, [stripped]
+    _close()
     return blocks
 
 
