@@ -63,12 +63,15 @@ wrong).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
+import subprocess
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
+_INCLUDE_DIR = os.path.join(_REPO_ROOT, "include")
 
 # The eight funnel leaves named at Sec7.3, verbatim: the forward-leaf caller-ensures
 # set the funnel exists to keep off every call site but its own.
@@ -142,223 +145,202 @@ _EXPECTED_DOOR_FUNCTIONS = (
     "CarriedScaleReciprocal",
 )
 
-# --- T-1378: a comment/indentation/paren-robust top-level function scanner. ---
+# --- T-1381: a Clang-AST derivation of the door count, replacing the text
+# scanner (D-SLM464; SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3a). ---
 #
-# The prior version anchored a function definition's signature at column 0 and
-# delimited its parameter list with `[^(){}]*` (no parens allowed inside), then
-# counted braces over the RAW file text to find the body's extent. Executed,
-# three independently-constructed adversarial doors passed this scan silently
-# (Poirot 9d8b38e-s3.4-s3.5-review-remainder-confirmation-2026-07-30.md,
-# Significant 1): a door whose parameter list itself contains parens (a
-# default-argument constructor call), a door indented inside `namespace
-# superslm { ... }` rather than at column 0, and a door preceded by a `}`
-# inside a `//` comment (which the raw brace count treated as a real close,
-# truncating the body early and losing the leaf call inside it). All three are
-# fixed by construction here, not by patching the old regex further:
+# T-1378 hardened the prior column-0-anchored, no-nested-parens regex scanner
+# with comment/string stripping, a balanced-parenthesis parameter list, and
+# brace-context tracking -- and an independent sweep against the HARDENED
+# scanner (Poirot 5af6ab5-t1377-t1378-review-2026-07-31.md, Significant 2)
+# still found three more missed shapes, one of them newly introduced by the
+# hardening itself: a trailing return type (`auto Foo(...) -> int64_t {`,
+# already a live style at src/bad_alloc_wrap.h:49) silently passed because
+# `_SIGNATURE_TAIL_RE` admitted only optional `noexcept` between `)` and `{`;
+# a door inside an `extern "C" { ... }` linkage block silently passed because
+# the brace-context tracker only ever tagged a brace "namespace" or "other",
+# never "extern C"; and a C++14 digit separator (`1'000`) appearing an ODD
+# number of times in the file blanked EVERYTHING from it to end of file,
+# because the comment/string stripper treated every `'` as a char-literal
+# opener with no way to tell a digit separator from a real char literal by
+# text alone -- silently erasing every door after it.
 #
-#   1. Comments and string/char literals are stripped (blanked to spaces,
-#      same length, same newline positions) before EITHER the signature match
-#      or the brace count ever runs (`_strip_comments_and_strings`) -- a `}`
-#      or a `(` inside one can no longer be mistaken for real source
-#      structure, closing the third shape above outright.
-#   2. A function's parameter list is found by a genuine balanced-parenthesis
-#      scan, not a no-parens character class -- closing the first shape.
-#   3. Brace CONTEXT is tracked (a stack of "namespace" / "other" tags, one
-#      per currently-open brace) rather than column position, so a
-#      definition nested inside any depth of `namespace { ... }` is found
-#      exactly like one at column 0, while a definition nested inside a
-#      struct/class/enum body, a control-structure body, a lambda, or
-#      another function's own body is still excluded -- closing the second
-#      shape and generalizing past the one-level case it was found at.
+# Per `StandardsDocument.md` Sec4, a defect class that survives a second,
+# carefully-executed repair is repaired by removing the class, not by
+# patching a third special case onto the same recognizer: comments, string
+# and char literals, digit separators, namespace/extern-"C" nesting at any
+# depth, and trailing return types are not six special cases to enumerate by
+# hand, they are ordinary nodes a real C++ grammar already resolves. This
+# section replaces the hand-rolled text scanner (the comment/string stripper
+# and the brace-tracking function-body finder, both removed) with a Clang AST
+# walk over the funnel's own one file, mirroring the pattern already
+# CI-wired in this repo at `tests/ci/derive_bad_alloc_membership.py`/
+# `tools/ci/check_bad_alloc_contract.py` (same pinned `clang++-18`, same
+# `ubuntu-latest` runner image; `.github/workflows/tests.yml`'s
+# `bad-alloc-membership-check` job proves the exact binary is present
+# there). The whole-tree leaf ban (`scan_files`/`find_banned_leaf_uses`,
+# below) is UNCHANGED -- it is a deliberately over-approximate text scan by
+# design (a ban, not a classifier; Sec7.3's own module docstring) and
+# carries no soundness gap this replaces.
 #
-# Independently validated against a population of six constructed doors,
-# each executed against BOTH the prior version and this one
-# (test_find_leaf_forwarding_doors_catches_the_independently_found_population
-# below): the three shapes above (missed before, caught now), a fourth
-# variant using a `/* ... } ... */` block comment rather than `//` (missed
-# before for the same reason as the third; caught now), a fifth combining the
-# paren-in-params and indentation shapes on one door at TWO levels of nested
-# `namespace { ... }` rather than one (missed before; caught now, proving the
-# fix generalizes past the exact nesting depth it was found at), and a false-
-# positive control: a banned leaf's name and a `{`/`}`-bearing fake signature
-# inside a STRING LITERAL, which must NOT be reported as a door either before
-# or after (both pass, unchanged -- this fix narrows what escapes detection,
-# it does not widen what counts as a door).
+# `-fsyntax-only -Xclang -ast-dump=json` still emits a full AST for a scratch
+# file with no `#include`s at all (every banned-leaf name and every type
+# unresolved): Clang's error-recovery machinery represents an unresolved call
+# as an `UnresolvedLookupExpr` carrying the callee's name directly, and an
+# unresolved type does not prevent the enclosing `FunctionDecl`, its name, or
+# its `CompoundStmt` body from appearing in the dump. This is what lets the
+# same population of constructed, include-free scratch fixtures this suite
+# already uses drive the AST-based mechanism exactly as they drove the text
+# scanner, with no synthetic header prelude required (confirmed by execution:
+# `clang++ -Xclang -ast-dump=json -fsyntax-only` on a bare
+# `int64_t CarriedScaleReciprocal(int64_t m) { return
+# DynamicScaleReciprocal(m); }` -- no includes, no declarations -- exits 0
+# and dumps a `FunctionDecl` named `CarriedScaleReciprocal` whose body
+# contains an `UnresolvedLookupExpr` named `DynamicScaleReciprocal`).
 #
-# `StandardsDocument.md` Sec4: a new structure is validated against an
-# independently-found population before it is trusted -- the population above
-# is not the three shapes' own author re-deriving them, it is a wider net
-# cast deliberately before hardening, per the same section's own instruction.
+# Validated against the same population `test_check_no_forward_leaf_calls.py`
+# already carries (five constructed doors plus the false-positive control)
+# PLUS the three shapes this review found still missed (trailing return type,
+# `extern "C" { }`, the odd-count digit separator) -- nine cases in total,
+# each executed against BOTH the text-scan mechanism being replaced
+# (reproduced verbatim in the test file, since this module no longer carries
+# it) and this AST-based one, so the improvement is measured rather than
+# asserted (StandardsDocument Sec4).
+
+_DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
+
+# The AST node kinds `find_leaf_forwarding_doors` treats as door candidates:
+# ordinary free/namespace-scope functions only. A member function
+# (CXXMethodDecl/CXXConstructorDecl/...) is deliberately never a kind this
+# set admits, which excludes a definition nested inside a struct/class/enum
+# body exactly as the prior text scanner's brace-context tag "other" did --
+# for free, because Clang's own AST already distinguishes a member function
+# from a free one by node kind, with no brace-counting needed here at all.
+_TOP_LEVEL_FUNCTION_KINDS = ("FunctionDecl",)
 
 
-def _strip_comments_and_strings(text: str) -> str:
-    """Returns a string the SAME LENGTH as `text`, with every `//` line
-    comment, `/* ... */` block comment, and string/char literal's CONTENTS
-    replaced by spaces (newlines preserved, so line-oriented reasoning
-    elsewhere stays valid even though nothing here currently needs it).
-    Positions map 1:1 onto the original text -- a caller slicing
-    `text[a:b]` using indices found against this stripped text gets the REAL
-    source, comments included; only the SCANNING (signature matching, brace
-    depth) ever sees the stripped version, so a `}`, a `(`, or a leaf's name
-    inside a comment or a string literal can no longer be mistaken for real
-    source structure. A text-level scan, not a preprocessor -- unterminated
-    comments/strings at end of file are closed at EOF rather than raising,
-    matching this module's existing over-approximation doctrine (module
-    docstring above: a false positive is accepted, a soundness gap is not)."""
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            start = i
-            while i < n and text[i] != "\n":
-                i += 1
-            out.append(" " * (i - start))
+class ClangUnavailable(RuntimeError):
+    """Raised when clang++ cannot run -Xclang -ast-dump=json at all -- the
+    environment problem, distinct from a genuine population mismatch (mirrors
+    tests/ci/derive_bad_alloc_membership.py's own exception of the same
+    name)."""
+
+
+def _run_clang_ast_dump(source_path: str, clangxx: str = _DEFAULT_CLANGXX,
+                         include_dir: str | None = None) -> dict:
+    """Runs `clangxx -Xclang -ast-dump=json -fsyntax-only` against
+    `source_path` and returns the parsed JSON root. A genuine environment
+    failure (a missing clang++, or a timeout) raises `ClangUnavailable`. A
+    RECOVERABLE semantic error -- an unresolved identifier or an unknown type
+    name, the ordinary case for a scratch fixture with no `#include`s --
+    does NOT raise, even though Clang's own exit code is nonzero in that
+    case (confirmed by execution: `clang++ -fsyntax-only` on
+    `int64_t Foo(int64_t m) { return Bar(m); }` with no declarations at all
+    exits 1, reporting "unknown type name 'int64_t'" twice, yet still emits
+    a complete, valid AST dump on stdout carrying `Foo`'s `FunctionDecl`, its
+    `CompoundStmt` body, and an `UnresolvedLookupExpr` named `Bar` -- the
+    exit code reflects the semantic errors, not whether the AST dump itself
+    succeeded). What DOES distinguish a genuine parse failure (an
+    unterminated brace, for instance) is that clang emits NO stdout at all
+    in that case -- so the discriminator this function uses is "did valid
+    JSON come back on stdout," not the process's exit code."""
+    cmd = [clangxx, "-std=c++20", "-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c++"]
+    if include_dir is not None:
+        cmd += ["-I", include_dir]
+    cmd.append(source_path)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+    except FileNotFoundError as e:
+        raise ClangUnavailable(f"{clangxx} not found on PATH: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        raise ClangUnavailable(f"{clangxx} timed out dumping {source_path}") from e
+    try:
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"clang++ produced no usable AST dump for {source_path} (exit {proc.returncode}):\n"
+            f"{proc.stderr.decode('utf-8', errors='replace')}"
+        ) from e
+
+
+def _node_leaf_name(node: dict, leaves: tuple[str, ...]) -> str | None:
+    """If `node` is a reference to one of `leaves` -- resolved (`DeclRefExpr`/
+    `MemberExpr` whose `referencedDecl.name` is a leaf, the shape a call
+    takes when the callee IS declared, e.g. the real production file with its
+    real `#include`s) or unresolved (`UnresolvedLookupExpr` whose own `name`
+    is a leaf directly, the shape an include-free scratch fixture takes) --
+    returns the matched leaf name, else None."""
+    referenced = node.get("referencedDecl")
+    if isinstance(referenced, dict) and referenced.get("name") in leaves:
+        return referenced["name"]
+    if node.get("kind") == "UnresolvedLookupExpr" and node.get("name") in leaves:
+        return node["name"]
+    return None
+
+
+def _body_calls_leaf(body: dict, leaves: tuple[str, ...]) -> bool:
+    """Whether ANY node in `body`'s subtree (a `CompoundStmt`) references a
+    banned leaf -- walked with no regard to further nesting (an `if`, a
+    lambda, another block), matching the text scanner's own "anywhere in the
+    body text" convention exactly, just precise about what counts as a
+    reference instead of a raw substring match."""
+    stack = [body]
+    while stack:
+        n = stack.pop()
+        if not isinstance(n, dict):
             continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            start = i
-            i += 2
-            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                i += 1
-            i = min(i + 2, n)
-            chunk = text[start:i]
-            out.append("".join(ch if ch == "\n" else " " for ch in chunk))
-            continue
-        if c in ("\"", "'"):
-            quote = c
-            start = i
-            i += 1
-            while i < n and text[i] != quote:
-                i += 2 if text[i] == "\\" and i + 1 < n else 1
-            i = min(i + 1, n)
-            out.append(" " * (i - start))
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-# A C++ function DEFINITION's signature HEAD: a return-type-ish prefix ending
-# in an identifier (the function's own name, captured), immediately followed
-# by `(` -- the same shape the prior version used, unchanged, because it
-# already correctly rejects a bare call expression (`identifier(args)` has
-# only ONE identifier before the `(`; a definition's return type supplies a
-# second). No `^` anchor and no `[^(){}]*` parameter-list restriction: this
-# module never anchors the match itself, it anchors the SEARCH POSITION via
-# `re.Pattern.match(text, pos)`, and the parameter list is resolved by a
-# balanced-parenthesis scan below, not by this pattern.
-_SIGNATURE_HEAD_RE = re.compile(r"[A-Za-z_][\w:*&<>,\s]*?\b([A-Za-z_]\w*)\s*\(")
-# Whatever separates a signature's closing `)` from its opening `{`:
-# qualifiers like `noexcept`, or nothing.
-_SIGNATURE_TAIL_RE = re.compile(r"\s*(?:noexcept\s*)?\{")
-# A `{` is a namespace opener when the (stripped) text immediately before it
-# ends in the `namespace` keyword, optionally named -- matches both
-# `namespace superslm {` and the anonymous `namespace {`.
-_NAMESPACE_OPENER_RE = re.compile(r"namespace(\s+[A-Za-z_]\w*)?\s*$")
-
-
-def _is_word_char(c: str) -> bool:
-    return c.isalnum() or c == "_"
-
-
-def _brace_tag(cleaned: str, brace_pos: int) -> str:
-    """Classifies a `{` at `brace_pos` in `cleaned` (already comment/string-
-    stripped) by looking back over the text immediately before it:
-    "namespace" (a named or anonymous namespace body -- the only tag
-    `find_top_level_function_bodies` treats as transparent) or "other"
-    (anything else: a struct/class/enum body, an if/for/while/do/switch
-    body, a lambda, an initializer list -- all of which make everything
-    inside them non-top-level for this scanner's purposes)."""
-    look_start = max(0, brace_pos - 200)
-    if _NAMESPACE_OPENER_RE.search(cleaned[look_start:brace_pos]):
-        return "namespace"
-    return "other"
-
-
-def find_top_level_function_bodies(text: str) -> list[tuple[str, int, int]]:
-    """Every top-level function DEFINITION in `text`: `(name, body_start,
-    body_end)` with `body_start`/`body_end` indices into `text` ITSELF (the
-    original, unstripped text), in file order. "Top-level" means every brace
-    enclosing the definition, if any, opens a namespace (named or anonymous,
-    any nesting depth) -- never a struct/class/enum body, a control-structure
-    body, a lambda, or another function's own body. See the module comment
-    above (T-1378) for why this replaced a column-0-anchored, no-nested-
-    parens regex over raw text."""
-    cleaned = _strip_comments_and_strings(text)
-    n = len(cleaned)
-    stack: list[str] = []
-    pending_names: list[str] = []
-    pending_starts: list[int] = []
-    results: list[tuple[str, int, int]] = []
-    i = 0
-    while i < n:
-        ch = cleaned[i]
-        if ch == "{":
-            stack.append(_brace_tag(cleaned, i))
-            i += 1
-            continue
-        if ch == "}":
-            if stack:
-                tag = stack.pop()
-                if tag == "function":
-                    results.append((pending_names.pop(), pending_starts.pop(), i + 1))
-            i += 1
-            continue
-        starts_ident = _is_word_char(ch) and not ch.isdigit()
-        prev_is_ident = i > 0 and _is_word_char(cleaned[i - 1])
-        if starts_ident and not prev_is_ident:
-            head = _SIGNATURE_HEAD_RE.match(cleaned, i)
-            if head is not None:
-                depth = 1
-                j = head.end()
-                while j < n and depth > 0:
-                    if cleaned[j] == "(":
-                        depth += 1
-                    elif cleaned[j] == ")":
-                        depth -= 1
-                    j += 1
-                if depth == 0:
-                    tail = _SIGNATURE_TAIL_RE.match(cleaned, j)
-                    if tail is not None:
-                        brace_pos = tail.end() - 1
-                        if all(t == "namespace" for t in stack):
-                            stack.append("function")
-                            pending_names.append(head.group(1))
-                            pending_starts.append(brace_pos)
-                        else:
-                            stack.append("other")
-                        i = brace_pos + 1
-                        continue
-        i += 1
-    return results
+        if _node_leaf_name(n, leaves) is not None:
+            return True
+        stack.extend(n.get("inner") or [])
+    return False
 
 
 def find_leaf_forwarding_doors(
     path: str,
     leaves: tuple[str, ...] = BANNED_LEAVES,
     exclude: tuple[str, ...] = _FUNNEL_ENTRY_POINTS,
+    clangxx: str = _DEFAULT_CLANGXX,
+    include_dir: str | None = _INCLUDE_DIR,
 ) -> list[str]:
-    """Every top-level function DEFINED in `path` whose body names a banned leaf,
-    excluding `exclude` (the funnel's own checked entry points, which are
-    SUPPOSED to). A function's extent comes from `find_top_level_function_bodies`
-    (T-1378): comment/string-stripped for both the signature match and the
-    brace count, a balanced-parenthesis parameter list, and brace-CONTEXT
-    tracking rather than column position -- see that function and the module
-    comment above for what this replaced and why. The body text searched for
-    a leaf name is sliced from the ORIGINAL (unstripped) text, so a leaf name
-    inside a comment inside an otherwise-legitimate function still counts as
-    a hit, matching this module's existing over-inclusive-on-comments
-    convention (the module docstring's own "a ban, not a classifier").
-    Returns names in file order, so the caller gets a stable diff against
-    `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        text = f.read()
+    """Every top-level function DEFINED in `path` whose body names a banned
+    leaf, excluding `exclude` (the funnel's own checked entry points, which
+    are SUPPOSED to). T-1381 (D-SLM464): derived from a real Clang AST dump
+    of `path` rather than a hand-rolled text scan -- see the module comment
+    above for what this replaced and why. A "top-level function DEFINED" is
+    an AST `FunctionDecl` node (never a member-function kind) located in
+    `path` itself (tracked via the dump's own file-attribution, the same
+    delta-encoded `loc.file`/`includedFrom` walk `derive_bad_alloc_
+    membership.py` already uses) that carries a `CompoundStmt` body -- a
+    declaration with no body (e.g. the header's own prototype) is not a
+    door. Returns names in file order, so the caller gets a stable diff
+    against `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
+    root = _run_clang_ast_dump(path, clangxx, include_dir)
+    target = os.path.normpath(os.path.abspath(path)).replace("\\", "/")
+    state = {"file": None}
     doors: list[str] = []
-    for name, body_start, body_end in find_top_level_function_bodies(text):
-        body_text = text[body_start:body_end]
-        if name not in exclude and any(_leaf_pattern(leaf).search(body_text) for leaf in leaves):
-            doors.append(name)
+
+    def walk(n: object) -> None:
+        if not isinstance(n, dict):
+            return
+        loc = n.get("loc") or {}
+        if "file" in loc:
+            state["file"] = loc["file"]
+        cur_file = str(state["file"] or "").replace("\\", "/")
+        if (
+            n.get("kind") in _TOP_LEVEL_FUNCTION_KINDS
+            and cur_file
+            and os.path.normpath(os.path.abspath(cur_file)).replace("\\", "/") == target
+        ):
+            name = n.get("name")
+            body = next(
+                (c for c in (n.get("inner") or []) if isinstance(c, dict) and c.get("kind") == "CompoundStmt"),
+                None,
+            )
+            if body is not None and name not in exclude and name not in doors and _body_calls_leaf(body, leaves):
+                doors.append(name)
+        for c in n.get("inner") or []:
+            walk(c)
+
+    walk(root)
     return doors
 
 
@@ -468,9 +450,18 @@ def main(
     # tree's own door count is asserted separately and unconditionally by
     # test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous.
     if os.path.normpath(repo_root) == os.path.normpath(_REPO_ROOT):
-        failures += check_door_count(
-            os.path.join(repo_root, "src/forward/checked_chain_funnel.cpp")
-        )
+        try:
+            failures += check_door_count(
+                os.path.join(repo_root, "src/forward/checked_chain_funnel.cpp")
+            )
+        except ClangUnavailable as e:
+            # T-1381 (D-SLM464): the door-count guard is now Clang-AST-derived
+            # and needs a real clang++ on PATH (or SUPERSLM_CLANGXX). Reported
+            # as a clean gate failure, mirroring tools/ci/check_bad_alloc_
+            # contract.py's own handling of the same exception -- an
+            # environment gap, not a Python traceback.
+            print(f"check_no_forward_leaf_calls.py: clang++ unavailable -- {e}", file=sys.stderr)
+            return 1
     if failures:
         print("check_no_forward_leaf_calls.py: FAILED", file=sys.stderr)
         for f in failures:

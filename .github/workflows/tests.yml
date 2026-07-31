@@ -406,6 +406,18 @@ jobs:
   # own pass/fail does not depend on that job's environment or ordering.
   forward-leaf-check:
     runs-on: ubuntu-latest
+    # T-1381 (D-SLM464; SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3a): the
+    # door-count guard (find_leaf_forwarding_doors/check_door_count) is now a
+    # Clang-AST derivation over the funnel's one file, replacing the text
+    # scanner a second hardened repair still left with three missed shapes.
+    # Pinned to Clang 18, matching bad-alloc-membership-check's own job
+    # (which already proves clang++-18 is present on this exact
+    # ubuntu-latest runner image) -- a floating `clang++` on this job would
+    # conflate releases across runner-image updates the same as an unpinned
+    # CC/CXX would. The whole-tree leaf ban (scan_files) needs no compiler
+    # at all and is unaffected.
+    env:
+      SUPERSLM_CLANGXX: clang++-18
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5

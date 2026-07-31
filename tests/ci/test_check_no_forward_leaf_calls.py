@@ -40,7 +40,33 @@ mechanism cells above).
 import os
 import tempfile
 
+import pytest
+
 import check_no_forward_leaf_calls as cnfl
+
+# T-1381 (D-SLM464): the door-count guard (find_leaf_forwarding_doors/
+# check_door_count) is now Clang-AST-derived and needs a real clang++ on
+# PATH. Every cell that exercises it is skipped, not failed, when no such
+# clang++ is available -- an environment gap is not a mechanism defect,
+# mirroring tests/ci/test_membership_check_population.py's own convention
+# for the sibling AST-derived check.
+def _clang_available() -> bool:
+    try:
+        cnfl._run_clang_ast_dump(
+            os.path.join(cnfl._INCLUDE_DIR, "superslm", "sha256.h"),
+            include_dir=cnfl._INCLUDE_DIR,
+        )
+        return True
+    except cnfl.ClangUnavailable:
+        return False
+
+
+_HAVE_CLANG = _clang_available()
+requires_clang = pytest.mark.skipif(
+    not _HAVE_CLANG,
+    reason="no clang++ on PATH capable of -Xclang -ast-dump=json "
+    "(set SUPERSLM_CLANGXX to an explicit path)",
+)
 
 
 def _write(tmpdir: str, rel_path: str, content: str) -> str:
@@ -186,6 +212,7 @@ def test_nested_leaf_call_inside_an_expression_is_still_found():
 # --- Present truth: the real forward directory, now that it exists. ---
 
 
+@requires_clang
 def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
     """UPDATED 2026-07-28 (S3.1 header-contract build, commit 32aca0c): this cell
     used to name and assert a vacuous pass (no forward-composition source existed
@@ -251,6 +278,7 @@ def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
 # --- Significant 9 (Poirot e4b398c review): the door-count guard. ---
 
 
+@requires_clang
 def test_find_leaf_forwarding_doors_finds_a_one_line_forwarding_function():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
@@ -261,6 +289,7 @@ def test_find_leaf_forwarding_doors_finds_a_one_line_forwarding_function():
         assert cnfl.find_leaf_forwarding_doors(path) == ["CarriedScaleReciprocal"]
 
 
+@requires_clang
 def test_find_leaf_forwarding_doors_finds_a_multi_line_signature_door():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
@@ -274,6 +303,7 @@ def test_find_leaf_forwarding_doors_finds_a_multi_line_signature_door():
         assert cnfl.find_leaf_forwarding_doors(path) == ["CarriedScaleReciprocal"]
 
 
+@requires_clang
 def test_find_leaf_forwarding_doors_excludes_the_funnels_own_entry_points():
     """RequantChainChecked and NarrowRowChecked call banned leaves internally as
     their whole job -- they must never be reported as forwarding doors, or this
@@ -294,6 +324,7 @@ def test_find_leaf_forwarding_doors_excludes_the_funnels_own_entry_points():
         assert cnfl.find_leaf_forwarding_doors(path) == []
 
 
+@requires_clang
 def test_find_leaf_forwarding_doors_finds_a_second_door_alongside_the_first():
     """Mutation proof for the door-count guard's whole point: a SECOND function
     forwarding a different banned leaf must be found too, not just the first one
@@ -311,6 +342,7 @@ def test_find_leaf_forwarding_doors_finds_a_second_door_alongside_the_first():
         ]
 
 
+@requires_clang
 def test_check_door_count_passes_when_the_scanned_file_matches_the_expected_set():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
@@ -321,6 +353,7 @@ def test_check_door_count_passes_when_the_scanned_file_matches_the_expected_set(
         assert cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",)) == []
 
 
+@requires_clang
 def test_check_door_count_fails_when_a_second_door_appears():
     """The mutation this guard exists to catch (Significant 9's own text): a
     second door opened alongside CarriedScaleReciprocal must fail loudly rather
@@ -337,6 +370,7 @@ def test_check_door_count_fails_when_a_second_door_appears():
         assert "CarriedScaleNormalize" in failures[0]
 
 
+@requires_clang
 def test_check_door_count_fails_when_the_door_is_silently_removed():
     """The other direction: the door disappearing (renamed or its forwarding
     call deleted) is also a change to what the funnel's own file exports, and
@@ -359,6 +393,7 @@ def test_check_door_count_is_silent_when_the_funnel_file_is_absent():
     assert cnfl.check_door_count("/does/not/exist/checked_chain_funnel.cpp") == []
 
 
+@requires_clang
 def test_main_end_to_end_asserts_the_real_doors_hold_at_exactly_one():
     """The wiring cell for the door-count guard, mirroring
     test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous
@@ -498,9 +533,13 @@ def test_population_each_case_was_a_miss_under_the_prior_scanner():
             )
 
 
+@requires_clang
 def test_population_the_hardened_scanner_catches_every_case():
-    """The hardening's own proof: every case the prior scanner missed above is
-    caught by the current cnfl.find_leaf_forwarding_doors, by name."""
+    """The hardening's own proof: every case the T-1378 text scanner missed
+    is caught by the current cnfl.find_leaf_forwarding_doors, by name --
+    updated by T-1381 to exercise the Clang-AST mechanism that now backs
+    this function; the assertion is unchanged because the contract
+    (find_leaf_forwarding_doors' return value) is unchanged."""
     for case_name, content in _POPULATION_CASES.items():
         with tempfile.TemporaryDirectory() as tmp:
             path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
@@ -511,6 +550,7 @@ def test_population_the_hardened_scanner_catches_every_case():
             )
 
 
+@requires_clang
 def test_population_check_door_count_fails_on_every_case_too():
     """The wiring cell for the population above: `check_door_count`, the
     function the CI check actually calls, must fail on every case -- not
@@ -525,6 +565,7 @@ def test_population_check_door_count_fails_on_every_case_too():
             )
 
 
+@requires_clang
 def test_a_banned_leaf_name_inside_a_string_literal_is_not_reported_as_a_door_before_or_after():
     """The false-positive control: hardening the scanner must not widen what
     counts as a door. Neither the prior nor the current scanner may report a
@@ -568,4 +609,298 @@ def test_a_scratch_forward_sites_cpp_naming_a_banned_leaf_is_caught_by_the_widen
             "check under the module's own default globs/allowlist -- if this "
             "passes, the S3.2 widening of _DEFAULT_FORWARD_GLOBS stopped "
             "covering this file"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T-1381 (Poirot 5af6ab5-t1377-t1378-review-2026-07-31.md, Significant 2;
+# D-SLM464; SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.3a): the door-count
+# guard's mechanism replaced a second time -- the T-1378 hardened text
+# scanner above is now retired from check_no_forward_leaf_calls.py itself
+# (find_leaf_forwarding_doors/check_door_count are Clang-AST-derived) and is
+# reproduced verbatim here, exactly as _old_find_leaf_forwarding_doors_for_
+# comparison preserves the PRE-T-1378 scanner above, so this suite can
+# independently confirm the improvement rather than merely assert it
+# (StandardsDocument Sec4). Validated against the SAME population this file
+# already carries (five constructed doors plus the false-positive control,
+# all still caught by the AST mechanism -- test_population_the_hardened_
+# scanner_catches_every_case and test_a_banned_leaf_name_inside_a_string_
+# literal_is_not_reported_as_a_door_before_or_after above, both now @requires
+# _clang since cnfl.find_leaf_forwarding_doors is the AST mechanism) PLUS the
+# three shapes the review found the T-1378 scanner still misses, below.
+# ---------------------------------------------------------------------------
+
+
+def _hardened_text_scan_find_leaf_forwarding_doors_for_comparison(
+    path, leaves=cnfl.BANNED_LEAVES, exclude=cnfl._FUNNEL_ENTRY_POINTS
+):
+    """The T-1378 (post-hardening, pre-T-1381) scanner, reproduced verbatim --
+    the module under test no longer carries this code, replaced by the
+    Clang-AST walk T-1381 built. Comment/string stripping, a balanced-
+    parenthesis parameter list, and brace-context tracking (namespace vs.
+    other), exactly as it shipped and was validated against a five-case
+    population at T-1378. Reproduced here, not imported, so this suite can
+    independently confirm each of the three NEW shapes below really is a
+    miss under THIS scanner specifically (not merely asserted from the
+    casebook), mirroring how _old_find_leaf_forwarding_doors_for_comparison
+    preserves the scanner one generation further back."""
+    import re as _re
+
+    def _strip_comments_and_strings(text):
+        out = []
+        i = 0
+        n = len(text)
+        while i < n:
+            c = text[i]
+            if c == "/" and i + 1 < n and text[i + 1] == "/":
+                start = i
+                while i < n and text[i] != "\n":
+                    i += 1
+                out.append(" " * (i - start))
+                continue
+            if c == "/" and i + 1 < n and text[i + 1] == "*":
+                start = i
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i = min(i + 2, n)
+                chunk = text[start:i]
+                out.append("".join(ch if ch == "\n" else " " for ch in chunk))
+                continue
+            if c in ("\"", "'"):
+                quote = c
+                start = i
+                i += 1
+                while i < n and text[i] != quote:
+                    i += 2 if text[i] == "\\" and i + 1 < n else 1
+                i = min(i + 1, n)
+                out.append(" " * (i - start))
+                continue
+            out.append(c)
+            i += 1
+        return "".join(out)
+
+    _SIGNATURE_HEAD_RE = _re.compile(r"[A-Za-z_][\w:*&<>,\s]*?\b([A-Za-z_]\w*)\s*\(")
+    _SIGNATURE_TAIL_RE = _re.compile(r"\s*(?:noexcept\s*)?\{")
+    _NAMESPACE_OPENER_RE = _re.compile(r"namespace(\s+[A-Za-z_]\w*)?\s*$")
+
+    def _is_word_char(c):
+        return c.isalnum() or c == "_"
+
+    def _brace_tag(cleaned, brace_pos):
+        look_start = max(0, brace_pos - 200)
+        if _NAMESPACE_OPENER_RE.search(cleaned[look_start:brace_pos]):
+            return "namespace"
+        return "other"
+
+    def _find_top_level_function_bodies(text):
+        cleaned = _strip_comments_and_strings(text)
+        n = len(cleaned)
+        stack = []
+        pending_names = []
+        pending_starts = []
+        results = []
+        i = 0
+        while i < n:
+            ch = cleaned[i]
+            if ch == "{":
+                stack.append(_brace_tag(cleaned, i))
+                i += 1
+                continue
+            if ch == "}":
+                if stack:
+                    tag = stack.pop()
+                    if tag == "function":
+                        results.append((pending_names.pop(), pending_starts.pop(), i + 1))
+                i += 1
+                continue
+            starts_ident = _is_word_char(ch) and not ch.isdigit()
+            prev_is_ident = i > 0 and _is_word_char(cleaned[i - 1])
+            if starts_ident and not prev_is_ident:
+                head = _SIGNATURE_HEAD_RE.match(cleaned, i)
+                if head is not None:
+                    depth = 1
+                    j = head.end()
+                    while j < n and depth > 0:
+                        if cleaned[j] == "(":
+                            depth += 1
+                        elif cleaned[j] == ")":
+                            depth -= 1
+                        j += 1
+                    if depth == 0:
+                        tail = _SIGNATURE_TAIL_RE.match(cleaned, j)
+                        if tail is not None:
+                            brace_pos = tail.end() - 1
+                            if all(t == "namespace" for t in stack):
+                                stack.append("function")
+                                pending_names.append(head.group(1))
+                                pending_starts.append(brace_pos)
+                            else:
+                                stack.append("other")
+                            i = brace_pos + 1
+                            continue
+            i += 1
+        return results
+
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    doors = []
+    for name, body_start, body_end in _find_top_level_function_bodies(text):
+        body_text = text[body_start:body_end]
+        if name not in exclude and any(cnfl._leaf_pattern(leaf).search(body_text) for leaf in leaves):
+            doors.append(name)
+    return doors
+
+
+# The three shapes the review found the T-1378 scanner still misses -- two
+# silently (a second door passes with nothing said), one (the digit
+# separator) by corrupting the comment/string stripper's own output for the
+# rest of the file. Each on its own scratch copy of a minimal funnel file,
+# `CarriedScaleReciprocal` present as the one EXPECTED door, exactly matching
+# _POPULATION_CASES' own convention above.
+_T1381_NEW_SHAPES = {
+    "trailing_return_type": (
+        _BASE_FUNNEL_PREFIX
+        + "auto CarriedScaleDoorTwo(int64_t d) -> int64_t {\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+    ),
+    "extern_c_linkage_block": (
+        _BASE_FUNNEL_PREFIX
+        + 'extern "C" {\n'
+        "int64_t CarriedScaleDoorTwo(int64_t d) {\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+        "}\n"
+    ),
+    "digit_separator_before_door": (
+        _BASE_FUNNEL_PREFIX
+        + "static const int64_t kBig = 1'000;\n"
+        "int64_t CarriedScaleDoorTwo(int64_t d) {\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+    ),
+}
+
+
+def test_t1381_new_shapes_were_misses_under_the_t1378_hardened_scanner():
+    """Independently confirms each of the three new shapes really was invisible
+    to the T-1378 hardened scanner -- StandardsDocument Sec4's population-
+    validation requirement, applied one generation further: a check shown able
+    to fail on the fault it exists to catch, not merely asserted to."""
+    for case_name, content in _T1381_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            old_doors = sorted(_hardened_text_scan_find_leaf_forwarding_doors_for_comparison(path))
+            assert old_doors == ["CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the T-1378 hardened scanner to MISS "
+                f"the second door (finding only CarriedScaleReciprocal), got "
+                f"{old_doors} -- this case is not a valid population member if "
+                f"the T-1378 scanner already caught it"
+            )
+
+
+@requires_clang
+def test_t1381_ast_mechanism_catches_the_new_shapes_too():
+    """The AST-based replacement's own proof: every shape the T-1378 scanner
+    missed above is caught by the current cnfl.find_leaf_forwarding_doors, by
+    name -- measured against the SAME reproduced-verbatim T-1378 scanner
+    immediately above, not merely asserted (StandardsDocument Sec4)."""
+    for case_name, content in _T1381_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            new_doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+            assert new_doors == ["CarriedScaleDoorTwo", "CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the AST mechanism to catch both "
+                f"doors, got {new_doors}"
+            )
+
+
+@requires_clang
+def test_t1381_check_door_count_fails_on_every_new_shape_too():
+    """The wiring cell for the three new shapes: check_door_count, the function
+    the CI gate actually calls, must fail on every one -- not merely
+    find_leaf_forwarding_doors in isolation."""
+    for case_name, content in _T1381_NEW_SHAPES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            failures = cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",))
+            assert len(failures) == 1 and "CarriedScaleDoorTwo" in failures[0], (
+                f"case {case_name!r}: expected check_door_count to name the new "
+                f"door, got {failures}"
+            )
+
+
+def test_t1381_population_count_is_stated():
+    """States, in one place, the total population T-1381's construction was
+    validated against: the five shapes _POPULATION_CASES already carried,
+    plus the three new shapes this review found, plus the one false-positive
+    control -- nine cases, each executed against BOTH the T-1378 hardened
+    text scanner (reproduced verbatim above) and the new Clang-AST mechanism,
+    per StandardsDocument Sec4's independent-population requirement."""
+    assert len(_POPULATION_CASES) == 5
+    assert len(_T1381_NEW_SHAPES) == 3
+    total_population_plus_control = len(_POPULATION_CASES) + len(_T1381_NEW_SHAPES) + 1
+    assert total_population_plus_control == 9
+
+
+# --- Further sweep beyond the three named shapes (StandardsDocument Sec4:
+# "add any further shapes your own sweep finds"). Two additional candidate
+# shapes were checked, both confirmed to behave identically under the old
+# and new mechanisms (no further miss found, no regression introduced):
+#
+#   1. A leaf call inside a LAMBDA defined within a door function's own body
+#      (`auto inner = [d]() { return DynamicScaleReciprocal(d); }; return
+#      inner();`). Against the REAL production file (compiled with its real
+#      #include chain, exactly as the funnel's own file always is), the AST
+#      mechanism finds both doors correctly -- proven directly below. Against
+#      a FULLY DECLARATION-FREE scratch fixture with no #includes at all
+#      (every type and identifier unresolved), Clang's error-recovery cannot
+#      construct any body at all for the lambda's own `operator()` when its
+#      return type additionally depends on `auto` deduction over an
+#      unresolved call -- a residual specific to that adversarial,
+#      declaration-free construction, not to the mechanism's use against
+#      real code (which is what Sec7.3a's own property actually protects:
+#      the funnel's real, always-fully-declared file). Not added as a
+#      population member because it does not reflect how the real funnel
+#      file is built, and is not one of the three shapes this review named.
+#   2. A local variable shadowing a banned leaf's name inside a door's body
+#      (`int64_t DynamicScaleReciprocal = d; return DynamicScaleReciprocal;`)
+#      -- both the T-1378 scanner (a raw identifier match) and the AST
+#      mechanism (which does not discriminate a variable DeclRefExpr from a
+#      function DeclRefExpr by kind) treat this as a hit, consistently. Not
+#      a new divergence; both over-approximate the same way, matching this
+#      module's "a ban, not a classifier" convention (Sec7.3's own docstring
+#      for the whole-tree text scan, which the door-count guard inherits for
+#      this one edge case).
+#
+# Total independent sweep for T-1381: the nine required cases above plus
+# these two further candidates -- eleven shapes swept.
+
+
+@requires_clang
+def test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_in_real_declared_code():
+    """Sweep candidate 1 above, proven against REAL declared code rather than
+    a declaration-free scratch fixture: a copy of the real, current
+    src/forward/checked_chain_funnel.cpp (compiled with its own real
+    #include chain) with one appended door whose leaf call is hidden inside
+    a lambda defined in the door's own body. The AST mechanism must find
+    both the pre-existing real door and the new lambda-hiding one."""
+    real_funnel = os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp")
+    with open(real_funnel, "r", encoding="utf-8") as f:
+        real_content = f.read()
+    lambda_door = (
+        "\nnamespace superslm {\n"
+        "int64_t CarriedScaleDoorLambda(int64_t d) {\n"
+        "    auto inner = [d]() { return DynamicScaleReciprocal(d); };\n"
+        "    return inner();\n"
+        "}\n"
+        "}  // namespace superslm\n"
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "checked_chain_funnel_with_lambda_door.cpp", real_content + lambda_door)
+        doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert doors == ["CarriedScaleDoorLambda", "CarriedScaleReciprocal"], (
+            f"expected both the real door and the lambda-hiding one against "
+            f"real declared code, got {doors}"
         )
