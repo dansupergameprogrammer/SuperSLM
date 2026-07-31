@@ -10937,8 +10937,7 @@ static void TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing() {
 	          "SoftmaxRowQ15(nullptr, width=0, q_ln2=1, q_b=1000000, q_c=250000, nullptr) "
 	          "returned well_formed=false, want true -- D-SLM497: width==0 is vacuous "
 	          "well-formedness over zero row elements, and the guard must return before "
-	          "reading scores or writing out_probs",
-	          well_formed);
+	          "reading scores or writing out_probs");
 }
 
 // T-1324 (BLOCKING; D-SLM409; Poirot 72b0c7f-s3.3-rope-site-and-c32-softmax-

@@ -38,6 +38,7 @@ mechanism cells above).
 """
 
 import os
+import re
 import tempfile
 
 import pytest
@@ -1330,6 +1331,22 @@ def test_t1383_function_pointer_to_leaf_is_still_missed_by_the_fixed_mechanism()
         assert new_doors == ["CarriedScaleReciprocal"], new_doors
 
 
+def _t1_new_shape_containers():
+    """Every module-level dict this file uses to enumerate a batch of doors a
+    ticket adds to the population, found by name (`_POPULATION_CASES` or
+    `_T<digits>_NEW_SHAPES`) rather than by a hand-maintained list of which
+    tickets exist. A new `_T1387_NEW_SHAPES`-shaped container is itself its
+    own registration here: defining it at module scope, following the naming
+    convention every prior ticket used, is sufficient for its cells to reach
+    `test_population_count_is_stated` below without that test being edited
+    (T-1467; Poirot 20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md
+    Minor 4). This is what T-1386 needed and did not have: it added a new
+    container outside the hand-written sum below, and the stated total did
+    not move."""
+    pattern = re.compile(r"^(_POPULATION_CASES|_T\d+_NEW_SHAPES)$")
+    return {name: value for name, value in globals().items() if pattern.match(name)}
+
+
 def test_population_count_is_stated():
     """States, in one place, the total accumulated population this campaign's
     own exit condition requires: the eleven shapes T-1381 already swept
@@ -1342,24 +1359,24 @@ def test_population_count_is_stated():
     T-1386 adds (local class member inside a function body) plus its
     declared-code further-sweep confirmation -- sixteen shapes total, at
     least, per StandardsDocument Sec4's population-validation requirement.
-    Every term below is `len()` of a counted fixture container except the
-    three `_further_sweep` literals, each of which documents, at its own
-    definition site, the shape(s) it counts -- so a generation that adds
-    cells to an existing container without also widening this total is
-    caught here rather than left behind (Poirot 9b0f938-t1411-t1415-t1416-
-    t1386-t1388-confirmation-2026-07-31.md Minor 2 / T-1427)."""
-    t1381_population = len(_POPULATION_CASES) + len(_T1381_NEW_SHAPES) + 1  # +1 string-literal control
-    t1381_further_sweep = 2  # lambda-in-real-code, shadowing variable (documented above, both parity)
-    t1383_new_population = len(_T1383_NEW_SHAPES)
-    t1383_further_sweep = 1  # function pointer to leaf (documented parity, this test file)
-    t1386_new_population = len(_T1386_NEW_SHAPES)
-    t1386_further_sweep = 1  # declared-code confirmation of the same shape (documented above)
-    total = (
-        t1381_population
-        + t1381_further_sweep
-        + t1383_new_population
-        + t1383_further_sweep
-        + t1386_new_population
-        + t1386_further_sweep
+
+    `container_total` is derived, not hand-summed: `_t1_new_shape_containers`
+    above discovers every `_POPULATION_CASES`/`_T<digits>_NEW_SHAPES` dict by
+    name and sums `len()` of each, so a new container is caught automatically
+    (T-1467). `further_sweep_total` is NOT derived -- T-1381's `+ 1`
+    string-literal control and the three `_further_sweep` literals below are
+    each a single documented one-off case that was never stored in a
+    container, so `_t1_new_shape_containers` cannot see them; a fifth such
+    literal added without also widening `further_sweep_total` is the one
+    shape this structure still does not catch (documented rather than closed,
+    per T-1467's remedy options; Poirot 20f11c1-...-2026-07-31.md Minor 4)."""
+    containers = _t1_new_shape_containers()
+    container_total = sum(len(value) for value in containers.values())
+    further_sweep_total = (
+        1  # T-1381: +1 string-literal control
+        + 2  # T-1381: lambda-in-real-code, shadowing variable (both documented parity)
+        + 1  # T-1383: function pointer to leaf (documented parity, this test file)
+        + 1  # T-1386: declared-code confirmation of the same shape (documented above)
     )
-    assert total == 9 + 2 + 2 + 1 + 1 + 1 == 16
+    total = container_total + further_sweep_total
+    assert total == 16, (containers.keys(), container_total, further_sweep_total, total)

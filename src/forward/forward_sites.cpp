@@ -851,9 +851,9 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			// `width` are all loop-invariant across `h` -- the gate is evaluated
 			// once here, above the head loop, rather than redundantly per head.
 			// The gate-before-kernel ORDERING it establishes is unchanged: the
-			// kernel's own contract states it performs no width check of its
-			// own and that `total`'s bound holds only when this gate has
-			// already run.
+			// kernel's own contract states it guards `width == 0` but performs
+			// no width upper-bound check of its own, and that `total`'s bound
+			// holds only when this gate has already run.
 			st = CheckSoftmaxRowWidthDomain(lw.q_b_iexp, lw.q_c_iexp, width);
 			if (st != SslmForwardStatus::Ok) return st;
 			std::vector<int64_t> ctx_wide(hidden_size);

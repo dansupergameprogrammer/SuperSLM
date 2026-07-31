@@ -223,23 +223,25 @@ _EXPECTED_DOOR_FUNCTIONS = (
 # as a separate top-level door: that guard is what keeps this widening from
 # regressing `test_t1381_ast_mechanism_finds_a_door_hidden_inside_a_lambda_
 # in_real_declared_code` into reporting two doors for one. Population widened
-# to fourteen cases: the nine T-1381 required (unchanged and re-verified
-# against the fixed mechanism) plus the two further shapes T-1381's own
-# independent sweep already found (a leaf call hidden inside a lambda
-# defined in a door's own body, against real declared code; and a local
-# variable shadowing a leaf's name), both unchanged and re-verified here
-# too, plus the out-of-line member door this correction targets, plus two
-# further shapes an independent sweep found this round -- an in-class member
-# door, now also caught as a consequence of the same fix, and a namespace-
-# scope function pointer initialised to a leaf's address, which remains
-# missed by this mechanism and by both retired scanners alike: a `VarDecl`
-# carries no `FunctionDecl`/`CXXMethodDecl` node for either generation to
-# find, so this is documented parity, not a regression, and is not fixed
-# here (9 + 2 + 1 + 2 == 14). See `test_check_no_forward_leaf_calls.py`'s own
-# T-1383 section for all three new cases this correction adds, each executed
-# against a verbatim reproduction of the mechanism this correction replaces,
-# exactly as the nine cases above are measured against the mechanism T-1381
-# replaced.
+# by: the nine T-1381 required (unchanged and re-verified against the fixed
+# mechanism); the two further shapes T-1381's own independent sweep already
+# found (a leaf call hidden inside a lambda defined in a door's own body,
+# against real declared code; and a local variable shadowing a leaf's name),
+# both unchanged and re-verified here too; the out-of-line member door this
+# correction targets; and two further shapes an independent sweep found this
+# round -- an in-class member door, now also caught as a consequence of the
+# same fix, and a namespace-scope function pointer initialised to a leaf's
+# address, which remains missed by this mechanism and by both retired
+# scanners alike: a `VarDecl` carries no `FunctionDecl`/`CXXMethodDecl` node
+# for either generation to find, so this is documented parity, not a
+# regression, and is not fixed here. See `test_check_no_forward_leaf_calls.py`'s
+# own T-1383 section for all three new cases this correction adds, each
+# executed against a verbatim reproduction of the mechanism this correction
+# replaces, exactly as the nine cases above are measured against the
+# mechanism T-1381 replaced. T-1465: this module states no running total --
+# the count is pinned once, under an assertion, by
+# `test_population_count_is_stated` in that file, which is this population's
+# single source of truth.
 
 _DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
 

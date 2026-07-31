@@ -473,8 +473,9 @@ inline constexpr int kProbFracBits = 15;
 // `max(total, 1)` guards the all-clipped row exactly (every e[k] is then 0, so
 // every p[k] is 0). The caller gates this kernel with
 // CheckSoftmaxRowWidthDomain(q_b, q_c, width) (checked_chain_funnel.h) BEFORE
-// calling it — this function itself performs no width check, matching every
-// other funnel-adjacent compute in this tree (the domain check and the compute
+// calling it — this function guards `width == 0` itself (below) but performs
+// no width *upper-bound* check of its own, matching every other
+// funnel-adjacent compute in this tree (the domain check and the compute
 // are separate calls). `scores`/`out_probs` each have `width` elements.
 //
 // **`width == 0` is guarded in the kernel itself, returning `true`** (D-SLM497;
@@ -542,9 +543,8 @@ inline constexpr int kProbFracBits = 15;
 // `total` cannot overflow `int64_t` under that contract. A caller that skips
 // the gate and calls this kernel directly still gets the per-element bound
 // (enforced unconditionally, above), but not the width bound -- `total` can
-// still overflow on an ungated, sufficiently wide row, exactly as this
-// function's own contract has always stated ("this function itself performs
-// no width check of its own").
+// still overflow on an ungated, sufficiently wide row: this kernel guards
+// `width == 0` (above) but performs no width upper-bound check of its own.
 [[nodiscard]] bool SoftmaxRowQ15(const int64_t* scores, size_t width, int64_t q_ln2, int64_t q_b,
                                   int64_t q_c, int64_t* out_probs);
 
