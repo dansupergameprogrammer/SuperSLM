@@ -12629,11 +12629,26 @@ struct TwoLayerFixture {
 	int32_t norm_gain[2] = {16384, 16384};
 	int8_t identity2x2[4] = {1, 0, 0, 1};   // [[1,0],[0,1]] row-major [out,in]
 
-	static TwoLayerFixture Build() {
+	// Default-constructs in place, wiring every LayerWeights pointer field to
+	// point at THIS object's own sibling array members (`norm_gain`,
+	// `identity2x2`, etc). This used to be a `static Build()` factory that
+	// built a separate local `f`, wired the pointers to `f`'s own members, and
+	// `return f;`d it -- a named-local return that only stays valid if NRVO
+	// elides the copy, which C++ never guarantees (D-SLM487). Doing the wiring
+	// in the constructor body instead means it runs directly on `*this` at
+	// its FINAL address (the caller's own local, `TwoLayerFixture fixture;`)
+	// -- there is no intermediate object for the pointers to dangle from, so
+	// the property does not depend on an optimization the compiler is free to
+	// skip. Confirmed by direct address trace, not by construction alone: see
+	// this pass's `TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress`
+	// below, which prints `&identity2x2` against `layers[*].q_weight` and
+	// requires them equal -- the same measurement D-SLM487 used to prove the
+	// old shape broken, now asserted permanently as a regression guard.
+	TwoLayerFixture() {
 		using namespace superslm_test;
 		using superslm::CarriedScale;
 
-		TwoLayerFixture f;
+		TwoLayerFixture& f = *this;
 		Cfg1Spec spec{};
 		spec.hidden_size = 2;
 		spec.num_hidden_layers = 2;
@@ -12751,7 +12766,6 @@ struct TwoLayerFixture {
 			lw.down_site_constant = canonical;
 			lw.mlp_residual_site_constant = canonical;
 		}
-		return f;
 	}
 };
 
@@ -12779,11 +12793,15 @@ struct CriticalOneFixture {
 	int8_t identity2x2[4] = {1, 0, 0, 1};
 	int8_t saturating_weight[4] = {2, 0, 0, 0};
 
-	static CriticalOneFixture Build(bool saturating) {
+	// Same shape and same reason as `TwoLayerFixture`'s constructor above
+	// (D-SLM487/T-1403): wiring runs on `*this` directly, in place, rather
+	// than on a separate local later `return`ed by name -- no NRVO
+	// dependency, no window in which the object exists twice.
+	explicit CriticalOneFixture(bool saturating) {
 		using namespace superslm_test;
 		using superslm::CarriedScale;
 
-		CriticalOneFixture f;
+		CriticalOneFixture& f = *this;
 		Cfg1Spec spec{};
 		spec.hidden_size = 2;
 		spec.num_hidden_layers = 1;
@@ -12845,11 +12863,72 @@ struct CriticalOneFixture {
 		lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
 		lw.down_site_constant = canonical;
 		lw.mlp_residual_site_constant = canonical;
-		return f;
 	}
 };
 
 }  // namespace
+
+// Regression guard for D-SLM487/T-1403: a `TwoLayerFixture` built by
+// direct-initialization (`TwoLayerFixture fixture;`) must never have its
+// `LayerWeights` pointer fields drift from the addresses of ITS OWN sibling
+// arrays -- the exact measurement D-SLM487 used to prove the OLD
+// `static Build() { TwoLayerFixture f; ...; return f; }` shape broken (a
+// named-local return relying on optional NRVO), now asserted permanently so
+// a future refactor that reintroduces a return-by-value of this fixture
+// fails HERE rather than resurfacing as unexplained corrupted weights three
+// call frames away. Checks every pointer field the constructor wires, not
+// just `q_weight` (the one D-SLM487 happened to trace), and both layers
+// (index 0 and 1 alias the SAME backing arrays by this fixture's own design,
+// so both must match).
+static void TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress() {
+	TwoLayerFixture fixture;
+	for (int l = 0; l < 2; ++l) {
+		const superslm::LayerWeights& lw = fixture.layers[l];
+		CHECK_MSG(lw.attn_norm_gain == fixture.norm_gain,
+		          "layers[%d].attn_norm_gain == &fixture.norm_gain (got a pointer into a "
+		          "different/stale object)",
+		          l);
+		CHECK_MSG(lw.mlp_norm_gain == fixture.norm_gain,
+		          "layers[%d].mlp_norm_gain == &fixture.norm_gain", l);
+		CHECK_MSG(lw.q_weight == fixture.identity2x2, "layers[%d].q_weight == &fixture.identity2x2",
+		          l);
+		CHECK_MSG(lw.k_weight == fixture.identity2x2, "layers[%d].k_weight == &fixture.identity2x2",
+		          l);
+		CHECK_MSG(lw.v_weight == fixture.identity2x2, "layers[%d].v_weight == &fixture.identity2x2",
+		          l);
+		CHECK_MSG(lw.o_weight == fixture.identity2x2, "layers[%d].o_weight == &fixture.identity2x2",
+		          l);
+		CHECK_MSG(lw.gate_weight == fixture.identity2x2,
+		          "layers[%d].gate_weight == &fixture.identity2x2", l);
+		CHECK_MSG(lw.up_weight == fixture.identity2x2, "layers[%d].up_weight == &fixture.identity2x2",
+		          l);
+		CHECK_MSG(lw.down_weight == fixture.identity2x2,
+		          "layers[%d].down_weight == &fixture.identity2x2", l);
+		CHECK_MSG(lw.kv_landing_r_t_k == fixture.kv_landing_r_t_arr,
+		          "layers[%d].kv_landing_r_t_k == &fixture.kv_landing_r_t_arr", l);
+		CHECK_MSG(lw.kv_landing_e_t_k == fixture.kv_landing_e_t_arr,
+		          "layers[%d].kv_landing_e_t_k == &fixture.kv_landing_e_t_arr", l);
+		CHECK_MSG(lw.kv_landing_r_t_v == fixture.kv_landing_r_t_arr,
+		          "layers[%d].kv_landing_r_t_v == &fixture.kv_landing_r_t_arr", l);
+		CHECK_MSG(lw.kv_landing_e_t_v == fixture.kv_landing_e_t_arr,
+		          "layers[%d].kv_landing_e_t_v == &fixture.kv_landing_e_t_arr", l);
+		CHECK_MSG(lw.ctx_fold_identity == fixture.ctx_fold_identity_arr,
+		          "layers[%d].ctx_fold_identity == &fixture.ctx_fold_identity_arr", l);
+		CHECK_MSG(lw.ctx_fold_mult == fixture.ctx_fold_mult_arr,
+		          "layers[%d].ctx_fold_mult == &fixture.ctx_fold_mult_arr", l);
+		CHECK_MSG(lw.ctx_fold_shift == fixture.ctx_fold_shift_arr,
+		          "layers[%d].ctx_fold_shift == &fixture.ctx_fold_shift_arr", l);
+	}
+	// The value-level corollary D-SLM487 actually caught (`q_weight` reading
+	// `{0,0,0,0}` instead of the fixture's constant `{1,0,0,1}`) -- a pointer
+	// can coincidentally still be non-dangling while the four bytes it names
+	// are wrong for an unrelated reason, so the address check above and this
+	// value check below are two independently-failing assertions.
+	CHECK_MSG(fixture.layers[0].q_weight[0] == 1 && fixture.layers[0].q_weight[1] == 0 &&
+	              fixture.layers[0].q_weight[2] == 0 && fixture.layers[0].q_weight[3] == 1,
+	          "layers[0].q_weight bytes == {1,0,0,1} (the fixture's documented identity matrix, "
+	          "read back through the stored pointer)");
+}
 
 // §9.3's decided contract: `layer_budget == 0` is `InvalidLayerBudget`, and
 // `seq` is left bit-identical to its pre-call state -- poison-fill the
@@ -12862,7 +12941,7 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 
 	int8_t hidden_codes[2] = {INT8_C(-99), INT8_C(-99)};
 	SequenceLayerState seq;
@@ -12906,7 +12985,7 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 
 	// Witness 1: an ordinary sequence that already consumed both layers.
 	{
@@ -12974,7 +13053,7 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 
 	// Witness 1: hidden_size=3 is not a multiple of head_dim=2. A 4096-byte
 	// workspace -- ample by any real sizing -- rules out an actual undersize.
@@ -13035,7 +13114,7 @@ static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 	fixture.layers[0].q_ln2 = 0;  // IExpConstruct::kBadQLn2 -- CheckSoftmaxRowWidthDomain
 	                              // does not take q_ln2 and cannot see this.
 
@@ -13094,7 +13173,7 @@ static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSi
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 
 	// Witness 1 (T-1375/Critical 2): context_cap == 0 zeroes the required
 	// size, clearing the guard on a null, zero-sized workspace -- pre-fix,
@@ -13162,7 +13241,7 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 	const uint32_t kNumLayers = 2;
 	// L-1 == 1 at this fixture's own num_hidden_layers=2, so the axis
 	// collapses to {1, 2} here -- both are still distinct, real cells (budget
@@ -13211,7 +13290,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 	const uint32_t kNumLayers = 2;
 	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
 	const int8_t kInitialCodes[2] = {5, -5};
@@ -13292,7 +13371,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 	const uint32_t kNumLayers = 2;
 	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
 	const int8_t kInitialCodes[2] = {5, -5};
@@ -13663,7 +13742,7 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 	using superslm::SslmForwardStatus;
 
 	for (bool saturating : {true, false}) {
-		auto fixture = CriticalOneFixture::Build(saturating);
+		CriticalOneFixture fixture(saturating);
 		int8_t hidden_codes[2] = {5, -5};
 		SequenceLayerState seq;
 		seq.hidden_codes = hidden_codes;
@@ -13882,7 +13961,7 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = TwoLayerFixture::Build();
+	TwoLayerFixture fixture;
 	int32_t bad_mlp_gain[2] = {65536, 65536};
 	fixture.layers[0].mlp_norm_gain = bad_mlp_gain;
 
@@ -14019,24 +14098,26 @@ struct DecodeLoopFixture {
 	superslm::CarriedScale embed_site_constant{INT64_C(1073741824), INT64_C(0)};
 	superslm::CarriedScale final_norm_site_constant{INT64_C(1073741824), INT64_C(-30)};
 
-	// Direct-initializes `layers_fixture` (the first member) from the prvalue
-	// TwoLayerFixture::Build() returns, rather than default-constructing this
-	// struct and assigning into it afterward. This is load-bearing, not
-	// stylistic: TwoLayerFixture's own LayerWeights entries hold raw pointers
-	// into ITS OWN sibling member arrays (`norm_gain`, `identity2x2`, etc,
-	// TwoLayerFixture's own header comment shows the pattern:
-	// `lw.attn_norm_gain = f.norm_gain;`). A copy-assignment of one
-	// TwoLayerFixture into an already-constructed one copies those pointer
-	// VALUES verbatim -- they keep pointing at the SOURCE object's arrays,
-	// which is the temporary Build() itself returned and which is destroyed
-	// at the end of the assignment's full expression, leaving every copied
-	// LayerWeights pointer dangling. Direct-initialization of an aggregate's
-	// member from a prvalue is guaranteed-elided (no temporary, no copy) --
-	// confirmed by AddressSanitizer, which caught exactly this
-	// stack-use-after-return when this function instead read `DecodeLoopFixture
-	// f; f.layers_fixture = TwoLayerFixture::Build();`.
-	static DecodeLoopFixture Build() { return DecodeLoopFixture{TwoLayerFixture::Build()}; }
-
+	// No `Build()` factory: `layers_fixture` has no initializer, so ordinary
+	// default construction of a `DecodeLoopFixture` (`DecodeLoopFixture
+	// fixture;`, or as a member of an enclosing fixture) default-constructs
+	// `layers_fixture` in place, which is exactly `TwoLayerFixture`'s own
+	// constructor wiring its LayerWeights pointers to ITS OWN sibling arrays
+	// (`norm_gain`, `identity2x2`, etc) at their FINAL address. There is no
+	// intermediate `TwoLayerFixture` object and no return-by-value of this
+	// struct anywhere, so there is nothing for those pointers to dangle from.
+	//
+	// This struct used to carry a `static Build()` that direct-initialized
+	// `layers_fixture` from the prvalue `TwoLayerFixture::Build()` returned
+	// (`DecodeLoopFixture{TwoLayerFixture::Build()}`), which was itself a
+	// guaranteed-elision fix for a copy-assignment bug AddressSanitizer had
+	// caught one level up (`DecodeLoopFixture f; f.layers_fixture =
+	// TwoLayerFixture::Build();`). That fix correctly eliminated the copy at
+	// ITS OWN level, but `TwoLayerFixture::Build()` was itself still a
+	// named-local `return f;` relying on NRVO one level further in
+	// (D-SLM487) -- the guaranteed-elision wrapper cannot rescue a callee
+	// that is unsafe on its own terms. Removing `TwoLayerFixture::Build()`
+	// entirely (T-1403) removes the need for this wrapper too.
 	const int32_t* final_norm_gain() const { return layers_fixture.layers[0].attn_norm_gain; }
 };
 
@@ -14073,7 +14154,7 @@ static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
-	auto fixture = DecodeLoopFixture::Build();
+	DecodeLoopFixture fixture;
 	for (int32_t token = 0; token < DecodeLoopFixture::kVocabSize; ++token) {
 		int8_t embed_codes[DecodeLoopFixture::kHiddenSize];
 		CarriedScale embed_scale;
@@ -14280,22 +14361,29 @@ struct DecodeLoopCallFixture {
 	superslm::SslmDecodeStopReason stop_reason =
 	    static_cast<superslm::SslmDecodeStopReason>(7777);  // poison
 
-	// Direct-initializes `model` (the first member) from the prvalue
-	// DecodeLoopFixture::Build() returns -- the same dangling-pointer hazard
-	// DecodeLoopFixture::Build()'s own comment documents, one level up
-	// (`model.layers_fixture`'s LayerWeights entries point into
-	// `model.layers_fixture`'s own sibling arrays; assigning a fresh
-	// DecodeLoopFixture into an already-constructed one copies those pointer
-	// values as-is, dangling once the RHS temporary is destroyed).
-	static DecodeLoopCallFixture Build(size_t out_capacity) {
-		DecodeLoopCallFixture f{DecodeLoopFixture::Build()};
+	// D-SLM487's own root cause: this constructor used to be `static
+	// DecodeLoopCallFixture Build(size_t out_capacity)`, direct-initializing
+	// `model` from the prvalue `DecodeLoopFixture::Build()` returned (itself
+	// safe, guaranteed-elided) but then setting `f.seq.hidden_codes =
+	// f.hidden_codes;` -- a pointer into `f`'s OWN sibling array member --
+	// and `return f;`ing the named local. That return is exactly the
+	// unguaranteed-NRVO shape D-SLM487 confirmed broken by direct address
+	// trace: MSVC did not elide it, `seq.hidden_codes` kept naming
+	// `Build()`'s own destroyed stack frame, and the next function to reuse
+	// that freed stack region (`RunGreedyDecodeLoop`/`RunLayerLoop`) left
+	// whatever garbage it wrote there for every subsequent dereference.
+	// Doing the wiring in the constructor body instead means `f` below IS
+	// `*this` -- there is no named local, no return-by-value, and no
+	// address the pointer could still be aliasing once construction is
+	// done, because construction never moved.
+	explicit DecodeLoopCallFixture(size_t out_capacity) {
+		DecodeLoopCallFixture& f = *this;
 		f.seq.hidden_codes = f.hidden_codes;
 		f.seq.hidden_scale = superslm::CarriedScale{INT64_C(-99), INT64_C(-99)};
 		f.seq.layer_index = 0xFFFFFFFFu;  // poison -- this call is never expected to touch it
 		std::memset(f.workspace, 0xEE, sizeof(f.workspace));
 		f.out_tokens.assign(out_capacity, INT32_C(-99));
 		f.out_logit_rows.assign(out_capacity * DecodeLoopFixture::kVocabSize, INT32_C(-99));
-		return f;
 	}
 
 	superslm::SslmForwardStatus Run(const std::vector<int32_t>& prompt_tokens,
@@ -14342,7 +14430,7 @@ static void TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateCha
 	using superslm::SslmForwardStatus;
 	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
 	for (int32_t bad_id : kBadIds) {
-		auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/4);
+		DecodeLoopCallFixture f(/*out_capacity=*/4);
 		// A good token followed by the bad one: proves the rejection is not
 		// silently skipped just because a prefix already validated.
 		const auto result = f.Run(/*prompt_tokens=*/{0, bad_id}, /*stop_ids=*/{}, /*max_new_tokens=*/4);
@@ -14366,7 +14454,7 @@ static void TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts() 
 	using superslm::SslmForwardStatus;
 	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
 	for (int32_t bad_id : kBadIds) {
-		auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/5);
+		DecodeLoopCallFixture f(/*out_capacity=*/5);
 		const auto result =
 		    f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{bad_id}, /*max_new_tokens=*/5);
 		CHECK_MSG(result == SslmForwardStatus::TokenIdOutOfRange,
@@ -14386,7 +14474,7 @@ static void TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount() {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
-	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/3);
+	DecodeLoopCallFixture f(/*out_capacity=*/3);
 	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{}, /*max_new_tokens=*/3);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
 	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[], max_new_tokens=3) status == %s, "
@@ -14414,7 +14502,7 @@ static void TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBoth
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
-	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/10);
+	DecodeLoopCallFixture f(/*out_capacity=*/10);
 	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{0}, /*max_new_tokens=*/10);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
 	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[0]) status == %s, want Ok",
@@ -14465,7 +14553,7 @@ static void TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly() {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
-	auto f = DecodeLoopCallFixture::Build(/*out_capacity=*/4);
+	DecodeLoopCallFixture f(/*out_capacity=*/4);
 	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{1}, /*max_new_tokens=*/4);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
 	          "RunGreedyDecodeLoop(prompt=[0], stop_ids=[1], max_new_tokens=4) status == %s, "
@@ -15094,6 +15182,12 @@ int main(int argc, char** argv) {
 	// INT64_MIN witness -- see each cell's own comment above.
 	TestLandingRescaleUnsignedNegationPinsInt64MinWitness();
 	TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd();
+	// D-SLM487/T-1403: TwoLayerFixture's construction regression guard --
+	// registered here, immediately before the first cell that consumes
+	// TwoLayerFixture, so a future reintroduction of the dangling-pointer
+	// shape fails at the fixture itself rather than surfacing as an
+	// unexplained wrong value three call frames away.
+	TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
