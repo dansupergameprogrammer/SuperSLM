@@ -27,6 +27,7 @@
 #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
+#include "superslm/trace_hook.h"  // SslmTraceHookInstalled / SslmEmitKvLandingTrace (T-1412 landing emission)
 
 namespace superslm {
 
@@ -810,6 +811,27 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, hidden_size,
 			                      vacc.data());
+			// T-1412: the K/V-landing trace emission (trace_hook.h's
+			// SslmKvLandingTraceRecord, §11 S3.1a) -- this landing loop is the
+			// one production site that composes LandingRescale per head per
+			// token, so it is where the reference's own two per-head records
+			// (`{prefix}.k_proj.requant` / `{prefix}.v_proj.requant`,
+			// dynamic_engine.py:374-397) are emitted. Gated on an installed
+			// hook AND the trace-only target arrays being wired (LayerWeights'
+			// kv_landing_m_target_*/e_target_* doc); with either absent, the
+			// loop below runs exactly as before and builds nothing extra.
+			const bool emit_landing =
+			    trace_hook_state != nullptr && SslmTraceHookInstalled(*trace_hook_state) &&
+			    lw.kv_landing_m_target_k != nullptr && lw.kv_landing_e_target_k != nullptr &&
+			    lw.kv_landing_m_target_v != nullptr && lw.kv_landing_e_target_v != nullptr;
+			std::vector<int64_t> k_folded_seg, v_folded_seg;
+			std::string k_landing_site, v_landing_site;
+			if (emit_landing) {
+				k_folded_seg.resize(head_dim);
+				v_folded_seg.resize(head_dim);
+				k_landing_site = LayerSite(site_prefix, l, "k_proj.requant");
+				v_landing_site = LayerSite(site_prefix, l, "v_proj.requant");
+			}
 			for (size_t h = 0; h < num_heads; ++h) {
 				for (size_t d = 0; d < head_dim; ++d) {
 					const size_t i = h * head_dim + d;
@@ -829,6 +851,45 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					v_store[i] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 					    vf, normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
 					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
+					if (emit_landing) {
+						k_folded_seg[d] = kf;
+						v_folded_seg[d] = vf;
+					}
+				}
+				if (emit_landing) {
+					// One record per (head, projection) per token, K then V --
+					// the reference's own emission order at this site. `x_int`
+					// is the head's FOLDED (pre-landing) segment; `codes` is
+					// the landed, clamped int8 segment as written to the K/V
+					// store (pre-RoPE, matching the reference, which lands
+					// then rotates); `m_in`/`e_in` are the norm's carried
+					// scale (the landing's own input scale); `m_out`/`e_out`
+					// are KvLandingScales' static per-head target.
+					SslmKvLandingTraceRecord krec;
+					krec.site = k_landing_site;
+					krec.token_index = token_index;
+					krec.head = static_cast<uint32_t>(h);
+					krec.x_int = std::span<const int64_t>(k_folded_seg.data(), head_dim);
+					krec.m_in = normed_scale.m;
+					krec.e_in = normed_scale.e;
+					krec.codes = std::span<const int8_t>(
+					    k_store + h * head_dim, head_dim);
+					krec.m_out = lw.kv_landing_m_target_k[h];
+					krec.e_out = lw.kv_landing_e_target_k[h];
+					SslmEmitKvLandingTrace(*trace_hook_state, krec);
+
+					SslmKvLandingTraceRecord vrec;
+					vrec.site = v_landing_site;
+					vrec.token_index = token_index;
+					vrec.head = static_cast<uint32_t>(h);
+					vrec.x_int = std::span<const int64_t>(v_folded_seg.data(), head_dim);
+					vrec.m_in = normed_scale.m;
+					vrec.e_in = normed_scale.e;
+					vrec.codes = std::span<const int8_t>(
+					    v_store + h * head_dim, head_dim);
+					vrec.m_out = lw.kv_landing_m_target_v[h];
+					vrec.e_out = lw.kv_landing_e_target_v[h];
+					SslmEmitKvLandingTrace(*trace_hook_state, vrec);
 				}
 			}
 		}
@@ -1059,7 +1120,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens, uint8_t* workspace,
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows,
     size_t out_tokens_capacity, size_t* out_tokens_produced,
-    SslmDecodeStopReason* out_stop_reason) {
+    SslmDecodeStopReason* out_stop_reason, std::string_view site_prefix,
+    SslmTraceHookState* trace_hook_state) {
 	// Caller-ensures `out_tokens_capacity >= max_new_tokens` (header comment,
 	// forward_sites.h) -- a workspace-sizing question this call does not
 	// scope, matching this file's existing caller-ensures convention for
@@ -1094,25 +1156,46 @@ SslmForwardStatus RunGreedyDecodeLoop(
 	std::vector<int32_t> logit_row(vocab_size_z);
 	CarriedScale embed_scale{};
 
+	// T-1399/D-SLM482: the caller's own outer qualifier is preserved ahead of
+	// the two loop-level site names, the same joining rule LayerSite applies
+	// for the per-layer names ("embed" / "final_norm" when the prefix is
+	// empty, "prefix.embed" / "prefix.final_norm" otherwise).
+	auto PrefixedSite = [&](const char* suffix) -> std::string {
+		std::string s;
+		if (!site_prefix.empty()) {
+			s.append(site_prefix);
+			s.push_back('.');
+		}
+		s.append(suffix);
+		return s;
+	};
+	const std::string embed_site = PrefixedSite("embed");
+	const std::string final_norm_site = PrefixedSite("final_norm");
+
 	// One whole token: embed it fresh, then run every layer. Shared by both
-	// the prefill loop and the generation loop's own first act.
-	auto RunWholeToken = [&](int32_t token) -> SslmForwardStatus {
+	// the prefill loop and the generation loop's own first act. `token_index`
+	// is the whole-token ordinal in call order (T-1399/D-SLM482): the header
+	// documents prefill token i carrying index i and the generation loop
+	// continuing the count from `prompt_len - 1`.
+	auto RunWholeToken = [&](int32_t token, size_t token_index) -> SslmForwardStatus {
 		const SslmForwardStatus est = EmbedEntry(token, vocab_size, embed_weights, hidden_size,
 		                                          embed_site_constant, embed_codes.data(),
-		                                          &embed_scale);
+		                                          &embed_scale, embed_site, token_index,
+		                                          trace_hook_state);
 		if (est != SslmForwardStatus::Ok) return est;
 		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = embed_codes[i];
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
 		return RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
 		                     hidden_size, head_dim, intermediate_size, context_cap, rope_tables,
-		                     workspace, workspace_size);
+		                     workspace, workspace_size, site_prefix, token_index,
+		                     trace_hook_state);
 	};
 
 	// Prefill: every prompt token except the last (the last is folded into
 	// the generation loop's own first iteration below).
 	for (size_t i = 0; i + 1 < prompt_len; ++i) {
-		const SslmForwardStatus st = RunWholeToken(prompt_tokens[i]);
+		const SslmForwardStatus st = RunWholeToken(prompt_tokens[i], /*token_index=*/i);
 		if (st != SslmForwardStatus::Ok) return st;
 	}
 
@@ -1124,14 +1207,19 @@ SslmForwardStatus RunGreedyDecodeLoop(
 	int32_t current_token = prompt_tokens[prompt_len - 1];
 	SslmDecodeStopReason stop_reason = SslmDecodeStopReason::MaxTokensReached;
 
+	// The generation loop's own whole-token ordinal continues the prefill's
+	// count: its first whole token IS the last prompt token (index
+	// prompt_len - 1), and each produced-token step advances it by one.
+	size_t whole_token_index = prompt_len - 1;
+
 	while (produced_tokens.size() < max_new_tokens) {
-		SslmForwardStatus st = RunWholeToken(current_token);
+		SslmForwardStatus st = RunWholeToken(current_token, whole_token_index);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		CarriedScale final_scale{};
 		st = RmsNormSite(seq.hidden_codes, final_norm_gain, hidden_size, seq.hidden_scale,
 		                  final_norm_site_constant, final_codes.data(), &final_scale,
-		                  "final_norm");
+		                  final_norm_site, whole_token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		st = LogitsSite(final_codes.data(), hidden_size, head_weights, vocab_size,
@@ -1161,6 +1249,7 @@ SslmForwardStatus RunGreedyDecodeLoop(
 			break;
 		}
 		current_token = token;
+		++whole_token_index;
 	}
 
 	// The commit: every internal call above returned Ok, so the caller's own

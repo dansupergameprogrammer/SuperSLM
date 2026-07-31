@@ -521,6 +521,21 @@ struct LayerWeights {
 	const int64_t* kv_landing_r_t_v;  // num_heads
 	const int64_t* kv_landing_e_t_v;  // num_heads
 
+	// T-1412 (trace-only): the per-(head, projection) LANDED target scale from
+	// KvLandingScales -- the `(m_target, e_target)` the reference emits as the
+	// K/V-landing trace record's own `m_out`/`e_out`
+	// (Tools/superslm_spike/dynamic_engine.py:374-397's `kv_landing_scales`
+	// unpack). Never an arithmetic operand: `LandingRescale` consumes only
+	// `(r_t, e_t)` above, and these four feed the trace record alone. Defaulted
+	// nullptr so every existing fixture stays valid unchanged; RunLayerLoop
+	// emits landing records only when a hook is installed AND all four are
+	// non-null (a fixture that has not wired the targets gets chain records
+	// but no landing records, rather than records carrying invented zeros).
+	const int64_t* kv_landing_m_target_k = nullptr;  // num_heads
+	const int64_t* kv_landing_e_target_k = nullptr;  // num_heads
+	const int64_t* kv_landing_m_target_v = nullptr;  // num_heads
+	const int64_t* kv_landing_e_target_v = nullptr;  // num_heads
+
 	// The D-SLM57 per-head ctx_fold dispatch (§6.2 step 6): WSC1's
 	// `layer{L}.ctx_fold` row for EACH head, applied via ApplyWeightScaleFold
 	// (C24/C25) to the raw GemmProbQ15Accumulate context-accumulate value,
@@ -771,6 +786,23 @@ enum class SslmDecodeStopReason {
 // own (LayerWeights' own header comment); `embed_weights`/`head_weights` are
 // the same kind of raw, caller-resolved pointer EmbedEntry/LogitsSite above
 // already take.
+//
+// T-1399/D-SLM482 (§11 S3.1a, D-SLM362): `site_prefix`/`trace_hook_state`
+// carry the funnel's emission seam through this driver, the same two
+// trailing parameters RunLayerLoop above already takes and forwards. Unlike
+// every single-site function in this file, this loop supplies its OWN
+// `token_index` to each site call rather than accepting one: the loop is
+// the one place the whole-token ordinal is known. The index is the
+// whole-token count in call order -- prefill token i carries index i, the
+// generation loop's own first whole token (the last prompt token) carries
+// `prompt_len - 1`, and each subsequent produced-token step increments by
+// one; the "final_norm" RmsNormSite call after each generation step carries
+// the same index as the whole token it followed. `LogitsSite` emits no
+// trace (its narrowing path has no funnel seam); the logit row itself is
+// already this call's own output. Defaults preserve every existing call
+// site, and a null `trace_hook_state` (or an uninstalled hook) leaves every
+// output bit-identical to a call without these parameters (§10.3's
+// instrumentation axis, the funnel's own emission-gating guarantee).
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
     size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
@@ -782,7 +814,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens,
     uint8_t* workspace, size_t workspace_size,
     int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
-    size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason);
+    size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason,
+    std::string_view site_prefix = {}, SslmTraceHookState* trace_hook_state = nullptr);
 
 }  // namespace superslm
 

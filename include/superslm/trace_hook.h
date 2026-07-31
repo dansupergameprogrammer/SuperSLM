@@ -59,11 +59,15 @@ struct SslmChainTraceRecord {
 	int64_t e_out = 0;
 };
 
-// The K/V-landing sibling (dynamic_engine.py:367-397): one per head per token,
+// The K/V-landing sibling (dynamic_engine.py:367-397): one per (head,
+// projection) per token -- K then V, the reference's own emission order --
 // same shape with `head`, `m_in`, `e_in` in place of `Dprime`/`Dn`/`s`/`R`.
-// Pinned here per §11 S3.1a ("declare the K/V-landing record shape too, even
-// though its site is S3.3's") -- no production site emits this record yet;
-// S3.3's K/V landing composite wires it when it lands.
+// Emitted by RunLayerLoop's K/V landing loop (forward_sites.cpp; T-1412),
+// gated on an installed hook and on the layer's trace-only landing-target
+// arrays being wired (LayerWeights' kv_landing_m_target_*/e_target_* doc).
+// `m_out`/`e_out` carry KvLandingScales' static per-head target, matching
+// the reference's `kv_landing_scales` unpack -- never a runtime-derived
+// scale.
 struct SslmKvLandingTraceRecord {
 	std::string_view site;
 	size_t token_index = 0;
