@@ -2926,6 +2926,55 @@ static void TestDynamicScaleReciprocalDenseSample() {
 	}
 }
 
+// Significant 9 (Poirot e4b398c review): `CarriedScaleReciprocal`
+// (checked_chain_funnel.h) is the one exported door onto C19 (T-1357/
+// D-SLM433) and shipped with no cell of its own -- a future edit changing
+// its body to a different reciprocal, or to `NormalizeScale(m).dn`, would
+// break C26's residual reconciliation site silently, with no cell failing.
+// `tests/test_main.cpp` is outside `check_no_forward_leaf_calls.py`'s
+// scanned glob and already calls `DynamicScaleReciprocal` directly
+// elsewhere in this file, so this pin costs nothing against §7.3's
+// structural check. Swept across C19's own declared domain, Dn in
+// [2^30, 2^31) (intmath.h:100,116): both boundaries, the midpoint, and a
+// dense prime-strided sample across the full domain.
+static void TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19Domain() {
+	using superslm::CarriedScaleReciprocal;
+	using superslm::DynamicScaleReciprocal;
+	constexpr int64_t kLo = INT64_C(1) << 30;
+	constexpr int64_t kHi = (INT64_C(1) << 31) - 1;
+	const int64_t named_probes[] = {kLo, kLo + 1, kHi - 1, kHi, (kLo + kHi) / 2};
+	for (int64_t dn : named_probes) {
+		const int64_t got = CarriedScaleReciprocal(dn);
+		const int64_t want = DynamicScaleReciprocal(dn);
+		CHECK_MSG(got == want,
+		          "CarriedScaleReciprocal(%lld) == %lld, want %lld (== DynamicScaleReciprocal(%lld), "
+		          "C19's own reciprocal -- the door's whole job is to forward to it and do nothing "
+		          "else)",
+		          static_cast<long long>(dn), static_cast<long long>(got),
+		          static_cast<long long>(want), static_cast<long long>(dn));
+	}
+	size_t mismatches = 0;
+	for (int64_t dn = kLo; dn < kHi; dn += 104729) {
+		const int64_t got = CarriedScaleReciprocal(dn);
+		const int64_t want = DynamicScaleReciprocal(dn);
+		++GChecks;
+		if (got != want) {
+			++GFailures;
+			++mismatches;
+			if (mismatches <= 20) {
+				std::printf("FAIL %s:%d: CarriedScaleReciprocal(%lld) == %lld, want %lld (dense "
+				            "sample over C19's domain)\n",
+				            __FILE__, __LINE__, static_cast<long long>(dn), static_cast<long long>(got),
+				            static_cast<long long>(want));
+			}
+		}
+	}
+	if (mismatches > 20) {
+		std::printf("... %zu additional CarriedScaleReciprocal dense-sample mismatches suppressed\n",
+		            mismatches - 20);
+	}
+}
+
 static void TestRequantTokenCode() {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRequantCasesCount; ++i) {
@@ -9083,7 +9132,7 @@ static void TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundar
 	                                     site_constant, out_codes, &out_scale);
 	CHECK_MSG(status == SslmForwardStatus::Ok,
 	          "token_id==vocab_size-1 (last valid id): EmbedEntry status == %s, want Ok "
-	          "(red-unimplemented until Brunel's green phase)",
+	          "(built and green)",
 	          superslm::SslmForwardStatusName(status));
 	if (status == SslmForwardStatus::Ok) {
 		for (size_t j = 0; j < kHiddenSize; ++j) {
@@ -11784,7 +11833,7 @@ static void TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut() {
 	                                     kSiluLutGoldenTable, site_constant, out_codes.data(),
 	                                     &out_scale);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
-	          "MlpActSite status == %s, want Ok (red-unimplemented until Brunel's green phase)",
+	          "MlpActSite status == %s, want Ok (built and green)",
 	          SslmForwardStatusName(result));
 	if (result == SslmForwardStatus::Ok) {
 		for (size_t i = 0; i < kN; ++i) {
@@ -12031,8 +12080,7 @@ static void TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives() 
 	                                                stream_scale, kHidden, site_constant,
 	                                                out_codes.data(), &out_scale);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
-	          "ResidualReconcileSite status == %s, want Ok (red-unimplemented until Brunel's "
-	          "green phase)",
+	          "ResidualReconcileSite status == %s, want Ok (built and green)",
 	          SslmForwardStatusName(result));
 	if (result == SslmForwardStatus::Ok) {
 		for (size_t i = 0; i < kHidden; ++i) {
@@ -12131,8 +12179,7 @@ static void TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRigh
 	                                                stream_scale, kHidden, site_constant,
 	                                                out_codes.data(), &out_scale);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
-	          "ResidualReconcileSite status == %s, want Ok (red-unimplemented until Brunel's "
-	          "green phase)",
+	          "ResidualReconcileSite status == %s, want Ok (built and green)",
 	          SslmForwardStatusName(result));
 	if (result == SslmForwardStatus::Ok) {
 		CHECK_MSG(out_scale.m == left_scale.m && out_scale.e == left_scale.e,
@@ -12440,8 +12487,7 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	                                             workspace, sizeof(workspace));
 	CHECK_MSG(result == SslmForwardStatus::InvalidLayerBudget,
 	          "RunLayerLoop(layer_budget=0) status == %s, want InvalidLayerBudget (§9.3's own "
-	          "decided contract; red-unimplemented until Brunel's green phase, whose stub "
-	          "currently returns WorkspaceTooSmall)",
+	          "decided contract, built and green)",
 	          SslmForwardStatusName(result));
 	CHECK_MSG(hidden_codes[0] == INT8_C(-99) && hidden_codes[1] == INT8_C(-99),
 	          "RunLayerLoop(layer_budget=0): seq.hidden_codes must be left exactly as poisoned "
@@ -12451,6 +12497,180 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	CHECK_MSG(seq.layer_index == 0xFFFFFFFFu,
 	          "RunLayerLoop(layer_budget=0): seq.layer_index must be left exactly as poisoned "
 	          "(the layer-position marker is part of the sequence's own untouched state)");
+}
+
+// Significant 6 (Poirot e4b398c review): the SAME livelock the budget=0 cell
+// above pins also arises when `seq.layer_index` is already at
+// `num_hidden_layers` -- this token's sequence already ran to completion --
+// even though the budget itself is legal. Two witnesses: an ordinary
+// mid-run token with two layers already consumed, and `num_hidden_layers ==
+// 0` (a degenerate config that makes `layer_index >= num_hidden_layers`
+// trivially true at `layer_index == 0`, the one value every fresh sequence
+// starts at). Both must be rejected rather than silently returning `Ok`
+// having advanced nothing.
+static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = TwoLayerFixture::Build();
+
+	// Witness 1: an ordinary sequence that already consumed both layers.
+	{
+		int8_t hidden_codes[2] = {INT8_C(-61), INT8_C(-61)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-61), INT64_C(-61)};
+		seq.layer_index = 2;  // == num_hidden_layers: already complete
+
+		uint8_t workspace[64];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+		                                             /*layer_budget=*/1, /*hidden_size=*/2,
+		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*context_cap=*/1, fixture.view.rope_tables,
+		                                             workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::SequenceAlreadyComplete,
+		          "RunLayerLoop(layer_index=num_hidden_layers=2, budget=1) status == %s, want "
+		          "SequenceAlreadyComplete -- a step that consumes a call and advances nothing "
+		          "must not return Ok merely because the reason differs from layer_budget==0",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-61) && hidden_codes[1] == INT8_C(-61) &&
+		              seq.hidden_scale.m == INT64_C(-61) && seq.hidden_scale.e == INT64_C(-61) &&
+		              seq.layer_index == 2,
+		          "RunLayerLoop(layer_index=num_hidden_layers): seq must be left exactly as it "
+		          "was -- the rejection happens before anything is read or written");
+	}
+
+	// Witness 2: num_hidden_layers == 0, a degenerate config that makes even
+	// a fresh sequence (layer_index == 0) "already complete".
+	{
+		int8_t hidden_codes[2] = {INT8_C(-62), INT8_C(-62)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-62), INT64_C(-62)};
+		seq.layer_index = 0;
+
+		uint8_t workspace[64];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/0,
+		                                             /*layer_budget=*/1, /*hidden_size=*/2,
+		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*context_cap=*/1, fixture.view.rope_tables,
+		                                             workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::SequenceAlreadyComplete,
+		          "RunLayerLoop(num_hidden_layers=0, layer_index=0, budget=1) status == %s, want "
+		          "SequenceAlreadyComplete -- the same livelock, from num_hidden_layers==0 rather "
+		          "than a sequence that ran to the end",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-62) && hidden_codes[1] == INT8_C(-62) &&
+		              seq.hidden_scale.m == INT64_C(-62) && seq.hidden_scale.e == INT64_C(-62) &&
+		              seq.layer_index == 0,
+		          "RunLayerLoop(num_hidden_layers=0): seq must be left exactly as it was");
+	}
+}
+
+// Significant 1 (Poirot e4b398c review): a CFG1 geometry mismatch --
+// `hidden_size` not an exact multiple of `head_dim`, or `head_dim == 0` --
+// must be reported as `HeadDimGeometryMismatch`, not `WorkspaceTooSmall`. A
+// host that receives `WorkspaceTooSmall` for a geometry fact enlarges its
+// buffer forever against a size no buffer satisfies. Two witnesses: a
+// non-dividing pair, and `head_dim == 0` itself.
+static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = TwoLayerFixture::Build();
+
+	// Witness 1: hidden_size=3 is not a multiple of head_dim=2. A 4096-byte
+	// workspace -- ample by any real sizing -- rules out an actual undersize.
+	{
+		int8_t hidden_codes[3] = {INT8_C(-51), INT8_C(-51), INT8_C(-51)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-51), INT64_C(-51)};
+		seq.layer_index = 0;
+
+		uint8_t workspace[4096];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+		                                             /*layer_budget=*/1, /*hidden_size=*/3,
+		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*context_cap=*/1, fixture.view.rope_tables,
+		                                             workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::HeadDimGeometryMismatch,
+		          "RunLayerLoop(hidden_size=3, head_dim=2, workspace=4096 bytes) status == %s, "
+		          "want HeadDimGeometryMismatch -- this is a CFG1 geometry fact, not a workspace "
+		          "size fact, and a 4096-byte workspace rules out an actual undersize",
+		          SslmForwardStatusName(result));
+	}
+
+	// Witness 2: head_dim == 0.
+	{
+		int8_t hidden_codes[2] = {INT8_C(-52), INT8_C(-52)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-52), INT64_C(-52)};
+		seq.layer_index = 0;
+
+		uint8_t workspace[4096];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+		                                             /*layer_budget=*/1, /*hidden_size=*/2,
+		                                             /*head_dim=*/0, /*intermediate_size=*/2,
+		                                             /*context_cap=*/1, fixture.view.rope_tables,
+		                                             workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::HeadDimGeometryMismatch,
+		          "RunLayerLoop(head_dim=0) status == %s, want HeadDimGeometryMismatch",
+		          SslmForwardStatusName(result));
+	}
+}
+
+// Minor A (Poirot e4b398c review): when `SoftmaxRowQ15` refuses after
+// `CheckSoftmaxRowWidthDomain` has already accepted, the loop must report a
+// status distinct from the gate's own rejection -- not
+// `SoftmaxRowWidthOutOfDomain`, which sends a host to inspect a width that
+// is already in domain. `CheckSoftmaxRowWidthDomain` takes only
+// (q_b, q_c, width); it has no q_ln2 parameter, so an out-of-domain q_ln2
+// (IExpConstruct's own `kBadQLn2`, intmath.cpp:445, "q_ln2 < 1") passes the
+// gate untouched at width=1 -- the only width this sub-slot's RunLayerLoop
+// composes -- and is caught only by the kernel's own independent domain
+// check, which is exactly the gap this status exists to name.
+static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	auto fixture = TwoLayerFixture::Build();
+	fixture.layers[0].q_ln2 = 0;  // IExpConstruct::kBadQLn2 -- CheckSoftmaxRowWidthDomain
+	                              // does not take q_ln2 and cannot see this.
+
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+
+	uint8_t workspace[64] = {};
+	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(
+	    fixture.layers[0].q_b_iexp, fixture.layers[0].q_c_iexp, /*width=*/1);
+	CHECK_MSG(gate_status == SslmForwardStatus::Ok,
+	          "grounding: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=1) == %s, want Ok "
+	          "-- this witness's own premise (the gate accepts while q_ln2 alone is bad) no "
+	          "longer holds",
+	          static_cast<long long>(fixture.layers[0].q_b_iexp),
+	          static_cast<long long>(fixture.layers[0].q_c_iexp), SslmForwardStatusName(gate_status));
+
+	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                             /*layer_budget=*/1, /*hidden_size=*/2,
+	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*context_cap=*/1, fixture.view.rope_tables,
+	                                             workspace, sizeof(workspace));
+	CHECK_MSG(result == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted,
+	          "RunLayerLoop(q_ln2=0, gate accepts) status == %s, want "
+	          "SoftmaxKernelRefusedAfterGateAccepted",
+	          SslmForwardStatusName(result));
 }
 
 // T-1375/Critical 2 and 3 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-
@@ -12569,7 +12789,7 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 		                                             sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::Ok,
 		          "RunLayerLoop(layer_budget=%u, num_hidden_layers=%u) status == %s, want Ok "
-		          "(red-unimplemented until Brunel's green phase)",
+		          "(built and green)",
 		          budget, kNumLayers, SslmForwardStatusName(result));
 		if (result == SslmForwardStatus::Ok) {
 			CHECK_MSG(seq.layer_index == budget,
@@ -12616,7 +12836,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	                             sizeof(full_workspace));
 	CHECK_MSG(full_result == SslmForwardStatus::Ok,
 	          "the straight-through budget=num_hidden_layers run status == %s, want Ok "
-	          "(red-unimplemented until Brunel's green phase)",
+	          "(built and green)",
 	          SslmForwardStatusName(full_result));
 
 	int8_t resumed_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
@@ -12632,7 +12852,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	                             sizeof(resumed_workspace));
 	CHECK_MSG(first_step == SslmForwardStatus::Ok,
 	          "the resumed run's first budget=1 step status == %s, want Ok "
-	          "(red-unimplemented until Brunel's green phase)",
+	          "(built and green)",
 	          SslmForwardStatusName(first_step));
 	const auto second_step =
 	    superslm::RunLayerLoop(resumed_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
@@ -12641,7 +12861,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	                             sizeof(resumed_workspace));
 	CHECK_MSG(second_step == SslmForwardStatus::Ok,
 	          "the resumed run's second (resuming) budget=1 step status == %s, want Ok "
-	          "(red-unimplemented until Brunel's green phase)",
+	          "(built and green)",
 	          SslmForwardStatusName(second_step));
 
 	if (full_result == SslmForwardStatus::Ok && first_step == SslmForwardStatus::Ok &&
@@ -12719,7 +12939,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 	                                   &clean_scale, &clean_layer_index);
 	CHECK_MSG(clean_ok,
 	          "the clean (non-poisoned-workspace) resumed run must succeed "
-	          "(red-unimplemented until Brunel's green phase)");
+	          "(built and green)");
 
 	int8_t poisoned_codes[2];
 	CarriedScale poisoned_scale{};
@@ -12728,7 +12948,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 	                                      &poisoned_scale, &poisoned_layer_index);
 	CHECK_MSG(poisoned_ok,
 	          "the workspace-poisoned resumed run must succeed "
-	          "(red-unimplemented until Brunel's green phase)");
+	          "(built and green)");
 
 	if (clean_ok && poisoned_ok) {
 		CHECK_MSG(poisoned_codes[0] == clean_codes[0] && poisoned_codes[1] == clean_codes[1],
@@ -12966,7 +13186,7 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	                             &hook_state);
 	superslm::SslmSetTraceHook(hook_state, nullptr, nullptr);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
-	          "RunLayerLoop status == %s, want Ok (red-unimplemented until Brunel's green phase)",
+	          "RunLayerLoop status == %s, want Ok (built and green)",
 	          SslmForwardStatusName(result));
 	if (result != SslmForwardStatus::Ok) return;
 
@@ -13088,6 +13308,164 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 			          static_cast<unsigned long long>(seq.kv_saturation_count));
 		}
 	}
+}
+
+// Significant 8 (Poirot e4b398c review, mutation M6): §6.2 step 4 -- "K is
+// cached post-rotation; V is cached unrotated" -- was pinned by NO cell:
+// every RunLayerLoop fixture in this suite, including the two immediately
+// above, drives an IDENTITY RoPE table (cos=1, sin=0), so the post-rotation
+// writeback (`for (i...) k_store[i] = k_rot[i]`) changes nothing whether it
+// runs or not and no assertion can tell the two apart. This cell is the one
+// RunLayerLoop fixture in the suite with a NON-identity rotation: a 90-degree
+// turn (cos_q30=0, sin_q30=2^30), under which `RopeApplyPair(x, y, 0, 2^30)`
+// == `(-y, x)` -- exactly swapping and negating the pair, so a K store still
+// holding its pre-rotation value is trivially distinguishable from the
+// post-rotation one for any non-zero landed K. The landed K value itself is
+// computed via the real, already-shipped primitives (RmsNormSite ->
+// GemmInt8AccumulateRow -> ApplyWeightScaleFold -> LandingRescale ->
+// ClampRopeCode), never hand-picked, so the oracle is grounded the same way
+// cell 9's own three-way join is.
+static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	// A 90-degree rotation (cos_q30=0, sin_q30=2^30 == ROPE_ONE), NOT the
+	// identity every other RunLayerLoop fixture in this suite uses.
+	const int64_t cos_flat[1] = {INT64_C(0)};
+	const int64_t sin_flat[1] = {INT64_C(1) << 30};
+	FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+	superslm::SslmModelView view;
+	std::string err;
+	const auto load_status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(load_status == superslm::SslmModelStatus::Ok,
+	          "this cell's own 90-degree-rotation artifact failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(load_status), err.c_str());
+	if (load_status != superslm::SslmModelStatus::Ok) return;
+
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+	const int64_t kv_landing_r_t_arr[1] = {r_t};
+	const int64_t kv_landing_e_t_arr[1] = {0};
+	const int32_t ctx_fold_identity_arr[1] = {1};
+	const int32_t ctx_fold_mult_arr[1] = {0};
+	const int32_t ctx_fold_shift_arr[1] = {0};
+
+	const int8_t kInitialCodes[2] = {5, -5};
+	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
+
+	// Oracle: the landed (pre-rotation) K pair, from the real primitives
+	// RunLayerLoop itself calls, computed independently of RunLayerLoop.
+	int8_t oracle_normed[2] = {};
+	CarriedScale oracle_normed_scale{};
+	const auto oracle_norm_status = superslm::RmsNormSite(kInitialCodes, norm_gain, 2, kInitialScale,
+	                                                        canonical, oracle_normed, &oracle_normed_scale);
+	CHECK_MSG(oracle_norm_status == SslmForwardStatus::Ok,
+	          "oracle: RmsNormSite status == %s, want Ok", SslmForwardStatusName(oracle_norm_status));
+	int64_t oracle_kacc[2] = {};
+	superslm::GemmInt8AccumulateRow(oracle_normed, identity2x2, 2, 2, oracle_kacc);
+	int8_t oracle_k_landed[2] = {};
+	for (int i = 0; i < 2; ++i) {
+		const int64_t kf = superslm::ApplyWeightScaleFold(oracle_kacc[i], /*identity=*/1, /*mult=*/0,
+		                                                   /*shift=*/0);
+		oracle_k_landed[i] = static_cast<int8_t>(superslm::ClampRopeCode(superslm::LandingRescale(
+		    kf, oracle_normed_scale.m, r_t, oracle_normed_scale.e, /*e_t=*/0)));
+	}
+	CHECK_MSG(oracle_k_landed[0] != 0,
+	          "grounding: the oracle's own landed K[0] == 0 -- this witness's premise (a non-zero "
+	          "pair whose rotation is trivially distinguishable from its pre-rotation value) no "
+	          "longer holds");
+
+	// Oracle: the POST-rotation pair a 90-degree turn produces -- (x,y) -> (-y,x).
+	const superslm::RopePair oracle_rotated =
+	    superslm::RopeApplyPair(oracle_k_landed[0], oracle_k_landed[1], /*cos_q30=*/0,
+	                             /*sin_q30=*/INT64_C(1) << 30);
+	CHECK_MSG(oracle_rotated.x != oracle_k_landed[0] || oracle_rotated.y != oracle_k_landed[1],
+	          "grounding: the 90-degree-rotated pair (%lld,%lld) equals the pre-rotation pair "
+	          "(%d,%d) -- this witness's premise (rotation is observable) no longer holds",
+	          static_cast<long long>(oracle_rotated.x), static_cast<long long>(oracle_rotated.y),
+	          static_cast<int>(oracle_k_landed[0]), static_cast<int>(oracle_k_landed[1]));
+
+	superslm::LayerWeights lw{};
+	lw.attn_norm_gain = norm_gain;
+	lw.attn_norm_site_constant = canonical;
+	lw.q_weight = identity2x2;
+	lw.k_weight = identity2x2;
+	lw.v_weight = identity2x2;
+	lw.o_weight = identity2x2;
+	lw.proj_identity = 1;
+	lw.proj_mult = 0;
+	lw.proj_shift = 0;
+	lw.q_site_constant = canonical;
+	lw.o_site_constant = canonical;
+	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_k = kv_landing_e_t_arr;
+	lw.kv_landing_r_t_v = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_v = kv_landing_e_t_arr;
+	lw.ctx_fold_identity = ctx_fold_identity_arr;
+	lw.ctx_fold_mult = ctx_fold_mult_arr;
+	lw.ctx_fold_shift = ctx_fold_shift_arr;
+	lw.ctx_fold_site_constant = canonical;
+	lw.attn_residual_site_constant = canonical;
+	lw.q_ln2 = INT64_C(2081104);
+	lw.q_b_iexp = INT64_C(4062246);
+	lw.q_c_iexp = INT64_C(8649804928567);
+	lw.mlp_norm_gain = norm_gain;
+	lw.mlp_norm_site_constant = canonical;
+	lw.gate_weight = identity2x2;
+	lw.up_weight = identity2x2;
+	lw.down_weight = identity2x2;
+	lw.gate_site_constant = canonical;
+	lw.up_site_constant = canonical;
+	lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+	lw.down_site_constant = canonical;
+	lw.mlp_residual_site_constant = canonical;
+
+	int8_t hidden_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = kInitialScale;
+	seq.layer_index = 0;
+	uint8_t workspace[64] = {};
+	const auto result = superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                                             /*hidden_size=*/2, /*head_dim=*/2,
+	                                             /*intermediate_size=*/2, /*context_cap=*/1,
+	                                             view.rope_tables, workspace, sizeof(workspace));
+	CHECK_MSG(result == SslmForwardStatus::Ok, "RunLayerLoop status == %s, want Ok",
+	          SslmForwardStatusName(result));
+	if (result != SslmForwardStatus::Ok) return;
+
+	// k_store lands at workspace[0..1] (context_cap=1, num_heads=1, head_dim=2,
+	// layer=0 -- the same offset arithmetic
+	// TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter's own comment
+	// derives), and is never subsequently rewritten except by the
+	// post-rotation writeback this cell exists to pin.
+	const int8_t k_store0 = static_cast<int8_t>(workspace[0]);
+	const int8_t k_store1 = static_cast<int8_t>(workspace[1]);
+	CHECK_MSG(k_store0 == static_cast<int8_t>(oracle_rotated.x) &&
+	              k_store1 == static_cast<int8_t>(oracle_rotated.y),
+	          "workspace K store after RunLayerLoop == {%d,%d}, want the POST-rotation pair "
+	          "{%lld,%lld} (§6.2 step 4: K is cached post-rotation) -- the pre-rotation landed "
+	          "pair was {%d,%d}, and this fixture's 90-degree rope table makes the two provably "
+	          "different",
+	          k_store0, k_store1, static_cast<long long>(oracle_rotated.x),
+	          static_cast<long long>(oracle_rotated.y), static_cast<int>(oracle_k_landed[0]),
+	          static_cast<int>(oracle_k_landed[1]));
 }
 
 // T-1375/Critical 4 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
@@ -13395,6 +13773,7 @@ int main(int argc, char** argv) {
 	TestNormalizeScale();
 	TestDynamicScaleReciprocalNamed();
 	TestDynamicScaleReciprocalDenseSample();
+	TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19Domain();
 	TestRequantTokenCode();
 	TestIntmathPipelineComposition();
 
@@ -13758,12 +14137,16 @@ int main(int argc, char** argv) {
 	TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives();
 	TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
+	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
+	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
+	TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection();
 	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
 	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();
 	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit();
 	TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls();
 	TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold();
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
+	TestRunLayerLoopCachesKPostRotationNotPreRotation();
 	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

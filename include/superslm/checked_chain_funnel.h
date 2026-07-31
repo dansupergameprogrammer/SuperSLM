@@ -140,6 +140,27 @@ enum class SslmForwardStatus {
 	                                          // size guard entirely; negative wraps the same size_t
 	                                          // product mod 2^64), checked before either size is
 	                                          // formed.
+	HeadDimGeometryMismatch,                  // Significant 1: `hidden_size` is not an exact multiple
+	                                          // of `head_dim` (or `head_dim == 0`) -- a CFG1 geometry
+	                                          // fact, never a fact about the caller-supplied workspace.
+	                                          // `WorkspaceTooSmall` used to be returned here, which
+	                                          // sends a host that enlarges its buffer into an infinite
+	                                          // retry against a size no buffer satisfies.
+	SequenceAlreadyComplete,                  // Significant 6: `seq.layer_index >= num_hidden_layers`
+	                                          // at entry -- there are no more layers to advance
+	                                          // through for this token, whether because the sequence
+	                                          // already ran to completion or because
+	                                          // `num_hidden_layers == 0`. Checked before the loop body
+	                                          // runs, on the same "reject-over-silently-degrade" law
+	                                          // §9.3 already applies to `layer_budget == 0`: a step
+	                                          // that consumes a call and advances nothing must not
+	                                          // return `Ok`, whichever of the two reasons produced it.
+	SoftmaxKernelRefusedAfterGateAccepted,    // Minor A: `SoftmaxRowQ15` returned false having already
+	                                          // passed `CheckSoftmaxRowWidthDomain`'s own gate -- a
+	                                          // distinct outcome from the gate's own rejection, which
+	                                          // this loop used to report instead, sending a host
+	                                          // debugging `SoftmaxRowWidthOutOfDomain` to inspect a
+	                                          // width that is already in domain.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

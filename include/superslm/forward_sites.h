@@ -429,6 +429,16 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // (`num_key_value_heads == num_attention_heads`, §13 dim 4's own accepted
 // case) only -- GQA grouping is not this sub-slot's own red cell and is
 // unexercised here.
+//
+// C28's bias reconciliation (§6.2 step 2's third component, "then C28's bias
+// reconciliation where the site has a BIA1 entry", F-S3-4) is likewise a
+// declared narrowing: this struct carries no bias field for any projection,
+// so `ProjectAndFunnel` composes GemmInt8AccumulateRow -> the WSC1 fold ->
+// the funnel and never calls `BiasReconcile` (already shipped in this same
+// translation unit). Sound for a fixture with no BIA1 entries, which is this
+// sub-slot's own scope (Poirot e4b398c review, Significant 3); the first
+// artifact carrying a BIA1 section for a projection this loop calls is a
+// separate, later obligation this declaration does not discharge.
 struct LayerWeights {
 	const int32_t* attn_norm_gain;  // hidden_size
 	CarriedScale attn_norm_site_constant;

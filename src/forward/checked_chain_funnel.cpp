@@ -46,6 +46,10 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::RopeTableTensorMissing: return "RopeTableTensorMissing";
 		case SslmForwardStatus::RopeTableExtentExceeded: return "RopeTableExtentExceeded";
 		case SslmForwardStatus::InvalidContextCap: return "InvalidContextCap";
+		case SslmForwardStatus::HeadDimGeometryMismatch: return "HeadDimGeometryMismatch";
+		case SslmForwardStatus::SequenceAlreadyComplete: return "SequenceAlreadyComplete";
+		case SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted:
+			return "SoftmaxKernelRefusedAfterGateAccepted";
 	}
 	return "?";
 }

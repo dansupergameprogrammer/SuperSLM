@@ -248,6 +248,132 @@ def test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous():
     )
 
 
+# --- Significant 9 (Poirot e4b398c review): the door-count guard. ---
+
+
+def test_find_leaf_forwarding_doors_finds_a_one_line_forwarding_function():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }\n",
+        )
+        assert cnfl.find_leaf_forwarding_doors(path) == ["CarriedScaleReciprocal"]
+
+
+def test_find_leaf_forwarding_doors_finds_a_multi_line_signature_door():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(\n"
+            "    int64_t m) {\n"
+            "  return DynamicScaleReciprocal(m);\n"
+            "}\n",
+        )
+        assert cnfl.find_leaf_forwarding_doors(path) == ["CarriedScaleReciprocal"]
+
+
+def test_find_leaf_forwarding_doors_excludes_the_funnels_own_entry_points():
+    """RequantChainChecked and NarrowRowChecked call banned leaves internally as
+    their whole job -- they must never be reported as forwarding doors, or this
+    guard would fail on the funnel's own real file permanently."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "ChainResult RequantChainChecked(int n) {\n"
+            "  auto D = MaxAbsReduceWide(nullptr, n);\n"
+            "  return {};\n"
+            "}\n"
+            "SslmForwardStatus NarrowRowChecked(int n) {\n"
+            "  auto x = NarrowAccumulatorToI32(nullptr, n, nullptr);\n"
+            "  return {};\n"
+            "}\n",
+        )
+        assert cnfl.find_leaf_forwarding_doors(path) == []
+
+
+def test_find_leaf_forwarding_doors_finds_a_second_door_alongside_the_first():
+    """Mutation proof for the door-count guard's whole point: a SECOND function
+    forwarding a different banned leaf must be found too, not just the first one
+    the scanner happens to hit."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }\n"
+            "int64_t CarriedScaleNormalize(int64_t d) { return NormalizeScale(d).dn; }\n",
+        )
+        assert sorted(cnfl.find_leaf_forwarding_doors(path)) == [
+            "CarriedScaleNormalize",
+            "CarriedScaleReciprocal",
+        ]
+
+
+def test_check_door_count_passes_when_the_scanned_file_matches_the_expected_set():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }\n",
+        )
+        assert cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",)) == []
+
+
+def test_check_door_count_fails_when_a_second_door_appears():
+    """The mutation this guard exists to catch (Significant 9's own text): a
+    second door opened alongside CarriedScaleReciprocal must fail loudly rather
+    than silently widen the set the funnel's own file is allowed to export."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }\n"
+            "int64_t CarriedScaleNormalize(int64_t d) { return NormalizeScale(d).dn; }\n",
+        )
+        failures = cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",))
+        assert len(failures) == 1
+        assert "CarriedScaleNormalize" in failures[0]
+
+
+def test_check_door_count_fails_when_the_door_is_silently_removed():
+    """The other direction: the door disappearing (renamed or its forwarding
+    call deleted) is also a change to what the funnel's own file exports, and
+    must be caught the same way a second door appearing is."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "src/forward/checked_chain_funnel.cpp",
+            "int64_t CarriedScaleReciprocal(int64_t m) { return 0; }\n",
+        )
+        failures = cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",))
+        assert len(failures) == 1
+
+
+def test_check_door_count_is_silent_when_the_funnel_file_is_absent():
+    """A scratch-directory mechanism test with no funnel file at all is
+    exercising the leaf-ban scan, not this guard -- absence is not itself a
+    door-count failure (see main()'s own repo_root gating for why the guard
+    does not run at all against an arbitrary scratch repo_root)."""
+    assert cnfl.check_door_count("/does/not/exist/checked_chain_funnel.cpp") == []
+
+
+def test_main_end_to_end_asserts_the_real_doors_hold_at_exactly_one():
+    """The wiring cell for the door-count guard, mirroring
+    test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous
+    immediately above: asserted against the real, current
+    src/forward/checked_chain_funnel.cpp, not a scratch stand-in."""
+    real_funnel = os.path.join(cnfl._REPO_ROOT, "src/forward/checked_chain_funnel.cpp")
+    assert cnfl.check_door_count(real_funnel) == []
+    doors = cnfl.find_leaf_forwarding_doors(real_funnel)
+    assert doors == list(cnfl._EXPECTED_DOOR_FUNCTIONS), (
+        f"the real funnel file's forwarding doors are {doors}, want exactly "
+        f"{list(cnfl._EXPECTED_DOOR_FUNCTIONS)} -- update _EXPECTED_DOOR_FUNCTIONS "
+        f"if a door was deliberately added, removed, or renamed"
+    )
+
+
 def test_a_scratch_forward_sites_cpp_naming_a_banned_leaf_is_caught_by_the_widened_glob():
     """Mutation proof for the S3.2 widening above: `src/forward_sites.cpp` sits
     outside `src/forward/` and was, before this pass, entirely outside

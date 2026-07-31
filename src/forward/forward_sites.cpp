@@ -440,15 +440,13 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size, const int8_t*
 	return result.status;
 }
 
-// STUB (T-1345): declared and stubbed by the test-design pass authoring the
-// red suite (Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md),
+// T-1345: declared by the test-design pass authoring the red suite
+// (Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md),
 // following the RoPE application site's own declare-and-stub sequence
-// (D-SLM384/385/386). Returns WorkspaceTooSmall unconditionally -- a status
-// none of this site's real outcomes (Ok, SiluCompositionScaleOutOfDomain)
-// ever is, matching the established stub convention (RopeApplySite's own
-// prior stub, this file's git history). Calls nothing, reads nothing, and
-// writes nothing to out_codes/out_scale. The build seat replaces this body
-// with the real four-step composition the header's own doc comment states.
+// (D-SLM384/385/386). Built by T-1345/T-1346: the real four-step
+// composition the header's own doc comment states, driven against the real
+// LUT and the real funnel and proven by the site's own feature oracle and
+// negative controls (superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
                               const int8_t* up_code, CarriedScale up_scale, size_t n,
                               const int32_t* sigmoid_lut_table, CarriedScale site_constant,
@@ -467,12 +465,17 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	if (domain != SslmForwardStatus::Ok) return domain;
 
 	// The predicate above has already bounded `e` to its own accepted range
-	// (kCompositionScaleMinE = -80 at the low end, and an upper branch pinned
-	// against kSiluLutTermLeftShiftOverflowExponent, §5.4's executed
-	// e = 8 ceiling). SiluSigmoidQ15 takes `int e`, and every value that
-	// reaches this narrowing is inside [-80, 8] by that check — so the
-	// conversion is exact here BECAUSE of step 1's ordering, not by
-	// assumption about the caller.
+	// (kSiluCompositionRuntimeMinE = -80 at the low end -- the RUNTIME
+	// predicate CheckSiluCompositionScaleDomain actually tests against
+	// (checked_chain_funnel.cpp), distinct from the load-time descriptor
+	// bound kCompositionScaleMinE this comment used to cite; both are -80
+	// today, but the static_asserts at checked_chain_funnel.cpp:340-344 exist
+	// precisely because the two are allowed to differ, and already do at the
+	// upper end: 7 versus 8 -- and an upper branch pinned against
+	// kSiluLutTermLeftShiftOverflowExponent, §5.4's executed e = 8 ceiling).
+	// SiluSigmoidQ15 takes `int e`, and every value that reaches this
+	// narrowing is inside [-80, 8] by that check — so the conversion is exact
+	// here BECAUSE of step 1's ordering, not by assumption about the caller.
 	const int gate_e = static_cast<int>(gate_scale.e);
 
 	std::vector<int64_t> wide(n);
@@ -495,9 +498,15 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	// Step 4: BOTH carried scales fold into the funnel's incoming span, gate
 	// then up — the reference's own list literal at this site
 	// (Tools/superslm_spike/dynamic_engine.py's `mlp_act` chain record passes
-	// [gate_scale[t], up_scale[t]]). Neither scale is dropped and the order is
-	// not free: the span is what the funnel composes into the outgoing carried
-	// scale. `site`/`token_index`/`trace_hook_state` are forwarded unchanged
+	// [gate_scale[t], up_scale[t]]). Neither scale is dropped -- the order is
+	// gate then up, matching the reference's own list literal, but the fold
+	// itself (carried_scale_product, D-SLM57) is permutation-invariant for a
+	// two-element span: mantissa product and exponent sum both commute, so no
+	// implementation can diverge on which of the two is listed first (Poirot
+	// e4b398c review, Significant 7 -- corrected from a prior claim here that
+	// the order was "not free", which does not hold for two operands). What
+	// the span DOES pin is that both scales are present; dropping one changes
+	// `out_scale`. `site`/`token_index`/`trace_hook_state` are forwarded unchanged
 	// (§11 S3.1a, D-SLM362) — this site never fixes its own name, so the
 	// caller's own layer-qualified string is exactly what reaches the
 	// emission seam.
@@ -508,15 +517,11 @@ SslmForwardStatus MlpActSite(const int8_t* gate_code, CarriedScale gate_scale,
 	return result.status;
 }
 
-// STUB (T-1347): declared and stubbed by the test-design pass authoring
-// S3.5's red suite (Claude/Curie/superslm-s3.5-residual-and-layer-loop-
-// test-design-2026-07-29.md), following the same declare-and-stub sequence
-// RopeApplySite and MlpActSite used (D-SLM384/385/386; T-1345). Returns
-// WorkspaceTooSmall unconditionally -- a status none of this site's real
-// outcomes ever is, matching the established stub convention. Calls
-// nothing, reads nothing, and writes nothing to out_codes/out_scale. The
-// build seat replaces this body with the real four-step composition the
-// header's own doc comment states.
+// T-1347: declared by the test-design pass authoring S3.5's red suite
+// (Claude/Curie/superslm-s3.5-residual-and-layer-loop-test-design-
+// 2026-07-29.md), following the same declare-and-stub sequence RopeApplySite
+// and MlpActSite used (D-SLM384/385/386; T-1345). Built by T-1347/T-1358:
+// the real four-step composition the header's own doc comment states.
 SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale branch_scale,
                                           const int8_t* stream_code, CarriedScale stream_scale,
                                           size_t hidden_size, CarriedScale site_constant,
@@ -566,13 +571,12 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 	return result.status;
 }
 
-// STUB (T-1347): same convention as ResidualReconcileSite above. Returns
-// WorkspaceTooSmall unconditionally, touching neither `seq` nor `workspace`
-// -- this is deliberate, not an oversight: the red suite's own budget=0 and
-// resume/workspace cells depend on the STUB leaving every out-param
-// untouched, exactly as every other declare-and-stub site in this file
-// does on rejection. The build seat replaces this body with the real
-// per-layer composition the header's own doc comment states.
+// T-1347: same declare-and-stub provenance as ResidualReconcileSite above.
+// Built by T-1347/T-1358/T-1375/T-1376: `RunLayerLoop`, below, is the real
+// per-layer composition the header's own doc comment states -- every
+// rejection path leaves `seq`/`workspace` untouched exactly as the red
+// suite's own budget=0 and resume/workspace-poisoning cells require, now
+// because the real body honours that contract, not because a stub does.
 namespace {
 
 // One projection: GemmInt8AccumulateRow -> the shared WSC1 fold -> the funnel.
@@ -649,9 +653,15 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// case is not a fixture choice this body is free to make -- it is forced by
 	// the declared surface, and a GQA loop needs a parameter that does not
 	// exist yet.
+	// Significant 1 (Poirot e4b398c review): this is a fact about the CFG1
+	// geometry the caller supplied (`hidden_size` is not an exact multiple of
+	// `head_dim`, or `head_dim == 0`), never a fact about `workspace` --
+	// `WorkspaceTooSmall` used to be returned here, which sends a host that
+	// enlarges its buffer into an infinite retry against a size no buffer
+	// satisfies, because the guard below it is never reached.
 	const size_t num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
 	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
-		return SslmForwardStatus::WorkspaceTooSmall;
+		return SslmForwardStatus::HeadDimGeometryMismatch;
 	}
 	// The size product itself, overflow-guarded factor by factor (the same
 	// `product > SIZE_MAX / factor` idiom model.cpp's tensor-shape check
@@ -669,6 +679,24 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	}
 	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
 	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+
+	// Significant 6 (Poirot e4b398c review): the SAME livelock the
+	// `layer_budget == 0` check above exists to reject also arises when
+	// there is nothing left to advance through for a REASON OTHER than the
+	// budget -- `seq.layer_index` already at `num_hidden_layers` (this
+	// token's sequence already ran to completion), or `num_hidden_layers ==
+	// 0` (which makes `layer_index >= num_hidden_layers` true trivially at
+	// `layer_index == 0`, so one check covers both). Without this, the
+	// `while` below never enters its body and falls through to `return Ok`
+	// at the bottom having advanced nothing -- indistinguishable, from the
+	// return value alone, from "advanced N layers." §9.3's
+	// reject-over-silently-degrade law does not depend on which of the two
+	// reasons produced zero progress. Checked after every domain guard
+	// above rather than before them: an invalid `context_cap` or geometry is
+	// still the more specific rejection when both are true of the same call,
+	// and every guard above it leaves `seq` untouched on its own rejection,
+	// so ordering relative to them changes no cell's observable contract.
+	if (seq.layer_index >= num_hidden_layers) return SslmForwardStatus::SequenceAlreadyComplete;
 
 	// This sub-slot's declared scope is a single position. §9.4's multi-
 	// position accessor (`KeyRow(layer, kv_head, position)`) is S3.7's and does
@@ -762,23 +790,29 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// Attention proper (§6.2 step 5). No named site for this composition
 		// exists anywhere in this tree; this is where it is first composed.
 		{
+			// Minor B (Poirot e4b398c review): `lw.q_b_iexp`, `lw.q_c_iexp`, and
+			// `width` are all loop-invariant across `h` -- the gate is evaluated
+			// once here, above the head loop, rather than redundantly per head.
+			// The gate-before-kernel ORDERING it establishes is unchanged: the
+			// kernel's own contract states it performs no width check of its
+			// own and that `total`'s bound holds only when this gate has
+			// already run.
+			st = CheckSoftmaxRowWidthDomain(lw.q_b_iexp, lw.q_c_iexp, width);
+			if (st != SslmForwardStatus::Ok) return st;
 			std::vector<int64_t> ctx_wide(hidden_size);
 			for (size_t h = 0; h < num_heads; ++h) {
 				std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
 				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_store + h * head_dim, head_dim,
 				                      width, scores.data());
-				// The gate before the kernel, in that order -- the kernel's own
-				// contract states it performs no width check and that `total`'s
-				// bound holds only under this ordering.
-				st = CheckSoftmaxRowWidthDomain(lw.q_b_iexp, lw.q_c_iexp, width);
-				if (st != SslmForwardStatus::Ok) return st;
 				if (!SoftmaxRowQ15(scores.data(), width, lw.q_ln2, lw.q_b_iexp, lw.q_c_iexp,
 				                   probs.data())) {
-					// The kernel refused after its own gate accepted. No status
-					// distinguishes that from the gate's own rejection, so the
-					// gate's is reported rather than inventing an enumerator --
-					// named as an owed distinction in this slot's build record.
-					return SslmForwardStatus::SoftmaxRowWidthOutOfDomain;
+					// Minor A (Poirot e4b398c review): the kernel refused after
+					// its own gate already accepted -- a distinct outcome from
+					// the gate's own rejection, now named rather than reported
+					// as the gate's own status (which used to send a host
+					// debugging `SoftmaxRowWidthOutOfDomain` to inspect a width
+					// already in domain).
+					return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 				}
 				GemmProbQ15Accumulate(probs.data(), v_store + h * head_dim, width, head_dim,
 				                      ctx_acc.data());
@@ -841,6 +875,12 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		                      trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
+		// Minor G (Poirot e4b398c review): ROP1 (`rope_tables`, above) comes
+		// from the loaded artifact; SIL1 here comes from a compiled constant
+		// instead, an asymmetry that reads as an oversight and is not one --
+		// `SslmModel::Load` (model.cpp) already validates any loaded SIL1
+		// element-by-element against this same `kSiluLutCanonicalTable`, so
+		// the two cannot differ for an artifact that loads at all.
 		st = MlpActSite(gate_codes.data(), gate_scale, up_codes.data(), up_scale, intermediate_size,
 		                kSiluLutCanonicalTable, lw.mlp_act_site_constant, act_codes.data(),
 		                &act_scale, LayerSite(site_prefix, l, "mlp_act"), token_index,
