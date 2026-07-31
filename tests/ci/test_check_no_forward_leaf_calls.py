@@ -1574,12 +1574,14 @@ def test_population_count_is_stated():
 # constructed namespaces, rather than left to the four prose statements
 # above alone (the module pin comment, `_T1_CONTAINER_NAME_PATTERN`'s
 # comment, `_t1_new_shape_containers`'s docstring, and
-# `test_population_count_is_stated`'s own docstring). Every cell below
-# exercises `_t1_check_population_registration` -- the same function
-# `test_population_count_is_stated` calls above against the real module --
-# so a cell here failing to fail is a cell exercising the real contract, not
-# a reimplementation of it. Each cell reproduces one row of the mutation
-# battery in Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md and
+# `test_population_count_is_stated`'s own docstring). Every cell below,
+# through `test_registration_admits_the_documented_off_convention_wrong_
+# shape_residual`, exercises `_t1_check_population_registration` -- the same
+# function `test_population_count_is_stated` calls above against the real
+# module -- so a cell there failing to fail is a cell exercising the real
+# contract, not a reimplementation of it. Each of those cells reproduces one
+# row of the mutation battery in Poirot
+# 03a9413-t1506-t1507-confirmation-2026-07-31.md and
 # 066319d-t1501-t1503-confirmation-2026-07-31.md, named in its own
 # docstring; `Claude/Brunel/t1514-t1515-build-2026-07-31.md` reconciles
 # every mutation in both battery tables (A-N, O, P, Q-T, W1-W5, X, O2, Y1,
@@ -1588,7 +1590,57 @@ def test_population_count_is_stated():
 # the first build left as prose only (Poirot
 # da69def-t1514-t1515-confirmation-2026-07-31.md Significant 1, T-1517);
 # Y1 and Y2 remain outside this contract, pinned instead by the
-# `total == 16` arithmetic assertion above, unchanged by either build. ---
+# `total == 16` arithmetic assertion above, unchanged by either build.
+# `test_fixture_family_convention_matches_its_stated_convention`, last in
+# the block, is the one exception: it does not call
+# `_t1_check_population_registration` and reproduces no battery row, by
+# design (T-1540; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
+# Significant 1 asked for each fixture's convention asserted "against the
+# pattern directly", which routing it back through the registration
+# function would defeat -- that function's shape/name discovery is exactly
+# the machinery the ticket asked this cell to bypass). It pins
+# `_T1_CONTAINER_NAME_PATTERN`'s admission decision for the five fixture
+# families the cells above use, so a widening that starts admitting an
+# off-convention family's name is caught even when no registration cell's
+# own verdict changes. ---
+
+
+#: The single source for every off-convention fixture family this block's
+#: cells share (T-1551; Poirot
+#: ee896a8-t1540-t1542-confirmation-2026-07-31.md Finding 4): a tuple of
+#: `(name, on_convention)` pairs, not a `dict` -- a non-empty `str`-keyed
+#: module-level `dict` is discovered by `_t1_discover_population_containers`
+#: and would have to be registered in `_T1_EXPECTED_CONTAINER_NAMES` to keep
+#: `test_population_count_is_stated` green, which puts a test-support
+#: constant into the population pin; a tuple is invisible to that shape net,
+#: and none of the names below matches `_T1_CONTAINER_NAME_PATTERN`, so it
+#: is invisible to the name net too. `test_fixture_family_convention_
+#: matches_its_stated_convention` below parametrizes directly off this
+#: tuple; the cells that use each off-convention family as their fixture
+#: reference the unpacked name below rather than repeating the literal, so a
+#: rename of a family's name in this tuple moves every cell that uses it
+#: together, and a rename that is not paired with the matching
+#: `on_convention` flag is caught by the parametrized cell itself (the
+#: renamed string is checked against `_T1_CONTAINER_NAME_PATTERN` directly).
+#: `_T9999_NEW_SHAPES`, the on-convention entry, is not referenced by name
+#: elsewhere from this tuple -- any name matching
+#: `_T1_CONTAINER_NAME_PATTERN` is equally on-convention, so the cells that
+#: use it for other mutation-battery rows are not coupled to this specific
+#: string the way the four off-convention homes are.
+_T1_FIXTURE_FAMILIES = (
+    ("_T9999_NEW_SHAPES", True),
+    ("_ORPHAN_CASES", False),
+    ("_CONTROL_CASES", False),
+    ("_PHANTOM_CASES", False),
+    ("_T9999_RENAMED_SHAPES", False),
+)
+(
+    _T1_ON_CONVENTION_FIXTURE,
+    _T1_ORPHAN_FIXTURE,
+    _T1_CONTROL_FIXTURE,
+    _T1_PHANTOM_FIXTURE,
+    _T1_RENAMED_FIXTURE,
+) = (name for name, _on_convention in _T1_FIXTURE_FAMILIES)
 
 
 def _t1_failing_assertion(excinfo):
@@ -1610,18 +1662,26 @@ def _t1_failing_assertion(excinfo):
     the part of these statements most likely to be edited -- T-1506 changed
     it once already -- and matching the whole expression means an operator
     edit alone, with the subject and the property it breaks unchanged,
-    misattributes the failure to every cell that reaches the edited
-    assertion, rather than to the one cell whose property the edit actually
-    breaks (T-1542; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
-    Minor 2 -- a namespace in this file is a mapping of names to values and
-    contains no statement text; what actually misattributes is that every
-    cell reaching the edited assertion asks this function which one raised
-    and gets `unrecognized failing statement` once the source no longer
-    matches the literal). Verified against the exact T-1506
-    regression (`name_matched <= pin` reverted to `== pin`): matching the
-    full expression reports 5 red cells, 4 of them spurious
-    `unrecognized failing statement` failures; matching the subject name
-    alone reports exactly the 1 cell whose property the regression breaks."""
+    misattributes the failure to every cell that fails at the edited
+    assertion and then asks this function which one raised, rather than to
+    the one cell whose property the edit actually breaks (T-1542; Poirot
+    8762a30-t1517-t1518-confirmation-2026-07-31.md Minor 2 -- a namespace in
+    this file is a mapping of names to values and contains no statement
+    text; what actually misattributes is that a cell failing at the edited
+    assertion, having asked this function which one raised, gets
+    `unrecognized failing statement` once the source no longer matches the
+    literal -- not every cell that merely reaches the assertion, since a
+    cell that reaches and passes it never calls this function at all).
+    Verified against the exact T-1506 regression (`name_matched <= pin`
+    reverted to `== pin`): of the ten cells that reach the edited assertion,
+    matching the full expression reports 5 red, 4 of them spurious
+    `unrecognized failing statement` misattributions -- cells that fail at
+    the edited assertion and ask this function which one raised -- and the
+    fifth a must-not-raise cell that fails under the regression without
+    calling this function at all; the remaining 5 reach the assertion, pass
+    it, and never call this function either. Matching the subject name
+    alone reports exactly the 1 cell whose property the regression breaks,
+    among the four misattributed."""
     statement = str(excinfo.traceback[-1].statement)
     if "discovered_names" in statement:
         return "shape-set"
@@ -1636,8 +1696,8 @@ def test_registration_admits_an_off_convention_container_present_in_the_pin():
     pin, passes both assertions -- the property T-1506 restored, and the one
     T-1507's docstring states in the "for any name, on-convention or not"
     clause."""
-    namespace = {"_CONTROL_CASES": {"case": "value"}}
-    pin = frozenset({"_CONTROL_CASES"})
+    namespace = {_T1_CONTROL_FIXTURE: {"case": "value"}}
+    pin = frozenset({_T1_CONTROL_FIXTURE})
     _t1_check_population_registration(namespace, pin)  # must not raise
 
 
@@ -1664,7 +1724,7 @@ def test_registration_rejects_an_on_convention_container_of_the_wrong_shape(valu
 @pytest.mark.parametrize(
     ("name", "value"),
     [
-        ("_ORPHAN_CASES", {"case": "value"}),
+        (_T1_ORPHAN_FIXTURE, {"case": "value"}),
         ("_T9999_NEW_SHAPES", {"case": "value"}),
         ("_T9999_NEW_SHAPES", {"case": ("tuple", "value")}),
         ("_T9999_NEW_SHAPES", {"case": {"nested": "dict"}}),
@@ -1697,14 +1757,14 @@ def test_registration_rejects_a_dict_absent_from_the_pin(name, value):
     ("pin_name", "namespace"),
     [
         ("_T9999_NEW_SHAPES", {}),
-        ("_PHANTOM_CASES", {}),
+        (_T1_PHANTOM_FIXTURE, {}),
         ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": []}),
         ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {}}),
         ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {1: "x"}}),
-        ("_PHANTOM_CASES", {"_PHANTOM_CASES": []}),
-        ("_PHANTOM_CASES", {"_PHANTOM_CASES": {}}),
-        ("_PHANTOM_CASES", {"_PHANTOM_CASES": {1: "x"}}),
-        ("_T9999_NEW_SHAPES", {"_T9999_RENAMED_SHAPES": {"case": "value"}}),
+        (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: []}),
+        (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: {}}),
+        (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: {1: "x"}}),
+        ("_T9999_NEW_SHAPES", {_T1_RENAMED_FIXTURE: {"case": "value"}}),
     ],
     ids=[
         "W1-undefined-on-convention",
@@ -1779,26 +1839,17 @@ def test_registration_admits_the_documented_off_convention_wrong_shape_residual(
     four cases (T-1541; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
     Minor 1), measured in `Claude/Brunel/t1517-t1518-build-2026-07-31.md`'s
     own verification table."""
-    namespace = {"_ORPHAN_CASES": value}
+    namespace = {_T1_ORPHAN_FIXTURE: value}
     pin = frozenset()
     _t1_check_population_registration(namespace, pin)  # must not raise
 
 
 @pytest.mark.parametrize(
     ("name", "on_convention"),
-    [
-        ("_T9999_NEW_SHAPES", True),
-        ("_ORPHAN_CASES", False),
-        ("_CONTROL_CASES", False),
-        ("_PHANTOM_CASES", False),
-        ("_T9999_RENAMED_SHAPES", False),
-    ],
+    _T1_FIXTURE_FAMILIES,
     ids=[
-        "T9999_NEW_SHAPES-on-convention",
-        "ORPHAN_CASES-off-convention",
-        "CONTROL_CASES-off-convention",
-        "PHANTOM_CASES-off-convention",
-        "T9999_RENAMED_SHAPES-off-convention",
+        f"{fixture_name.lstrip('_')}-{'on' if fixture_on_convention else 'off'}-convention"
+        for fixture_name, fixture_on_convention in _T1_FIXTURE_FAMILIES
     ],
 )
 def test_fixture_family_convention_matches_its_stated_convention(name, on_convention):
@@ -1810,13 +1861,26 @@ def test_fixture_family_convention_matches_its_stated_convention(name, on_conven
     `Claude/Poirot/da69def-t1514-t1515-confirmation-2026-07-31.md`, which
     asked for exactly this: "assert each fixture's convention against the
     pattern directly, so a cell whose docstring says 'off-convention' fails
-    when its name stops being off-convention"). `_T9999_NEW_SHAPES` is the
-    on-convention fixture used throughout this file's T-1514 cells above.
+    when its name stops being off-convention"). Both the parametrization and
+    the four off-convention fixtures' own occurrences below are read from
+    `_T1_FIXTURE_FAMILIES` (T-1551; Poirot
+    ee896a8-t1540-t1542-confirmation-2026-07-31.md Finding 4), rather than
+    each repeating the family's name as a separate literal, so a rename of a
+    family's name in that tuple moves every cell using it together, and a
+    rename left unpaired with its `on_convention` flag is caught by this
+    cell itself rather than left silently stale.
+
+    `_T9999_NEW_SHAPES` is the on-convention fixture used throughout this
+    file's T-1514 cells above -- not coupled to this tuple's entry the way
+    the four off-convention names are, because any name matching
+    `_T1_CONTAINER_NAME_PATTERN` serves those cells equally.
     `_ORPHAN_CASES` is
     `test_registration_admits_the_documented_off_convention_wrong_shape_
-    residual`'s fixture, above. `_CONTROL_CASES` is
+    residual`'s fixture, above, and also
+    `test_registration_rejects_a_dict_absent_from_the_pin`'s
+    `off-convention-name` case. `_CONTROL_CASES` is
     `test_registration_admits_an_off_convention_container_present_in_the_
-    pin`'s fixture. `_PHANTOM_CASES` is the W3, W4, W5 cases and
+    pin`'s fixture. `_PHANTOM_CASES` is the W2, W3, W4 and W5 cases and
     `_T9999_RENAMED_SHAPES` is the O2 case, both in
     `test_registration_rejects_a_pinned_name_absent_from_the_namespace`
     above -- every one of those cells' own id or docstring calls its
@@ -1849,5 +1913,22 @@ def test_fixture_family_convention_matches_its_stated_convention(name, on_conven
     residual`'s four cases red, because that widening admits `_ORPHAN_CASES`
     too. This cell's on-convention case, `_T9999_NEW_SHAPES`, stays green
     under all four widenings, matching what `_T1_CONTAINER_NAME_PATTERN` is
-    stated to admit as shipped."""
+    stated to admit as shipped.
+
+    The rename axis (T-1551; Poirot
+    ee896a8-t1540-t1542-confirmation-2026-07-31.md Finding 4) is closed by
+    `_T1_FIXTURE_FAMILIES` above, measured two ways by the same literal-
+    substitution-and-restore method: editing `_PHANTOM_CASES`'s entry to a
+    new, on-convention name while leaving its `on_convention` flag at
+    `False` -- an unpaired rename -- reds exactly this cell's own renamed
+    case and nothing else, because every other cell that used
+    `_T1_PHANTOM_FIXTURE` moved with the rename and none of them is
+    sensitive to what the literal spelling is; editing both the name and
+    the flag together -- a consistent rename -- leaves the file's full
+    suite green with the id for that case reading the new name, and no
+    cell anywhere still asserting about `_PHANTOM_CASES`, confirmed by
+    collecting the suite's test ids after the substitution. Neither run
+    left a stale off-convention claim standing, which is what renaming
+    `_PHANTOM_CASES` in place (rather than through this tuple) did in the
+    review that raised this finding."""
     assert bool(_T1_CONTAINER_NAME_PATTERN.match(name)) == on_convention
