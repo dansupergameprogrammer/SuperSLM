@@ -1610,9 +1610,14 @@ def _t1_failing_assertion(excinfo):
     the part of these statements most likely to be edited -- T-1506 changed
     it once already -- and matching the whole expression means an operator
     edit alone, with the subject and the property it breaks unchanged,
-    misattributes the failure to every cell whose namespace happens to
-    contain the now-unmatched text rather than to the one cell whose
-    property the edit actually breaks. Verified against the exact T-1506
+    misattributes the failure to every cell that reaches the edited
+    assertion, rather than to the one cell whose property the edit actually
+    breaks (T-1542; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
+    Minor 2 -- a namespace in this file is a mapping of names to values and
+    contains no statement text; what actually misattributes is that every
+    cell reaching the edited assertion asks this function which one raised
+    and gets `unrecognized failing statement` once the source no longer
+    matches the literal). Verified against the exact T-1506
     regression (`name_matched <= pin` reverted to `== pin`): matching the
     full expression reports 5 red cells, 4 of them spurious
     `unrecognized failing statement` failures; matching the subject name
@@ -1754,17 +1759,95 @@ def test_registration_admits_the_documented_off_convention_wrong_shape_residual(
     other cell's contrast.
 
     This is the one direction in this file that exercises
-    `_T1_CONTAINER_NAME_PATTERN`'s admission side: every other cell here
-    supplies a name the pattern already matches, or a name it already
-    rejects and keeps rejecting. `_ORPHAN_CASES` is chosen because it does
-    not match the pattern as shipped but does match both a broad widening
+    `_T1_CONTAINER_NAME_PATTERN`'s admission side through the population-
+    registration contract itself: every other cell here supplies a name the
+    pattern already matches, or an off-convention name. Each fixture
+    family's own convention -- on or off -- is asserted directly against the
+    pattern by `test_fixture_family_convention_matches_its_stated_convention`
+    below (T-1540; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
+    Significant 1), rather than left to this cell's single fixture name or
+    to prose. `_ORPHAN_CASES` is chosen for this cell because it does not
+    match the pattern as shipped but does match both a broad widening
     (`^_[A-Z0-9_]*(CASES|SHAPES)$`) and a plausible convention extension
     (adding a `_[A-Z]+_CASES` alternative) -- measured directly: widening
     `_T1_CONTAINER_NAME_PATTERN` either way turns this cell red, because
     the name then joins the name-matched set while remaining absent from
     the pin; narrowing the pattern leaves it green, because this class was
-    never reached by shape. No cell before this one is sensitive to a
-    widening of the pattern in either direction."""
+    never reached by shape. No cell before this one changes verdict under a
+    widening of the pattern; four change verdict under a narrowing --
+    `test_registration_rejects_an_on_convention_container_of_the_wrong_shape`'s
+    four cases (T-1541; Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md
+    Minor 1), measured in `Claude/Brunel/t1517-t1518-build-2026-07-31.md`'s
+    own verification table."""
     namespace = {"_ORPHAN_CASES": value}
     pin = frozenset()
     _t1_check_population_registration(namespace, pin)  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("name", "on_convention"),
+    [
+        ("_T9999_NEW_SHAPES", True),
+        ("_ORPHAN_CASES", False),
+        ("_CONTROL_CASES", False),
+        ("_PHANTOM_CASES", False),
+        ("_T9999_RENAMED_SHAPES", False),
+    ],
+    ids=[
+        "T9999_NEW_SHAPES-on-convention",
+        "ORPHAN_CASES-off-convention",
+        "CONTROL_CASES-off-convention",
+        "PHANTOM_CASES-off-convention",
+        "T9999_RENAMED_SHAPES-off-convention",
+    ],
+)
+def test_fixture_family_convention_matches_its_stated_convention(name, on_convention):
+    """Asserts each fixture family used elsewhere in this section against
+    `_T1_CONTAINER_NAME_PATTERN` directly, rather than leaving the
+    convention-ness of every fixture but `_ORPHAN_CASES` to prose (T-1540;
+    Poirot 8762a30-t1517-t1518-confirmation-2026-07-31.md Significant 1 --
+    the un-built third clause of the T-1517 ticket in
+    `Claude/Poirot/da69def-t1514-t1515-confirmation-2026-07-31.md`, which
+    asked for exactly this: "assert each fixture's convention against the
+    pattern directly, so a cell whose docstring says 'off-convention' fails
+    when its name stops being off-convention"). `_T9999_NEW_SHAPES` is the
+    on-convention fixture used throughout this file's T-1514 cells above.
+    `_ORPHAN_CASES` is
+    `test_registration_admits_the_documented_off_convention_wrong_shape_
+    residual`'s fixture, above. `_CONTROL_CASES` is
+    `test_registration_admits_an_off_convention_container_present_in_the_
+    pin`'s fixture. `_PHANTOM_CASES` is the W3, W4, W5 cases and
+    `_T9999_RENAMED_SHAPES` is the O2 case, both in
+    `test_registration_rejects_a_pinned_name_absent_from_the_namespace`
+    above -- every one of those cells' own id or docstring calls its
+    fixture off-convention, and none of those cells is sensitive to a
+    widening of the pattern that starts admitting its own fixture's name,
+    because none of them exercises the pattern's admission side (only
+    `test_registration_admits_the_documented_off_convention_wrong_shape_
+    residual` does, and only for `_ORPHAN_CASES`). This cell closes that:
+    a widening that starts admitting any of the four off-convention names
+    turns this cell red directly, independent of whether that widening also
+    changes any other cell's verdict.
+
+    Measured against all four widenings named or derived for this ticket,
+    each applied by literal substitution to the real
+    `_T1_CONTAINER_NAME_PATTERN` line, the file's full suite run, and the
+    file restored and SHA-256-verified afterward: the three
+    `Claude/Poirot/8762a30-t1517-t1518-confirmation-2026-07-31.md`
+    Significant 1 names -- `^(_POPULATION_CASES|_T\\d+_(NEW|RENAMED)_
+    SHAPES)$`, `^(_POPULATION_CASES|_T\\d+_NEW_SHAPES|_CONTROL_CASES)$`, and
+    `^(_POPULATION_CASES|_T\\d+_NEW_SHAPES|_PHANTOM_CASES)$` -- each admit
+    exactly one of `_T9999_RENAMED_SHAPES`, `_CONTROL_CASES`, or
+    `_PHANTOM_CASES` and turn exactly that one case in this cell red,
+    leaving this cell's other four cases and the file's other 65 cells
+    green. A fourth widening, not named in that casebook,
+    `^_[A-Z][A-Z0-9_]*_(CASES|SHAPES)$`, admits all four off-convention
+    names in this cell's own parametrization at once -- including
+    `_ORPHAN_CASES` -- and turns all four of this cell's off-convention
+    cases red together, and also turns
+    `test_registration_admits_the_documented_off_convention_wrong_shape_
+    residual`'s four cases red, because that widening admits `_ORPHAN_CASES`
+    too. This cell's on-convention case, `_T9999_NEW_SHAPES`, stays green
+    under all four widenings, matching what `_T1_CONTAINER_NAME_PATTERN` is
+    stated to admit as shipped."""
+    assert bool(_T1_CONTAINER_NAME_PATTERN.match(name)) == on_convention
