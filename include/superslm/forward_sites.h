@@ -205,8 +205,12 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // convention here, NOT its own "accumulate across a sequence" convention --
 // this parameter has no accumulation semantics of its own; `ResidualReconcileSite`
 // below is the one caller and it checks this flag per element, immediately).
-// Defaults to `nullptr`: every existing call (there are none yet outside this
-// pass) compiles unchanged and nothing is read or written.
+// Defaults to `nullptr`: every existing call -- none of which passes this new
+// parameter yet -- compiles unchanged and nothing is read or written through
+// it. (Corrected 2026-07-31, Poirot Minor 1: this comment previously claimed
+// "there are none yet outside this pass", which is false -- existing calls
+// are at forward_sites.cpp:807,810 and roughly twenty in tests/test_main.cpp;
+// the true claim is narrower, that none of them passes this parameter.)
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
                         int64_t e_t, uint64_t* out_saturation_count = nullptr,
                         bool* out_magnitude_exceeded_int64 = nullptr);

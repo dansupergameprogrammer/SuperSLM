@@ -306,7 +306,14 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 		}
 		raw = static_cast<int64_t>(shifted.lo);
 	}
-	if (negative) raw = -raw;
+	// T-1382 (Poirot, `5af6ab5-t1377-t1378-review-2026-07-31.md`, Significant 3):
+	// `raw` may be exactly INT64_MIN here -- reached one call level up on a
+	// fully load-legal witness (branch_code=-2, m_a=2^30, r_t=2^32, e_a=62,
+	// e_t=0) -- and `-raw` on INT64_MIN is signed-integer-overflow UB, not a
+	// wrap the standard promises. Negating in `uint64_t` and casting back is
+	// well-defined (C++20 mandates two's-complement conversion, P0907R4) and
+	// produces the identical bit pattern a wrapping negation would.
+	if (negative) raw = static_cast<int64_t>(0u - static_cast<uint64_t>(raw));
 
 	// T-518 / D-SLM201 option 2, §8.2: the predicated-increment half. The
 	// clamp comparison the caller's own `clamp(LandingRescale(...), -127, 127)`
@@ -582,13 +589,25 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 		const int64_t reconciled = LandingRescale(
 		    static_cast<int64_t>(branch_code[i]), branch_scale.m, r_h, branch_scale.e,
 		    stream_scale.e, /*out_saturation_count=*/nullptr, &magnitude_exceeded);
-		any_magnitude_out_of_domain = any_magnitude_out_of_domain || magnitude_exceeded;
+		if (magnitude_exceeded) {
+			// T-1382 (Poirot, `5af6ab5-t1377-t1378-review-2026-07-31.md`,
+			// Significant 3): the row is rejected below regardless, so
+			// `wide[i]` is never read -- but `reconciled` is a value this
+			// call has already declared does not fit int64, and adding to it
+			// is not a computation this site is entitled to perform (the
+			// prior "no observable effect" comment was true only in the
+			// sense that `wide` is discarded, not in the sense that the add
+			// itself is well-defined). The loop still runs every index,
+			// matching the funnel's own step-5-before-step-6 ordering (the
+			// check governs write-out, not loop completion) -- it just does
+			// not compute on an element it has already flagged.
+			any_magnitude_out_of_domain = true;
+			continue;
+		}
 		// Step 3: the wide add, both operands now nominally at the stream's
-		// own scale. Computed even on a flagged element (matching the
-		// funnel's own step-5-before-step-6 ordering: the check governs
-		// whether the row's WRITE-OUT proceeds, not whether the loop itself
-		// runs to completion) -- `wide` is a local buffer never exposed to
-		// the caller, so this has no observable effect when rejected below.
+		// own scale -- only reached for an element this call has NOT
+		// flagged. `wide` is a local buffer never exposed to the caller
+		// regardless of which branch runs.
 		wide[i] = reconciled + static_cast<int64_t>(stream_code[i]);
 	}
 	if (any_magnitude_out_of_domain) {
