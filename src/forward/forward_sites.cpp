@@ -978,48 +978,200 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	return SslmForwardStatus::Ok;
 }
 
-// STUB (T-1389): declared and stubbed by the test-design pass authoring the
-// S3.6 red suite (Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-
-// design-2026-07-31.md), following this file's own established
-// declare-and-stub sequence (RopeApplySite/MlpActSite/ResidualReconcileSite,
-// D-SLM384/385/386, T-1345). Returns WorkspaceTooSmall unconditionally -- a
-// status neither of this site's real outcomes (Ok, LogitNarrowingOverflow)
-// ever is -- and calls nothing, reads nothing, writes nothing to
-// `out_logits`. The build seat replaces this body with the real two-step
-// composition the header's own doc comment states.
-SslmForwardStatus LogitsSite(const int8_t* /*final_codes*/, size_t /*hidden_size*/,
-                              const int8_t* /*head_weights*/, size_t /*vocab_size*/,
-                              int64_t* /*wide_logits*/, int32_t* /*out_logits*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;
+// Master plan §6.4 steps 14-15's real two-step composition (T-1389; built
+// against Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-
+// 2026-07-31.md's red suite, replacing the WorkspaceTooSmall stub the
+// test-design pass landed): the real GEMM into the caller-owned wide row,
+// then the funnel's second entry point, which performs C35's own domain
+// check and narrows only once every element has been individually proven to
+// fit int32 (checked_chain_funnel.h). Neither step is reordered, and no
+// third step is inserted -- `out_logits` is exactly `NarrowRowChecked`'s own
+// output, never independently touched by this function.
+SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
+                              const int8_t* head_weights, size_t vocab_size,
+                              int64_t* wide_logits, int32_t* out_logits) {
+	GemmInt8AccumulateRow(final_codes, head_weights, hidden_size, vocab_size, wide_logits);
+	return NarrowRowChecked(wide_logits, vocab_size, out_logits);
 }
 
-// STUB (T-1389): C16's tie-break has no status to return (a pure caller-
-// ensures value function, matching FloorDivI64/ShiftByMax's own shape), so
-// the stub instead returns -1 -- never a valid `[0, n)` index for any n >= 1,
-// so any cell asserting a specific in-range token id fails loudly rather
-// than silently matching by chance. Reads nothing from `logits`.
-int32_t ArgmaxLowestIndexTieBreak(const int32_t* /*logits*/, size_t /*n*/) {
-	return -1;
+// C16's pinned tie-break (master plan §6.8 row C16, D-SLM35, T-1389): scans
+// left to right and keeps the running maximum's FIRST index -- a later
+// element strictly greater replaces it; a later element merely EQUAL to the
+// running maximum never does, which is what makes this lowest-index rather
+// than last-write-wins. Caller-ensures `n >= 1` (this file's existing
+// caller-ensures convention, matching FloorDivI64/ShiftByMax's own shape): a
+// conformant artifact's `vocab_size` is load-time rejected at 0, so no
+// production call ever passes `n == 0`.
+int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {
+	int32_t best_index = 0;
+	int32_t best_value = logits[0];
+	for (size_t i = 1; i < n; ++i) {
+		if (logits[i] > best_value) {
+			best_value = logits[i];
+			best_index = static_cast<int32_t>(i);
+		}
+	}
+	return best_index;
 }
 
-// STUB (T-1389): same convention as LogitsSite above -- WorkspaceTooSmall
-// unconditionally, none of `seq`/`out_tokens`/`out_logit_rows`/
-// `*out_tokens_produced`/`*out_stop_reason` touched. The build seat replaces
-// this body with the real prefill-then-repeat composition the header's own
-// doc comment states.
+// §9.1's real prefill-then-repeat composition (T-1389; built against
+// Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md's
+// red suite, replacing the WorkspaceTooSmall stub the test-design pass
+// landed).
+//
+// Every host-supplied id is validated FIRST, in two whole passes with no
+// embedding or state mutation in between -- every stop id, then every prompt
+// token id, both against `[0, vocab_size)`, both before `seq` or any output
+// parameter is touched at all. This is what makes "a bad prompt id past a
+// good prefix still leaves everything untouched" true: a partial, already-
+// valid prefix of `prompt_tokens` is never embedded before a later bad id in
+// the same array is discovered, because no id is embedded until every id in
+// both arrays has already been proven in range.
+//
+// Once every id validates, one whole token -- embed it fresh (§9.3: a fresh
+// token resets the layer-position marker to 0 and the residual becomes this
+// token's own embed output), then run every layer -- is the one composition
+// both the prefill loop and the generation loop below share. Prefill runs it
+// for every prompt token EXCEPT the last; the generation loop's own first
+// iteration runs it for the last prompt token, which is exactly §9.1's own
+// text: "embed the last produced (OR LAST PROMPT) token." Neither prefill's
+// own calls, nor the generation loop's whole-token step, differ in this
+// composition -- only the generation loop additionally runs final_norm,
+// LogitsSite, and the tie-break afterward, because only a PRODUCED token
+// needs a logit row computed for it.
+//
+// Every produced token and logit row is accumulated in LOCAL storage, never
+// written through `out_tokens`/`out_logit_rows` directly, and `seq` is
+// mutated only through calls whose own atomic-layer contract already governs
+// what a mid-call rejection leaves behind (RunLayerLoop, §11 S3.5). The
+// caller's own output parameters are committed -- `out_tokens`,
+// `out_logit_rows`, `*out_tokens_produced`, `*out_stop_reason` -- only once a
+// stop condition is actually reached with no internal call ever returning
+// anything but Ok; any rejection along the way returns immediately, before
+// that commit, leaving every one of the four exactly as the caller passed it
+// in.
 SslmForwardStatus RunGreedyDecodeLoop(
-    SequenceLayerState& /*seq*/, const LayerWeights* /*layers*/, uint32_t /*num_hidden_layers*/,
-    size_t /*hidden_size*/, size_t /*head_dim*/, size_t /*intermediate_size*/,
-    int64_t /*context_cap*/, const SslmTensorManifest& /*rope_tables*/,
-    const int32_t* /*prompt_tokens*/, size_t /*prompt_len*/,
-    const int8_t* /*embed_weights*/, CarriedScale /*embed_site_constant*/,
-    const int32_t* /*final_norm_gain*/, CarriedScale /*final_norm_site_constant*/,
-    const int8_t* /*head_weights*/, int32_t /*vocab_size*/,
-    const int32_t* /*stop_ids*/, size_t /*stop_count*/, size_t /*max_new_tokens*/,
-    uint8_t* /*workspace*/, size_t /*workspace_size*/,
-    int32_t* /*out_tokens*/, int32_t* /*out_logit_rows*/, size_t /*out_tokens_capacity*/,
-    size_t* /*out_tokens_produced*/, SslmDecodeStopReason* /*out_stop_reason*/) {
-	return SslmForwardStatus::WorkspaceTooSmall;
+    SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
+    size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
+    const SslmTensorManifest& rope_tables, const int32_t* prompt_tokens, size_t prompt_len,
+    const int8_t* embed_weights, CarriedScale embed_site_constant, const int32_t* final_norm_gain,
+    CarriedScale final_norm_site_constant, const int8_t* head_weights, int32_t vocab_size,
+    const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens, uint8_t* workspace,
+    size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows,
+    size_t out_tokens_capacity, size_t* out_tokens_produced,
+    SslmDecodeStopReason* out_stop_reason) {
+	// Caller-ensures `out_tokens_capacity >= max_new_tokens` (header comment,
+	// forward_sites.h) -- a workspace-sizing question this call does not
+	// scope, matching this file's existing caller-ensures convention for
+	// buffer sizes throughout (not runtime-checked, like GemmInt8AccumulateRow's
+	// own `out_acc` sizing).
+	(void)out_tokens_capacity;
+
+	// §9.1: every stop id validated against [0, vocab_size) BEFORE the loop
+	// starts -- checked here, ahead of every prompt token, so neither array
+	// can leave any partial state on a rejection from the other.
+	for (size_t i = 0; i < stop_count; ++i) {
+		if (stop_ids[i] < 0 || stop_ids[i] >= vocab_size) {
+			return SslmForwardStatus::TokenIdOutOfRange;
+		}
+	}
+	// Every prompt token id validated too, in encounter order -- a pure
+	// bounds pass, still touching neither `seq` nor any output.
+	for (size_t i = 0; i < prompt_len; ++i) {
+		if (prompt_tokens[i] < 0 || prompt_tokens[i] >= vocab_size) {
+			return SslmForwardStatus::TokenIdOutOfRange;
+		}
+	}
+	// Caller-ensures `prompt_len >= 1` (this file's existing caller-ensures
+	// convention for an unstated domain precondition, matching
+	// ArgmaxLowestIndexTieBreak's own `n >= 1`): "the last prompt token",
+	// below, presupposes one exists.
+
+	std::vector<int8_t> embed_codes(hidden_size);
+	std::vector<int8_t> final_codes(hidden_size);
+	const size_t vocab_size_z = static_cast<size_t>(vocab_size);
+	std::vector<int64_t> wide_logits(vocab_size_z);
+	std::vector<int32_t> logit_row(vocab_size_z);
+	CarriedScale embed_scale{};
+
+	// One whole token: embed it fresh, then run every layer. Shared by both
+	// the prefill loop and the generation loop's own first act.
+	auto RunWholeToken = [&](int32_t token) -> SslmForwardStatus {
+		const SslmForwardStatus est = EmbedEntry(token, vocab_size, embed_weights, hidden_size,
+		                                          embed_site_constant, embed_codes.data(),
+		                                          &embed_scale);
+		if (est != SslmForwardStatus::Ok) return est;
+		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = embed_codes[i];
+		seq.hidden_scale = embed_scale;
+		seq.layer_index = 0;
+		return RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
+		                     hidden_size, head_dim, intermediate_size, context_cap, rope_tables,
+		                     workspace, workspace_size);
+	};
+
+	// Prefill: every prompt token except the last (the last is folded into
+	// the generation loop's own first iteration below).
+	for (size_t i = 0; i + 1 < prompt_len; ++i) {
+		const SslmForwardStatus st = RunWholeToken(prompt_tokens[i]);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+
+	std::vector<int32_t> produced_tokens;
+	std::vector<int32_t> produced_logit_rows;
+	produced_tokens.reserve(max_new_tokens);
+	produced_logit_rows.reserve(max_new_tokens * vocab_size_z);
+
+	int32_t current_token = prompt_tokens[prompt_len - 1];
+	SslmDecodeStopReason stop_reason = SslmDecodeStopReason::MaxTokensReached;
+
+	while (produced_tokens.size() < max_new_tokens) {
+		SslmForwardStatus st = RunWholeToken(current_token);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		CarriedScale final_scale{};
+		st = RmsNormSite(seq.hidden_codes, final_norm_gain, hidden_size, seq.hidden_scale,
+		                  final_norm_site_constant, final_codes.data(), &final_scale,
+		                  "final_norm");
+		if (st != SslmForwardStatus::Ok) return st;
+
+		st = LogitsSite(final_codes.data(), hidden_size, head_weights, vocab_size,
+		                wide_logits.data(), logit_row.data());
+		if (st != SslmForwardStatus::Ok) return st;
+
+		const int32_t token = ArgmaxLowestIndexTieBreak(logit_row.data(), vocab_size_z);
+
+		// §9.1: the produced token is appended BEFORE the stop-id test, so a
+		// matched stop token is present in the output and in both digests.
+		produced_tokens.push_back(token);
+		produced_logit_rows.insert(produced_logit_rows.end(), logit_row.begin(), logit_row.end());
+
+		bool matched = false;
+		for (size_t i = 0; i < stop_count; ++i) {
+			if (stop_ids[i] == token) {
+				matched = true;
+				break;
+			}
+		}
+		if (matched) {
+			stop_reason = SslmDecodeStopReason::StopTokenMatched;
+			break;
+		}
+		if (produced_tokens.size() >= max_new_tokens) {
+			stop_reason = SslmDecodeStopReason::MaxTokensReached;
+			break;
+		}
+		current_token = token;
+	}
+
+	// The commit: every internal call above returned Ok, so the caller's own
+	// output buffers are touched now, for the first time.
+	for (size_t i = 0; i < produced_tokens.size(); ++i) out_tokens[i] = produced_tokens[i];
+	for (size_t i = 0; i < produced_logit_rows.size(); ++i) {
+		out_logit_rows[i] = produced_logit_rows[i];
+	}
+	*out_tokens_produced = produced_tokens.size();
+	*out_stop_reason = stop_reason;
+	return SslmForwardStatus::Ok;
 }
 
 }  // namespace superslm
