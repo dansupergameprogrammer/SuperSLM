@@ -5648,7 +5648,8 @@ static int RunCrashProbe(const std::string& name) {
 		}
 		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
 		std::printf("crash-probe rope_apply_site_null_cos_tensor_deref: calling RopeApplySite against "
-		            "a loaded, zero-tensor ROP1 manifest (Tensor(\"cos\") == nullptr) -- Critical 1, "
+		            "a loaded, zero-tensor ROP1 manifest (Tensor(\"cos\") == nullptr) -- Critical 1 "
+		            "(closed; see the comment above this probe), "
 		            "src/forward/forward_sites.cpp:329-330,342-343\n");
 		std::fflush(stdout);
 		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -5708,8 +5709,8 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
 		std::printf("crash-probe rope_apply_site_position_far_past_tensor_extent: calling "
 		            "RopeApplySite(head_dim=8, position=268435456, context_cap=2147483647) against a "
-		            "real, loaded 1-row ROP1 tensor -- Critical 2, src/forward/forward_sites.cpp:"
-		            "316-343\n");
+		            "real, loaded 1-row ROP1 tensor -- Critical 2 (closed; see the comment above this "
+		            "probe), src/forward/forward_sites.cpp:316-343\n");
 		std::fflush(stdout);
 		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 		int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -11676,8 +11677,9 @@ static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
 
 // ---------------------------------------------------------------------------
 // Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md -- the
-// remediation red suite for Critical 1, Critical 2, and Significant 5. The
-// C32 kernel-half pin (Significant 3) lives above, in the C32 red suite
+// remediation red suite for Critical 1, Critical 2, and Significant 5, all
+// closed (see each cell's own comment below for its confirmation citation).
+// The C32 kernel-half pin (Significant 3) lives above, in the C32 red suite
 // section, next to its own gate-half siblings.
 // Claude/Curie/fa3189a-s3.3-rope-site-and-c32-softmax-remediation-test-design-
 // 2026-07-28.md.
@@ -11696,7 +11698,8 @@ static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNu
 	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
 	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
 	          "RopeApplySite against a loaded ROP1 manifest carrying no \"cos\"/\"sin\" tensor must "
-	          "return a defined status, not fault the process (Critical 1) -- a null Tensor(\"cos\")/"
+	          "return a defined status, not fault the process (Critical 1, closed; see the comment "
+	          "above this function) -- a null Tensor(\"cos\")/"
 	          "Tensor(\"sin\") is a real, reachable load-time outcome (SslmTensorManifest::Tensor "
 	          "returns nullptr for an absent name, model.h:206-207) -- outcome was %s, child output "
 	          "was: %s",
@@ -11731,7 +11734,8 @@ static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingU
 	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
 	          "RopeApplySite at a position the caller-supplied context_cap admits, but the loaded ROP1 "
 	          "tensor's own row count does not, must return a defined status, not fault the process "
-	          "(Critical 2) -- outcome was %s, child output was: %s",
+	          "(Critical 2, closed; see the comment above this function) -- outcome was %s, child "
+	          "output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
 	if (outcome != CrashProbeOutcome::kRanNoCrash) return;
 	// Significant B: the exact status, not merely "did not fault" -- see the sibling cell
@@ -11799,7 +11803,8 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 	if (!view.has_rope_tables) return;
 
 	// context_cap decoupled from the tensor's real row count (1) -- exactly the join
-	// the loader does not make (Critical 2's own text).
+	// the loader does not make (Critical 2's own text, closed; see the section
+	// comment above TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull).
 	const int64_t context_cap = 2;
 	const int64_t position = 1;  // < context_cap, but one row past the tensor's real extent
 
@@ -12565,8 +12570,9 @@ static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	          "ResidualReconcileSite status == %s at the negative-k witness, want "
 	          "ResidualReconciliationMagnitudeOutOfDomain -- an executed revert of both negative-k "
 	          "assignments in LandingRescale returns Ok with out_codes[0]==0 at these exact "
-	          "operands instead (Poirot Significant 1), which is the clause's own stated negative "
-	          "control this cell must catch",
+	          "operands instead (Poirot Significant 1, closed: LandingRescale's shipped negative-k "
+	          "assignments are exactly what this cell's positive assertion above confirms are in "
+	          "place), which is the clause's own stated negative control this cell must catch",
 	          SslmForwardStatusName(result));
 	CHECK_MSG(out_codes[0] == INT8_C(-99),
 	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched -- the unguarded "
@@ -13196,15 +13202,15 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	          "(the layer-position marker is part of the sequence's own untouched state)");
 }
 
-// Significant 6 (Poirot e4b398c review): the SAME livelock the budget=0 cell
-// above pins also arises when `seq.layer_index` is already at
-// `num_hidden_layers` -- this token's sequence already ran to completion --
-// even though the budget itself is legal. Two witnesses: an ordinary
-// mid-run token with two layers already consumed, and `num_hidden_layers ==
-// 0` (a degenerate config that makes `layer_index >= num_hidden_layers`
-// trivially true at `layer_index == 0`, the one value every fresh sequence
-// starts at). Both must be rejected rather than silently returning `Ok`
-// having advanced nothing.
+// Significant 6 (Poirot e4b398c review), closed by the cell below: the SAME
+// livelock the budget=0 cell above pins also arises when `seq.layer_index`
+// is already at `num_hidden_layers` -- this token's sequence already ran to
+// completion -- even though the budget itself is legal. Two witnesses: an
+// ordinary mid-run token with two layers already consumed, and
+// `num_hidden_layers == 0` (a degenerate config that makes `layer_index >=
+// num_hidden_layers` trivially true at `layer_index == 0`, the one value
+// every fresh sequence starts at). Both must be rejected rather than
+// silently returning `Ok` having advanced nothing.
 static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
@@ -13267,12 +13273,12 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 	}
 }
 
-// Significant 1 (Poirot e4b398c review): a CFG1 geometry mismatch --
-// `hidden_size` not an exact multiple of `head_dim`, or `head_dim == 0` --
-// must be reported as `HeadDimGeometryMismatch`, not `WorkspaceTooSmall`. A
-// host that receives `WorkspaceTooSmall` for a geometry fact enlarges its
-// buffer forever against a size no buffer satisfies. Two witnesses: a
-// non-dividing pair, and `head_dim == 0` itself.
+// Significant 1 (Poirot e4b398c review), closed by the cell below: a CFG1
+// geometry mismatch -- `hidden_size` not an exact multiple of `head_dim`, or
+// `head_dim == 0` -- must be reported as `HeadDimGeometryMismatch`, not
+// `WorkspaceTooSmall`. A host that receives `WorkspaceTooSmall` for a
+// geometry fact enlarges its buffer forever against a size no buffer
+// satisfies. Two witnesses: a non-dividing pair, and `head_dim == 0` itself.
 static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
@@ -14007,8 +14013,9 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 	}
 }
 
-// Significant 8 (Poirot e4b398c review, mutation M6): §6.2 step 4 -- "K is
-// cached post-rotation; V is cached unrotated" -- was pinned by NO cell:
+// Significant 8 (Poirot e4b398c review, mutation M6), closed by this cell:
+// §6.2 step 4 -- "K is cached post-rotation; V is cached unrotated" -- was
+// pinned by NO cell before this one existed:
 // every RunLayerLoop fixture in this suite, including the two immediately
 // above, drives an IDENTITY RoPE table (cos=1, sin=0), so the post-rotation
 // writeback (`for (i...) k_store[i] = k_rot[i]`) changes nothing whether it
@@ -15390,7 +15397,7 @@ int main(int argc, char** argv) {
 	TestCheckSoftmaxRowWidthDomainRejectsZeroWidth();
 
 	// D-SLM497 (Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-
-	// confirmation-2026-07-31.md Significant 1).
+	// confirmation-2026-07-31.md Significant 1, closed).
 	TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing();
 
 	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
