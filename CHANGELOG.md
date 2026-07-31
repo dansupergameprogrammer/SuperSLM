@@ -83,20 +83,32 @@ missing assertion (S-HARDEN-4, F2); provenance verification for vendored referen
 files (S-HARDEN-5, `tests/reference/check_provenance.py`); the cross-toolchain/
 cross-optimization axis-digest harness (S-HARDEN-6, `tools/ci/sslm_axis_digest.cpp`);
 a `std::bad_alloc`-only fault-injection contract across every allocating entry
-point (S-HARDEN-7, F5); and per-file branch-coverage floors (S-HARDEN-8, F12,
+point (S-HARDEN-7, F5; the last of its nineteen-member derived population,
+`proof_manifest.h`'s `JsonEscape`, was wrapped at T-1475 -- confirmed by
+`tools/ci/check_bad_alloc_contract.py --list-unwrapped` exiting 0); and
+per-file branch-coverage floors (S-HARDEN-8, F12,
 `tools/ci/check_branch_coverage_floors.py`).
 
-This campaign's own CI verification is incomplete, not because any suite is known
-red, but because most of it has never run in the repository's own Actions
-workflow: `.github/workflows/tests.yml`'s job history shows the last successful
-run was 2026-07-23T19:03:55Z (commit `4071828`), and every job added or widened
-after that commit -- which includes most of S-HARDEN-3 through -8 -- has never
+This campaign's own CI verification is incomplete, both because most of it has
+never run in the repository's own Actions workflow, and because the
+bad-alloc-membership-check job was itself red until this commit range: its
+membership-derivation script pinned `-std=c++17` against a C++20 codebase and
+could not parse the tree at all once `trace_hook.h` started using `std::span`
+(T-1476), which is what masked the unwrapped `JsonEscape` above (T-1475).
+`.github/workflows/tests.yml`'s job history shows the last successful run was
+2026-07-23T19:03:55Z (commit `4071828`), and every job added or widened after
+that commit -- which includes most of S-HARDEN-3 through -8 -- has never
 started (Actions billing limit; see the workflow's own forward-leaf-check job
 comment). Suite counts are therefore not restated here per phase: a number
-measured only by local, partial execution (no `clang++` on the measuring machine
-for several suites) would misrepresent itself as the "green on the full CI
-matrix" figures S0/S1 above earned honestly. What has been proven true by local
+measured only by local, partial execution (no `clang++` on PATH on the
+measuring machine for several suites -- a clang 18.1.8 toolchain is installed
+there and reached by setting `SUPERSLM_CLANGXX`, D-SLM522) would misrepresent
+itself as the "green on the full CI matrix" figures S0/S1 above earned
+honestly. What has been proven true by local
 execution as of this entry: `python -m pytest tools/ tests/reference/` (69/69)
 and `python -m pytest tests/ci/` (79 non-clang-gated cells) both green against a
-freshly built `sslm_verify`; the S2.1 exhaustive certifier passes over its full
+freshly built `sslm_verify`; with `SUPERSLM_CLANGXX` pointed at the local
+clang 18.1.8 install, all 111 of `tests/ci`'s cells run (the 32 that
+previously skipped for want of a discoverable clang++ included) and pass, as
+of T-1475/T-1476; the S2.1 exhaustive certifier passes over its full
 2^30 + 2^31-input domain on this tier.

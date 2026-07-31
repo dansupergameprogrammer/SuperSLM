@@ -9,13 +9,21 @@
 
 namespace superslm {
 
+namespace {
+
 // JSON string escaping -- the manifest carries tensor and section names, which
 // are UTF-8 but otherwise untrusted; escape the ASCII control set and the two
 // structural characters so the emitted document is valid JSON regardless of
 // what a hostile-but-Load-accepted name contains. Declared in the header (not
 // file-local) so tools/sslm_verify.cpp's hand-assembled REJECTED-path
-// manifests route through this one implementation too (T-1449).
-std::string JsonEscape(std::string_view s) {
+// manifests route through this one implementation too (T-1449). Renamed to
+// *Impl and wrapped below (S-HARDEN-7, F5, T-1475) -- promoting it out of
+// this anonymous namespace into the header made it a member of the "throws
+// only std::bad_alloc" contract's derived population (it allocates via
+// `out.reserve`/`out +=`), so it follows the same rename-and-wrap shape as
+// every other member in this file.
+std::string JsonEscapeImpl(std::string_view s) {
+	internal::MaybeThrowInjectedBadAllocFault();
 	std::string out;
 	out.reserve(s.size() + 2);
 	for (unsigned char c : s) {
@@ -36,6 +44,15 @@ std::string JsonEscape(std::string_view s) {
 		}
 	}
 	return out;
+}
+
+}  // namespace
+
+// S-HARDEN-7: wraps JsonEscapeImpl above with the shared catch-and-rethrow
+// helper (src/bad_alloc_wrap.h), matching every other member of this file's
+// derived population (T-1475).
+std::string JsonEscape(std::string_view s) {
+	return internal::WrapBadAllocContract([&] { return JsonEscapeImpl(s); });
 }
 
 namespace {

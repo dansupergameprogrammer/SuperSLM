@@ -66,12 +66,23 @@ def _keyset(pop: list[dict]) -> set[tuple[str, int, str]]:
 
 
 @requires_clang
-def test_pinned_oracle_has_eighteen_sites():
+def test_pinned_oracle_has_nineteen_sites():
+    """T-1475: proof_manifest.h's JsonEscape was promoted out of its
+    anonymous namespace and into the header (T-1449), making it the
+    membership rule's 19th derived member -- confirmed by executing the
+    corrected rule (see derive_bad_alloc_membership.py's -std=c++20 fix,
+    T-1476) against the real headers on disk, not asserted. Design Sec3.1's
+    table itself (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_Design-
+    2026-07-23.md) still states eighteen as of this change and is owed a
+    matching amendment outside this suite's writable surface; this pin
+    tracks the mechanically-derived population, which is the number this
+    gate and the oracle file must agree on."""
     oracle = _load_pinned_oracle()
-    assert len(oracle) == 18, (
-        f"design Sec3.1's table states exactly eighteen sites; the pinned oracle "
+    assert len(oracle) == 19, (
+        f"the pinned oracle should carry the nineteen sites the corrected rule "
+        f"derives as of T-1475 (JsonEscape's promotion into proof_manifest.h); "
         f"has {len(oracle)} -- regenerate tests/ci/bad_alloc_membership_expected.txt "
-        f"only after confirming the design's own table changed, never silently"
+        f"only after confirming the population change is deliberate, never silently"
     )
 
 

@@ -46,6 +46,9 @@ namespace superslm {
 // every JSON-emitting call site -- BuildProofManifestJson's own fields and
 // tools/sslm_verify.cpp's hand-assembled REJECTED-path manifests alike --
 // routes through the one implementation instead of a second, unescaped one.
+// Throws only std::bad_alloc (S-HARDEN-7, F5; wrapped T-1475 -- being
+// declared here, rather than file-local, makes it a member of the "throws
+// only std::bad_alloc" contract's derived population).
 std::string JsonEscape(std::string_view s);
 
 // The config x tensor-shape geometry cross-check (§17.3 cell 4). Operates on raw

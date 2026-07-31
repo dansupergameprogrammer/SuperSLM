@@ -366,7 +366,17 @@ void SectionIExp() {
 					// `con` is digested unconditionally, refused or not. This population DOES
 					// contain refused triples (the F21-strike quadruple q=0, q_ln2=887904998,
 					// q_b=1733160715, q_c=INT64_MAX among them, per the header's own documented
-					// example) -- but a refused construction does NOT digest as (0, 0):
+					// example) -- but of `IExpDomain`'s four outcomes, only `kNotRepresentable`
+					// is reachable by this sweep, and only `kNotRepresentable` leaves `con`
+					// populated the way this comment relies on. The other three (`kBadQ`,
+					// `kBadQLn2`, `kBadQB`) all return BEFORE `out` is written and would digest
+					// as (0, 0) if they fired here -- they cannot, for this population
+					// specifically: `kBadQ` needs `q > 0`, excluded by this loop's own
+					// `if (q > 0) continue;` above; `kBadQLn2` needs `q_ln2` outside
+					// `[1, INT64_MAX / I_EXP_CLIP_N]`, and every `kQln2` entry is within it;
+					// `kBadQB` needs `q_b < INT64_MIN - q_p`, and every `kQb` entry is `>= 0`
+					// with `q_p <= 0` here, so that arm cannot fire. For the triples this sweep
+					// actually forms, a refused construction does NOT digest as (0, 0):
 					// IExpConstruct populates `con.z()`/`con.base()` with the formed z/base
 					// BEFORE the representability judgement runs (intmath.cpp's own ordering),
 					// so `con`'s digested bytes are identical whether or not the construction is
@@ -374,7 +384,10 @@ void SectionIExp() {
 					// identity with the legacy IExpShift/IExpBase arm holds: both arms form and
 					// digest the same z/base regardless of refusal, and only the OPTIONAL third
 					// value -- IExpFromConstants/IExpEvaluate, gated on `in_domain` above -- is
-					// ever skipped for a refused triple, identically in both arms.
+					// ever skipped for a refused triple, identically in both arms. (T-1480: a
+					// future edit widening `kQln2`/`kQb` to include a `kBadQLn2`/`kBadQB`-firing
+					// value would silently move this digest; the load-bearing facts above live
+					// only in the array literals near the top of this loop.)
 					//
 					// S-HARDEN-0 also split the value out of the single-call form, so the
 					// evaluation moved inside this arm: `IExpEvaluate` takes the construction

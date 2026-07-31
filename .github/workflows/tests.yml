@@ -271,10 +271,14 @@ jobs:
   # percentages" -- has never happened. Until it does, the checker fails
   # cleanly with a diagnostic naming the missing file and the `--record-floors`
   # remedy (design Sec4.3 step 1) rather than crashing; that failure is this
-  # job's honest, expected first result, not a defect in the gate. Recording
-  # the floors requires a real llvm-cov run (clang++-18) this build could not
-  # produce on the available machine -- inventing the numbers is prohibited
-  # (StandardsDocument.md Sec5.4). A per-branch allowlist
+  # job's honest, expected first result, not a defect in the gate. The floors
+  # are defined against THIS job's own clang-18 / Linux / RelWithDebInfo cell
+  # (D-SLM521): only a branch-coverage percentage measured in that exact
+  # configuration is a floor for it, so recording them requires a run of this
+  # job specifically -- a number measured in any other cell (a different OS,
+  # STL, or optimization level) would be an invented number wearing a
+  # measurement's authority, which Sec5.4 prohibits regardless of which
+  # machine measured it. A per-branch allowlist
   # (tools/ci/branch_coverage_allowlist.txt) exists for genuinely-unreachable
   # defensive code, each entry carrying its own reason.
   # RelWithDebInfo, not Release: assert()-gated contract checks stay live

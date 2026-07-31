@@ -231,7 +231,7 @@ def run_clang_ast_dump(source_path: str, include_dir: str = _INCLUDE_DIR,
     error in the source itself raises RuntimeError with clang's stderr."""
     cmd = [
         clangxx,
-        "-std=c++17",
+        "-std=c++20",
         "-D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH",
         "-I",
         include_dir,
