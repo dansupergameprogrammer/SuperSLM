@@ -1522,10 +1522,14 @@ def test_population_count_is_stated():
     container is non-empty, on-convention or off, which is symmetric and not
     a defect the "two edits" framing ever claimed to remove; see mutations
     Y1 and Y2 in Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md).
-    Both assertions are `_t1_check_population_registration`'s (T-1514), and
-    the T-1514 cells below pin this whole paragraph directly against
-    constructed namespaces rather than leaving it to be re-verified in prose
-    every round.
+    Both assertions are `_t1_check_population_registration`'s (T-1514); the
+    T-1514 cells below pin the two assertions' behaviour directly against
+    constructed namespaces, including the residual direction above -- a
+    name the pattern does not match, bound to a value the shape check does
+    not reach, is admitted by neither assertion (T-1517; mutations Q, R, S,
+    T; a widening of `_T1_CONTAINER_NAME_PATTERN` that starts admitting one
+    of those names turns the corresponding cell red) -- rather than leaving
+    any of it to be re-verified in prose every round.
     `further_sweep_total` is NOT derived -- it sums four literals for five
     documented one-off cases that were never stored in a container, so
     neither check above can see them: T-1381's `+ 1` string-literal control
@@ -1545,7 +1549,13 @@ def test_population_count_is_stated():
     20f11c1-dslm497-t1425-t1430-fold-confirmation-2026-07-31.md Minor 4;
     82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 2, Minor 3;
     2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1;
-    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1)."""
+    75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1). This
+    escape stays uncaught by design -- it is not a claim the two assertions
+    enforce -- but the T-1517 cell following `_t1_failing_assertion` below
+    pins its behaviour under `_T1_CONTAINER_NAME_PATTERN` as shipped, so a
+    widening of the pattern that starts admitting one of its fixture names
+    turns that cell red instead of leaving the escape's stability to be
+    re-verified in prose every round."""
     containers = _t1_check_population_registration(
         globals(), _T1_EXPECTED_CONTAINER_NAMES
     )
@@ -1573,8 +1583,12 @@ def test_population_count_is_stated():
 # 066319d-t1501-t1503-confirmation-2026-07-31.md, named in its own
 # docstring; `Claude/Brunel/t1514-t1515-build-2026-07-31.md` reconciles
 # every mutation in both battery tables (A-N, O, P, Q-T, W1-W5, X, O2, Y1,
-# Y2) against the cell that exercises it, including the residual rows (Q-T,
-# Y1, Y2) this contract does not pin, and states why. ---
+# Y2) against the cell that exercises it. `Claude/Brunel/t1517-t1518-build-
+# 2026-07-31.md` adds the four cells (Q, R, S, T) that close the residual
+# the first build left as prose only (Poirot
+# da69def-t1514-t1515-confirmation-2026-07-31.md Significant 1, T-1517);
+# Y1 and Y2 remain outside this contract, pinned instead by the
+# `total == 16` arithmetic assertion above, unchanged by either build. ---
 
 
 def _t1_failing_assertion(excinfo):
@@ -1714,3 +1728,43 @@ def test_registration_rejects_a_pinned_name_absent_from_the_namespace(pin_name, 
     with pytest.raises(AssertionError) as excinfo:
         _t1_check_population_registration(namespace, pin)
     assert _t1_failing_assertion(excinfo) == "shape-set"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], (), {}, {1: "x"}],
+    ids=[
+        "Q-off-convention-list",
+        "R-off-convention-tuple",
+        "S-off-convention-empty-dict",
+        "T-off-convention-int-keyed-dict",
+    ],
+)
+def test_registration_admits_the_documented_off_convention_wrong_shape_residual(value):
+    """Pins mutations Q, R, S, T (the file's own documented residual;
+    `Claude/Brunel/t1514-t1515-build-2026-07-31.md` "What was not
+    pinnable"; Poirot da69def-t1514-t1515-confirmation-2026-07-31.md
+    Significant 1, T-1517): a name that does not match
+    `_T1_CONTAINER_NAME_PATTERN` as shipped, bound to a value that is not a
+    non-empty `str`-keyed dict, is invisible to both assertions -- absent
+    from the shape-discovered set because of its shape, absent from the
+    name-matched set because of its name -- which is the residual
+    `test_population_count_is_stated`'s own docstring names and this cell
+    now pins directly rather than leaving it to be inferred from every
+    other cell's contrast.
+
+    This is the one direction in this file that exercises
+    `_T1_CONTAINER_NAME_PATTERN`'s admission side: every other cell here
+    supplies a name the pattern already matches, or a name it already
+    rejects and keeps rejecting. `_ORPHAN_CASES` is chosen because it does
+    not match the pattern as shipped but does match both a broad widening
+    (`^_[A-Z0-9_]*(CASES|SHAPES)$`) and a plausible convention extension
+    (adding a `_[A-Z]+_CASES` alternative) -- measured directly: widening
+    `_T1_CONTAINER_NAME_PATTERN` either way turns this cell red, because
+    the name then joins the name-matched set while remaining absent from
+    the pin; narrowing the pattern leaves it green, because this class was
+    never reached by shape. No cell before this one is sensitive to a
+    widening of the pattern in either direction."""
+    namespace = {"_ORPHAN_CASES": value}
+    pin = frozenset()
+    _t1_check_population_registration(namespace, pin)  # must not raise
