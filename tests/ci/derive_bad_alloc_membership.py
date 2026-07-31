@@ -96,10 +96,18 @@ _FUNC_KINDS = {
 
 _VECTOR_RETURN_RE = re.compile(r"^std::vector<.*>$")
 
+# Wall-clock budget for a single clang++ -ast-dump=json invocation. T-1508:
+# named as a constant rather than a repeated literal so run_clang_ast_dump's
+# timeout message always states the value it was actually run with.
+_AST_DUMP_TIMEOUT_SECONDS = 180
+
 
 class ClangUnavailable(RuntimeError):
-    """Raised when clang++ cannot run -Xclang -ast-dump=json at all -- the
-    environment problem, distinct from a genuine population mismatch."""
+    """Raised when clang++ itself cannot be found -- the environment
+    problem, distinct from a genuine population mismatch and distinct from a
+    found clang++ that failed to complete (T-1508: a toolchain that hangs
+    instead of exiting is not absent, and is raised as RuntimeError, not
+    this)."""
 
 
 def _strip(t: str) -> str:
@@ -238,9 +246,11 @@ def _dedup_sort(hits: list[dict]) -> list[dict]:
 def run_clang_ast_dump(source_path: str, include_dir: str = _INCLUDE_DIR,
                         clangxx: str = _DEFAULT_CLANGXX) -> dict:
     """Run `clangxx -Xclang -ast-dump=json` against `source_path` and return
-    the parsed JSON root. Raises ClangUnavailable if clang++ cannot be
-    invoked at all (missing binary, wrong flag support); a genuine parse
-    error in the source itself raises RuntimeError with clang's stderr."""
+    the parsed JSON root. Raises ClangUnavailable only if the clang++ binary
+    itself cannot be found; a genuine parse error, or a found clang++ that
+    times out without completing (T-1508 -- e.g. a major-version mismatch
+    hanging inside a standard-library header), raises RuntimeError with
+    detail on which it was."""
     cmd = [
         clangxx,
         "-std=c++20",
@@ -255,11 +265,21 @@ def run_clang_ast_dump(source_path: str, include_dir: str = _INCLUDE_DIR,
         source_path,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        proc = subprocess.run(cmd, capture_output=True, timeout=_AST_DUMP_TIMEOUT_SECONDS)
     except FileNotFoundError as e:
         raise ClangUnavailable(f"{clangxx} not found on PATH: {e}") from e
     except subprocess.TimeoutExpired as e:
-        raise ClangUnavailable(f"{clangxx} timed out dumping {source_path}") from e
+        # A found clang++ that hangs rather than exiting is not an absent
+        # toolchain (T-1508): classifying it as ClangUnavailable made a
+        # major-version mismatch that hangs inside MSVC's <xstring> under
+        # -D_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH indistinguishable from
+        # a machine with no clang++ at all, and the clang-gated cells would
+        # SKIP silently instead of failing.
+        raise RuntimeError(
+            f"{clangxx} timed out after {_AST_DUMP_TIMEOUT_SECONDS}s dumping "
+            f"{source_path} -- a toolchain that was found but did not "
+            "complete, not a missing one"
+        ) from e
     if proc.returncode != 0:
         raise RuntimeError(
             f"clang++ AST dump failed for {source_path} (exit {proc.returncode}):\n"

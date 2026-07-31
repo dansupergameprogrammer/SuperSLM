@@ -7496,15 +7496,29 @@ static void TestBadAllocContractToHex() {
 //     namespace and into the header, making it a derived member of the
 //     contract's population -- until this cell, that promotion had a wrap
 //     (WrapBadAllocContract) and a text-match production gate but no
-//     executed fault-injection cell of its own: deleting the wrap and
-//     leaving the JsonEscapeImpl( call in place would still pass
-//     tools/ci/check_bad_alloc_contract.py's regex, and did not fail this
-//     suite's own check count (23,115 at this commit and at its parent
-//     alike, before this cell). Also asserts the wrap's clause marker,
-//     which the other eighteen cells do not: JsonEscape's own public entry
-//     point wraps JsonEscapeImpl directly (one layer), so an injected
-//     std::length_error must take the general catch(const std::exception&)
-//     clause, unlike the nested call inside BuildProofManifestJsonImpl
+//     executed fault-injection cell of its own. tools/ci/
+//     check_bad_alloc_contract.py's _is_wrapped requires both the literal
+//     "WrapBadAllocContract" and a `JsonEscapeImpl(` call to appear anywhere
+//     in the definition's body -- it is a text match, not a structural one,
+//     so a body that still NAMES the helper (e.g. left behind in a comment)
+//     while no longer applying it reads as wrapped: exit 0, "OK -- every
+//     derived member is wrapped," on a genuinely unwrapped member. Deleting
+//     the wrap outright, as opposed to merely commenting it out, does not
+//     pass the gate -- removing "WrapBadAllocContract" from the body fails
+//     the first half of the same check, exit 1, naming JsonEscape -- so this
+//     cell's fault-injection is not what catches THAT mutation; it is what
+//     catches the gate's actual blind spot, a body that keeps the helper's
+//     name in scope (e.g. in a comment) without calling it, which the
+//     production gate reports OK on but this cell fails on both assertions.
+//     Did not fail this suite's own check count (23,115 at this commit and
+//     at its parent alike, before this cell). Also asserts the wrap's clause
+//     marker, which only one other cell in this file does --
+//     TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific
+//     (site 1/19, above) -- and here for a different reason: JsonEscape's
+//     own public entry point wraps JsonEscapeImpl directly (one layer), so
+//     an injected std::length_error must take the general
+//     catch(const std::exception&) clause, unlike the nested call inside
+//     BuildProofManifestJsonImpl
 //     (proof_manifest.cpp), where JsonEscape's own inner wrap already
 //     narrows to std::bad_alloc before the outer wrap's
 //     catch(const std::bad_alloc&){throw;} clause re-catches it -- a path
