@@ -356,7 +356,8 @@ def test_check_door_count_passes_when_the_scanned_file_matches_the_expected_set(
 
 @requires_clang
 def test_check_door_count_fails_when_a_second_door_appears():
-    """The mutation this guard exists to catch (Significant 9's own text): a
+    """The mutation this guard exists to catch (Significant 9, closed by
+    T-1357/D-SLM433 -- see `_EXPECTED_DOOR_FUNCTIONS`'s own comment above): a
     second door opened alongside CarriedScaleReciprocal must fail loudly rather
     than silently widen the set the funnel's own file is allowed to export."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1615,12 +1616,12 @@ def test_registration_admits_an_off_convention_container_present_in_the_pin():
     ids=["list", "tuple", "int-keyed-dict", "empty-dict"],
 )
 def test_registration_rejects_an_on_convention_container_of_the_wrong_shape(value):
-    """Pins mutations H, J, K, L (Poirot 066319d Significant 1; reproduced
-    unchanged in 03a9413's Execution evidence): an on-convention name --
-    matches `_T1_CONTAINER_NAME_PATTERN` -- bound to a value that is not a
-    non-empty `str`-keyed dict is invisible to shape-based discovery, so it
-    is absent from the pin and the name-set assertion fires -- not the
-    shape-set assertion, which is what closes the direction
+    """Pins mutations H, J, K, L (Poirot 066319d Significant 1, closed by
+    T-1501/T-1503; reproduced unchanged in 03a9413's Execution evidence): an
+    on-convention name -- matches `_T1_CONTAINER_NAME_PATTERN` -- bound to a
+    value that is not a non-empty `str`-keyed dict is invisible to shape-based
+    discovery, so it is absent from the pin and the name-set assertion fires
+    -- not the shape-set assertion, which is what closes the direction
     `_t1_new_shape_containers` cannot reach by construction."""
     namespace = {"_T9999_NEW_SHAPES": value}
     pin = frozenset()

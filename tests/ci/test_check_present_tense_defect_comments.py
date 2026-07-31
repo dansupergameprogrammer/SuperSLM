@@ -182,14 +182,22 @@ def test_a_multiline_python_docstring_is_joined_into_one_block():
 
 
 def test_a_multiline_python_docstring_with_no_marker_anywhere_is_still_flagged():
+    # The target docstring's `"""` delimiters are built from `_TQ` rather than
+    # written as a literal three-quote run: a literal run here would itself be
+    # an (uncited, marker-free) instance of this exact block shape in THIS
+    # module's own source, which this module's own default globs scan (a
+    # self-application collision T-1485's real-tree run hit once already; see
+    # test_a_marker_in_a_different_block_does_not_suppress_an_unrelated_
+    # citation's comment above).
+    _tq = '"' * 3
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
             tmp,
             "tests/site_test.py",
             'def test_something():\n'
-            '    """The mutation this guard exists to catch (Critical 1\'s own\n'
+            f"    {_tq}The mutation this guard exists to catch (Critical 1's own\n"
             '    text): a regression must fail loudly rather than pass\n'
-            '    silently."""\n'
+            f"    silently.{_tq}\n"
             "    assert True\n",
         )
         hits = cptdc.find_uncited_defect_citations(path)
