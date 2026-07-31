@@ -385,6 +385,95 @@ def test_a_resolution_marker_in_one_paragraph_of_a_multiline_string_does_not_cle
         )
 
 
+def test_two_adjacent_string_literals_with_no_blank_line_between_them_do_not_merge():
+    """T-1553 (Poirot d2a7eed-t1547-present-tense-confirmation-2026-07-31.md
+    Significant 1): `_python_multiline_string_lines` used to flatten every
+    literal's own line range into one undifferentiated `frozenset[int]`, so
+    `_iter_blocks` had no way to tell where one literal ended and the next
+    began -- two DISTINCT multi-line string literals with no blank line
+    between them read as a single block, and a resolution marker inside the
+    first silently satisfied an uncited citation inside the second. T-1545's
+    own f-string fix newly exposed this: an f-string's lines were not in the
+    pool at all before that fix, so an f-string immediately followed by a
+    plain multi-line string never had the chance to merge with it.
+
+    Primary construction, matching the review's own repro exactly: an
+    f-string carrying a closed "Significant 5" citation, immediately followed
+    (no blank line) by a plain multi-line string carrying an uncited
+    citation."""
+    _label = "Critical" + " 1"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/adjacent_fstring_then_plain_test.py",
+            'HEADER = f"""Significant 5 (closed; fixed 2026-07-01).\n'
+            "index of the remediation suite.\n"
+            '"""\n'
+            f'BODY = """{_label}: the guard does not exist and the kernel\n'
+            "reads unmapped heap memory on every call.\n"
+            '"""\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            f"an f-string's own closed 'Significant 5' citation must not silently satisfy "
+            f"the uncited {_label} citation in the immediately adjacent, distinct multi-line "
+            f"string, got {hits}"
+        )
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+        significant5_hit = any("Significant 5" in block_labels for _, _, block_labels in hits)
+        assert not significant5_hit, (
+            f"the f-string's own 'Significant 5 (closed; ...)' carries its own resolution "
+            f"marker in its own literal and must not be flagged, got {hits}"
+        )
+
+    # Control 1: the same adjacency shape with BOTH literals plain (no
+    # leading `f`) -- latent on this checker since before T-1545 too (the
+    # review confirmed it: neither 28aa351 nor d2a7eed caught it), because
+    # the flattening defect this fix removes applies to any two adjacent
+    # literals, not only ones involving an f-string. The general remedy
+    # (literal-identity-aware block boundaries) must close this too.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/adjacent_plain_then_plain_test.py",
+            'HEADER = """Significant 5 (closed; fixed 2026-07-01).\n'
+            "index of the remediation suite.\n"
+            '"""\n'
+            f'BODY = """{_label}: the guard does not exist and the kernel\n'
+            "reads unmapped heap memory on every call.\n"
+            '"""\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, (
+            f"two adjacent PLAIN multi-line strings with no blank line between them must not "
+            f"let the first's closed citation silently satisfy the second's uncited {_label}, "
+            f"got {hits}"
+        )
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+
+    # Control 2: the same two literals with a blank line between them --
+    # already caught before this fix (the blank line alone already breaks
+    # the block) and must remain caught after it.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "tests/blank_separated_literals_test.py",
+            'HEADER = """Significant 5 (closed; fixed 2026-07-01).\n'
+            "index of the remediation suite.\n"
+            '"""\n'
+            "\n"
+            f'BODY = """{_label}: the guard does not exist and the kernel\n'
+            "reads unmapped heap memory on every call.\n"
+            '"""\n',
+        )
+        hits = cptdc.find_uncited_defect_citations(path)
+        assert hits, f"the blank-line-separated pair must remain caught, got {hits}"
+        labels = {label for _, _, block_labels in hits for label in block_labels}
+        assert _label in labels, f"expected {_label} among the flagged labels, got {labels}"
+
+
 def test_a_py_file_tokenize_cannot_parse_is_reported_as_a_failure_not_treated_as_clean():
     """T-1538: a `.py` file this check cannot tokenize must not be silently
     scanned as clean (StandardsDocument Sec4) -- scan_files reports it as its

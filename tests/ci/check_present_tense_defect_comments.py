@@ -52,23 +52,27 @@ some of these same severity-label citations (as provenance on a fix, not as a li
 defect claim) and are deliberately outside this check's scope for that reason.
 
 KNOWN FALSE POSITIVE, NAMED RATHER THAN SUPPRESSED. A purely navigational section
-header that cites several severity labels as an index (no defect language at all,
-e.g. "the remediation red suite for Critical A, Critical B, and Significant C" --
-letter-suffixed here, per this codebase's own "Significant B"-style coverage-tag
-convention, `SEVERITY_LABEL_PATTERN`'s digit requirement above, so this
-illustrative example itself is not a live match this module's own default-glob
-self-scan would flag; T-1545, after the paragraph-granular fix below stopped
-masking a self-scan collision here the way it masked prior Significant 3/28aa351
-Significant 2's docstring-wide merge) also lacks a resolution marker and is
-flagged by this rule as written when the labels DO carry a digit. Narrowing
-the rule to require a negation word ("no"/"never"/"not") alongside the label
-would suppress that false positive -- but it also suppresses a REAL, independently
-found instance of this exact defect class (see the module's own casebook/build-log
-citation for the discovered site), which contains no negation word at all
-("... reads unmapped heap memory ..." stated as present fact, no "no"/"never").
-Between a rule that over-flags a benign header and one that misses a real defect,
-this module keeps the wider rule and reports both outcomes plainly rather than
-tuning against either.
+header that cites several severity labels as an index (no defect language at all)
+also lacks a resolution marker and is flagged by this rule as written, when the
+labels carry a digit the way this codebase's severity-label citations normally
+do. This paragraph's own example is deliberately written without digits instead
+-- "the remediation red suite for Critical A, Critical B, and Significant C",
+letter-suffixed per this codebase's own "Significant B"-style coverage-tag
+convention -- so `SEVERITY_LABEL_PATTERN`'s digit requirement (defined below)
+does not match it and this module's own default-glob self-scan does not flag its
+own text; T-1545's paragraph-granular fix (below) would otherwise have turned a
+digit-labeled version of this same sentence into a live, uncited self-scan hit,
+where before that fix a single docstring-wide block masked it behind an
+unrelated "closed" citation elsewhere in the same then-one-block docstring
+(28aa351 Significant 2/prior Significant 3). Narrowing the rule to require a
+negation word ("no"/"never"/"not") alongside the label would suppress that false
+positive -- but it also suppresses a REAL, independently found instance of this
+exact defect class (see the module's own casebook/build-log citation for the
+discovered site), which contains no negation word at all ("... reads unmapped
+heap memory ..." stated as present fact, no "no"/"never"). Between a rule that
+over-flags a benign header and one that misses a real defect, this module keeps
+the wider rule and reports both outcomes plainly rather than tuning against
+either.
 
 Modelled on tests/ci/check_no_forward_leaf_calls.py's own conventions: a text
 scan (not a full C++ parse) over a glob-derived file set, a `scan_files` entry
@@ -149,6 +153,23 @@ tokenizer-forced string span as outside one, so a multi-line string is
 scanned at paragraph granularity -- one block per blank-line-delimited
 paragraph -- consistent with how `//` comment runs and bare C string-literal
 continuations already break at a blank or non-continuing line.
+
+LITERAL-IDENTITY-AWARE BLOCK BOUNDARIES (T-1553). T-1545's fix widened the
+line pool `_python_multiline_string_lines` returns to cover f-strings, but
+still flattened it to one `frozenset[int]` of physical line numbers with no
+record of which literal each line belongs to. `_iter_blocks` merges by
+adjacency alone, so two DISTINCT multi-line string literals with no blank
+line between them -- an f-string ending on one line immediately followed by a
+plain triple-quoted string starting on the next, exactly the shape T-1545's
+own widened pool newly admits -- read as one block, and a resolution marker
+in the first silently satisfied an uncited citation in the second (Poirot
+d2a7eed-t1547-present-tense-confirmation-2026-07-31.md Significant 1; latent
+on plain-plain adjacent literals since before T-1545 too, per the same
+finding). `_python_multiline_string_lines` now returns each literal's own
+`(start, end)` line range rather than a flattened set of line numbers, and
+`_iter_blocks` closes the current block whenever a new literal's start line
+is reached, the same way a blank line already closes it -- so two adjacent
+literals with no blank line between them still get two blocks.
 """
 from __future__ import annotations
 
@@ -220,11 +241,14 @@ _FSTRING_START = getattr(tokenize, "FSTRING_START", None)
 _FSTRING_END = getattr(tokenize, "FSTRING_END", None)
 
 
-def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
-    """Physical line numbers (1-based) that fall inside a multi-line STRING
-    token, or (T-1545) a multi-line f-string's FSTRING_START..FSTRING_END
-    span, per Python's own tokenizer -- ground truth for a `.py` file's
-    triple-quoted-string spans (T-1538).
+def _python_multiline_string_lines(lines: list[str]) -> frozenset[tuple[int, int]]:
+    """Each multi-line STRING token's own `(start, end)` 1-based physical line
+    range, or (T-1545) a multi-line f-string's own FSTRING_START..FSTRING_END
+    range, per Python's own tokenizer -- ground truth for a `.py` file's
+    triple-quoted-string spans (T-1538). One tuple per literal (T-1553) --
+    NOT flattened into a single set of line numbers -- so a caller can tell
+    where one literal ends and the next begins even when two literals are
+    physically adjacent with no blank line between them.
 
     Replaces this module's earlier per-physical-line triple-quote-PARITY
     heuristic (T-1485), which carried no whole-file notion of whether a
@@ -247,9 +271,17 @@ def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
     span early -- rather than inspecting the interior tokens' own types,
     because an interpolated expression's tokens (a NAME, an OP) are still
     physically inside the f-string's source text and must not be read as
-    code lines outside it."""
+    code lines outside it.
+
+    Flattening this into one `frozenset[int]` (T-1538 through T-1545) erased
+    which literal a line belonged to, so two distinct literals with no blank
+    line between them read as one merged block once both were in the pool
+    (T-1553, Poirot d2a7eed-t1547-present-tense-confirmation-2026-07-31.md
+    Significant 1): keeping each literal's own range is what lets a caller
+    close a block at a literal's start line, the same way it already closes
+    one at a blank line."""
     text = "".join(lines)
-    result: set[int] = set()
+    result: set[tuple[int, int]] = set()
     try:
         fstring_depth = 0
         fstring_open_line: int | None = None
@@ -264,7 +296,7 @@ def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
                     fstring_depth -= 1
                     if fstring_depth == 0 and fstring_open_line is not None:
                         if tok.end[0] > fstring_open_line:
-                            result.update(range(fstring_open_line, tok.end[0] + 1))
+                            result.add((fstring_open_line, tok.end[0]))
                         fstring_open_line = None
                 continue
             if fstring_depth > 0:
@@ -274,7 +306,7 @@ def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
                 # covered when the matching FSTRING_END closes the span above.
                 continue
             if tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
-                result.update(range(tok.start[0], tok.end[0] + 1))
+                result.add((tok.start[0], tok.end[0]))
     except (tokenize.TokenError, SyntaxError, IndentationError, UnicodeDecodeError) as exc:
         raise PythonTokenizeError(f"could not tokenize as Python: {exc}") from exc
     return frozenset(result)
@@ -282,12 +314,16 @@ def _python_multiline_string_lines(lines: list[str]) -> frozenset[int]:
 
 def _line_kind(line: str) -> str:
     """Classifies one physical line for block-grouping purposes. `_iter_blocks`
-    calls this for every line except one it already knows, from a `.py` file's
-    tokenize-derived multi-line-string spans, to be inside a Python string
-    literal -- those lines are forced to STRING without consulting this
-    function at all (see `_iter_blocks`). A line is part of a textual block
-    if it is a `//` comment (any indentation), a
-    Python-quoted `//` comment line (`_PY_QUOTED_CPP_COMMENT_PATTERN`), or a
+    calls this for every line except a NON-BLANK one it already knows, from a
+    `.py` file's tokenize-derived multi-line-string spans, to be inside a
+    Python string literal -- such a line is forced to STRING without
+    consulting this function at all (see `_iter_blocks`). A BLANK line inside
+    such a span is still routed through this function like any other line, so
+    it classifies OTHER and breaks the block the same as a blank line
+    anywhere else (T-1545; see `_iter_blocks`'s own docstring for why). A line
+    consulted here is part of a textual block if it is a `//` comment (any
+    indentation), a Python-quoted `//` comment line
+    (`_PY_QUOTED_CPP_COMMENT_PATTERN`), or a
     bare C string-literal continuation (the shape this codebase's multi-line
     CHECK_MSG messages take: one quoted string literal per physical line).
     Anything else -- code, blank lines -- is a break between blocks, so a
@@ -316,7 +352,7 @@ def _line_kind(line: str) -> str:
 
 
 def _iter_blocks(
-    lines: list[str], python_string_lines: frozenset[int] | None = None
+    lines: list[str], python_string_spans: frozenset[tuple[int, int]] | None = None
 ) -> list[tuple[int, int, str]]:
     """Every maximal run of same-kind (COMMENT or STRING) contiguous lines, as
     (1-based start line, 1-based end line, merged text). Lines are joined with a
@@ -324,18 +360,22 @@ def _iter_blocks(
     text does this ("...(Significant " / "5, closed by...)") -- is still found as
     one continuous match against the merged text, never only against one line.
 
-    `python_string_lines`, when given, is the set of 1-based physical line
-    numbers a `.py` file's tokenizer places inside a multi-line STRING or
-    f-string token (`_python_multiline_string_lines`). A non-blank such line
-    is forced to kind STRING regardless of what character it starts with,
-    which is what keeps a multi-line docstring paragraph together as one
-    block the same way the `//` and bare-C-string rules already keep their
-    own multi-line shapes together -- without re-deriving "is a string open"
-    from each line's own content the way T-1485's triple-quote-parity
-    tracker did (see `_python_multiline_string_lines`'s docstring for why
-    that desynchronised). `.cpp`/`.h` inputs pass `None`: C++ has no
-    triple-quoted strings, so no line in a C++ file should ever force this
-    state, and none does.
+    `python_string_spans`, when given, is the set of each individual literal's
+    own 1-based `(start, end)` physical line range that a `.py` file's
+    tokenizer places inside a multi-line STRING or f-string token
+    (`_python_multiline_string_lines`) -- NOT a single flattened set of line
+    numbers (T-1553): keeping each literal's own range is what lets this
+    function tell a line that starts a NEW literal from a line that continues
+    the one before it, even when the two are physically adjacent with no
+    blank line between them. A non-blank line inside any span is forced to
+    kind STRING regardless of what character it starts with, which is what
+    keeps a multi-line docstring paragraph together as one block the same way
+    the `//` and bare-C-string rules already keep their own multi-line shapes
+    together -- without re-deriving "is a string open" from each line's own
+    content the way T-1485's triple-quote-parity tracker did (see
+    `_python_multiline_string_lines`'s docstring for why that desynchronised).
+    `.cpp`/`.h` inputs pass `None`: C++ has no triple-quoted strings, so no
+    line in a C++ file should ever force this state, and none does.
 
     A BLANK line inside a tokenizer-forced string span is NOT forced to
     STRING (T-1545, Poirot
@@ -345,13 +385,31 @@ def _iter_blocks(
     multi-line docstring or module-level string -- however many blank lines
     separate its paragraphs -- merged into ONE block, so a resolution marker
     anywhere in the string silently satisfied a citation anywhere else in
-    it. This module's own 112-line module docstring was exactly such a
-    span: one `closed` inside it cleared six unrelated severity-label
+    it. This module's own module docstring was exactly such a span before
+    this fix: one `closed` inside it cleared six unrelated severity-label
     citations, which is precisely what `_line_kind`'s own docstring already
     states must not happen. Forcing only non-blank lines gives a multi-line
     string paragraph-granular blocks -- one block per run of non-blank
     lines -- the same shape blank lines already produce for `//` comment
-    runs and bare C string-literal continuations."""
+    runs and bare C string-literal continuations.
+
+    A literal's OWN start line also closes the current block, even when the
+    previous line was already kind STRING (T-1553, Poirot
+    d2a7eed-t1547-present-tense-confirmation-2026-07-31.md Significant 1):
+    without this, two distinct literals with no blank line between them --
+    an f-string ending on one line immediately followed by a plain
+    triple-quoted string starting on the next -- read as a single block, so a
+    resolution marker in the first silently satisfied an uncited citation in
+    the second. Only a literal's first line ever triggers this break; every
+    other line inside the same literal's own span behaves exactly as before."""
+    python_string_lines: frozenset[int] = frozenset()
+    literal_start_lines: frozenset[int] = frozenset()
+    if python_string_spans is not None:
+        python_string_lines = frozenset(
+            n for span_start, span_end in python_string_spans for n in range(span_start, span_end + 1)
+        )
+        literal_start_lines = frozenset(span_start for span_start, _span_end in python_string_spans)
+
     blocks: list[tuple[int, int, str]] = []
     start: int | None = None
     kind: str | None = None
@@ -366,12 +424,12 @@ def _iter_blocks(
     for i, line in enumerate(lines, start=1):
         stripped = line.strip()
 
-        if python_string_lines is not None and i in python_string_lines and stripped:
+        if i in python_string_lines and stripped:
             this_kind = "STRING"
         else:
             this_kind = _line_kind(line)
 
-        if this_kind in ("COMMENT", "STRING") and this_kind == kind:
+        if this_kind in ("COMMENT", "STRING") and this_kind == kind and i not in literal_start_lines:
             buf.append(stripped)
             continue
         _close()
@@ -395,9 +453,9 @@ def scan_text(lines: list[str], is_python: bool = False) -> list[tuple[int, int,
     `is_python=True` derives `lines`' multi-line-string spans from `tokenize`
     (T-1538) rather than skipping triple-quote tracking altogether; may raise
     `PythonTokenizeError` if `lines` cannot be tokenized as Python."""
-    python_string_lines = _python_multiline_string_lines(lines) if is_python else None
+    python_string_spans = _python_multiline_string_lines(lines) if is_python else None
     hits: list[tuple[int, int, list[str]]] = []
-    for start, end, text in _iter_blocks(lines, python_string_lines):
+    for start, end, text in _iter_blocks(lines, python_string_spans):
         labels = SEVERITY_LABEL_PATTERN.findall(text)
         if not labels:
             continue
