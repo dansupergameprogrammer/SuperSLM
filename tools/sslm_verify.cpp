@@ -51,8 +51,8 @@ int main(int argc, char** argv) {
 	if (SslmArtifact::OpenFromFile(artifact_path, artifact, &aerr) != SslmStatus::Ok) {
 		std::ofstream out(manifest_path, std::ios::binary);
 		out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n"
-		    << "  \"reject_status\": \"ArtifactRejected\",\n  \"diagnostic\": \"" << SslmStatusName(aerr.code)
-		    << ": " << aerr.message << "\"\n}\n";
+		    << "  \"reject_status\": \"ArtifactRejected\",\n  \"diagnostic\": \""
+		    << JsonEscape(SslmStatusName(aerr.code)) << ": " << JsonEscape(aerr.message) << "\"\n}\n";
 		std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmStatusName(aerr.code), aerr.message.c_str());
 		return 1;
 	}
@@ -70,7 +70,8 @@ int main(int argc, char** argv) {
 		if (status != SslmModelStatus::Ok) {
 			std::ofstream out(manifest_path, std::ios::binary);
 			out << "{\n  \"schema\": \"sslm_proof_manifest_v1\",\n  \"status\": \"REJECTED\",\n  \"reject_status\": \""
-			    << SslmModelStatusName(status) << "\",\n  \"diagnostic\": \"" << load_err << "\"\n}\n";
+			    << JsonEscape(SslmModelStatusName(status)) << "\",\n  \"diagnostic\": \"" << JsonEscape(load_err)
+			    << "\"\n}\n";
 			std::fprintf(stderr, "REJECTED: %s -- %s\n", SslmModelStatusName(status), load_err.c_str());
 			return 1;
 		}
@@ -104,6 +105,14 @@ int main(int argc, char** argv) {
 	std::ofstream out(manifest_path, std::ios::binary);
 	out << manifest;
 	out.close();
+	// T-1457: the manifest is this tool's product on the OK path (the caller,
+	// sslm_convert_manifest.py's run_verifier, reads it back and json.load()s
+	// it) -- a failed write (bad path, full disk) must not still print OK and
+	// exit 0, which is what happened here before this check existed.
+	if (!out) {
+		std::fprintf(stderr, "REJECTED: failed to write manifest to %s\n", manifest_path);
+		return 1;
+	}
 
 	std::printf("OK  artifact=%s  manifest=%s  fingerprint=%s\n", artifact_path, manifest_path,
 	            artifact.FingerprintHex().c_str());

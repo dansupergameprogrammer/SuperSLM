@@ -262,11 +262,21 @@ jobs:
   # -- F12's own finding is that a single aggregate line percentage hides
   # exactly the parser gaps that matter (artifact.cpp and model.cpp were the
   # two files a 97%/92%/75.7% aggregate concealed real gaps inside). Floors
-  # are measured, never invented (tools/ci/branch_coverage_floors.json,
-  # committed) -- tools/ci/check_branch_coverage_floors.py fails the build if
-  # any file's measured branch percentage drops below its pinned floor. A
-  # per-branch allowlist (tools/ci/branch_coverage_allowlist.txt) exists for
-  # genuinely-unreachable defensive code, each entry carrying its own reason.
+  # are measured, never invented -- tools/ci/check_branch_coverage_floors.py
+  # fails the build if any file's measured branch percentage drops below its
+  # pinned floor, once that floor exists. tools/ci/branch_coverage_floors.json
+  # is NOT YET committed (T-1451, correcting this comment's prior false claim
+  # that it was): this job has never started (D-SLM469/T-1450), so the design's
+  # own step 1 -- "the first run of this gate records the actual per-file
+  # percentages" -- has never happened. Until it does, the checker fails
+  # cleanly with a diagnostic naming the missing file and the `--record-floors`
+  # remedy (design Sec4.3 step 1) rather than crashing; that failure is this
+  # job's honest, expected first result, not a defect in the gate. Recording
+  # the floors requires a real llvm-cov run (clang++-18) this build could not
+  # produce on the available machine -- inventing the numbers is prohibited
+  # (StandardsDocument.md Sec5.4). A per-branch allowlist
+  # (tools/ci/branch_coverage_allowlist.txt) exists for genuinely-unreachable
+  # defensive code, each entry carrying its own reason.
   # RelWithDebInfo, not Release: assert()-gated contract checks stay live
   # (matching linux-x64-debug's own reasoning above), so their branches are
   # part of what this leg measures.
@@ -419,9 +429,12 @@ jobs:
     # -- false on two counts. First, that job's own comment above states the
     # opposite: the binary's presence is taken from the published software
     # manifest, "not reconfirmed by executing a runner in this design pass."
-    # Second, no job in this workflow has ever started on this repository --
-    # every run aborts before starting on the account's spending limit
-    # (`gh run view`, executed; D-SLM469). The underlying fact (clang++-18
+    # Second, this job -- added after the last successful run -- has never
+    # started on this repository (`gh run view`, executed; T-1450 corrects
+    # D-SLM469's broader claim: 77 runs total, 44 successful, last success
+    # 2026-07-23T19:03:55Z on 4071828 -- every job added after that commit,
+    # this one included, has never started; every push since aborts on the
+    # account's Actions spending limit). The underlying fact (clang++-18
     # ships on this runner image per its manifest) is still the true basis
     # for the pin; what was false is the claim that a run had confirmed it.
     # This job's own first successful run is that confirmation, exactly as

@@ -29,12 +29,24 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "superslm/artifact.h"
 #include "superslm/model.h"
 
 namespace superslm {
+
+// JSON string escaping -- the manifest carries tensor and section names, which
+// are UTF-8 but otherwise untrusted, and (T-1449) rejection diagnostics, which
+// routinely quote a section/entry name (e.g. `entry "kv"`). Escapes the ASCII
+// control set and the two structural characters so any emitted document is
+// valid JSON regardless of what a hostile-but-Load-accepted name, or a
+// loader diagnostic naming one, contains. Exposed here (not file-local) so
+// every JSON-emitting call site -- BuildProofManifestJson's own fields and
+// tools/sslm_verify.cpp's hand-assembled REJECTED-path manifests alike --
+// routes through the one implementation instead of a second, unescaped one.
+std::string JsonEscape(std::string_view s);
 
 // The config x tensor-shape geometry cross-check (§17.3 cell 4). Operates on raw
 // fields rather than a validated SslmModelConfig so it is directly testable

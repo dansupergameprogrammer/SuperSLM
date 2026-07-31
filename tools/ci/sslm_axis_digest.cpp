@@ -363,10 +363,18 @@ void SectionIExp() {
 					sec.sink.I64(superslm::IExpBase(q, ln2, qb));
 					if (in_domain) sec.sink.I64(superslm::IExpFromConstants(q, ln2, qb, qc));
 #else
-					// Default-constructed and digested unconditionally, so a triple the entry
-					// point REFUSES digests as (0, 0) and moves the hash -- the refusal is
-					// visible to the instrument rather than silently skipped. No triple in
-					// this population is refused, which is why the digest is unchanged.
+					// `con` is digested unconditionally, refused or not. This population DOES
+					// contain refused triples (the F21-strike quadruple q=0, q_ln2=887904998,
+					// q_b=1733160715, q_c=INT64_MAX among them, per the header's own documented
+					// example) -- but a refused construction does NOT digest as (0, 0):
+					// IExpConstruct populates `con.z()`/`con.base()` with the formed z/base
+					// BEFORE the representability judgement runs (intmath.cpp's own ordering),
+					// so `con`'s digested bytes are identical whether or not the construction is
+					// later judged representable. That is the actual reason the cross-arm digest
+					// identity with the legacy IExpShift/IExpBase arm holds: both arms form and
+					// digest the same z/base regardless of refusal, and only the OPTIONAL third
+					// value -- IExpFromConstants/IExpEvaluate, gated on `in_domain` above -- is
+					// ever skipped for a refused triple, identically in both arms.
 					//
 					// S-HARDEN-0 also split the value out of the single-call form, so the
 					// evaluation moved inside this arm: `IExpEvaluate` takes the construction

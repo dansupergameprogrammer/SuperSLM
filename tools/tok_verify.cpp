@@ -17,6 +17,21 @@ static uint32_t Rd32(const uint8_t* p) {
 	return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
 }
 
+// T-1455: this tool's only trust boundary is the `.gld` file's own byte layout
+// -- a truncated or malformed pack previously drove `Rd32`/the text-record read
+// past `d.size()` with no check (developer-input debug tool, but held to the
+// same T-129 bar every other hostile-input sub-parse in this tree already is).
+// `need` reports the first out-of-bounds read with the offset and the bytes
+// actually available, and the caller returns rather than continuing to read
+// past a pack it has already shown is malformed.
+static bool need(size_t pos, size_t n, size_t total) {
+	if (pos > total || n > total - pos) {
+		std::printf("bad golden: record needs %zu byte(s) at offset %zu, only %zu available\n", n, pos, total);
+		return false;
+	}
+	return true;
+}
+
 int main(int argc, char** argv) {
 	if (argc < 3) { std::printf("usage: tok_verify <artifact.sslm> <golden.gld>\n"); return 2; }
 	SslmArtifact art;
@@ -36,9 +51,13 @@ int main(int argc, char** argv) {
 	size_t pos = 40;
 	int mism = 0;
 	for (uint32_t r = 0; r < count; ++r) {
+		if (!need(pos, 4, d.size())) return 1;
 		uint32_t tlen = Rd32(d.data() + pos); pos += 4;
+		if (!need(pos, tlen, d.size())) return 1;
 		std::string text(reinterpret_cast<const char*>(d.data() + pos), tlen); pos += tlen;
+		if (!need(pos, 4, d.size())) return 1;
 		uint32_t ic = Rd32(d.data() + pos); pos += 4;
+		if (!need(pos, size_t(ic) * 4, d.size())) return 1;
 		std::vector<int32_t> want(ic);
 		for (uint32_t i = 0; i < ic; ++i) { want[i] = int32_t(Rd32(d.data() + pos)); pos += 4; }
 		std::vector<int32_t> got = tok.Encode(text);

@@ -9,24 +9,12 @@
 
 namespace superslm {
 
-namespace {
-
-int32_t RdI32(const uint8_t* p) noexcept {
-	uint32_t v = 0;
-	for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[i]) << (8 * i);
-	return static_cast<int32_t>(v);
-}
-
-int64_t RdI64(const uint8_t* p) noexcept {
-	uint64_t v = 0;
-	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
-	return static_cast<int64_t>(v);
-}
-
 // JSON string escaping -- the manifest carries tensor and section names, which
 // are UTF-8 but otherwise untrusted; escape the ASCII control set and the two
 // structural characters so the emitted document is valid JSON regardless of
-// what a hostile-but-Load-accepted name contains.
+// what a hostile-but-Load-accepted name contains. Declared in the header (not
+// file-local) so tools/sslm_verify.cpp's hand-assembled REJECTED-path
+// manifests route through this one implementation too (T-1449).
 std::string JsonEscape(std::string_view s) {
 	std::string out;
 	out.reserve(s.size() + 2);
@@ -48,6 +36,20 @@ std::string JsonEscape(std::string_view s) {
 		}
 	}
 	return out;
+}
+
+namespace {
+
+int32_t RdI32(const uint8_t* p) noexcept {
+	uint32_t v = 0;
+	for (int i = 0; i < 4; ++i) v |= static_cast<uint32_t>(p[i]) << (8 * i);
+	return static_cast<int32_t>(v);
+}
+
+int64_t RdI64(const uint8_t* p) noexcept {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
+	return static_cast<int64_t>(v);
 }
 
 }  // namespace

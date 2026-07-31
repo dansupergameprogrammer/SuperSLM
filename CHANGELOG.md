@@ -41,3 +41,62 @@ and API are not yet frozen (the ABI freezes at S-FREEZE, `SuperSLM_Plan.md` §19
 - Suite: 247 checks / 0 failures, green on the full CI matrix. Reviewed and SHIP-
   verdicted (Poirot), after fixing two trust-boundary bounds-check defects in the
   sub-blob parse.
+
+### S2 — integer-arithmetic core + kernels (complete)
+
+- Bit-exact, dependency-free integer-only kernels for the forward pass: i-sqrt and
+  the i-exp core (`intmath.h`), `RopeApplyPair` (rotary position embedding),
+  a fixed-point SiLU sigmoid LUT (`silu_lut.h`, format v2's `SigmoidLut`/`SIL1`
+  section), and the int8 matmul kernel (`matmul.h`) with a scalar reference proven
+  identical to its SIMD path. Every kernel proven bit-equal to the Python reference
+  implementation over its red-first suite, plus an exhaustive/hostile-input
+  population for the arithmetic core.
+- `.sslm` gains the `SigmoidLut` section (type 12, `SIL1`) and is required from
+  format v2 onward.
+- Golden cross-ISA/toolchain hashes committed for the SiLU LUT and matmul kernels
+  (scalar == SSE2 == the pinned oracle).
+
+### S3a — walking skeleton: converter geometry + KV landing (in progress)
+
+- Config-vs-tensor geometry cross-check (`CheckConfigGeometry`,
+  `include/superslm/proof_manifest.h`) wired into `SslmModel::Load`'s
+  `ValidateConfigGeometryJoin`, rejecting a hidden_size/heads/head_dim mismatch at
+  load rather than only in the converter-side proof manifest.
+  `KvLandingScales`/`KvLandingReciprocals` schema-value domains
+  (`ValidateKvLandingScalesDomain`/`ValidateKvLandingReciprocalsDomain`,
+  `src/model.cpp`) gate the KV-landing mantissa/exponent/reciprocal ranges at load.
+  The checked chain funnel and forward composition sites
+  (`src/forward/checked_chain_funnel.cpp`, `src/forward/forward_sites.cpp`) are
+  under active development; not yet feature-complete or CI-confirmed end to end
+  (see the S-HARDEN entry below for the CI-availability caveat that applies to
+  every change after 2026-07-23).
+
+### S-HARDEN 1-8 — converter/CI hardening campaign (in progress)
+
+A numbered series closing findings from the S2/S3a-era spec and coverage audits:
+schema-value domain gates at load (S-HARDEN-1, F1/F14/F20/F22/F23/F24); the
+tokenizer's TOK1×CFG1 vocabulary join and a strict shared UTF-8 decoder
+(S-HARDEN-2, F6/F7/F15/F18); the converter's validate/serialize/verify transaction
+and its independent C++ proof manifest, `tools/sslm_verify.cpp`/
+`include/superslm/proof_manifest.h` (S-HARDEN-3, F13); the S2.5 acceptance-gate
+missing assertion (S-HARDEN-4, F2); provenance verification for vendored reference
+files (S-HARDEN-5, `tests/reference/check_provenance.py`); the cross-toolchain/
+cross-optimization axis-digest harness (S-HARDEN-6, `tools/ci/sslm_axis_digest.cpp`);
+a `std::bad_alloc`-only fault-injection contract across every allocating entry
+point (S-HARDEN-7, F5); and per-file branch-coverage floors (S-HARDEN-8, F12,
+`tools/ci/check_branch_coverage_floors.py`).
+
+This campaign's own CI verification is incomplete, not because any suite is known
+red, but because most of it has never run in the repository's own Actions
+workflow: `.github/workflows/tests.yml`'s job history shows the last successful
+run was 2026-07-23T19:03:55Z (commit `4071828`), and every job added or widened
+after that commit -- which includes most of S-HARDEN-3 through -8 -- has never
+started (Actions billing limit; see the workflow's own forward-leaf-check job
+comment). Suite counts are therefore not restated here per phase: a number
+measured only by local, partial execution (no `clang++` on the measuring machine
+for several suites) would misrepresent itself as the "green on the full CI
+matrix" figures S0/S1 above earned honestly. What has been proven true by local
+execution as of this entry: `python -m pytest tools/ tests/reference/` (69/69)
+and `python -m pytest tests/ci/` (79 non-clang-gated cells) both green against a
+freshly built `sslm_verify`; the S2.1 exhaustive certifier passes over its full
+2^30 + 2^31-input domain on this tier.

@@ -3,7 +3,15 @@
 // C++ with a matching fingerprint. Not part of the shipped library.
 //
 // Build (from repo root): see tools/build_inspect.bat, or:
-//   cl /std:c++20 /EHsc /Iinclude src/artifact.cpp src/sha256.cpp tools/sslm_inspect.cpp
+//   cl /std:c++20 /EHsc /Iinclude src/artifact.cpp src/sha256.cpp src/model.cpp ^
+//     src/tokenizer.cpp src/proof_manifest.cpp tools/sslm_inspect.cpp
+// (model.cpp, tokenizer.cpp, and proof_manifest.cpp are all required TUs --
+// InspectModelSection below calls SslmTensorManifest::Parse/
+// SslmKeyedConstants::Parse/ParseConfig/ParseSigmoidLut, all defined in
+// model.cpp, which itself needs tokenizer.cpp's symbols and (since
+// ValidateConfigGeometryJoin was wired into SslmModel::Load, model.cpp) also
+// proof_manifest.cpp's CheckConfigGeometry; omitting any of the three fails
+// to link. build_inspect.bat's own command carries the same list.)
 #include "superslm/artifact.h"
 #include "superslm/model.h"
 
@@ -52,6 +60,17 @@ static bool InspectModelSection(const SslmSectionView& s) {
 		std::printf("\n");
 		return true;
 	}
+	if (s.type == SslmSectionType::SigmoidLut) {
+		SslmSigmoidLut lut;
+		SslmModelStatus st = ParseSigmoidLut(s, lut, &err);
+		if (st != SslmModelStatus::Ok) {
+			std::printf("      ModelView REJECTED: %s — %s\n", SslmModelStatusName(st), err.c_str());
+			return false;
+		}
+		std::printf("      -> %u entries; first=%d last=%d\n", lut.entry_count,
+		            (int)SigmoidLutValue(lut, 0), (int)SigmoidLutValue(lut, lut.entry_count - 1));
+		return true;
+	}
 	if (s.type == SslmSectionType::Config) {
 		SslmModelConfig c;
 		SslmModelStatus st = ParseConfig(s, c, &err);
@@ -80,6 +99,7 @@ static const char* TypeName(SslmSectionType t) {
 		case SslmSectionType::CompositionConstants: return "CompositionConstants";
 		case SslmSectionType::KvLandingScales: return "KvLandingScales";
 		case SslmSectionType::KvLandingReciprocals: return "KvLandingReciprocals";
+		case SslmSectionType::SigmoidLut: return "SigmoidLut";
 		case SslmSectionType::Calibration: return "Calibration";
 		case SslmSectionType::GoldenHashes: return "GoldenHashes";
 		case SslmSectionType::Tokenizer: return "Tokenizer";

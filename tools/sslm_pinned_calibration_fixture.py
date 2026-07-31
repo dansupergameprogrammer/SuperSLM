@@ -73,13 +73,25 @@ def _base_model():
         config=cfg,
         weights={"layer0.w": weights},
         dynamic_biases={"layer0.site": (30, np.array([1, 2, 3, 4], dtype=np.int64))},
-        rope_tables=(np.array([1000, 2000, 3000], dtype=np.int64),
-                    np.array([-1000, -2000, -3000], dtype=np.int64)),
+        # context_cap * (head_dim / 2) = 4 * (4 / 2) = 8 entries each --
+        # RopeTablesShapeMismatchConfig (model.cpp's ConfigGeometryJoin,
+        # wired after this fixture was authored) rejects any other count.
+        # Values stay well inside ROPE_ONE (2^30, model.cpp kRopeEntryAbsMax).
+        rope_tables=(np.array([1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000], dtype=np.int64),
+                    np.array([-1000, -2000, -3000, -4000, -5000, -6000, -7000, -8000], dtype=np.int64)),
         weight_scales=weight_scales,
         scales=_Scales({"layer0.v_head0.scale": 0.75}),
         composition_constants={"scale": (1000000, 0)},
-        kv_landing_scales={"kv": (1, 0)},
-        kv_landing_reciprocals={"kv": (1, 0, 0)},
+        # m_t in [2^30, 2^31-1] (KvLandingScales' loader-checked mantissa
+        # domain, src/model.cpp ValidateKvLandingScalesDomain); e_target
+        # carries no loader check (D-SLM142, pending-consumer). R_t in
+        # [2^31+1, 2^32] (KvLandingReciprocals' loader-checked domain,
+        # ValidateKvLandingReciprocalsDomain) and e_t >= -60 (the joint-bound
+        # floor, same function) -- both canonical in-domain values, not the
+        # placeholders (1, 0) / (1, 0, 0) the loader's KV-landing domain gate
+        # (added after this fixture) now rejects.
+        kv_landing_scales={"kv": (1 << 30, 0)},
+        kv_landing_reciprocals={"kv": (1, 0, (1 << 31) + 1)},
         # A plain callable, not a bound method -- called identically to the real
         # QuantizedModel.float_weight as `model.float_weight(name)`.
         float_weight=lambda name: {"layer0.w": float_weights}[name],
