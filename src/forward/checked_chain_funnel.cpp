@@ -50,6 +50,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::SequenceAlreadyComplete: return "SequenceAlreadyComplete";
 		case SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted:
 			return "SoftmaxKernelRefusedAfterGateAccepted";
+		case SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain:
+			return "ResidualReconciliationMagnitudeOutOfDomain";
 	}
 	return "?";
 }

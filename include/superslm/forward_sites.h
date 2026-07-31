@@ -182,8 +182,34 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // separate, deferred obligation (S3.6/S3.7's own decode-step struct; see
 // this pass's build log) and is NOT this parameter's job: this parameter is
 // the counting mechanism only, never a report.
+//
+// `out_magnitude_exceeded_int64` (T-1377 / D-SLM457, Sec7.2b, Sec14.14): a
+// SECOND, DISTINCT out-parameter from `out_saturation_count` above -- the two
+// conditions are not the same claim. `out_saturation_count`'s own internal OR
+// (`magnitude_exceeds_clamp || raw < -127 || raw > 127`) is coupled to the
+// K/V-landing caller's own `[-127, 127]` clamp range, which is not every
+// caller's contract (`ResidualReconcileSite` below composes no clamp at all,
+// Sec6.2 step 8). This parameter reports only "the true, pre-narrowing
+// magnitude does not fit `int64`" -- in the non-negative-`k` branch, the
+// 128-bit quotient exceeds `INT64_MAX` (Sec7.2b: "the divisor 2^(k+1) ... must
+// bring that magnitude below 2^63" is this exact threshold, stated there as
+// the reachability bound and enforced here as the check); in the negative-`k`
+// branch, the left-shifted 128-bit magnitude either loses bits (the
+// shift-then-verify mismatch already computed for the existing counter) or
+// itself exceeds `INT64_MAX`. Neither branch's condition is the `> 127`
+// clamp-range test the existing counter also performs -- a wide row
+// legitimately carries values outside `+/-127` at this site, so that test
+// would false-positive on every ordinary large-but-correct result. When
+// non-null, written exactly once per call (never OR'd with a prior value,
+// matching `out_saturation_count`'s own "caller passes a per-call flag"
+// convention here, NOT its own "accumulate across a sequence" convention --
+// this parameter has no accumulation semantics of its own; `ResidualReconcileSite`
+// below is the one caller and it checks this flag per element, immediately).
+// Defaults to `nullptr`: every existing call (there are none yet outside this
+// pass) compiles unchanged and nothing is read or written.
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a,
-                        int64_t e_t, uint64_t* out_saturation_count = nullptr);
+                        int64_t e_t, uint64_t* out_saturation_count = nullptr,
+                        bool* out_magnitude_exceeded_int64 = nullptr);
 
 // C33's post-rotation clamp (§5.3, §11 S3.3 §6.2 step 3): `RopeApplyPair`
 // (intmath.h) returns its rotated pair UNCLAMPED and int64-wide by its own
@@ -400,6 +426,19 @@ struct SequenceLayerState {
 // `"layerL.mlp_residual"`, the trace-hook site-naming convention extended to
 // this site, §4.1). On Ok, `out_codes`/`*out_scale` are written; on any
 // rejection, neither is touched (§7.2's convention).
+//
+// **T-1377 / D-SLM457 (§7.2b, §14.14): step 2's own derived-operand predicate.**
+// `LandingRescale`'s second out-parameter (`out_magnitude_exceeded_int64`) is
+// checked for every element BEFORE step 4's funnel call runs. If any element's
+// flag is set, this function returns `ResidualReconciliationMagnitudeOutOfDomain`
+// immediately, with `out_codes`/`*out_scale` untouched -- the same
+// "reject leaves output untouched" contract every other funnel rejection
+// already honours. This is a runtime check on `LandingRescale`'s own
+// already-computed loss signal, not a static exponent-range threshold: no
+// closed-form bound independent of layer count exists here (`CarriedScale.e`
+// accumulates as an unbounded sum with no domain check anywhere in this
+// tree), and the danger zone is reachable from a single, load-legal call
+// (§7.2b's derivation, confirmed by execution).
 SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale branch_scale,
                                           const int8_t* stream_code, CarriedScale stream_scale,
                                           size_t hidden_size, CarriedScale site_constant,

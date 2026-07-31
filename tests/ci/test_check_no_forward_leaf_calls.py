@@ -374,6 +374,177 @@ def test_main_end_to_end_asserts_the_real_doors_hold_at_exactly_one():
     )
 
 
+# --- T-1378 (Poirot 9d8b38e review, Significant 1): the door scanner is
+# hardened against three shapes it missed and validated against a wider,
+# independently-constructed population before being trusted. ---
+
+
+def _old_find_leaf_forwarding_doors_for_comparison(path, leaves=cnfl.BANNED_LEAVES,
+                                                     exclude=cnfl._FUNNEL_ENTRY_POINTS):
+    """The PRE-T-1378 scanner, reproduced verbatim (not imported -- the module
+    under test no longer carries this code) so this suite can independently
+    confirm each new population member really was a miss, not merely assert
+    it from the casebook. Column-0-anchored, no-nested-parens parameter list,
+    raw (non-comment-stripped) brace counting -- exactly Significant 1's own
+    quoted description of what shipped at `9d8b38e`."""
+    import re as _re
+
+    old_re = _re.compile(
+        r"^[A-Za-z_][\w:*&<>,\s]*?\b([A-Za-z_]\w*)\s*\([^(){}]*\)\s*(?:noexcept\s*)?\{",
+        _re.MULTILINE,
+    )
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    doors = []
+    for m in old_re.finditer(text):
+        name = m.group(1)
+        body_start = m.end() - 1
+        depth = 0
+        body_end = len(text)
+        for i in range(body_start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = i + 1
+                    break
+        body_text = text[body_start:body_end]
+        if name not in exclude and any(
+            cnfl._leaf_pattern(leaf).search(body_text) for leaf in leaves
+        ):
+            doors.append(name)
+    return doors
+
+
+# Five independently-constructed doors (StandardsDocument Sec4: a wider net
+# cast deliberately, not the three original shapes' own author re-deriving
+# them): the three shapes the code review found (paren-in-params, indented
+# inside a namespace, brace inside a `//` comment), plus two more found by
+# this pass's own wider sweep (brace inside a `/* */` block comment; the
+# paren-in-params and indentation shapes combined on one door, nested TWO
+# levels of `namespace { ... }` rather than one). Each on its own scratch copy
+# of a minimal funnel file, `CarriedScaleReciprocal` present as the one
+# EXPECTED door in every case so the new, second door is what each case is
+# isolating.
+_BASE_FUNNEL_PREFIX = (
+    "int64_t CarriedScaleReciprocal(int64_t m) { return DynamicScaleReciprocal(m); }\n"
+)
+
+_POPULATION_CASES = {
+    "paren_in_param_list": (
+        _BASE_FUNNEL_PREFIX
+        + "int64_t CarriedScaleDoorTwo(int64_t d, CarriedScale c = CarriedScale()) "
+        "{ return DynamicScaleReciprocal(d); }\n"
+    ),
+    "indented_one_level_inside_namespace": (
+        "namespace superslm {\n"
+        + _BASE_FUNNEL_PREFIX
+        + "    int64_t CarriedScaleDoorTwo(int64_t d) {\n"
+        "        return DynamicScaleReciprocal(d);\n"
+        "    }\n"
+        "}  // namespace superslm\n"
+    ),
+    "closing_brace_inside_line_comment": (
+        _BASE_FUNNEL_PREFIX
+        + "int64_t CarriedScaleDoorTwo(int64_t d) {\n"
+        "    // a closing brace inside a comment: }\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+    ),
+    "closing_brace_inside_block_comment": (
+        _BASE_FUNNEL_PREFIX
+        + "int64_t CarriedScaleDoorTwo(int64_t d) {\n"
+        "    /* a closing brace inside a block comment: } */\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+    ),
+    "paren_in_params_and_two_levels_of_nested_namespace": (
+        "namespace superslm {\n"
+        "namespace {\n"
+        + _BASE_FUNNEL_PREFIX
+        + "int64_t CarriedScaleDoorTwo(int64_t d, CarriedScale c = CarriedScale()) {\n"
+        "    return DynamicScaleReciprocal(d);\n"
+        "}\n"
+        "}  // namespace\n"
+        "}  // namespace superslm\n"
+    ),
+}
+
+# The false-positive control: a banned leaf's name AND a fake `{`/`}`-bearing
+# signature, both inside a string literal. Must NOT be reported as a door
+# either before or after T-1378 -- this hardening narrows what escapes
+# detection, it must not widen what counts as a door.
+_STRING_LITERAL_CONTROL = (
+    _BASE_FUNNEL_PREFIX
+    + 'const char* kNotADoor = "int64_t NormalizeScale(int64_t x) { return x; }";\n'
+)
+
+
+def test_population_each_case_was_a_miss_under_the_prior_scanner():
+    """Independently confirms every population member above really was
+    invisible to the pre-T-1378 scanner (not merely asserted from the
+    casebook) -- the population-validation half of StandardsDocument Sec4:
+    a check must be shown able to FAIL on the fault it exists to catch."""
+    for case_name, content in _POPULATION_CASES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            old_doors = sorted(_old_find_leaf_forwarding_doors_for_comparison(path))
+            assert old_doors == ["CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the prior scanner to MISS the second "
+                f"door (finding only CarriedScaleReciprocal), got {old_doors} -- "
+                f"this case is not a valid population member if the prior scanner "
+                f"already caught it"
+            )
+
+
+def test_population_the_hardened_scanner_catches_every_case():
+    """The hardening's own proof: every case the prior scanner missed above is
+    caught by the current cnfl.find_leaf_forwarding_doors, by name."""
+    for case_name, content in _POPULATION_CASES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            new_doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+            assert new_doors == ["CarriedScaleDoorTwo", "CarriedScaleReciprocal"], (
+                f"case {case_name!r}: expected the hardened scanner to catch both "
+                f"doors, got {new_doors}"
+            )
+
+
+def test_population_check_door_count_fails_on_every_case_too():
+    """The wiring cell for the population above: `check_door_count`, the
+    function the CI check actually calls, must fail on every case -- not
+    merely `find_leaf_forwarding_doors` in isolation."""
+    for case_name, content in _POPULATION_CASES.items():
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write(tmp, "src/forward/checked_chain_funnel.cpp", content)
+            failures = cnfl.check_door_count(path, expected=("CarriedScaleReciprocal",))
+            assert len(failures) == 1 and "CarriedScaleDoorTwo" in failures[0], (
+                f"case {case_name!r}: expected check_door_count to name the new "
+                f"door, got {failures}"
+            )
+
+
+def test_a_banned_leaf_name_inside_a_string_literal_is_not_reported_as_a_door_before_or_after():
+    """The false-positive control: hardening the scanner must not widen what
+    counts as a door. Neither the prior nor the current scanner may report a
+    door here -- the fake signature and the leaf name both live inside a
+    string literal, not in real source."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "src/forward/checked_chain_funnel.cpp", _STRING_LITERAL_CONTROL)
+        old_doors = sorted(_old_find_leaf_forwarding_doors_for_comparison(path))
+        new_doors = sorted(cnfl.find_leaf_forwarding_doors(path))
+        assert old_doors == ["CarriedScaleReciprocal"], old_doors
+        assert new_doors == ["CarriedScaleReciprocal"], new_doors
+
+
+def test_the_population_count_is_stated():
+    """States, in one place, the count required by this campaign's own exit
+    condition: five independently-constructed population members
+    (_POPULATION_CASES) plus one false-positive control, all executed above."""
+    assert len(_POPULATION_CASES) == 5
+
+
 def test_a_scratch_forward_sites_cpp_naming_a_banned_leaf_is_caught_by_the_widened_glob():
     """Mutation proof for the S3.2 widening above: `src/forward_sites.cpp` sits
     outside `src/forward/` and was, before this pass, entirely outside

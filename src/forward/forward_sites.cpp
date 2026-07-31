@@ -205,7 +205,7 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 }
 
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
-                        uint64_t* out_saturation_count) {
+                        uint64_t* out_saturation_count, bool* out_magnitude_exceeded_int64) {
 	// C27's residual_reconcile (§8.1, dynamic_engine.py-vendored formula):
 	//   round_half_away_from_zero((branch_code * m_a * r_t) / 2^(62 - (e_a - e_t)))
 	// with a negative composite exponent an EXACT left shift (no rounding).
@@ -242,6 +242,17 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	// catch (D-SLM201). `magnitude_exceeds_clamp` records that loss so the
 	// counter is not fooled by it, independent of what `raw` narrows to.
 	bool magnitude_exceeds_clamp = false;
+	// T-1377 / D-SLM457 (§7.2b, §14.14): the SECOND, narrower loss signal --
+	// "the true 128-bit magnitude does not fit int64" -- computed alongside
+	// `magnitude_exceeds_clamp` above but never OR'd with the `> 127` clamp
+	// test: a wide row at this site legitimately carries values outside
+	// `+/-127` (§6.2 step 8 composes no clamp here), so that test alone would
+	// flag every ordinary large-but-correct result. `kInt64MaxU` is
+	// `INT64_MAX` widened to `uint64_t`, the same threshold §7.2b's own
+	// derivation names ("the divisor 2^(k+1) ... must bring that magnitude
+	// below 2^63").
+	constexpr uint64_t kInt64MaxU = static_cast<uint64_t>(INT64_MAX);
+	bool magnitude_exceeds_int64 = false;
 	if (k >= 0) {
 		// round_half_away_from_zero(magnitude / 2^k) == floor((2*magnitude + 2^k) / 2^(k+1)),
 		// both terms carried in the same 128-bit space as `magnitude` itself
@@ -267,6 +278,7 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 		const U128 rounded = U128Add(doubled, U128OneShl(static_cast<int>(k)));
 		const U128 quotient = U128Shr(rounded, static_cast<int>(k) + 1);
 		magnitude_exceeds_clamp = (quotient.hi != 0) || quotient.lo > 127;
+		magnitude_exceeds_int64 = (quotient.hi != 0) || quotient.lo > kInt64MaxU;
 		raw = static_cast<int64_t>(quotient.lo);
 	} else {
 		// A negative composite exponent is an exact left shift -- no
@@ -285,10 +297,12 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 		const U128 shifted = U128Shl(magnitude, shift);
 		if (shift >= 128) {
 			magnitude_exceeds_clamp = (magnitude.lo != 0 || magnitude.hi != 0);
+			magnitude_exceeds_int64 = magnitude_exceeds_clamp;
 		} else {
 			const U128 verify = U128Shr(shifted, shift);
-			magnitude_exceeds_clamp = (verify.lo != magnitude.lo || verify.hi != magnitude.hi) ||
-			                           shifted.hi != 0 || shifted.lo > 127;
+			const bool shift_lost_bits = (verify.lo != magnitude.lo || verify.hi != magnitude.hi);
+			magnitude_exceeds_clamp = shift_lost_bits || shifted.hi != 0 || shifted.lo > 127;
+			magnitude_exceeds_int64 = shift_lost_bits || shifted.hi != 0 || shifted.lo > kInt64MaxU;
 		}
 		raw = static_cast<int64_t>(shifted.lo);
 	}
@@ -302,6 +316,13 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	// either fires. This has no effect whatsoever on `raw`.
 	if (out_saturation_count != nullptr && (magnitude_exceeds_clamp || raw < -127 || raw > 127)) {
 		*out_saturation_count += 1;
+	}
+	// T-1377 / D-SLM457: the SECOND, distinct signal -- written exactly once,
+	// never accumulated (unlike `out_saturation_count`'s own per-sequence
+	// accumulation) -- so `ResidualReconcileSite` can check it per element,
+	// immediately, this call alone. Has no effect whatsoever on `raw`.
+	if (out_magnitude_exceeded_int64 != nullptr) {
+		*out_magnitude_exceeded_int64 = magnitude_exceeds_int64;
 	}
 	return raw;
 }
@@ -543,18 +564,35 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 	const int64_t r_h = CarriedScaleReciprocal(stream_scale.m);
 
 	std::vector<int64_t> wide(hidden_size);
+	// T-1377 / D-SLM457 (§7.2b, §14.14): checked across the WHOLE row before
+	// step 4's funnel call runs, on the funnel's own "reject leaves output
+	// untouched" convention -- a rejection midway through the loop must not
+	// leave `out_codes`/`*out_scale` partially written, and neither is touched
+	// by this loop regardless (only the local `wide` buffer is).
+	bool any_magnitude_out_of_domain = false;
 	for (size_t i = 0; i < hidden_size; ++i) {
 		// Step 2: the SAME primitive C27's landing composite uses, at a
 		// different call site -- there the reciprocal is the static offline
 		// one, here it is derived from the stream at runtime. Unclamped in the
 		// saturation-counting sense: T-518's counter belongs to C27's landing
-		// site, not to this one, so no counter is passed.
-		const int64_t reconciled =
-		    LandingRescale(static_cast<int64_t>(branch_code[i]), branch_scale.m, r_h,
-		                   branch_scale.e, stream_scale.e, /*out_saturation_count=*/nullptr);
+		// site, not to this one, so no counter is passed. The second,
+		// distinct out-parameter IS checked here -- this site's own derived-
+		// operand predicate (§7.2's second limb, fourth bullet).
+		bool magnitude_exceeded = false;
+		const int64_t reconciled = LandingRescale(
+		    static_cast<int64_t>(branch_code[i]), branch_scale.m, r_h, branch_scale.e,
+		    stream_scale.e, /*out_saturation_count=*/nullptr, &magnitude_exceeded);
+		any_magnitude_out_of_domain = any_magnitude_out_of_domain || magnitude_exceeded;
 		// Step 3: the wide add, both operands now nominally at the stream's
-		// own scale.
+		// own scale. Computed even on a flagged element (matching the
+		// funnel's own step-5-before-step-6 ordering: the check governs
+		// whether the row's WRITE-OUT proceeds, not whether the loop itself
+		// runs to completion) -- `wide` is a local buffer never exposed to
+		// the caller, so this has no observable effect when rejected below.
 		wide[i] = reconciled + static_cast<int64_t>(stream_code[i]);
+	}
+	if (any_magnitude_out_of_domain) {
+		return SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain;
 	}
 
 	// Step 4: the funnel's own left-associated fold (D-SLM57). The incoming

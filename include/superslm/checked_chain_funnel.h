@@ -161,6 +161,21 @@ enum class SslmForwardStatus {
 	                                          // this loop used to report instead, sending a host
 	                                          // debugging `SoftmaxRowWidthOutOfDomain` to inspect a
 	                                          // width that is already in domain.
+	// --- T-1377 / D-SLM457 (SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.2b, Sec14.14) ---
+	ResidualReconciliationMagnitudeOutOfDomain,  // C26's residual-reconciliation site
+	                                          // (ResidualReconcileSite, forward_sites.h/.cpp): the
+	                                          // true 128-bit magnitude `LandingRescale` computes for
+	                                          // at least one element of the row does not fit int64
+	                                          // (`out_magnitude_exceeded_int64`, LandingRescale's own
+	                                          // second, distinct out-parameter) -- a runtime check on
+	                                          // an already-computed loss signal, not a static margin
+	                                          // (Sec7.2b's derivation; the exponent `CarriedScale.e`
+	                                          // carries no domain check anywhere in this tree, so no
+	                                          // closed-form threshold independent of layer count
+	                                          // exists). Distinct from the existing
+	                                          // `out_saturation_count`/[-127,127] clamp signal, which
+	                                          // is C27's own and stays coupled to that caller's clamp
+	                                          // range.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

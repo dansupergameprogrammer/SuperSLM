@@ -12192,6 +12192,170 @@ static void TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRigh
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T-1377 / D-SLM457 (SuperSLM_S3a_WalkingSkeleton_Plan.md §7.2b, §14.14, §11
+// S3.5, §13 dim 5/6/7): the residual-reconciliation site's own derived-operand
+// predicate. The witness pair below is independently derived (not copied from
+// the code-review casebook's own operands) by direct execution of the real,
+// already-shipped `LandingRescale`/`DynamicScaleReciprocal` -- sweeping
+// `stream_scale.e` at a fixed `branch_scale.e = 79` and `branch_code = 127`
+// finds the exact one-exponent-step boundary where the true 128-bit magnitude
+// stops fitting `int64`: at `stream_e = 24` the true value
+// (6785758296680197044) fits and is returned correctly; at `stream_e = 23`
+// the true value (13571516593360394087) does NOT fit `int64` -- it wraps to
+// -4875227480349157529, a NEGATIVE result from a POSITIVE branch code, the
+// same "wrong-sign, large-magnitude" shape the review's own witness pair
+// showed (Significant 5, `Claude/Poirot/e4b398c-s3.4-s3.5-mlp-act-and-layer-
+// loop-review-2026-07-29.md` §4). This is the negative control every cell
+// below states explicitly: the OLD, unguarded arithmetic really does produce
+// a silently wrong value at `stream_e = 23`, which is exactly why a runtime
+// check -- not a static margin -- is the correct construction (§7.2b).
+// ---------------------------------------------------------------------------
+
+namespace {
+// The independently-derived witness operands (see the block comment above).
+// `kWitnessStreamM` is reused from `TestResidualReconcileSiteC26FeatureOracle
+// AgainstTheRealPrimitives`'s own stream mantissa, so `DynamicScaleReciprocal`
+// is exercised at an already-proven-canonical value rather than an invented
+// one; `kWitnessBranchM`/`kWitnessBranchCode`/`kWitnessBranchE` are the
+// operands the sweep was run against.
+constexpr int64_t kWitnessStreamM = INT64_C(1392366989);
+constexpr int64_t kWitnessBranchM = INT64_C(2064898088);
+constexpr int64_t kWitnessBranchCode = 127;
+constexpr int64_t kWitnessBranchE = 79;
+constexpr int64_t kWitnessStreamEAccepted = 24;
+constexpr int64_t kWitnessStreamERejected = 23;
+constexpr int64_t kWitnessReconciledAccepted = INT64_C(6785758296680197044);
+constexpr int64_t kWitnessReconciledRejectedWrongSign = INT64_C(-4875227480349157529);
+}  // namespace
+
+// §13 dim 5/6, §14.14: the `LandingRescale`-level half of the witness pair --
+// direct calls, no `ResidualReconcileSite` composition, isolating the new
+// out-parameter itself. This is the RED cell for T-1377's construction: it
+// does not compile until `LandingRescale` gains `out_magnitude_exceeded_int64`
+// (§7.2b), and it is discriminating (not merely present) because it pins the
+// exact reconciled value at both operating points AND asserts the flag.
+static void TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater() {
+	const int64_t r_h = superslm::DynamicScaleReciprocal(kWitnessStreamM);
+
+	bool accepted_flag = true;  // poisoned -- must become false
+	const int64_t accepted_raw =
+	    superslm::LandingRescale(kWitnessBranchCode, kWitnessBranchM, r_h, kWitnessBranchE,
+	                              kWitnessStreamEAccepted, /*out_saturation_count=*/nullptr,
+	                              &accepted_flag);
+	CHECK_MSG(accepted_raw == kWitnessReconciledAccepted,
+	          "LandingRescale(branch_code=%lld, m_a=%lld, r_t=%lld, e_a=%lld, e_t=%lld) == %lld, "
+	          "want %lld (the operating point this witness pair calls ACCEPTED)",
+	          (long long)kWitnessBranchCode, (long long)kWitnessBranchM, (long long)r_h,
+	          (long long)kWitnessBranchE, (long long)kWitnessStreamEAccepted,
+	          (long long)accepted_raw, (long long)kWitnessReconciledAccepted);
+	CHECK_MSG(!accepted_flag,
+	          "out_magnitude_exceeded_int64 == true at stream_e=%lld, want false -- the true "
+	          "magnitude fits int64 here (%lld), so this must not be flagged",
+	          (long long)kWitnessStreamEAccepted, (long long)kWitnessReconciledAccepted);
+
+	bool rejected_flag = false;  // poisoned -- must become true
+	const int64_t rejected_raw =
+	    superslm::LandingRescale(kWitnessBranchCode, kWitnessBranchM, r_h, kWitnessBranchE,
+	                              kWitnessStreamERejected, /*out_saturation_count=*/nullptr,
+	                              &rejected_flag);
+	// Negative control, stated explicitly (§7.2b): a POSITIVE branch code
+	// reconciling to a NEGATIVE raw value is exactly the silently-wrong
+	// result the unguarded construction produces -- this assertion is what
+	// proves the cell is discriminating rather than checking a flag that
+	// happens to be true for an unrelated reason.
+	CHECK_MSG(rejected_raw == kWitnessReconciledRejectedWrongSign,
+	          "LandingRescale(..., e_t=%lld) == %lld, want %lld -- the unguarded raw value at one "
+	          "exponent step past the accepted point (negative control: positive branch_code=%lld "
+	          "must reconcile to a NEGATIVE value here for this cell to discriminate anything)",
+	          (long long)kWitnessStreamERejected, (long long)rejected_raw,
+	          (long long)kWitnessReconciledRejectedWrongSign, (long long)kWitnessBranchCode);
+	CHECK_MSG(rejected_raw < 0,
+	          "sanity: the rejected operating point's raw value must be negative for a positive "
+	          "branch_code (%lld) -- got %lld", (long long)kWitnessBranchCode,
+	          (long long)rejected_raw);
+	CHECK_MSG(rejected_flag,
+	          "out_magnitude_exceeded_int64 == false at stream_e=%lld, want true -- the true "
+	          "magnitude (13571516593360394087) does not fit int64 here",
+	          (long long)kWitnessStreamERejected);
+}
+
+// §11 S3.5's own red cell, §13 dim 5/6/7: the `ResidualReconcileSite`-level
+// half -- the same witness pair, driven through the real site composition, so
+// the wiring (not only `LandingRescale` in isolation) is proven. Accepted at
+// `stream_e = 24` (Ok, matching the funnel's own oracle exactly, same shape as
+// `TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives` above);
+// REJECTED at `stream_e = 23` with the new status, `out_codes`/`*out_scale`
+// left at their sentinel values (the funnel's own "reject leaves output
+// untouched" contract, extended to this site's own domain check per §7.2b).
+static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	constexpr size_t kHidden = 1;
+	const int8_t branch_code[kHidden] = {static_cast<int8_t>(kWitnessBranchCode)};
+	const int8_t stream_code[kHidden] = {0};
+	const CarriedScale branch_scale{/*m=*/kWitnessBranchM, /*e=*/kWitnessBranchE};
+	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
+
+	// Accepted operating point: `LandingRescale`'s own new predicate must NOT
+	// fire (proven directly above), so the site must not return the new
+	// status. It is NOT asserted Ok here: at a magnitude this close to
+	// int64's own boundary (6785758296680197044, this witness's own
+	// accepted value), the funnel's OWN, already-shipped C29 domain check
+	// (`D' <= 2^31`, unrelated to this predicate) also rejects downstream --
+	// executed and confirmed `ChainInputOutOfDomain`, asserted explicitly so
+	// a future change to either check is caught rather than masked by a
+	// loose `!= ResidualReconciliationMagnitudeOutOfDomain` alone. The
+	// funnel-domain, small-magnitude "reaches Ok" case is already covered by
+	// `TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives`
+	// above; this cell's own job is only the residual predicate's boundary.
+	{
+		const CarriedScale stream_scale{/*m=*/kWitnessStreamM, /*e=*/kWitnessStreamEAccepted};
+		std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
+		                                                stream_scale, kHidden, site_constant,
+		                                                out_codes.data(), &out_scale);
+		CHECK_MSG(result != SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
+		          "ResidualReconcileSite status == %s at the ACCEPTED operating point "
+		          "(stream_e=%lld) -- must not be ResidualReconciliationMagnitudeOutOfDomain, "
+		          "the true magnitude fits int64 here",
+		          SslmForwardStatusName(result), (long long)kWitnessStreamEAccepted);
+		CHECK_MSG(result == SslmForwardStatus::ChainInputOutOfDomain,
+		          "ResidualReconcileSite status == %s at the ACCEPTED operating point "
+		          "(stream_e=%lld), want ChainInputOutOfDomain (the funnel's own C29 domain check, "
+		          "unrelated to this predicate, rejects this witness's own large-but-in-int64-"
+		          "domain magnitude downstream)",
+		          SslmForwardStatusName(result), (long long)kWitnessStreamEAccepted);
+	}
+
+	// Rejected operating point: one exponent step away, same everything else.
+	{
+		const CarriedScale stream_scale{/*m=*/kWitnessStreamM, /*e=*/kWitnessStreamERejected};
+		std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
+		CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+		auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
+		                                                stream_scale, kHidden, site_constant,
+		                                                out_codes.data(), &out_scale);
+		CHECK_MSG(result == SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain,
+		          "ResidualReconcileSite status == %s at the REJECTED operating point "
+		          "(stream_e=%lld), want ResidualReconciliationMagnitudeOutOfDomain -- one "
+		          "exponent step from the accepted point above, the unguarded construction's own "
+		          "wrong-sign result (§7.2b) is exactly what this predicate must now catch",
+		          SslmForwardStatusName(result), (long long)kWitnessStreamERejected);
+		CHECK_MSG(out_codes[0] == INT8_C(-99),
+		          "out_codes[0] == %d after rejection, want the sentinel -99 untouched (§7.2's "
+		          "convention: a rejection leaves output untouched)",
+		          static_cast<int>(out_codes[0]));
+		CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+		          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) "
+		          "untouched",
+		          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+	}
+}
+
 namespace {
 
 // A minimal, real, two-layer LayerWeights fixture (hidden_size=2, one
@@ -14136,6 +14300,9 @@ int main(int argc, char** argv) {
 	// is red against the real symbols' unconditional-WorkspaceTooSmall stubs.
 	TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives();
 	TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation();
+	// T-1377 / D-SLM457 (§7.2b, §14.14, §11 S3.5's new red cell).
+	TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater();
+	TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain();
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();

@@ -142,17 +142,196 @@ _EXPECTED_DOOR_FUNCTIONS = (
     "CarriedScaleReciprocal",
 )
 
-# A top-level (column-0) C++ function DEFINITION's signature: a return type,
-# the function name, a parenthesized parameter list with no nested parens (true
-# of every function in this file -- no default-argument or template-parameter
-# parens appear inside a top-level signature here), then whatever separates the
-# parameter list from the opening brace (qualifiers like `noexcept`, or
-# nothing). Matched against the WHOLE FILE TEXT (re.DOTALL), not line by line,
-# so a signature split across several lines is still found as one match.
-_TOP_LEVEL_FUNCTION_START = re.compile(
-    r"^[A-Za-z_][\w:*&<>,\s]*?\b([A-Za-z_]\w*)\s*\([^(){}]*\)\s*(?:noexcept\s*)?\{",
-    re.MULTILINE,
-)
+# --- T-1378: a comment/indentation/paren-robust top-level function scanner. ---
+#
+# The prior version anchored a function definition's signature at column 0 and
+# delimited its parameter list with `[^(){}]*` (no parens allowed inside), then
+# counted braces over the RAW file text to find the body's extent. Executed,
+# three independently-constructed adversarial doors passed this scan silently
+# (Poirot 9d8b38e-s3.4-s3.5-review-remainder-confirmation-2026-07-30.md,
+# Significant 1): a door whose parameter list itself contains parens (a
+# default-argument constructor call), a door indented inside `namespace
+# superslm { ... }` rather than at column 0, and a door preceded by a `}`
+# inside a `//` comment (which the raw brace count treated as a real close,
+# truncating the body early and losing the leaf call inside it). All three are
+# fixed by construction here, not by patching the old regex further:
+#
+#   1. Comments and string/char literals are stripped (blanked to spaces,
+#      same length, same newline positions) before EITHER the signature match
+#      or the brace count ever runs (`_strip_comments_and_strings`) -- a `}`
+#      or a `(` inside one can no longer be mistaken for real source
+#      structure, closing the third shape above outright.
+#   2. A function's parameter list is found by a genuine balanced-parenthesis
+#      scan, not a no-parens character class -- closing the first shape.
+#   3. Brace CONTEXT is tracked (a stack of "namespace" / "other" tags, one
+#      per currently-open brace) rather than column position, so a
+#      definition nested inside any depth of `namespace { ... }` is found
+#      exactly like one at column 0, while a definition nested inside a
+#      struct/class/enum body, a control-structure body, a lambda, or
+#      another function's own body is still excluded -- closing the second
+#      shape and generalizing past the one-level case it was found at.
+#
+# Independently validated against a population of six constructed doors,
+# each executed against BOTH the prior version and this one
+# (test_find_leaf_forwarding_doors_catches_the_independently_found_population
+# below): the three shapes above (missed before, caught now), a fourth
+# variant using a `/* ... } ... */` block comment rather than `//` (missed
+# before for the same reason as the third; caught now), a fifth combining the
+# paren-in-params and indentation shapes on one door at TWO levels of nested
+# `namespace { ... }` rather than one (missed before; caught now, proving the
+# fix generalizes past the exact nesting depth it was found at), and a false-
+# positive control: a banned leaf's name and a `{`/`}`-bearing fake signature
+# inside a STRING LITERAL, which must NOT be reported as a door either before
+# or after (both pass, unchanged -- this fix narrows what escapes detection,
+# it does not widen what counts as a door).
+#
+# `StandardsDocument.md` Sec4: a new structure is validated against an
+# independently-found population before it is trusted -- the population above
+# is not the three shapes' own author re-deriving them, it is a wider net
+# cast deliberately before hardening, per the same section's own instruction.
+
+
+def _strip_comments_and_strings(text: str) -> str:
+    """Returns a string the SAME LENGTH as `text`, with every `//` line
+    comment, `/* ... */` block comment, and string/char literal's CONTENTS
+    replaced by spaces (newlines preserved, so line-oriented reasoning
+    elsewhere stays valid even though nothing here currently needs it).
+    Positions map 1:1 onto the original text -- a caller slicing
+    `text[a:b]` using indices found against this stripped text gets the REAL
+    source, comments included; only the SCANNING (signature matching, brace
+    depth) ever sees the stripped version, so a `}`, a `(`, or a leaf's name
+    inside a comment or a string literal can no longer be mistaken for real
+    source structure. A text-level scan, not a preprocessor -- unterminated
+    comments/strings at end of file are closed at EOF rather than raising,
+    matching this module's existing over-approximation doctrine (module
+    docstring above: a false positive is accepted, a soundness gap is not)."""
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            start = i
+            while i < n and text[i] != "\n":
+                i += 1
+            out.append(" " * (i - start))
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            start = i
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i = min(i + 2, n)
+            chunk = text[start:i]
+            out.append("".join(ch if ch == "\n" else " " for ch in chunk))
+            continue
+        if c in ("\"", "'"):
+            quote = c
+            start = i
+            i += 1
+            while i < n and text[i] != quote:
+                i += 2 if text[i] == "\\" and i + 1 < n else 1
+            i = min(i + 1, n)
+            out.append(" " * (i - start))
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+# A C++ function DEFINITION's signature HEAD: a return-type-ish prefix ending
+# in an identifier (the function's own name, captured), immediately followed
+# by `(` -- the same shape the prior version used, unchanged, because it
+# already correctly rejects a bare call expression (`identifier(args)` has
+# only ONE identifier before the `(`; a definition's return type supplies a
+# second). No `^` anchor and no `[^(){}]*` parameter-list restriction: this
+# module never anchors the match itself, it anchors the SEARCH POSITION via
+# `re.Pattern.match(text, pos)`, and the parameter list is resolved by a
+# balanced-parenthesis scan below, not by this pattern.
+_SIGNATURE_HEAD_RE = re.compile(r"[A-Za-z_][\w:*&<>,\s]*?\b([A-Za-z_]\w*)\s*\(")
+# Whatever separates a signature's closing `)` from its opening `{`:
+# qualifiers like `noexcept`, or nothing.
+_SIGNATURE_TAIL_RE = re.compile(r"\s*(?:noexcept\s*)?\{")
+# A `{` is a namespace opener when the (stripped) text immediately before it
+# ends in the `namespace` keyword, optionally named -- matches both
+# `namespace superslm {` and the anonymous `namespace {`.
+_NAMESPACE_OPENER_RE = re.compile(r"namespace(\s+[A-Za-z_]\w*)?\s*$")
+
+
+def _is_word_char(c: str) -> bool:
+    return c.isalnum() or c == "_"
+
+
+def _brace_tag(cleaned: str, brace_pos: int) -> str:
+    """Classifies a `{` at `brace_pos` in `cleaned` (already comment/string-
+    stripped) by looking back over the text immediately before it:
+    "namespace" (a named or anonymous namespace body -- the only tag
+    `find_top_level_function_bodies` treats as transparent) or "other"
+    (anything else: a struct/class/enum body, an if/for/while/do/switch
+    body, a lambda, an initializer list -- all of which make everything
+    inside them non-top-level for this scanner's purposes)."""
+    look_start = max(0, brace_pos - 200)
+    if _NAMESPACE_OPENER_RE.search(cleaned[look_start:brace_pos]):
+        return "namespace"
+    return "other"
+
+
+def find_top_level_function_bodies(text: str) -> list[tuple[str, int, int]]:
+    """Every top-level function DEFINITION in `text`: `(name, body_start,
+    body_end)` with `body_start`/`body_end` indices into `text` ITSELF (the
+    original, unstripped text), in file order. "Top-level" means every brace
+    enclosing the definition, if any, opens a namespace (named or anonymous,
+    any nesting depth) -- never a struct/class/enum body, a control-structure
+    body, a lambda, or another function's own body. See the module comment
+    above (T-1378) for why this replaced a column-0-anchored, no-nested-
+    parens regex over raw text."""
+    cleaned = _strip_comments_and_strings(text)
+    n = len(cleaned)
+    stack: list[str] = []
+    pending_names: list[str] = []
+    pending_starts: list[int] = []
+    results: list[tuple[str, int, int]] = []
+    i = 0
+    while i < n:
+        ch = cleaned[i]
+        if ch == "{":
+            stack.append(_brace_tag(cleaned, i))
+            i += 1
+            continue
+        if ch == "}":
+            if stack:
+                tag = stack.pop()
+                if tag == "function":
+                    results.append((pending_names.pop(), pending_starts.pop(), i + 1))
+            i += 1
+            continue
+        starts_ident = _is_word_char(ch) and not ch.isdigit()
+        prev_is_ident = i > 0 and _is_word_char(cleaned[i - 1])
+        if starts_ident and not prev_is_ident:
+            head = _SIGNATURE_HEAD_RE.match(cleaned, i)
+            if head is not None:
+                depth = 1
+                j = head.end()
+                while j < n and depth > 0:
+                    if cleaned[j] == "(":
+                        depth += 1
+                    elif cleaned[j] == ")":
+                        depth -= 1
+                    j += 1
+                if depth == 0:
+                    tail = _SIGNATURE_TAIL_RE.match(cleaned, j)
+                    if tail is not None:
+                        brace_pos = tail.end() - 1
+                        if all(t == "namespace" for t in stack):
+                            stack.append("function")
+                            pending_names.append(head.group(1))
+                            pending_starts.append(brace_pos)
+                        else:
+                            stack.append("other")
+                        i = brace_pos + 1
+                        continue
+        i += 1
+    return results
 
 
 def find_leaf_forwarding_doors(
@@ -162,31 +341,21 @@ def find_leaf_forwarding_doors(
 ) -> list[str]:
     """Every top-level function DEFINED in `path` whose body names a banned leaf,
     excluding `exclude` (the funnel's own checked entry points, which are
-    SUPPOSED to). A function's extent is found by matching its signature at
-    column 0 (`_TOP_LEVEL_FUNCTION_START`, whole-file text so a multi-line
-    signature is still one match) through the opening `{` that match ends on,
-    then counting brace depth character by character from there to the matching
-    close -- a text-level approximation, not a real tokenizer, matching this
-    module's existing text-scan precedent (the docstring above) rather than
-    adding a second parsing strategy. Returns names in file order, so the
-    caller gets a stable diff against `_EXPECTED_DOOR_FUNCTIONS` when one
-    changes."""
+    SUPPOSED to). A function's extent comes from `find_top_level_function_bodies`
+    (T-1378): comment/string-stripped for both the signature match and the
+    brace count, a balanced-parenthesis parameter list, and brace-CONTEXT
+    tracking rather than column position -- see that function and the module
+    comment above for what this replaced and why. The body text searched for
+    a leaf name is sliced from the ORIGINAL (unstripped) text, so a leaf name
+    inside a comment inside an otherwise-legitimate function still counts as
+    a hit, matching this module's existing over-inclusive-on-comments
+    convention (the module docstring's own "a ban, not a classifier").
+    Returns names in file order, so the caller gets a stable diff against
+    `_EXPECTED_DOOR_FUNCTIONS` when one changes."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
     doors: list[str] = []
-    for m in _TOP_LEVEL_FUNCTION_START.finditer(text):
-        name = m.group(1)
-        body_start = m.end() - 1  # the opening '{' this match ends on
-        depth = 0
-        body_end = len(text)
-        for i in range(body_start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    body_end = i + 1
-                    break
+    for name, body_start, body_end in find_top_level_function_bodies(text):
         body_text = text[body_start:body_end]
         if name not in exclude and any(_leaf_pattern(leaf).search(body_text) for leaf in leaves):
             doors.append(name)
