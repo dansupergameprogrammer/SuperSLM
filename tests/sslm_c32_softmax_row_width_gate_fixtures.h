@@ -53,7 +53,7 @@ inline constexpr SoftmaxRowOffRatioWitness kSoftmaxRowOffRatioWitness = {
 // `m_usable` bound now exists and this witness exercises it): the same
 // off-ratio mechanism as witness 1, with q_c >= 0 so CheckSoftmaxRowWidthDomain's
 // own `q_c < 0` rejection does not intercept it before the kernel's per-element
-// check (src/intmath.cpp:598-602) is reached. M = q_b*q_b + q_c is trivially
+// check (src/intmath.cpp:625) is reached. M = q_b*q_b + q_c is trivially
 // inside the ratified ceiling; the row's real evaluated peak (at scores[1])
 // vastly exceeds it regardless. ---
 

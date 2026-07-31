@@ -132,7 +132,7 @@ def _build_sign_asymmetry_witness() -> dict:
 
 # =====================================================================
 # Witness 4 -- the kernel's own per-element ceiling check
-# (src/intmath.cpp:598-602, D-SLM380) is pinned by nothing (Poirot
+# (src/intmath.cpp:592-593,625, D-SLM380) is pinned by nothing (Poirot
 # fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md, Significant 3):
 # every witness above carries `q_c <= 0`, so `CheckSoftmaxRowWidthDomain`'s own
 # `q_c < 0` rejection (checked_chain_funnel.cpp:400-402) satisfies every
@@ -282,7 +282,7 @@ def generate() -> str:
         "// `m_usable` bound now exists and this witness exercises it): the same",
         "// off-ratio mechanism as witness 1, with q_c >= 0 so CheckSoftmaxRowWidthDomain's",
         "// own `q_c < 0` rejection does not intercept it before the kernel's per-element",
-        "// check (src/intmath.cpp:598-602) is reached. M = q_b*q_b + q_c is trivially",
+        "// check (src/intmath.cpp:625) is reached. M = q_b*q_b + q_c is trivially",
         "// inside the ratified ceiling; the row's real evaluated peak (at scores[1])",
         "// vastly exceeds it regardless. ---",
         "",
