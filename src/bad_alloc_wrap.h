@@ -3,7 +3,7 @@
 // point in the "throws only std::bad_alloc" contract's derived population
 // wraps itself with. std::bad_alloc crosses unchanged; every other
 // std::exception-derived type narrows to std::bad_alloc. This is a
-// rename-and-wrap, not a rewrite -- the eighteen sites' own validation logic
+// rename-and-wrap, not a rewrite -- the nineteen sites' own validation logic
 // is unchanged; only renamed to a *Impl-suffixed inner call and wrapped.
 //
 // tools/ci/check_bad_alloc_contract.py's "check wrapping" step looks for
@@ -42,9 +42,12 @@ namespace internal {
 // callable's return type via `decltype(fn())`, which covers `void` the same
 // way it covers every other return type (a `return` statement of a void
 // expression inside a void-returning function is well-formed) -- one shape
-// for all eighteen sites' return types (SslmStatus, SslmModelStatus, bool,
-// std::string, std::vector<T>, void), matching design Sec3.1's "two handling
-// shapes... covering all eighteen sites with one helper".
+// for all nineteen sites' return types (SslmStatus, SslmModelStatus, bool,
+// std::string, std::vector<T>, void; JsonEscape's std::string is already an
+// instantiated case) -- matching design Sec3.1's "two handling shapes...
+// covering all eighteen sites with one helper" (a verbatim quote of the
+// design text as authored; the design's own table is owed a matching
+// amendment to nineteen, T-1475).
 template <typename Fn>
 auto WrapBadAllocContract(Fn&& fn) -> decltype(fn()) {
 	try {

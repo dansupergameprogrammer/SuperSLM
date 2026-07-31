@@ -82,7 +82,7 @@ def test_pinned_oracle_has_nineteen_sites():
         f"the pinned oracle should carry the nineteen sites the corrected rule "
         f"derives as of T-1475 (JsonEscape's promotion into proof_manifest.h); "
         f"has {len(oracle)} -- regenerate tests/ci/bad_alloc_membership_expected.txt "
-        f"only after confirming the population change is deliberate, never silently"
+        f"only after confirming the design's own table changed, never silently"
     )
 
 
@@ -144,15 +144,18 @@ def test_artifact_move_special_members_are_excluded_under_every_strategy():
 
 
 @requires_clang
-def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
+def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
     """Guard-vitality cell (design Sec3.2, "New cell -- the membership-check
     job's own discriminating power"): a throwaway function satisfying the
     rule, added to a scratch copy of the include tree, must be flagged; once
-    removed, the population returns to exactly the pinned eighteen. Proves
-    THIS reference tool's own discriminating power -- StandardsDocument
-    Sec4's "a check that has never been shown able to fail is not shown to
-    cover anything," applied to the independent derivation tool itself, ahead
-    of the production CI gate that must reproduce it."""
+    removed, the population returns to exactly the pinned nineteen (T-1475
+    renumbered this from eighteen to nineteen when JsonEscape was promoted
+    into proof_manifest.h; the injected function was, and remains, one past
+    the pinned oracle's own count, whatever that count is). Proves THIS
+    reference tool's own discriminating power -- StandardsDocument Sec4's "a
+    check that has never been shown able to fail is not shown to cover
+    anything," applied to the independent derivation tool itself, ahead of
+    the production CI gate that must reproduce it."""
     import shutil
 
     scratch_include = tmp_path / "include"
@@ -160,7 +163,7 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
 
     artifact_h = scratch_include / "superslm" / "artifact.h"
     original = artifact_h.read_text(encoding="utf-8")
-    assert "SUPERSLM_TEST_INJECTED_NINETEENTH_FUNCTION" not in original
+    assert "SUPERSLM_TEST_INJECTED_TWENTIETH_FUNCTION" not in original
 
     injected = original.replace(
         "} // namespace superslm",
@@ -168,7 +171,7 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
         "// non-noexcept, non-deleted static function taking a\n"
         "// (const uint8_t*, size_t) pair -- condition 4(a) satisfied,\n"
         "// deliberately left unwrapped. Must be flagged by the derivation.\n"
-        "struct SUPERSLM_TEST_INJECTED_NINETEENTH_FUNCTION {\n"
+        "struct SUPERSLM_TEST_INJECTED_TWENTIETH_FUNCTION {\n"
         "\tstatic SslmStatus Probe(const uint8_t* data, size_t size);\n"
         "};\n"
         "} // namespace superslm",
@@ -186,14 +189,14 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
     assert injected_hits[0]["header"] == "artifact.h"
 
     # Every other site must be unaffected -- the injected function adds
-    # exactly one member, it does not perturb the other eighteen.
+    # exactly one member, it does not perturb the other nineteen.
     oracle = _load_pinned_oracle()
     derived_without_probe = {
         (m["header"], m["line"], m["name"]) for m in population_with_injection if m["name"] != "Probe"
     }
     assert derived_without_probe == oracle
 
-    # Restore and confirm the population returns to exactly the pinned eighteen.
+    # Restore and confirm the population returns to exactly the pinned nineteen.
     artifact_h.write_text(original, encoding="utf-8")
     population_restored = _keyset(dbam.derive_population_from_headers_dir(str(tmp_path)))
     assert population_restored == oracle
@@ -202,7 +205,7 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 # The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
 # is built, and design Sec3.3's rename-and-wrap has landed for every one of
-# the eighteen derived members (src/bad_alloc_wrap.h's WrapBadAllocContract,
+# the nineteen derived members (src/bad_alloc_wrap.h's WrapBadAllocContract,
 # included by all five src/*.cpp files the population's members live in). The
 # reference tool above (derive_bad_alloc_membership.py) proves the POPULATION
 # is derivable and stable; the cells below confirm the CI GATE that reproduces
@@ -210,7 +213,8 @@ def test_vitality_injected_nineteenth_function_is_flagged(tmp_path):
 # reports zero unwrapped members and exits 0 -- design Sec3.3 step 3's other
 # half (the RED-state half, "confirm it fails naming exactly the eighteen
 # sites," was proven at the design's own authoring and is not re-proven here;
-# re-creating that state would mean reverting the shipped wrap).
+# re-creating that state would mean reverting the shipped wrap -- a verbatim
+# quote of the design text, which described eighteen sites at that time).
 #
 # CLI contract: `tools/ci/check_bad_alloc_contract.py --list-unwrapped` prints
 # one `header:line:name` row per currently-unwrapped member of the derived
@@ -230,7 +234,7 @@ def test_production_membership_check_tool_exists():
 
 @requires_clang
 def test_production_membership_check_reports_zero_unwrapped_members():
-    """S-HARDEN-7's rename-and-wrap has landed for every one of the eighteen
+    """S-HARDEN-7's rename-and-wrap has landed for every one of the nineteen
     sites, so the gate's own --list-unwrapped must report none, and exit 0."""
     repo_root = dbam._REPO_ROOT
     tool_path = os.path.join(repo_root, "tools", "ci", "check_bad_alloc_contract.py")

@@ -366,8 +366,10 @@ void SectionIExp() {
 					// `con` is digested unconditionally, refused or not. This population DOES
 					// contain refused triples (the F21-strike quadruple q=0, q_ln2=887904998,
 					// q_b=1733160715, q_c=INT64_MAX among them, per the header's own documented
-					// example) -- but of `IExpDomain`'s four outcomes, only `kNotRepresentable`
-					// is reachable by this sweep, and only `kNotRepresentable` leaves `con`
+					// example) -- but of `IExpDomain`'s four REFUSAL outcomes (`kOk` is the
+					// fifth and is not a refusal; it is reached whenever `in_domain` is true,
+					// three lines above, gating `IExpEvaluate`), only `kNotRepresentable` is
+					// reachable by this sweep, and only `kNotRepresentable` leaves `con`
 					// populated the way this comment relies on. The other three (`kBadQ`,
 					// `kBadQLn2`, `kBadQB`) all return BEFORE `out` is written and would digest
 					// as (0, 0) if they fired here -- they cannot, for this population
@@ -387,13 +389,30 @@ void SectionIExp() {
 					// ever skipped for a refused triple, identically in both arms. (T-1480: a
 					// future edit widening `kQln2`/`kQb` to include a `kBadQLn2`/`kBadQB`-firing
 					// value would silently move this digest; the load-bearing facts above live
-					// only in the array literals near the top of this loop.)
+					// only in the array literals near the top of this loop -- pinned structurally
+					// below, T-1496, rather than by this prose alone, which has already been
+					// wrong twice: a plain `assert` would not do, since every one of this
+					// harness's six CI jobs builds Release (Linux/macOS
+					// -DCMAKE_BUILD_TYPE=Release, Windows --config Release), which defines
+					// NDEBUG and compiles `assert` out on the exact configs that matter; this
+					// file's own established idiom for a locally-detected invariant violation
+					// -- `sec.ok = false` plus `sec.note`, matching the scalar-vs-SIMD checks
+					// elsewhere in this file -- is checked by every one of those jobs' own CI
+					// steps (`grep -q '^local_invariant_failures 0$'` / the PowerShell
+					// equivalent) regardless of NDEBUG.)
 					//
 					// S-HARDEN-0 also split the value out of the single-call form, so the
 					// evaluation moved inside this arm: `IExpEvaluate` takes the construction
 					// (which carries its own q_c) rather than the four constants again.
 					superslm::IExpConstruction con;
-					superslm::IExpConstruct(q, ln2, qb, qc, &con);
+					const superslm::IExpDomain dom = superslm::IExpConstruct(q, ln2, qb, qc, &con);
+					if (dom != superslm::IExpDomain::kOk && dom != superslm::IExpDomain::kNotRepresentable) {
+						sec.ok = false;
+						sec.note = "IExpConstruct returned a refusal outcome (kBadQ/kBadQLn2/kBadQB) "
+						           "this population's own kQln2/kQb literals were constructed to "
+						           "exclude -- a future widening moved outside the bounds the comment "
+						           "block above this loop assumes";
+					}
 					sec.sink.I64(con.z());
 					sec.sink.I64(con.base());
 					if (in_domain) sec.sink.I64(superslm::IExpEvaluate(con));

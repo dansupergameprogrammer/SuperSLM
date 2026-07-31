@@ -372,11 +372,14 @@ jobs:
 
   # S-HARDEN-7 (F5, design Sec3.1, T-411): the "throws only std::bad_alloc"
   # contract's `membership-check` job. Mechanically, on every run: derives the
-  # eighteen-site population from the nine include/superslm/*.h headers via a
-  # Clang AST walk (tests/ci/derive_bad_alloc_membership.py's corrected,
-  # four-condition rule), confirms it matches the pinned oracle
+  # nineteen-site population (T-1475: JsonEscape's promotion into
+  # proof_manifest.h made it the 19th; design Sec3.1's table itself still
+  # states eighteen and is owed a matching amendment) from the nine
+  # include/superslm/*.h headers via a Clang AST walk
+  # (tests/ci/derive_bad_alloc_membership.py's corrected, four-condition
+  # rule), confirms it matches the pinned oracle
   # (tests/ci/bad_alloc_membership_expected.txt) under three independent scan
-  # strategies and the injected-19th-function vitality proof
+  # strategies and the injected-20th-function vitality proof
   # (tests/ci/test_membership_check_population.py), then runs the production
   # gate itself (tools/ci/check_bad_alloc_contract.py --list-unwrapped),
   # which fails naming any derived member whose .cpp definition does not

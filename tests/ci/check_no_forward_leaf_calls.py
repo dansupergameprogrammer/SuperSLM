@@ -241,7 +241,13 @@ _EXPECTED_DOOR_FUNCTIONS = (
 # exactly as the nine cases above are measured against the mechanism T-1381
 # replaced.
 
-_DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
+sys.path.insert(0, _THIS_DIR)
+from _clang_discovery import discover_clangxx  # noqa: E402  (path set above)
+
+# D-SLM528 (T-1494): discovered rather than only read from an already-set
+# environment variable, the same fix as derive_bad_alloc_membership.py's --
+# see _clang_discovery's module docstring for the defect this closes.
+_DEFAULT_CLANGXX = discover_clangxx()
 
 # The AST node kinds `find_leaf_forwarding_doors` treats as door candidates:
 # free/namespace-scope functions AND member functions, in-class or defined

@@ -26,9 +26,11 @@ independently-found population before it is trusted." The four Loki probes
 ARE that independently-found population for the prior rule; this module
 re-derives the population under the CORRECTED rule and this package's own
 test suite (test_membership_check_population.py) confirms it reproduces the
-design's stated eighteen, from the real headers on disk, under three
-independent scan strategies -- the direct re-run of the property the strike
-found false of the prior rule.
+mechanically-derived population -- nineteen as of T-1475 (JsonEscape's
+promotion into proof_manifest.h); design Sec3.1's table itself still states
+eighteen and is owed a matching amendment -- from the real headers on disk,
+under three independent scan strategies: the direct re-run of the property
+the strike found false of the prior rule.
 
 This is a REFERENCE tool, not the CI gate. The CI gate itself
 (design Sec3.1: "tools/ci/check_bad_alloc_contract.py or the build seat's
@@ -42,10 +44,13 @@ Invokes `clang++ -Xclang -ast-dump=json` as a subprocess per scan (no AST
 dump is ever written to a tracked file -- a single header's dump is on the
 order of 100+ MB of JSON, and the point of this module is that the dump is
 reproducible from the headers on demand, not that a snapshot of it is
-committed). Requires a clang++ on PATH capable of `-Xclang -ast-dump=json`
-(pinned per design Sec3.1: ships pre-installed on GitHub's stock
-`ubuntu-latest` runner image; locally, set SUPERSLM_CLANGXX to an explicit
-path if `clang++` does not resolve to one).
+committed). Requires a clang++ capable of `-Xclang -ast-dump=json` (pinned
+per design Sec3.1: ships pre-installed on GitHub's stock `ubuntu-latest`
+runner image, which sets SUPERSLM_CLANGXX explicitly; locally,
+_clang_discovery.discover_clangxx() finds one on PATH or in a short list of
+known install locations without anyone setting the variable -- set
+SUPERSLM_CLANGXX to an explicit path only to override that discovery,
+D-SLM528, T-1494).
 """
 from __future__ import annotations
 
@@ -60,7 +65,14 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _INCLUDE_DIR = os.path.join(_REPO_ROOT, "include")
 
-_DEFAULT_CLANGXX = os.environ.get("SUPERSLM_CLANGXX", "clang++")
+sys.path.insert(0, _THIS_DIR)
+from _clang_discovery import discover_clangxx  # noqa: E402  (path set above)
+
+# D-SLM528 (T-1494): discovered rather than only read from an already-set
+# environment variable, so this module's own gates run without anyone
+# remembering to export SUPERSLM_CLANGXX -- see _clang_discovery's module
+# docstring for the defect this closes.
+_DEFAULT_CLANGXX = discover_clangxx()
 
 HEADERS = (
     "artifact",
