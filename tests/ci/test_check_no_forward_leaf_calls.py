@@ -1613,7 +1613,9 @@ def test_population_count_is_stated():
 #: and would have to be registered in `_T1_EXPECTED_CONTAINER_NAMES` to keep
 #: `test_population_count_is_stated` green, which puts a test-support
 #: constant into the population pin; a tuple is invisible to that shape net,
-#: and none of the names below matches `_T1_CONTAINER_NAME_PATTERN`, so it
+#: and none of the module-level NAMES this constant introduces -- the tuple
+#: itself and the five it is unpacked into, as distinct from the name
+#: strings they hold -- matches `_T1_CONTAINER_NAME_PATTERN`, so it
 #: is invisible to the name net too. `test_fixture_family_convention_
 #: matches_its_stated_convention` below parametrizes directly off this
 #: tuple; the cells that use each off-convention family as their fixture
@@ -1627,20 +1629,66 @@ def test_population_count_is_stated():
 #: `_T1_CONTAINER_NAME_PATTERN` is equally on-convention, so the cells that
 #: use it for other mutation-battery rows are not coupled to this specific
 #: string the way the four off-convention homes are.
+#: Each row is `(role, name, on_convention)`. The ROLE is the key every
+#: consumer binds through; the name is data (T-1566; Poirot
+#: 67eb223-t1555-fixture-family-single-source-confirmation-2026-07-31.md
+#: Finding 2). The previous form unpacked the five module names POSITIONALLY,
+#: so `_T1_ORPHAN_FIXTURE` meant "row 1" rather than "`_ORPHAN_CASES`", and a
+#: pure two-row reorder -- no rename, no flag change -- silently repointed
+#: four cells and dropped the residual cell's measured W-E discrimination from
+#: four red to none, at a full 70 green. Binding by role makes a reorder inert
+#: and a removed role loud (`_t1_family` raises at import), and
+#: `test_each_fixture_family_role_is_bound_to_its_documented_name` below pins
+#: the role-to-name map itself, which nothing previously asserted.
 _T1_FIXTURE_FAMILIES = (
-    ("_T9999_NEW_SHAPES", True),
-    ("_ORPHAN_CASES", False),
-    ("_CONTROL_CASES", False),
-    ("_PHANTOM_CASES", False),
-    ("_T9999_RENAMED_SHAPES", False),
+    ("on-convention", "_T9999_NEW_SHAPES", True),
+    ("orphan", "_ORPHAN_CASES", False),
+    ("control", "_CONTROL_CASES", False),
+    ("phantom", "_PHANTOM_CASES", False),
+    ("renamed", "_T9999_RENAMED_SHAPES", False),
 )
-(
-    _T1_ON_CONVENTION_FIXTURE,
-    _T1_ORPHAN_FIXTURE,
-    _T1_CONTROL_FIXTURE,
-    _T1_PHANTOM_FIXTURE,
-    _T1_RENAMED_FIXTURE,
-) = (name for name, _on_convention in _T1_FIXTURE_FAMILIES)
+
+
+def _t1_family(role: str) -> str:
+    """The fixture-family name bound to `role` in `_T1_FIXTURE_FAMILIES`.
+
+    Raises at import if the role is absent, so deleting or re-keying a row is
+    an immediate hard failure rather than a silent repoint (T-1566)."""
+    for family_role, name, _on_convention in _T1_FIXTURE_FAMILIES:
+        if family_role == role:
+            return name
+    raise AssertionError(
+        f"no fixture family is registered under role {role!r}; "
+        f"_T1_FIXTURE_FAMILIES declares "
+        f"{[family_role for family_role, _, _ in _T1_FIXTURE_FAMILIES]}"
+    )
+
+
+def _t1_convention_tag(name: str) -> str:
+    """`"on-convention"` or `"off-convention"` for a registered family name,
+    read from its own `on_convention` flag.
+
+    Test ids that state a family's convention are built through this rather
+    than hand-written, so a PAIRED rename -- name and flag edited together,
+    the family genuinely changing convention -- moves the id with the fixture
+    (T-1565; same casebook Finding 1). Hand-written ids survived such a rename
+    reading `off-convention` against an on-convention fixture at 70 green,
+    which is verbatim the condition T-1551 exists to close."""
+    for _role, family_name, on_convention in _T1_FIXTURE_FAMILIES:
+        if family_name == name:
+            return "on-convention" if on_convention else "off-convention"
+    raise AssertionError(
+        f"{name!r} is not a registered fixture family; "
+        f"_T1_FIXTURE_FAMILIES declares "
+        f"{[family_name for _, family_name, _ in _T1_FIXTURE_FAMILIES]}"
+    )
+
+
+_T1_ON_CONVENTION_FIXTURE = _t1_family("on-convention")
+_T1_ORPHAN_FIXTURE = _t1_family("orphan")
+_T1_CONTROL_FIXTURE = _t1_family("control")
+_T1_PHANTOM_FIXTURE = _t1_family("phantom")
+_T1_RENAMED_FIXTURE = _t1_family("renamed")
 
 
 def _t1_failing_assertion(excinfo):
@@ -1673,21 +1721,109 @@ def _t1_failing_assertion(excinfo):
     literal -- not every cell that merely reaches the assertion, since a
     cell that reaches and passes it never calls this function at all).
     Verified against the exact T-1506 regression (`name_matched <= pin`
-    reverted to `== pin`): of the ten cells that reach the edited assertion,
-    matching the full expression reports 5 red, 4 of them spurious
-    `unrecognized failing statement` misattributions -- cells that fail at
-    the edited assertion and ask this function which one raised -- and the
-    fifth a must-not-raise cell that fails under the regression without
-    calling this function at all; the remaining 5 reach the assertion, pass
-    it, and never call this function either. Matching the subject name
-    alone reports exactly the 1 cell whose property the regression breaks,
-    among the four misattributed."""
+    reverted to `== pin`): of the ten CASES, across four cells, that reach
+    the edited assertion (T-1569 -- the unit was previously stated as
+    "cells", and a reader looking for ten red cells finds four), matching the
+    full expression reports 5 red, 4 of them spurious `unrecognized failing
+    statement` misattributions -- cases that fail at the edited assertion and
+    ask this function which one raised -- and the fifth a must-not-raise cell
+    that fails under the regression without calling this function at all;
+    the remaining 5 cases reach the assertion, pass it, and never call this
+    function either.
+
+    Matching the subject name alone leaves all four misattributed cases
+    GREEN and reds exactly one cell -- the must-not-raise cell named just
+    above, which is NOT among the four (T-1567; Poirot
+    67eb223-t1555-fixture-family-single-source-confirmation-2026-07-31.md
+    Finding 3). The previous sentence here said it reported "the 1 cell whose
+    property the regression breaks, among the four misattributed", which
+    contradicted this same paragraph two sentences earlier and understated
+    the result: the matcher does not discriminate WITHIN the misattributed
+    population, it empties it. The MECHANISM behind those counts -- that this
+    matcher is insensitive to the comparison operator, which is what makes the
+    four go green -- is pinned by
+    `test_subject_name_matching_empties_the_misattributed_population` below,
+    with the superseded full-expression predicate beside it as the control.
+    The counts themselves stay a recorded measurement: reproducing them needs
+    the suite re-run under the regression, which is pytest-in-pytest. Pinned
+    at all because this is the fifth consecutive round in which this module's
+    prose produced a finding, and a paragraph cannot fail a build
+    (D-SLM555)."""
     statement = str(excinfo.traceback[-1].statement)
     if "discovered_names" in statement:
         return "shape-set"
     if "name_matched" in statement:
         return "name-set"
     raise AssertionError(f"unrecognized failing statement: {statement!r}")
+
+
+class _T1FakeTracebackEntry:
+    """Minimal stand-in for a pytest traceback entry. The only contract
+    `_t1_failing_assertion` uses is `entry.statement`, stringified."""
+
+    def __init__(self, statement_text):
+        self.statement = statement_text
+
+
+class _T1FakeExcInfo:
+    def __init__(self, statement_text):
+        self.traceback = [_T1FakeTracebackEntry(statement_text)]
+
+
+def test_subject_name_matching_empties_the_misattributed_population():
+    """T-1567 (Poirot 67eb223-t1555-fixture-family-single-source-confirmation-
+    2026-07-31.md Finding 3), pinned rather than re-worded.
+
+    The claim: under the exact T-1506 regression (`name_matched <= pin`
+    reverted to `== pin`) the SHIPPED subject-name matcher still attributes
+    the name-set assertion correctly, so the four cases that were misattributed
+    under full-expression matching go green -- the matcher EMPTIES the
+    misattributed population rather than discriminating within it.
+
+    Driven through the real `_t1_failing_assertion` on one side, so the
+    shipped behaviour is not restated by a stand-in. The superseded
+    full-expression predicate is spelled out on the other side because it no
+    longer exists in the file; it is the thing being compared against, not the
+    thing being certified.
+
+    This pins the MATCHER's behaviour on both statement forms, which is the
+    mechanism behind the 5-vs-1 counts. It does not re-run the suite under the
+    regression -- that would need pytest-in-pytest -- so the counts themselves
+    remain a measurement recorded in the docstring above and in the casebook."""
+    head_form = "assert name_matched <= pin, (f\"...\")"
+    regressed_form = "assert name_matched == pin, (f\"...\")"
+    shape_form = "assert discovered_names == expected_shapes, (f\"...\")"
+
+    def full_expression_matcher(statement):
+        """The superseded predicate: the full expression, literally."""
+        if "discovered_names == expected_shapes" in statement:
+            return "shape-set"
+        if "name_matched <= pin" in statement:
+            return "name-set"
+        raise AssertionError(f"unrecognized failing statement: {statement!r}")
+
+    # The shipped matcher is insensitive to the comparison operator, which is
+    # the whole of T-1518's design.
+    assert _t1_failing_assertion(_T1FakeExcInfo(head_form)) == "name-set"
+    assert _t1_failing_assertion(_T1FakeExcInfo(regressed_form)) == "name-set", (
+        "under the T-1506 regression the shipped matcher must still attribute the "
+        "name-set assertion -- if it raises here, the four cases that ask which "
+        "assertion fired are misattributed again and T-1518 has been undone"
+    )
+    assert _t1_failing_assertion(_T1FakeExcInfo(shape_form)) == "shape-set"
+
+    # The superseded matcher is why those four were red: same input, no answer.
+    assert full_expression_matcher(head_form) == "name-set"
+    try:
+        full_expression_matcher(regressed_form)
+    except AssertionError as exc:
+        assert "unrecognized failing statement" in str(exc)
+    else:
+        raise AssertionError(
+            "the full-expression matcher must fail to recognise the regressed "
+            "statement -- if it does not, the control is vacuous and this cell "
+            "proves nothing about what subject-name matching bought"
+        )
 
 
 def test_registration_admits_an_off_convention_container_present_in_the_pin():
@@ -1756,26 +1892,30 @@ def test_registration_rejects_a_dict_absent_from_the_pin(name, value):
 @pytest.mark.parametrize(
     ("pin_name", "namespace"),
     [
-        ("_T9999_NEW_SHAPES", {}),
+        (_T1_ON_CONVENTION_FIXTURE, {}),
         (_T1_PHANTOM_FIXTURE, {}),
-        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": []}),
-        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {}}),
-        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {1: "x"}}),
+        (_T1_ON_CONVENTION_FIXTURE, {_T1_ON_CONVENTION_FIXTURE: []}),
+        (_T1_ON_CONVENTION_FIXTURE, {_T1_ON_CONVENTION_FIXTURE: {}}),
+        (_T1_ON_CONVENTION_FIXTURE, {_T1_ON_CONVENTION_FIXTURE: {1: "x"}}),
         (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: []}),
         (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: {}}),
         (_T1_PHANTOM_FIXTURE, {_T1_PHANTOM_FIXTURE: {1: "x"}}),
-        ("_T9999_NEW_SHAPES", {_T1_RENAMED_FIXTURE: {"case": "value"}}),
+        (_T1_ON_CONVENTION_FIXTURE, {_T1_RENAMED_FIXTURE: {"case": "value"}}),
     ],
+    # Every convention word here is derived from the family's own
+    # `on_convention` flag (T-1565). Hand-writing them let a paired rename --
+    # the family genuinely changing convention -- leave four ids reading
+    # `off-convention` against an on-convention fixture, green.
     ids=[
-        "W1-undefined-on-convention",
-        "W2-undefined-off-convention",
-        "X-on-convention-bound-to-list",
-        "N-analog-on-convention-bound-to-empty-dict",
-        "M-on-convention-bound-to-int-keyed-dict",
-        "W3-off-convention-bound-to-list",
-        "W4-off-convention-bound-to-empty-dict",
-        "W5-off-convention-bound-to-int-keyed-dict",
-        "O2-pin-stale-after-off-convention-rename",
+        f"W1-undefined-{_t1_convention_tag(_T1_ON_CONVENTION_FIXTURE)}",
+        f"W2-undefined-{_t1_convention_tag(_T1_PHANTOM_FIXTURE)}",
+        f"X-{_t1_convention_tag(_T1_ON_CONVENTION_FIXTURE)}-bound-to-list",
+        f"N-analog-{_t1_convention_tag(_T1_ON_CONVENTION_FIXTURE)}-bound-to-empty-dict",
+        f"M-{_t1_convention_tag(_T1_ON_CONVENTION_FIXTURE)}-bound-to-int-keyed-dict",
+        f"W3-{_t1_convention_tag(_T1_PHANTOM_FIXTURE)}-bound-to-list",
+        f"W4-{_t1_convention_tag(_T1_PHANTOM_FIXTURE)}-bound-to-empty-dict",
+        f"W5-{_t1_convention_tag(_T1_PHANTOM_FIXTURE)}-bound-to-int-keyed-dict",
+        f"O2-pin-stale-after-{_t1_convention_tag(_T1_RENAMED_FIXTURE)}-rename",
     ],
 )
 def test_registration_rejects_a_pinned_name_absent_from_the_namespace(pin_name, namespace):
@@ -1844,12 +1984,78 @@ def test_registration_admits_the_documented_off_convention_wrong_shape_residual(
     _t1_check_population_registration(namespace, pin)  # must not raise
 
 
+def test_each_fixture_family_role_is_bound_to_its_documented_name():
+    """T-1566 (Poirot 67eb223-t1555-fixture-family-single-source-confirmation-
+    2026-07-31.md Finding 2): the role-to-name map itself, which nothing
+    asserted while the five module names were unpacked positionally.
+
+    This is the cell the finding says would have caught two of that round's
+    three Significants pre-commit. It is not tautological: each name below is
+    reached through `_t1_family(role)`, so re-keying a row, deleting one, or
+    editing a name without updating the cells that depend on that specific
+    name's properties all land here.
+    """
+    assert _T1_ON_CONVENTION_FIXTURE == "_T9999_NEW_SHAPES"
+    assert _T1_ORPHAN_FIXTURE == "_ORPHAN_CASES"
+    assert _T1_CONTROL_FIXTURE == "_CONTROL_CASES"
+    assert _T1_PHANTOM_FIXTURE == "_PHANTOM_CASES"
+    assert _T1_RENAMED_FIXTURE == "_T9999_RENAMED_SHAPES"
+
+
+def test_a_reorder_of_the_fixture_family_rows_cannot_repoint_any_binding():
+    """T-1566's own axis, pinned. A pure reorder -- no rename, no flag change
+    -- silently repointed four cells under positional unpacking and left the
+    suite at 70 green, costing the residual cell its measured W-E
+    discrimination (four red to none). Role lookup makes it inert; this cell
+    performs the reorder and asserts that."""
+    reordered = tuple(reversed(_T1_FIXTURE_FAMILIES))
+    original = {role: name for role, name, _ in _T1_FIXTURE_FAMILIES}
+    after = {role: name for role, name, _ in reordered}
+    assert original == after, (
+        "role-to-name binding must be invariant under row order; if this fails, "
+        "something reintroduced a positional dependency"
+    )
+    assert [name for _, name, _ in reordered] != [name for _, name, _ in _T1_FIXTURE_FAMILIES], (
+        "the control is vacuous unless the reorder actually changes row order"
+    )
+
+
+def test_the_residual_cells_fixture_still_has_the_property_that_cell_relies_on():
+    """T-1566, the half that cost measured coverage rather than only prose.
+
+    `test_registration_admits_the_documented_off_convention_wrong_shape_residual`
+    uses `_T1_ORPHAN_FIXTURE` for a stated reason: the name does NOT match
+    `_T1_CONTAINER_NAME_PATTERN` as shipped, but DOES match both a broad
+    widening and the `_[A-Z]+_CASES` convention extension -- which is what
+    makes the cell go red under either widening and therefore worth having.
+
+    Under the positional reorder that cell silently became built on
+    `_T9999_RENAMED_SHAPES`, which the `_[A-Z]+_CASES` extension does not
+    admit, so one of the two widenings named as its reason for existing
+    stopped reaching it -- green throughout. That property is asserted here
+    rather than left in the docstring that claims it."""
+    broad = re.compile(r"^_[A-Z0-9_]*(CASES|SHAPES)$")
+    extension = re.compile(r"^(_POPULATION_CASES|_T\d+_NEW_SHAPES|_[A-Z]+_CASES)$")
+    assert not _T1_CONTAINER_NAME_PATTERN.match(_T1_ORPHAN_FIXTURE), (
+        f"{_T1_ORPHAN_FIXTURE} must be off-convention as shipped, or the residual cell "
+        f"is not exercising the residual class at all"
+    )
+    assert broad.match(_T1_ORPHAN_FIXTURE), (
+        f"{_T1_ORPHAN_FIXTURE} must be admitted by the broad widening, or that widening "
+        f"no longer reds the residual cell"
+    )
+    assert extension.match(_T1_ORPHAN_FIXTURE), (
+        f"{_T1_ORPHAN_FIXTURE} must be admitted by the _[A-Z]+_CASES extension, or that "
+        f"widening no longer reds the residual cell -- the exact coverage the reorder lost"
+    )
+
+
 @pytest.mark.parametrize(
     ("name", "on_convention"),
-    _T1_FIXTURE_FAMILIES,
+    [(name, on_convention) for _role, name, on_convention in _T1_FIXTURE_FAMILIES],
     ids=[
         f"{fixture_name.lstrip('_')}-{'on' if fixture_on_convention else 'off'}-convention"
-        for fixture_name, fixture_on_convention in _T1_FIXTURE_FAMILIES
+        for _role, fixture_name, fixture_on_convention in _T1_FIXTURE_FAMILIES
     ],
 )
 def test_fixture_family_convention_matches_its_stated_convention(name, on_convention):
@@ -1923,12 +2129,27 @@ def test_fixture_family_convention_matches_its_stated_convention(name, on_conven
     `False` -- an unpaired rename -- reds exactly this cell's own renamed
     case and nothing else, because every other cell that used
     `_T1_PHANTOM_FIXTURE` moved with the rename and none of them is
-    sensitive to what the literal spelling is; editing both the name and
-    the flag together -- a consistent rename -- leaves the file's full
-    suite green with the id for that case reading the new name, and no
-    cell anywhere still asserting about `_PHANTOM_CASES`, confirmed by
-    collecting the suite's test ids after the substitution. Neither run
-    left a stale off-convention claim standing, which is what renaming
-    `_PHANTOM_CASES` in place (rather than through this tuple) did in the
-    review that raised this finding."""
+    sensitive to what the literal spelling is.
+
+    The PAIRED direction -- name and flag edited together, the family
+    genuinely changing convention -- was previously described here as
+    leaving "no stale off-convention claim standing, confirmed by collecting
+    the suite's test ids". **That was false, and the cited method could not
+    have shown it either way** (T-1565; Poirot
+    67eb223-t1555-fixture-family-single-source-confirmation-2026-07-31.md
+    Finding 1): collecting ids searched for the old SPELLING, which is a
+    different proposition from "no stale convention claim survives", and the
+    ids it collected refuted the claim on their face. Measured then: four
+    W-case ids read `off-convention` against an on-convention fixture at a
+    full 70 green -- verbatim the condition this cell exists to close.
+
+    Measured now, with the same paired rename applied to
+    `_T1_FIXTURE_FAMILIES`: every id stating a convention is built through
+    `_t1_convention_tag`, so all four move with the fixture and read
+    `on-convention`; and
+    `test_each_fixture_family_role_is_bound_to_its_documented_name` goes
+    RED, which is the deliberate loud signal that a family's documented
+    role-to-name map needs updating alongside the rename. One red and no
+    silent stale claim, where before there were four silent stale claims and
+    no red."""
     assert bool(_T1_CONTAINER_NAME_PATTERN.match(name)) == on_convention
