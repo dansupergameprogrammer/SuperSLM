@@ -1382,6 +1382,29 @@ _T1_EXPECTED_CONTAINER_NAMES = frozenset(
 _T1_CONTAINER_NAME_PATTERN = re.compile(r"^(_POPULATION_CASES|_T\d+_NEW_SHAPES)$")
 
 
+def _t1_discover_population_containers(namespace):
+    """The shape half of the union, factored out of `_t1_new_shape_containers`
+    (T-1514) so the discovery predicate can be run against an arbitrary
+    namespace mapping (name -> value), not only against the real module's
+    `globals()`. `_t1_new_shape_containers` below is this function applied to
+    `globals()`; `_t1_check_population_registration` below is the
+    registration contract this file states in four places, applied to a
+    caller-supplied namespace and pin. Both are used by
+    `test_population_count_is_stated` against the real module, and by the
+    T-1514 cells following it against constructed namespaces -- so those
+    cells pin this predicate directly rather than a reimplementation of it.
+    See `_t1_new_shape_containers`'s own docstring for what "shape" means and
+    why."""
+    return {
+        name: value
+        for name, value in namespace.items()
+        if not name.startswith("__")
+        and isinstance(value, dict)
+        and value
+        and all(isinstance(k, str) for k in value)
+    }
+
+
 def _t1_new_shape_containers():
     """Every module-level dict this file uses to enumerate a batch of doors a
     ticket adds to the population, discovered by shape -- a non-empty
@@ -1415,15 +1438,48 @@ def _t1_new_shape_containers():
     off-convention escapes measured against three prior predicates. A
     container that is both off-convention in name and outside this
     function's structural shape -- an off-convention `list`, for instance --
-    is caught by neither check; see that test's own docstring."""
-    return {
-        name: value
-        for name, value in globals().items()
-        if not name.startswith("__")
-        and isinstance(value, dict)
-        and value
-        and all(isinstance(k, str) for k in value)
-    }
+    is caught by neither check; see that test's own docstring. Delegates to
+    `_t1_discover_population_containers(globals())` (T-1514) -- the shape
+    predicate itself is unchanged, only where it reads its namespace from."""
+    return _t1_discover_population_containers(globals())
+
+
+def _t1_name_matched_containers(namespace):
+    """The name half of the union, factored out for the same reason as
+    `_t1_discover_population_containers` (T-1514): every name in an
+    arbitrary namespace mapping matching `_T1_CONTAINER_NAME_PATTERN`,
+    regardless of the type or contents of the value it is bound to. See
+    `_T1_CONTAINER_NAME_PATTERN`'s own comment for what the pattern is and
+    why."""
+    return {name for name in namespace if _T1_CONTAINER_NAME_PATTERN.match(name)}
+
+
+def _t1_check_population_registration(namespace, pin):
+    """The population-registration contract this file states in four places
+    -- the module pin comment above `_T1_EXPECTED_CONTAINER_NAMES`,
+    `_T1_CONTAINER_NAME_PATTERN`'s own comment, `_t1_new_shape_containers`'s
+    docstring, and this function's caller `test_population_count_is_stated`
+    -- pinned once, here, rather than left to those four statements alone
+    (T-1514; Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md
+    Significant 1). Two assertions, run in this order against `namespace`:
+    the shape-discovered name set must equal `pin` exactly; the name-matched
+    set must be a subset of `pin`. `test_population_count_is_stated` below
+    calls this with `namespace=globals()` and `pin=_T1_EXPECTED_CONTAINER_
+    NAMES`, which is the real cell; the T-1514 tests immediately following
+    it call this same function against constructed namespaces built from the
+    mutation battery in the Poirot casebook above, so those cells pin the
+    real contract rather than a copy of it. Returns the discovered
+    containers dict so a caller that also wants the population total (as
+    `test_population_count_is_stated` does) does not discover twice."""
+    containers = _t1_discover_population_containers(namespace)
+    discovered_names = set(containers.keys())
+    assert discovered_names == pin, (
+        discovered_names - pin,
+        pin - discovered_names,
+    )
+    name_matched = _t1_name_matched_containers(namespace)
+    assert name_matched <= pin, (name_matched - pin)
+    return containers
 
 
 def test_population_count_is_stated():
@@ -1461,7 +1517,15 @@ def test_population_count_is_stated():
     an `int`-keyed `dict`, each escaping the shape check alone and each
     caught by the name check; and against mutations that register an
     off-convention container by the two-edit rule alone, which require no
-    third edit).
+    third edit to `_T1_CONTAINER_NAME_PATTERN` or to the container's own
+    name -- T-1515: the stated total is still a third edit when the
+    container is non-empty, on-convention or off, which is symmetric and not
+    a defect the "two edits" framing ever claimed to remove; see mutations
+    Y1 and Y2 in Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md).
+    Both assertions are `_t1_check_population_registration`'s (T-1514), and
+    the T-1514 cells below pin this whole paragraph directly against
+    constructed namespaces rather than leaving it to be re-verified in prose
+    every round.
     `further_sweep_total` is NOT derived -- it sums four literals for five
     documented one-off cases that were never stored in a container, so
     neither check above can see them: T-1381's `+ 1` string-literal control
@@ -1482,17 +1546,8 @@ def test_population_count_is_stated():
     82ff942-t1463-t1468-confirmation-2026-07-31.md Minor 2, Minor 3;
     2126ab1-t1482-t1484-confirmation-2026-07-31.md Significant 1;
     75692c0-t1489-t1492-confirmation-2026-07-31.md Significant 1)."""
-    containers = _t1_new_shape_containers()
-    discovered_names = set(containers.keys())
-    assert discovered_names == _T1_EXPECTED_CONTAINER_NAMES, (
-        discovered_names - _T1_EXPECTED_CONTAINER_NAMES,
-        _T1_EXPECTED_CONTAINER_NAMES - discovered_names,
-    )
-    name_matched = {
-        name for name in globals() if _T1_CONTAINER_NAME_PATTERN.match(name)
-    }
-    assert name_matched <= _T1_EXPECTED_CONTAINER_NAMES, (
-        name_matched - _T1_EXPECTED_CONTAINER_NAMES
+    containers = _t1_check_population_registration(
+        globals(), _T1_EXPECTED_CONTAINER_NAMES
     )
     container_total = sum(len(value) for value in containers.values())
     further_sweep_total = (
@@ -1503,3 +1558,146 @@ def test_population_count_is_stated():
     )
     total = container_total + further_sweep_total
     assert total == 16, (containers.keys(), container_total, further_sweep_total, total)
+
+
+# --- T-1514: the population-registration contract, pinned directly against
+# constructed namespaces, rather than left to the four prose statements
+# above alone (the module pin comment, `_T1_CONTAINER_NAME_PATTERN`'s
+# comment, `_t1_new_shape_containers`'s docstring, and
+# `test_population_count_is_stated`'s own docstring). Every cell below
+# exercises `_t1_check_population_registration` -- the same function
+# `test_population_count_is_stated` calls above against the real module --
+# so a cell here failing to fail is a cell exercising the real contract, not
+# a reimplementation of it. Each cell reproduces one row of the mutation
+# battery in Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md and
+# 066319d-t1501-t1503-confirmation-2026-07-31.md, named in its own
+# docstring; `Claude/Brunel/t1514-t1515-build-2026-07-31.md` reconciles
+# every mutation in both battery tables (A-N, O, P, Q-T, W1-W5, X, O2, Y1,
+# Y2) against the cell that exercises it, including the residual rows (Q-T,
+# Y1, Y2) this contract does not pin, and states why. ---
+
+
+def _t1_failing_assertion(excinfo):
+    """Distinguishes which of `_t1_check_population_registration`'s two
+    assertions raised, from the raised frame's own source statement rather
+    than from surrounding context or from the exception's message -- pytest
+    rewrites both assert statements to fold the tuple/set message into a
+    single formatted string on failure (confirmed by execution: the
+    original 2-tuple and single-set message shapes are not preserved on
+    `AssertionError.args` once pytest's assertion-rewrite import hook has
+    processed this module), so distinguishing by message shape is not
+    reliable and the source line is used instead -- the same discipline
+    Poirot 03a9413-t1506-t1507-confirmation-2026-07-31.md states: "the
+    failing assertion is read from pytest's `>` source-line marker, not
+    from surrounding context"."""
+    statement = str(excinfo.traceback[-1].statement)
+    if "discovered_names == pin" in statement:
+        return "shape-set"
+    if "name_matched <= pin" in statement:
+        return "name-set"
+    raise AssertionError(f"unrecognized failing statement: {statement!r}")
+
+
+def test_registration_admits_an_off_convention_container_present_in_the_pin():
+    """Pins mutations O and P (Poirot 03a9413 Significant 1, Execution
+    evidence): an off-convention non-empty `str`-keyed dict, named in the
+    pin, passes both assertions -- the property T-1506 restored, and the one
+    T-1507's docstring states in the "for any name, on-convention or not"
+    clause."""
+    namespace = {"_CONTROL_CASES": {"case": "value"}}
+    pin = frozenset({"_CONTROL_CASES"})
+    _t1_check_population_registration(namespace, pin)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "value",
+    [[], (), {1: "x"}, {}],
+    ids=["list", "tuple", "int-keyed-dict", "empty-dict"],
+)
+def test_registration_rejects_an_on_convention_container_of_the_wrong_shape(value):
+    """Pins mutations H, J, K, L (Poirot 066319d Significant 1; reproduced
+    unchanged in 03a9413's Execution evidence): an on-convention name --
+    matches `_T1_CONTAINER_NAME_PATTERN` -- bound to a value that is not a
+    non-empty `str`-keyed dict is invisible to shape-based discovery, so it
+    is absent from the pin and the name-set assertion fires -- not the
+    shape-set assertion, which is what closes the direction
+    `_t1_new_shape_containers` cannot reach by construction."""
+    namespace = {"_T9999_NEW_SHAPES": value}
+    pin = frozenset()
+    with pytest.raises(AssertionError) as excinfo:
+        _t1_check_population_registration(namespace, pin)
+    assert _t1_failing_assertion(excinfo) == "name-set"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("_ORPHAN_CASES", {"case": "value"}),
+        ("_T9999_NEW_SHAPES", {"case": "value"}),
+        ("_T9999_NEW_SHAPES", {"case": ("tuple", "value")}),
+        ("_T9999_NEW_SHAPES", {"case": {"nested": "dict"}}),
+        ("_T9999_NEW_SHAPES", {"case": b"bytes"}),
+    ],
+    ids=[
+        "off-convention-name",
+        "on-convention-name",
+        "on-convention-name-tuple-values",
+        "on-convention-name-nested-dict-values",
+        "on-convention-name-bytes-values",
+    ],
+)
+def test_registration_rejects_a_dict_absent_from_the_pin(name, value):
+    """Pins mutations A, C, D, G (Poirot 066319d/03a9413 A-N battery) and E,
+    F, I (the value-type independence T-1489 established): a non-empty
+    `str`-keyed dict is discovered by shape regardless of its name's
+    convention or its values' types, so failing to name it in the pin fails
+    the shape-set assertion the same way in every case -- shape-based
+    discovery does not depend on the naming convention or on what the
+    values are, only on the keys being `str` and the dict being non-empty."""
+    namespace = {name: value}
+    pin = frozenset()
+    with pytest.raises(AssertionError) as excinfo:
+        _t1_check_population_registration(namespace, pin)
+    assert _t1_failing_assertion(excinfo) == "shape-set"
+
+
+@pytest.mark.parametrize(
+    ("pin_name", "namespace"),
+    [
+        ("_T9999_NEW_SHAPES", {}),
+        ("_PHANTOM_CASES", {}),
+        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": []}),
+        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {}}),
+        ("_T9999_NEW_SHAPES", {"_T9999_NEW_SHAPES": {1: "x"}}),
+        ("_PHANTOM_CASES", {"_PHANTOM_CASES": []}),
+        ("_PHANTOM_CASES", {"_PHANTOM_CASES": {}}),
+        ("_PHANTOM_CASES", {"_PHANTOM_CASES": {1: "x"}}),
+        ("_T9999_NEW_SHAPES", {"_T9999_RENAMED_SHAPES": {"case": "value"}}),
+    ],
+    ids=[
+        "W1-undefined-on-convention",
+        "W2-undefined-off-convention",
+        "X-on-convention-bound-to-list",
+        "N-analog-on-convention-bound-to-empty-dict",
+        "M-on-convention-bound-to-int-keyed-dict",
+        "W3-off-convention-bound-to-list",
+        "W4-off-convention-bound-to-empty-dict",
+        "W5-off-convention-bound-to-int-keyed-dict",
+        "O2-pin-stale-after-off-convention-rename",
+    ],
+)
+def test_registration_rejects_a_pinned_name_absent_from_the_namespace(pin_name, namespace):
+    """Pins mutations W1-W5, X, M, N and O2 (Poirot 066319d/03a9413, "the
+    removed direction, probed to exhaustion" and the A-N battery's shape
+    mutations): a name present in the pin but not discovered by shape in
+    the namespace -- because nothing is bound to it (W1, W2), because it is
+    bound to something other than a non-empty `str`-keyed dict (M, N, W3,
+    W4, W5, X), or because the container was renamed away from the pinned
+    name without updating the pin (O2) -- fails the shape-set assertion
+    before the name-set assertion is ever reached, whatever the pin's own
+    name looks like and whatever the namespace's actual container is
+    named."""
+    pin = frozenset({pin_name})
+    with pytest.raises(AssertionError) as excinfo:
+        _t1_check_population_registration(namespace, pin)
+    assert _t1_failing_assertion(excinfo) == "shape-set"
