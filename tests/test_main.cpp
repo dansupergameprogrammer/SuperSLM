@@ -14130,6 +14130,106 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	          SslmForwardStatusName(result), seq.layer_index);
 }
 
+// T-1461 (Claude/Curie/superslm-attention-interior-test-design-2026-07-31.md;
+// D-SLM515; commissioned from the T-1409 solve/strike/fold record --
+// Claude/Laplace/superslm-decode-oracle-discrimination-solve-2026-07-31.md
+// (fold) 8, Claude/Loki/superslm-t1409-decode-discrimination-strike-2026-07-
+// 31.md 4 mutant A4). RunLayerLoop's attention block calls
+// CheckSoftmaxRowWidthDomain(lw.q_b_iexp, lw.q_c_iexp, width) ONCE, above
+// the head loop, and returns its status without calling SoftmaxRowQ15 at
+// all when it rejects (forward_sites.cpp, the attention-proper block). No
+// existing cell drives THIS composition -- RunLayerLoop -- to that
+// rejection; every existing SoftmaxRowWidthOutOfDomain cell calls
+// CheckSoftmaxRowWidthDomain directly as a unit, not through the layer
+// loop. Loki's A4 mutant (`st = CheckSoftmaxRowWidthDomain(...);` replaced
+// with `st = SslmForwardStatus::Ok;`) is invisible to the committed suite
+// and to decode-level output BECAUSE no composition-level cell forces the
+// gate to reject in the first place -- on the solver's own fixture the gate
+// always accepts, so A4 is an equivalent mutant there (Loki 4's own honest
+// scoping). This cell closes that composition-level gap with a fixture
+// whose (q_b_iexp, q_c_iexp) genuinely push M = q_b^2+q_c out of domain, so
+// the gate's real rejection is forced to reach RunLayerLoop's return value.
+//
+// Oracle: kC32WidthDomainCases[0] ("numerator_overflow_single_element",
+// tests/sslm_s3_3_fixtures.h) -- a witness derived independently of this
+// cell for C32/D-SLM366's own predicate, at width=1 (RunLayerLoop's own
+// hard-coded width, so no width mismatch). CheckSoftmaxRowWidthDomain is
+// called directly first, as GROUNDING (confirming the witness still
+// rejects under the shipped predicate) -- not as the pin. The pin is that
+// RunLayerLoop, driven through its real composition, returns the SAME
+// status the real gate function returns in isolation, and leaves seq
+// exactly as it was pre-call (T-1375/Critical 4's atomic-commit contract:
+// a rejection strictly between attn_norm and mlp_residual must not have
+// committed anything into seq). This is a composition-WIRING claim (does
+// RunLayerLoop actually call the real gate and propagate its real
+// verdict), not a re-derivation of the gate's own arithmetic -- the same
+// shape as the committed
+// TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection and
+// TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct
+// cells immediately above.
+static void TestRunLayerLoopRejectsSoftmaxRowWidthOutOfDomainAtCompositionLevel() {
+	using namespace superslm_test;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	const C32WidthDomainCase& w = kC32WidthDomainCases[0];
+	CHECK_MSG(w.width == 1u,
+	          "grounding: this witness's own width == %zu, want 1 -- RunLayerLoop hard-codes "
+	          "width=1 (forward_sites.cpp), so a witness at any other width cannot be driven "
+	          "through this composition at all",
+	          w.width);
+	CHECK_MSG(!w.ok_under_2pow47,
+	          "grounding: kC32WidthDomainCases[0] (%s) must reject under the shipped "
+	          "kSoftmaxRowMaxSafeExponent threshold, or this witness no longer forces the gate "
+	          "to reject and this cell's premise is stale",
+	          w.label);
+	fixture.layers[0].q_b_iexp = w.q_b;
+	fixture.layers[0].q_c_iexp = w.q_c;
+	fixture.layers[0].q_ln2 = w.q_ln2;
+
+	// Grounding, not the pin: the real gate function, called directly,
+	// confirms this fixture's own (q_b_iexp, q_c_iexp) reject at width=1.
+	const auto gate_status =
+	    superslm::CheckSoftmaxRowWidthDomain(fixture.layers[0].q_b_iexp,
+	                                          fixture.layers[0].q_c_iexp, /*width=*/1);
+	CHECK_MSG(gate_status == SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "grounding: CheckSoftmaxRowWidthDomain(q_b=%lld, q_c=%lld, width=1) == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- this witness's own premise no longer holds",
+	          static_cast<long long>(fixture.layers[0].q_b_iexp),
+	          static_cast<long long>(fixture.layers[0].q_c_iexp),
+	          SslmForwardStatusName(gate_status));
+
+	const int8_t kInitialCodes[2] = {5, -5};
+	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
+	int8_t hidden_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = kInitialScale;
+	seq.layer_index = 0;
+	uint8_t workspace[64] = {};
+	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                             /*layer_budget=*/1, /*hidden_size=*/2,
+	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*context_cap=*/1, fixture.view.rope_tables,
+	                                             workspace, sizeof(workspace));
+	CHECK_MSG(result == SslmForwardStatus::SoftmaxRowWidthOutOfDomain,
+	          "RunLayerLoop with layer 0's (q_b_iexp=%lld, q_c_iexp=%lld) -- an out-of-domain "
+	          "witness the real gate rejects in isolation -- status == %s, want "
+	          "SoftmaxRowWidthOutOfDomain -- if the composition's own call to the gate is "
+	          "bypassed or its rejection is not propagated (Loki T-1434 mutant A4's exact "
+	          "shape), this status is Ok or something else instead",
+	          static_cast<long long>(fixture.layers[0].q_b_iexp),
+	          static_cast<long long>(fixture.layers[0].q_c_iexp), SslmForwardStatusName(result));
+	CHECK_MSG(hidden_codes[0] == kInitialCodes[0] && hidden_codes[1] == kInitialCodes[1] &&
+	              seq.hidden_scale.m == kInitialScale.m && seq.hidden_scale.e == kInitialScale.e &&
+	              seq.layer_index == 0,
+	          "RunLayerLoop (softmax-width-domain rejection at layer 0): seq must be left "
+	          "exactly as it was pre-call -- the rejection happens strictly before "
+	          "attn_residual would commit anything (T-1375/Critical 4's atomic-commit contract)");
+}
+
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16; §10.1;
 // Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md).
@@ -15362,6 +15462,7 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
 	TestRunLayerLoopCachesKPostRotationNotPreRotation();
 	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
+	TestRunLayerLoopRejectsSoftmaxRowWidthOutOfDomainAtCompositionLevel();
 
 	// S3.6 -- the head and the greedy decode loop (C16, §9.1; master plan
 	// §6.4; §10.1; T-1389;
