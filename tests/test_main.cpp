@@ -12767,6 +12767,30 @@ struct TwoLayerFixture {
 			lw.mlp_residual_site_constant = canonical;
 		}
 	}
+
+	// D-SLM492/T-1407: every `LayerWeights` pointer field wired above points at
+	// THIS object's own sibling array members. A copy or a move would produce a
+	// second object whose `LayerWeights` still point at the ORIGINAL object's
+	// arrays (a shallow-copied pointer, not a deep one) -- harmless only for as
+	// long as the original outlives the copy, and silently dangling the moment
+	// it does not. The constructor-body wiring (T-1403) makes direct
+	// construction safe by removing the return-by-value NRVO dependency; it
+	// does nothing to stop a FUTURE caller from relocating an already-built
+	// fixture (a helper that builds one and returns it by value, a
+	// `std::vector<TwoLayerFixture>`, an assignment). Deleting copy and move
+	// converts that reintroduction from a silent dangling pointer into
+	// `error C2280` at compile time -- proven: a hand-built two-return-path
+	// factory returning `TwoLayerFixture` by value (the exact shape D-SLM487
+	// found broken) fails to compile with copy/move deleted, where it
+	// previously compiled and passed every existing check while corrupting the
+	// four bytes `TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress`
+	// (below) reads back. No existing call site constructs this fixture by
+	// relocation (independently swept, §4 of the review this repairs), so
+	// nothing that exists today needs the move.
+	TwoLayerFixture(const TwoLayerFixture&) = delete;
+	TwoLayerFixture& operator=(const TwoLayerFixture&) = delete;
+	TwoLayerFixture(TwoLayerFixture&&) = delete;
+	TwoLayerFixture& operator=(TwoLayerFixture&&) = delete;
 };
 
 // T-1375/Critical 1 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
@@ -12864,6 +12888,17 @@ struct CriticalOneFixture {
 		lw.down_site_constant = canonical;
 		lw.mlp_residual_site_constant = canonical;
 	}
+
+	// D-SLM492/T-1407: same shape and same reason as `TwoLayerFixture`'s
+	// deletions above -- `layer`'s pointer fields are wired to THIS object's
+	// own sibling arrays, so a copy or a move would leave them aliasing the
+	// wrong object. No existing call site relocates this fixture; deleting
+	// copy and move makes a future one a compile error instead of a silent
+	// dangling pointer.
+	CriticalOneFixture(const CriticalOneFixture&) = delete;
+	CriticalOneFixture& operator=(const CriticalOneFixture&) = delete;
+	CriticalOneFixture(CriticalOneFixture&&) = delete;
+	CriticalOneFixture& operator=(CriticalOneFixture&&) = delete;
 };
 
 }  // namespace
@@ -12873,13 +12908,30 @@ struct CriticalOneFixture {
 // `LayerWeights` pointer fields drift from the addresses of ITS OWN sibling
 // arrays -- the exact measurement D-SLM487 used to prove the OLD
 // `static Build() { TwoLayerFixture f; ...; return f; }` shape broken (a
-// named-local return relying on optional NRVO), now asserted permanently so
-// a future refactor that reintroduces a return-by-value of this fixture
-// fails HERE rather than resurfacing as unexplained corrupted weights three
-// call frames away. Checks every pointer field the constructor wires, not
-// just `q_weight` (the one D-SLM487 happened to trace), and both layers
-// (index 0 and 1 alias the SAME backing arrays by this fixture's own design,
-// so both must match).
+// named-local return relying on optional NRVO). Checks every pointer field
+// the constructor wires, not just `q_weight` (the one D-SLM487 happened to
+// trace), and both layers (index 0 and 1 alias the SAME backing arrays by
+// this fixture's own design, so both must match).
+//
+// **What this guard does NOT catch, corrected per
+// `Claude/Poirot/bb79269-t1403-fixture-nrvo-remedy-review.md` Finding 1:** it
+// exercises exactly one construction shape -- a direct local
+// (`TwoLayerFixture fixture;`) -- and says nothing about a fixture relocated
+// after construction. The review reintroduced D-SLM487's exact defect (a
+// two-return-path factory returning `TwoLayerFixture` by value, where NRVO
+// does not apply) against the shipped constructor and this guard PASSED in
+// the same run while the relocated copy's own pointers dangled (`match=0`,
+// addresses 0x4A0 apart). A return-by-value reintroduction is caught
+// instead, structurally, by the deleted copy/move constructors on
+// `TwoLayerFixture` itself (D-SLM492/T-1407, immediately below the fixture's
+// definition): that reintroduction is now `error C2280` at compile time, a
+// door this runtime guard does not watch and was never positioned to. This
+// guard's own remaining, genuine job is the shape D-SLM487 originally found
+// broken and the one deleted copy/move cannot express a compile error for --
+// an "unwired" fixture (e.g. a factory that builds a `TwoLayerFixture` and
+// then re-wires its `LayerWeights` pointers at some OTHER object's addresses
+// by hand): that shape still compiles, and this guard is what catches it (33
+// failures under the review's own reproduction of it).
 static void TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress() {
 	TwoLayerFixture fixture;
 	for (int l = 0; l < 2; ++l) {
@@ -14104,8 +14156,17 @@ struct DecodeLoopFixture {
 	// `layers_fixture` in place, which is exactly `TwoLayerFixture`'s own
 	// constructor wiring its LayerWeights pointers to ITS OWN sibling arrays
 	// (`norm_gain`, `identity2x2`, etc) at their FINAL address. There is no
-	// intermediate `TwoLayerFixture` object and no return-by-value of this
-	// struct anywhere, so there is nothing for those pointers to dangle from.
+	// intermediate `TwoLayerFixture` object. **A return-by-value of this
+	// struct, or of `layers_fixture` alone, is a compile error, not merely
+	// absent from today's call sites** (D-SLM492/T-1407: `TwoLayerFixture`'s
+	// and this struct's own deleted copy/move constructors below, which a
+	// relocating factory fails against with `error C2280`) -- so there is
+	// nothing for those pointers to dangle from, as a structural property
+	// rather than a fact about what happens to be built today. (A prior
+	// version of this comment stated the second half as a bare invariant
+	// while only the call-site survey supported it -- corrected per
+	// `Claude/Poirot/bb79269-t1403-fixture-nrvo-remedy-review.md` Finding 5,
+	// now that the deletions below make it true as written.)
 	//
 	// This struct used to carry a `static Build()` that direct-initialized
 	// `layers_fixture` from the prvalue `TwoLayerFixture::Build()` returned
@@ -14119,6 +14180,23 @@ struct DecodeLoopFixture {
 	// that is unsafe on its own terms. Removing `TwoLayerFixture::Build()`
 	// entirely (T-1403) removes the need for this wrapper too.
 	const int32_t* final_norm_gain() const { return layers_fixture.layers[0].attn_norm_gain; }
+
+	// D-SLM492/T-1407: `layers_fixture` (a `TwoLayerFixture`) already deletes
+	// its own copy and move, which transitively deletes this struct's -- a
+	// relocation of `DecodeLoopFixture` would need to relocate `layers_fixture`
+	// and that step alone already fails to compile. Declared explicitly
+	// anyway, matching the other three fixtures this remedy covers, so the
+	// property is documented here rather than left as an incidental
+	// consequence a future reader has to re-derive from the member's own
+	// declaration. Declaring the deletions below is itself a user-declared
+	// constructor, which suppresses the implicit default constructor this
+	// struct otherwise relies on (`DecodeLoopFixture fixture;`) -- restored
+	// explicitly rather than left to silently stop compiling.
+	DecodeLoopFixture() = default;
+	DecodeLoopFixture(const DecodeLoopFixture&) = delete;
+	DecodeLoopFixture& operator=(const DecodeLoopFixture&) = delete;
+	DecodeLoopFixture(DecodeLoopFixture&&) = delete;
+	DecodeLoopFixture& operator=(DecodeLoopFixture&&) = delete;
 };
 
 // The real, executed truth this fixture's own header comment derives, for
@@ -14385,6 +14463,17 @@ struct DecodeLoopCallFixture {
 		f.out_tokens.assign(out_capacity, INT32_C(-99));
 		f.out_logit_rows.assign(out_capacity * DecodeLoopFixture::kVocabSize, INT32_C(-99));
 	}
+
+	// D-SLM492/T-1407: `seq.hidden_codes` above is wired to THIS object's own
+	// `hidden_codes` sibling array -- the exact self-referential shape
+	// `TwoLayerFixture` carries, and the one D-SLM487 originally found broken
+	// one level up from this very struct (`model.layers_fixture` is also
+	// non-relocatable transitively). Deleting copy and move here closes the
+	// same door at this struct's own level, independent of the member.
+	DecodeLoopCallFixture(const DecodeLoopCallFixture&) = delete;
+	DecodeLoopCallFixture& operator=(const DecodeLoopCallFixture&) = delete;
+	DecodeLoopCallFixture(DecodeLoopCallFixture&&) = delete;
+	DecodeLoopCallFixture& operator=(DecodeLoopCallFixture&&) = delete;
 
 	superslm::SslmForwardStatus Run(const std::vector<int32_t>& prompt_tokens,
 	                                  const std::vector<int32_t>& stop_ids,
