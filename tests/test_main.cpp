@@ -10844,7 +10844,7 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 // This is not a red-before-green cell -- the kernel check already exists and is
 // already correct (D-SLM380). This cell is a coverage pin: it passes today because
 // the shipped check does its job, and it is mutation-proved by deleting
-// src/intmath.cpp:598-602 in a scratch copy outside the repository and confirming
+// src/intmath.cpp:625-629 in a scratch copy outside the repository and confirming
 // this cell (and no other) newly fails.
 static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate() {
 	using namespace superslm_test;
@@ -10883,7 +10883,7 @@ static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTh
 	          static_cast<long long>(real_value), static_cast<long long>(m));
 
 	// The property this cell exists to pin: SoftmaxRowQ15 must not report this row
-	// well-formed. Deleting src/intmath.cpp:598-602 removes the only check that can
+	// well-formed. Deleting src/intmath.cpp:625-629 removes the only check that can
 	// refuse element k=1 here (the gate already accepted; IExpConstruct already
 	// constructed) -- so this assertion is exactly what that deletion flips.
 	std::vector<int64_t> out_probs(w.width, INT64_C(-99));  // poison
@@ -10892,7 +10892,7 @@ static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTh
 	CHECK_MSG(!well_formed,
 	          "SoftmaxRowQ15(q_b=%lld, q_c=%lld, q_ln2=%lld) reported well_formed=true for a row whose "
 	          "real evaluated element at k=1 (%lld) exceeds M (%lld) -- the kernel's own per-element "
-	          "ceiling check (src/intmath.cpp:598-602) must refuse this row",
+	          "ceiling check (src/intmath.cpp:625-629) must refuse this row",
 	          static_cast<long long>(w.q_b), static_cast<long long>(w.q_c),
 	          static_cast<long long>(w.q_ln2), static_cast<long long>(real_value),
 	          static_cast<long long>(m));
@@ -12547,8 +12547,14 @@ static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
 // value appears only inside a `CHECK_MSG` failure string, which is
 // description. The cell IS discriminating -- an executed revert of both
 // negative-`k` assignments in `LandingRescale` produces exactly this cell's
-// four failures, confirmed by execution -- by the sentinel assertion above,
-// not by the mechanism this comment previously claimed.)
+// four failures, confirmed by execution -- by the sentinel assertions below,
+// not by the mechanism this comment previously claimed. (Corrected further
+// 2026-07-31, T-1539: this parenthetical and the resolution clause inside
+// the cell's first CHECK_MSG below both said "above", pointing at nothing --
+// this block comment precedes the function, and the first CHECK_MSG is the
+// cell's own first assertion, so neither has anything above it within the
+// cell. The discriminating sentinels are the two CHECK_MSGs below the
+// first.)
 static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
@@ -12571,7 +12577,7 @@ static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 	          "ResidualReconciliationMagnitudeOutOfDomain -- an executed revert of both negative-k "
 	          "assignments in LandingRescale returns Ok with out_codes[0]==0 at these exact "
 	          "operands instead (Poirot Significant 1, closed: LandingRescale's shipped negative-k "
-	          "assignments are exactly what this cell's positive assertion above confirms are in "
+	          "assignments are exactly what the two sentinel CHECK_MSGs below confirm are in "
 	          "place), which is the clause's own stated negative control this cell must catch",
 	          SslmForwardStatusName(result));
 	CHECK_MSG(out_codes[0] == INT8_C(-99),
