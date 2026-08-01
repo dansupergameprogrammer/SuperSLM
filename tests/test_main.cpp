@@ -13257,7 +13257,13 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	seq.hidden_scale = CarriedScale{INT64_C(-99), INT64_C(-99)};
 	seq.layer_index = 0xFFFFFFFFu;  // poison -- not a legal layer_index for num_hidden_layers=2
 
-	uint8_t workspace[64];
+	// T-1594: sized to EXACTLY kv_bytes_needed for this call's own geometry
+	// (num_hidden_layers=2, context_cap=1, num_heads=1, head_dim=2 -> 8
+	// bytes), not the suite's old generic 64-byte convention -- a workspace
+	// larger than kv_bytes_needed lets a write past the declared size land
+	// inside the true allocation, invisible to any memory-safety instrument.
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize];
 	std::memset(workspace, 0xEE, sizeof(workspace));
 
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
@@ -13303,7 +13309,11 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 		seq.hidden_scale = CarriedScale{INT64_C(-61), INT64_C(-61)};
 		seq.layer_index = 2;  // == num_hidden_layers: already complete
 
-		uint8_t workspace[64];
+		// T-1594: exact for this call's own valid geometry (num_hidden_layers=2,
+		// context_cap=1, num_heads=1, head_dim=2 -> 8 bytes) rather than the
+		// old generic 64-byte convention.
+		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize];
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
@@ -13331,13 +13341,19 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 		seq.hidden_scale = CarriedScale{INT64_C(-62), INT64_C(-62)};
 		seq.layer_index = 0;
 
-		uint8_t workspace[64];
+		// T-1594: this call's own kv_bytes_needed is 0 (num_hidden_layers=0
+		// zeroes the product regardless of the other factors) -- the declared
+		// workspace_size passed below is exactly that, 0. Standard C++ has no
+		// zero-length array, so the backing store is the minimum expressible
+		// size (1 byte); the call is told, truthfully, that it may use none of
+		// it.
+		uint8_t workspace[1];
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/0,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
 		                                             /*head_dim=*/2, /*intermediate_size=*/2,
 		                                             /*context_cap=*/1, fixture.view.rope_tables,
-		                                             workspace, sizeof(workspace));
+		                                             workspace, /*workspace_size=*/0);
 		CHECK_MSG(result == SslmForwardStatus::SequenceAlreadyComplete,
 		          "RunLayerLoop(num_hidden_layers=0, layer_index=0, budget=1) status == %s, want "
 		          "SequenceAlreadyComplete -- the same livelock, from num_hidden_layers==0 rather "
@@ -13365,6 +13381,13 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 
 	// Witness 1: hidden_size=3 is not a multiple of head_dim=2. A 4096-byte
 	// workspace -- ample by any real sizing -- rules out an actual undersize.
+	//
+	// T-1594: this workspace is deliberately NOT sized to kv_bytes_needed --
+	// this geometry is itself invalid (hidden_size not a multiple of head_dim),
+	// so RunLayerLoop's kv_bytes_needed formula never executes for this call
+	// (the HeadDimGeometryMismatch check runs first and rejects before it);
+	// there is no well-defined "exact" size to allocate. The oversize here is
+	// the cell's own point, not an instance of the pattern this ticket closes.
 	{
 		int8_t hidden_codes[3] = {INT8_C(-51), INT8_C(-51), INT8_C(-51)};
 		SequenceLayerState seq;
@@ -13387,6 +13410,10 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 	}
 
 	// Witness 2: head_dim == 0.
+	//
+	// T-1594: same exception as Witness 1 above -- head_dim==0 is itself the
+	// invalid geometry under test, so kv_bytes_needed is never computed for
+	// this call and there is no exact size to allocate to.
 	{
 		int8_t hidden_codes[2] = {INT8_C(-52), INT8_C(-52)};
 		SequenceLayerState seq;
@@ -13432,7 +13459,10 @@ static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 
-	uint8_t workspace[64] = {};
+	// T-1594: exact for this call's geometry (num_hidden_layers=2, context_cap=1,
+	// num_heads=1, head_dim=2 -> 8 bytes).
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
 	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(
 	    fixture.layers[0].q_b_iexp, fixture.layers[0].q_c_iexp, /*width=*/1);
 	CHECK_MSG(gate_status == SslmForwardStatus::Ok,
@@ -13520,6 +13550,13 @@ static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSi
 		seq.hidden_codes = hidden_codes;
 		seq.hidden_scale = CarriedScale{INT64_C(-78), INT64_C(-78)};
 		seq.layer_index = 0xFFFFFFFDu;
+		// T-1594: this workspace is deliberately NOT sized to kv_bytes_needed --
+		// context_cap=-(2^62) is itself the invalid input under test, rejected
+		// by the InvalidContextCap guard before kv_bytes_needed is ever formed,
+		// so no exact size is well-defined for this call. Kept at 64 bytes, a
+		// real allocation large enough that a wild wrapped-pointer write (the
+		// pre-fix defect this cell regresses) would still land inside it and be
+		// observable by the assertions below rather than merely by luck.
 		uint8_t workspace[64];
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(
@@ -13561,7 +13598,10 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		seq.layer_index = 0;
 
-		uint8_t workspace[64] = {};
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// head_dim=2 -> 8 bytes); budget does not affect kv_bytes_needed.
+		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, budget,
 		                                             /*hidden_size=*/2, /*head_dim=*/2,
 		                                             /*intermediate_size=*/2, /*context_cap=*/1,
@@ -13608,7 +13648,11 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	full_seq.hidden_codes = full_codes;
 	full_seq.hidden_scale = kInitialScale;
 	full_seq.layer_index = 0;
-	uint8_t full_workspace[64] = {};
+	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+	// head_dim=2 -> 8 bytes), shared by both the straight-through and
+	// resumed runs below since both use the identical geometry.
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t full_workspace[kWorkspaceSize] = {};
 	const auto full_result =
 	    superslm::RunLayerLoop(full_seq, fixture.layers, kNumLayers, /*layer_budget=*/kNumLayers,
 	                             /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
@@ -13624,7 +13668,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	resumed_seq.hidden_codes = resumed_codes;
 	resumed_seq.hidden_scale = kInitialScale;
 	resumed_seq.layer_index = 0;
-	uint8_t resumed_workspace[64] = {};
+	uint8_t resumed_workspace[kWorkspaceSize] = {};
 	const auto first_step =
 	    superslm::RunLayerLoop(resumed_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
 	                             /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
@@ -13691,7 +13735,10 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 		seq.hidden_codes = codes;
 		seq.hidden_scale = kInitialScale;
 		seq.layer_index = 0;
-		uint8_t workspace[64] = {};
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// head_dim=2 -> 8 bytes).
+		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
 		const auto first = superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
 		                                            /*hidden_size=*/2, /*head_dim=*/2,
 		                                            /*intermediate_size=*/2, /*context_cap=*/1,
@@ -13957,7 +14004,10 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	// starting seq.hidden_scale.
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
-	uint8_t workspace[128] = {};
+	// T-1594: exact for this call's geometry (num_hidden_layers=1, context_cap=1,
+	// num_heads=2 [hidden_size=4/head_dim=2], head_dim=2 -> 8 bytes).
+	constexpr size_t kWorkspaceSize = 1 * 1 * 2 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result =
 	    superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
 	                             /*hidden_size=*/4, /*head_dim=*/2, /*intermediate_size=*/2,
@@ -14056,7 +14106,10 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 		seq.hidden_codes = hidden_codes;
 		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		seq.layer_index = 0;
-		uint8_t workspace[64] = {};
+		// T-1594: exact (num_hidden_layers=1, context_cap=1, num_heads=1,
+		// head_dim=2 -> 4 bytes).
+		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
 		const auto result = superslm::RunLayerLoop(
 		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
 		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
@@ -14222,7 +14275,10 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 	seq.hidden_codes = hidden_codes;
 	seq.hidden_scale = kInitialScale;
 	seq.layer_index = 0;
-	uint8_t workspace[64] = {};
+	// T-1594: exact (num_hidden_layers=1, context_cap=1, num_heads=1,
+	// head_dim=2 -> 4 bytes).
+	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result = superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
 	                                             /*hidden_size=*/2, /*head_dim=*/2,
 	                                             /*intermediate_size=*/2, /*context_cap=*/1,
@@ -14281,7 +14337,10 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	seq.hidden_codes = hidden_codes;
 	seq.hidden_scale = kInitialScale;
 	seq.layer_index = 0;
-	uint8_t workspace[64] = {};
+	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+	// head_dim=2 -> 8 bytes).
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                             /*layer_budget=*/1, /*hidden_size=*/2,
 	                                             /*head_dim=*/2, /*intermediate_size=*/2,
@@ -14651,7 +14710,11 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 
 	TwoLayerFixture fixture;
 	const int64_t kContextCap = 3;  // smallest cap giving 0, 1, context_cap-1, context_cap four distinct values
-	uint8_t workspace[2 * 16 * 1 * 2 * 2] = {};  // sized for kContextCap<=16
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// head_dim=2 -> 24 bytes) -- was sized for a 16-cap fixture default this
+	// function never actually calls with, oversized by 296 bytes relative to
+	// what every call below actually needs.
+	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 
 	int8_t codes[2] = {};
 	SequenceLayerState seq;
@@ -15041,7 +15104,11 @@ static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughA
 
 	const int64_t kContextCap = 3;
 	TwoLayerFixture fixture;
-	uint8_t workspace[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// head_dim=2 -> 24 bytes) -- was sized against TwoLayerFixture's own
+	// 16-cap default instead of the context_cap this test actually calls
+	// with, oversized by 40 bytes.
+	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 	int8_t codes[2] = {};
 	SequenceLayerState seq;
 	seq.hidden_codes = codes;
@@ -15115,7 +15182,11 @@ static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
 
 	const int64_t kContextCap = 3;
 	TwoLayerFixture fixture;
-	uint8_t workspace[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// head_dim=2 -> 24 bytes) -- was sized against TwoLayerFixture's own
+	// 16-cap default instead of the context_cap this test actually calls
+	// with.
+	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 
 	// Sequence A: commit 2 positions.
 	{
@@ -15517,7 +15588,10 @@ static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard(
 	seq.layer_index = UINT32_MAX;  // caller-restored, far past num_hidden_layers
 	seq.context_length = 0;
 
-	uint8_t workspace[64];
+	// T-1594: exact for this call's geometry (num_hidden_layers=2, context_cap=3,
+	// num_heads=1, head_dim=2 -> 24 bytes).
+	constexpr size_t kWorkspaceSize = 2 * 3 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize];
 	std::memset(workspace, 0xEE, sizeof(workspace));
 	const auto st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                        /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
@@ -16172,7 +16246,10 @@ static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
 		seq.hidden_codes = embed_codes;
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
-		uint8_t workspace[64] = {};
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// head_dim=2 -> 8 bytes).
+		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWorkspaceSize] = {};
 		const auto lst = superslm::RunLayerLoop(
 		    seq, fixture.layers_fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
 		    DecodeLoopFixture::kHiddenSize, /*head_dim=*/2, /*intermediate_size=*/2,
