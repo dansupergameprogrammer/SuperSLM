@@ -22,10 +22,19 @@ jobs:
       # already stated both run in CI; this is that step). Run immediately
       # after the build above so the binary they scan against is the one
       # this job just produced -- never a leftover from a prior run.
-      - name: Test-suite-split structural checks -- SSLM_TEST count/order/hash and test-shaped-definition registration
-        run: |
-          python tests/ci/check_test_registration_complete.py
-          python tests/ci/check_test_definitions_registered.py
+      # ONE COMMAND PER STEP, and it is load-bearing rather than stylistic
+      # (T-1635 Significant 1). These two ran as two lines of a single `run:`
+      # block, and the runner's wrapper exits on the LAST command's code --
+      # $ErrorActionPreference does not couple to a native exit code unless
+      # $PSNativeCommandUseErrorActionPreference is opted into, and it is not.
+      # A first-command failure exited the step 0, measured. The script being
+      # swallowed was the count/order/body-hash/check-site one, so an area file
+      # omitted from a build surface -- D-SLM596 live, D-SLM594's own drill --
+      # would have gone green in CI. Do not recombine these.
+      - name: Test-suite-split structural check -- SSLM_TEST count, order, body hash, check sites
+        run: python tests/ci/check_test_registration_complete.py
+      - name: Test-suite-split structural check -- every test-shaped definition is registered
+        run: python tests/ci/check_test_definitions_registered.py
       - shell: pwsh
         run: |
           $out = & build/Release/superslm_tests.exe

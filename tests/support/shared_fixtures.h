@@ -20,8 +20,18 @@
 // -- is TwoLayerFixture's own constructor's dependency (T-1632 Minor 4: this
 // promotion was previously undocumented here).
 //
-// No production or fixture *behavior* changes here: every struct/function
-// body below is relocated exactly as it read at tests/test_main.cpp@9fc75b0.
+// No production or fixture *behavior* changes here. The bodies below are NOT
+// all byte-identical to tests/test_main.cpp@9fc75b0, and saying so plainly
+// matters because a pinned hash is what enforces it (T-1635 Significant 2):
+// two bodies were changed by e70acc0 when this header's namespace-scope
+// using-directives were removed, and both changes are name qualification only
+// -- unqualified superslm names became superslm::-qualified, resolving to the
+// same entities the directives used to supply. TwoLayerFixture's constructor
+// is pinned in tests/support/check_site_hashes.txt and its pin was moved with
+// that commit, deliberately and with the diff verified; MakeRop1SectionMultiRow
+// carries no CHECK site, so it is outside that mechanism's scope and its change
+// was not caught by any check. Every other body here is relocated exactly as it
+// read at tests/test_main.cpp@9fc75b0.
 #pragma once
 
 #include "superslm/artifact.h"
