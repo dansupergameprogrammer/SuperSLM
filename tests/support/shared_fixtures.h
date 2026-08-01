@@ -20,6 +20,23 @@
 // -- is TwoLayerFixture's own constructor's dependency (T-1632 Minor 4: this
 // promotion was previously undocumented here).
 //
+// FixtureTokenizer/OpenFixtureTokenizer, BuildFullyValidV2ArtifactForLoad, and
+// its own MakeKvc1CompositionSection/MakeWsc1Section/MakeRop1Section
+// ingredients -- moved verbatim from tests/test_main.cpp (T-1574 Stage 2, a
+// third crossing discovered mid-migration per the plan's standing promotion
+// rule, §4): OpenFixtureTokenizer is used by candidate area #2
+// (tokenizer.cpp, not yet extracted) and by candidate area #10
+// (bad_alloc_contract.cpp); BuildFullyValidV2ArtifactForLoad and its three
+// section-builder ingredients are used by candidate area #4 (model_load.cpp,
+// not yet extracted) and by candidate area #10. All five were `static` (two)
+// or anonymous-namespace-scoped (three) in tests/test_main.cpp -- internal
+// linkage that bad_alloc_contract.cpp, a separate translation unit, cannot
+// see -- so promotion to this header is not merely tidiness: it is what
+// makes Stage 2 compile at all. Promoted to `inline`, matching
+// MakeRop1SectionMultiRow's own precedent.
+// BuildFullyValidV2ArtifactForLoadWithTokenizer stays in tests/test_main.cpp
+// -- swept and confirmed single-area (model_load.cpp only) at Stage 2.
+//
 // No production or fixture *behavior* changes here. The bodies below are NOT
 // all byte-identical to tests/test_main.cpp@9fc75b0, and saying so plainly
 // matters because a pinned hash is what enforces it (T-1635 Significant 2):
@@ -39,11 +56,14 @@
 #include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
 #include "superslm/model.h"
+#include "superslm/tokenizer.h"
 #include "superslm/trace_hook.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
+#include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_s3_2_fixtures.h"
 #include "sslm_sil1_hostile_fixtures.h"
+#include "sslm_tokenizer_fixtures.h"
 
 #include "test_harness.h"
 
@@ -325,3 +345,99 @@ struct TwoLayerFixture {
 	TwoLayerFixture(TwoLayerFixture&&) = delete;
 	TwoLayerFixture& operator=(TwoLayerFixture&&) = delete;
 };
+
+// Opens the real Qwen2.5-1.5B fixture artifact's tokenizer. Moved verbatim
+// from tests/test_main.cpp:775-805 (was inside an anonymous namespace there;
+// anonymous-namespace scoping gives internal linkage, which a second
+// translation unit cannot see, so the promotion drops the anonymous
+// namespace along with the move -- the struct/function themselves are
+// unchanged).
+struct FixtureTokenizer {
+	superslm::SslmArtifact artifact;
+	superslm::TokenizerView view;
+	bool artifact_ok = false;
+	bool view_ok = false;
+	std::string artifact_error;
+	std::string view_error;
+};
+
+inline FixtureTokenizer OpenFixtureTokenizer() {
+	using namespace superslm;
+	FixtureTokenizer ft;
+	std::string path = superslm_test::ResolveFixturePath("qwen2.5-1.5b.tok.sslm");
+	if (path.empty()) {
+		ft.artifact_error =
+		    "fixture qwen2.5-1.5b.tok.sslm not found under tests/fixtures (searched CWD, .., ../..)";
+		return ft;
+	}
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromFile(path.c_str(), ft.artifact, &aerr);
+	ft.artifact_ok = (status == SslmStatus::Ok);
+	if (!ft.artifact_ok) {
+		ft.artifact_error = std::string(SslmStatusName(status)) + ": " + aerr.message;
+		return ft;
+	}
+	std::string terr;
+	ft.view_ok = TokenizerView::Open(ft.artifact, ft.view, &terr);
+	ft.view_error = terr;
+	return ft;
+}
+
+// Builds a CompositionConstants (KVC1) section with one entry named "scale"
+// carrying (m, e). Moved verbatim from tests/test_main.cpp:3988-3992
+// (was `static`), promoted to `inline` -- BuildFullyValidV2ArtifactForLoad's
+// own ingredient, and also used directly by candidate area #4's boundary
+// matrix (not yet extracted).
+inline superslm_test::FixtureSection MakeKvc1CompositionSection(int64_t m, int64_t e) {
+	using namespace superslm_test;
+	auto kvc1 = BuildKvc1(2, {{"scale", {m, e}}});
+	return MakeSection(superslm::SslmSectionType::CompositionConstants, superslm::SslmDtype::Raw, kvc1.bytes,
+	                    /*alignment=*/64);
+}
+
+// Builds a WeightScales (WSC1) section with one (identity, mult, shift) row.
+// Moved verbatim from tests/test_main.cpp:3997-4005 (was `static`), promoted
+// to `inline` -- same crossing as MakeKvc1CompositionSection above.
+inline superslm_test::FixtureSection MakeWsc1Section(int32_t identity, int32_t mult, int32_t shift) {
+	using namespace superslm_test;
+	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{3});
+	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
+	PutU32(manifest.bytes, data_off + 0, static_cast<uint32_t>(identity));
+	PutU32(manifest.bytes, data_off + 4, static_cast<uint32_t>(mult));
+	PutU32(manifest.bytes, data_off + 8, static_cast<uint32_t>(shift));
+	return MakeSection(superslm::SslmSectionType::WeightScales, superslm::SslmDtype::Int32, manifest.bytes,
+	                    /*alignment=*/64);
+}
+
+// Builds a RopeTables (ROP1) section whose "cos"/"sin" tensors each carry
+// kCfg1DefaultRopeElemCount elements (every element set to the one given
+// value). Moved verbatim from tests/test_main.cpp:4018-4029 (was `static`),
+// promoted to `inline` -- same crossing as the two helpers above.
+inline superslm_test::FixtureSection MakeRop1Section(int64_t cos_v, int64_t sin_v) {
+	using namespace superslm_test;
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {kCfg1DefaultRopeElemCount}}, {"sin", {kCfg1DefaultRopeElemCount}}};
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	for (uint32_t i = 0; i < kCfg1DefaultRopeElemCount; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(cos_v));
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + static_cast<size_t>(i) * 8,
+		       static_cast<uint64_t>(sin_v));
+	}
+	return MakeSection(superslm::SslmSectionType::RopeTables, superslm::SslmDtype::Int64, manifest.bytes,
+	                    /*alignment=*/64);
+}
+
+// A complete, fully in-domain v2 artifact: Config, SigmoidLut, and one each
+// of CompositionConstants/WeightScales/RopeTables with every gated field
+// inside its stated domain. Moved verbatim from tests/test_main.cpp:4052-4059
+// (was `static`), promoted to `inline` -- used by candidate area #4
+// (model_load.cpp, not yet extracted) and candidate area #10
+// (bad_alloc_contract.cpp, Stage 2).
+inline superslm_test::BuiltArtifact BuildFullyValidV2ArtifactForLoad() {
+	using namespace superslm_test;
+	FixtureSection composition_constants = MakeKvc1CompositionSection(/*m=*/1000000, /*e=*/0);
+	FixtureSection weight_scales = MakeWsc1Section(/*identity=*/1, /*mult=*/12345, /*shift=*/10);
+	FixtureSection rope_tables = MakeRop1Section(/*cos=*/500000000, /*sin=*/-500000000);
+	return BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(), composition_constants,
+	                      weight_scales, rope_tables});
+}

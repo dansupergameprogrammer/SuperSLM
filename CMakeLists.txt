@@ -64,6 +64,7 @@ add_executable(superslm_tests
 	tests/support/crash_probe.cpp
 	tests/support/shared_fixtures.cpp
 	tests/areas/proof_manifest.cpp
+	tests/areas/bad_alloc_contract.cpp
 )
 target_include_directories(superslm_tests PRIVATE tests)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
