@@ -555,6 +555,28 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
                                           int8_t* out_codes, CarriedScale* out_scale,
                                           std::string_view site, size_t token_index,
                                           SslmTraceHookState* trace_hook_state) {
+	// Step 0 (Poirot 76a9776-t1599, Significant 2): `stream_scale.m` must fit
+	// int32_t's own range before it reaches the reciprocal below.
+	// `CarriedScaleReciprocal` (checked_chain_funnel.h's own exported door,
+	// T-1357/D-SLM433) forwards straight to the funnel's own C19 leaf --
+	// deliberately unnamed here, matching this file's own convention below
+	// (§7.3's CI source check matches text, not calls) -- whose seed
+	// computation is signed-overflow UB once its operand sits outside that
+	// range -- reachable here because `RequantChainChecked`'s own step-0
+	// rejection (`CarriedScaleMantissaOutOfDomain`, checked_chain_funnel.cpp)
+	// runs on `incoming`/`site_constant` only AFTER this call, at step 5, not
+	// before it: the exemption at this loop's own guard block below claims
+	// the mantissa "reaches only pure arithmetic ... confirmed at source",
+	// which is true of the call but not of the domain it is applied to. Same
+	// test as `CarriedScaleMantissaFitsInt32` (checked_chain_funnel.cpp,
+	// TU-local), same status the fold would have returned two steps later,
+	// so no caller observes a different outcome -- only an earlier, defined
+	// one.
+	if (stream_scale.m < static_cast<int64_t>(kInt32Min) ||
+	    stream_scale.m > static_cast<int64_t>(kInt32Max)) {
+		return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
+	}
+
 	// C26 (§6.2 step 8 / §6.3 step 13), the header's four steps in order.
 	//
 	// Step 1: C19 over the STREAM's own mantissa, never the branch's -- the
@@ -814,19 +836,27 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	//     remedy this ticket's own review prescribed.
 	//   - `hidden_scale`: reaches only pure arithmetic
 	//     (`CarriedScaleReciprocal`, `LandingRescale`), never a size, count,
-	//     or offset, and `RequantChainChecked`'s own step 0 rejects an
-	//     out-of-int32 mantissa (`CarriedScaleMantissaOutOfDomain`) before
-	//     any output is written -- confirmed at source (checked_chain_funnel.cpp)
-	//     and probed, not merely reasoned: T-1590's hidden_scale cell runs
-	//     TWO sub-cases -- an out-of-domain mantissa `m` (rejected), and, per
-	//     T-1596, an extreme in-domain exponent `e` (the one field
-	//     checked_chain_funnel.h's own comment states carries no domain
-	//     check anywhere in this tree, run through to whatever status it
-	//     actually returns) -- against workspace and `hidden_codes` buffers
-	//     each ringed with a canary immediately before AND after their
-	//     declared region, and confirms all four canaries untouched
-	//     regardless of which status either sub-case returns. No guard
-	//     needed.
+	//     or offset. `ResidualReconcileSite`'s own Step 0 (Poirot
+	//     76a9776-t1599, Significant 2) rejects an out-of-int32 mantissa
+	//     (`CarriedScaleMantissaOutOfDomain`) BEFORE the reciprocal call --
+	//     not `RequantChainChecked`'s step 0, which runs two steps later and
+	//     was reached only after the reciprocal had already executed
+	//     signed-overflow UB on the out-of-domain mantissa (measured;
+	//     `intmath.cpp:224`, the funnel's own C19 leaf's seed computation --
+	//     deliberately unnamed here, matching this file's own convention).
+	//     "Reaches only pure arithmetic" is therefore true of the domain this
+	//     arithmetic is actually applied to, not merely of the call site --
+	//     confirmed at source (`forward_sites.cpp`, this file) and probed,
+	//     not merely reasoned: T-1590's hidden_scale cell runs TWO sub-cases
+	//     -- an out-of-domain mantissa `m` (rejected before the reciprocal
+	//     runs), and, per T-1596, an extreme in-domain exponent `e` (the one
+	//     field checked_chain_funnel.h's own comment states carries no
+	//     domain check anywhere in this tree, run through to whatever status
+	//     it actually returns -- `Ok`, measured) -- against workspace and
+	//     `hidden_codes` buffers each ringed with a canary immediately
+	//     before AND after their declared region, and confirms all four
+	//     canaries untouched regardless of which status either sub-case
+	//     returns. No guard needed beyond the Step-0 mantissa check above.
 	if (seq.hidden_codes == nullptr) return SslmForwardStatus::InvalidHiddenCodes;
 
 	// Significant 6 (Poirot e4b398c review): the SAME livelock the

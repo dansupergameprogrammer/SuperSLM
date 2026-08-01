@@ -14712,8 +14712,10 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	const int64_t kContextCap = 3;  // smallest cap giving 0, 1, context_cap-1, context_cap four distinct values
 	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
 	// head_dim=2 -> 24 bytes) -- was sized for a 16-cap fixture default this
-	// function never actually calls with, oversized by 296 bytes relative to
-	// what every call below actually needs.
+	// function never actually calls with (128 bytes), oversized by 104 bytes
+	// relative to what every call below actually needs (Poirot
+	// 76a9776-t1599, Minor 2: measured at `e24b971` via `git show`, correcting
+	// this comment's own prior 296).
 	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 
 	int8_t codes[2] = {};
@@ -15107,7 +15109,9 @@ static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughA
 	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
 	// head_dim=2 -> 24 bytes) -- was sized against TwoLayerFixture's own
 	// 16-cap default instead of the context_cap this test actually calls
-	// with, oversized by 40 bytes.
+	// with (128 bytes), oversized by 104 bytes (Poirot 76a9776-t1599, Minor
+	// 2: measured at `e24b971` via `git show`, correcting this comment's own
+	// prior 40).
 	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 	int8_t codes[2] = {};
 	SequenceLayerState seq;
@@ -15717,6 +15721,25 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 // (checked_chain_funnel.h's ResidualReconciliationMagnitudeOutOfDomain
 // comment; T-1596) -- which runs the call through to whatever status it
 // actually returns rather than assuming a rejection.
+//
+// Poirot 76a9776-t1599 (Significant 1): sub-case B originally used
+// `e = INT64_MAX`, which is NOT an in-domain exponent for this expression --
+// `forward_sites.cpp`'s `LandingRescale` computes `62 - (e_a - e_t)`, and at
+// this fixture's own `e_a` (branch_scale.e == -2, measured), `e_t = INT64_MAX`
+// drives that subtraction into real signed-overflow UB (T-1596's own open
+// site), which the project's MSVC-ABI ASan+UBSan instrument confirms as a
+// hard abort under its own flags. A cell whose own run is undefined proves
+// nothing about the status it happens to print. `e = INT64_MAX / 2` is the
+// value used instead: still an extreme, far-outside-canonical-range exponent
+// (the property this sub-case exists to stress; T-1596), but with roughly
+// `INT64_MAX / 2` of headroom below the actual overflow boundary at this
+// fixture's own `e_a` (`e_t <= INT64_MAX - 64`, derived from the expression
+// above) rather than sitting on it -- deliberately not the tightest in-domain
+// value, so the margin holds even if a future change to this fixture's data
+// moves `e_a` by any amount a real composition could plausibly produce.
+// Confirmed by this project's own instrument to produce zero UBSan reports,
+// and the call genuinely runs to completion and returns `Ok` -- a real
+// non-rejection, not an artifact of undefined behavior.
 static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
@@ -15778,14 +15801,20 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 	          "inside ResidualReconcileSite, before this layer's commit point",
 	          SslmForwardStatusName(status_a));
 
-	// Sub-case B: T-1597/S1 -- `e` itself pushed to an extreme IN-DOMAIN
-	// value (there is no domain check on `e` anywhere in this tree, T-1596),
-	// with `m` left in-domain so the call is not rejected on `m`'s account.
-	// Whatever status this returns, the two rings above must stay intact --
-	// that is the "regardless of the call's returned status" half of the
-	// comment this cell answers to, now genuinely exercised against a status
-	// other than a rejection.
-	RunRingedCase(CarriedScale{1, INT64_MAX}, "extreme e");
+	// Sub-case B: T-1597/S1, corrected by T-1599/S1 -- `e` pushed to
+	// `INT64_MAX / 2`, an extreme exponent kept comfortably inside
+	// `LandingRescale`'s `62 - (e_a - e_t)` domain at this fixture's own
+	// `e_a` (see the comment above this function), with `m` left in-domain
+	// so the call is not rejected on `m`'s account. The two rings above must
+	// stay intact regardless of the call's returned status; this sub-case
+	// additionally pins the status itself, since a defined run now lets it
+	// be pinned rather than merely printed.
+	const SslmForwardStatus status_b = RunRingedCase(CarriedScale{1, INT64_MAX / 2}, "extreme e");
+	CHECK_MSG(status_b == SslmForwardStatus::Ok,
+	          "T-1599: RunLayerLoop(hidden_scale.e=INT64_MAX/2) status == %s, want Ok -- measured "
+	          "under this project's own MSVC-ABI ASan+UBSan instrument with zero UBSan reports, "
+	          "the first defined run of this sub-case",
+	          SslmForwardStatusName(status_b));
 }
 
 // --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
