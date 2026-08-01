@@ -11,8 +11,21 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - run: cmake -B build
       - run: cmake --build build --config Release
+      # T-1574 test suite split §7.2, plan §7.3 final-closure list: these two
+      # checks carry the whole registration-completeness claim for every
+      # remaining test-suite-split stage (T-1632 Significant 3 -- the plan
+      # already stated both run in CI; this is that step). Run immediately
+      # after the build above so the binary they scan against is the one
+      # this job just produced -- never a leftover from a prior run.
+      - name: Test-suite-split structural checks -- SSLM_TEST count/order/hash and test-shaped-definition registration
+        run: |
+          python tests/ci/check_test_registration_complete.py
+          python tests/ci/check_test_definitions_registered.py
       - shell: pwsh
         run: |
           $out = & build/Release/superslm_tests.exe
