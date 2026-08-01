@@ -14,6 +14,12 @@
 // superslm::RunLayerLoop, by a join test that files under candidate area #12
 // per the plan's composing-function rule (§4).
 //
+// MakeRop1SectionMultiRow -- moved verbatim from tests/test_main.cpp, and
+// promoted from `static` to `inline` so every tests/test_main.cpp call site
+// that still names it directly continues to resolve it through this header
+// -- is TwoLayerFixture's own constructor's dependency (T-1632 Minor 4: this
+// promotion was previously undocumented here).
+//
 // No production or fixture *behavior* changes here: every struct/function
 // body below is relocated exactly as it read at tests/test_main.cpp@9fc75b0.
 #pragma once
@@ -35,13 +41,21 @@
 #include <string>
 #include <vector>
 
-// ChainTraceSinkRecord + ChainTraceSinkHookFn used the file's ambient
-// `using namespace superslm; using namespace superslm_test;` at their
-// original site; this header states the same two qualifications so a caller
-// that includes it and does not repeat those directives still sees the same
-// names resolve the same way.
-using namespace superslm;       // NOLINT
-using namespace superslm_test;  // NOLINT
+// T-1632 Minor 2: this header previously declared `using namespace superslm;
+// using namespace superslm_test;` at namespace scope here, to preserve the
+// name resolution ChainTraceSinkRecord/ChainTraceSinkHookFn had at their
+// original site in tests/test_main.cpp (which opens both namespaces itself).
+// That leaked both directives into every current and future includer
+// whether or not it opens them itself, with no way to opt out. Every
+// declaration below already names its superslm/superslm_test types fully
+// qualified (ChainTraceSinkHookFn's parameters, MakeRop1SectionMultiRow's
+// return type, TwoLayerFixture's members), and the two functions that use
+// unqualified names from those namespaces internally (MakeRop1SectionMultiRow,
+// TwoLayerFixture's constructor) already scope their own
+// `using namespace superslm_test;` to the function body -- so this header
+// needs no namespace-scope using-directive of its own, and both current
+// includers (tests/test_main.cpp, tests/areas/proof_manifest.cpp) already
+// declare the same two directives themselves at file scope.
 
 struct ChainTraceSinkRecord {
 	std::string site;
@@ -82,7 +96,8 @@ inline superslm_test::FixtureSection MakeRop1SectionMultiRow(int32_t context_cap
 		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8,
 		       static_cast<uint64_t>(sin_flat[i]));
 	}
-	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+	return MakeSection(superslm::SslmSectionType::RopeTables, superslm::SslmDtype::Int64, manifest.bytes,
+	                    /*alignment=*/64);
 }
 
 struct TwoLayerFixture {
@@ -161,7 +176,8 @@ struct TwoLayerFixture {
 		spec.context_cap = TwoLayerFixture::kContextCap;
 		spec.kv_precision = 0;  // Int8
 		spec.kv_block_size = 1;
-		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		FixtureSection config =
+		    MakeSection(superslm::SslmSectionType::Config, superslm::SslmDtype::Raw, BuildCfg1(spec));
 		// Identity rotation (cos(0)==2^30, sin==0) at every one of the
 		// fixture's `kContextCap` rows -- every existing cell in this suite
 		// that reads this fixture's rope table still sees identity at
