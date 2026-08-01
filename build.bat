@@ -28,7 +28,7 @@ if errorlevel 1 (
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	tests\test_main.cpp tests\support\test_harness.cpp tests\support\test_registry.cpp ^
 	tests\support\crash_probe.cpp tests\support\shared_fixtures.cpp ^
-	tests\areas\proof_manifest.cpp tests\areas\bad_alloc_contract.cpp ^
+	tests\areas\proof_manifest.cpp tests\areas\bad_alloc_contract.cpp tests\areas\loader.cpp ^
 	/Fo:out\tests\ /c
 if errorlevel 1 (
 	popd & exit /b 1
@@ -37,6 +37,7 @@ cl /nologo out\artifact.obj out\sha256.obj out\tokenizer.obj out\model.obj out\i
 	out\matmul.obj out\proof_manifest.obj out\trace_hook.obj out\checked_chain_funnel.obj out\forward_sites.obj ^
 	out\decode_digest.obj out\tests\test_main.obj out\tests\test_harness.obj out\tests\test_registry.obj ^
 	out\tests\crash_probe.obj out\tests\shared_fixtures.obj out\tests\proof_manifest.obj out\tests\bad_alloc_contract.obj ^
+	out\tests\loader.obj ^
 	/Fe:out\superslm_tests.exe
 if errorlevel 1 (
 	popd & exit /b 1
