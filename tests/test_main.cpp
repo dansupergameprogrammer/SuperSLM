@@ -15562,6 +15562,53 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 	          "the counter takes the same +1 path from any restored starting value and touches no "
 	          "other state",
 	          static_cast<unsigned long long>(count_from_max));
+
+	// T-1597 (Poirot e24b971 review, S1): the two checks above never call
+	// RunLayerLoop, never construct a SequenceLayerState, and declare no
+	// workspace -- so they cannot be the run the comment above this cell
+	// describes as confirming "the call's outcome and the workspace" are
+	// identical between a restored count of 0 and UINT64_MAX. This second
+	// half is that run: two otherwise-identical RunLayerLoop calls, one
+	// seeded at kv_saturation_count==0 and one at UINT64_MAX, each against
+	// its own freshly-poisoned workspace, comparing the returned status and
+	// every workspace byte.
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	constexpr size_t kWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
+
+	auto RunAt = [&](uint64_t starting_count) {
+		TwoLayerFixture fixture;
+		int8_t codes[2] = {1, -1};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1), 0};
+		seq.layer_index = 0;
+		seq.context_length = 0;
+		seq.kv_saturation_count = starting_count;
+
+		std::vector<uint8_t> workspace(kWorkspaceSize, 0xEE);
+		const SslmForwardStatus st = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+		    fixture.view.rope_tables, workspace.data(), kWorkspaceSize);
+		return std::make_pair(st, workspace);
+	};
+
+	const auto [status_zero, workspace_zero] = RunAt(0);
+	const auto [status_max, workspace_max] = RunAt(UINT64_MAX);
+
+	CHECK_MSG(status_zero == status_max,
+	          "T-1597: RunLayerLoop(kv_saturation_count=0) status %s != "
+	          "RunLayerLoop(kv_saturation_count=UINT64_MAX) status %s -- the comment above claims "
+	          "the call's outcome is identical between the two restored starting values",
+	          SslmForwardStatusName(status_zero), SslmForwardStatusName(status_max));
+	CHECK_MSG(workspace_zero == workspace_max,
+	          "T-1597: the two calls' resulting workspace bytes differ -- the comment above claims "
+	          "the workspace is identical between a kv_saturation_count restored at 0 and at "
+	          "UINT64_MAX");
 }
 
 // T-1590 (Poirot cd2e75a review): `hidden_scale` admits the identical
@@ -15578,55 +15625,93 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 // the layer's k/v weights, before ResidualReconcileSite is ever called),
 // so the canary bytes past the declared workspace must be exactly as
 // untouched as they are on any other call.
+//
+// T-1597 (Poirot e24b971 review, S1): the comment this cell answers to
+// (forward_sites.cpp, the hidden_scale bullet in RunLayerLoop's guard
+// block) claimed both buffers were "ringed with canaries" and both rings
+// confirmed untouched "regardless of the call's returned status" -- neither
+// was true of the cell below alone: `hidden_codes` carried no canary, the
+// workspace canary sat only AFTER the declared region (not a ring), and `e`
+// was fixed at 0 (in-domain, never varied) while only ONE status (a
+// rejection) was ever observed. This cell now runs the two sub-cases the
+// comment describes, sharing one true-ring instrumentation (a byte
+// immediately before AND after each of `hidden_codes` and the declared
+// workspace region, checked after every call regardless of its status):
+// sub-case A is the original out-of-domain MANTISSA (still a rejection);
+// sub-case B pushes `e` itself to an extreme in-domain value -- the field
+// this tree states carries no domain check anywhere
+// (checked_chain_funnel.h's ResidualReconciliationMagnitudeOutOfDomain
+// comment; T-1596) -- which runs the call through to whatever status it
+// actually returns rather than assuming a rejection.
 static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
 	const int64_t kContextCap = 3;
-	TwoLayerFixture fixture;
-
-	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
-	uint8_t workspace[kDeclaredWorkspaceSize + 2];
-	std::memset(workspace, 0xEE, sizeof(workspace));
 	constexpr uint8_t kCanary = 0x5A;
-	workspace[kDeclaredWorkspaceSize] = kCanary;
-	workspace[kDeclaredWorkspaceSize + 1] = kCanary;
+	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
 
-	int8_t codes[2] = {1, -1};
-	const int8_t codes_before[2] = {1, -1};
-	SequenceLayerState seq;
-	seq.hidden_codes = codes;
-	// INT64_MAX does not fit int32_t -- out of CombineCarriedScale's own
+	// One call, one hidden_scale: both buffers ringed (one canary byte
+	// immediately before and after each declared region), checked after the
+	// call regardless of the status it returns.
+	auto RunRingedCase = [&](CarriedScale scale, const char* label) {
+		uint8_t workspace_buf[1 + kDeclaredWorkspaceSize + 1];
+		std::memset(workspace_buf, 0xEE, sizeof(workspace_buf));
+		workspace_buf[0] = kCanary;
+		workspace_buf[sizeof(workspace_buf) - 1] = kCanary;
+		uint8_t* const workspace = workspace_buf + 1;
+
+		int8_t codes_buf[4] = {static_cast<int8_t>(kCanary), 1, -1, static_cast<int8_t>(kCanary)};
+		int8_t* const codes = codes_buf + 1;
+
+		TwoLayerFixture fixture;
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = scale;
+		seq.layer_index = 0;
+		seq.context_length = 0;
+
+		const SslmForwardStatus st = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+		    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+
+		CHECK_MSG(workspace_buf[0] == kCanary && workspace_buf[sizeof(workspace_buf) - 1] == kCanary,
+		          "T-1597 (%s): the workspace ring (one byte immediately before, one immediately "
+		          "after the declared region) must stay 0x5A regardless of hidden_scale's domain "
+		          "-- got {%d,%d}, status %s",
+		          label, static_cast<int>(workspace_buf[0]),
+		          static_cast<int>(workspace_buf[sizeof(workspace_buf) - 1]), SslmForwardStatusName(st));
+		CHECK_MSG(codes_buf[0] == static_cast<int8_t>(kCanary) &&
+		              codes_buf[3] == static_cast<int8_t>(kCanary),
+		          "T-1597 (%s): the hidden_codes ring (one byte immediately before, one immediately "
+		          "after the declared elements) must stay 0x5A regardless of hidden_scale's domain "
+		          "-- got {%d,%d}, status %s",
+		          label, static_cast<int>(codes_buf[0]), static_cast<int>(codes_buf[3]),
+		          SslmForwardStatusName(st));
+		return st;
+	};
+
+	// Sub-case A: the out-of-domain MANTISSA, unchanged from before --
+	// INT64_MAX does not fit int32_t, out of CombineCarriedScale's own
 	// precondition, and a value a caller-restored struct's raw bytes could
 	// carry with no construction path through this loop's own code.
-	seq.hidden_scale = CarriedScale{INT64_MAX, 0};
-	seq.layer_index = 0;
-	seq.context_length = 0;
-
-	const auto st = superslm::RunLayerLoop(
-	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
-
-	CHECK_MSG(st == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	const SslmForwardStatus status_a = RunRingedCase(CarriedScale{INT64_MAX, 0}, "out-of-domain m");
+	CHECK_MSG(status_a == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 	          "T-1590: RunLayerLoop(hidden_scale.m=INT64_MAX) status == %s, want "
 	          "CarriedScaleMantissaOutOfDomain -- RequantChainChecked's own step 0 rejects it "
 	          "inside ResidualReconcileSite, before this layer's commit point",
-	          SslmForwardStatusName(st));
-	CHECK_MSG(workspace[kDeclaredWorkspaceSize] == kCanary &&
-	              workspace[kDeclaredWorkspaceSize + 1] == kCanary,
-	          "T-1590: the two bytes past the declared workspace_size must stay 0x5A regardless "
-	          "of hidden_scale's domain -- got {%d,%d}; hidden_scale never participates in any "
-	          "K/V address computation",
-	          static_cast<int>(workspace[kDeclaredWorkspaceSize]),
-	          static_cast<int>(workspace[kDeclaredWorkspaceSize + 1]));
-	CHECK_MSG(codes[0] == codes_before[0] && codes[1] == codes_before[1],
-	          "T-1590: seq.hidden_codes must be untouched after a rejected call -- got {%d,%d}, "
-	          "want {%d,%d}; a difference would mean the layer's commit point ran despite the "
-	          "rejection",
-	          static_cast<int>(codes[0]), static_cast<int>(codes[1]),
-	          static_cast<int>(codes_before[0]), static_cast<int>(codes_before[1]));
+	          SslmForwardStatusName(status_a));
+
+	// Sub-case B: T-1597/S1 -- `e` itself pushed to an extreme IN-DOMAIN
+	// value (there is no domain check on `e` anywhere in this tree, T-1596),
+	// with `m` left in-domain so the call is not rejected on `m`'s account.
+	// Whatever status this returns, the two rings above must stay intact --
+	// that is the "regardless of the call's returned status" half of the
+	// comment this cell answers to, now genuinely exercised against a status
+	// other than a rejection.
+	RunRingedCase(CarriedScale{1, INT64_MAX}, "extreme e");
 }
 
 // --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
@@ -16391,6 +16476,35 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	          "RunGreedyDecodeLoop(kv_precision=Int8 (default)) status == %s, want Ok -- the "
 	          "int16 guard must not also reject the legal value",
 	          SslmForwardStatusName(ok_result));
+}
+
+// T-1597 (Poirot e24b971 review, Critical 1): RunGreedyDecodeLoop's own
+// RunWholeToken step writes `hidden_size` bytes through `seq.hidden_codes`
+// directly (forward_sites.cpp), one call frame ahead of ever entering
+// RunLayerLoop -- so RunLayerLoop's own `hidden_codes == nullptr` guard
+// (T-1590, above) never ran on this entry point. A default-constructed or
+// zero-restored `SequenceLayerState` -- `hidden_codes`'s own default member
+// initializer -- used to terminate the process here (measured: exit code
+// `-1073741819` / `0xC0000005`, no status ever formed; confirmed by a
+// standalone reproduction outside this suite, recorded in this ticket's
+// build log -- there is no check left to run once the process is gone).
+// Checked immediately after the `kv_precision` guard above and before any
+// token is embedded (forward_sites.cpp). Unlike RunLayerLoop's own
+// equivalent cell, this guard's shape RETURNS rather than crashing, so this
+// cell asserts a real status in-process rather than merely the guarded
+// shape.
+static void TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected() {
+	using superslm::SslmForwardStatus;
+
+	DecodeLoopCallFixture f(/*out_capacity=*/2);
+	f.seq.hidden_codes = nullptr;  // default-constructed / zero-restored
+	const auto result = f.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{}, /*max_new_tokens=*/1);
+	CHECK_MSG(result == SslmForwardStatus::InvalidHiddenCodes,
+	          "T-1597: RunGreedyDecodeLoop(hidden_codes=nullptr) status == %s, want "
+	          "InvalidHiddenCodes -- a default-constructed or zero-restored state must be "
+	          "rejected before RunWholeToken's first write through seq.hidden_codes",
+	          SslmForwardStatusName(result));
+	f.CheckEverythingUntouched("RunGreedyDecodeLoop(hidden_codes=nullptr)");
 }
 
 // §9.1/§13 dim 2/5: a host-supplied PROMPT token id outside [0, vocab_size)
@@ -17199,6 +17313,7 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
 	TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse();
+	TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected();
 	TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions();
 	TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor();
 	TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore();
