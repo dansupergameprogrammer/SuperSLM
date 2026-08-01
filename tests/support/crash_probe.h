@@ -75,4 +75,21 @@ void RegisterCrashProbe(const char* name, CrashProbeFn fn);
 // did not run" to every caller, never as "the probe ran and did not crash".
 int RunCrashProbe(const std::string& name);
 
+// A file-scope global of this type, constructed with a probe's name and
+// function pointer, registers that probe as a side effect of static
+// initialization -- the same self-registration shape SSLM_TEST gives tests
+// (test_registry.h), applied to the crash-probe registry instead. Moved here
+// (T-1574 Stage 6, §4's standing promotion rule) from tests/test_main.cpp,
+// where it was `struct CrashProbeRegistrar { ... };` inside an anonymous
+// namespace (internal linkage) -- every area that owns a crash-probe
+// registration (matmul.cpp, intmath.cpp, and, once each is extracted,
+// checked_chain_funnel.cpp and forward_attention.cpp) needs it in its own
+// translation unit, so anonymous-namespace scoping in test_main.cpp would
+// make it invisible to all but the first mover. Promoted to a plain
+// (non-anonymous-namespace) struct here, matching this header's own
+// unnamespaced declarations above.
+struct CrashProbeRegistrar {
+	CrashProbeRegistrar(const char* name, CrashProbeFn fn) { RegisterCrashProbe(name, fn); }
+};
+
 }  // namespace superslm_test_registry

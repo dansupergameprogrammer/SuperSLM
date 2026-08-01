@@ -1,12 +1,21 @@
-// tests/areas/loader.cpp -- T-1574 test suite split, Stage 3.
+// tests/areas/loader.cpp -- T-1574 test suite split, Stage 3, amended during
+// Stage 6 prep.
 // Area #1 (Claude/Plans/SuperSLM_TestSuiteSplit_Plan.md §4): tests calling
 // through src/artifact.cpp's and src/sha256.cpp's public contract
 // (SslmArtifact::OpenFromMemory/OpenFromFile, DtypeSize, IsKnownSectionType,
 // Sha256Hash, ToHex). Extracted verbatim from tests/test_main.cpp (order
-// keys 0-36, S0 skeleton baseline + Curie's S0 loader red suite; plus order
-// key 336, the S-HARDEN-8 generic section-descriptor-reserved-field cell,
-// which is physically distant in the legacy file but calls through the same
-// contract, OpenFromMemory).
+// keys 0-36, S0 skeleton baseline + Curie's S0 loader red suite; order key
+// 336, the S-HARDEN-8 generic section-descriptor-reserved-field cell; and
+// order key 238, added by this amendment).
+//
+// **Amendment (order key 238).** `TestArtifactRejectsConfigOnlyV2MissingSigmoidLut`
+// sits physically beside the SIL1 sub-parse block (tests/areas/tensor_manifest.cpp's
+// own Stage-6-prep amendment, see that file's header comment) but calls only
+// `SslmArtifact::OpenFromMemory` -- no `ParseSigmoidLut` call at all -- so
+// §3.1's rule places it here, in the loader's own area, not with the SIL1
+// sub-parse content it happens to sit beside. Missed at Stage 3's own commit
+// for the same physical-proximity reason the SIL1 block was missed at
+// Stage 5; closed together.
 //
 // The plan's own §4 area table lists `FoundSection` as this area's owned
 // local fixture. Reading the actual source at this stage finds no such
@@ -760,4 +769,23 @@ SSLM_TEST(TestRejectsNonZeroSectionDescriptorReservedField, 336) {
 	CHECK(err.code == SslmStatus::BadHeader);
 	CHECK(err.section_index == 0);
 	CHECK(err.message.find("reserved") != std::string::npos);
+}
+
+// The F1 gate's own literal red cell, stated in S-HARDEN-1's plan text: "a
+// correctly-hashed config-only v2 artifact expecting a specific
+// missing-SigmoidLut diagnostic." Distinct from TestRejectsMissingConfigSection
+// (which is missing Config, not SigmoidLut) — this is the mirror case the
+// version-indexed schema exists to catch.
+SSLM_TEST(TestArtifactRejectsConfigOnlyV2MissingSigmoidLut, 238) {
+	auto built = BuildArtifact({MakeConfigSection()});  // Config only; no SigmoidLut
+
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::MissingSection, "got %s, want MissingSection", SslmStatusName(status));
+	CHECK(err.code == SslmStatus::MissingSection);
+	CHECK(err.section_index == kNoSection);
+	CHECK_MSG(err.message.find("SigmoidLut") != std::string::npos,
+	          "diagnostic does not name SigmoidLut specifically: \"%s\"", err.message.c_str());
+	CHECK(!out.Ok());
 }

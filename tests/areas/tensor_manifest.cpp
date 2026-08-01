@@ -1,20 +1,49 @@
-// tests/areas/tensor_manifest.cpp -- T-1574 test suite split, Stage 5.
+// tests/areas/tensor_manifest.cpp -- T-1574 test suite split, Stage 5,
+// amended during Stage 6 prep.
 // Area #3 (Claude/Plans/SuperSLM_TestSuiteSplit_Plan.md §4): tests calling
 // through src/model.cpp's structural sub-parsers (SslmTensorManifest::Parse
 // for WGT1/BIA1/ROP1/WeightScales; SslmKeyedConstants::Parse for KVC1;
-// ParseConfig for CFG1). Extracted verbatim from tests/test_main.cpp (order
-// keys 111-174); no local fixtures owned.
+// ParseConfig for CFG1; ParseSigmoidLut for SIL1). Extracted verbatim from
+// tests/test_main.cpp (order keys 111-174, then 226-237); no local fixtures
+// owned.
+//
+// **Amendment (order keys 226-237, added after Stage 5's own commit).** The
+// design record's superseded legacy-content column filed these under a
+// "S2.4 SiLU sigmoid-LUT" campaign slot alongside `SiluSigmoidQ15` (silu_lut.h,
+// candidate area #7); the design record's own header comment on this slot
+// (originally at test_main.cpp, "Curie's S2.4 SiLU sigmoid-LUT red suite")
+// names ParseSigmoidLut (src/model.cpp) and SiluSigmoidQ15 (src/silu_lut.cpp)
+// as two DISTINCT code-under-test surfaces sharing one campaign banner. The
+// plan's own §4 table settles which area each belongs to by production TU,
+// not campaign slot: area #3's row names `model.cpp`; area #7's row names
+// only `silu_lut.cpp`. Every test in this amendment calls ParseSigmoidLut
+// (model.cpp) -- the structural SIL1 sub-parse, exactly the same shape as
+// this area's WGT1/BIA1/ROP1/KVC1/CFG1/WeightScales cells -- never
+// SiluSigmoidQ15, so §3.1's rule (area is the contract actually called)
+// places them here, not in silu_lut.cpp. This was missed at Stage 5's own
+// commit (the SIL1 block was not adjacent to the rest of this area's content
+// and read, at a glance, as belonging to the upcoming SiLU slot) and is
+// closed here, before Stage 8 (silu_lut.cpp) could extract this content
+// under the wrong area by physical proximity. `TestArtifactRejectsConfigOnly
+// V2MissingSigmoidLut` (order 238, physically adjacent to this block) calls
+// only `SslmArtifact::OpenFromMemory` with no `ParseSigmoidLut` call at all --
+// area #1 loader.cpp's own contract -- and is routed there as the same
+// amendment's second half, not here.
 
+#include "superslm/artifact.h"
 #include "superslm/model.h"
+#include "superslm/silu_lut_canonical.h"
 #include "sslm_cfg1_hostile_fixtures.h"
 #include "sslm_fixtures.h"
 #include "sslm_kvc1_hostile_fixtures.h"
 #include "sslm_model_hostile_fixtures.h"
+#include "sslm_sil1_hostile_fixtures.h"
 
 #include "support/test_harness.h"
 #include "support/test_registry.h"
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -1018,3 +1047,276 @@ SSLM_TEST(TestWeightScalesRejectsWrongMagicDiscriminatesPerType, 174) {
 	          manifest.Tensors().size());
 }
 
+// ---------------------------------------------------------------------------
+// Curie's S2.4 SiLU sigmoid-LUT red suite (SuperSLM_S2.4_SiLU_LUT_Design;
+// SuperSLM_Plan.md S2.4). Two code-under-test surfaces, both fully built
+// (shipped at S-HARDEN-1):
+//   - `superslm::ParseSigmoidLut` (src/model.cpp) — the SIL1 fixed-layout
+//     hostile sub-parse (§8, §12 dim 2/5/9).
+//   - `superslm::SiluSigmoidQ15` (src/silu_lut.cpp) — the runtime index
+//     derivation + interpolation (§5, §6, §12 dim 4/6/7/10).
+//
+// Every cell states, in its own comment, which §12 Coverage Model dimension /
+// §10 acceptance item it proves and its oracle kind. Per §12's own discipline:
+// the op-level parity cell is a CONSISTENCY oracle (LUT vs an independently
+// computed float reference) — blind to a value that is wrong but deterministic
+// — so the saturation, interior-interpolation, and downstream int8-agreement
+// cells are the REFERENCE/EXACT-VALUE oracles that catch what parity alone
+// cannot. Every expected numeric constant below is derived from scratch
+// against the §4/§5/§6 formulas (independently re-derived and cross-checked
+// against a standalone Python re-implementation of the same formulas before
+// authoring), never by calling `SiluSigmoidQ15` itself.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Shared assertion for every SIL1 hostile cell below: ParseSigmoidLut must
+// reject with the cell's one named status and leave `out` at
+// SslmSigmoidLut{} defaults (never a partial or repaired view) — the
+// reject-over-degrade law, mirroring AssertCfg1Rejected.
+void AssertSil1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmModelStatus want, const char* why) {
+	SslmSectionView view = MakeSigmoidLutSectionView(mutated_bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == want, "%s: got %s, want %s", why, SslmModelStatusName(status), SslmModelStatusName(want));
+	CHECK_MSG(out.values == nullptr && out.entry_count == 0,
+	          "%s: SslmSigmoidLut not left at defaults on a rejected parse", why);
+}
+
+}  // namespace
+
+// --- SIL1 sub-parse: the feature oracle (dim 10) + lifetime/reuse (dim 1) +
+//     the payload round-trip (dim 9's third clause). The minimal fixture every
+//     hostile cell mutates from is itself spec-faithful: it parses to Ok and
+//     every one of the 1025 nodes reads back exactly what the independent
+//     reference table computed (BuildReferenceSigmoidLutQ15 — a from-scratch
+//     double-precision computation, not a read of any code under test),
+//     including the two extreme nodes (table[0], table[N]) whose exact values
+//     the domain-clamp cells below also depend on. ---
+
+SSLM_TEST(TestMinimalSil1ParsesAndReadsBackAllNodes, 226) {
+	using namespace superslm_test;
+	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
+	CHECK_MSG(ref.size() == kSigmoidLutEntries, "reference table has %zu entries, want %u", ref.size(),
+	          kSigmoidLutEntries);
+
+	auto bytes = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "minimal SIL1 failed to parse: got %s: %s",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+
+	CHECK_MSG(out.entry_count == kSigmoidLutEntries, "entry_count == %u, want %u", out.entry_count,
+	          kSigmoidLutEntries);
+	// SigmoidLutValue's contract is undefined for i >= entry_count, so guard
+	// against reading through a null/empty view rather than let a defect
+	// that reports Ok with an empty view crash this cell.
+	CHECK_MSG(out.values != nullptr, "out.values is null on a status==Ok parse");
+	if (out.entry_count != kSigmoidLutEntries || out.values == nullptr) return;
+	int mismatches = 0;
+	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) {
+		int32_t got = SigmoidLutValue(out, i);
+		if (got != ref[i]) ++mismatches;
+	}
+	CHECK_MSG(mismatches == 0, "%d of %u nodes did not read back the reference table's value", mismatches,
+	          kSigmoidLutEntries);
+	// The two extreme nodes, named explicitly: the domain-clamp saturation
+	// cells below assert against these same two values.
+	CHECK_MSG(SigmoidLutValue(out, 0) == ref[0], "table[0] == %d, want %d", SigmoidLutValue(out, 0), ref[0]);
+	CHECK_MSG(SigmoidLutValue(out, kSiluLutN) == ref[static_cast<size_t>(kSiluLutN)], "table[N] == %d, want %d",
+	          SigmoidLutValue(out, kSiluLutN), ref[static_cast<size_t>(kSiluLutN)]);
+}
+
+// dim 1 — lifetime and reuse: the same parsed SslmSigmoidLut, read many times
+// (standing in for "across many tokens"), must never drift — every repeated
+// read of the same node returns the identical value a fresh read would.
+SSLM_TEST(TestSil1WarmObjectRepeatedReadsShowNoDrift, 227) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(bytes);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "warm-object fixture failed to parse: got %s",
+	          SslmModelStatusName(status));
+	if (status != SslmModelStatus::Ok) return;
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
+	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
+	          "out is not a populated view on a status==Ok parse");
+	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
+
+	const int32_t first_read_node0 = SigmoidLutValue(out, 0);
+	const int32_t first_read_mid = SigmoidLutValue(out, kSiluLutN / 2);
+	const int32_t first_read_n = SigmoidLutValue(out, kSiluLutN);
+	int drift = 0;
+	for (int pass = 0; pass < 1000; ++pass) {
+		if (SigmoidLutValue(out, 0) != first_read_node0) ++drift;
+		if (SigmoidLutValue(out, kSiluLutN / 2) != first_read_mid) ++drift;
+		if (SigmoidLutValue(out, kSiluLutN) != first_read_n) ++drift;
+	}
+	CHECK_MSG(drift == 0, "%d of 3000 repeated reads drifted from the first read (no re-derivation expected)",
+	          drift);
+}
+
+// dim 9 (third clause) — SIL1's payload plus its internal magic+version pair
+// round-trips bit-exactly after parse + read-back + re-encode.
+SSLM_TEST(TestSil1RoundTripReencodeMatchesOriginalBytes, 228) {
+	using namespace superslm_test;
+	auto original = MakeMinimalValidSil1();
+	SslmSectionView view = MakeSigmoidLutSectionView(original);
+	SslmSigmoidLut out;
+	std::string err;
+	SslmModelStatus status = ParseSigmoidLut(view, out, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok, "round-trip fixture failed to parse: got %s",
+	          SslmModelStatusName(status));
+	if (status != SslmModelStatus::Ok) return;
+	// Guard against a defect that reports Ok over a null/empty view (see
+	// TestMinimalSil1ParsesAndReadsBackAllNodes).
+	CHECK_MSG(out.values != nullptr && out.entry_count == kSigmoidLutEntries,
+	          "out is not a populated view on a status==Ok parse");
+	if (out.values == nullptr || out.entry_count != kSigmoidLutEntries) return;
+
+	std::vector<int32_t> readback(kSigmoidLutEntries);
+	for (uint32_t i = 0; i < kSigmoidLutEntries; ++i) readback[i] = SigmoidLutValue(out, i);
+	auto reencoded = BuildSil1(readback, kManifestVersion, kSigmoidLutEntries, /*reserved=*/0);
+	CHECK_MSG(reencoded.size() == original.size(), "re-encoded size %zu != original size %zu", reencoded.size(),
+	          original.size());
+	CHECK_MSG(reencoded == original, "re-encoded SIL1 bytes (magic+version+entry_count+reserved+payload) "
+	                                  "do not match the original bytes exactly");
+}
+
+// --- SIL1 hostile rejection cells (dim 2/5). SIL1 is a single FIXED-layout
+//     struct — no variable-length region — so BadSigmoidLutSize (byte_size !=
+//     4116) is the entire bounds surface, both directions. ---
+
+SSLM_TEST(TestSil1RejectsSizeTooShort, 229) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes.pop_back();  // 4115 bytes, < kSigmoidLutBytes (4116)
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4115 (< 4116)");
+}
+
+SSLM_TEST(TestSil1RejectsSizeTooLong, 230) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes.push_back(0);  // 4117 bytes, > kSigmoidLutBytes (4116)
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4117 (> 4116)");
+}
+
+SSLM_TEST(TestSil1RejectsBadMagic, 231) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	bytes[kSil1MagicOff] = 'X';  // was 'S' of "SIL1"
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutMagic, "SIL1 bad magic");
+}
+
+SSLM_TEST(TestSil1RejectsUnsupportedVersion, 232) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1VersionOff, 2);  // only 1 is valid (kManifestVersion)
+	AssertSil1Rejected(bytes, SslmModelStatus::UnsupportedSigmoidLutVersion, "SIL1 version == 2");
+}
+
+// entry_count is a distinct field from byte_size: this cell holds byte_size at
+// exactly 4116 (so BadSigmoidLutSize's check would pass) and mutates only the
+// header's declared entry_count, isolating BadSigmoidLutCount from the size
+// check above.
+SSLM_TEST(TestSil1RejectsBadEntryCount, 233) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1EntryCountOff, kSigmoidLutEntries - 1);  // 1024, byte_size unchanged at 4116
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutCount, "SIL1 entry_count == 1024 (!= 1025)");
+}
+
+SSLM_TEST(TestSil1RejectsBadReserved, 234) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1ReservedOff, 1);
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutReserved, "SIL1 reserved == 1");
+}
+
+// ---------------------------------------------------------------------------
+// S-HARDEN-1 (F20/F22): pinned canonical content. SIL1 is a universal
+// construction the spec fixes entirely, not model-specific learned data — so a
+// section that passes every STRUCTURAL check (size/magic/version/count/
+// reserved) but carries node values that are not byte-for-byte the canonical
+// table must still be rejected. This is the gap the external review's strike
+// exploited: F20's original fix validated node RANGES/monotonicity: this cell
+// forces a case that is well-formed under a range check yet is not the
+// canonical table, which only an exact-content comparison catches. §17.3
+// cell 6's oracle ("pinned canonical content... a section hash or
+// byte-for-byte comparison").
+// ---------------------------------------------------------------------------
+
+SSLM_TEST(TestSil1RejectsSingleNodeContentMismatch, 235) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	// Node 512 (the table's midpoint, sigmoid(0)*2^15 == 16384): off by exactly
+	// one from canonical — a range/monotonicity check would not catch this, an
+	// exact-content check must.
+	const uint32_t mutated = static_cast<uint32_t>(superslm::kSiluLutCanonicalTable[512] + 1);
+	PutU32(bytes, kSil1NodesOff + 512u * 4u, mutated);
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutContent,
+	                    "SIL1 node[512] == canonical+1 (single off-by-one, still monotone and in-range)");
+}
+
+// The exact shape the external review's strike used against F20's original
+// range-only fix: two ADJACENT nodes at INT32_MIN and INT32_MAX. Both are
+// individually "in range" for an int32 field and the pair is even monotone
+// non-decreasing is not required by a range check — this is precisely the
+// operand that reached SiluSigmoidQ15's `diff = hi - lo` and produced UB
+// (F20's remedy text). The content-pinning check must reject this
+// independently of any node-range/monotonicity check that may or may not
+// exist, because content-pinning is what this slot commits to as the actual
+// gate (defence-in-depth, never the sole claimed protection).
+SSLM_TEST(TestSil1RejectsHostileExtremeAdjacentNodes, 236) {
+	using namespace superslm_test;
+	auto bytes = MakeMinimalValidSil1();
+	PutU32(bytes, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
+	PutU32(bytes, kSil1NodesOff + 513u * 4u, static_cast<uint32_t>(INT32_MAX));
+	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutContent,
+	                    "SIL1 node[512]=INT32_MIN, node[513]=INT32_MAX (the F20/F22 strike's exact operand)");
+}
+
+// The gate cell, run through the REAL artifact/parser path end to end
+// (OpenFromMemory, THEN ParseSigmoidLut on the section it returns) so parser
+// safety and construction identity cannot drift apart (S-HARDEN-1's own gate
+// text). A correctly-hashed, structurally valid v2 artifact carrying the
+// F20/F22 hostile operand must load Ok at the OUTER layer (the outer loader
+// has no notion of SIL1's internal content) and then be rejected at the SIL1
+// sub-parse specifically — never reach SiluSigmoidQ15.
+SSLM_TEST(TestArtifactRejectsHostileSigmoidLutContentThroughRealPath, 237) {
+	using namespace superslm_test;
+	auto hostile_sil1 = MakeMinimalValidSil1();
+	PutU32(hostile_sil1, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
+	PutU32(hostile_sil1, kSil1NodesOff + 513u * 4u, static_cast<uint32_t>(INT32_MAX));
+	FixtureSection sigmoid_lut =
+	    MakeSection(SslmSectionType::SigmoidLut, SslmDtype::Int32, hostile_sil1, /*alignment=*/64);
+	auto built = BuildArtifact({MakeConfigSection(), sigmoid_lut});
+
+	SslmArtifact out;
+	SslmError aerr;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &aerr);
+	CHECK_MSG(status == SslmStatus::Ok,
+	          "outer artifact structurally valid (hostile bytes are a content matter, not structure): got %s",
+	          SslmStatusName(status));
+	if (status != SslmStatus::Ok) return;
+
+	const SslmSectionView* section = out.Section(SslmSectionType::SigmoidLut);
+	CHECK(section != nullptr);
+	if (section == nullptr) return;
+
+	SslmSigmoidLut lut;
+	std::string perr;
+	SslmModelStatus pstatus = ParseSigmoidLut(*section, lut, &perr);
+	CHECK_MSG(pstatus == SslmModelStatus::BadSigmoidLutContent,
+	          "ParseSigmoidLut on a loaded hostile SIL1 section: got %s, want BadSigmoidLutContent",
+	          SslmModelStatusName(pstatus));
+	CHECK_MSG(lut.values == nullptr && lut.entry_count == 0,
+	          "hostile SIL1 not left at defaults on a rejected parse — a view MUST NOT be exposed");
+}
