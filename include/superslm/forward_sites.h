@@ -387,16 +387,37 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
 // whole tokens carries a marker at layer 0 and a zero-length residual" --
 // realized here as `layer_index == 0`, `hidden_codes` not yet meaningful).
 //
-// T-1590: §13 dim 9 pins this struct as "addressable as a unit", an
+// T-1590/T-1597: §13 dim 9 pins this struct as "addressable as a unit", an
 // explicit invitation for a caller to save and restore one -- which means a
-// value RunLayerLoop receives in any of these five fields carries no
-// guarantee of having come from this loop's own resume path. RunLayerLoop's
-// own top-of-function guard block enumerates all five against that
-// possibility; see it for what is validated, what is not, and why in each
-// case. `hidden_codes == nullptr` and `context_length < 0` are rejected
-// there. `layer_index` is already fully bounded by the guard immediately
-// following it. `kv_saturation_count` and `hidden_scale` need no guard --
-// neither is ever read back as a size, offset, or index.
+// value received in any of these five fields, by EITHER of the two
+// functions below that take a `SequenceLayerState&`, carries no guarantee
+// of having come from either loop's own resume path. The closed unit is
+// the cross product of the two functions and the five fields, not the five
+// fields against one function:
+//
+//   - `RunLayerLoop`: its own top-of-function guard block enumerates all
+//     five fields directly; see it for what is validated, what is not, and
+//     why in each case. `hidden_codes == nullptr` and `context_length < 0`
+//     are rejected there. `layer_index` is already fully bounded by the
+//     guard immediately following it. `kv_saturation_count` and
+//     `hidden_scale` need no guard -- neither is ever read back as a size,
+//     offset, or index.
+//   - `RunGreedyDecodeLoop`: its own RunWholeToken step overwrites
+//     `hidden_scale` and `layer_index` with fresh, non-restored values
+//     BEFORE its first call into `RunLayerLoop` -- so a restored value in
+//     either field is discarded, unread, on this path. That same step
+//     writes THROUGH `hidden_codes`, dereferencing the caller's own
+//     (not-yet-overwritten) pointer one call frame BEFORE `RunLayerLoop` is
+//     ever entered. `context_length` and `kv_saturation_count` are never
+//     touched directly by this function; both reach `RunLayerLoop`'s own
+//     guard block above still carrying whatever value the caller restored.
+//     So of the five fields, `hidden_codes` is the only one read, unguarded,
+//     before `RunLayerLoop`'s own guard block runs -- `RunGreedyDecodeLoop`
+//     therefore carries its own `hidden_codes == nullptr` guard
+//     (forward_sites.cpp), checked immediately after its `kv_precision`
+//     check and before any token is embedded: the one cell of the ten (two
+//     functions x five fields) that needs a guard outside `RunLayerLoop`'s
+//     own block.
 struct SequenceLayerState {
 	int8_t* hidden_codes = nullptr;
 	CarriedScale hidden_scale;

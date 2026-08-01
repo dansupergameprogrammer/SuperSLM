@@ -817,11 +817,16 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	//     or offset, and `RequantChainChecked`'s own step 0 rejects an
 	//     out-of-int32 mantissa (`CarriedScaleMantissaOutOfDomain`) before
 	//     any output is written -- confirmed at source (checked_chain_funnel.cpp)
-	//     and probed, not merely reasoned: T-1590's hidden_scale cell
-	//     restores it at an out-of-domain `(m, e)` pair against workspace and
-	//     `hidden_codes` buffers ringed with canaries and confirms both
-	//     canary rings untouched regardless of the call's returned status.
-	//     No guard needed.
+	//     and probed, not merely reasoned: T-1590's hidden_scale cell runs
+	//     TWO sub-cases -- an out-of-domain mantissa `m` (rejected), and, per
+	//     T-1596, an extreme in-domain exponent `e` (the one field
+	//     checked_chain_funnel.h's own comment states carries no domain
+	//     check anywhere in this tree, run through to whatever status it
+	//     actually returns) -- against workspace and `hidden_codes` buffers
+	//     each ringed with a canary immediately before AND after their
+	//     declared region, and confirms all four canaries untouched
+	//     regardless of which status either sub-case returns. No guard
+	//     needed.
 	if (seq.hidden_codes == nullptr) return SslmForwardStatus::InvalidHiddenCodes;
 
 	// Significant 6 (Poirot e4b398c review): the SAME livelock the
@@ -1234,6 +1239,20 @@ SslmForwardStatus RunGreedyDecodeLoop(
 	// only rejects a value outside {0,1}), but S3a builds int8 only.
 	if (kv_precision == SslmKvPrecision::Int16) {
 		return SslmForwardStatus::KvPrecisionUnsupported;
+	}
+
+	// T-1597 (Poirot e24b971 review, Critical 1): checked immediately after
+	// `kv_precision`, before `seq` is touched a second way -- this loop's own
+	// RunWholeToken step (below) writes `hidden_size` bytes through
+	// `seq.hidden_codes` directly, one call frame ahead of ever entering
+	// RunLayerLoop, so RunLayerLoop's own `hidden_codes == nullptr` guard
+	// (this file, RunLayerLoop's top-of-function guard block) never runs on
+	// this entry point. A default-constructed or zero-restored
+	// `SequenceLayerState` -- `hidden_codes`'s own default member initializer
+	// -- used to terminate the process here with no status ever formed
+	// (measured: 0xC0000005) rather than return one.
+	if (seq.hidden_codes == nullptr) {
+		return SslmForwardStatus::InvalidHiddenCodes;
 	}
 
 	// Caller-ensures `out_tokens_capacity >= max_new_tokens` (header comment,
