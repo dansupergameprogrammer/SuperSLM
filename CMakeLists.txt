@@ -57,7 +57,15 @@ else()
 	target_compile_options(superslm_test_injection PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
-add_executable(superslm_tests tests/test_main.cpp)
+add_executable(superslm_tests
+	tests/test_main.cpp
+	tests/support/test_harness.cpp
+	tests/support/test_registry.cpp
+	tests/support/crash_probe.cpp
+	tests/support/shared_fixtures.cpp
+	tests/areas/proof_manifest.cpp
+)
+target_include_directories(superslm_tests PRIVATE tests)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
 if(MSVC)
 	target_compile_options(superslm_tests PRIVATE /W4 /fp:precise)

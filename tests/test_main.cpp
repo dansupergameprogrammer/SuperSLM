@@ -42,6 +42,10 @@
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
+#include "support/test_harness.h"
+#include "support/test_registry.h"
+#include "support/crash_probe.h"
+#include "support/shared_fixtures.h"
 
 #include <algorithm>
 #include <atomic>
@@ -58,41 +62,17 @@
 #include <type_traits>
 #include <vector>
 
-#ifdef _WIN32
-#include <process.h>  // _getpid
-#else
-#include <unistd.h>  // getpid
-#endif
 
 using namespace superslm;
 using namespace superslm_test;
+using namespace superslm_test_registry;
 
-static int GChecks = 0;
-static int GFailures = 0;
-
-#define CHECK(cond) \
-	do { \
-		++GChecks; \
-		if (!(cond)) { \
-			++GFailures; \
-			std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
-		} \
-	} while (0)
-
-#define CHECK_MSG(cond, ...) \
-	do { \
-		++GChecks; \
-		if (!(cond)) { \
-			++GFailures; \
-			std::printf("FAIL %s:%d: %s — ", __FILE__, __LINE__, #cond); \
-			std::printf(__VA_ARGS__); \
-			std::printf("\n"); \
-		} \
-	} while (0)
+// GChecks, GFailures, CHECK, CHECK_MSG moved to
+// tests/support/test_harness.h/.cpp (T-1574 Stage 0, §3).
 
 // --- S0 skeleton baseline -------------------------------------------------
 
-static void TestSha256KnownVectors() {
+SSLM_TEST(TestSha256KnownVectors, 0) {
 	// FIPS 180-4 / NIST known-answer vectors.
 	uint8_t d[32];
 	Sha256Hash(reinterpret_cast<const uint8_t*>(""), 0, d);
@@ -112,7 +92,7 @@ static void TestSha256KnownVectors() {
 	      "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
 }
 
-static void TestDtypeSizes() {
+SSLM_TEST(TestDtypeSizes, 1) {
 	CHECK(DtypeSize(static_cast<uint32_t>(SslmDtype::Raw)) == 1);
 	CHECK(DtypeSize(static_cast<uint32_t>(SslmDtype::Int8)) == 1);
 	CHECK(DtypeSize(static_cast<uint32_t>(SslmDtype::Int32)) == 4);
@@ -122,7 +102,7 @@ static void TestDtypeSizes() {
 	CHECK(DtypeSize(9999u) == 0); // unknown dtype
 }
 
-static void TestKnownSectionTypes() {
+SSLM_TEST(TestKnownSectionTypes, 2) {
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Config)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::Weights)));
 	CHECK(IsKnownSectionType(static_cast<uint32_t>(SslmSectionType::GoldenHashes)));
@@ -143,7 +123,7 @@ static void TestKnownSectionTypes() {
 //     produce, each on a buffer that is structurally valid except the one named
 //     defect. ---
 
-static void TestRejectsBadMagic() {
+SSLM_TEST(TestRejectsBadMagic, 3) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	built.bytes[0] = 'X';  // was 'S' — docs/sslm_format.md header offset 0
 	RecomputeIntegrityHash(built.bytes);
@@ -157,7 +137,7 @@ static void TestRejectsBadMagic() {
 	CHECK(!out.Ok());
 }
 
-static void TestRejectsUnsupportedVersion() {
+SSLM_TEST(TestRejectsUnsupportedVersion, 4) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	PutU32(built.bytes, 4, kArtifactFormatVersion + 1);  // format_version, offset 4
 	RecomputeIntegrityHash(built.bytes);
@@ -170,7 +150,7 @@ static void TestRejectsUnsupportedVersion() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsHeaderBytesMismatch() {
+SSLM_TEST(TestRejectsHeaderBytesMismatch, 5) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	PutU32(built.bytes, 8, kHeaderBytes - 1);  // header_bytes, offset 8, must == 64
 	RecomputeIntegrityHash(built.bytes);
@@ -183,7 +163,7 @@ static void TestRejectsHeaderBytesMismatch() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsNonzeroFlags() {
+SSLM_TEST(TestRejectsNonzeroFlags, 6) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	PutU32(built.bytes, 16, 1);  // flags, offset 16, reserved == 0
 	RecomputeIntegrityHash(built.bytes);
@@ -196,7 +176,7 @@ static void TestRejectsNonzeroFlags() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsNonzeroReserved0() {
+SSLM_TEST(TestRejectsNonzeroReserved0, 7) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	PutU32(built.bytes, 20, 1);  // reserved0, offset 20, == 0
 	RecomputeIntegrityHash(built.bytes);
@@ -209,7 +189,7 @@ static void TestRejectsNonzeroReserved0() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsTruncatedHeader() {
+SSLM_TEST(TestRejectsTruncatedHeader, 8) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	built.bytes.resize(32);  // shorter than the 64-byte header itself
 
@@ -229,7 +209,7 @@ static void TestRejectsTruncatedHeader() {
 // This cell asserts the DEFINED-REJECTION contract, not merely "does not crash"
 // — a null check that returns Ok would pass a crash-only assertion and still be
 // wrong, so the assertion is the specific status and diagnostic.
-static void TestRejectsNullDataNonzeroSize() {
+SSLM_TEST(TestRejectsNullDataNonzeroSize, 9) {
 	SslmArtifact out;
 	SslmError err;
 	auto status = SslmArtifact::OpenFromMemory(nullptr, 64, out, &err);
@@ -243,7 +223,7 @@ static void TestRejectsNullDataNonzeroSize() {
 // header-length bound — a null pointer with a SMALL nonzero size (which the
 // unfixed code's `size < kHeaderBytes` check would have caught first, masking
 // whether the null check exists at all) must reach the same explicit status.
-static void TestRejectsNullDataSmallNonzeroSize() {
+SSLM_TEST(TestRejectsNullDataSmallNonzeroSize, 10) {
 	SslmArtifact out;
 	SslmError err;
 	auto status = SslmArtifact::OpenFromMemory(nullptr, 4, out, &err);
@@ -256,7 +236,7 @@ static void TestRejectsNullDataSmallNonzeroSize() {
 // the stream constructor (whose behavior on a null `const char*` is itself
 // undefined — std::ifstream's path constructor requires a valid null-terminated
 // string).
-static void TestRejectsNullPath() {
+SSLM_TEST(TestRejectsNullPath, 11) {
 	SslmArtifact out;
 	SslmError err;
 	auto status = SslmArtifact::OpenFromFile(nullptr, out, &err);
@@ -265,7 +245,7 @@ static void TestRejectsNullPath() {
 	CHECK(!out.Ok());
 }
 
-static void TestRejectsTruncatedSectionTable() {
+SSLM_TEST(TestRejectsTruncatedSectionTable, 12) {
 	// Two sections declared (a 144-byte table+header region) but the buffer is cut
 	// to 100 bytes — the header is intact but the declared table does not fit.
 	auto built = BuildArtifact({MakeConfigSection(),
@@ -285,7 +265,7 @@ static void TestRejectsTruncatedSectionTable() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsTooManySections() {
+SSLM_TEST(TestRejectsTooManySections, 13) {
 	// Structural count check: header.section_count > kMaxSections must reject
 	// before any per-row validation runs. This cell's 4097 table rows are left
 	// zeroed garbage (type 0 duplicated 4097x, alignment 0) because v1's known
@@ -317,7 +297,7 @@ static void TestRejectsTooManySections() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsFileSizeMismatch() {
+SSLM_TEST(TestRejectsFileSizeMismatch, 14) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	// file_bytes (header) keeps declaring the ORIGINAL length; the buffer grows.
 	built.bytes.insert(built.bytes.end(), 8, 0xAB);
@@ -332,7 +312,7 @@ static void TestRejectsFileSizeMismatch() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsAlignmentNotPowerOfTwo() {
+SSLM_TEST(TestRejectsAlignmentNotPowerOfTwo, 15) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/24)});
@@ -344,7 +324,7 @@ static void TestRejectsAlignmentNotPowerOfTwo() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsAlignmentBelowMinimum() {
+SSLM_TEST(TestRejectsAlignmentBelowMinimum, 16) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/4)});  // power of two, but < 8
@@ -356,7 +336,7 @@ static void TestRejectsAlignmentBelowMinimum() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsAlignmentAboveMaximum() {
+SSLM_TEST(TestRejectsAlignmentAboveMaximum, 17) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/8192)});  // power of two, but > 4096
@@ -368,7 +348,7 @@ static void TestRejectsAlignmentAboveMaximum() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsMisalignedOffset() {
+SSLM_TEST(TestRejectsMisalignedOffset, 18) {
 	FixtureSection provenance =
 	    MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4}, /*alignment=*/64);
 	provenance.offset_override = 200;  // valid alignment (64), but 200 % 64 != 0
@@ -382,7 +362,7 @@ static void TestRejectsMisalignedOffset() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSectionOutOfBoundsPastEof() {
+SSLM_TEST(TestRejectsSectionOutOfBoundsPastEof, 19) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4})});
 	const size_t row = kHeaderBytes + 1 * kSectionDescBytes;  // section index 1
@@ -400,7 +380,7 @@ static void TestRejectsSectionOutOfBoundsPastEof() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSectionOffsetOverflow() {
+SSLM_TEST(TestRejectsSectionOffsetOverflow, 20) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/16)});
@@ -419,7 +399,7 @@ static void TestRejectsSectionOffsetOverflow() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSectionOverlapWithHeader() {
+SSLM_TEST(TestRejectsSectionOverlapWithHeader, 21) {
 	// Empty (byte_size 0) so BuildArtifact writes no bytes at offset 0 — a non-empty
 	// section here would memcpy over the magic and the loader would (correctly)
 	// reject BadMagic first, not reach the overlap check at all (F-3, coordinator
@@ -439,7 +419,7 @@ static void TestRejectsSectionOverlapWithHeader() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSectionOverlapWithSection() {
+SSLM_TEST(TestRejectsSectionOverlapWithSection, 22) {
 	FixtureSection config = MakeConfigSection();
 	config.offset_override = 192;  // 192 % 64 == 0
 
@@ -464,7 +444,7 @@ static void TestRejectsSectionOverlapWithSection() {
 	CHECK(err.section_index == 1 || err.section_index == 2);
 }
 
-static void TestRejectsBadDtype() {
+SSLM_TEST(TestRejectsBadDtype, 23) {
 	FixtureSection bad;
 	bad.type = static_cast<uint32_t>(SslmSectionType::Provenance);
 	bad.dtype = 9999;  // not a known SslmDtype
@@ -481,7 +461,7 @@ static void TestRejectsBadDtype() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSectionDtypeMismatch() {
+SSLM_TEST(TestRejectsSectionDtypeMismatch, 24) {
 	// docs/sslm_format.md load-bearing choice 6: Weights requires Int8. Declare it
 	// Int32 instead — a known dtype, just not the one Weights requires. byte_size /
 	// elem_count stay consistent for the DECLARED (wrong) dtype (4 elements @ size
@@ -500,7 +480,7 @@ static void TestRejectsSectionDtypeMismatch() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsSizeMismatch() {
+SSLM_TEST(TestRejectsSizeMismatch, 25) {
 	FixtureSection biases =
 	    MakeSection(SslmSectionType::Biases, SslmDtype::Int64, EncodeInt64LE({1, 2, 3, 4}));  // 32 bytes, 4 elems
 	biases.elem_count_override = 3;  // 32 != 3 * 8
@@ -514,7 +494,7 @@ static void TestRejectsSizeMismatch() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsUnknownSectionType() {
+SSLM_TEST(TestRejectsUnknownSectionType, 26) {
 	FixtureSection bad;
 	bad.type = 999;  // outside the v1 set (docs/sslm_format.md "Section types")
 	bad.dtype = static_cast<uint32_t>(SslmDtype::Raw);
@@ -530,7 +510,7 @@ static void TestRejectsUnknownSectionType() {
 	CHECK(err.section_index == 1);
 }
 
-static void TestRejectsDuplicateSection() {
+SSLM_TEST(TestRejectsDuplicateSection, 27) {
 	auto built = BuildArtifact({MakeConfigSection(),
 	                             MakeSection(SslmSectionType::Config, SslmDtype::Raw, {'{', ' ', '}'})});
 	SslmArtifact out;
@@ -542,7 +522,7 @@ static void TestRejectsDuplicateSection() {
 	CHECK(err.section_index == 0 || err.section_index == 1);
 }
 
-static void TestRejectsMissingConfigSection() {
+SSLM_TEST(TestRejectsMissingConfigSection, 28) {
 	auto built = BuildArtifact(
 	    {MakeSection(SslmSectionType::Weights, SslmDtype::Int8, EncodeInt8({1, 2, 3, 4}))});  // no Config
 	SslmArtifact out;
@@ -553,7 +533,7 @@ static void TestRejectsMissingConfigSection() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsIntegrityMismatch() {
+SSLM_TEST(TestRejectsIntegrityMismatch, 29) {
 	auto built = BuildArtifact(
 	    {MakeConfigSection(), MakeSection(SslmSectionType::Weights, SslmDtype::Int8, EncodeInt8({1, 2, 3, 4}))});
 	const uint64_t weights_offset = built.placed[1].offset;
@@ -569,7 +549,7 @@ static void TestRejectsIntegrityMismatch() {
 
 // --- Boundary richness: shapes the rejection roster does not exercise. ---
 
-static void TestAcceptsEmptySection() {
+SSLM_TEST(TestAcceptsEmptySection, 30) {
 	FixtureSection empty = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {});  // byte_size 0
 	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(), empty});  // SigmoidLut required from v2 (F1)
 
@@ -586,7 +566,7 @@ static void TestAcceptsEmptySection() {
 	}
 }
 
-static void TestAcceptsMaximumAlignment() {
+SSLM_TEST(TestAcceptsMaximumAlignment, 31) {
 	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
 	                             MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, {1, 2, 3, 4},
 	                                         /*alignment=*/4096)});
@@ -600,7 +580,7 @@ static void TestAcceptsMaximumAlignment() {
 	if (view) CHECK(view->alignment == 4096);
 }
 
-static void TestAcceptsSectionsInNonAscendingOffsetOrder() {
+SSLM_TEST(TestAcceptsSectionsInNonAscendingOffsetOrder, 32) {
 	// Table row 0 (Config) is placed at the HIGHER byte offset; table row 1
 	// (Provenance) is placed at the LOWER one — docs/sslm_format.md: "Their order
 	// in the table is not constrained; their byte ranges are."
@@ -647,7 +627,7 @@ static void TestAcceptsSectionsInNonAscendingOffsetOrder() {
 	}
 }
 
-static void TestAcceptsReservedSectionTypeStructurally() {
+SSLM_TEST(TestAcceptsReservedSectionTypeStructurally, 33) {
 	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
 	                            MakeSection(SslmSectionType::Tokenizer, SslmDtype::Raw, {9, 9, 9})});
 	SslmArtifact out;
@@ -667,7 +647,7 @@ static void TestAcceptsReservedSectionTypeStructurally() {
 	}
 }
 
-static void TestOpenFromFileLoadsValidArtifact() {
+SSLM_TEST(TestOpenFromFileLoadsValidArtifact, 34) {
 	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection(),  // required from v2 (F1)
 	                            MakeSection(SslmSectionType::Weights, SslmDtype::Int8, EncodeInt8({1, 2, 3, 4}))});
 
@@ -693,7 +673,7 @@ static void TestOpenFromFileLoadsValidArtifact() {
 	if (view) CHECK(view->byte_size == 4);
 }
 
-static void TestOpenFromFileMissingFileReturnsIoError() {
+SSLM_TEST(TestOpenFromFileMissingFileReturnsIoError, 35) {
 	std::filesystem::path path =
 	    std::filesystem::temp_directory_path() / "superslm_test_nonexistent_9f3c2a.sslm";
 	std::error_code ec;
@@ -716,7 +696,7 @@ static void TestOpenFromFileMissingFileReturnsIoError() {
 //     exact end-state the bytes were built to carry — not merely "the loader
 //     agrees with itself." ---
 
-static void TestValidArtifactLoadsToExpectedEndState() {
+SSLM_TEST(TestValidArtifactLoadsToExpectedEndState, 36) {
 	FixtureSection config = MakeConfigSection();
 	FixtureSection weights =
 	    MakeSection(SslmSectionType::Weights, SslmDtype::Int8,
@@ -828,7 +808,7 @@ FixtureTokenizer OpenFixtureTokenizer() {
 //     executed against the real Qwen2.5-1.5B artifact must reproduce the
 //     upstream HF tokenizer's ids, not merely agree with itself. ---
 
-static void TestTokenizerGoldenEncodeMatchesUpstreamIds() {
+SSLM_TEST(TestTokenizerGoldenEncodeMatchesUpstreamIds, 38) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
@@ -850,7 +830,7 @@ static void TestTokenizerGoldenEncodeMatchesUpstreamIds() {
 	}
 }
 
-static void TestTokenizerGoldenIdsHashMatchesConverter() {
+SSLM_TEST(TestTokenizerGoldenIdsHashMatchesConverter, 39) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
@@ -892,7 +872,7 @@ static void TestTokenizerGoldenIdsHashMatchesConverter() {
 //     the rest assert the idempotent Decode(Encode(t)) == Decode(golden.ids)
 //     round-trip, avoiding the need for an NFC oracle in C++. ---
 
-static void TestTokenizerDecodeRoundTrip() {
+SSLM_TEST(TestTokenizerDecodeRoundTrip, 40) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
@@ -922,7 +902,7 @@ static void TestTokenizerDecodeRoundTrip() {
 
 // --- Targeted edges: no HF reference needed. ---
 
-static void TestTokenizerOpensFixtureArtifact() {
+SSLM_TEST(TestTokenizerOpensFixtureArtifact, 37) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
@@ -930,14 +910,14 @@ static void TestTokenizerOpensFixtureArtifact() {
 	CHECK(ft.view.VocabSize() > 0);
 }
 
-static void TestTokenizerEncodeEmptyStringYieldsEmptyIds() {
+SSLM_TEST(TestTokenizerEncodeEmptyStringYieldsEmptyIds, 41) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
 	CHECK(ft.view.Encode("").empty());
 }
 
-static void TestTokenizerSpecialTokenIdMatchesArtifactDeclaration() {
+SSLM_TEST(TestTokenizerSpecialTokenIdMatchesArtifactDeclaration, 42) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	if (!ft.artifact_ok) return;
@@ -974,7 +954,7 @@ static void TestTokenizerSpecialTokenIdMatchesArtifactDeclaration() {
 	CHECK(ft.view.Decode(ids) == kSpecial);
 }
 
-static void TestTokenizerVocabSizeMatchesArtifactDeclaration() {
+SSLM_TEST(TestTokenizerVocabSizeMatchesArtifactDeclaration, 43) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	if (!ft.artifact_ok) return;
@@ -998,7 +978,7 @@ static void TestTokenizerVocabSizeMatchesArtifactDeclaration() {
 	          "VocabSize() == %d, artifact declares vocab_count %u", ft.view.VocabSize(), blob.vocab_count);
 }
 
-static void TestTokenizerAsciiStringRoundTrips() {
+SSLM_TEST(TestTokenizerAsciiStringRoundTrips, 44) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed: %s", ft.view_error.c_str());
@@ -1018,7 +998,7 @@ static void TestTokenizerAsciiStringRoundTrips() {
 // different claim from "the base vocabulary has one slot per byte value";
 // testing Decode() on an isolated out-of-context id would conflate the two
 // and assert something F7 correctly makes false.
-static void TestTokenizerByteToIdBijectsOntoEveryRawByteValue() {
+SSLM_TEST(TestTokenizerByteToIdBijectsOntoEveryRawByteValue, 45) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.artifact_ok, "fixture artifact failed to load: %s", ft.artifact_error.c_str());
 	if (!ft.artifact_ok) return;
@@ -1070,7 +1050,7 @@ static void TestTokenizerByteToIdBijectsOntoEveryRawByteValue() {
 //     cell is what proves the baseline isn't rejecting (or wrongly accepting) for
 //     some unrelated reason of its own. ---
 
-static void TestMinimalTokenizerArtifactOpensAndRoundTrips() {
+SSLM_TEST(TestMinimalTokenizerArtifactOpensAndRoundTrips, 58) {
 	auto tok1 = MakeMinimalValidTok1();
 	auto uni1 = MakeMinimalValidUni1();
 	auto built = BuildTokenizerArtifact(tok1.bytes, uni1.bytes);
@@ -1163,7 +1143,7 @@ const std::string kFffdUtf8 = "\xEF\xBF\xBD";  // U+FFFD, the documented replace
 
 }  // namespace
 
-static void TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence, 46) {
 	// 0xC0 0x80: the canonical two-byte encoding of NUL — always overlong (NUL is
 	// representable in one byte); C0/C1 can never start a well-formed sequence.
 	std::string err;
@@ -1172,7 +1152,7 @@ static void TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8);  // both bytes are individually invalid leads
 }
 
-static void TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence, 47) {
 	// 0xE0 0x80 0x80: an overlong 3-byte encoding (E0's first continuation must be
 	// >= 0xA0; here it is 0x80). Per the Unicode Standard's "maximal subpart of an
 	// ill-formed subsequence" algorithm, a lead whose FIRST continuation byte
@@ -1187,7 +1167,7 @@ static void TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForSurrogateCodepoint() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForSurrogateCodepoint, 48) {
 	// 0xED 0xA0 0x80: encodes U+D800, a UTF-16 surrogate half — UTF-8 must never
 	// encode U+D800-U+DFFF (ED's first continuation must be <= 0x9F; here 0xA0).
 	// Same maximal-subpart shape as the overlong-3-byte cell above: ED's first
@@ -1200,7 +1180,7 @@ static void TestDecodeSubstitutesReplacementCharForSurrogateCodepoint() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF, 49) {
 	// 0xF5 alone: any lead >= 0xF5 can only encode a codepoint past U+10FFFF.
 	std::string err;
 	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xF5\x80\x80\x80", 4), &err);
@@ -1211,7 +1191,7 @@ static void TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax, 50) {
 	// 0xF4 0x90 0x80 0x80: F4's first continuation must be <= 0x8F (else the
 	// codepoint exceeds U+10FFFF) — 0x90 is one past that. Same maximal-subpart
 	// shape as the two three-byte cells above, one byte longer: F4 alone is the
@@ -1223,7 +1203,7 @@ static void TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence, 51) {
 	// 0xF0 0x80 0x80 0x80: an overlong 4-byte encoding (F0's first continuation
 	// must be >= 0x90; here it is 0x80). Same maximal-subpart shape as the
 	// overlong-3-byte and surrogate cells above, one byte longer: F0's first
@@ -1236,7 +1216,7 @@ static void TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8 + kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence, 52) {
 	// 0xF0 0x90 0x80: the first three bytes of the 4-byte sequence for U+10000,
 	// missing its final continuation byte. F0's first continuation (0x90) and
 	// second continuation (0x80) are both individually valid, so the decoder
@@ -1248,7 +1228,7 @@ static void TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForLoneContinuationByte() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForLoneContinuationByte, 53) {
 	// 0x80 alone: a continuation byte with no lead byte before it.
 	std::string err;
 	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\x80", 1), &err);
@@ -1256,7 +1236,7 @@ static void TestDecodeSubstitutesReplacementCharForLoneContinuationByte() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8);
 }
 
-static void TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd() {
+SSLM_TEST(TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd, 54) {
 	// 0xE2 0x82: the first two bytes of the 3-byte sequence for U+20AC ('€'),
 	// missing its final continuation byte.
 	std::string err;
@@ -1281,7 +1261,7 @@ static void TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd() {
 // buffer with different bytes -- and asserts the exact expected output, so a
 // reintroduced bare-view return is likely to surface here as corrupted bytes on
 // a normal (non-ASan) build, not only under CI's sanitizer leg.
-static void TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode() {
+SSLM_TEST(TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode, 55) {
 	std::string err;
 	auto t = OpenTokenizerWithSingleVocabEntry(std::string("\xC0\x80", 2), &err);
 	CHECK_MSG(t.view.Ok(), "setup: %s", err.c_str());
@@ -1293,7 +1273,7 @@ static void TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode() {
 	CHECK(t.view.Decode({0}) == kFffdUtf8 + kFffdUtf8);
 }
 
-static void TestDecodeReconstructsSequenceSplitAcrossTokenBoundary() {
+SSLM_TEST(TestDecodeReconstructsSequenceSplitAcrossTokenBoundary, 56) {
 	// U+00E9 ('é') encodes as 0xC3 0xA9. Split it across two vocabulary entries —
 	// id 0 carries only the lead byte 0xC3, id 1 carries only the continuation
 	// byte 0xA9 — so NEITHER token's bytes are individually valid UTF-8, but
@@ -1324,7 +1304,7 @@ static void TestDecodeReconstructsSequenceSplitAcrossTokenBoundary() {
 	CHECK(view.Decode({1}) == kFffdUtf8);
 }
 
-static void TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText() {
+SSLM_TEST(TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText, 57) {
 	// A well-formed non-ASCII round trip through the SAME decoder Encode's input
 	// path uses (Utf8Decode -> NFC -> pretokenize -> BPE), confirming the shared
 	// strict decoder does not regress ordinary valid text: 'é' (U+00E9, already
@@ -1357,7 +1337,7 @@ static void TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText() 
 
 // --- Structural: TokenizerView::Open requires both sections outright. ---
 
-static void TestOpenRejectsArtifactMissingTokenizerSection() {
+SSLM_TEST(TestOpenRejectsArtifactMissingTokenizerSection, 59) {
 	auto uni1 = MakeMinimalValidUni1();
 	auto built = BuildArtifactMissingTokenizer(uni1.bytes);
 
@@ -1375,7 +1355,7 @@ static void TestOpenRejectsArtifactMissingTokenizerSection() {
 	CHECK(!view.Ok());
 }
 
-static void TestOpenRejectsArtifactMissingUnicodeTablesSection() {
+SSLM_TEST(TestOpenRejectsArtifactMissingUnicodeTablesSection, 60) {
 	auto tok1 = MakeMinimalValidTok1();
 	auto built = BuildArtifactMissingUnicodeTables(tok1.bytes);
 
@@ -1458,61 +1438,61 @@ void AssertUni1Rejected(const std::vector<uint8_t>& mutated_uni1, const char* wh
 // --- TOK1 cells. Each isolates exactly one deviation from docs/sslm_format.md's
 //     "Tokenizer blob — TOK1" layout in the minimal valid blob. ---
 
-static void TestTok1RejectsBadMagic() {
+SSLM_TEST(TestTok1RejectsBadMagic, 61) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes[0] = 'X';  // was 'T' of "TOK1", offset 0
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad TOK1 header");
 }
 
-static void TestTok1RejectsTruncatedHeader() {
+SSLM_TEST(TestTok1RejectsTruncatedHeader, 62) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(10);  // shorter than the 24-byte fixed TOK1 header
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad TOK1 header");
 }
 
-static void TestTok1RejectsVocabCountOverflow() {
+SSLM_TEST(TestTok1RejectsVocabCountOverflow, 63) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0xFFFFFFFFu);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab_count exceeds INT32_MAX");
 }
 
-static void TestTok1RejectsMergeCountOverflow() {
+SSLM_TEST(TestTok1RejectsMergeCountOverflow, 64) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merge_count_off, 0xFFFFFFFFu);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated merges");
 }
 
-static void TestTok1RejectsSpecialCountOverflow() {
+SSLM_TEST(TestTok1RejectsSpecialCountOverflow, 65) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.special_count_off, 0xFFFFFFFFu);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special ids");
 }
 
-static void TestTok1RejectsTruncatedByteToId() {
+SSLM_TEST(TestTok1RejectsTruncatedByteToId, 66) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.byte_to_id_off + 100);  // 100 of the required 1024 bytes
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated byte_to_id");
 }
 
-static void TestTok1RejectsTruncatedVocabOffsets() {
+SSLM_TEST(TestTok1RejectsTruncatedVocabOffsets, 67) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_offsets_off + 4);  // 1 of the required vocab_count+1=5 entries
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab offsets");
 }
 
-static void TestTok1RejectsTruncatedVocabBlobLen() {
+SSLM_TEST(TestTok1RejectsTruncatedVocabBlobLen, 68) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_blob_len_off + 2);  // half of the 4-byte length field
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab blob_len");
 }
 
-static void TestTok1RejectsTruncatedVocabBlob() {
+SSLM_TEST(TestTok1RejectsTruncatedVocabBlob, 69) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.vocab_blob_off + tok1.layout.vocab_blob_len - 1);  // one byte short
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated vocab blob");
 }
 
-static void TestTok1RejectsVocabOffsetNonMonotonic() {
+SSLM_TEST(TestTok1RejectsVocabOffsetNonMonotonic, 70) {
 	auto tok1 = MakeMinimalValidTok1();
 	// Baseline vocab_offsets [0,1,2,3,5,10] (vblob=10, S-HARDEN-2's 5-entry
 	// fixture). Bump index 2 from 2 to 4 (still <= vblob): index 3's value (3) is
@@ -1522,7 +1502,7 @@ static void TestTok1RejectsVocabOffsetNonMonotonic() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
-static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
+SSLM_TEST(TestTok1RejectsLastVocabOffsetExceedsBlob, 71) {
 	auto tok1 = MakeMinimalValidTok1();
 	// Index `vocab_count` is the terminal offset (derived, not a hardcoded literal,
 	// per S-HARDEN-2's fixture replacement note above); baseline value == vblob.
@@ -1531,44 +1511,44 @@ static void TestTok1RejectsLastVocabOffsetExceedsBlob() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
-static void TestTok1RejectsMiddleVocabOffsetExceedsBlob() {
+SSLM_TEST(TestTok1RejectsMiddleVocabOffsetExceedsBlob, 72) {
 	auto tok1 = MakeMinimalValidTok1();
 	// Index 2 is not the terminal offset (index `vocab_count` is); baseline value 2.
 	PutU32(tok1.bytes, tok1.layout.vocab_offsets_off + 2 * 4, tok1.layout.vocab_blob_len + 50);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab offset out of range");
 }
 
-static void TestTok1RejectsTruncatedMerges() {
+SSLM_TEST(TestTok1RejectsTruncatedMerges, 73) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.merges_off + 6);  // half of the one 12-byte merge record
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated merges");
 }
 
-static void TestTok1RejectsTruncatedSpecialIds() {
+SSLM_TEST(TestTok1RejectsTruncatedSpecialIds, 74) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_ids_off + 2);  // half of the one 4-byte special id
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special ids");
 }
 
-static void TestTok1RejectsTruncatedSpecialOffsets() {
+SSLM_TEST(TestTok1RejectsTruncatedSpecialOffsets, 75) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_offsets_off + 4);  // 1 of the required special_count+1=2 entries
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special offsets");
 }
 
-static void TestTok1RejectsTruncatedSpecialBlobLen() {
+SSLM_TEST(TestTok1RejectsTruncatedSpecialBlobLen, 76) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_blob_len_off + 2);  // half of the 4-byte length field
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special blob_len");
 }
 
-static void TestTok1RejectsTruncatedSpecialBlob() {
+SSLM_TEST(TestTok1RejectsTruncatedSpecialBlob, 77) {
 	auto tok1 = MakeMinimalValidTok1();
 	tok1.bytes.resize(tok1.layout.special_blob_off + tok1.layout.special_blob_len - 1);  // one byte short
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: truncated special blob");
 }
 
-static void TestTok1RejectsSpecialOffsetNonMonotonic() {
+SSLM_TEST(TestTok1RejectsSpecialOffsetNonMonotonic, 78) {
 	auto tok1 = MakeMinimalValidTok1();
 	// Baseline special_offsets [0,5] (sblob=5). Set index 0 to 6 (> index 1's 5) —
 	// non-monotonic; index 1 (5) does not itself exceed sblob (5), so the range
@@ -1577,7 +1557,7 @@ static void TestTok1RejectsSpecialOffsetNonMonotonic() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: bad special offset");
 }
 
-static void TestTok1RejectsSpecialOffsetOutOfRange() {
+SSLM_TEST(TestTok1RejectsSpecialOffsetOutOfRange, 79) {
 	auto tok1 = MakeMinimalValidTok1();
 	// Leave the (monotonic) offsets [0,5] untouched; lie about special_blob_len
 	// instead (5 -> 3), so the terminal offset (5) now exceeds the declared length
@@ -1591,13 +1571,13 @@ static void TestTok1RejectsSpecialOffsetOutOfRange() {
 //     never read by any code path before this slot — a guard-vitality gap (§17
 //     dim 11): the format declares both and nothing enforced either. ---
 
-static void TestTok1RejectsUnsupportedVersion() {
+SSLM_TEST(TestTok1RejectsUnsupportedVersion, 80) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.version_off, 2);  // only 1 is the declared TOK1 version
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: unsupported TOK1 version");
 }
 
-static void TestTok1RejectsNonzeroReserved() {
+SSLM_TEST(TestTok1RejectsNonzeroReserved, 81) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.reserved_off, 1);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: TOK1 reserved field != 0");
@@ -1609,13 +1589,13 @@ static void TestTok1RejectsNonzeroReserved() {
 //     narrowing (or the bound checks below, which compare ids against vocab_count
 //     as read) can be silently wrong. ---
 
-static void TestTok1RejectsVocabCountZero() {
+SSLM_TEST(TestTok1RejectsVocabCountZero, 82) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.vocab_count_off, 0);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: vocab_count == 0");
 }
 
-static void TestTok1RejectsVocabCountExceedsInt32Max() {
+SSLM_TEST(TestTok1RejectsVocabCountExceedsInt32Max, 83) {
 	auto tok1 = MakeMinimalValidTok1();
 	// The exact boundary — INT32_MAX + 1 — not merely a very large value (the
 	// pre-existing TestTok1RejectsVocabCountOverflow uses 0xFFFFFFFF, which this
@@ -1632,7 +1612,7 @@ static void TestTok1RejectsVocabCountExceedsInt32Max() {
 //     vocabulary entry (4 declared), and TokenizerView::Open accepted it. Each
 //     cell below isolates one of the four id classes the parser stores. ---
 
-static void TestTok1RejectsByteToIdEntryAtOrAboveVocabCount() {
+SSLM_TEST(TestTok1RejectsByteToIdEntryAtOrAboveVocabCount, 84) {
 	auto tok1 = MakeMinimalValidTok1();
 	// byte_to_id['z'] defaults to 0 (a valid id, below vocab_count=5); mutate it to
 	// vocab_count itself — one past the last real vocabulary slot.
@@ -1640,7 +1620,7 @@ static void TestTok1RejectsByteToIdEntryAtOrAboveVocabCount() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: byte_to_id entry >= vocab_count");
 }
 
-static void TestTok1RejectsMergeOperandAAtOrAboveVocabCount() {
+SSLM_TEST(TestTok1RejectsMergeOperandAAtOrAboveVocabCount, 85) {
 	auto tok1 = MakeMinimalValidTok1();
 	// The one merge record is (a=0, b=1, merged=3) at merges_off; field `a` is the
 	// first u32.
@@ -1648,19 +1628,19 @@ static void TestTok1RejectsMergeOperandAAtOrAboveVocabCount() {
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
-static void TestTok1RejectsMergeOperandBAtOrAboveVocabCount() {
+SSLM_TEST(TestTok1RejectsMergeOperandBAtOrAboveVocabCount, 86) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merges_off + 4, tok1.layout.vocab_count);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
-static void TestTok1RejectsMergeResultAtOrAboveVocabCount() {
+SSLM_TEST(TestTok1RejectsMergeResultAtOrAboveVocabCount, 87) {
 	auto tok1 = MakeMinimalValidTok1();
 	PutU32(tok1.bytes, tok1.layout.merges_off + 8, tok1.layout.vocab_count);
 	AssertTok1Rejected(tok1.bytes, "Tokenizer: merge operand or result >= vocab_count");
 }
 
-static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
+SSLM_TEST(TestTok1RejectsSpecialIdAtOrAboveVocabCount, 88) {
 	auto tok1 = MakeMinimalValidTok1();
 	// This is F18's own fixture pattern reproduced as a hostile mutation cell now
 	// that the baseline fixture itself is valid: the special's declared id (4)
@@ -1677,13 +1657,13 @@ static void TestTok1RejectsSpecialIdAtOrAboveVocabCount() {
 //     truncation, count overflow) are exercised per table, since those are the
 //     axes a per-call regression could plausibly differ on. ---
 
-static void TestUni1RejectsBadMagic() {
+SSLM_TEST(TestUni1RejectsBadMagic, 89) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes[0] = 'X';  // was 'U' of "UNI1", offset 0
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad UNI1 header");
 }
 
-static void TestUni1RejectsTruncatedHeader() {
+SSLM_TEST(TestUni1RejectsTruncatedHeader, 90) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(5);  // shorter than the 8-byte magic+version header
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad UNI1 header");
@@ -1692,85 +1672,85 @@ static void TestUni1RejectsTruncatedHeader() {
 // S-HARDEN-2 (F6): offset 4's version field was skipped past (`pos = 8`) but
 // never actually read and compared — the same guard-vitality gap as TOK1's
 // version/reserved fields.
-static void TestUni1RejectsUnsupportedVersion() {
+SSLM_TEST(TestUni1RejectsUnsupportedVersion, 91) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.version_off, 2);  // only 1 is the declared UNI1 version
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: unsupported UNI1 version");
 }
 
-static void TestUni1RejectsLetterCountFieldTruncated() {
+SSLM_TEST(TestUni1RejectsLetterCountFieldTruncated, 92) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.letter_count_off + 2);  // half of the 4-byte count field
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated range count");
 }
 
-static void TestUni1RejectsLetterRangesTruncated() {
+SSLM_TEST(TestUni1RejectsLetterRangesTruncated, 93) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.letter_data_off + 4);  // 4 of the required 16 bytes (2 ranges)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsLetterCountOverflow() {
+SSLM_TEST(TestUni1RejectsLetterCountOverflow, 94) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.letter_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsNumberRangesTruncated() {
+SSLM_TEST(TestUni1RejectsNumberRangesTruncated, 95) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.number_data_off + 4);  // 4 of the required 8 bytes (1 range)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsNumberCountOverflow() {
+SSLM_TEST(TestUni1RejectsNumberCountOverflow, 96) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.number_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsSpaceRangesTruncated() {
+SSLM_TEST(TestUni1RejectsSpaceRangesTruncated, 97) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.space_data_off + 8);  // 8 of the required 16 bytes (2 ranges)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsSpaceCountOverflow() {
+SSLM_TEST(TestUni1RejectsSpaceCountOverflow, 98) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.space_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ranges");
 }
 
-static void TestUni1RejectsCccTruncated() {
+SSLM_TEST(TestUni1RejectsCccTruncated, 99) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.ccc_data_off + 4);  // 4 of the required 8 bytes (1 entry)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ccc");
 }
 
-static void TestUni1RejectsCccCountOverflow() {
+SSLM_TEST(TestUni1RejectsCccCountOverflow, 100) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.ccc_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated ccc");
 }
 
-static void TestUni1RejectsDecompCpsTruncated() {
+SSLM_TEST(TestUni1RejectsDecompCpsTruncated, 101) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_cps_off + 2);  // half of the required 4 bytes (1 cp)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp cps");
 }
 
-static void TestUni1RejectsDecompCountOverflow() {
+SSLM_TEST(TestUni1RejectsDecompCountOverflow, 102) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.decomp_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp cps");
 }
 
-static void TestUni1RejectsDecompOffsetsTruncated() {
+SSLM_TEST(TestUni1RejectsDecompOffsetsTruncated, 103) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_offsets_off + 4);  // 1 of the required decomp_count+1=2 entries
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp offsets");
 }
 
-static void TestUni1RejectsDecompOffsetOutOfRange() {
+SSLM_TEST(TestUni1RejectsDecompOffsetOutOfRange, 104) {
 	auto uni1 = MakeMinimalValidUni1();
 	// Baseline decomp offsets [0,2] (seq_len=2). Bump the terminal offset (index 1)
 	// past seq_len while keeping it >= its predecessor — a pure range violation.
@@ -1778,7 +1758,7 @@ static void TestUni1RejectsDecompOffsetOutOfRange() {
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad decomp offset");
 }
 
-static void TestUni1RejectsDecompOffsetNonMonotonic() {
+SSLM_TEST(TestUni1RejectsDecompOffsetNonMonotonic, 105) {
 	auto uni1 = MakeMinimalValidUni1();
 	// Baseline decomp offsets [0,2]. Set index 0 to 3 (> index 1's 2) — non-
 	// monotonic; index 1 (2) does not itself exceed seq_len (2).
@@ -1786,19 +1766,19 @@ static void TestUni1RejectsDecompOffsetNonMonotonic() {
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: bad decomp offset");
 }
 
-static void TestUni1RejectsDecompSeqTruncated() {
+SSLM_TEST(TestUni1RejectsDecompSeqTruncated, 106) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.decomp_seq_off + 4);  // half of the required 8 bytes (seq_len=2)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated decomp seq");
 }
 
-static void TestUni1RejectsComposeTruncated() {
+SSLM_TEST(TestUni1RejectsComposeTruncated, 107) {
 	auto uni1 = MakeMinimalValidUni1();
 	uni1.bytes.resize(uni1.layout.compose_data_off + 6);  // half of the required 12 bytes (1 entry)
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated compose");
 }
 
-static void TestUni1RejectsComposeCountOverflow() {
+SSLM_TEST(TestUni1RejectsComposeCountOverflow, 108) {
 	auto uni1 = MakeMinimalValidUni1();
 	PutU32(uni1.bytes, uni1.layout.compose_count_off, 0xFFFFFFFFu);
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: truncated compose");
@@ -1811,7 +1791,7 @@ static void TestUni1RejectsComposeCountOverflow() {
 // cells below isolate the two ways ReadRanges' new monotonicity check can
 // fail, mirroring TestUni1RejectsDecompOffsetOutOfRange/NonMonotonic's
 // two-cell shape for the same class of defect on a sibling table.
-static void TestUni1RejectsLetterRangeWithLoGreaterThanHi() {
+SSLM_TEST(TestUni1RejectsLetterRangeWithLoGreaterThanHi, 109) {
 	auto uni1 = MakeMinimalValidUni1();
 	// Baseline letter range 0 is ('A'=65, 'Z'=90). Swap to (90, 65) -- a pure
 	// lo > hi violation; range 1 ('a'-'z') is untouched and still valid on its
@@ -1821,7 +1801,7 @@ static void TestUni1RejectsLetterRangeWithLoGreaterThanHi() {
 	AssertUni1Rejected(uni1.bytes, "UnicodeTables: range lo > hi");
 }
 
-static void TestUni1RejectsLetterRangesOverlapping() {
+SSLM_TEST(TestUni1RejectsLetterRangesOverlapping, 110) {
 	auto uni1 = MakeMinimalValidUni1();
 	// Baseline letter ranges are ('A'-'Z'=65-90), ('a'-'z'=97-122) -- sorted,
 	// non-overlapping. Pull range 1's lo down to 70, inside range 0's [65,90],
@@ -1877,7 +1857,7 @@ void AssertManifestRejected(const std::vector<uint8_t>& mutated_bytes, SslmSecti
 //     these three cells (one per magic) are what prove the baseline isn't
 //     rejecting -- or silently misreading -- for some unrelated reason. ---
 
-static void TestWgtMinimalManifestParsesAndRoundTrips() {
+SSLM_TEST(TestWgtMinimalManifestParsesAndRoundTrips, 111) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, /*element_size=*/1);
 	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Weights, SslmDtype::Int8, m.bytes);
 
@@ -1932,7 +1912,7 @@ static void TestWgtMinimalManifestParsesAndRoundTrips() {
 	CHECK_MSG(manifest.Tensor("does-not-exist") == nullptr, "Tensor() lookup miss did not return nullptr");
 }
 
-static void TestBiaMinimalManifestParsesAndRoundTrips() {
+SSLM_TEST(TestBiaMinimalManifestParsesAndRoundTrips, 112) {
 	auto m = MakeMinimalValidManifest(kBiasesMagic, /*element_size=*/4);
 	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Biases, SslmDtype::Int32, m.bytes);
 
@@ -1969,7 +1949,7 @@ static void TestBiaMinimalManifestParsesAndRoundTrips() {
 	CHECK_MSG(manifest.Tensor("does-not-exist") == nullptr, "Tensor() lookup miss did not return nullptr");
 }
 
-static void TestRopMinimalManifestParsesAndRoundTrips() {
+SSLM_TEST(TestRopMinimalManifestParsesAndRoundTrips, 113) {
 	auto m = MakeMinimalValidManifest(kRopeMagic, /*element_size=*/8);
 	SslmSectionView view = MakeManifestSectionView(SslmSectionType::RopeTables, SslmDtype::Int64, m.bytes);
 
@@ -2008,7 +1988,7 @@ static void TestRopMinimalManifestParsesAndRoundTrips() {
 
 // --- Section-level / header cells. ---
 
-static void TestManifestRejectsSectionTooShort() {
+SSLM_TEST(TestManifestRejectsSectionTooShort, 114) {
 	std::vector<uint8_t> bytes(10, 0);  // < kManifestHeaderBytes (16)
 	bytes[0] = 'W';
 	bytes[1] = 'G';
@@ -2018,35 +1998,35 @@ static void TestManifestRejectsSectionTooShort() {
 	                        "WGT1 section too short (10 bytes < 16)");
 }
 
-static void TestManifestRejectsBadMagicWgt() {
+SSLM_TEST(TestManifestRejectsBadMagicWgt, 115) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	m.bytes[0] = 'X';  // was 'W' of "WGT1"
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadManifestMagic,
 	                        "WGT1 bad magic");
 }
 
-static void TestManifestRejectsBadMagicBia() {
+SSLM_TEST(TestManifestRejectsBadMagicBia, 116) {
 	auto m = MakeMinimalValidManifest(kBiasesMagic, 4);
 	m.bytes[0] = 'X';  // was 'B' of "BIA1"
 	AssertManifestRejected(m.bytes, SslmSectionType::Biases, SslmDtype::Int32, SslmModelStatus::BadManifestMagic,
 	                        "BIA1 bad magic");
 }
 
-static void TestManifestRejectsBadMagicRop() {
+SSLM_TEST(TestManifestRejectsBadMagicRop, 117) {
 	auto m = MakeMinimalValidManifest(kRopeMagic, 8);
 	m.bytes[0] = 'X';  // was 'R' of "ROP1"
 	AssertManifestRejected(m.bytes, SslmSectionType::RopeTables, SslmDtype::Int64, SslmModelStatus::BadManifestMagic,
 	                        "ROP1 bad magic");
 }
 
-static void TestManifestRejectsUnsupportedVersion() {
+SSLM_TEST(TestManifestRejectsUnsupportedVersion, 118) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, kManifestVersionOff, 2);
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8,
 	                        SslmModelStatus::UnsupportedManifestVersion, "WGT1 version == 2");
 }
 
-static void TestManifestRejectsTooManyTensors() {
+SSLM_TEST(TestManifestRejectsTooManyTensors, 119) {
 	// A complete, valid 16-byte header declaring a tensor_count far beyond
 	// kMaxTensors (65536) and no following bytes -- TooManyTensors must be
 	// checked (and must reject) before any attempt to read a descriptor table
@@ -2060,7 +2040,7 @@ static void TestManifestRejectsTooManyTensors() {
 	                        "WGT1 tensor_count == 0xFFFFFFFF");
 }
 
-static void TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors() {
+SSLM_TEST(TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors, 120) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// Cut the buffer to strictly inside the descriptor table: one full
 	// descriptor plus half of a second, while tensor_count (4) still declares
@@ -2070,7 +2050,7 @@ static void TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors() {
 	                        "WGT1 truncated mid-descriptor-table");
 }
 
-static void TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob() {
+SSLM_TEST(TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob, 121) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// The full descriptor table is present, but not all of the declared
 	// name_blob_len bytes after it -- cut one byte short of the name blob.
@@ -2085,21 +2065,21 @@ static void TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob() {
 //     magic/element-size only change which magic reads the manifest, never
 //     how a descriptor field is validated. ---
 
-static void TestManifestRejectsBadTensorNameOutOfRange() {
+SSLM_TEST(TestManifestRejectsBadTensorNameOutOfRange, 122) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, ManifestDescNameLenOff(0), m.name_blob_len + 50);  // t1's name now runs past the blob
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorName,
 	                        "WGT1 tensor[0] (t1) name range exceeds name_blob_len");
 }
 
-static void TestManifestRejectsEmptyTensorName() {
+SSLM_TEST(TestManifestRejectsEmptyTensorName, 123) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, ManifestDescNameLenOff(0), 0);
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::EmptyTensorName,
 	                        "WGT1 tensor[0] (t1) name_len == 0");
 }
 
-static void TestManifestRejectsDuplicateTensorName() {
+SSLM_TEST(TestManifestRejectsDuplicateTensorName, 124) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// Point tensor[1] ("t2") at the exact same name-blob range as tensor[0]
 	// ("t1") -- both descriptors now name the same tensor.
@@ -2111,21 +2091,21 @@ static void TestManifestRejectsDuplicateTensorName() {
 	                        "WGT1 tensor[1] (t2) name duplicates tensor[0]'s (t1)");
 }
 
-static void TestManifestRejectsBadTensorRankZero() {
+SSLM_TEST(TestManifestRejectsBadTensorRankZero, 125) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, ManifestDescRankOff(0), 0);
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorRank,
 	                        "WGT1 tensor[0] (t1) rank == 0");
 }
 
-static void TestManifestRejectsBadTensorRankTooLarge() {
+SSLM_TEST(TestManifestRejectsBadTensorRankTooLarge, 126) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, ManifestDescRankOff(0), kMaxTensorRank + 1);  // 5
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadTensorRank,
 	                        "WGT1 tensor[0] (t1) rank == kMaxTensorRank+1 (5)");
 }
 
-static void TestManifestRejectsBadTensorShapeZeroDim() {
+SSLM_TEST(TestManifestRejectsBadTensorShapeZeroDim, 127) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// t2 (tensor[1]) is rank 2, shape [2,2]; zero its first dimension -- still
 	// "declared" by rank (2) but no longer > 0 as required for i < rank. The
@@ -2138,7 +2118,7 @@ static void TestManifestRejectsBadTensorShapeZeroDim() {
 	                        "WGT1 tensor[1] (t2) shape[0] == 0 within rank");
 }
 
-static void TestManifestRejectsBadTensorShapeNonzeroPastRank() {
+SSLM_TEST(TestManifestRejectsBadTensorShapeNonzeroPastRank, 128) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// t1 (tensor[0]) is rank 1, shape [3,0,0,0]; set shape[1] (past rank)
 	// nonzero. elem_count (3, the product over shape[0..rank)) is unaffected.
@@ -2147,7 +2127,7 @@ static void TestManifestRejectsBadTensorShapeNonzeroPastRank() {
 	                        "WGT1 tensor[0] (t1) shape[1] != 0 past rank 1");
 }
 
-static void TestManifestRejectsShapeCountMismatch() {
+SSLM_TEST(TestManifestRejectsShapeCountMismatch, 129) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// t3 (tensor[2]) is rank 3, shape [2,1,2] -> product 4; declare 999.
 	PutU64(m.bytes, ManifestDescElemCountOff(2), 999);
@@ -2155,7 +2135,7 @@ static void TestManifestRejectsShapeCountMismatch() {
 	                        "WGT1 tensor[2] (t3) elem_count 999 != product(shape) 4");
 }
 
-static void TestManifestRejectsTensorOutOfBoundsDataExceedsSection() {
+SSLM_TEST(TestManifestRejectsTensorOutOfBoundsDataExceedsSection, 130) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// Push t4's (tensor[3]) data_off to one byte before the end of the buffer;
 	// its declared elem_count (2) then needs 2 bytes there, exceeding
@@ -2166,7 +2146,7 @@ static void TestManifestRejectsTensorOutOfBoundsDataExceedsSection() {
 	                        "WGT1 tensor[3] (t4) data range exceeds byte_size by 1");
 }
 
-static void TestManifestRejectsTensorOverlap() {
+SSLM_TEST(TestManifestRejectsTensorOverlap, 131) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	// Point t2's (tensor[1]) data_off at t1's (tensor[0]) -- both then claim
 	// overlapping byte ranges, while the claimed range still fits comfortably
@@ -2176,14 +2156,14 @@ static void TestManifestRejectsTensorOverlap() {
 	                        "WGT1 tensor[1] (t2) data_off == tensor[0]'s (t1)");
 }
 
-static void TestManifestRejectsBadDescriptorReserved() {
+SSLM_TEST(TestManifestRejectsBadDescriptorReserved, 132) {
 	auto m = MakeMinimalValidManifest(kWeightsMagic, 1);
 	PutU32(m.bytes, ManifestDescReservedOff(0), 1);
 	AssertManifestRejected(m.bytes, SslmSectionType::Weights, SslmDtype::Int8, SslmModelStatus::BadDescriptorReserved,
 	                        "WGT1 tensor[0] (t1) reserved == 1");
 }
 
-static void TestManifestRejectsDataOffBelowDataRegion() {
+SSLM_TEST(TestManifestRejectsDataOffBelowDataRegion, 133) {
 	// docs/sslm_format.md's TensorDesc table states data_off must be "multiple
 	// of the element size; >= end of the name blob; in bounds" -- three
 	// sub-constraints on one field. This cell violates only the middle one:
@@ -2210,7 +2190,7 @@ static void TestManifestRejectsDataOffBelowDataRegion() {
 //     cell uses a single-tensor manifest so an alignment/offset shift on the
 //     one tensor present cannot also read as TensorOverlap. ---
 
-static void TestManifestRejectsTensorMisalignedBia() {
+SSLM_TEST(TestManifestRejectsTensorMisalignedBia, 134) {
 	auto m = MakeSingleTensorManifest(kBiasesMagic, 4, {4});
 	m.bytes.resize(m.bytes.size() + 64, 0);  // headroom: isolate misalignment from bounds
 	PutU64(m.bytes, ManifestDescDataOffOff(0), m.tensor_data_off[0] + 1);  // +1: not a multiple of 4
@@ -2218,7 +2198,7 @@ static void TestManifestRejectsTensorMisalignedBia() {
 	                        "BIA1 tensor[0] (t0) data_off + 1 (not a multiple of element_size 4)");
 }
 
-static void TestManifestRejectsTensorMisalignedRop() {
+SSLM_TEST(TestManifestRejectsTensorMisalignedRop, 135) {
 	auto m = MakeSingleTensorManifest(kRopeMagic, 8, {4});
 	m.bytes.resize(m.bytes.size() + 64, 0);  // headroom: isolate misalignment from bounds
 	PutU64(m.bytes, ManifestDescDataOffOff(0), m.tensor_data_off[0] + 4);  // +4: not a multiple of 8
@@ -2226,7 +2206,7 @@ static void TestManifestRejectsTensorMisalignedRop() {
 	                        "ROP1 tensor[0] (t0) data_off + 4 (not a multiple of element_size 8)");
 }
 
-static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia() {
+SSLM_TEST(TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia, 136) {
 	auto m = MakeSingleTensorManifest(kBiasesMagic, 4, {1});
 	// A single-dim shape/elem_count of 1,200,000,000 is well under 2^32
 	// (4,294,967,295), so the elem_count field itself does not overflow --
@@ -2244,7 +2224,7 @@ static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia() {
 	                        "BIA1 tensor[0] (t0) elem_count(1.2B) * element_size(4) overflows 32 bits");
 }
 
-static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop() {
+SSLM_TEST(TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop, 137) {
 	auto m = MakeSingleTensorManifest(kRopeMagic, 8, {1});
 	// element_size 8 needs a smaller elem_count to overflow 32 bits at the
 	// second multiplication: 600,000,000 * 8 == 4,800,000,000.
@@ -2254,7 +2234,7 @@ static void TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop() {
 	                        "ROP1 tensor[0] (t0) elem_count(600M) * element_size(8) overflows 32 bits");
 }
 
-static void TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds() {
+SSLM_TEST(TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds, 138) {
 	auto m = MakeSingleTensorManifest(kWeightsMagic, 1, {1, 1});
 	// shape [70000,70000]: product 4,900,000,000 overflows a 32-bit
 	// multiplication (2^32 == 4,294,967,296) but is exactly representable and
@@ -2323,7 +2303,7 @@ void AssertKvc1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmSectionTy
 //     some unrelated reason before any hostile cell attributes a rejection
 //     to its one named mutation. ---
 
-static void TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips() {
+SSLM_TEST(TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips, 139) {
 	auto m = MakeMinimalValidKvc1(/*value_words=*/2);
 	SslmSectionView view = MakeConstantsSectionView(SslmSectionType::CompositionConstants, m.bytes);
 
@@ -2366,7 +2346,7 @@ static void TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips() {
 	CHECK_MSG(table.Entry("does-not-exist") == nullptr, "Entry() lookup miss did not return nullptr");
 }
 
-static void TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips() {
+SSLM_TEST(TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips, 140) {
 	auto m = MakeMinimalValidKvc1(/*value_words=*/3);
 	SslmSectionView view = MakeConstantsSectionView(SslmSectionType::KvLandingReciprocals, m.bytes);
 
@@ -2408,7 +2388,7 @@ static void TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips() {
 //     WGT1/BIA1/ROP1, KVC1 shares ONE magic across every type, so there is
 //     no per-type BadConstantsMagic split to make). ---
 
-static void TestKvc1RejectsSectionTooShort() {
+SSLM_TEST(TestKvc1RejectsSectionTooShort, 141) {
 	std::vector<uint8_t> bytes(20, 0);  // < kConstantHeaderBytes (24)
 	bytes[0] = 'K';
 	bytes[1] = 'V';
@@ -2418,21 +2398,21 @@ static void TestKvc1RejectsSectionTooShort() {
 	                    "KVC1 section too short (20 bytes < 24)");
 }
 
-static void TestKvc1RejectsBadMagic() {
+SSLM_TEST(TestKvc1RejectsBadMagic, 142) {
 	auto m = MakeMinimalValidKvc1(2);
 	m.bytes[0] = 'X';  // was 'K' of "KVC1"
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadConstantsMagic,
 	                    "KVC1 bad magic");
 }
 
-static void TestKvc1RejectsUnsupportedVersion() {
+SSLM_TEST(TestKvc1RejectsUnsupportedVersion, 143) {
 	auto m = MakeMinimalValidKvc1(2);
 	PutU32(m.bytes, kConstantsVersionOff, 2);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::UnsupportedConstantsVersion,
 	                    "KVC1 version == 2");
 }
 
-static void TestKvc1RejectsTooManyEntries() {
+SSLM_TEST(TestKvc1RejectsTooManyEntries, 144) {
 	// A complete, valid 24-byte header declaring an entry_count far beyond
 	// kMaxConstantEntries (1048576) and no following bytes -- TooManyConstant
 	// Entries must be checked (and must reject) before any attempt to read a
@@ -2449,7 +2429,7 @@ static void TestKvc1RejectsTooManyEntries() {
 	                    "KVC1 entry_count == kMaxConstantEntries+1");
 }
 
-static void TestKvc1RejectsBadReserved() {
+SSLM_TEST(TestKvc1RejectsBadReserved, 145) {
 	auto m = MakeMinimalValidKvc1(2);
 	PutU32(m.bytes, kConstantsReservedOff, 1);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadConstantsReserved,
@@ -2467,7 +2447,7 @@ static void TestKvc1RejectsBadReserved() {
 //     overflows 32-bit" scenario is unreachable given kMaxConstantEntries,
 //     and why this cell is the faithful adaptation. ---
 
-static void TestKvc1RejectsOutOfBoundsTruncatedDescriptors() {
+SSLM_TEST(TestKvc1RejectsOutOfBoundsTruncatedDescriptors, 146) {
 	auto m = MakeMinimalValidKvc1(2);  // 3 entries
 	// Cut the buffer to strictly inside the descriptor table: one full
 	// descriptor plus half of a second, while entry_count (3) still declares
@@ -2477,7 +2457,7 @@ static void TestKvc1RejectsOutOfBoundsTruncatedDescriptors() {
 	                    "KVC1 truncated mid-descriptor-table");
 }
 
-static void TestKvc1RejectsOutOfBoundsTruncatedValues() {
+SSLM_TEST(TestKvc1RejectsOutOfBoundsTruncatedValues, 147) {
 	auto m = MakeMinimalValidKvc1(2);  // 3 entries * 2 words * 8 bytes == 48 value bytes
 	// The full descriptor table is present, but not all of the declared
 	// entry_count*value_words int64s after it -- cut one byte short of the
@@ -2487,7 +2467,7 @@ static void TestKvc1RejectsOutOfBoundsTruncatedValues() {
 	                    "KVC1 truncated mid-value-array");
 }
 
-static void TestKvc1RejectsOutOfBoundsTruncatedNameBlob() {
+SSLM_TEST(TestKvc1RejectsOutOfBoundsTruncatedNameBlob, 148) {
 	auto m = MakeMinimalValidKvc1(2);
 	// The full descriptor table and value array are present, but not all of
 	// the declared name_blob_len bytes after them -- cut one byte short of
@@ -2497,7 +2477,7 @@ static void TestKvc1RejectsOutOfBoundsTruncatedNameBlob() {
 	                    "KVC1 truncated mid-name-blob");
 }
 
-static void TestKvc1RejectsNameBlobLenSumOverflow32Bit() {
+SSLM_TEST(TestKvc1RejectsNameBlobLenSumOverflow32Bit, 149) {
 	// entry_count is capped at kMaxConstantEntries (1048576), so entry_count *
 	// value_words * 8 tops out around 25M -- nowhere near overflowing a
 	// 32-bit product on its own (see the test-design record §4.4). name_blob_
@@ -2520,21 +2500,21 @@ static void TestKvc1RejectsNameBlobLenSumOverflow32Bit() {
 //     docs/sslm_format.md's EntryDesc field table in the minimal valid
 //     blob. ---
 
-static void TestKvc1RejectsBadEntryNameOutOfRange() {
+SSLM_TEST(TestKvc1RejectsBadEntryNameOutOfRange, 150) {
 	auto m = MakeMinimalValidKvc1(2);
 	PutU32(m.bytes, ConstantsDescNameLenOff(0), m.name_blob_len + 50);  // alpha's name now runs past the blob
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadEntryName,
 	                    "KVC1 entry[0] (alpha) name range exceeds name_blob_len");
 }
 
-static void TestKvc1RejectsEmptyEntryName() {
+SSLM_TEST(TestKvc1RejectsEmptyEntryName, 151) {
 	auto m = MakeMinimalValidKvc1(2);
 	PutU32(m.bytes, ConstantsDescNameLenOff(0), 0);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::EmptyEntryName,
 	                    "KVC1 entry[0] (alpha) name_len == 0");
 }
 
-static void TestKvc1RejectsDuplicateEntryName() {
+SSLM_TEST(TestKvc1RejectsDuplicateEntryName, 152) {
 	auto m = MakeMinimalValidKvc1(2);
 	// Point entry[1] ("beta") at the exact same name-blob range as entry[0]
 	// ("alpha") -- both descriptors now name the same entry.
@@ -2554,21 +2534,21 @@ static void TestKvc1RejectsDuplicateEntryName() {
 //     KvLandingReciprocals; these three cells add KvLandingScales and
 //     re-exercise the other two from the opposite direction). ---
 
-static void TestKvc1RejectsValueWordsOutOfRange() {
+SSLM_TEST(TestKvc1RejectsValueWordsOutOfRange, 153) {
 	auto m = MakeMinimalValidKvc1(2);  // KvLandingScales also requires 2
 	PutU32(m.bytes, kConstantsValueWordsOff, 5);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::KvLandingScales, SslmModelStatus::BadValueWords,
 	                    "KVC1 (KvLandingScales) value_words == 5, not in {2,3}");
 }
 
-static void TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree() {
+SSLM_TEST(TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree, 154) {
 	auto m = MakeMinimalValidKvc1(2);  // CompositionConstants requires 2
 	PutU32(m.bytes, kConstantsValueWordsOff, 3);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::CompositionConstants, SslmModelStatus::BadValueWords,
 	                    "KVC1 (CompositionConstants, requires 2) value_words == 3");
 }
 
-static void TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo() {
+SSLM_TEST(TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo, 155) {
 	auto m = MakeMinimalValidKvc1(3);  // KvLandingReciprocals requires 3
 	PutU32(m.bytes, kConstantsValueWordsOff, 2);
 	AssertKvc1Rejected(m.bytes, SslmSectionType::KvLandingReciprocals, SslmModelStatus::BadValueWords,
@@ -2626,7 +2606,7 @@ void AssertCfg1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmModelStat
 //     proves the baseline isn't rejecting -- or silently misreading -- before
 //     any hostile cell attributes a rejection to its one named mutation. ---
 
-static void TestMinimalCfg1ParsesAndMatchesEveryField() {
+SSLM_TEST(TestMinimalCfg1ParsesAndMatchesEveryField, 156) {
 	Cfg1Spec spec;  // defaults: see sslm_cfg1_hostile_fixtures.h
 	auto bytes = BuildCfg1(spec);
 	SslmSectionView view = MakeConfigSectionView(bytes);
@@ -2660,25 +2640,25 @@ static void TestMinimalCfg1ParsesAndMatchesEveryField() {
 // --- BadConfigSize — both directions, since the parse must reject ANY
 //     byte_size != 84, not merely a too-short buffer. ---
 
-static void TestCfg1RejectsSizeTooShort() {
+SSLM_TEST(TestCfg1RejectsSizeTooShort, 157) {
 	auto bytes = MakeMinimalValidCfg1();
 	bytes.pop_back();  // 83 bytes, < kConfigBytes (84)
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigSize, "CFG1 byte_size == 83 (< 84)");
 }
 
-static void TestCfg1RejectsSizeTooLong() {
+SSLM_TEST(TestCfg1RejectsSizeTooLong, 158) {
 	auto bytes = MakeMinimalValidCfg1();
 	bytes.push_back(0);  // 85 bytes, > kConfigBytes (84)
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigSize, "CFG1 byte_size == 85 (> 84)");
 }
 
-static void TestCfg1RejectsBadMagic() {
+SSLM_TEST(TestCfg1RejectsBadMagic, 159) {
 	auto bytes = MakeMinimalValidCfg1();
 	bytes[0] = 'X';  // was 'C' of "CFG1"
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigMagic, "CFG1 bad magic");
 }
 
-static void TestCfg1RejectsUnsupportedVersion() {
+SSLM_TEST(TestCfg1RejectsUnsupportedVersion, 160) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1VersionOff, 2);
 	AssertCfg1Rejected(bytes, SslmModelStatus::UnsupportedConfigVersion, "CFG1 version == 2");
@@ -2687,74 +2667,74 @@ static void TestCfg1RejectsUnsupportedVersion() {
 // --- BadConfigDim — all eight dimension fields, each its own cell (a parse
 //     that wrongly guards only some of them is caught). ---
 
-static void TestCfg1RejectsZeroHiddenSize() {
+SSLM_TEST(TestCfg1RejectsZeroHiddenSize, 161) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1HiddenSizeOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 hidden_size == 0");
 }
 
-static void TestCfg1RejectsZeroNumHiddenLayers() {
+SSLM_TEST(TestCfg1RejectsZeroNumHiddenLayers, 162) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1NumHiddenLayersOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_hidden_layers == 0");
 }
 
-static void TestCfg1RejectsZeroNumAttentionHeads() {
+SSLM_TEST(TestCfg1RejectsZeroNumAttentionHeads, 163) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1NumAttentionHeadsOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_attention_heads == 0");
 }
 
-static void TestCfg1RejectsZeroNumKeyValueHeads() {
+SSLM_TEST(TestCfg1RejectsZeroNumKeyValueHeads, 164) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1NumKeyValueHeadsOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 num_key_value_heads == 0");
 }
 
-static void TestCfg1RejectsZeroHeadDim() {
+SSLM_TEST(TestCfg1RejectsZeroHeadDim, 165) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1HeadDimOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 head_dim == 0");
 }
 
-static void TestCfg1RejectsZeroIntermediateSize() {
+SSLM_TEST(TestCfg1RejectsZeroIntermediateSize, 166) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1IntermediateSizeOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 intermediate_size == 0");
 }
 
-static void TestCfg1RejectsZeroVocabSize() {
+SSLM_TEST(TestCfg1RejectsZeroVocabSize, 167) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1VocabSizeOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 vocab_size == 0");
 }
 
-static void TestCfg1RejectsZeroContextCap() {
+SSLM_TEST(TestCfg1RejectsZeroContextCap, 168) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1ContextCapOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 context_cap == 0");
 }
 
 // kv_block_size is a required-nonzero field too (docs "Config blob"; Poirot C-1).
-static void TestCfg1RejectsZeroKvBlockSize() {
+SSLM_TEST(TestCfg1RejectsZeroKvBlockSize, 169) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1KvBlockSizeOff, 0);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigDim, "CFG1 kv_block_size == 0");
 }
 
-static void TestCfg1RejectsBadKvPrecision() {
+SSLM_TEST(TestCfg1RejectsBadKvPrecision, 170) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1KvPrecisionOff, 2);  // only 0 (Int8) or 1 (Int16) are valid
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadKvPrecision, "CFG1 kv_precision == 2");
 }
 
-static void TestCfg1RejectsBadConfigBool() {
+SSLM_TEST(TestCfg1RejectsBadConfigBool, 171) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1TieWordEmbeddingsOff, 2);  // only 0 or 1 are valid
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigBool, "CFG1 tie_word_embeddings == 2");
 }
 
-static void TestCfg1RejectsBadConfigReserved() {
+SSLM_TEST(TestCfg1RejectsBadConfigReserved, 172) {
 	auto bytes = MakeMinimalValidCfg1();
 	PutU32(bytes, kCfg1ReservedOff, 1);
 	AssertCfg1Rejected(bytes, SslmModelStatus::BadConfigReserved, "CFG1 reserved == 1");
@@ -2776,7 +2756,7 @@ static void TestCfg1RejectsBadConfigReserved() {
 // SslmTensorManifest::Parse (S2.0a), not ParseConfig.
 // ---------------------------------------------------------------------------
 
-static void TestWeightScalesMinimalManifestParsesAndRoundTrips() {
+SSLM_TEST(TestWeightScalesMinimalManifestParsesAndRoundTrips, 173) {
 	// Column 0 = identity flag (0/1), column 1 = mult, column 2 = shift — one
 	// C24/C25 fold-op triple per output channel (docs/sslm_format.md
 	// "Weight-scale fold blob — WSC1"). Two channels ("layer0.q_proj",
@@ -2810,7 +2790,7 @@ static void TestWeightScalesMinimalManifestParsesAndRoundTrips() {
 	}
 }
 
-static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
+SSLM_TEST(TestWeightScalesRejectsWrongMagicDiscriminatesPerType, 174) {
 	// A WGT1-magic'd blob handed to a WeightScales section: confirms the
 	// per-type magic actually discriminates — WeightScales requires 'WSC1',
 	// not 'WGT1', even though both are int8/int32-element tensor manifests of
@@ -2838,7 +2818,7 @@ static void TestWeightScalesRejectsWrongMagicDiscriminatesPerType() {
 // S-HARDEN-1); every cell below is green against it.
 // ---------------------------------------------------------------------------
 
-static void TestC2SaturatingRoundingDoublingHighMul() {
+SSLM_TEST(TestC2SaturatingRoundingDoublingHighMul, 175) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kC2CasesCount; ++i) {
 		const C2Case& c = kC2Cases[i];
@@ -2848,7 +2828,7 @@ static void TestC2SaturatingRoundingDoublingHighMul() {
 	}
 }
 
-static void TestC1C3RoundingDivideByPOT() {
+SSLM_TEST(TestC1C3RoundingDivideByPOT, 176) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kC1C3CasesCount; ++i) {
 		const C1C3Case& c = kC1C3Cases[i];
@@ -2858,7 +2838,7 @@ static void TestC1C3RoundingDivideByPOT() {
 	}
 }
 
-static void TestMultiplyByQuantizedMultiplier() {
+SSLM_TEST(TestMultiplyByQuantizedMultiplier, 177) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kMbqmCasesCount; ++i) {
 		const MbqmCase& c = kMbqmCases[i];
@@ -2868,7 +2848,7 @@ static void TestMultiplyByQuantizedMultiplier() {
 	}
 }
 
-static void TestClz64() {
+SSLM_TEST(TestClz64, 178) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kClz64CasesCount; ++i) {
 		const Clz64Case& c = kClz64Cases[i];
@@ -2878,7 +2858,7 @@ static void TestClz64() {
 	}
 }
 
-static void TestMaxAbsReduce() {
+SSLM_TEST(TestMaxAbsReduce, 179) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kMaxAbsCasesCount; ++i) {
 		const MaxAbsCase& c = kMaxAbsCases[i];
@@ -2900,7 +2880,7 @@ static void TestMaxAbsReduce() {
 	          static_cast<long long>(perm_c));
 }
 
-static void TestNormalizeScale() {
+SSLM_TEST(TestNormalizeScale, 180) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kNormalizeScaleCasesCount; ++i) {
 		const NormalizeScaleCase& c = kNormalizeScaleCases[i];
@@ -2920,7 +2900,7 @@ static void TestNormalizeScale() {
 	}
 }
 
-static void TestDynamicScaleReciprocalNamed() {
+SSLM_TEST(TestDynamicScaleReciprocalNamed, 181) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kDynRecipNamedCasesCount; ++i) {
 		const DynRecipNamedCase& c = kDynRecipNamedCases[i];
@@ -2931,7 +2911,7 @@ static void TestDynamicScaleReciprocalNamed() {
 	}
 }
 
-static void TestDynamicScaleReciprocalDenseSample() {
+SSLM_TEST(TestDynamicScaleReciprocalDenseSample, 182) {
 	using namespace superslm_test;
 	size_t mismatches = 0;
 	for (size_t i = 0; i < kDynRecipDenseCasesCount; ++i) {
@@ -2965,7 +2945,7 @@ static void TestDynamicScaleReciprocalDenseSample() {
 // structural check. Swept across C19's own declared domain, Dn in
 // [2^30, 2^31) (intmath.h:100,116): both boundaries, the midpoint, and a
 // dense prime-strided sample across the full domain.
-static void TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19Domain() {
+SSLM_TEST(TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19Domain, 183) {
 	using superslm::CarriedScaleReciprocal;
 	using superslm::DynamicScaleReciprocal;
 	constexpr int64_t kLo = INT64_C(1) << 30;
@@ -3003,7 +2983,7 @@ static void TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19D
 	}
 }
 
-static void TestRequantTokenCode() {
+SSLM_TEST(TestRequantTokenCode, 184) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRequantCasesCount; ++i) {
 		const RequantCase& c = kRequantCases[i];
@@ -3027,7 +3007,7 @@ static void TestRequantTokenCode() {
 // Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md
 // Sec4.1/Sec4.2/Sec4.3.
 
-static void TestMaxAbsReduceWide() {
+SSLM_TEST(TestMaxAbsReduceWide, 186) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kMaxAbsWideCasesCount; ++i) {
 		const MaxAbsWideCase& c = kMaxAbsWideCases[i];
@@ -3048,7 +3028,7 @@ static void TestMaxAbsReduceWide() {
 	          static_cast<long long>(perm_c));
 }
 
-static void TestRowBoundsWide() {
+SSLM_TEST(TestRowBoundsWide, 187) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRowBoundsWideCasesCount; ++i) {
 		const RowBoundsWideCase& c = kRowBoundsWideCases[i];
@@ -3072,7 +3052,7 @@ static void TestRowBoundsWide() {
 	          static_cast<long long>(min_b));
 }
 
-static void TestRequantTokenCodeWide() {
+SSLM_TEST(TestRequantTokenCodeWide, 188) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRequantWideCasesCount; ++i) {
 		const RequantWideCase& c = kRequantWideCases[i];
@@ -3086,7 +3066,7 @@ static void TestRequantTokenCodeWide() {
 	}
 }
 
-static void TestIntmathPipelineComposition() {
+SSLM_TEST(TestIntmathPipelineComposition, 185) {
 	// The feature oracle (dim 10) for the C19-C22 chain: MaxAbsReduce ->
 	// NormalizeScale -> DynamicScaleReciprocal -> RequantTokenCode composed
 	// exactly as the runtime rung-1 per-token quantizer composes them,
@@ -3128,7 +3108,7 @@ static void TestIntmathPipelineComposition() {
 // superslm-s2.2-nonlinear-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
-static void TestISqrt() {
+SSLM_TEST(TestISqrt, 206) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kISqrtCasesCount; ++i) {
 		const ISqrtCase& c = kISqrtCases[i];
@@ -3139,7 +3119,7 @@ static void TestISqrt() {
 	}
 }
 
-static void TestISqrtTrace() {
+SSLM_TEST(TestISqrtTrace, 207) {
 	// The §17 blind cell: the fixed 32-iteration recurrence. Every case asserts
 	// BOTH that the trace is exactly I_SQRT_ITERATIONS entries long AND that
 	// EVERY iterate matches the reference's i_sqrt_trace(n)[k] individually —
@@ -3169,7 +3149,7 @@ static void TestISqrtTrace() {
 	}
 }
 
-static void TestShiftByMax() {
+SSLM_TEST(TestShiftByMax, 208) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kShiftByMaxCasesCount; ++i) {
 		const ShiftByMaxCase& c = kShiftByMaxCases[i];
@@ -3202,7 +3182,7 @@ static void TestShiftByMax() {
 // commission: if any of these 36 values had moved, that would be a real
 // regression, not a port detail -- none did, confirmed by this port compiling
 // and passing against the unedited kIExpCases table).
-static void TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases() {
+SSLM_TEST(TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases, 209) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpCasesCount; ++i) {
 		const IExpCase& c = kIExpCases[i];
@@ -3224,7 +3204,7 @@ static void TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases() {
 }
 
 // PORTED (this session): construct-then-evaluate, same claim.
-static void TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily() {
+SSLM_TEST(TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily, 210) {
 	// C8's clip claim, checked live across every "realistic_s*"/"qln2_min"
 	// family in the fixture set: the clip-boundary input and the beyond-clip
 	// input for the SAME (q_ln2, q_b, q_c) triple must produce the SAME
@@ -3282,7 +3262,7 @@ static void TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily() {
 // fixes).
 // ---------------------------------------------------------------------------
 
-static void TestIExpConstantsInDomainAcrossCorpus() {
+SSLM_TEST(TestIExpConstantsInDomainAcrossCorpus, 211) {
 	// The full domain-predicate corpus: the strike's exact input, both the z=0 and
 	// the z>=1 in-domain/out-of-domain boundaries forced EXACTLY on both sides (a
 	// boundary is only authored where a valid int64_t q_c actually sits on the
@@ -3304,7 +3284,7 @@ static void TestIExpConstantsInDomainAcrossCorpus() {
 	}
 }
 
-static void TestIExpConstantsInDomainRejectsStrikeExactInput() {
+SSLM_TEST(TestIExpConstantsInDomainRejectsStrikeExactInput, 212) {
 	// Standalone, individually diagnosable regression cell for the defect itself
 	// (Claude/Loki/softmax-s2.6-strike-2026-07-21.md): this exact call is
 	// contract-legal under every documented LOWER-bound precondition (q<=0,
@@ -3336,7 +3316,7 @@ bool IExpShortcutHolds(int64_t q_ln2, int64_t q_b) { return 2 * q_b >= q_ln2 - 1
 
 }  // namespace
 
-static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
+SSLM_TEST(TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim, 213) {
 	// Four scenarios authored in tests/gen_iexp_domain_fixtures.py at
 	// q_ln2 = 3,000,000,000 (labels "shortcut_*_q0" / "shortcut_*_far_end" in
 	// kIExpDomainCases), each placing q_c so one end of the row -- q=0 or the
@@ -3429,7 +3409,7 @@ static void TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim() {
 // superslm-s2.3-rope-test-design-2026-07-19.md.
 // ---------------------------------------------------------------------------
 
-static void TestRopeApplyPair() {
+SSLM_TEST(TestRopeApplyPair, 221) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRopeCasesCount; ++i) {
 		const RopeCase& c = kRopeCases[i];
@@ -3443,7 +3423,7 @@ static void TestRopeApplyPair() {
 	}
 }
 
-static void TestRopeApplyPairIdentityIsExact() {
+SSLM_TEST(TestRopeApplyPairIdentityIsExact, 222) {
 	// The identity/passthrough claim (dimension 10, feature oracle): rotating by
 	// angle 0 (cos=ROPE_ONE, sin=0) must reproduce (x, y) EXACTLY — the
 	// x*ROPE_ONE / ROPE_ONE division has zero remainder, so no rounding may
@@ -3461,7 +3441,7 @@ static void TestRopeApplyPairIdentityIsExact() {
 	}
 }
 
-static void TestRopeApplyPairQuarterTurnIsExact() {
+SSLM_TEST(TestRopeApplyPairQuarterTurnIsExact, 223) {
 	// The quarter-turn claim, executed live: cos=0 isolates the pure-sin
 	// rotation, and (-y, x) / (y, -x) must hold exactly for every (x, y) in
 	// this suite's kRopeCases quarter-turn cells (found by label prefix).
@@ -3489,7 +3469,7 @@ static void TestRopeApplyPairQuarterTurnIsExact() {
 	CHECK_MSG(checked == 8, "expected 8 quarter-turn fixture cells (4 pos-sin + 4 neg-sin), found %zu", checked);
 }
 
-static void TestRopeApplyPairWideInputExceedsInt32Range() {
+SSLM_TEST(TestRopeApplyPairWideInputExceedsInt32Range, 224) {
 	// The int64-return-type claim (dimension 10, load-bearing): at least one
 	// wide-input cell's result must exceed INT32_MAX in magnitude, checked live
 	// against this suite's own executed calls — not only asserted true of the
@@ -3519,7 +3499,7 @@ static void TestRopeApplyPairWideInputExceedsInt32Range() {
 	          static_cast<long long>(largest_magnitude), superslm::kInt32Max);
 }
 
-static void TestRopeApplyPairTieRoundsAwayFromZero() {
+SSLM_TEST(TestRopeApplyPairTieRoundsAwayFromZero, 225) {
 	// The tie-inheritance claim, executed live: RopeApplyPair's rounding must
 	// move strictly off zero on an exact-half input, on both signs, for the
 	// x-component alone, the y-component alone, and both simultaneously —
@@ -3598,7 +3578,7 @@ void AssertSil1Rejected(const std::vector<uint8_t>& mutated_bytes, SslmModelStat
 //     including the two extreme nodes (table[0], table[N]) whose exact values
 //     the domain-clamp cells below also depend on. ---
 
-static void TestMinimalSil1ParsesAndReadsBackAllNodes() {
+SSLM_TEST(TestMinimalSil1ParsesAndReadsBackAllNodes, 226) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	CHECK_MSG(ref.size() == kSigmoidLutEntries, "reference table has %zu entries, want %u", ref.size(),
@@ -3637,7 +3617,7 @@ static void TestMinimalSil1ParsesAndReadsBackAllNodes() {
 // dim 1 — lifetime and reuse: the same parsed SslmSigmoidLut, read many times
 // (standing in for "across many tokens"), must never drift — every repeated
 // read of the same node returns the identical value a fresh read would.
-static void TestSil1WarmObjectRepeatedReadsShowNoDrift() {
+SSLM_TEST(TestSil1WarmObjectRepeatedReadsShowNoDrift, 227) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	SslmSectionView view = MakeSigmoidLutSectionView(bytes);
@@ -3668,7 +3648,7 @@ static void TestSil1WarmObjectRepeatedReadsShowNoDrift() {
 
 // dim 9 (third clause) — SIL1's payload plus its internal magic+version pair
 // round-trips bit-exactly after parse + read-back + re-encode.
-static void TestSil1RoundTripReencodeMatchesOriginalBytes() {
+SSLM_TEST(TestSil1RoundTripReencodeMatchesOriginalBytes, 228) {
 	using namespace superslm_test;
 	auto original = MakeMinimalValidSil1();
 	SslmSectionView view = MakeSigmoidLutSectionView(original);
@@ -3697,28 +3677,28 @@ static void TestSil1RoundTripReencodeMatchesOriginalBytes() {
 //     struct — no variable-length region — so BadSigmoidLutSize (byte_size !=
 //     4116) is the entire bounds surface, both directions. ---
 
-static void TestSil1RejectsSizeTooShort() {
+SSLM_TEST(TestSil1RejectsSizeTooShort, 229) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	bytes.pop_back();  // 4115 bytes, < kSigmoidLutBytes (4116)
 	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4115 (< 4116)");
 }
 
-static void TestSil1RejectsSizeTooLong() {
+SSLM_TEST(TestSil1RejectsSizeTooLong, 230) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	bytes.push_back(0);  // 4117 bytes, > kSigmoidLutBytes (4116)
 	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutSize, "SIL1 byte_size == 4117 (> 4116)");
 }
 
-static void TestSil1RejectsBadMagic() {
+SSLM_TEST(TestSil1RejectsBadMagic, 231) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	bytes[kSil1MagicOff] = 'X';  // was 'S' of "SIL1"
 	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutMagic, "SIL1 bad magic");
 }
 
-static void TestSil1RejectsUnsupportedVersion() {
+SSLM_TEST(TestSil1RejectsUnsupportedVersion, 232) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	PutU32(bytes, kSil1VersionOff, 2);  // only 1 is valid (kManifestVersion)
@@ -3729,14 +3709,14 @@ static void TestSil1RejectsUnsupportedVersion() {
 // exactly 4116 (so BadSigmoidLutSize's check would pass) and mutates only the
 // header's declared entry_count, isolating BadSigmoidLutCount from the size
 // check above.
-static void TestSil1RejectsBadEntryCount() {
+SSLM_TEST(TestSil1RejectsBadEntryCount, 233) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	PutU32(bytes, kSil1EntryCountOff, kSigmoidLutEntries - 1);  // 1024, byte_size unchanged at 4116
 	AssertSil1Rejected(bytes, SslmModelStatus::BadSigmoidLutCount, "SIL1 entry_count == 1024 (!= 1025)");
 }
 
-static void TestSil1RejectsBadReserved() {
+SSLM_TEST(TestSil1RejectsBadReserved, 234) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	PutU32(bytes, kSil1ReservedOff, 1);
@@ -3756,7 +3736,7 @@ static void TestSil1RejectsBadReserved() {
 // byte-for-byte comparison").
 // ---------------------------------------------------------------------------
 
-static void TestSil1RejectsSingleNodeContentMismatch() {
+SSLM_TEST(TestSil1RejectsSingleNodeContentMismatch, 235) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	// Node 512 (the table's midpoint, sigmoid(0)*2^15 == 16384): off by exactly
@@ -3777,7 +3757,7 @@ static void TestSil1RejectsSingleNodeContentMismatch() {
 // independently of any node-range/monotonicity check that may or may not
 // exist, because content-pinning is what this slot commits to as the actual
 // gate (defence-in-depth, never the sole claimed protection).
-static void TestSil1RejectsHostileExtremeAdjacentNodes() {
+SSLM_TEST(TestSil1RejectsHostileExtremeAdjacentNodes, 236) {
 	using namespace superslm_test;
 	auto bytes = MakeMinimalValidSil1();
 	PutU32(bytes, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
@@ -3793,7 +3773,7 @@ static void TestSil1RejectsHostileExtremeAdjacentNodes() {
 // F20/F22 hostile operand must load Ok at the OUTER layer (the outer loader
 // has no notion of SIL1's internal content) and then be rejected at the SIL1
 // sub-parse specifically — never reach SiluSigmoidQ15.
-static void TestArtifactRejectsHostileSigmoidLutContentThroughRealPath() {
+SSLM_TEST(TestArtifactRejectsHostileSigmoidLutContentThroughRealPath, 237) {
 	using namespace superslm_test;
 	auto hostile_sil1 = MakeMinimalValidSil1();
 	PutU32(hostile_sil1, kSil1NodesOff + 512u * 4u, static_cast<uint32_t>(INT32_MIN));
@@ -3829,7 +3809,7 @@ static void TestArtifactRejectsHostileSigmoidLutContentThroughRealPath() {
 // missing-SigmoidLut diagnostic." Distinct from TestRejectsMissingConfigSection
 // (which is missing Config, not SigmoidLut) — this is the mirror case the
 // version-indexed schema exists to catch.
-static void TestArtifactRejectsConfigOnlyV2MissingSigmoidLut() {
+SSLM_TEST(TestArtifactRejectsConfigOnlyV2MissingSigmoidLut, 238) {
 	auto built = BuildArtifact({MakeConfigSection()});  // Config only; no SigmoidLut
 
 	SslmArtifact out;
@@ -3870,7 +3850,7 @@ static void TestArtifactRejectsConfigOnlyV2MissingSigmoidLut() {
 // in-range int64 values (no field-level bound is violated — the KVC1 parser's
 // own checks are all structural: magic/version/count/value_words/bounds), so
 // only the load-time (m, e) domain check catches this.
-static void TestKvc1RejectsHostileCompositionConstantsScale() {
+SSLM_TEST(TestKvc1RejectsHostileCompositionConstantsScale, 239) {
 	using namespace superslm_test;
 	const int64_t kHostileM = INT64_C(1) << 60;
 	const int64_t kHostileE = -17;
@@ -3893,7 +3873,7 @@ static void TestKvc1RejectsHostileCompositionConstantsScale() {
 // F23: WSC1's shift column, documented [0,31] bound is a header comment only
 // (docs/sslm_format.md; `RoundingDivideByPOT`'s exponent parameter). shift=32
 // is the exact one-past-the-end value the finding names as UB.
-static void TestWsc1RejectsHostileShiftOutOfDocumentedBound() {
+SSLM_TEST(TestWsc1RejectsHostileShiftOutOfDocumentedBound, 240) {
 	using namespace superslm_test;
 	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{3});
 	// Overwrite the one tensor's (identity, mult, shift) int32 triple directly —
@@ -3926,7 +3906,7 @@ static void TestWsc1RejectsHostileShiftOutOfDocumentedBound() {
 // elements loaded Ok with no validation. elem_count=4 is one element past the
 // single-row case (shape {3} above): a whole first triple plus one orphan
 // int32 that is neither identity, mult, nor shift of any complete row.
-static void TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree() {
+SSLM_TEST(TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree, 241) {
 	using namespace superslm_test;
 	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{4});
 	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
@@ -3955,7 +3935,7 @@ static void TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree() {
 // "the method lesson" per the finding record). cos = sin = INT32_MIN is the
 // named hostile pair; ROP1's declared dtype is Int64 (ExpectedDtype), so the
 // hostile values are carried as the int64 bit pattern of INT32_MIN.
-static void TestRop1RejectsHostileCosSinPair() {
+SSLM_TEST(TestRop1RejectsHostileCosSinPair, 242) {
 	using namespace superslm_test;
 	// Every element carries the hostile value (not just one): SslmModel::Load's ROP1<->CFG1 shape
 	// join (S3.3 §13.1 cell 4, D-SLM420-D-SLM423) now rejects a "cos"/"sin" tensor whose elem_count
@@ -4083,7 +4063,7 @@ static superslm_test::BuiltArtifact BuildFullyValidV2ArtifactForLoad() {
 //     existing cell reaches; the companion field is held safely in-domain so
 //     the assertion isolates exactly the one clause named. ---
 
-static void TestKvc1RejectsCompositionScaleMUnderNoUbFloor() {
+SSLM_TEST(TestKvc1RejectsCompositionScaleMUnderNoUbFloor, 243) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/INT64_C(-2147483648), /*e=*/0)});
@@ -4097,7 +4077,7 @@ static void TestKvc1RejectsCompositionScaleMUnderNoUbFloor() {
 	CHECK(!view.has_composition_constants);
 }
 
-static void TestKvc1RejectsCompositionScaleEUnderNoUbFloor() {
+SSLM_TEST(TestKvc1RejectsCompositionScaleEUnderNoUbFloor, 244) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/-81)});
@@ -4111,7 +4091,7 @@ static void TestKvc1RejectsCompositionScaleEUnderNoUbFloor() {
 	CHECK(!view.has_composition_constants);
 }
 
-static void TestKvc1RejectsCompositionScaleEOverNoUbFloor() {
+SSLM_TEST(TestKvc1RejectsCompositionScaleEOverNoUbFloor, 245) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/8)});
@@ -4125,7 +4105,7 @@ static void TestKvc1RejectsCompositionScaleEOverNoUbFloor() {
 	CHECK(!view.has_composition_constants);
 }
 
-static void TestWsc1RejectsIdentityUnderDocumentedBound() {
+SSLM_TEST(TestWsc1RejectsIdentityUnderDocumentedBound, 246) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/-1, /*mult=*/1, /*shift=*/0)});
@@ -4139,7 +4119,7 @@ static void TestWsc1RejectsIdentityUnderDocumentedBound() {
 	CHECK(!view.has_weight_scales);
 }
 
-static void TestWsc1RejectsIdentityOverDocumentedBound() {
+SSLM_TEST(TestWsc1RejectsIdentityOverDocumentedBound, 247) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/2, /*mult=*/1, /*shift=*/0)});
@@ -4153,7 +4133,7 @@ static void TestWsc1RejectsIdentityOverDocumentedBound() {
 	CHECK(!view.has_weight_scales);
 }
 
-static void TestWsc1RejectsShiftUnderDocumentedBound() {
+SSLM_TEST(TestWsc1RejectsShiftUnderDocumentedBound, 248) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/-1)});
@@ -4167,7 +4147,7 @@ static void TestWsc1RejectsShiftUnderDocumentedBound() {
 	CHECK(!view.has_weight_scales);
 }
 
-static void TestRop1RejectsElementOverDocumentedBound() {
+SSLM_TEST(TestRop1RejectsElementOverDocumentedBound, 249) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeRop1Section(/*cos_v=*/INT64_C(1073741825), /*sin_v=*/0)});
@@ -4188,7 +4168,7 @@ static void TestRop1RejectsElementOverDocumentedBound() {
 //     currently passes silently. Reference/exact-value oracle: status must be
 //     Ok and the section's own view must be exposed. ---
 
-static void TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor() {
+SSLM_TEST(TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor, 250) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/INT64_C(-2147483647), /*e=*/0)});
@@ -4200,7 +4180,7 @@ static void TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor() {
 	CHECK(view.has_composition_constants);
 }
 
-static void TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor() {
+SSLM_TEST(TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor, 251) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/-80)});
@@ -4212,7 +4192,7 @@ static void TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor() {
 	CHECK(view.has_composition_constants);
 }
 
-static void TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor() {
+SSLM_TEST(TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor, 252) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeKvc1CompositionSection(/*m=*/0, /*e=*/7)});
@@ -4224,7 +4204,7 @@ static void TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor() {
 	CHECK(view.has_composition_constants);
 }
 
-static void TestWsc1AcceptsIdentityAtZero() {
+SSLM_TEST(TestWsc1AcceptsIdentityAtZero, 253) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/0)});
@@ -4236,7 +4216,7 @@ static void TestWsc1AcceptsIdentityAtZero() {
 	CHECK(view.has_weight_scales);
 }
 
-static void TestWsc1AcceptsIdentityAtOne() {
+SSLM_TEST(TestWsc1AcceptsIdentityAtOne, 254) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/1, /*mult=*/1, /*shift=*/0)});
@@ -4248,7 +4228,7 @@ static void TestWsc1AcceptsIdentityAtOne() {
 	CHECK(view.has_weight_scales);
 }
 
-static void TestWsc1AcceptsShiftAtLowerBound() {
+SSLM_TEST(TestWsc1AcceptsShiftAtLowerBound, 255) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/0)});
@@ -4260,7 +4240,7 @@ static void TestWsc1AcceptsShiftAtLowerBound() {
 	CHECK(view.has_weight_scales);
 }
 
-static void TestWsc1AcceptsShiftAtUpperBound() {
+SSLM_TEST(TestWsc1AcceptsShiftAtUpperBound, 256) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeWsc1Section(/*identity=*/0, /*mult=*/1, /*shift=*/31)});
@@ -4272,7 +4252,7 @@ static void TestWsc1AcceptsShiftAtUpperBound() {
 	CHECK(view.has_weight_scales);
 }
 
-static void TestRop1AcceptsElementAtPositiveBound() {
+SSLM_TEST(TestRop1AcceptsElementAtPositiveBound, 257) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeRop1Section(/*cos_v=*/INT64_C(1073741824), /*sin_v=*/0)});
@@ -4284,7 +4264,7 @@ static void TestRop1AcceptsElementAtPositiveBound() {
 	CHECK(view.has_rope_tables);
 }
 
-static void TestRop1AcceptsElementAtNegativeBound() {
+SSLM_TEST(TestRop1AcceptsElementAtNegativeBound, 258) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 	                            MakeRop1Section(/*cos_v=*/INT64_C(-1073741824), /*sin_v=*/0)});
@@ -4301,7 +4281,7 @@ static void TestRop1AcceptsElementAtNegativeBound() {
 //     one — every existing structural-rejection cell calls
 //     SslmArtifact::OpenFromMemory directly. ---
 
-static void TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected() {
+SSLM_TEST(TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected, 259) {
 	using namespace superslm_test;
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection()});
 	built.bytes[0] = 'X';  // was 'S' — corrupts the header magic, a container-level defect
@@ -4329,7 +4309,7 @@ static void TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected() {
 //     sub-parser) so the fixture's own values stay in-domain — the rejection
 //     this cell targets is the STRUCTURAL one, never the value gate's. ---
 
-static void TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate() {
+SSLM_TEST(TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate, 260) {
 	using namespace superslm_test;
 	// An otherwise-valid WeightScales manifest (in-domain identity/mult/shift)
 	// with its own magic corrupted, so SslmTensorManifest::Parse itself rejects
@@ -4371,7 +4351,7 @@ static void TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate() {
 //     values on every populated view are checked against what the fixture
 //     wrote, not against themselves. ---
 
-static void TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact() {
+SSLM_TEST(TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact, 261) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoad();
 
@@ -4438,7 +4418,7 @@ static void TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact() {
 //     clause ("a view built from a rejected artifact is never exposed") is
 //     already discharged by every "!view.has_*" assertion above. ---
 
-static void TestLoadComposedViewRepeatedReadsShowNoDrift() {
+SSLM_TEST(TestLoadComposedViewRepeatedReadsShowNoDrift, 262) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoad();
 
@@ -4476,7 +4456,7 @@ static void TestLoadComposedViewRepeatedReadsShowNoDrift() {
 	          drift);
 }
 
-static void TestLoadComposedViewReopenIsIdempotent() {
+SSLM_TEST(TestLoadComposedViewReopenIsIdempotent, 263) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoad();
 
@@ -4531,7 +4511,7 @@ static void TestLoadComposedViewReopenIsIdempotent() {
 // second Load must fully RESET the target to the freshly-parsed state; an append-without-clear
 // would leave the first Load's entries in place (doubling the constants container), which a
 // value-only check on Entry("scale") would not catch because the lookup would still resolve.
-static void TestLoadOntoPopulatedViewResetsEntries() {
+SSLM_TEST(TestLoadOntoPopulatedViewResetsEntries, 264) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoad();
 
@@ -4611,7 +4591,7 @@ static superslm_test::BuiltArtifact BuildFullyValidV2ArtifactForLoadWithTokenize
 // SslmArtifact; the intervening allocation below reclaims and poisons the
 // freed block, reproducing the sslm_verify garble witness deterministically);
 // GREEN once SslmModelView owns its backing store.
-static void TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead() {
+SSLM_TEST(TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead, 265) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoadWithTokenizer();
 
@@ -4688,7 +4668,7 @@ static void TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead() {
 // a default move copies its bits onto the destination and leaves the source's
 // copy — and its has_sigmoid_lut flag — untouched); GREEN only once the move
 // constructor/assignment are hand-written to clear the source explicitly.
-static void TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut() {
+SSLM_TEST(TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut, 266) {
 	using namespace superslm_test;
 	auto built = BuildFullyValidV2ArtifactForLoad();
 
@@ -4736,7 +4716,7 @@ static void TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut() {
 // bare-sub-parser assertion could not detect a MISSING join by construction.
 // ---------------------------------------------------------------------------
 
-static void TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch() {
+SSLM_TEST(TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch, 267) {
 	using namespace superslm_test;
 	auto tok1 = MakeMinimalValidTok1();       // vocab_count == 5
 	auto uni1 = MakeMinimalValidUni1();
@@ -4754,7 +4734,7 @@ static void TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch() {
 	          "diagnostic does not name both declared sizes: \"%s\"", err.c_str());
 }
 
-static void TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize() {
+SSLM_TEST(TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize, 268) {
 	using namespace superslm_test;
 	auto tok1 = MakeMinimalValidTok1();  // vocab_count == 5
 	auto uni1 = MakeMinimalValidUni1();
@@ -4775,7 +4755,7 @@ static void TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize() {
 	CHECK(view.tokenizer.Decode(ids) == "cat");
 }
 
-static void TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables() {
+SSLM_TEST(TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables, 269) {
 	using namespace superslm_test;
 	auto tok1 = MakeMinimalValidTok1();
 	Cfg1Spec cfg;
@@ -4794,7 +4774,7 @@ static void TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables() {
 	CHECK(!view.has_tokenizer);
 }
 
-static void TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer() {
+SSLM_TEST(TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer, 270) {
 	using namespace superslm_test;
 	auto uni1 = MakeMinimalValidUni1();
 	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
@@ -4810,7 +4790,7 @@ static void TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer() {
 	CHECK(!view.has_tokenizer);
 }
 
-static void TestLoadAcceptsArtifactWithNeitherTokenizerSection() {
+SSLM_TEST(TestLoadAcceptsArtifactWithNeitherTokenizerSection, 271) {
 	// A model-weights-only artifact (no Tokenizer, no UnicodeTables) is a valid
 	// artifact shape (tokenizer and model weights are emitted by separate
 	// converter invocations, tools/convert_tokenizer.py vs tools/convert_model.py)
@@ -4840,7 +4820,7 @@ static void TestLoadAcceptsArtifactWithNeitherTokenizerSection() {
 // for the "too new" case (test_main.cpp line ~128).
 // ---------------------------------------------------------------------------
 
-static void TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader() {
+SSLM_TEST(TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader, 272) {
 	using namespace superslm_test;
 	// A v1-shaped artifact: Config only, no SigmoidLut section, format_version
 	// one less than the compiled-in v2 constant — the exact "pre-SIL1 artifact
@@ -4858,7 +4838,7 @@ static void TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader() {
 	CHECK(!out.Ok());
 }
 
-static void TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection() {
+SSLM_TEST(TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection, 273) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	FixtureSection config = MakeConfigSection();
@@ -4914,7 +4894,7 @@ static void TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection() {
 // which drives x to ~±56 at code=±127, four times past the ±16 table domain).
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch() {
+SSLM_TEST(TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch, 274) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// code=127, m=1500000000, e=-30 -> shift = e+k+Q_idx = -30+5+12 = -13 < 0
@@ -4926,14 +4906,14 @@ static void TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch() {
 	          ref[static_cast<size_t>(kSiluLutN)]);
 }
 
-static void TestSiluSigmoidQ15SaturatesLowDomainShiftNegativeBranch() {
+SSLM_TEST(TestSiluSigmoidQ15SaturatesLowDomainShiftNegativeBranch, 275) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1500000000, /*e=*/-30);
 	CHECK_MSG(got == ref[0], "SiluSigmoidQ15 saturated-low (shift<0) == %d, want table[0] == %d", got, ref[0]);
 }
 
-static void TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch() {
+SSLM_TEST(TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch, 276) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// e=-17 -> shift = -17+5+12 = 0 exactly (the left-shift branch, term<<0):
@@ -4953,14 +4933,14 @@ static void TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch() {
 	          ref[static_cast<size_t>(kSiluLutN)]);
 }
 
-static void TestSiluSigmoidQ15SaturatesLowDomainShiftNonNegativeBranch() {
+SSLM_TEST(TestSiluSigmoidQ15SaturatesLowDomainShiftNonNegativeBranch, 277) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1073741824, /*e=*/-17);
 	CHECK_MSG(got == ref[0], "SiluSigmoidQ15 saturated-low (shift==0) == %d, want table[0] == %d", got, ref[0]);
 }
 
-static void TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode() {
+SSLM_TEST(TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode, 278) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// The largest realscale in the measurement corpus (Claude/Laplace/harness/
@@ -4974,7 +4954,7 @@ static void TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode() {
 	          ref[static_cast<size_t>(kSiluLutN)]);
 }
 
-static void TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode() {
+SSLM_TEST(TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode, 279) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	int32_t got = SiluSigmoidQ15(ref.data(), /*code=*/-127, /*m=*/1898583166, /*e=*/-32);
@@ -4995,7 +4975,7 @@ static void TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode() {
 // formula worked by hand (comments below), never SiluSigmoidQ15 called twice.
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15InteriorInterpolationFracZero() {
+SSLM_TEST(TestSiluSigmoidQ15InteriorInterpolationFracZero, 280) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// code=1, m=1,476,395,008, e=-29 -> shift=-12; term=1*m=1,476,395,008,
@@ -5008,7 +4988,7 @@ static void TestSiluSigmoidQ15InteriorInterpolationFracZero() {
 	          ref[600]);
 }
 
-static void TestSiluSigmoidQ15InteriorInterpolationFracMax() {
+SSLM_TEST(TestSiluSigmoidQ15InteriorInterpolationFracMax, 281) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// Same i0=600, same shift=-12; m=1,493,168,128 = 364,543 * 2^12 (also an
@@ -5037,7 +5017,7 @@ static void TestSiluSigmoidQ15InteriorInterpolationFracMax() {
 // cells above, which also use shift>=0 but only exercise the clamped path).
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly() {
+SSLM_TEST(TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly, 282) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// e=-17 -> shift = -17+5+12 = 0 exactly.
@@ -5045,7 +5025,7 @@ static void TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly() {
 	CHECK_MSG(got == ref[512], "SiluSigmoidQ15 code=0, shift==0 == %d, want table[512] == %d", got, ref[512]);
 }
 
-static void TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly() {
+SSLM_TEST(TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly, 283) {
 	using namespace superslm_test;
 	std::vector<int32_t> ref = BuildReferenceSigmoidLutQ15();
 	// e=0 -> shift = 0+5+12 = 17 (strictly positive, the left-shift branch at
@@ -5066,7 +5046,7 @@ static void TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly(
 // comparisons), not merely the synthetic single-point cells above.
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
+SSLM_TEST(TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors, 284) {
 	using namespace superslm_test;
 	std::string path = ResolveFixturePath("silu_lut_real_vectors.bin");
 	CHECK_MSG(!path.empty(), "silu_lut_real_vectors.bin not found under tests/fixtures");
@@ -5138,7 +5118,7 @@ static void TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors() {
 // is now an informational comment only, not asserted.)
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand() {
+SSLM_TEST(TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand, 285) {
 	using namespace superslm_test;
 	std::string path = ResolveFixturePath("silu_lut_real_vectors.bin");
 	CHECK_MSG(!path.empty(), "silu_lut_real_vectors.bin not found under tests/fixtures");
@@ -5237,7 +5217,7 @@ static void TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand() {
 // and only the joining main thread calls CHECK.
 // ---------------------------------------------------------------------------
 
-static void TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded() {
+SSLM_TEST(TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded, 286) {
 	using namespace superslm_test;
 	std::vector<int32_t> table = BuildReferenceSigmoidLutQ15();
 
@@ -5312,7 +5292,7 @@ static void TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded() {
 // never UB. e crosses both branches (shift>=0 and <0) and the saturation regime;
 // m spans the [2^30, 2^31) mantissa domain incl. both ends and the real-corpus max.
 // ---------------------------------------------------------------------------
-static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
+SSLM_TEST(TestSiluSigmoidQ15GoldenHashCrossPlatform, 287) {
 	using superslm::SiluSigmoidQ15;
 	static constexpr int kEs[] = {6, 0, -15, -17, -19, -25, -32, -40};  // shift = e+17
 	static constexpr int64_t kMs[] = {1073741824LL, 1073741831LL, 1500000000LL, 1898583166LL, 2147483647LL};
@@ -5360,372 +5340,309 @@ static void TestSiluSigmoidQ15GoldenHashCrossPlatform() {
 // gen_intmath_fixtures.py.
 // ---------------------------------------------------------------------------
 
-static std::string GSelfPath;  // argv[0], captured in main() for the death-test probe below
+// GSelfPath, CrashProbeBeganMarker, EnvVarIsSet, kCrashProbeChildEnvVar,
+// CrashProbeOutcome, and RunsCrashProbeAndCrashes moved to
+// tests/support/crash_probe.h/.cpp (T-1574 Stage 0, §3). The probe functions
+// below register themselves against that file's RegisterCrashProbe.
 
-// --- S12 dim 5 / the design's debug-assert-fire smoke check: a caller-contract
-//     violation (in_channels == 0 -- below the architectural floor of 1, design S12
-//     dim 4) must abort a debug build (the caller-ensures convention MaxAbsReduce/
-//     ShiftByMax already use -- i-exp moved from caller-ensures to checked at
-//     S-HARDEN-0, so it is no longer this convention's example). assert()'s abort() would take down this
-//     ENTIRE process -- and every check after it -- if the violating call ran
-//     in-process, so it runs in an isolated child process instead; the parent only
-//     observes whether the child terminated abnormally. This is new infrastructure:
-//     no death-test convention existed anywhere in this suite before S2.5 (confirmed
-//     by inspection before authoring this cell) -- documented in the test-design
-//     record, not silently introduced. Verified empirically (see the record) that
-//     an MSVC assert() failure under build.bat's flags exits promptly with a
-//     nonzero abnormal-termination code and does NOT block on a dialog. ---
-
-// Printed by RunCrashProbe to the child's stdout, immediately before the
-// contract-violating call, so the parent can prove the named probe was actually
-// dispatched and reached the call -- not merely that the child exited some way.
-// The marker is probe-name-qualified so a stale or mismatched name cannot be
-// mistaken for the one under test.
-static std::string CrashProbeBeganMarker(const std::string& probe_name) {
-	return "CRASH_PROBE_BEGAN:" + probe_name;
-}
-
-// Environment variable set by RunsCrashProbeAndCrashes before spawning the child,
-// and inherited by it. Its presence lets main() recognize "this process is a
-// crash-probe child" independently of argv parsing, so a future change that
-// breaks the "--crash-probe=<name>" prefix match cannot make the child silently
-// fall through to running the full suite -- which would itself spawn another
-// crash-probe child, recursively (design/finding: pre-existing fork-bomb risk,
-// Claude/Poirot/2fdaf49-s2.5-golden-hash-review-2026-07-20.md finding 8).
-static const char* kCrashProbeChildEnvVar = "SUPERSLM_CRASH_PROBE_CHILD";
-
-// std::getenv is the portable read; MSVC's /W4 flags it as deprecated in favor of
-// _dupenv_s. This process only checks presence, never reads a value into a fixed
-// buffer, so the deprecation does not apply -- silenced locally rather than
-// project-wide.
-static bool EnvVarIsSet(const char* name) {
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4996)
-#endif
-	return std::getenv(name) != nullptr;
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-}
-
-// Portable current-process-id read, used only to keep each crash-probe child's capture
-// file distinct from every other configuration's (see kCrashProbeChildEnvVar's sibling
-// note below): two configurations of this binary (e.g. a debug and an NDEBUG build) run
-// concurrently on one machine and, before this, wrote and read the same fixed path in the
-// shared system temp directory -- a race that turned a lost capture file from a degraded
-// diagnostic message into an outright cell failure once the began-marker check started
-// depending on that file's contents.
-static long CurrentProcessId() {
-#ifdef _WIN32
-	return static_cast<long>(_getpid());
-#else
-	return static_cast<long>(getpid());
-#endif
-}
-
-// The single verdict RunsCrashProbeAndCrashes returns. A plain bool cannot represent
-// "the probe never ran" without collapsing it onto one of the other two answers -- which
-// is exactly the shape of the finding this type exists to close (Claude/Poirot/
-// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 3, and the residual it
-// names in the same entry). kDidNotRun is a third state a caller must handle explicitly;
-// there is no bool-shaped shortcut back to "crashed" or "did not crash" for it.
-enum class CrashProbeOutcome {
-	kDidNotRun,      // the began-marker for the requested probe never appeared in the
-	                 // child's captured output -- the contract-violating call was never
-	                 // dispatched (probe name mismatch, broken dispatch, the child exited
-	                 // before reaching it, or an unrecognized probe name). Neither
-	                 // "crashed" nor "did not crash" is a meaningful answer for this
-	                 // outcome.
-	kRanNoCrash,     // the marker is present (the probe genuinely ran) and the child
-	                 // completed without abnormal termination.
-	kRanAndCrashed,  // the marker is present (the probe genuinely ran) and the child
-	                 // terminated abnormally.
+// Each crash probe below registers itself under the exact --crash-probe=<name>
+// key it used to occupy as an if/else branch inside one shared RunCrashProbe
+// function (T-1574 Stage 0, §3): each area owning a death-test probe now
+// registers it locally instead of editing one shared chain. RunCrashProbe
+// itself (the registry-backed dispatcher) now lives in
+// tests/support/crash_probe.h/.cpp.
+namespace {
+struct CrashProbeRegistrar {
+	CrashProbeRegistrar(const char* name, superslm_test_registry::CrashProbeFn fn) {
+		superslm_test_registry::RegisterCrashProbe(name, fn);
+	}
 };
+}  // namespace
 
-static const char* CrashProbeOutcomeName(CrashProbeOutcome outcome) {
-	switch (outcome) {
-		case CrashProbeOutcome::kDidNotRun:
-			return "did-not-run";
-		case CrashProbeOutcome::kRanNoCrash:
-			return "ran-no-crash";
-		case CrashProbeOutcome::kRanAndCrashed:
-			return "ran-and-crashed";
+// RETIRED 2026-07-22 (S-HARDEN-0 final API): the "iexp_out_of_domain_constants" and
+// "iexp_guard_order:<fn>:..." probes that used to live here called IExpFromConstants
+// directly with contract-violating raw (q, q_ln2, q_b, q_c) -- a call this API no
+// longer allows anyone to write. IExpFromConstants is removed; the only entry point
+// that takes raw constants is IExpConstruct, and it is TOTAL and asserts nothing, in
+// every build configuration, so there is no longer a contract-violating call to
+// isolate in a crash-probe child at all. See
+// TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants and the
+// comment at the retired TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle
+// call site below for the full account and where each witness value now lives.
+
+static int ProbeMatmulZeroInChannels() {
+	int8_t act[1] = {0};
+	int8_t wgt[1] = {0};
+	int64_t out_acc[1] = {0};
+	std::printf("%s\n", CrashProbeBeganMarker("matmul_zero_in_channels").c_str());
+	std::printf("crash-probe matmul_zero_in_channels: calling GemmInt8AccumulateRow "
+	            "with in_channels=0 (below the architectural floor, design S12 dim 4)\n");
+	std::fflush(stdout);
+	GemmInt8AccumulateRow(act, wgt, /*in_channels=*/0, /*out_channels=*/1, out_acc);
+	std::printf("PROBE DID NOT CRASH\n");
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeMatmulZeroInChannels(
+    "matmul_zero_in_channels", &ProbeMatmulZeroInChannels); }
+
+// S3 (Poirot review ac34677, 2026-07-28): RowBoundsWide (src/intmath.cpp:
+// 279-280) reads x[0] before testing n at all -- with a null data pointer
+// and n == 0 this is a null-pointer dereference, and the reviewer's own
+// probe process terminated at the call (P7). Unlike matmul_zero_in_
+// channels above, this is a genuine memory access, not an assert(): it is
+// not compiled out under NDEBUG, so it must not crash in EITHER build
+// configuration once fixed.
+static int ProbeRowBoundsWideZeroLenNullPtr() {
+	int64_t out_max = 0;
+	int64_t out_min = 0;
+	std::printf("%s\n", CrashProbeBeganMarker("row_bounds_wide_zero_len_null_ptr").c_str());
+	std::printf("crash-probe row_bounds_wide_zero_len_null_ptr: calling RowBoundsWide "
+	            "with a null data pointer and n=0 (no n >= 1 precondition is documented "
+	            "on this primitive or on NarrowRowChecked, S3)\n");
+	std::fflush(stdout);
+	superslm::RowBoundsWide(nullptr, /*n=*/0, &out_max, &out_min);
+	std::printf("PROBE DID NOT CRASH (out_max=%lld out_min=%lld)\n",
+	            static_cast<long long>(out_max), static_cast<long long>(out_min));
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRowBoundsWideZeroLenNullPtr(
+    "row_bounds_wide_zero_len_null_ptr", &ProbeRowBoundsWideZeroLenNullPtr); }
+
+// N5, second half (Poirot 380b75f review): "the crash probe covers RowBoundsWide
+// directly; nothing drives NarrowRowChecked(nullptr, 0, out), which is the caller
+// the finding was raised against." This cell drives that exact call.
+// NarrowRowChecked(nullptr, 0, out_i32) resolves through three steps today: (1)
+// RowBoundsWide(nullptr, 0, ...) -- the S3 cell above's own case, already fixed
+// to return (0,0) without touching x; (2) the (0,0) result is trivially within
+// [INT32_MIN, INT32_MAX], so C35's own check accepts; (3) NarrowAccumulatorToI32
+// loops zero times over a null row, writing nothing. None of the three steps
+// dereferences a null pointer at n == 0, so this cell asserts kRanNoCrash
+// unconditionally, mirroring the sibling cell's own reasoning and the same
+// "n == 0 is in-contract, not a caller-ensures violation" convention.
+static int ProbeNarrowRowCheckedZeroLenNullPtr() {
+	int32_t out_i32[1] = {0};
+	std::printf("%s\n", CrashProbeBeganMarker("narrow_row_checked_zero_len_null_ptr").c_str());
+	std::printf("crash-probe narrow_row_checked_zero_len_null_ptr: calling "
+	            "NarrowRowChecked with a null wide-row pointer and n=0 (no n >= 1 "
+	            "precondition is documented on this entry point, N5)\n");
+	std::fflush(stdout);
+	superslm::NarrowRowChecked(nullptr, /*n=*/0, out_i32);
+	std::printf("PROBE DID NOT CRASH\n");
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeNarrowRowCheckedZeroLenNullPtr(
+    "narrow_row_checked_zero_len_null_ptr", &ProbeNarrowRowCheckedZeroLenNullPtr); }
+
+// Critical 1 (closed; Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-
+// 2026-07-28.md, confirmed closed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-
+// c32-softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/
+// "sin" tensor lookup and returns RopeTableTensorMissing before any read, rather
+// than dereferencing a null pointer. SslmTensorManifest::Tensor returns nullptr
+// when the name is absent (model.h's own contract), and a zero-tensor ROP1
+// manifest loads Ok (ParseImpl bounds tensor_count only ABOVE kMaxTensors;
+// ValidateRopeTablesDomain walks whatever tensors are present and requires no
+// particular name) -- so a real, successfully loaded model can carry
+// has_rope_tables == true with Tensor("cos") == nullptr, and this probe proves
+// the guard intercepts that case rather than faulting. Still isolated here
+// because a regression that removed the guard would again fault the process --
+// a cell that crashes the runner is not a usable red (this suite's own
+// established death-test convention, S2.5).
+static int ProbeRopeApplySiteNullCosTensorDeref() {
+	using namespace superslm_test;
+	const char* name = "rope_apply_site_null_cos_tensor_deref";
+	Cfg1Spec spec{};
+	spec.head_dim = 8;
+	spec.context_cap = 1;
+	// hidden_size must track the overridden head_dim to satisfy R1
+	// (SslmModel::Load's config-geometry join, S3.3 §13.1 cell 4,
+	// D-SLM420-D-SLM423) -- Cfg1Spec{}'s own default (4096) only pairs
+	// with the default head_dim (128).
+	spec.hidden_size = spec.num_attention_heads * spec.head_dim;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, /*tensors=*/{});
+	FixtureSection rope_tables =
+	    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	if (status != SslmModelStatus::Ok || !view.has_rope_tables ||
+	    view.rope_tables.Tensor("cos") != nullptr) {
+		std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d cos_tensor_is_null=%d) "
+		            "-- the fixture no longer reaches the state this probe requires\n",
+		            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables),
+		            static_cast<int>(view.has_rope_tables && view.rope_tables.Tensor("cos") == nullptr));
+		return 3;
 	}
-	return "(unknown CrashProbeOutcome)";
+	std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+	std::printf("crash-probe rope_apply_site_null_cos_tensor_deref: calling RopeApplySite against "
+	            "a loaded, zero-tensor ROP1 manifest (Tensor(\"cos\") == nullptr) -- Critical 1 "
+	            "(closed; see the comment above this probe), "
+	            "src/forward/forward_sites.cpp:329-330,342-343\n");
+	std::fflush(stdout);
+	int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	const auto forward_status =
+	    superslm::RopeApplySite(row, 8, /*position=*/0, /*context_cap=*/1, view.rope_tables, out_row);
+	std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
+	            superslm::SslmForwardStatusName(forward_status));
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRopeApplySiteNullCosTensorDeref(
+    "rope_apply_site_null_cos_tensor_deref", &ProbeRopeApplySiteNullCosTensorDeref); }
+
+// Critical 2 (closed; Poirot fa3189a review, confirmed closed by the 72b0c7f
+// confirmation pass): the position guard now bounds `position` against the
+// ROP1 tensors' own extent, not merely against the caller's `context_cap` --
+// `row_offset` is checked against `cos->elem_count`/`sin->elem_count` before
+// either tensor is read. A `position` the caller's `context_cap` legally
+// admits, but far past a real, loaded tensor's actual row count, would
+// previously have read unmapped heap memory. This probe mirrors the review's
+// own executed reproduction exactly (position=268435456,
+// context_cap=2147483647, a genuine CFG1-admissible u32 value, against a real
+// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) and proves the
+// extent guard intercepts it. Still isolated here because a regression that
+// removed the guard would again fault the process.
+static int ProbeRopeApplySitePositionFarPastTensorExtent() {
+	using namespace superslm_test;
+	const char* name = "rope_apply_site_position_far_past_tensor_extent";
+	// context_cap matches the real tensor's own row count (1) below, and
+	// hidden_size tracks the overridden head_dim -- both needed to satisfy
+	// SslmModel::Load's config-geometry/ROP1 join (R1, R4; S3.3 §13.1 cell
+	// 4, D-SLM420-D-SLM423). The probe's own direct RopeApplySite call
+	// below still passes context_cap=2147483647 as an explicit argument,
+	// decoupled from what Load validated -- that decoupling is the point
+	// of this probe and is unaffected by this fixture's own config.
+	Cfg1Spec spec{};
+	spec.head_dim = 8;
+	spec.context_cap = 1;
+	spec.hidden_size = spec.num_attention_heads * spec.head_dim;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	std::vector<ManifestTensorSpec> tensors = {{"cos", {1, 4}}, {"sin", {1, 4}}};
+	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
+	for (size_t i = 0; i < 4; ++i) {
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
+		       static_cast<uint64_t>(INT64_C(1073741824)));  // identity cos row
+		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8, 0);  // sin row
+	}
+	FixtureSection rope_tables =
+	    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	if (status != SslmModelStatus::Ok || !view.has_rope_tables) {
+		std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d) -- the fixture no "
+		            "longer reaches the state this probe requires\n",
+		            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables));
+		return 3;
+	}
+	std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+	std::printf("crash-probe rope_apply_site_position_far_past_tensor_extent: calling "
+	            "RopeApplySite(head_dim=8, position=268435456, context_cap=2147483647) against a "
+	            "real, loaded 1-row ROP1 tensor -- Critical 2 (closed; see the comment above this "
+	            "probe), src/forward/forward_sites.cpp:316-343\n");
+	std::fflush(stdout);
+	int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+	const auto forward_status = superslm::RopeApplySite(row, 8, /*position=*/268435456,
+	                                                     /*context_cap=*/2147483647, view.rope_tables,
+	                                                     out_row);
+	std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
+	            superslm::SslmForwardStatusName(forward_status));
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRopeApplySitePositionFarPastTensorExtent(
+    "rope_apply_site_position_far_past_tensor_extent", &ProbeRopeApplySitePositionFarPastTensorExtent); }
+
+// --- Stage 0 guard-vitality drill probes (T-1574, §3, §5 Stage 0, §6 dim 5/11) ---
+// Three permanent, CI-resident guard-vitality tests spawn these three probes
+// as children and assert each one aborts, proving RegisterTest's own
+// duplicate-name/duplicate-order-key aborts and RunAllRegisteredTests's
+// dense-permutation assert stay alive for the suite's remaining life. Each
+// probe registers two throwaway entries at order keys far outside the real
+// suite's range (900001+), so it reproduces the fault against its OWN
+// just-inserted entries regardless of how many real tests are registered.
+//
+// The throwaway entries register no-op captureless lambdas (decayed to
+// `void(*)()` via unary `+`), not named functions -- a named
+// `[static] void Name() { ... }` definition is exactly the shape
+// tests/ci/check_test_definitions_registered.py's own D-SLM592 scan treats
+// as "test-shaped," and these two are dummies that must never be mistaken
+// for one.
+static int ProbeRegistryDuplicateName() {
+	std::printf("%s\n", CrashProbeBeganMarker("registry_duplicate_name").c_str());
+	std::printf("crash-probe registry_duplicate_name: registering two entries under the "
+	            "same name to prove RegisterTest aborts on a name collision\n");
+	std::fflush(stdout);
+	superslm_test_registry::RegisterTest("__guard_vitality_dup_name__", +[] {}, 900001);
+	superslm_test_registry::RegisterTest("__guard_vitality_dup_name__", +[] {}, 900002);
+	std::printf("PROBE DID NOT CRASH (RegisterTest accepted a duplicate name)\n");
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRegistryDuplicateName(
+    "registry_duplicate_name", &ProbeRegistryDuplicateName); }
+
+static int ProbeRegistryDuplicateOrder() {
+	std::printf("%s\n", CrashProbeBeganMarker("registry_duplicate_order").c_str());
+	std::printf("crash-probe registry_duplicate_order: registering two entries under the "
+	            "same order key to prove RegisterTest aborts on an order-key collision\n");
+	std::fflush(stdout);
+	superslm_test_registry::RegisterTest("__guard_vitality_order_a__", +[] {}, 900003);
+	superslm_test_registry::RegisterTest("__guard_vitality_order_b__", +[] {}, 900003);
+	std::printf("PROBE DID NOT CRASH (RegisterTest accepted a duplicate order key)\n");
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRegistryDuplicateOrder(
+    "registry_duplicate_order", &ProbeRegistryDuplicateOrder); }
+
+static int ProbeRegistryOrderGap() {
+	std::printf("%s\n", CrashProbeBeganMarker("registry_order_gap").c_str());
+	std::printf("crash-probe registry_order_gap: registering an entry at a high, "
+	            "non-contiguous order key to prove RunAllRegisteredTests's dense-permutation "
+	            "assert fires\n");
+	std::fflush(stdout);
+	superslm_test_registry::RegisterTest("__guard_vitality_gap__", +[] {}, 900010);
+	superslm_test_registry::RunAllRegisteredTests();
+	std::printf("PROBE DID NOT CRASH (RunAllRegisteredTests accepted a non-dense order-key set)\n");
+	return 0;
+}
+namespace { CrashProbeRegistrar gRegisterProbeRegistryOrderGap(
+    "registry_order_gap", &ProbeRegistryOrderGap); }
+
+// Three permanent, CI-resident guard-vitality tests (T-1574, §3, §6 dim 11).
+// Additive to the 23,330-check baseline (§8) -- they test the migration's own
+// new registration machinery, not the pre-existing 461 tests' behavior.
+SSLM_TEST(TestRegisterTestAbortsOnDuplicateName, 461) {
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes("registry_duplicate_name", &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
+	          "RegisterTest must abort the process on a duplicate test name -- outcome was "
+	          "%s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 }
 
-// Runs the named crash probe in a child process and returns a single verdict that already
-// accounts for whether the probe genuinely ran -- a caller cannot obtain kRanNoCrash or
-// kRanAndCrashed without the began-marker check below having passed first, because the
-// CHECK_MSG that enforces it, and the early return past it, both live here rather than at
-// each call site. A future second death-test cell built on this helper inherits that
-// enforcement by construction: there is no code path through this function that hands back
-// a crashed/did-not-crash answer for a probe that never ran, so there is nothing for a new
-// caller to forget to repeat.
-static CrashProbeOutcome RunsCrashProbeAndCrashes(const char* probe_name, std::string* out_tail) {
-	std::filesystem::path out_path =
-	    std::filesystem::temp_directory_path() /
-	    (std::string("superslm_crash_probe_") + probe_name + "_" +
-	     std::to_string(CurrentProcessId()) + ".txt");
-	std::error_code rm_ec;
-	std::filesystem::remove(out_path, rm_ec);
-
-	std::string cmd = "\"" + GSelfPath + "\" --crash-probe=" + probe_name +
-	                   " > \"" + out_path.string() + "\" 2>&1";
-#ifdef _WIN32
-	// system() on Windows invokes `cmd.exe /c <cmd>`; when <cmd> itself begins with a
-	// quoted executable path, cmd.exe's first/last-quote-stripping parser misreads the
-	// nested quotes (a well-known cmd.exe quirk) unless the WHOLE string is wrapped in
-	// one more outer quote pair -- that outer pair is what cmd strips, leaving the
-	// interior correctly quoted. This wrap is a cmd.exe-only workaround: std::system on
-	// POSIX invokes `/bin/sh -c <cmd>`, which has no equivalent quote-stripping step, so
-	// the same outer wrap there collapses the whole command into one (nonexistent)
-	// command word -- verified by execution: sh exits 127 and the child never runs, which
-	// a naive `rc != 0` read misreports as "crashed" (Claude/Brunel/
-	// superslm-s2.5-finding-for-curie-crash-probe-2026-07-20.md).
-	std::string wrapped_cmd = "\"" + cmd + "\"";
-	_putenv_s(kCrashProbeChildEnvVar, "1");
-#else
-	const std::string& wrapped_cmd = cmd;
-	setenv(kCrashProbeChildEnvVar, "1", /*overwrite=*/1);
-#endif
-	int rc = std::system(wrapped_cmd.c_str());
-#ifdef _WIN32
-	// _putenv_s with an empty value removes the variable (documented behavior). Set only
-	// for the duration of spawning this one child; a variable left set in the parent's own
-	// environment would be inherited by any later child this process spawns, which would
-	// misread as "I am a crash-probe child" and refuse to run (Claude/Poirot/
-	// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 4).
-	_putenv_s(kCrashProbeChildEnvVar, "");
-#else
-	unsetenv(kCrashProbeChildEnvVar);
-#endif
-
-	std::string content;
-	{
-		std::ifstream f(out_path, std::ios::binary);
-		content.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-	}
-	if (out_tail) *out_tail = content;
-	std::filesystem::remove(out_path, rm_ec);
-
-	// The began-marker check that used to live in the caller (Claude/Poirot/
-	// 7511117-s2.5-golden-crash-probe-reverify-2026-07-20.md, finding 3): the contract-
-	// violating call must have been genuinely dispatched before "crashed" or "did not
-	// crash" means anything. Folded in here, this CHECK_MSG fires for every caller of this
-	// helper, present and future, not only for the one call site that remembers to repeat
-	// it.
-	bool began = content.find(CrashProbeBeganMarker(probe_name)) != std::string::npos;
-	CHECK_MSG(began,
-	          "the child's captured output never contains the began-marker for probe "
-	          "'%s' -- the contract-violating call was never dispatched (probe name "
-	          "mismatch, broken dispatch, or the child exited before reaching it), so no "
-	          "crashed/did-not-crash outcome can be trusted for it -- child output was: %s",
-	          probe_name, content.c_str());
-	if (!began) return CrashProbeOutcome::kDidNotRun;
-
-	// Reachable only once the marker has proven the probe genuinely ran. RunCrashProbe's
-	// unrecognized-name sentinel (return code 2) cannot occur on this path: it returns 2
-	// only on the branch that never prints the marker, so `began` would have been false
-	// and the function would already have returned above. rc's only remaining meanings are
-	// therefore "completed normally" (0) or "terminated abnormally" (nonzero) -- the
-	// residual the reviewer named (RunCrashProbe's code 2 satisfying `rc != 0` for a probe
-	// that never ran) closes by construction, not by exclusion, because the sentinel and a
-	// present marker cannot occur together.
-	return (rc != 0) ? CrashProbeOutcome::kRanAndCrashed : CrashProbeOutcome::kRanNoCrash;
+SSLM_TEST(TestRegisterTestAbortsOnDuplicateOrderKey, 462) {
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes("registry_duplicate_order", &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
+	          "RegisterTest must abort the process on a duplicate order key -- outcome was "
+	          "%s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 }
 
-// Dispatched from main() when argv[1] == "--crash-probe=<name>": runs exactly one
-// contract-violating call in isolation. Prints CrashProbeBeganMarker(name)
-// immediately before making the call and flushes it, so the marker reaches the
-// parent's captured output even if the call crashes the process outright.
-// Returns 0 ONLY if the named, recognized call ran to completion without
-// crashing -- a suite defect this cell exists to catch, not the expected
-// outcome. Returns 2, without printing the began-marker for `name`, if `name`
-// is not a recognized probe -- this must read as "the probe did not run" to
-// every caller, never as "the probe ran and did not crash".
-static int RunCrashProbe(const std::string& name) {
-	// RETIRED 2026-07-22 (S-HARDEN-0 final API): the "iexp_out_of_domain_constants" and
-	// "iexp_guard_order:<fn>:..." probes that used to live here called IExpFromConstants
-	// directly with contract-violating raw (q, q_ln2, q_b, q_c) -- a call this API no
-	// longer allows anyone to write. IExpFromConstants is removed; the only entry point
-	// that takes raw constants is IExpConstruct, and it is TOTAL and asserts nothing, in
-	// every build configuration, so there is no longer a contract-violating call to
-	// isolate in a crash-probe child at all. See
-	// TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants and the
-	// comment at the retired TestIExpGuardOrderCasesNeverExecuteUBAndAgreeWithIndependentOracle
-	// call site below for the full account and where each witness value now lives.
-	if (name == "matmul_zero_in_channels") {
-		int8_t act[1] = {0};
-		int8_t wgt[1] = {0};
-		int64_t out_acc[1] = {0};
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe matmul_zero_in_channels: calling GemmInt8AccumulateRow "
-		            "with in_channels=0 (below the architectural floor, design S12 dim 4)\n");
-		std::fflush(stdout);
-		GemmInt8AccumulateRow(act, wgt, /*in_channels=*/0, /*out_channels=*/1, out_acc);
-		std::printf("PROBE DID NOT CRASH\n");
-		return 0;
-	}
-	// S3 (Poirot review ac34677, 2026-07-28): RowBoundsWide (src/intmath.cpp:
-	// 279-280) reads x[0] before testing n at all -- with a null data pointer
-	// and n == 0 this is a null-pointer dereference, and the reviewer's own
-	// probe process terminated at the call (P7). Unlike matmul_zero_in_
-	// channels above, this is a genuine memory access, not an assert(): it is
-	// not compiled out under NDEBUG, so it must not crash in EITHER build
-	// configuration once fixed.
-	if (name == "row_bounds_wide_zero_len_null_ptr") {
-		int64_t out_max = 0;
-		int64_t out_min = 0;
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe row_bounds_wide_zero_len_null_ptr: calling RowBoundsWide "
-		            "with a null data pointer and n=0 (no n >= 1 precondition is documented "
-		            "on this primitive or on NarrowRowChecked, S3)\n");
-		std::fflush(stdout);
-		superslm::RowBoundsWide(nullptr, /*n=*/0, &out_max, &out_min);
-		std::printf("PROBE DID NOT CRASH (out_max=%lld out_min=%lld)\n",
-		            static_cast<long long>(out_max), static_cast<long long>(out_min));
-		return 0;
-	}
-	// N5, second half (Poirot 380b75f review): the S3 crash probe above drives
-	// RowBoundsWide directly; nothing drove NarrowRowChecked(nullptr, 0, out) --
-	// the actual caller the S3 finding was raised against, and the one path a
-	// null-row call reaches in production. NarrowRowChecked calls RowBoundsWide
-	// internally (checked_chain_funnel.cpp), so this probe also exercises S3's
-	// own fix at one further remove.
-	if (name == "narrow_row_checked_zero_len_null_ptr") {
-		int32_t out_i32[1] = {0};
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe narrow_row_checked_zero_len_null_ptr: calling "
-		            "NarrowRowChecked with a null wide-row pointer and n=0 (no n >= 1 "
-		            "precondition is documented on this entry point, N5)\n");
-		std::fflush(stdout);
-		superslm::NarrowRowChecked(nullptr, /*n=*/0, out_i32);
-		std::printf("PROBE DID NOT CRASH\n");
-		return 0;
-	}
-	// Critical 1 (closed; Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-
-	// 2026-07-28.md, confirmed closed by Claude/Poirot/72b0c7f-s3.3-rope-site-and-
-	// c32-softmax-confirmation-2026-07-28.md): RopeApplySite now guards its "cos"/
-	// "sin" tensor lookup and returns RopeTableTensorMissing before any read, rather
-	// than dereferencing a null pointer. SslmTensorManifest::Tensor returns nullptr
-	// when the name is absent (model.h's own contract), and a zero-tensor ROP1
-	// manifest loads Ok (ParseImpl bounds tensor_count only ABOVE kMaxTensors;
-	// ValidateRopeTablesDomain walks whatever tensors are present and requires no
-	// particular name) -- so a real, successfully loaded model can carry
-	// has_rope_tables == true with Tensor("cos") == nullptr, and this probe proves
-	// the guard intercepts that case rather than faulting. Still isolated here
-	// because a regression that removed the guard would again fault the process --
-	// a cell that crashes the runner is not a usable red (this suite's own
-	// established death-test convention, S2.5).
-	if (name == "rope_apply_site_null_cos_tensor_deref") {
-		using namespace superslm_test;
-		Cfg1Spec spec{};
-		spec.head_dim = 8;
-		spec.context_cap = 1;
-		// hidden_size must track the overridden head_dim to satisfy R1
-		// (SslmModel::Load's config-geometry join, S3.3 §13.1 cell 4,
-		// D-SLM420-D-SLM423) -- Cfg1Spec{}'s own default (4096) only pairs
-		// with the default head_dim (128).
-		spec.hidden_size = spec.num_attention_heads * spec.head_dim;
-		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
-		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, /*tensors=*/{});
-		FixtureSection rope_tables =
-		    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
-		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
-
-		SslmModelView view;
-		std::string err;
-		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-		if (status != SslmModelStatus::Ok || !view.has_rope_tables ||
-		    view.rope_tables.Tensor("cos") != nullptr) {
-			std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d cos_tensor_is_null=%d) "
-			            "-- the fixture no longer reaches the state this probe requires\n",
-			            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables),
-			            static_cast<int>(view.has_rope_tables && view.rope_tables.Tensor("cos") == nullptr));
-			return 3;
-		}
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe rope_apply_site_null_cos_tensor_deref: calling RopeApplySite against "
-		            "a loaded, zero-tensor ROP1 manifest (Tensor(\"cos\") == nullptr) -- Critical 1 "
-		            "(closed; see the comment above this probe), "
-		            "src/forward/forward_sites.cpp:329-330,342-343\n");
-		std::fflush(stdout);
-		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		const auto forward_status =
-		    superslm::RopeApplySite(row, 8, /*position=*/0, /*context_cap=*/1, view.rope_tables, out_row);
-		std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
-		            superslm::SslmForwardStatusName(forward_status));
-		return 0;
-	}
-	// Critical 2 (closed; Poirot fa3189a review, confirmed closed by the 72b0c7f
-	// confirmation pass): the position guard now bounds `position` against the
-	// ROP1 tensors' own extent, not merely against the caller's `context_cap` --
-	// `row_offset` is checked against `cos->elem_count`/`sin->elem_count` before
-	// either tensor is read. A `position` the caller's `context_cap` legally
-	// admits, but far past a real, loaded tensor's actual row count, would
-	// previously have read unmapped heap memory. This probe mirrors the review's
-	// own executed reproduction exactly (position=268435456,
-	// context_cap=2147483647, a genuine CFG1-admissible u32 value, against a real
-	// 1-row-times-4-pair ROP1 tensor parsed by the shipped loader) and proves the
-	// extent guard intercepts it. Still isolated here because a regression that
-	// removed the guard would again fault the process.
-	if (name == "rope_apply_site_position_far_past_tensor_extent") {
-		using namespace superslm_test;
-		Cfg1Spec spec{};
-		spec.head_dim = 8;
-		// context_cap matches the real tensor's own row count (1) below, and
-		// hidden_size tracks the overridden head_dim -- both needed to satisfy
-		// SslmModel::Load's config-geometry/ROP1 join (R1, R4; S3.3 §13.1 cell
-		// 4, D-SLM420-D-SLM423). The probe's own direct RopeApplySite call
-		// below still passes context_cap=2147483647 as an explicit argument,
-		// decoupled from what Load validated -- that decoupling is the point
-		// of this probe and is unaffected by this fixture's own config.
-		spec.context_cap = 1;
-		spec.hidden_size = spec.num_attention_heads * spec.head_dim;
-		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
-		std::vector<ManifestTensorSpec> tensors = {{"cos", {1, 4}}, {"sin", {1, 4}}};
-		auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
-		for (size_t i = 0; i < 4; ++i) {
-			PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
-			       static_cast<uint64_t>(INT64_C(1073741824)));  // identity cos row
-			PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8, 0);  // sin row
-		}
-		FixtureSection rope_tables =
-		    MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
-		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope_tables});
-
-		SslmModelView view;
-		std::string err;
-		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-		if (status != SslmModelStatus::Ok || !view.has_rope_tables) {
-			std::printf("PROBE SETUP FAILED (Load status=%s has_rope_tables=%d) -- the fixture no "
-			            "longer reaches the state this probe requires\n",
-			            SslmModelStatusName(status), static_cast<int>(view.has_rope_tables));
-			return 3;
-		}
-		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
-		std::printf("crash-probe rope_apply_site_position_far_past_tensor_extent: calling "
-		            "RopeApplySite(head_dim=8, position=268435456, context_cap=2147483647) against a "
-		            "real, loaded 1-row ROP1 tensor -- Critical 2 (closed; see the comment above this "
-		            "probe), src/forward/forward_sites.cpp:316-343\n");
-		std::fflush(stdout);
-		int8_t row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		int8_t out_row[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-		const auto forward_status = superslm::RopeApplySite(row, 8, /*position=*/268435456,
-		                                                     /*context_cap=*/2147483647, view.rope_tables,
-		                                                     out_row);
-		std::printf("PROBE DID NOT CRASH (forward_status=%s)\n",
-		            superslm::SslmForwardStatusName(forward_status));
-		return 0;
-	}
-	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
-	return 2;
+SSLM_TEST(TestRunAllRegisteredTestsAbortsOnOrderKeyGap, 463) {
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes("registry_order_gap", &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanAndCrashed,
+	          "RunAllRegisteredTests must abort the process when the registered order keys "
+	          "are not a dense permutation of [0, N) -- outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
 }
 
-static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() {
+SSLM_TEST(TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation, 288) {
 	static const char* kProbeName = "matmul_zero_in_channels";
 	std::string tail;
 	// The began-marker check is enforced inside RunsCrashProbeAndCrashes itself (it fires
@@ -5775,7 +5692,7 @@ static void TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation() 
 // defined case (D' == 1, "the empty reduction", intmath.h:150-152), so n ==
 // 0 is not a caller-ensures contract violation this primitive is entitled
 // to leave undefined either.
-static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
+SSLM_TEST(TestRowBoundsWideZeroLenNullPtrDoesNotCrash, 196) {
 	static const char* kProbeName = "row_bounds_wide_zero_len_null_ptr";
 	std::string tail;
 	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
@@ -5796,7 +5713,7 @@ static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
 // dereferences a null pointer at n == 0, so this cell asserts kRanNoCrash
 // unconditionally, mirroring the sibling cell's own reasoning and the same
 // "n == 0 is in-contract, not a caller-ensures violation" convention.
-static void TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash() {
+SSLM_TEST(TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash, 204) {
 	static const char* kProbeName = "narrow_row_checked_zero_len_null_ptr";
 	std::string tail;
 	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
@@ -5830,7 +5747,7 @@ static void TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash() {
 // regression check for that one row, checked directly rather than by scanning a
 // table (the same rationale TestIExpConstantsInDomainRejectsStrikeExactInput already
 // uses for the predicate side of the same input).
-static void TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants() {
+SSLM_TEST(TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants, 214) {
 	superslm::IExpConstruction out;
 	superslm::IExpDomain d = superslm::IExpConstruct(INT64_C(0), INT64_C(887904998), INT64_C(1733160715),
 	                                                  INT64_C(9223372036854775807), &out);
@@ -5946,7 +5863,7 @@ static_assert(!std::is_aggregate<superslm::IExpConstruction>::value,
 // and that evaluating it executes no UB (run under ASan+UBSan, this cell would trap
 // if z were anything other than a legal shift amount) and returns the value the
 // formula predicts ((0^2 + 0) >> 0 == 0).
-static void TestIExpConstructionDefaultIsSafeToEvaluate() {
+SSLM_TEST(TestIExpConstructionDefaultIsSafeToEvaluate, 215) {
 	superslm::IExpConstruction c;
 	CHECK_MSG(c.z() == 0 && c.base() == 0 && c.q_c() == 0,
 	          "a default-constructed IExpConstruction must be {z=0, base=0, q_c=0} -- got "
@@ -5998,7 +5915,7 @@ static bool IExpDomainNameIsWellFormed(const char* name) {
 // reader confirms "does the entry point classify, decompose, and evaluate
 // correctly" without also having to reason about the untouched-vs-filled contract
 // at the same time.
-static void TestIExpConstructMatchesIndependentOracleAcrossCases() {
+SSLM_TEST(TestIExpConstructMatchesIndependentOracleAcrossCases, 216) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
@@ -6057,7 +5974,7 @@ static void TestIExpConstructMatchesIndependentOracleAcrossCases() {
 // values (overwritten). This is a stronger test than a sentinel, not a weaker one:
 // it proves untouched-ness against a real object a caller could actually be
 // holding across two calls, not against an artificial poison value.
-static void TestIExpConstructOutContractPerOutcome() {
+SSLM_TEST(TestIExpConstructOutContractPerOutcome, 217) {
 	using namespace superslm_test;
 	const int64_t kPrimingQ = INT64_C(-777);
 	const int64_t kPrimingQLn2 = INT64_C(777);
@@ -6103,7 +6020,7 @@ static void TestIExpConstructOutContractPerOutcome() {
 }
 
 // "out may be null when only the predicate answer is wanted."
-static void TestIExpConstructAcceptsNullOutForPredicateOnlyUse() {
+SSLM_TEST(TestIExpConstructAcceptsNullOutForPredicateOnlyUse, 218) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
@@ -6122,7 +6039,7 @@ static void TestIExpConstructAcceptsNullOutForPredicateOnlyUse() {
 // every input that was previously defined" (S-HARDEN-0 sub-slot, Brunel's revision).
 // Proves the equivalence directly rather than assuming the two calls agree because
 // both matched the same oracle independently.
-static void TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk() {
+SSLM_TEST(TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk, 219) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpConstructCasesCount; ++i) {
 		const IExpConstructCase& c = kIExpConstructCases[i];
@@ -6163,7 +6080,7 @@ static void TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk() {
 // docstring), so this function also checks the returned IExpDomain.
 // ---------------------------------------------------------------------------
 
-static void TestIExpConstructMatchesAccessorCasesZAndBase() {
+SSLM_TEST(TestIExpConstructMatchesAccessorCasesZAndBase, 220) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kIExpAccessorCasesCount; ++i) {
 		const IExpAccessorCase& c = kIExpAccessorCases[i];
@@ -6219,7 +6136,7 @@ static void TestIExpConstructMatchesAccessorCasesZAndBase() {
 //     small vectors, int8 extremes on both operands, and the architectural floor
 //     (in_channels == out_channels == 1). ---
 
-static void TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases() {
+SSLM_TEST(TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases, 289) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kRowCasesCount; ++i) {
 		const RowCase& c = kRowCases[i];
@@ -6240,7 +6157,7 @@ static void TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases() {
 //     4095 -- the load-bearing tail forcer). Also proves NarrowAccumulatorToI32
 //     bit-exact against the independently-constructed golden int32 row. ---
 
-static void TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases() {
+SSLM_TEST(TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases, 290) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
 		const CompositionCase& c = kCompositionCases[i];
@@ -6275,7 +6192,7 @@ static void TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases() {
 //     asserted against the TRUE unwrapped int64 value only -- the wrapped value is
 //     never a golden. ---
 
-static void TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle() {
+SSLM_TEST(TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle, 291) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kUniformCasesCount; ++i) {
 		const UniformCase& c = kUniformCases[i];
@@ -6310,7 +6227,7 @@ static void TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle() {
 //     (offsets 1/3/5/7/15/31/63 bytes into a padded allocation), reusing an
 //     already-exact composition case's data. ---
 
-static void TestGemmInt8AccumulateRowUnalignedBufferPointers() {
+SSLM_TEST(TestGemmInt8AccumulateRowUnalignedBufferPointers, 292) {
 	using namespace superslm_test;
 	const CompositionCase& c = kCompositionCases[0];  // hidden_size_1536_qwen2_5_1_5b
 	static constexpr size_t kOffsets[] = {1, 3, 5, 7, 15, 31, 63};
@@ -6336,7 +6253,7 @@ static void TestGemmInt8AccumulateRowUnalignedBufferPointers() {
 //     weight (a genuine reordering of the same dot product, not a different
 //     computation) and asserts the bit-identical sum. ---
 
-static void TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity() {
+SSLM_TEST(TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity, 293) {
 	using namespace superslm_test;
 	int64_t original = 0;
 	GemmInt8AccumulateRow(kPermActs, kPermWgts, kPermInChannels, /*out_channels=*/1, &original);
@@ -6364,7 +6281,7 @@ static void TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity() {
 //     rows must be bit-identical to num_tokens independent GemmInt8AccumulateRow
 //     calls stacked row-major [num_tokens, out_channels] (design S3). ---
 
-static void TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence() {
+SSLM_TEST(TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence, 294) {
 	using namespace superslm_test;
 	const MultiRowCase& base = kMultiRowCases[0];      // row_independence_base
 	const MultiRowCase& mutated = kMultiRowCases[1];    // row_independence_row2_mutated
@@ -6433,7 +6350,7 @@ static void TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence(
 //     many independent activation rows (simulating many tokens/resets against a
 //     loaded artifact), not only a fresh-load test. ---
 
-static void TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights() {
+SSLM_TEST(TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights, 295) {
 	using namespace superslm_test;
 	for (size_t r = 0; r < kWarmObjectRowCount; ++r) {
 		std::vector<int64_t> out_acc(kWarmObjectOutChannels, 0);
@@ -6454,7 +6371,7 @@ static void TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights() {
 //     overwritten with fresh data, never stale bytes from a larger prior call (the
 //     v2.1-v2.2 workspace-reuse stride bug the catalog names directly). ---
 
-static void TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange() {
+SSLM_TEST(TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange, 296) {
 	using namespace superslm_test;
 	const MultiRowCase& call1 = kMultiRowCases[2];  // scratch_reuse_call1_num_tokens_6
 	const MultiRowCase& call2 = kMultiRowCases[3];  // scratch_reuse_call2_num_tokens_2
@@ -6502,7 +6419,7 @@ static void TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeCh
 //     accumulates a local mismatch count and only the joining main thread calls
 //     CHECK. ---
 
-static void TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded() {
+SSLM_TEST(TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded, 297) {
 	using namespace superslm_test;
 	constexpr int kThreads = 8;
 	constexpr size_t kSweeps = 501;  // 501 * 20 rows == 10,020 calls/thread >= 10,000
@@ -6552,7 +6469,7 @@ static void TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded() {
 //     Cross-checked a second way against the pinned Python intmath.py pipeline
 //     oracle (the same reference gen_intmath_fixtures.py's pipeline cases use). ---
 
-static void TestGemmInt8AccumulateComposesWithShippedRequantChain() {
+SSLM_TEST(TestGemmInt8AccumulateComposesWithShippedRequantChain, 298) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kCompositionCasesCount; ++i) {
 		const CompositionCase& c = kCompositionCases[i];
@@ -6635,7 +6552,7 @@ static void TestGemmInt8AccumulateComposesWithShippedRequantChain() {
 //     part of the same change -- a wider aggregate pin does not license a wider
 //     per-case bound, and vice versa. ---
 
-static void TestS2Point5SixCaseAcceptanceGateMeasurement() {
+SSLM_TEST(TestS2Point5SixCaseAcceptanceGateMeasurement, 299) {
 	using namespace superslm_test;
 
 	// The pinned per-case acceptance coefficient (F2): the closeout record's measured
@@ -6736,7 +6653,7 @@ static void TestS2Point5SixCaseAcceptanceGateMeasurement() {
 //     in_channels=1..80 tail-length sweep with both sign extremes on both
 //     operands at every length (tests/gen_matmul_fixtures.py, kTailSweepCases). ---
 
-static void TestDotRowScalarRefMatchesShippingSse2PathAndOracle() {
+SSLM_TEST(TestDotRowScalarRefMatchesShippingSse2PathAndOracle, 300) {
 	using namespace superslm_test;
 
 	auto check_one = [](const char* label, const int8_t* acts, const int8_t* wgts,
@@ -6847,7 +6764,7 @@ inline void AppendI32Le(std::vector<uint8_t>& out, int32_t v) {
 
 }  // namespace
 
-static void TestMatmulGoldenHashCrossPlatform() {
+SSLM_TEST(TestMatmulGoldenHashCrossPlatform, 301) {
 	using namespace superslm_test;
 	using superslm::DotRowScalarRef;
 	using superslm::GemmInt8Accumulate;
@@ -6938,237 +6855,8 @@ static void TestMatmulGoldenHashCrossPlatform() {
 	          hex.c_str(), kMatmulGoldenHash);
 }
 
-// --- S-HARDEN-3 (F13, §13 item 7, §17.3 cell 4): the independent converter
-//     verifier's core -- config geometry x tensor shapes, per-tensor evidence,
-//     and the proof-manifest document itself. Curie's red suite (red-first;
-//     the whole superslm::proof_manifest translation unit did not exist before
-//     this slot -- every symbol below is new). Mendeleev's 2026-07-21 coverage
-//     audit §3.3 names the zero-boundary cells explicitly: kv_heads == 0 and,
-//     separately, heads == 0, must each produce a DEFINED rejection rather than
-//     a fault in the `heads % kv_heads` modulus -- the two cells directly below
-//     are that specification, unmodified. ---
-
-static void TestConfigGeometryRejectsZeroAttentionHeads() {
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/0, /*kv_heads=*/8, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::ZeroAttentionHeads,
-	          "num_attention_heads == 0 must be a DEFINED rejection (ZeroAttentionHeads), checked before "
-	          "any modulus, not a crash: got %s",
-	          ConfigGeometryStatusName(r.status));
-}
-
-static void TestConfigGeometryRejectsZeroKeyValueHeadsBeforeModulusFaults() {
-	// The coverage audit's own specification (§3.3): "heads % kv_heads faults at
-	// the validation site itself when kv_heads == 0, so the check crashes before
-	// any rejection can fire." This call reaching a CHECK at all (rather than a
-	// SIGFPE from an integer division by zero) is itself part of what this cell
-	// proves -- the zero must be caught before the modulus in CheckConfigGeometry's
-	// own body ever executes.
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/0, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::ZeroKeyValueHeads,
-	          "num_key_value_heads == 0 must be a DEFINED rejection (ZeroKeyValueHeads), checked before "
-	          "`heads %% kv_heads` is ever evaluated: got %s",
-	          ConfigGeometryStatusName(r.status));
-}
-
-static void TestConfigGeometryRejectsKvHeadsExceedsHeads() {
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/8, /*kv_heads=*/16, /*head_dim=*/512);
-	CHECK_MSG(r.status == ConfigGeometryStatus::KvHeadsExceedsHeads,
-	          "num_key_value_heads (16) > num_attention_heads (8): got %s", ConfigGeometryStatusName(r.status));
-}
-
-static void TestConfigGeometryRejectsHeadsNotDivisibleByKv() {
-	// 10 heads, 3 kv_heads: 10 % 3 != 0. kv_heads <= heads holds, so this cell
-	// isolates the divisibility relation from the ordering relation above it.
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/10, /*kv_heads=*/3, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::HeadsNotDivisibleByKv,
-	          "num_attention_heads (10) %% num_key_value_heads (3) != 0: got %s",
-	          ConfigGeometryStatusName(r.status));
-}
-
-static void TestConfigGeometryRejectsHiddenSizeMismatch() {
-	// heads=32, head_dim=128 -> 4096, but hidden_size declares 4097: the GQA
-	// relations both hold, isolating the hidden_size x heads*head_dim relation.
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4097, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::HiddenSizeGeometryMismatch,
-	          "hidden_size (4097) != num_attention_heads * head_dim (32*128=4096): got %s",
-	          ConfigGeometryStatusName(r.status));
-}
-
-static void TestConfigGeometryAcceptsGqaShape() {
-	const auto r = CheckConfigGeometry(/*hidden_size=*/4096, /*heads=*/32, /*kv_heads=*/8, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::Ok,
-	          "a coherent GQA shape (32 heads, 8 kv_heads, head_dim=128, hidden_size=4096) must be Ok: got "
-	          "%s (%s)",
-	          ConfigGeometryStatusName(r.status), r.diagnostic.c_str());
-}
-
-static void TestConfigGeometryAcceptsMhaShape() {
-	// kv_heads == heads (plain multi-head attention, no grouping) is the
-	// degenerate-but-valid case of the same relations, not a special case.
-	const auto r = CheckConfigGeometry(/*hidden_size=*/2048, /*heads=*/16, /*kv_heads=*/16, /*head_dim=*/128);
-	CHECK_MSG(r.status == ConfigGeometryStatus::Ok, "kv_heads == heads (plain MHA) must be Ok: got %s (%s)",
-	          ConfigGeometryStatusName(r.status), r.diagnostic.c_str());
-}
-
-// --- Per-tensor evidence: a feature oracle grounded in known planted values,
-//     not a recode of ComputeTensorEvidence's own arithmetic. A single WGT1
-//     tensor's four bytes are patched directly to -128, -128, 127, 5 after the
-//     spec-faithful manifest builder lays out the section, so the assertion
-//     below is checked against values this test wrote, not against whatever
-//     the implementation happens to compute. ---
-
-static void TestComputeTensorEvidenceReportsExtremaAndSaturationBoundary() {
-	using namespace superslm_test;
-	auto manifest = MakeSingleTensorManifest(superslm::kWeightsMagic, /*element_size=*/1, /*shape=*/{4});
-	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
-	manifest.bytes[data_off + 0] = static_cast<uint8_t>(int8_t(-128));  // dtype minimum
-	manifest.bytes[data_off + 1] = static_cast<uint8_t>(int8_t(-128));  // dtype minimum, second hit
-	manifest.bytes[data_off + 2] = static_cast<uint8_t>(int8_t(127));   // dtype maximum
-	manifest.bytes[data_off + 3] = static_cast<uint8_t>(int8_t(5));     // interior, not a boundary
-
-	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Weights, SslmDtype::Int8, manifest.bytes);
-	SslmTensorManifest parsed;
-	std::string err;
-	SslmModelStatus status = SslmTensorManifest::Parse(view, parsed, &err);
-	CHECK_MSG(status == SslmModelStatus::Ok, "fixture manifest failed to parse: %s (%s)",
-	          SslmModelStatusName(status), err.c_str());
-	if (status != SslmModelStatus::Ok) return;
-
-	auto evidence = ComputeTensorEvidence(parsed, SslmDtype::Int8);
-	CHECK_MSG(evidence.size() == 1, "expected 1 tensor of evidence, got %zu", evidence.size());
-	if (evidence.size() != 1) return;
-	CHECK(evidence[0].name == "t0");
-	CHECK(evidence[0].elem_count == 4);
-	CHECK_MSG(evidence[0].min_value == -128, "min_value: got %lld, want -128",
-	          (long long)evidence[0].min_value);
-	CHECK_MSG(evidence[0].max_value == 127, "max_value: got %lld, want 127", (long long)evidence[0].max_value);
-	CHECK_MSG(evidence[0].saturation_lo_count == 2, "saturation_lo_count: got %llu, want 2",
-	          (unsigned long long)evidence[0].saturation_lo_count);
-	CHECK_MSG(evidence[0].saturation_hi_count == 1, "saturation_hi_count: got %llu, want 1",
-	          (unsigned long long)evidence[0].saturation_hi_count);
-}
-
-static void TestComputeWeightScaleEvidenceReportsShiftRangeAndIdentityCount() {
-	using namespace superslm_test;
-	// Two rows: (identity=1, mult=0, shift=0) and (identity=0, mult=99, shift=31)
-	// -- shift_min/max isolate the fold triple's shift column; identity_count
-	// isolates the {0,1} flag column, independent of mult (deliberately
-	// unbounded per D-SLM142, so mult=99 must not affect either reported field).
-	auto manifest = MakeSingleTensorManifest(superslm::kWeightScalesMagic, /*element_size=*/4, /*shape=*/{2, 3});
-	const size_t data_off = static_cast<size_t>(manifest.tensor_data_off[0]);
-	PutU32(manifest.bytes, data_off + 0, 1);   // row0 identity
-	PutU32(manifest.bytes, data_off + 4, 0);   // row0 mult
-	PutU32(manifest.bytes, data_off + 8, 0);   // row0 shift
-	PutU32(manifest.bytes, data_off + 12, 0);  // row1 identity
-	PutU32(manifest.bytes, data_off + 16, 99); // row1 mult
-	PutU32(manifest.bytes, data_off + 20, 31); // row1 shift
-
-	SslmSectionView view = MakeManifestSectionView(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes);
-	SslmTensorManifest parsed;
-	std::string err;
-	SslmModelStatus status = SslmTensorManifest::Parse(view, parsed, &err);
-	CHECK_MSG(status == SslmModelStatus::Ok, "fixture manifest failed to parse: %s (%s)",
-	          SslmModelStatusName(status), err.c_str());
-	if (status != SslmModelStatus::Ok) return;
-
-	auto evidence = ComputeWeightScaleEvidence(parsed);
-	CHECK_MSG(evidence.size() == 1, "expected 1 tensor of evidence, got %zu", evidence.size());
-	if (evidence.size() != 1) return;
-	CHECK(evidence[0].row_count == 2);
-	CHECK_MSG(evidence[0].shift_min == 0, "shift_min: got %d, want 0", evidence[0].shift_min);
-	CHECK_MSG(evidence[0].shift_max == 31, "shift_max: got %d, want 31", evidence[0].shift_max);
-	CHECK_MSG(evidence[0].identity_count == 1, "identity_count: got %llu, want 1",
-	          (unsigned long long)evidence[0].identity_count);
-}
-
-static void TestHashSectionHexMatchesIndependentSha256() {
-	using namespace superslm_test;
-	auto manifest = MakeMinimalValidManifest(superslm::kWeightsMagic, /*element_size=*/1);
-	SslmSectionView view = MakeManifestSectionView(SslmSectionType::Weights, SslmDtype::Int8, manifest.bytes);
-
-	uint8_t digest[32];
-	Sha256Hash(view.data, static_cast<size_t>(view.byte_size), digest);
-	const std::string want = ToHex(digest);
-
-	const std::string got = HashSectionHex(view);
-	CHECK_MSG(got == want, "HashSectionHex diverged from a direct Sha256Hash call over the same bytes: got "
-	          "%s, want %s",
-	          got.c_str(), want.c_str());
-}
-
-// --- The proof manifest document, driven through a real Load()-accepted view
-//     -- both the geometry-coherent and geometry-incoherent cases, so the
-//     manifest's own "config_geometry" field is proven to actually reflect the
-//     independent check rather than a hardcoded "ok". ---
-
-static void TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact() {
-	using namespace superslm_test;
-	Cfg1Spec coherent;
-	coherent.num_attention_heads = 32;
-	coherent.num_key_value_heads = 8;
-	coherent.head_dim = 128;
-	coherent.hidden_size = 32 * 128;  // = 4096, coherent with heads*head_dim
-	FixtureSection cfg = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(coherent));
-	auto built = BuildArtifact({cfg, MakeSigmoidLutSection()});
-
-	SslmModelView view;
-	std::string err;
-	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-	CHECK_MSG(status == SslmModelStatus::Ok, "coherent-geometry fixture failed to load: got %s (%s)",
-	          SslmModelStatusName(status), err.c_str());
-	if (status != SslmModelStatus::Ok) return;
-
-	SslmArtifact artifact;
-	SslmError aerr;
-	SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
-	const std::string manifest = BuildProofManifestJson(artifact);
-	CHECK_MSG(manifest.find("\"ok\": true") != std::string::npos,
-	          "proof manifest for a geometry-coherent artifact must report config_geometry.ok == true; "
-	          "manifest:\n%s",
-	          manifest.c_str());
-	CHECK(manifest.find(artifact.FingerprintHex()) != std::string::npos);
-}
-
-static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact() {
-	using namespace superslm_test;
-	// A deliberately incoherent shape, unrelated to this slot: 24 heads * 128
-	// head_dim = 3072 != hidden_size 4096. Built explicitly rather than via
-	// Cfg1Spec{}'s own defaults -- since SslmModel::Load's config-geometry join
-	// landed (S3.3 §13.1 cell 4, D-SLM420-D-SLM423), Cfg1Spec{}'s defaults are
-	// themselves R1-coherent (32*128 == 4096, the sibling coherent-case test's
-	// own explicit values above), so this cell can no longer borrow the shared
-	// default's incoherence and states its own.
-	Cfg1Spec incoherent;
-	incoherent.num_attention_heads = 24;
-	incoherent.head_dim = 128;  // hidden_size stays the default 4096: 24*128=3072 != 4096
-	auto built = BuildArtifact(
-	    {MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(incoherent)), MakeSigmoidLutSection()});
-
-	// This artifact is deliberately R1-incoherent, so SslmModel::Load itself now
-	// rejects it too (ConfigGeometryHiddenSizeMismatch) -- that is the correct,
-	// intended outcome of cell 4's own obligation, not a regression, and is
-	// exercised by cell 4's own red suite above. This cell's purpose is
-	// different: proving BuildProofManifestJson's "config_geometry" field
-	// reflects CheckConfigGeometry's own independent verdict rather than a
-	// hardcoded "ok" -- which needs only that the artifact is otherwise
-	// structurally valid (OpenFromMemory succeeds), not that SslmModel::Load
-	// accepts it.
-	SslmArtifact artifact;
-	SslmError aerr;
-	const SslmStatus open_status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), artifact, &aerr);
-	CHECK_MSG(open_status == SslmStatus::Ok,
-	          "the incoherent-geometry-but-otherwise-valid fixture failed to open (a defect unrelated to "
-	          "this cell's own target): got status %d",
-	          static_cast<int>(open_status));
-	if (open_status != SslmStatus::Ok) return;
-
-	const std::string manifest = BuildProofManifestJson(artifact);
-	CHECK_MSG(manifest.find("\"ok\": false") != std::string::npos,
-	          "proof manifest for an incoherent shape (24*128=3072 != hidden_size 4096) must report "
-	          "config_geometry.ok == false; manifest:\n%s",
-	          manifest.c_str());
-	CHECK(manifest.find("HiddenSizeGeometryMismatch") != std::string::npos);
-}
+// Area #9 (proof_manifest.cpp, order keys 302-313) extracted to
+// tests/areas/proof_manifest.cpp (T-1574 Stage 1).
 
 // ---------------------------------------------------------------------------
 // Curie's S-HARDEN-7 suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
@@ -7226,7 +6914,7 @@ void CheckBadAllocContractSite(const char* site_name, Callable&& call_site) {
 }  // namespace
 
 // --- Site 1/19: SslmArtifact::OpenFromMemory (artifact.h:149) ---
-static void TestBadAllocContractOpenFromMemory() {
+SSLM_TEST(TestBadAllocContractOpenFromMemory, 314) {
 	uint8_t data[4] = {'S', 'S', 'L', 'M'};
 	SslmArtifact out;
 	SslmError err;
@@ -7243,7 +6931,7 @@ static void TestBadAllocContractOpenFromMemory() {
 //     the mechanism per §17 dimension 11's usual population-validation shape
 //     (the shared helper makes this true for all nineteen sites by
 //     construction). ---
-static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
+SSLM_TEST(TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific, 315) {
 	using namespace superslm_test;
 	ArmInjectedFault(InjectThrowKind::kBadAlloc);
 	bool threw_bad_alloc = false;
@@ -7269,7 +6957,7 @@ static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
 }
 
 // --- Site 2/19: SslmArtifact::OpenFromFile (artifact.h:155) ---
-static void TestBadAllocContractOpenFromFile() {
+SSLM_TEST(TestBadAllocContractOpenFromFile, 316) {
 	SslmArtifact out;
 	SslmError err;
 	CheckBadAllocContractSite("SslmArtifact::OpenFromFile", [&] {
@@ -7279,7 +6967,7 @@ static void TestBadAllocContractOpenFromFile() {
 
 // --- Site 3/19 (this fold's addition, condition 4(b)): SslmArtifact::
 //     FingerprintHex (artifact.h:162) ---
-static void TestBadAllocContractFingerprintHex() {
+SSLM_TEST(TestBadAllocContractFingerprintHex, 317) {
 	SslmArtifact out;
 	CheckBadAllocContractSite("SslmArtifact::FingerprintHex", [&] {
 		(void)out.FingerprintHex();
@@ -7288,7 +6976,7 @@ static void TestBadAllocContractFingerprintHex() {
 
 // --- Site 4/19: SslmTensorManifest::Parse (model.h:178), the direct-call
 //     path ---
-static void TestBadAllocContractTensorManifestParseDirect() {
+SSLM_TEST(TestBadAllocContractTensorManifestParseDirect, 318) {
 	SslmSectionView section{};
 	SslmTensorManifest out;
 	std::string err;
@@ -7303,7 +6991,7 @@ static void TestBadAllocContractTensorManifestParseDirect() {
 //     *Impl body itself, not only by whatever calls it directly, using a
 //     fully valid artifact whose Weights section routes through
 //     SslmTensorManifest::Parse from inside SslmModel::Load. ---
-static void TestBadAllocContractTensorManifestParseViaLoad() {
+SSLM_TEST(TestBadAllocContractTensorManifestParseViaLoad, 319) {
 	auto built = BuildFullyValidV2ArtifactForLoad();
 	SslmModelView view;
 	std::string err;
@@ -7313,7 +7001,7 @@ static void TestBadAllocContractTensorManifestParseViaLoad() {
 }
 
 // --- Site 5/19: SslmKeyedConstants::Parse (model.h:219) ---
-static void TestBadAllocContractKeyedConstantsParse() {
+SSLM_TEST(TestBadAllocContractKeyedConstantsParse, 320) {
 	SslmSectionView section{};
 	SslmKeyedConstants out;
 	std::string err;
@@ -7323,7 +7011,7 @@ static void TestBadAllocContractKeyedConstantsParse() {
 }
 
 // --- Site 6/19: ParseConfig (model.h:239) ---
-static void TestBadAllocContractParseConfig() {
+SSLM_TEST(TestBadAllocContractParseConfig, 321) {
 	SslmSectionView section{};
 	SslmModelConfig out{};
 	std::string err;
@@ -7333,7 +7021,7 @@ static void TestBadAllocContractParseConfig() {
 }
 
 // --- Site 7/19: ParseSigmoidLut (model.h:261) ---
-static void TestBadAllocContractParseSigmoidLut() {
+SSLM_TEST(TestBadAllocContractParseSigmoidLut, 322) {
 	SslmSectionView section{};
 	SslmSigmoidLut out{};
 	std::string err;
@@ -7346,7 +7034,7 @@ static void TestBadAllocContractParseSigmoidLut() {
 //     (model.cpp:711,788's string concatenations) -- exercised here via the
 //     null-data path, which reaches Load's own body before any sub-parser
 //     runs. ---
-static void TestBadAllocContractLoad() {
+SSLM_TEST(TestBadAllocContractLoad, 323) {
 	SslmModelView out;
 	std::string err;
 	CheckBadAllocContractSite("SslmModel::Load", [&] {
@@ -7356,7 +7044,7 @@ static void TestBadAllocContractLoad() {
 
 // --- Site 9/19: TokenizerView::Open (tokenizer.h:35), the direct-call path
 //     (tools/tok_verify.cpp's bypass shape) ---
-static void TestBadAllocContractTokenizerOpenDirect() {
+SSLM_TEST(TestBadAllocContractTokenizerOpenDirect, 324) {
 	SslmArtifact artifact;  // default: no sections, Ok() == false
 	TokenizerView out;
 	std::string err;
@@ -7372,7 +7060,7 @@ static void TestBadAllocContractTokenizerOpenDirect() {
 //     that carries a genuine Tokenizer + UnicodeTables pair), read as raw
 //     bytes and driven through SslmModel::Load directly rather than through
 //     SslmArtifact::OpenFromFile. ---
-static void TestBadAllocContractTokenizerOpenViaLoad() {
+SSLM_TEST(TestBadAllocContractTokenizerOpenViaLoad, 325) {
 	std::string path = ResolveFixturePath("qwen2.5-1.5b.tok.sslm");
 	if (path.empty()) {
 		CHECK_MSG(false,
@@ -7395,7 +7083,7 @@ static void TestBadAllocContractTokenizerOpenViaLoad() {
 
 // --- Site 10/19 (this fold's addition, condition 4(b)): TokenizerView::Encode
 //     (tokenizer.h:44) ---
-static void TestBadAllocContractTokenizerEncode() {
+SSLM_TEST(TestBadAllocContractTokenizerEncode, 326) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Encode injection fixture: %s",
 	          ft.view_error.c_str());
@@ -7407,7 +7095,7 @@ static void TestBadAllocContractTokenizerEncode() {
 
 // --- Site 11/19 (this fold's addition, condition 4(b)): TokenizerView::Decode
 //     (tokenizer.h:48) ---
-static void TestBadAllocContractTokenizerDecode() {
+SSLM_TEST(TestBadAllocContractTokenizerDecode, 327) {
 	auto ft = OpenFixtureTokenizer();
 	CHECK_MSG(ft.view_ok, "TokenizerView::Open failed for the Decode injection fixture: %s",
 	          ft.view_error.c_str());
@@ -7420,7 +7108,7 @@ static void TestBadAllocContractTokenizerDecode() {
 
 // --- Site 12/19 (this fold's addition, condition 4(b)): ComputeTensorEvidence
 //     (proof_manifest.h:84) ---
-static void TestBadAllocContractComputeTensorEvidence() {
+SSLM_TEST(TestBadAllocContractComputeTensorEvidence, 328) {
 	SslmTensorManifest manifest;
 	CheckBadAllocContractSite("ComputeTensorEvidence", [&] {
 		(void)ComputeTensorEvidence(manifest, SslmDtype::Int8);
@@ -7429,7 +7117,7 @@ static void TestBadAllocContractComputeTensorEvidence() {
 
 // --- Site 13/19 (this fold's addition, condition 4(b)):
 //     ComputeWeightScaleEvidence (proof_manifest.h:99) ---
-static void TestBadAllocContractComputeWeightScaleEvidence() {
+SSLM_TEST(TestBadAllocContractComputeWeightScaleEvidence, 329) {
 	SslmTensorManifest manifest;
 	CheckBadAllocContractSite("ComputeWeightScaleEvidence", [&] {
 		(void)ComputeWeightScaleEvidence(manifest);
@@ -7437,7 +7125,7 @@ static void TestBadAllocContractComputeWeightScaleEvidence() {
 }
 
 // --- Site 14/19: HashSectionHex (proof_manifest.h:106) ---
-static void TestBadAllocContractHashSectionHex() {
+SSLM_TEST(TestBadAllocContractHashSectionHex, 330) {
 	SslmSectionView section{};
 	CheckBadAllocContractSite("HashSectionHex", [&] {
 		(void)HashSectionHex(section);
@@ -7445,7 +7133,7 @@ static void TestBadAllocContractHashSectionHex() {
 }
 
 // --- Site 15/19: BuildProofManifestJson (proof_manifest.h:128) ---
-static void TestBadAllocContractBuildProofManifestJson() {
+SSLM_TEST(TestBadAllocContractBuildProofManifestJson, 331) {
 	SslmArtifact artifact;
 	CheckBadAllocContractSite("BuildProofManifestJson", [&] {
 		(void)BuildProofManifestJson(artifact);
@@ -7458,7 +7146,7 @@ static void TestBadAllocContractBuildProofManifestJson() {
 //     rather than a pre-existing real-world leak, the same shape every other
 //     site's cell uses, applied to a site whose current implementation
 //     happens not to need it yet. ---
-static void TestBadAllocContractSha256Update() {
+SSLM_TEST(TestBadAllocContractSha256Update, 332) {
 	Sha256 h;
 	const uint8_t byte = 'x';
 	CheckBadAllocContractSite("Sha256::Update", [&] {
@@ -7468,7 +7156,7 @@ static void TestBadAllocContractSha256Update() {
 
 // --- Site 17/19: Sha256Hash (sha256.h:32). Same "cannot currently throw"
 //     shape as site 16. ---
-static void TestBadAllocContractSha256HashFreeFunction() {
+SSLM_TEST(TestBadAllocContractSha256HashFreeFunction, 333) {
 	const uint8_t byte = 'x';
 	uint8_t digest[32];
 	CheckBadAllocContractSite("Sha256Hash", [&] {
@@ -7485,7 +7173,7 @@ static void TestBadAllocContractSha256HashFreeFunction() {
 //     this test. Cannot practically reach std::length_error given a fixed
 //     64-character output (design §3.1) -- same "seam-fires, not a real
 //     leak" shape as sites 16-17. ---
-static void TestBadAllocContractToHex() {
+SSLM_TEST(TestBadAllocContractToHex, 334) {
 	uint8_t digest[32] = {};
 	CheckBadAllocContractSite("superslm::ToHex", [&] {
 		(void)ToHex(digest);
@@ -7525,7 +7213,7 @@ static void TestBadAllocContractToHex() {
 //     catch(const std::bad_alloc&){throw;} clause re-catches it -- a path
 //     this cell does not exercise, since it calls the public JsonEscape
 //     directly. ---
-static void TestBadAllocContractJsonEscape() {
+SSLM_TEST(TestBadAllocContractJsonEscape, 335) {
 	using namespace superslm_test;
 	CheckBadAllocContractSite("JsonEscape", [&] {
 		(void)JsonEscape("test");
@@ -7554,7 +7242,7 @@ static void TestBadAllocContractJsonEscape() {
 // §4.1) would otherwise have to rediscover, not gating unbuilt behavior.
 // ---------------------------------------------------------------------------
 
-static void TestRejectsNonZeroSectionDescriptorReservedField() {
+SSLM_TEST(TestRejectsNonZeroSectionDescriptorReservedField, 336) {
 	auto built = BuildArtifact({MakeConfigSection()});
 	const size_t row = kHeaderBytes;  // section 0's descriptor row
 	built.bytes[row + 36] = 7;        // the generic reserved field -- distinct from any
@@ -7585,7 +7273,7 @@ static void TestRejectsNonZeroSectionDescriptorReservedField() {
 //     triples are C30's own derivation (iexp_scale_constants), called from the
 //     vendored reference by tests/gen_s3_1_c30_iexp_domain_sweep_fixtures.py -- never
 //     re-derived in this file. ---
-static void TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep() {
+SSLM_TEST(TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep, 337) {
 	using namespace superslm_test;
 	int checked = 0;
 	for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
@@ -7617,7 +7305,7 @@ static void TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep
 // to this cell (a required-green witness stated in the open, not just implied by a
 // loop). Both mantissa extremes at each e, so the mantissa-conditional branch at
 // e=-61 is pinned on both sides of its own m >= 1,268,234,713 threshold.
-static void TestC30DomainDisagreementPointsAreExplicitlyPinned() {
+SSLM_TEST(TestC30DomainDisagreementPointsAreExplicitlyPinned, 338) {
 	using namespace superslm_test;
 	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
 	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1
@@ -7733,7 +7421,7 @@ static bool C34LoadTimeAcceptsE(int64_t m, int64_t e) {
 // so the |m| branch never fires here -- this cell's own scope is the e-axis
 // containment relation at each mantissa, not the |m| branch (that is
 // TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound's own scope).
-static void TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor() {
+SSLM_TEST(TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor, 339) {
 	using superslm::CheckSiluCompositionScaleDomain;
 	using superslm::SslmForwardStatus;
 	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
@@ -7800,7 +7488,7 @@ static void TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescrip
 // reduces to the e-formula alone for both mantissas, which this cell confirms
 // rather than assumes, closing the possibility of an m/e coupling bug the
 // design's own two-axis sweep exists to catch.
-static void TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep() {
+SSLM_TEST(TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep, 340) {
 	using superslm::CheckSiluCompositionScaleDomain;
 	using superslm::SslmForwardStatus;
 	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
@@ -7829,7 +7517,7 @@ static void TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcros
 // kind (380b75f review); Sec11 S3.1's own red-cell list names "a (m,e) outside C34's
 // no-UB domain is rejected" as required. e is held at 0 (comfortably in-domain)
 // throughout, isolating the assertion to the |m| axis alone.
-static void TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound() {
+SSLM_TEST(TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound, 341) {
 	using superslm::CheckSiluCompositionScaleDomain;
 	using superslm::SslmForwardStatus;
 	using superslm::kCompositionScaleMaxAbsM;
@@ -7861,7 +7549,7 @@ static void TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound() {
 // Sec4.4/Sec4.5, tests/sslm_s3_1_wide_intmath_fixtures.h.
 // ---------------------------------------------------------------------------
 
-static void TestRequantChainCheckedT1254Witness() {
+SSLM_TEST(TestRequantChainCheckedT1254Witness, 189) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	using superslm::ChainResult;
@@ -7890,7 +7578,7 @@ static void TestRequantChainCheckedT1254Witness() {
 	}
 }
 
-static void TestRequantChainCheckedRejectsOverC29Domain() {
+SSLM_TEST(TestRequantChainCheckedRejectsOverC29Domain, 190) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	// Sec11 S3.1's own named red cell: "a wide row at D' = 2^31 + 1 returns
@@ -7910,7 +7598,7 @@ static void TestRequantChainCheckedRejectsOverC29Domain() {
 	          "D' = 2^31+1: *out_scale must be untouched on rejection (\"computes nothing\")");
 }
 
-static void TestNarrowRowCheckedT1254Witness() {
+SSLM_TEST(TestNarrowRowCheckedT1254Witness, 191) {
 	using namespace superslm_test;
 	// Positive-extreme row: max element is 2^31, one past INT32_MAX -- C35
 	// must reject.
@@ -7967,7 +7655,7 @@ static bool C29StyleMagnitudeCheckWouldAcceptRow(const int64_t* row, size_t n) {
 	return d_prime <= INT64_C(2147483648);  // C29's own D' <= 2^31 magnitude bound
 }
 
-static void TestNarrowRowCheckedC35VsC29NegativeControl() {
+SSLM_TEST(TestNarrowRowCheckedC35VsC29NegativeControl, 192) {
 	using namespace superslm_test;
 	const bool c29_would_accept =
 	    C29StyleMagnitudeCheckWouldAcceptRow(kWideT1254WitnessPositiveRow, kWideT1254WitnessRowLen);
@@ -8012,7 +7700,7 @@ static void TestNarrowRowCheckedC35VsC29NegativeControl() {
 // (never the textual corollary).
 // ---------------------------------------------------------------------------
 
-static void TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep() {
+SSLM_TEST(TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep, 193) {
 	using namespace superslm_test;
 	int checked = 0;
 	for (size_t i = 0; i < kC30IExpDomainSweepCasesCount; ++i) {
@@ -8042,7 +7730,7 @@ static void TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep
 // rather than the bare primitive -- mirrors
 // TestC30DomainDisagreementPointsAreExplicitlyPinned's own direct-call cell,
 // realized here against the funnel's actual entry point now that it exists.
-static void TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned() {
+SSLM_TEST(TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned, 194) {
 	using namespace superslm_test;
 	constexpr int64_t kMLow = INT64_C(1073741824);   // 2^30
 	constexpr int64_t kMHigh = INT64_C(2147483647);  // 2^31 - 1
@@ -8131,7 +7819,7 @@ static void TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned() 
 // report for this row must exceed 2^31, and RequantChainChecked must reject
 // it -- whatever internal representation the primitive eventually uses to
 // get there. Today it does neither.
-static void TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain() {
+SSLM_TEST(TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain, 195) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -8200,7 +7888,7 @@ static void TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain() {
 // computes {m=1230129357, e=89} for this identical input -- a
 // one-ULP-in-mantissa difference this cell's exact-equality assertion
 // catches and the prior poison-value-difference check does not.
-static void TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference() {
+SSLM_TEST(TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference, 197) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
@@ -8245,7 +7933,7 @@ static void TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendor
 // reviewer's own probe used (P1/P2): both accepted by step 0, both exactly at the
 // endpoints the precondition names, and their fold's own high-mul result is
 // {m=-4294967294} -- outside int32 -- which the next fold's cast turns into {m=2}.
-static void TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated() {
+SSLM_TEST(TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated, 201) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
@@ -8305,7 +7993,7 @@ static void TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTr
 // ahead-of-C29 ordering produces the documented status -- is
 // TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth, immediately
 // below.
-static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain() {
+SSLM_TEST(TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain, 202) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
@@ -8367,7 +8055,7 @@ static void TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain
 // (Sec10.4's diagnostic table names the two statuses to different site
 // classes), so this cell pins the shipped precedence explicitly and is the
 // one cell in this suite that dies when step 0 is deleted (mutation-verified).
-static void TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth() {
+SSLM_TEST(TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth, 203) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
@@ -8406,47 +8094,11 @@ static void TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth() {
 // the REDUCED form, not Sec11 S3.1a's own full-forward Cell 1 (needs S3.6's
 // digests) or Cell 2 (needs the full forward and the reference prompt pack,
 // Sec14.3) -- both remain open, unchanged by this pass.
-namespace {
+// ChainTraceSinkRecord/ChainTraceSinkHookFn moved to
+// tests/support/shared_fixtures.h/.cpp (T-1574 Stage 0, §3) -- shared across
+// candidate areas #6/#12, included via the support headers above.
 
-struct ChainTraceSinkRecord {
-	std::string site;
-	size_t token_index = 0;
-	std::vector<int64_t> x_int;
-	int64_t d_prime = 0;
-	int64_t dn = 0;
-	int32_t s = 0;
-	int64_t r = 0;
-	std::vector<int8_t> codes;
-	int64_t m_out = 0;
-	int64_t e_out = 0;
-};
-
-void ChainTraceSinkHookFn(const superslm::SslmChainTraceRecord* chain,
-                           const superslm::SslmKvLandingTraceRecord* kv, void* user) {
-	// trace_hook.h's own contract: exactly one of the two record pointers is
-	// non-null per call, never both, never neither.
-	CHECK_MSG((chain != nullptr) != (kv != nullptr),
-	          "a trace hook call must carry exactly one non-null record pointer, never "
-	          "both and never neither");
-	if (chain == nullptr) return;
-	auto* sink = static_cast<std::vector<ChainTraceSinkRecord>*>(user);
-	ChainTraceSinkRecord rec;
-	rec.site.assign(chain->site.begin(), chain->site.end());
-	rec.token_index = chain->token_index;
-	rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
-	rec.d_prime = chain->d_prime;
-	rec.dn = chain->dn;
-	rec.s = chain->s;
-	rec.r = chain->r;
-	rec.codes.assign(chain->codes.begin(), chain->codes.end());
-	rec.m_out = chain->m_out;
-	rec.e_out = chain->e_out;
-	sink->push_back(std::move(rec));
-}
-
-}  // namespace
-
-static void TestRequantChainCheckedHookInstalledProducesIdenticalOutputs() {
+SSLM_TEST(TestRequantChainCheckedHookInstalledProducesIdenticalOutputs, 198) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 
@@ -8524,7 +8176,7 @@ static void TestRequantChainCheckedHookInstalledProducesIdenticalOutputs() {
 	}
 }
 
-static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled() {
+SSLM_TEST(TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled, 199) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 
@@ -8570,7 +8222,7 @@ static void TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookIn
 // this cell's own two-state-instance call shape makes it fail at exactly its
 // crux assertions (Poirot 380b75f review, M6) -- confirming the cell would
 // catch a regression back to shared storage, not just that it passes today.
-static void TestTraceHookCrossModelHandleIsolation() {
+SSLM_TEST(TestTraceHookCrossModelHandleIsolation, 200) {
 	using namespace superslm_test;
 	using superslm::CarriedScale;
 
@@ -8672,7 +8324,7 @@ static void TestTraceHookCrossModelHandleIsolation() {
 // during its own reset, which nothing in the design or the plan asks for. A
 // caller that wants trace coverage across a reload reinstalls the hook after
 // Load returns, the same way it would attach the hook the first time.
-static void TestSslmModelLoadClearsPreviouslyInstalledTraceHook() {
+SSLM_TEST(TestSslmModelLoadClearsPreviouslyInstalledTraceHook, 205) {
 	using namespace superslm_test;
 	using superslm::SslmChainTraceRecord;
 	using superslm::SslmKvLandingTraceRecord;
@@ -8742,7 +8394,7 @@ static void TestSslmModelLoadClearsPreviouslyInstalledTraceHook() {
 // trunc_q, derived in Python by gen_s3_2_fixtures.py's own `_trunc_div` -- is
 // checked here BY EXECUTING C++'s own `/` directly on every row, not assumed
 // to survive the Python/C++ language boundary unchanged.
-static void TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision() {
+SSLM_TEST(TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision, 342) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kC31UnitCasesCount; ++i) {
 		const C31UnitCase& c = kC31UnitCases[i];
@@ -8835,7 +8487,7 @@ inline void CaptureChainTrace(const superslm::SslmChainTraceRecord* chain,
 // reference, never by calling FloorDivI64 itself), so a mutated FloorDivI64
 // cannot drag both sides of this comparison the same way it drags a
 // comparison that calls FloorDivI64 on both ends.
-static void TestRmsNormSiteC31UsesFloorDivisionMechanismPin() {
+SSLM_TEST(TestRmsNormSiteC31UsesFloorDivisionMechanismPin, 343) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using superslm::SslmTraceHookState;
@@ -8925,7 +8577,7 @@ static void TestRmsNormSiteC31UsesFloorDivisionMechanismPin() {
 // correct, floor-based wide row -- a real feature oracle on the composition's
 // wiring, which a wrong hidden_size, a wrong shift, a wrong per-element
 // formula, or a dropped max(root,1) guard would all still fail.
-static void TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel() {
+SSLM_TEST(TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel, 344) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -8977,7 +8629,7 @@ static void TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel() {
 
 // Sec4.3 (C24/C25, Sec11 S3.2's own two-element-row cell): the WSC1
 // identity/near-identity fold-apply dispatch, against the real funnel.
-static void TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel() {
+SSLM_TEST(TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel, 345) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -9058,7 +8710,7 @@ static void TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunne
 // Sec4.4 (C28, Sec7.2 second limb, Sec4.4): the (q_B, e_a) domain-boundary
 // half. All four boundary points at q_B=30 (kC28TieQB, F-S3-4's own verified
 // constant), derived from k = q_B + 62 + e_a rather than guessed.
-static void TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix() {
+SSLM_TEST(TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix, 346) {
 	using superslm::SslmForwardStatus;
 	struct Point {
 		int64_t e_a;
@@ -9093,7 +8745,7 @@ static void TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix() {
 // in this same composition) agree on the positive tie and disagree only on
 // the negative one. See the test-design record Sec5 for why this is the one
 // reading "C28's sign-inverted negative control" supports.
-static void TestBiasReconcileC28SignInvertedNegativeControl() {
+SSLM_TEST(TestBiasReconcileC28SignInvertedNegativeControl, 347) {
 	// Pin the fixture's own claim (a comment naming a mechanism is a claim
 	// mutation-verified before filing): the wrong (round-half-up) candidate
 	// agrees with the correct (away-from-zero) result on the positive tie and
@@ -9131,7 +8783,7 @@ static FixtureSection MakeBia1Section(int64_t value) {
 	return MakeSection(SslmSectionType::Biases, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
 }
 
-static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
+SSLM_TEST(TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary, 348) {
 	// Reject: one past the derived bound, both signs (Sec3.4/Sec4.7 -- the
 	// domain is symmetric, so both signs are named rather than assumed to fail
 	// identically).
@@ -9180,7 +8832,7 @@ static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
 }
 
 // Sec4.9 (F-S3-8, Sec4.8, Sec13 dim 2): the embed entry's token-id validation.
-static void TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary() {
+SSLM_TEST(TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary, 349) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -9262,7 +8914,7 @@ static void TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundar
 // carried scales -- no separate reference oracle is owed beyond the site's
 // own gain-derived formula (C23), which is already pinned prose, not a
 // quantity this pass derives.
-static void TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale() {
+SSLM_TEST(TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale, 350) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -9459,7 +9111,7 @@ inline std::vector<int64_t> ReadKvc1EntryByName(const uint8_t* section, uint64_t
 // bias.q_b: the (30, 0) shift-count pair, Sec6.8/Sec14.2), loads the result
 // through the REAL loader for cross-check, then confirms the independent
 // reader above recovers the same values from the same bytes.
-static void TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView() {
+SSLM_TEST(TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView, 351) {
 	auto bia1_manifest = BuildManifest(superslm::kBiasesMagic, /*element_size=*/8, {{"layer0.bias", {2}}});
 	const size_t bo = static_cast<size_t>(bia1_manifest.tensor_data_off[0]);
 	PutU64(bia1_manifest.bytes, bo + 0, static_cast<uint64_t>(INT64_C(123456789)));
@@ -9539,7 +9191,7 @@ static void TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView() {
 // Negative control (this cell's own, Sec11 S3.2's text): a hand-corrupted
 // BIA1 tensor, run through THIS cell's independent reader alone -- never
 // through SslmModel::Load.
-static void TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThroughLoad() {
+SSLM_TEST(TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThroughLoad, 352) {
 	auto bia1_manifest = BuildManifest(superslm::kBiasesMagic, /*element_size=*/8, {{"layer0.bias", {2}}});
 	// Corrupt the tensor's own data_off descriptor field (descriptor 0 starts
 	// at byte 16; data_off is at descriptor offset 28) to point past the end
@@ -9567,7 +9219,7 @@ static void TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThrough
 // matching the already-shipped funnel's own codes for that specific row
 // (not merely a non-error status), so a wiring defect that reads the wrong
 // row is caught, not only one that rejects outright.
-static void TestTokenizerDriveEveryEncodedIdAddressesItsOwnValidEmbeddingRow() {
+SSLM_TEST(TestTokenizerDriveEveryEncodedIdAddressesItsOwnValidEmbeddingRow, 353) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using superslm::TokenizerView;
@@ -9712,7 +9364,7 @@ static FixtureSection MakeCtxFoldSection(int32_t mult1, int32_t shift1) {
 	return MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, manifest.bytes, /*alignment=*/64);
 }
 
-static void TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1() {
+SSLM_TEST(TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1, 354) {
 	using namespace superslm_test;
 	auto built = BuildArtifact(
 	    {MakeValidConfigSection(), MakeSigmoidLutSection(), MakeCtxFoldSection(kCtxFoldJoinCase.mult, kCtxFoldJoinCase.shift)});
@@ -9767,7 +9419,7 @@ static void TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBui
 // that will feed it the moment it lands are proven genuine here, against the
 // real primitive, so the C33 red cell (record Sec4.2) is a drop-in the day
 // the site exists.
-static void TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair() {
+SSLM_TEST(TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair, 355) {
 	using superslm::RopeApplyPair;
 
 	const auto& c = kC33BothSignsCase;
@@ -9821,7 +9473,7 @@ static void TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealR
 // are blocked (undeclared), but the bound itself is proven against the real
 // primitive it is defined in terms of ("R_t IS C19's reciprocal", Plan
 // Sec8.1), not only against the vendored Python mirror.
-static void TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints() {
+SSLM_TEST(TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints, 356) {
 	using superslm::DynamicScaleReciprocal;
 
 	const int64_t r_at_min_dn = DynamicScaleReciprocal(INT64_C(1) << 30);
@@ -9881,7 +9533,7 @@ static void TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDoma
 // two discriminating rows; asserting LandingRescale equals `correct`
 // therefore already has full discriminating power against either wrong
 // construction, without re-implementing them a second time in C++).
-static void TestLandingRescaleFeatureOracleAgainstResidualReconcileWitnesses() {
+SSLM_TEST(TestLandingRescaleFeatureOracleAgainstResidualReconcileWitnesses, 357) {
 	using namespace superslm_test;
 	for (size_t i = 0; i < kLandingCompositeCasesCount; ++i) {
 		const LandingCompositeCase& c = kLandingCompositeCases[i];
@@ -9922,7 +9574,7 @@ constexpr int64_t kSatCounterRT = INT64_C(1) << 32;
 // three do not (127, -127 -- the in-band boundary controls; 50, comfortably
 // interior). The reported VALUE is asserted, not merely that it fires
 // (Sec8.2: "the counter's reported value is asserted, not only its firing").
-static void TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements() {
+SSLM_TEST(TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements, 358) {
 	struct Site {
 		int64_t branch_code;
 		bool expect_clamp;
@@ -9955,7 +9607,7 @@ static void TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements(
 // (Sec13 dim 8's "counter x layer budget" crossing, realized without a
 // layer-budget mechanism by simply checking the running total at each
 // checkpoint rather than only at the end).
-static void TestLandingRescaleSaturationCounterMonotoneAcrossTokens() {
+SSLM_TEST(TestLandingRescaleSaturationCounterMonotoneAcrossTokens, 359) {
 	uint64_t count = 0;
 
 	// "Token" 1: one site, saturates. Running total after: 1.
@@ -9983,7 +9635,7 @@ static void TestLandingRescaleSaturationCounterMonotoneAcrossTokens() {
 // off-by-one in the predicate's placement (e.g. incrementing before the
 // comparison, or skipping the row's last element) is visible as a count that
 // is not exactly the row length.
-static void TestLandingRescaleSaturationCounterWholeRowClamp() {
+SSLM_TEST(TestLandingRescaleSaturationCounterWholeRowClamp, 360) {
 	uint64_t count = 0;
 	const int64_t row[] = {500, -500, 200, -1000};  // every element saturates
 	for (int64_t branch_code : row) {
@@ -10000,7 +9652,7 @@ static void TestLandingRescaleSaturationCounterWholeRowClamp() {
 // `out_saturation_count == nullptr` and once with a real accumulator; the
 // two raw results must be bit-identical, on both a saturating and a
 // non-saturating branch_code.
-static void TestLandingRescaleSaturationCountHasNoEffectOnReturnValue() {
+SSLM_TEST(TestLandingRescaleSaturationCountHasNoEffectOnReturnValue, 361) {
 	const int64_t no_counter_interior = superslm::LandingRescale(50, kSatCounterMA, kSatCounterRT, 0, 0, nullptr);
 	uint64_t count = 0;
 	const int64_t with_counter_interior =
@@ -10026,7 +9678,7 @@ static void TestLandingRescaleSaturationCountHasNoEffectOnReturnValue() {
 // Record Sec6.3: C33's post-rotation clamp. `ClampRopeCode` is now the real
 // caller-side site; asserted against the same witnesses Sec4.1 already
 // pinned genuine against the real RopeApplyPair, above.
-static void TestClampRopeCodeAgainstC33Witnesses() {
+SSLM_TEST(TestClampRopeCodeAgainstC33Witnesses, 362) {
 	using superslm::ClampRopeCode;
 
 	const auto& c = kC33BothSignsCase;
@@ -10054,7 +9706,7 @@ static bool ExpectedSoftmaxRowWidthOk(const superslm_test::C32WidthDomainCase& c
 	       static_cast<uint64_t>(INT64_MAX) / static_cast<uint64_t>(c.row_max);
 }
 
-static void TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCase() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCase, 363) {
 	using namespace superslm_test;
 	using superslm::CheckSoftmaxRowWidthDomain;
 	using superslm::SslmForwardStatus;
@@ -10097,7 +9749,7 @@ static void TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCas
 // recode of SoftmaxRowQ15's own internals (matching S3.2's RmsNormSite
 // precedent, which used the already-shipped funnel as its own site's
 // oracle).
-static void TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle() {
+SSLM_TEST(TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle, 364) {
 	using namespace superslm;
 	using namespace superslm_test;
 
@@ -10149,7 +9801,7 @@ static void TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle() {
 // under permuted summation orders ... bit-identical"), plus the two named
 // width extremes (a row whose mass is entirely on one key; a row spread
 // across many keys).
-static void TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification() {
+SSLM_TEST(TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification, 365) {
 	using superslm::GemmProbQ15Accumulate;
 
 	// Feature oracle: width=2, head_dim=2. key0=[3,-3], key1=[7,1].
@@ -10228,7 +9880,7 @@ static FixtureSection MakeKvLandingReciprocalsSection(int64_t m_t, int64_t e_t, 
 	return MakeSection(SslmSectionType::KvLandingReciprocals, SslmDtype::Raw, kvc1.bytes, /*alignment=*/64);
 }
 
-static void TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary() {
+SSLM_TEST(TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary, 366) {
 	using namespace superslm_test;
 	// Reject: one past each bound.
 	{
@@ -10283,7 +9935,7 @@ static void TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBound
 	}
 }
 
-static void TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
+SSLM_TEST(TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary, 367) {
 	using namespace superslm_test;
 	// Reject: one past each bound. m_t/e_t held at a safe, in-domain value
 	// throughout (only R_t, word 2, is under test here).
@@ -10360,7 +10012,7 @@ static void TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTh
 // tests/sslm_s3_3_fixtures.h) -- it is asserted directly against the
 // production derivation's own comment at src/model.cpp:790-806, per this
 // cell's audit specification.
-static void TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast() {
+SSLM_TEST(TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast, 368) {
 	using namespace superslm_test;
 	constexpr int64_t kExponentFloor = -60;  // src/model.cpp:806, kKvLandingExponentMin.
 
@@ -10413,7 +10065,7 @@ static void TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast() 
 // [2^30,2^31) range; gamma's own R-word is INT64_MAX), so this cell is
 // overdetermined to fail once the real check lands -- exactly the
 // correction owed.
-static void TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow() {
+SSLM_TEST(TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow, 369) {
 	using namespace superslm_test;
 	{
 		auto m = MakeMinimalValidKvc1(/*value_words=*/2);
@@ -10472,7 +10124,7 @@ static void TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGamma
 // canonical mantissa domain where (q_b, q_c) is fully int64-representable
 // but q_b*q_b + q_c is not -- the predicate's own threshold computation
 // overflows, and the row it exists to refuse is accepted.
-static void TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64, 370) {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxRowOverflowWitness;
 	const auto status = superslm::CheckSoftmaxRowWidthDomain(w.q_b, w.q_c, w.width);
@@ -10496,7 +10148,7 @@ static void TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverfl
 // residual_reconcile's own result (it is odd-symmetric in m_a) -- the
 // shipped sign handling does not, and falsely reports a clamp event that
 // never happened.
-static void TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile() {
+SSLM_TEST(TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile, 371) {
 	using namespace superslm_test;
 	const auto& w = kLandingNegativeMaWitness;
 
@@ -10534,7 +10186,7 @@ static void TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile() {
 // 0, the saturation check (raw < -127 || raw > 127) never fires. This is
 // the exact class D-SLM201's counter exists to catch, defeated by the same
 // bug that produces the wrong answer.
-static void TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent() {
+SSLM_TEST(TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent, 372) {
 	using namespace superslm_test;
 	const auto& w = kLandingExtremeExponentWitness;
 
@@ -10581,7 +10233,7 @@ static void TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent
 // explicit refusal genuinely could not have been expressed against that
 // code, let alone pass; the bool return this cell requires is exactly what
 // 6eb1b76 added.
-static void TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid() {
+SSLM_TEST(TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid, 373) {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxQLn2ZeroWitness;
 
@@ -10637,7 +10289,7 @@ static void TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid() {
 // INSIDE [-127, 127] -- an ordinary-looking activation code with the WRONG
 // SIGN, which is exactly why the symptom alone cannot catch this class:
 // only the saturation counter can, and today it does not fire.
-static void TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss() {
+SSLM_TEST(TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss, 374) {
 	using namespace superslm_test;
 	const auto& w = kLandingRoundDivideInBandWitness;
 
@@ -10672,7 +10324,7 @@ static void TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecision
 // (kLandingExtremeExponentWitness.e_t) must be REJECTED at load time; today
 // it is accepted regardless of what e_t carries, because no check anywhere
 // reads word 1 of this section.
-static void TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT() {
+SSLM_TEST(TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT, 375) {
 	using namespace superslm_test;
 	const int64_t extreme_e_t = static_cast<int64_t>(kLandingExtremeExponentWitness.e_t);  // -1000
 
@@ -10726,7 +10378,7 @@ static void TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardl
 // q_ln2 parameter with which to check that ratio. This cell targets the gate
 // alone, before any kernel call, so a fix that rejects here (rather than
 // only downstream at the kernel) is recognized as sound.
-static void TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling, 376) {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxRowOffRatioWitness;
 
@@ -10752,7 +10404,7 @@ static void TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExce
 // accumulator) and bit-compared against the vendored reference's
 // exact-precision sum, wrapped to int64_t -- grounding "genuinely overflows"
 // in execution, not assertion.
-static void TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability() {
+SSLM_TEST(TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability, 377) {
 	using namespace superslm_test;
 	using superslm::IExpConstruct;
 	using superslm::IExpConstruction;
@@ -10829,7 +10481,7 @@ static void TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability()
 // be a width=3 coincidence -- the same (q_b, q_c) pair must still be refused
 // at a width near the artifact format's own admitted context_cap ceiling
 // (uint32_t, model.h + model.cpp:463's non-zero-only load-time validation).
-static void TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth, 378) {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxRowMZeroWideWitness;
 
@@ -10853,7 +10505,7 @@ static void TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth() {
 // counterpart, since a computed "peak" can never legitimately be negative
 // and a negative M carries no more assurance than a positive one of equal
 // size.
-static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude, 379) {
 	using namespace superslm_test;
 	const auto& w = kSoftmaxRowSignAsymmetryWitness;
 
@@ -10897,7 +10549,7 @@ static void TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMTha
 // the shipped check does its job, and it is mutation-proved by deleting
 // src/intmath.cpp:625-629 in a scratch copy outside the repository and confirming
 // this cell (and no other) newly fails.
-static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate() {
+SSLM_TEST(TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate, 380) {
 	using namespace superslm_test;
 	using superslm::IExpConstruct;
 	using superslm::IExpConstruction;
@@ -10958,7 +10610,7 @@ static void TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTh
 // standard forbids asserting a deliberate process crash) -- the same shape as
 // TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling
 // above, which likewise proves a gate-only property before any kernel call.
-static void TestCheckSoftmaxRowWidthDomainRejectsZeroWidth() {
+SSLM_TEST(TestCheckSoftmaxRowWidthDomainRejectsZeroWidth, 381) {
 	// A representative in-domain (q_b, q_c) pair (M = 1000000^2 + 250000, well
 	// under kSoftmaxRowMaxSafeExponent) -- every OTHER limb of the gate passes,
 	// isolating width == 0 as the only reason for the expected rejection.
@@ -10981,7 +10633,7 @@ static void TestCheckSoftmaxRowWidthDomainRejectsZeroWidth() {
 // over zero row elements). This cell calls it with a null `scores` pointer and
 // a null `out_probs` pointer: if the guard is ever removed or reordered past a
 // dereference, this is a crash, not a silent pass.
-static void TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing() {
+SSLM_TEST(TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing, 382) {
 	const bool well_formed = superslm::SoftmaxRowQ15(/*scores=*/nullptr, /*width=*/0,
 	                                                  /*q_ln2=*/1, /*q_b=*/1000000,
 	                                                  /*q_c=*/250000, /*out_probs=*/nullptr);
@@ -11006,7 +10658,7 @@ static void TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing() {
 // header's own documented "ungated caller" case does: calling SoftmaxRowQ15
 // directly, bypassing the gate. The gate's own rejection is grounded first, so
 // the cell cannot be satisfied by accident of the gate being reachable here too.
-static void TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling() {
+SSLM_TEST(TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling, 383) {
 	using namespace superslm_test;
 	using superslm::IExpConstruct;
 	using superslm::IExpConstruction;
@@ -11113,7 +10765,7 @@ static void TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceeds
 // -- this cell is the first C++ exercise of it directly, closing the gap that
 // only a Python source-text-scan (tests/ci/check_checked_chain_funnel_position_
 // cap_not_a_stub.py) had ever driven it before this pass.
-static void TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps() {
+SSLM_TEST(TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps, 384) {
 	using superslm::SslmForwardStatus;
 	struct Point {
 		int64_t position;
@@ -11185,36 +10837,17 @@ static void CheckRopeSitePositionCase(const superslm_test::RopeSitePositionCase&
 	}
 }
 
-static void TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives() {
+SSLM_TEST(TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives, 385) {
 	CheckRopeSitePositionCase(superslm_test::kRopeSitePositionZeroCase);
 	CheckRopeSitePositionCase(superslm_test::kRopeSitePositionCapMinusOneCase);
 }
 
-// Sec13.1 cell 9's sibling join for the RoPE table itself: the real, pinned
-// cos/sin rows the site will eventually read are carried byte-for-byte
-// through the real `SslmModel::Load`, at every row a small (context_cap=4)
-// artifact declares -- proving the artifact-carries-the-real-table half of
-// the site's own join independently of the site itself (which does not yet
-// exist to be driven end to end).
-static superslm_test::FixtureSection MakeRop1SectionMultiRow(int32_t context_cap, int32_t pairs,
-                                                               const int64_t* cos_flat, const int64_t* sin_flat) {
-	using namespace superslm_test;
-	std::vector<ManifestTensorSpec> tensors = {
-	    {"cos", {static_cast<uint32_t>(context_cap), static_cast<uint32_t>(pairs)}},
-	    {"sin", {static_cast<uint32_t>(context_cap), static_cast<uint32_t>(pairs)}},
-	};
-	auto manifest = BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors);
-	const size_t n = static_cast<size_t>(context_cap) * static_cast<size_t>(pairs);
-	for (size_t i = 0; i < n; ++i) {
-		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
-		       static_cast<uint64_t>(cos_flat[i]));
-		PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[1]) + i * 8,
-		       static_cast<uint64_t>(sin_flat[i]));
-	}
-	return MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
-}
+// MakeRop1SectionMultiRow moved to tests/support/shared_fixtures.h (T-1574
+// Stage 0): TwoLayerFixture's constructor calls it and TwoLayerFixture itself
+// moved there; every call site below still resolves it unqualified via that
+// header's include.
 
-static void TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow() {
+SSLM_TEST(TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow, 386) {
 	using namespace superslm_test;
 	const int32_t cap = kRopeSiteRoundTripContextCap;
 	const int32_t pairs = kRopeSiteRoundTripPairs;
@@ -11339,7 +10972,7 @@ static superslm_test::FixtureSection MakeRop1SectionAsymmetric(uint32_t cos_elem
 // against the loaded view. This is what stops a real R1-R4 implementation
 // from rejecting a conformant artifact; it is not itself a hostile cell and
 // is expected to stay green both before and after the real logic lands.
-static void TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin() {
+SSLM_TEST(TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin, 387) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
@@ -11373,7 +11006,7 @@ static void TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin() 
 
 // R1: hidden_size (4097) != num_attention_heads * head_dim (32 * 128 = 4096),
 // one past the exact product, with R2/R3/R4 all held.
-static void TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim() {
+SSLM_TEST(TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim, 388) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	spec.hidden_size = spec.num_attention_heads * spec.head_dim + 1;  // 4097
@@ -11398,7 +11031,7 @@ static void TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim() {
 // R2: num_attention_heads (32) % num_key_value_heads (7) != 0, with kv_heads
 // still <= heads (R3 held) and hidden_size still == heads*head_dim (R1 held)
 // and ROP1 still conformant (R4 held).
-static void TestCell4LoadRejectsHeadsNotDivisibleByKvHeads() {
+SSLM_TEST(TestCell4LoadRejectsHeadsNotDivisibleByKvHeads, 389) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	spec.num_key_value_heads = 7;  // 32 % 7 == 4 != 0; 7 <= 32 still holds
@@ -11425,7 +11058,7 @@ static void TestCell4LoadRejectsHeadsNotDivisibleByKvHeads() {
 // failing at the same time -- the same precedent the existing
 // TestConfigGeometryRejectsKvHeadsExceedsHeads pure-function cell already
 // establishes (heads=8, kv_heads=16). R1 and R4 are held.
-static void TestCell4LoadRejectsKvHeadsExceedsHeads() {
+SSLM_TEST(TestCell4LoadRejectsKvHeadsExceedsHeads, 390) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	spec.num_key_value_heads = 33;  // > 32
@@ -11450,7 +11083,7 @@ static void TestCell4LoadRejectsKvHeadsExceedsHeads() {
 // plan's own pre-D-SLM421 wrong bound (the factor-of-two error the fold
 // corrected) -- while "sin" carries the correct 256 (context_cap*(head_dim/2))
 // via the real, pinned kRopeSiteRoundTripSinFlat table. R1/R2/R3 held.
-static void TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect() {
+SSLM_TEST(TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect, 391) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
@@ -11480,7 +11113,7 @@ static void TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect() {
 // correct 256 via kRopeSiteRoundTripCosFlat. Proves the two tensors are
 // checked independently (D-SLM421): a correct "cos" does not mask a
 // malformed "sin".
-static void TestCell4LoadRejectsRopeSinShapeMismatchWithCosCorrect() {
+SSLM_TEST(TestCell4LoadRejectsRopeSinShapeMismatchWithCosCorrect, 392) {
 	using namespace superslm_test;
 	Cfg1Spec spec = MakeCell4CoherentCfg1Spec();
 	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
@@ -11554,7 +11187,7 @@ static superslm_test::FixtureSection MakeRop1SectionSparse128At(
 // and asserts out_row == c.expected_out exactly -- the site's own feature
 // oracle, at position 0 (the identity) and position context_cap-1 (a
 // genuine, clamp-engaging rotation), per Sec13 dim 6's own named cell.
-static void TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne() {
+SSLM_TEST(TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne, 393) {
 	using namespace superslm_test;
 
 	Cfg1Spec spec{};
@@ -11617,7 +11250,7 @@ static void TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne() {
 // unchanged from the poison pattern -- proving no write, and therefore no
 // read of the out-of-bounds row, occurred (the strongest ordering proof
 // constructible without instrumenting the tensor accessor itself).
-static void TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead() {
+SSLM_TEST(TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead, 394) {
 	using namespace superslm_test;
 
 	Cfg1Spec spec{};
@@ -11685,7 +11318,7 @@ static void TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead() {
 // exactly the "vitality" this dimension names, and distinct from Sec6.3's
 // cell above by using the tightest possible tensor rather than a
 // general-purpose one.
-static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
+SSLM_TEST(TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan, 395) {
 	using namespace superslm_test;
 
 	const int32_t cap = 1;
@@ -11743,7 +11376,7 @@ static void TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan() {
 // child (this suite's established death-test convention, S2.5) because a
 // regression here would again fault the process -- a cell that crashes the
 // runner is not a usable red.
-static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull() {
+SSLM_TEST(TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull, 396) {
 	static const char* kProbeName = "rope_apply_site_null_cos_tensor_deref";
 	std::string tail;
 	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
@@ -11778,7 +11411,7 @@ static void TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNu
 // probe (position=268435456, context_cap=2147483647, a genuine
 // CFG1-admissible u32 value). Routed through the crash-probe child for the
 // same reason as the cell above.
-static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory() {
+SSLM_TEST(TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory, 397) {
 	static const char* kProbeName = "rope_apply_site_position_far_past_tensor_extent";
 	std::string tail;
 	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
@@ -11820,7 +11453,7 @@ static void TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingU
 // read when the two bounds happen to agree), not this one. This cell sets
 // context_cap ABOVE the tensor's row count, so CheckPositionOverCap does NOT
 // intercept, and the read past the tensor's own extent actually happens.
-static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap() {
+SSLM_TEST(TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap, 398) {
 	using namespace superslm_test;
 
 	const int32_t tensor_rows = 1;
@@ -11901,7 +11534,7 @@ static void TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCa
 // StandardsDocument Sec5.6, a document claiming what the code does not deliver
 // is a code bug; this cell pins the remedy at the boundary the header's own
 // text names.
-static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
+SSLM_TEST(TestParseConfigRejectsOddHeadDimAtLoadTime, 399) {
 	using namespace superslm_test;
 
 	Cfg1Spec spec{};
@@ -11951,7 +11584,7 @@ static void TestParseConfigRejectsOddHeadDimAtLoadTime() {
 // (1234567890, 11) -- again caught by the out_scale assertion. Every
 // discriminating property this cell needs is therefore proven to fail on a
 // real, executed mutant, not asserted by argument.
-static void TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut() {
+SSLM_TEST(TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut, 400) {
 	using superslm::CarriedScale;
 	using superslm::SiluSigmoidQ15;
 	using superslm::SslmForwardStatus;
@@ -12034,7 +11667,7 @@ static void TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut() {
 // therefore not merely fail an abstract UB argument; it would silently
 // compute a negative garbage `pos_fixed` and feed it onward, which is
 // precisely the failure this ordering guard exists to prevent.
-static void TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid() {
+SSLM_TEST(TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid, 401) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12106,7 +11739,7 @@ static void TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid()
 // -- by execution, not by argument -- that an implementation of MlpActSite
 // substituting i-exp-sigmoid for the LUT at this fixture would fail that
 // cell's own out_codes[60] assertion.
-static void TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60() {
+SSLM_TEST(TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60, 402) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12209,7 +11842,7 @@ static void TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60() {
 // the wide add, then the funnel (RequantChainChecked) -- against those
 // ALREADY-SHIPPED primitives called directly, never a recode of their own
 // steps.
-static void TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives() {
+SSLM_TEST(TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives, 403) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12298,7 +11931,7 @@ static void TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives() 
 // then fail. This cell exists to state that divergence explicitly, as its
 // own discriminating claim, independent of the feature-oracle cell's pass/
 // fail.
-static void TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation() {
+SSLM_TEST(TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation, 404) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12410,7 +12043,7 @@ constexpr int64_t kWitnessReconciledRejectedWrongSign = INT64_C(-487522748034915
 // does not compile until `LandingRescale` gains `out_magnitude_exceeded_int64`
 // (§7.2b), and it is discriminating (not merely present) because it pins the
 // exact reconciled value at both operating points AND asserts the flag.
-static void TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater() {
+SSLM_TEST(TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater, 405) {
 	const int64_t r_h = superslm::DynamicScaleReciprocal(kWitnessStreamM);
 
 	bool accepted_flag = true;  // poisoned -- must become false
@@ -12463,7 +12096,7 @@ static void TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExpo
 // REJECTED at `stream_e = 23` with the new status, `out_codes`/`*out_scale`
 // left at their sentinel values (the funnel's own "reject leaves output
 // untouched" contract, extended to this site's own domain check per §7.2b).
-static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain() {
+SSLM_TEST(TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain, 406) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12562,7 +12195,7 @@ static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOf
 // build log, `Claude/Brunel/`): this exact call returns
 // `ResidualReconciliationMagnitudeOutOfDomain` there and
 // `CarriedScaleMantissaOutOfDomain` at HEAD.
-static void TestResidualReconcileSiteStepZeroGuardIsLoadBearing() {
+SSLM_TEST(TestResidualReconcileSiteStepZeroGuardIsLoadBearing, 407) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -12632,7 +12265,7 @@ constexpr int64_t kNegKStreamE = -40;
 
 // §13 dim 5/6, §14.14: the `LandingRescale`-level half of the negative-`k`
 // witness -- direct call, isolating the flag from the site's own composition.
-static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
+SSLM_TEST(TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness, 408) {
 	const int64_t r_h = superslm::DynamicScaleReciprocal(kNegKStreamM);
 	const int64_t k = 62 - (kNegKBranchE - kNegKStreamE);
 	CHECK_MSG(k == -34, "witness sanity: k == %lld, want -34 (negative-k branch)",
@@ -12676,7 +12309,7 @@ static void TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness() {
 // cell's own first assertion, so neither has anything above it within the
 // cell. The discriminating sentinels are the two CHECK_MSGs below the
 // first.)
-static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
+SSLM_TEST(TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain, 409) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 	using namespace superslm_test;
@@ -12732,7 +12365,7 @@ static void TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain() {
 // reverted code paths agree on that value absent the sanitizer catching the
 // UB itself -- exactly the two-part pin the casebook's remedy specifies.
 // ---------------------------------------------------------------------------
-static void TestLandingRescaleUnsignedNegationPinsInt64MinWitness() {
+SSLM_TEST(TestLandingRescaleUnsignedNegationPinsInt64MinWitness, 410) {
 	constexpr int64_t kBranchCode = -2;
 	constexpr int64_t kBranchM = INT64_C(1) << 30;
 	constexpr int64_t kBranchE = 62;
@@ -12778,7 +12411,7 @@ static void TestLandingRescaleUnsignedNegationPinsInt64MinWitness() {
 // inert" exactly as its own comment states), so, matching the LandingRescale
 // cell immediately above, this pins the value/status on every non-sanitizer
 // leg and turns a revert into a hard sanitizer failure on `linux-x64-asan`.
-static void TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd() {
+SSLM_TEST(TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd, 411) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -12832,220 +12465,8 @@ namespace {
 // kCtxFoldJoinCase/MakeCtxFoldSection (§11 S3.3's own fixture,
 // TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1
 // above).
-struct TwoLayerFixture {
-	// S3.7: the fixture's own CFG1 `context_cap` and ROP1 row count (T-1571,
-	// the multi-position bump below). Not the `context_cap` any individual
-	// call site passes to RunLayerLoop/RunGreedyDecodeLoop -- those remain
-	// each call's own explicit argument.
-	static constexpr int32_t kContextCap = 16;
-
-	superslm::SslmModelView view;  // owns the backing store rope_tables points into
-	superslm::LayerWeights layers[2];
-	// Backing arrays LayerWeights points into -- kept alive for the fixture's
-	// own lifetime.
-	// T-1374/Significant 4: this fixture's own geometry has exactly one head
-	// (num_attention_heads=1), so the per-head arrays below have one entry
-	// each -- the same value every element used before this struct gained a
-	// head axis, replicated across K and V since this fixture does not
-	// distinguish them.
-	int64_t kv_landing_r_t_arr[1];
-	int64_t kv_landing_e_t_arr[1] = {0};
-	int32_t ctx_fold_identity_arr[1] = {1};
-	int32_t ctx_fold_mult_arr[1] = {0};
-	int32_t ctx_fold_shift_arr[1] = {0};
-	// T-1356: a Q16 gain of 1.0 (65536) is OUT of C29's chain-input domain at
-	// this composition, by construction rather than by bad luck. RmsNormSite
-	// forms `FloorDivI64(h[i] << 2*NORM_FRAC_BITS, root) * g[i]`, and for a row
-	// whose elements are all at the RMS the first factor is ~2^16, so a unit
-	// Q16 gain lands the wide row at exactly 2^32 -- twice C29's `d_prime >
-	// 2^31` ceiling. Executed at this fixture's own {5,-5}: root == 327680,
-	// wide == +/-4294967296 at gain 65536, +/-2147483648 at 32768 (the ceiling
-	// itself), +/-1073741824 at 16384. The declaring pass could not have seen
-	// this -- the stub returned before any funnel call, so nothing in the suite
-	// ever drove the fixture through C29. Same class as D-SLM426, where a
-	// latent fixture defect stayed silent until a real body first ran against
-	// it. 16384 (Q16 0.25) is chosen over 32768 to sit clear of the boundary
-	// rather than exactly on it.
-	int32_t norm_gain[2] = {16384, 16384};
-	int8_t identity2x2[4] = {1, 0, 0, 1};   // [[1,0],[0,1]] row-major [out,in]
-
-	// Default-constructs in place, wiring every LayerWeights pointer field to
-	// point at THIS object's own sibling array members (`norm_gain`,
-	// `identity2x2`, etc). This used to be a `static Build()` factory that
-	// built a separate local `f`, wired the pointers to `f`'s own members, and
-	// `return f;`d it -- a named-local return that only stays valid if NRVO
-	// elides the copy, which C++ never guarantees (D-SLM487). Doing the wiring
-	// in the constructor body instead means it runs directly on `*this` at
-	// its FINAL address (the caller's own local, `TwoLayerFixture fixture;`)
-	// -- there is no intermediate object for the pointers to dangle from, so
-	// the property does not depend on an optimization the compiler is free to
-	// skip. Confirmed by direct address trace, not by construction alone: see
-	// this pass's `TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress`
-	// below, which prints `&identity2x2` against `layers[*].q_weight` and
-	// requires them equal -- the same measurement D-SLM487 used to prove the
-	// old shape broken, now asserted permanently as a regression guard.
-	TwoLayerFixture() {
-		using namespace superslm_test;
-		using superslm::CarriedScale;
-
-		TwoLayerFixture& f = *this;
-		Cfg1Spec spec{};
-		spec.hidden_size = 2;
-		spec.num_hidden_layers = 2;
-		spec.num_attention_heads = 1;
-		spec.num_key_value_heads = 1;
-		spec.head_dim = 2;
-		spec.intermediate_size = 2;
-		// S3.7: bumped from 1 to kTwoLayerFixtureContextCap (16) so this
-		// fixture's own ROP1 table carries enough rows for a multi-position
-		// caller to drive `context_length` past 0 -- every existing call site
-		// that passes RunLayerLoop its own explicit `context_cap=1` literal is
-		// unaffected (CheckPositionOverCap/RopeApplySite bound `position`
-		// against the CALLER's own `context_cap` argument, never CFG1's, so a
-		// bigger table changes nothing for a caller that only ever asks for
-		// position 0). The K/V workspace size is likewise driven by each
-		// call's own `context_cap` argument, not this fixture's CFG1 value.
-		spec.context_cap = TwoLayerFixture::kContextCap;
-		spec.kv_precision = 0;  // Int8
-		spec.kv_block_size = 1;
-		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
-		// Identity rotation (cos(0)==2^30, sin==0) at every one of the
-		// fixture's `kContextCap` rows -- every existing cell in this suite
-		// that reads this fixture's rope table still sees identity at
-		// position 0, unchanged from before this bump.
-		std::vector<int64_t> cos_flat(TwoLayerFixture::kContextCap, INT64_C(1073741824));
-		std::vector<int64_t> sin_flat(TwoLayerFixture::kContextCap, INT64_C(0));
-		FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/TwoLayerFixture::kContextCap,
-		                                               /*pairs=*/1, cos_flat.data(), sin_flat.data());
-		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
-		std::string err;
-		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
-		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
-		          "TwoLayerFixture's own minimal artifact failed to load: got %s (%s)",
-		          superslm::SslmModelStatusName(status), err.c_str());
-
-		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
-		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
-		f.kv_landing_r_t_arr[0] = r_t;
-		for (int l = 0; l < 2; ++l) {
-			superslm::LayerWeights& lw = f.layers[l];
-			lw.attn_norm_gain = f.norm_gain;
-			lw.attn_norm_site_constant = canonical;
-			lw.q_weight = f.identity2x2;
-			lw.k_weight = f.identity2x2;
-			lw.v_weight = f.identity2x2;
-			lw.o_weight = f.identity2x2;
-			lw.proj_identity = 1;
-			lw.proj_mult = 0;
-			lw.proj_shift = 0;
-			lw.q_site_constant = canonical;
-			lw.o_site_constant = canonical;
-			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
-			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
-			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
-			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
-			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
-			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
-			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
-			lw.ctx_fold_site_constant = canonical;
-			lw.attn_residual_site_constant = canonical;
-			// A domain-checked, non-degenerate C30 triple (e=-52 against this
-			// fixture's own canonical m=2^30-adjacent mantissa) -- derived by
-			// direct execution of the vendored reference's iexp_scale_constants,
-			// never hand re-derived (Curie's own discipline, dimension 10):
-			// python -c "import sys; sys.path.insert(0,'tests/reference/
-			// superslm_spike'); sys.path.insert(0,'tests/reference'); import
-			// intmath as im; QFMT=30; LN2_Q=int(im._LN2*(1<<QFMT));
-			// B_Q=int(im._POLY_B*(1<<QFMT)); CA_Q=int((im._POLY_C/im._POLY_A)*(1<<QFMT));
-			// print(im.iexp_scale_constants(1500000000,-52,LN2_Q,QFMT,B_Q,QFMT,CA_Q,QFMT))"
-			// -> (2081104, 4062246, 8649804928567); M=q_b^2+q_c == 25151647493083,
-			// under kSoftmaxRowMaxSafeExponent (2^47 == 140737488355328).
-			lw.q_ln2 = INT64_C(2081104);
-			lw.q_b_iexp = INT64_C(4062246);
-			lw.q_c_iexp = INT64_C(8649804928567);
-			lw.mlp_norm_gain = f.norm_gain;
-			lw.mlp_norm_site_constant = canonical;
-			lw.gate_weight = f.identity2x2;
-			lw.up_weight = f.identity2x2;
-			lw.down_weight = f.identity2x2;
-			// T-1355: gate_proj/up_proj each funnel in their own right and so
-			// each carries its own site constant, on the same `canonical`
-			// pattern every other site constant in this fixture uses.
-			lw.gate_site_constant = canonical;
-			lw.up_site_constant = canonical;
-			// T-1356: `canonical` here would compound into the SAME
-			// chain-input rejection D-SLM434 already found one site later
-			// (the whole finding this fixture pass closes). Derived by
-			// execution, not tuned: MlpActSite's own funnel call folds THREE
-			// factors left-associated (gate_scale, up_scale, this site
-			// constant -- forward_sites.cpp:504), and the trace hook
-			// (SslmSetTraceHook + ChainTraceSinkHookFn, this suite's own
-			// S3.1a instrumentation) reads the real per-site (dn, s, m_out,
-			// e_out) with no re-implementation needed.
-			//   1. With this field at `canonical` (e=-30), a trace-hooked
-			//      run of RunLayerLoop(budget=1) on this fixture's layer 0
-			//      gives mlp_act e_out=72 (executed) -- gate/up both e=6, so
-			//      the three-factor fold plus this site's own D'=528515072
-			//      (~127*2^15*127, MlpActSite's own documented Q15 product
-			//      bound) drives the OUTPUT nearly 66 exponent-bits above
-			//      its INPUTS. Downstream this composes through down_proj
-			//      (e_out=79) into mlp_residual, whose wide row then reads
-			//      exactly the values Poirot's review recorded --
-			//      branch=(2064898088,79), stream=(1140850688,6) -- and
-			//      rejects C29 (`d_prime > 2^31`), reproducing D-SLM434's
-			//      "each correction moves rejection one site later" exactly.
-			//   2. The +66 drift lives entirely in this ONE site constant's
-			//      own `e`, because CombineCarriedScale's exponent output is
-			//      `a.e + b.e + 31` (checked_chain_funnel.cpp) at each fold
-			//      step, and this constant's own `m` stays at the same
-			//      canonical mantissa (2^30) every other site constant in
-			//      this tree uses -- so shifting only its `e` shifts
-			//      mlp_act's own output `e` by the identical amount, with no
-			//      other combine step touched. Re-running the same
-			//      trace-hooked probe at e=-96 (30+66 below canonical)
-			//      gives mlp_act e_out=6 exactly (executed) -- landing on
-			//      attn_residual's own carried-scale exponent for this same
-			//      fixture, which keeps down_proj (e_out=13) and
-			//      mlp_residual (e_out=20, wide-row d_prime=29550, far
-			//      inside C29's 2^31 ceiling) in domain at every enumerated
-			//      budget and every resume/poison cell (§8 below).
-			// Reproduction: build this commit, install the trace hook on a
-			// RunLayerLoop(budget=1) call over this fixture's layer 0, and
-			// diff mlp_act's own e_out between `canonical` and this value --
-			// the delta is exactly -66, matching the shift applied here.
-			// C34's own domain check (CheckSiluCompositionScaleDomain) is
-			// unaffected: it examines gate_scale (the INPUT), never this
-			// site constant, so no upstream cell's C34 coverage changes.
-			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
-			lw.down_site_constant = canonical;
-			lw.mlp_residual_site_constant = canonical;
-		}
-	}
-
-	// D-SLM492/T-1407: every `LayerWeights` pointer field wired above points at
-	// THIS object's own sibling array members. A copy or a move would produce a
-	// second object whose `LayerWeights` still point at the ORIGINAL object's
-	// arrays (a shallow-copied pointer, not a deep one) -- harmless only for as
-	// long as the original outlives the copy, and silently dangling the moment
-	// it does not. The constructor-body wiring (T-1403) makes direct
-	// construction safe by removing the return-by-value NRVO dependency; it
-	// does nothing to stop a FUTURE caller from relocating an already-built
-	// fixture (a helper that builds one and returns it by value, a
-	// `std::vector<TwoLayerFixture>`, an assignment). Deleting copy and move
-	// converts that reintroduction from a silent dangling pointer into
-	// `error C2280` at compile time -- proven: a hand-built two-return-path
-	// factory returning `TwoLayerFixture` by value (the exact shape D-SLM487
-	// found broken) fails to compile with copy/move deleted, where it
-	// previously compiled and passed every existing check while corrupting the
-	// four bytes `TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress`
-	// (below) reads back. No existing call site constructs this fixture by
-	// relocation (independently swept, §4 of the review this repairs), so
-	// nothing that exists today needs the move.
-	TwoLayerFixture(const TwoLayerFixture&) = delete;
-	TwoLayerFixture& operator=(const TwoLayerFixture&) = delete;
-	TwoLayerFixture(TwoLayerFixture&&) = delete;
-	TwoLayerFixture& operator=(TwoLayerFixture&&) = delete;
-};
+// TwoLayerFixture moved to tests/support/shared_fixtures.h (T-1574 Stage 0, §3) --
+// shared across candidate areas #12/#13, included via the support headers above.
 
 // T-1375/Critical 1 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
 // 2026-07-29.md; fixed at fdb4d13). Single layer, one head, hidden_size=2.
@@ -13186,7 +12607,7 @@ struct CriticalOneFixture {
 // then re-wires its `LayerWeights` pointers at some OTHER object's addresses
 // by hand): that shape still compiles, and this guard is what catches it (33
 // failures under the review's own reproduction of it).
-static void TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress() {
+SSLM_TEST(TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress, 412) {
 	TwoLayerFixture fixture;
 	for (int l = 0; l < 2; ++l) {
 		const superslm::LayerWeights& lw = fixture.layers[l];
@@ -13275,7 +12696,7 @@ static void TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress() {
 // `{0,0,0,0}`, every one of the fourteen assertions below fails
 // (`out == {0,0} != {5,-3}`) -- this cell is the closing half of that
 // control.
-static void TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite() {
+SSLM_TEST(TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite, 413) {
 	TwoLayerFixture fixture;
 
 	const int8_t kInput[2] = {INT8_C(5), INT8_C(-3)};
@@ -13314,7 +12735,7 @@ static void TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite() {
 // call at budget 0, and assert every one of those is exactly the poison
 // value (never touched), on top of the status itself. §13 dim 4's own
 // budget-axis cell.
-static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged() {
+SSLM_TEST(TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged, 414) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13364,7 +12785,7 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 // num_hidden_layers` trivially true at `layer_index == 0`, the one value
 // every fresh sequence starts at). Both must be rejected rather than
 // silently returning `Ok` having advanced nothing.
-static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
+SSLM_TEST(TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk, 415) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13442,7 +12863,7 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 // `WorkspaceTooSmall`. A host that receives `WorkspaceTooSmall` for a
 // geometry fact enlarges its buffer forever against a size no buffer
 // satisfies. Two witnesses: a non-dividing pair, and `head_dim == 0` itself.
-static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
+SSLM_TEST(TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall, 416) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13514,7 +12935,7 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 // gate untouched at width=1 -- the only width this sub-slot's RunLayerLoop
 // composes -- and is caught only by the kernel's own independent domain
 // check, which is exactly the gap this status exists to name.
-static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
+SSLM_TEST(TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection, 417) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13576,7 +12997,7 @@ static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
 // reliably -- what this cell pins, and what does not depend on that, is
 // the STATUS: `RunLayerLoop` must refuse before forming the size product,
 // never after.
-static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct() {
+SSLM_TEST(TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct, 418) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13651,7 +13072,7 @@ static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSi
 // There is no `all` sentinel (§9.3) -- "every layer" is spelled
 // `layer_budget == num_hidden_layers` and nothing else, so the L cell IS
 // the "all" case, not a separate axis value.
-static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
+SSLM_TEST(TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget, 419) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13703,7 +13124,7 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 // an implementation returning the same fixed status/untouched output on
 // every call (this pass's own stub) fails the precondition Ok check first,
 // which is why this cell is red-unimplemented rather than vacuously green.
-static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit() {
+SSLM_TEST(TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit, 420) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13788,7 +13209,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 // second call's output would diverge -- this is the silent failure D-SLM432
 // requires a discriminating value comparison for, not a status/untouched
 // check alone.
-static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls() {
+SSLM_TEST(TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls, 421) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -13889,7 +13310,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 // reused here byte for byte) == what the forward reads (this cell) ==
 // the arbitrary-precision oracle (S3.3's own, transitively, since both
 // legs are proven equal to the SAME independently-derived dispatch).
-static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold() {
+SSLM_TEST(TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold, 422) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14164,7 +13585,7 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 // `num_heads=1`, `head_dim=2`, `layer=0`) places k_store at workspace[0..1]
 // and v_store at workspace[2..3] by construction, and V is never
 // subsequently rewritten by RoPE (only K is).
-static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
+SSLM_TEST(TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter, 423) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14229,7 +13650,7 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 // GemmInt8AccumulateRow -> ApplyWeightScaleFold -> LandingRescale ->
 // ClampRopeCode), never hand-picked, so the oracle is grounded the same way
 // cell 9's own three-way join is.
-static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
+SSLM_TEST(TestRunLayerLoopCachesKPostRotationNotPreRotation, 424) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14391,7 +13812,7 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 // pre-call state AND the corrupted post-attn_residual state, so an
 // assertion against the pre-call value alone could not be satisfied by
 // accident.
-static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt() {
+SSLM_TEST(TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt, 425) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14627,7 +14048,7 @@ superslm::SslmForwardStatus RunOneWholeTokenDirect(superslm::SequenceLayerState&
 // and siblings); this cell's own unique contribution is the width>=2
 // discrimination property, which is layer-index-agnostic by construction --
 // the SAME code path runs for `layers[0]` and `layers[1]` alike.
-static void TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo() {
+SSLM_TEST(TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo, 426) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14729,7 +14150,7 @@ static void TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo() {
 // `kv_head * head_dim` instead) aliases head 1's rows onto head 0's from
 // position 1 onward, and that mutation drives 23,270 checks to 0 failures
 // without this cell.
-static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
+SSLM_TEST(TestKvRowAccessorHeadStrideIncludesContextCapFactor, 427) {
 	using namespace superslm;
 
 	uint8_t workspace[1 * 3 * 2 * 2 * 2] = {};  // 1 layer * cap 3 * 2 heads * head_dim 2 * 2 (K+V)
@@ -14773,7 +14194,7 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 // -- the axis's own comment used to say so ("context axis sub-cell 2/3").
 // `context_cap == 3` gives the axis four DISTINCT integers (0, 1, 2, 3), so
 // each of the four sub-cells below is its own call and its own assertion.
-static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
+SSLM_TEST(TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast, 428) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -14923,7 +14344,7 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 // budget each time. Path B: the SAME three tokens, but the third token's
 // layers are split across two resumed calls (the RESUME axis §11 S3.5
 // already exercises, crossed here with the position axis S3.7 adds).
-static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition() {
+SSLM_TEST(TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition, 429) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15023,7 +14444,7 @@ static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition()
 // RoPE K row must be UNCHANGED by position 1's own landing write, read
 // through KeyRow -- a regression to a whole-region flat copy would overwrite
 // it.
-static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
+SSLM_TEST(TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions, 432) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15170,7 +14591,7 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 // The K/V store's context_cap-sized reservation, exercised at its own
 // boundary (test design §3 Cell 6): a position exactly context_cap-1 writes
 // and reads correctly through KeyRow/ValueRow.
-static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor() {
+SSLM_TEST(TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor, 433) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15250,7 +14671,7 @@ static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughA
 // release the handle (poison-fill the shared workspace); sequence B, created
 // fresh in the same slot, must read poison -- not A's committed codes -- at
 // every position 0..k-1, before B has written that position itself.
-static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
+SSLM_TEST(TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore, 434) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15316,7 +14737,7 @@ static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
 // a stale or double-advanced context_length -- both must stay constant
 // across every layer of ONE token, since context_length only advances at the
 // token's LAST layer.
-static void TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers() {
+SSLM_TEST(TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers, 435) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15397,7 +14818,7 @@ static void TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers() {
 // own hidden_codes buffer, memcpy'd from the snapshot's own pointee -- never
 // the pointer itself), continue the restored copy, and assert the two token
 // streams are identical.
-static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength() {
+SSLM_TEST(TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength, 436) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15497,7 +14918,7 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 // PositionOverCap, canary bytes clobbered). A guard checked on every call
 // rejects before any layer runs: status KvCapacityExhausted, canary bytes
 // untouched, `seq` left bit-identical.
-static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() {
+SSLM_TEST(TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite, 437) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15554,7 +14975,7 @@ static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() 
 // this regresses (context_cap=3, num_heads=1, head_dim=2,
 // context_length=-1): status PositionOverCap, bytes at offsets [-2,-1]
 // overwritten.
-static void TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite() {
+SSLM_TEST(TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite, 438) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15611,7 +15032,7 @@ static void TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLand
 // reproduction outside this suite (recorded in this ticket's build log,
 // not committed here); this cell asserts the GUARDED behavior, the one
 // shape safe to assert in-process.
-static void TestRunLayerLoopRestoredStateNullHiddenCodesRejected() {
+SSLM_TEST(TestRunLayerLoopRestoredStateNullHiddenCodesRejected, 439) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15650,7 +15071,7 @@ static void TestRunLayerLoopRestoredStateNullHiddenCodesRejected() {
 // Witness 1 (`layer_index == num_hidden_layers`) -- a caller-restored
 // state assembled from truncated or garbage bytes could carry UINT32_MAX
 // specifically, not only the boundary value.
-static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard() {
+SSLM_TEST(TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard, 440) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15691,7 +15112,7 @@ static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard(
 // from 0 -- unsigned overflow is well-defined wraparound in C++, and this
 // asserts the counter actually takes that path, not merely that nothing
 // crashes.
-static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorruption() {
+SSLM_TEST(TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorruption, 441) {
 	uint64_t count_from_zero = 0;
 	const int64_t raw_from_zero =
 	    superslm::LandingRescale(200, kSatCounterMA, kSatCounterRT, 0, 0, &count_from_zero);
@@ -15820,7 +15241,7 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 // small, WRONG-signed `int` shift, `-63`, for this exact witness). `e` is
 // therefore restored to the true extreme, `INT64_MAX`, below -- the value
 // this sub-case's own name and comment always claimed to stress.
-static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit() {
+SSLM_TEST(TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit, 442) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -15990,7 +15411,7 @@ superslm::SslmModelStatus LoadCalibrationBandFixture(bool include_band, int64_t 
 // section-loop arm changed). `kArtifactFormatVersion`, `kConfigBytes`, and
 // CFG1's own `version` field are unchanged, asserted at the constants
 // themselves (they are compile-time constants this pass did not touch).
-static void TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged() {
+SSLM_TEST(TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged, 443) {
 	using superslm::SslmCalibrationBandVerdict;
 	using superslm::SslmModelStatus;
 
@@ -16020,7 +15441,7 @@ static void TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged(
 // (min=10, max=20). PASS iff each reports exactly its own named verdict --
 // an achievement claim per §13 dim 10 (a golden-hash or consistency oracle
 // would pass on a verdict enum that always returned the same member).
-static void TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases() {
+SSLM_TEST(TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases, 444) {
 	using superslm::SslmCalibrationBandVerdict;
 	using superslm::SslmModelStatus;
 
@@ -16074,7 +15495,7 @@ static void TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases() {
 // (above_band). PASS iff each reports the verdict its own inclusive-endpoint
 // reading demands; FAIL iff `min`/`max` themselves report below/above (an
 // off-by-one on the inclusive claim).
-static void TestCalibrationBandBoundaryEndpointsAreInclusive() {
+SSLM_TEST(TestCalibrationBandBoundaryEndpointsAreInclusive, 445) {
 	using superslm::SslmCalibrationBandVerdict;
 	using superslm::SslmModelStatus;
 
@@ -16117,7 +15538,7 @@ static void TestCalibrationBandBoundaryEndpointsAreInclusive() {
 // `max <= 0` both present), and `min < 0` alone against a positive `max`
 // (isolated from the pre-existing `max <= 0` rejection, so this sub-case is
 // not redundant with it).
-static void TestCalibrationBandHostileBandsAreLoadRejections() {
+SSLM_TEST(TestCalibrationBandHostileBandsAreLoadRejections, 446) {
 	using superslm::SslmModelStatus;
 
 	{
@@ -16185,7 +15606,7 @@ static void TestCalibrationBandHostileBandsAreLoadRejections() {
 // truth (D-SLM563) rather than changed: this pins the shipped behaviour so
 // it is a deliberate, tested policy rather than one that can drift with no
 // cell noticing, per §11 S3.7's own domain-gate discipline.
-static void TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown() {
+SSLM_TEST(TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown, 447) {
 	using namespace superslm_test;
 	using superslm::SslmCalibrationBandVerdict;
 	using superslm::SslmModelStatus;
@@ -16387,7 +15808,7 @@ constexpr int32_t kDecodeLoopExpectedArgmax[3] = {0, 1, 2};
 // oracle, run once per vocabulary entry, so a future reader can re-derive
 // kDecodeLoopExpectedLogits/kDecodeLoopExpectedArgmax by re-running this
 // test rather than by re-reading a comment.
-static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
+SSLM_TEST(TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits, 448) {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
@@ -16472,7 +15893,7 @@ static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
 // NarrowAccumulatorToI32 substituted for NarrowRowChecked (undetectable by
 // THIS cell alone since both agree in-domain -- the next cell is what kills
 // that substitution).
-static void TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow() {
+SSLM_TEST(TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow, 449) {
 	using superslm::CarriedScale;
 	using superslm::SslmForwardStatus;
 
@@ -16512,7 +15933,7 @@ static void TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow() {
 // LogitsSite that narrows via a bare NarrowAccumulatorToI32 (would wrap to a
 // negative int32 and return Ok) or that omits the check under any
 // "hidden_size is usually small" assumption.
-static void TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping() {
+SSLM_TEST(TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping, 450) {
 	using superslm::SslmForwardStatus;
 
 	constexpr size_t kHiddenSize = 133200;
@@ -16541,7 +15962,7 @@ static void TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping() {
 // own composition above so a tie-break defect and a logits-composition
 // defect are two independently-failing cells rather than one bundled cell. --
 
-static void TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie() {
+SSLM_TEST(TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie, 451) {
 	// The plan's own mandated red cell, verbatim: "a constructed exact tie in
 	// the logit row selects the lower index."
 	const int32_t logits[4] = {5, 7, 7, 3};
@@ -16552,7 +15973,7 @@ static void TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie() {
 	          result);
 }
 
-static void TestArgmaxLowestIndexTieBreakTieNotAtTheEdges() {
+SSLM_TEST(TestArgmaxLowestIndexTieBreakTieNotAtTheEdges, 452) {
 	// A tie away from both array edges, to kill an implementation that only
 	// special-cases index 0 or the last index.
 	const int32_t logits[4] = {1, 2, 9, 9};
@@ -16560,7 +15981,7 @@ static void TestArgmaxLowestIndexTieBreakTieNotAtTheEdges() {
 	CHECK_MSG(result == 2, "ArgmaxLowestIndexTieBreak({1,2,9,9}) == %d, want 2", result);
 }
 
-static void TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex() {
+SSLM_TEST(TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex, 453) {
 	// Kills a magnitude/absolute-value confusion: the tie is between two
 	// NEGATIVE values, and a more-negative distractor (-9) must not win.
 	const int32_t logits[4] = {-5, -1, -1, -9};
@@ -16568,7 +15989,7 @@ static void TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex() {
 	CHECK_MSG(result == 1, "ArgmaxLowestIndexTieBreak({-5,-1,-1,-9}) == %d, want 1", result);
 }
 
-static void TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie() {
+SSLM_TEST(TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie, 454) {
 	// The non-tied control: exactly one maximum, proving the function finds
 	// the true maximum's own index and is not, say, always returning 0 or
 	// always returning the first index whose value differs from its
@@ -16578,7 +15999,7 @@ static void TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie() {
 	CHECK_MSG(result == 1, "ArgmaxLowestIndexTieBreak({5,7,2}) == %d, want 1", result);
 }
 
-static void TestArgmaxLowestIndexTieBreakSingleElementRow() {
+SSLM_TEST(TestArgmaxLowestIndexTieBreakSingleElementRow, 455) {
 	const int32_t logits[1] = {42};
 	const int32_t result = superslm::ArgmaxLowestIndexTieBreak(logits, 1);
 	CHECK_MSG(result == 0, "ArgmaxLowestIndexTieBreak({42}) == %d, want 0", result);
@@ -16682,7 +16103,7 @@ struct DecodeLoopCallFixture {
 // workspace is sized or any token is embedded. A too-small workspace is the
 // witness that the check runs FIRST -- if the width check ran after sizing,
 // WorkspaceTooSmall (or a crash) would fire instead.
-static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
+SSLM_TEST(TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse, 430) {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmKvPrecision;
 
@@ -16731,7 +16152,7 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 // equivalent cell, this guard's shape RETURNS rather than crashing, so this
 // cell asserts a real status in-process rather than merely the guarded
 // shape.
-static void TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected() {
+SSLM_TEST(TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected, 431) {
 	using superslm::SslmForwardStatus;
 
 	DecodeLoopCallFixture f(/*out_capacity=*/2);
@@ -16751,7 +16172,7 @@ static void TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected() {
 // prefix still leaves everything untouched (the whole call is rejected, not
 // partially applied). Three boundary values: negative, == vocab_size, and >
 // vocab_size (§13 dim 2's own enumerated set).
-static void TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateChanges() {
+SSLM_TEST(TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateChanges, 456) {
 	using superslm::SslmForwardStatus;
 	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
 	for (int32_t bad_id : kBadIds) {
@@ -16775,7 +16196,7 @@ static void TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateCha
 // pass by accident on some implementations; requiring EVERYTHING untouched,
 // including `out_tokens`, is what forces the check to run up front rather
 // than after some tokens are already produced.
-static void TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts() {
+SSLM_TEST(TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts, 457) {
 	using superslm::SslmForwardStatus;
 	const int32_t kBadIds[3] = {-1, DecodeLoopFixture::kVocabSize, DecodeLoopFixture::kVocabSize + 1};
 	for (int32_t bad_id : kBadIds) {
@@ -16795,7 +16216,7 @@ static void TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts() 
 // run: DecodeLoopFixture's own token-0 vocabulary entry ties at {127, _,
 // 127} and C16 selects index 0 every time, so a 1-token prompt with an
 // empty stop set and max_new_tokens=3 deterministically produces {0,0,0}.
-static void TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount() {
+SSLM_TEST(TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount, 458) {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
@@ -16823,7 +16244,7 @@ static void TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount() {
 // 0 and must be the LAST element of out_tokens (§9.1: "appended before the
 // stop test"), and both digests, computed independently via Sha256Hash on a
 // hand-assembled byte buffer per §10.1's own definition, must match.
-static void TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests() {
+SSLM_TEST(TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests, 459) {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
@@ -16874,7 +16295,7 @@ static void TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBoth
 // prompt of token 0 (this fixture's own deterministic argmax always returns
 // 0 for that starting point) -- stop_ids={1} must therefore run all the way
 // to max_new_tokens, never matching.
-static void TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly() {
+SSLM_TEST(TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly, 460) {
 	using superslm::SslmForwardStatus;
 	using superslm::SslmDecodeStopReason;
 
@@ -16897,6 +16318,14 @@ int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
 		const std::string arg1 = argv[1];
+		if (arg1 == "--count-tests") {
+			std::printf("%zu\n", superslm_test_registry::RegisteredTestCount());
+			return 0;
+		}
+		if (arg1 == "--list-tests") {
+			superslm_test_registry::ListRegisteredTests();
+			return 0;
+		}
 		const std::string prefix = "--crash-probe=";
 		if (arg1.rfind(prefix, 0) == 0) {
 			return RunCrashProbe(arg1.substr(prefix.size()));
@@ -16922,674 +16351,7 @@ int main(int argc, char** argv) {
 		             kCrashProbeChildEnvVar, argc > 1 ? argv[1] : "(none)");
 		return 3;
 	}
-	TestSha256KnownVectors();
-	TestDtypeSizes();
-	TestKnownSectionTypes();
-
-	// --- Curie's S0 loader red suite (red-first). ---
-	TestRejectsBadMagic();
-	TestRejectsUnsupportedVersion();
-	TestRejectsHeaderBytesMismatch();
-	TestRejectsNonzeroFlags();
-	TestRejectsNonzeroReserved0();
-	TestRejectsTruncatedHeader();
-
-	// --- S-HARDEN-1 (F14): null-buffer / null-path rejection (red-first). ---
-	TestRejectsNullDataNonzeroSize();
-	TestRejectsNullDataSmallNonzeroSize();
-	TestRejectsNullPath();
-
-	TestRejectsTruncatedSectionTable();
-	TestRejectsTooManySections();
-	TestRejectsFileSizeMismatch();
-	TestRejectsAlignmentNotPowerOfTwo();
-	TestRejectsAlignmentBelowMinimum();
-	TestRejectsAlignmentAboveMaximum();
-	TestRejectsMisalignedOffset();
-	TestRejectsSectionOutOfBoundsPastEof();
-	TestRejectsSectionOffsetOverflow();
-	TestRejectsSectionOverlapWithHeader();
-	TestRejectsSectionOverlapWithSection();
-	TestRejectsBadDtype();
-	TestRejectsSectionDtypeMismatch();
-	TestRejectsSizeMismatch();
-	TestRejectsUnknownSectionType();
-	TestRejectsDuplicateSection();
-	TestRejectsMissingConfigSection();
-	TestRejectsIntegrityMismatch();
-	TestAcceptsEmptySection();
-	TestAcceptsMaximumAlignment();
-	TestAcceptsSectionsInNonAscendingOffsetOrder();
-	TestAcceptsReservedSectionTypeStructurally();
-	TestOpenFromFileLoadsValidArtifact();
-	TestOpenFromFileMissingFileReturnsIoError();
-	TestValidArtifactLoadsToExpectedEndState();
-
-	// --- Curie's S1 tokenizer red suite (red-first). ---
-	TestTokenizerOpensFixtureArtifact();
-	TestTokenizerGoldenEncodeMatchesUpstreamIds();
-	TestTokenizerGoldenIdsHashMatchesConverter();
-	TestTokenizerDecodeRoundTrip();
-	TestTokenizerEncodeEmptyStringYieldsEmptyIds();
-	TestTokenizerSpecialTokenIdMatchesArtifactDeclaration();
-	TestTokenizerVocabSizeMatchesArtifactDeclaration();
-	TestTokenizerAsciiStringRoundTrips();
-	TestTokenizerByteToIdBijectsOntoEveryRawByteValue();
-
-	// --- S-HARDEN-2 (F7, red-first): Decode's documented malformed-UTF-8 policy
-	//     through the one strict decoder shared by encode and decode. ---
-	TestDecodeSubstitutesReplacementCharForOverlongTwoByteSequence();
-	TestDecodeSubstitutesReplacementCharForOverlongThreeByteSequence();
-	TestDecodeSubstitutesReplacementCharForSurrogateCodepoint();
-	TestDecodeSubstitutesReplacementCharForCodepointPastU10FFFF();
-	TestDecodeSubstitutesReplacementCharForF4WithContinuationPastMax();
-	TestDecodeSubstitutesReplacementCharForOverlongFourByteSequence();
-	TestDecodeSubstitutesReplacementCharForTruncatedFourByteSequence();
-	TestDecodeSubstitutesReplacementCharForLoneContinuationByte();
-	TestDecodeSubstitutesReplacementCharForTruncatedSequenceAtEnd();
-	TestSingleVocabTokenizerSurvivesHeapChurnBetweenOpenAndDecode();
-	TestDecodeReconstructsSequenceSplitAcrossTokenBoundary();
-	TestDecodeAndEncodeShareOneStrictDecoderOnWellFormedMultibyteText();
-
-	// --- Curie's T-129 TOK1/UNI1 sub-parse hostile-input suite (red-first). ---
-	TestMinimalTokenizerArtifactOpensAndRoundTrips();
-	TestOpenRejectsArtifactMissingTokenizerSection();
-	TestOpenRejectsArtifactMissingUnicodeTablesSection();
-	TestTok1RejectsBadMagic();
-	TestTok1RejectsTruncatedHeader();
-	TestTok1RejectsVocabCountOverflow();
-	TestTok1RejectsMergeCountOverflow();
-	TestTok1RejectsSpecialCountOverflow();
-	TestTok1RejectsTruncatedByteToId();
-	TestTok1RejectsTruncatedVocabOffsets();
-	TestTok1RejectsTruncatedVocabBlobLen();
-	TestTok1RejectsTruncatedVocabBlob();
-	TestTok1RejectsVocabOffsetNonMonotonic();
-	TestTok1RejectsLastVocabOffsetExceedsBlob();
-	TestTok1RejectsMiddleVocabOffsetExceedsBlob();
-	TestTok1RejectsTruncatedMerges();
-	TestTok1RejectsTruncatedSpecialIds();
-	TestTok1RejectsTruncatedSpecialOffsets();
-	TestTok1RejectsTruncatedSpecialBlobLen();
-	TestTok1RejectsTruncatedSpecialBlob();
-	TestTok1RejectsSpecialOffsetNonMonotonic();
-	TestTok1RejectsSpecialOffsetOutOfRange();
-
-	// --- S-HARDEN-2 (F6/F18, red-first): TOK1's version/reserved fields and its
-	//     vocabulary-bound rejection (byte_to_id, merge operands/results, special
-	//     ids, and vocab_count's own domain). ---
-	TestTok1RejectsUnsupportedVersion();
-	TestTok1RejectsNonzeroReserved();
-	TestTok1RejectsVocabCountZero();
-	TestTok1RejectsVocabCountExceedsInt32Max();
-	TestTok1RejectsByteToIdEntryAtOrAboveVocabCount();
-	TestTok1RejectsMergeOperandAAtOrAboveVocabCount();
-	TestTok1RejectsMergeOperandBAtOrAboveVocabCount();
-	TestTok1RejectsMergeResultAtOrAboveVocabCount();
-	TestTok1RejectsSpecialIdAtOrAboveVocabCount();
-
-	TestUni1RejectsBadMagic();
-	TestUni1RejectsTruncatedHeader();
-	TestUni1RejectsUnsupportedVersion();
-	TestUni1RejectsLetterCountFieldTruncated();
-	TestUni1RejectsLetterRangesTruncated();
-	TestUni1RejectsLetterCountOverflow();
-	TestUni1RejectsNumberRangesTruncated();
-	TestUni1RejectsNumberCountOverflow();
-	TestUni1RejectsSpaceRangesTruncated();
-	TestUni1RejectsSpaceCountOverflow();
-	TestUni1RejectsCccTruncated();
-	TestUni1RejectsCccCountOverflow();
-	TestUni1RejectsDecompCpsTruncated();
-	TestUni1RejectsDecompCountOverflow();
-	TestUni1RejectsDecompOffsetsTruncated();
-	TestUni1RejectsDecompOffsetOutOfRange();
-	TestUni1RejectsDecompOffsetNonMonotonic();
-	TestUni1RejectsDecompSeqTruncated();
-	TestUni1RejectsComposeTruncated();
-	TestUni1RejectsComposeCountOverflow();
-
-	// T-1416 (whole-tree review b9dcbe0, Minor 4).
-	TestUni1RejectsLetterRangeWithLoGreaterThanHi();
-	TestUni1RejectsLetterRangesOverlapping();
-
-	// --- Curie's S2.0a WGT1/BIA1/ROP1 tensor-manifest hostile-input suite. ---
-	TestWgtMinimalManifestParsesAndRoundTrips();
-	TestBiaMinimalManifestParsesAndRoundTrips();
-	TestRopMinimalManifestParsesAndRoundTrips();
-	TestManifestRejectsSectionTooShort();
-	TestManifestRejectsBadMagicWgt();
-	TestManifestRejectsBadMagicBia();
-	TestManifestRejectsBadMagicRop();
-	TestManifestRejectsUnsupportedVersion();
-	TestManifestRejectsTooManyTensors();
-	TestManifestRejectsManifestOutOfBoundsTruncatedDescriptors();
-	TestManifestRejectsManifestOutOfBoundsTruncatedNameBlob();
-	TestManifestRejectsBadTensorNameOutOfRange();
-	TestManifestRejectsEmptyTensorName();
-	TestManifestRejectsDuplicateTensorName();
-	TestManifestRejectsBadTensorRankZero();
-	TestManifestRejectsBadTensorRankTooLarge();
-	TestManifestRejectsBadTensorShapeZeroDim();
-	TestManifestRejectsBadTensorShapeNonzeroPastRank();
-	TestManifestRejectsShapeCountMismatch();
-	TestManifestRejectsTensorOutOfBoundsDataExceedsSection();
-	TestManifestRejectsTensorOverlap();
-	TestManifestRejectsBadDescriptorReserved();
-	TestManifestRejectsDataOffBelowDataRegion();
-	TestManifestRejectsTensorMisalignedBia();
-	TestManifestRejectsTensorMisalignedRop();
-	TestManifestRejectsElemCountTimesElementSizeOverflows32BitBia();
-	TestManifestRejectsElemCountTimesElementSizeOverflows32BitRop();
-	TestManifestRejectsShapeProductOverflows32BitTensorOutOfBounds();
-
-	// --- Curie's S2.0b KVC1 keyed-constant sub-parse hostile-input suite. ---
-	TestCompositionConstantsMinimalKvc1ParsesAndRoundTrips();
-	TestKvLandingReciprocalsMinimalKvc1ParsesAndRoundTrips();
-	TestKvc1RejectsSectionTooShort();
-	TestKvc1RejectsBadMagic();
-	TestKvc1RejectsUnsupportedVersion();
-	TestKvc1RejectsTooManyEntries();
-	TestKvc1RejectsBadReserved();
-	TestKvc1RejectsOutOfBoundsTruncatedDescriptors();
-	TestKvc1RejectsOutOfBoundsTruncatedValues();
-	TestKvc1RejectsOutOfBoundsTruncatedNameBlob();
-	TestKvc1RejectsNameBlobLenSumOverflow32Bit();
-	TestKvc1RejectsBadEntryNameOutOfRange();
-	TestKvc1RejectsEmptyEntryName();
-	TestKvc1RejectsDuplicateEntryName();
-	TestKvc1RejectsValueWordsOutOfRange();
-	TestKvc1RejectsValueWordsWrongForTypeCompositionDeclaresThree();
-	TestKvc1RejectsValueWordsWrongForTypeReciprocalsDeclaresTwo();
-
-	// --- Curie's S2.0b CFG1 config sub-parse hostile-input suite. ---
-	TestMinimalCfg1ParsesAndMatchesEveryField();
-	TestCfg1RejectsSizeTooShort();
-	TestCfg1RejectsSizeTooLong();
-	TestCfg1RejectsBadMagic();
-	TestCfg1RejectsUnsupportedVersion();
-	TestCfg1RejectsZeroHiddenSize();
-	TestCfg1RejectsZeroNumHiddenLayers();
-	TestCfg1RejectsZeroNumAttentionHeads();
-	TestCfg1RejectsZeroNumKeyValueHeads();
-	TestCfg1RejectsZeroHeadDim();
-	TestCfg1RejectsZeroIntermediateSize();
-	TestCfg1RejectsZeroVocabSize();
-	TestCfg1RejectsZeroContextCap();
-	TestCfg1RejectsZeroKvBlockSize();
-	TestCfg1RejectsBadKvPrecision();
-	TestCfg1RejectsBadConfigBool();
-	TestCfg1RejectsBadConfigReserved();
-
-	// --- Curie's S2.0b WeightScales manifest-reuse oracle (WSC1 routes through
-	//     the already-certified S2.0a SslmTensorManifest::Parse — expected
-	//     green at authoring time). ---
-	TestWeightScalesMinimalManifestParsesAndRoundTrips();
-	TestWeightScalesRejectsWrongMagicDiscriminatesPerType();
-
-	// --- Curie's S2.1 intmath red suite. ---
-	TestC2SaturatingRoundingDoublingHighMul();
-	TestC1C3RoundingDivideByPOT();
-	TestMultiplyByQuantizedMultiplier();
-	TestClz64();
-	TestMaxAbsReduce();
-	TestNormalizeScale();
-	TestDynamicScaleReciprocalNamed();
-	TestDynamicScaleReciprocalDenseSample();
-	TestCarriedScaleReciprocalIsAForwardOfDynamicScaleReciprocalOverC19Domain();
-	TestRequantTokenCode();
-	TestIntmathPipelineComposition();
-
-	// --- Curie's S3.1 wide-row (int64 input width) red suite (F-S3-7). ---
-	TestMaxAbsReduceWide();
-	TestRowBoundsWide();
-	TestRequantTokenCodeWide();
-
-	// --- Curie's S3.1 checked-chain-funnel red suite (T-200, T-1254). ---
-	TestRequantChainCheckedT1254Witness();
-	TestRequantChainCheckedRejectsOverC29Domain();
-	TestNarrowRowCheckedT1254Witness();
-	TestNarrowRowCheckedC35VsC29NegativeControl();
-	TestCheckIExpConstantsDomainWrapsIExpConstantsInDomainAcrossTheSweep();
-	TestCheckIExpConstantsDomainDisagreementPointsAreExplicitlyPinned();
-
-	// --- Poirot review ac34677 (2026-07-28) test-coverage findings: S1, S3,
-	//     S4 red; the two S9 cells already green at review time. ---
-	TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain();
-	TestRowBoundsWideZeroLenNullPtrDoesNotCrash();
-	TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference();
-	TestRequantChainCheckedHookInstalledProducesIdenticalOutputs();
-	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
-
-	// --- D-SLM353 / SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md Sec6:
-	//     the cross-model isolation cell -- storage is model-scoped and green
-	//     (Poirot 380b75f review O4; mutation-checked against a reversion to
-	//     process-global storage by M6, which fails this cell's own two crux
-	//     assertions). ---
-	TestTraceHookCrossModelHandleIsolation();
-
-	// --- Poirot review 380b75f (2026-07-28) test-coverage findings: N1 (the
-	//     funnel's own running product, RED against today's unguarded fold);
-	//     N5's second half (a null-row cell for NarrowRowChecked); N6 (Load
-	//     clears a previously-installed trace hook, pinned as the correct
-	//     behaviour). Curie's own record: Claude/Curie/superslm-s3.1-checked-
-	//     chain-funnel-test-design-2026-07-28.md Sec12. ---
-	TestRequantChainCheckedRunningProductOutOfInt32DomainIsRejectedNotTruncated();
-	TestRequantChainCheckedRejectsIncomingFactorMantissaOutOfInt32Domain();
-	TestRequantChainCheckedStepZeroPrecedesC29OnARowViolatingBoth();
-	TestNarrowRowCheckedZeroLenNullPtrDoesNotCrash();
-	TestSslmModelLoadClearsPreviouslyInstalledTraceHook();
-
-	// --- Curie's S2.2 nonlinear scalar primitives red suite. ---
-	TestISqrt();
-	TestISqrtTrace();
-	TestShiftByMax();
-	// PORTED (S-HARDEN-0 final API): IExpFromConstants is removed; evaluation is
-	// now construct-then-evaluate. Expected values unchanged from the original 36
-	// kIExpCases goldens.
-	TestIExpConstructAndEvaluateMatchGoldenCasesAcrossKIExpCases();
-	TestIExpConstructAndEvaluateClipClampsIdenticallyAcrossFamily();
-
-	// --- Curie's S2.6-amendment red suite for IExpConstantsInDomain (D-SLM78/79/81;
-	//     unchanged by the S-HARDEN-0 final API -- IExpConstantsInDomain's own
-	//     signature and behaviour are untouched). ---
-	TestIExpConstantsInDomainAcrossCorpus();
-	TestIExpConstantsInDomainRejectsStrikeExactInput();
-	TestIExpConstantsInDomainShortcutConditionMatchesHeaderClaim();
-	// REWORKED (S-HARDEN-0 final API): no debug-build assert survives to pin (see
-	// the function's own comment); the wrapped-value golden is preserved.
-	TestIExpConstructAndEvaluateProducesKnownWrappedValueForOutOfDomainConstants();
-
-	// --- Curie's S-HARDEN-0 population suite, final API (F9, F21, Poirot's
-	// a1d7986 code-review Finding 1; SuperSLM_Plan.md's S-HARDEN preamble;
-	// Claude/Curie/superslm-s-harden-0-test-design-2026-07-21.md). Layer A's
-	// separate crash-probe population is RETIRED -- the API collapse removed its
-	// subject; see the comment at its former call site (above, in this file) for
-	// the full account and where every witness value now lives (kIExpConstructCases
-	// below). IExpEvaluate's totality and IExpConstruction's structural safety are
-	// pinned first (default-construction safety, and the two static_asserts
-	// immediately preceding it), then the full construct/evaluate population. ---
-	TestIExpConstructionDefaultIsSafeToEvaluate();
-	TestIExpConstructMatchesIndependentOracleAcrossCases();
-	TestIExpConstructOutContractPerOutcome();
-	TestIExpConstructAcceptsNullOutForPredicateOnlyUse();
-	TestIExpConstantsInDomainEquivalentToIExpConstructEqualsKOk();
-	TestIExpConstructMatchesAccessorCasesZAndBase();
-
-	// --- Curie's S2.3 RopeApplyPair red suite. ---
-	TestRopeApplyPair();
-	TestRopeApplyPairIdentityIsExact();
-	TestRopeApplyPairQuarterTurnIsExact();
-	TestRopeApplyPairWideInputExceedsInt32Range();
-	TestRopeApplyPairTieRoundsAwayFromZero();
-
-	// --- Curie's S2.4 SiLU sigmoid-LUT red suite. ---
-	TestMinimalSil1ParsesAndReadsBackAllNodes();
-	TestSil1WarmObjectRepeatedReadsShowNoDrift();
-	TestSil1RoundTripReencodeMatchesOriginalBytes();
-	TestSil1RejectsSizeTooShort();
-	TestSil1RejectsSizeTooLong();
-	TestSil1RejectsBadMagic();
-	TestSil1RejectsUnsupportedVersion();
-	TestSil1RejectsBadEntryCount();
-	TestSil1RejectsBadReserved();
-
-	// --- S-HARDEN-1 (F20/F22): pinned canonical content (red-first). ---
-	TestSil1RejectsSingleNodeContentMismatch();
-	TestSil1RejectsHostileExtremeAdjacentNodes();
-	TestArtifactRejectsHostileSigmoidLutContentThroughRealPath();
-	TestArtifactRejectsConfigOnlyV2MissingSigmoidLut();
-
-	// --- S-HARDEN-1's schema-value gate (F22/F23/F24, D-SLM141/D-SLM142) — the
-	//     parser-vs-consumer question is RULED: value validation lives at the
-	//     new SslmModel::Load entry point, not at the two structural parsers. ---
-	TestKvc1RejectsHostileCompositionConstantsScale();
-	TestWsc1RejectsHostileShiftOutOfDocumentedBound();
-	TestWsc1RejectsTensorWhoseElemCountIsNotAMultipleOfThree();
-	TestRop1RejectsHostileCosSinPair();
-
-	// --- Mendeleev's 2026-07-22 coverage audit of the gate above: the
-	//     boundary/guard matrix (§3.1), Load's structural fail-closed reset
-	//     (§3.2), Load's own success path (§3.3), and the dim-1 warm-object
-	//     cell (§4, T-164). ---
-	TestKvc1RejectsCompositionScaleMUnderNoUbFloor();
-	TestKvc1RejectsCompositionScaleEUnderNoUbFloor();
-	TestKvc1RejectsCompositionScaleEOverNoUbFloor();
-	TestWsc1RejectsIdentityUnderDocumentedBound();
-	TestWsc1RejectsIdentityOverDocumentedBound();
-	TestWsc1RejectsShiftUnderDocumentedBound();
-	TestRop1RejectsElementOverDocumentedBound();
-	TestKvc1AcceptsCompositionScaleMAtLowerNoUbFloor();
-	TestKvc1AcceptsCompositionScaleEAtLowerNoUbFloor();
-	TestKvc1AcceptsCompositionScaleEAtUpperNoUbFloor();
-	TestWsc1AcceptsIdentityAtZero();
-	TestWsc1AcceptsIdentityAtOne();
-	TestWsc1AcceptsShiftAtLowerBound();
-	TestWsc1AcceptsShiftAtUpperBound();
-	TestRop1AcceptsElementAtPositiveBound();
-	TestRop1AcceptsElementAtNegativeBound();
-	TestLoadRejectsStructurallyInvalidArtifactAsArtifactRejected();
-	TestLoadFailsClosedOnStructuralSubParseFailureBeforeValueGate();
-	TestLoadSucceedsAndExposesFullyPopulatedViewOnValidArtifact();
-	TestLoadComposedViewRepeatedReadsShowNoDrift();
-	TestLoadComposedViewReopenIsIdempotent();
-	TestLoadOntoPopulatedViewResetsEntries();
-
-	// --- T-403 regression PIN: SslmModelView lifetime-contract fix (the
-	//     design's §7 behavioral cell plus Charpy's 2026-07-22 temper §6
-	//     amendment's moved-from-inertness cell). ---
-	TestLoadReturnedViewSurvivesInterveningHeapAllocationBeforeRead();
-	TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut();
-
-	// --- S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count x
-	//     CFG1.vocab_size enforced at SslmModel::Load, following the S-HARDEN-1
-	//     boundary-gate pattern. ---
-	TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch();
-	TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize();
-	TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables();
-	TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer();
-	TestLoadAcceptsArtifactWithNeitherTokenizerSection();
-
-	TestArtifactRejectsPreSigmoidLutV1FormatUnderCurrentLoader();
-	TestArtifactAcceptsV2ArtifactCarryingValidSigmoidLutSection();
-	TestSiluSigmoidQ15SaturatesHighDomainShiftNegativeBranch();
-	TestSiluSigmoidQ15SaturatesLowDomainShiftNegativeBranch();
-	TestSiluSigmoidQ15SaturatesHighDomainShiftNonNegativeBranch();
-	TestSiluSigmoidQ15SaturatesLowDomainShiftNonNegativeBranch();
-	TestSiluSigmoidQ15RealCorpusDeepSaturationHighCode();
-	TestSiluSigmoidQ15RealCorpusDeepSaturationLowCode();
-	TestSiluSigmoidQ15InteriorInterpolationFracZero();
-	TestSiluSigmoidQ15InteriorInterpolationFracMax();
-	TestSiluSigmoidQ15ShiftZeroBranchCodeZeroReachesMidpointExactly();
-	TestSiluSigmoidQ15PositiveShiftBranchCodeZeroReachesMidpointExactly();
-	TestSiluSigmoidQ15OpLevelParityWithinOneUlpOnRealVectors();
-	TestSiluSigmoidQ15DownstreamInt8AgreementReproducesLaplaceBand();
-	TestSiluSigmoidQ15ConcurrentReadsMatchSingleThreaded();
-	TestSiluSigmoidQ15GoldenHashCrossPlatform();
-
-	// --- Curie's S2.5 matmul red suite. ---
-	TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation();
-	TestGemmInt8AccumulateRowMatchesOracleAcrossRowCases();
-	TestGemmInt8AccumulateRowInt32SafeAndTailLengthCases();
-	TestGemmInt8AccumulateRowUniformCasesExactAgainstOracle();
-	TestGemmInt8AccumulateRowUnalignedBufferPointers();
-	TestGemmInt8AccumulateRowOrderLaneRegroupingAssociativity();
-	TestGemmInt8AccumulateRowIndependenceAndMultiRowStackingEquivalence();
-	TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights();
-	TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange();
-	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
-	TestGemmInt8AccumulateComposesWithShippedRequantChain();
-	TestS2Point5SixCaseAcceptanceGateMeasurement();
-	TestDotRowScalarRefMatchesShippingSse2PathAndOracle();
-	TestMatmulGoldenHashCrossPlatform();
-
-	// --- S-HARDEN-3 (F13, §13 item 7, §17.3 cell 4): the independent converter
-	//     verifier's core (red-first; superslm/proof_manifest.h is new this slot). ---
-	TestConfigGeometryRejectsZeroAttentionHeads();
-	TestConfigGeometryRejectsZeroKeyValueHeadsBeforeModulusFaults();
-	TestConfigGeometryRejectsKvHeadsExceedsHeads();
-	TestConfigGeometryRejectsHeadsNotDivisibleByKv();
-	TestConfigGeometryRejectsHiddenSizeMismatch();
-	TestConfigGeometryAcceptsGqaShape();
-	TestConfigGeometryAcceptsMhaShape();
-	TestComputeTensorEvidenceReportsExtremaAndSaturationBoundary();
-	TestComputeWeightScaleEvidenceReportsShiftRangeAndIdentityCount();
-	TestHashSectionHexMatchesIndependentSha256();
-	TestBuildProofManifestJsonReportsGeometryOkOnCoherentArtifact();
-	TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact();
-
-	// --- S-HARDEN-7 (F5, §3, T-411): the "throws only std::bad_alloc" contract,
-	//     all nineteen sites of the corrected, four-condition membership rule's
-	//     derived population (JsonEscape is the 19th, T-1475; design §3.1's
-	//     table itself still states eighteen and is owed a matching
-	//     amendment outside this suite's writable surface). The rename-and-
-	//     wrap has landed; each site's *Impl body consults the test-only
-	//     injection seam (tests/support/bad_alloc_injection.h). ---
-	TestBadAllocContractOpenFromMemory();
-	TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific();
-	TestBadAllocContractOpenFromFile();
-	TestBadAllocContractFingerprintHex();
-	TestBadAllocContractTensorManifestParseDirect();
-	TestBadAllocContractTensorManifestParseViaLoad();
-	TestBadAllocContractKeyedConstantsParse();
-	TestBadAllocContractParseConfig();
-	TestBadAllocContractParseSigmoidLut();
-	TestBadAllocContractLoad();
-	TestBadAllocContractTokenizerOpenDirect();
-	TestBadAllocContractTokenizerOpenViaLoad();
-	TestBadAllocContractTokenizerEncode();
-	TestBadAllocContractTokenizerDecode();
-	TestBadAllocContractComputeTensorEvidence();
-	TestBadAllocContractComputeWeightScaleEvidence();
-	TestBadAllocContractHashSectionHex();
-	TestBadAllocContractBuildProofManifestJson();
-	TestBadAllocContractSha256Update();
-	TestBadAllocContractSha256HashFreeFunction();
-	TestBadAllocContractToHex();
-	TestBadAllocContractJsonEscape();
-
-	// --- S-HARDEN-8 (F12, §4.2/§4.3, T-412): the generic section-descriptor
-	//     `reserved` field, untested until this cell. ---
-	TestRejectsNonZeroSectionDescriptorReservedField();
-
-	// --- S3.1 (T-200, board T-132, §7.2, D-SLM318): the C30 derived-operand
-	//     predicate's oracle-pinning cell. The full "design's C30 site" differential
-	//     cell against a production wrapper is blocked (no such wrapper exists yet,
-	//     S3.3's build) -- see Claude/Curie/superslm-s3.1-checked-chain-funnel-test-
-	//     design-2026-07-28.md Sec3.2 for the routed finding. ---
-	TestIExpConstantsInDomainAgreesWithC30DerivedConstantsAcrossTheSweep();
-	TestC30DomainDisagreementPointsAreExplicitlyPinned();
-
-	// --- S3.1 (§5.4, §7.2, D-SLM318): the C34 derived-operand predicate
-	//     (CheckSiluCompositionScaleDomain, checked_chain_funnel.h/.cpp) is real
-	//     and every cell below calls it directly -- N3 (Poirot 380b75f review)
-	//     closed: the containment cell used to call a test-local
-	//     reimplementation instead. ---
-	TestCheckSiluCompositionScaleDomainContainsTheShippedLoadTimeDescriptor();
-	TestCheckSiluCompositionScaleDomainAgreesWithIndependentFormulaAcrossMESweep();
-	TestCheckSiluCompositionScaleDomainRejectsMOutsideNoUbAbsBound();
-
-	// --- S3.2 (Sec11, C31/C24/C25/C28/F-S3-8/BIA1): the weightless and
-	//     projection sites' red suite, authored against the header contract
-	//     (commit a594dd2). Every one of these is RED-UNIMPLEMENTED today --
-	//     Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-
-	//     design-2026-07-28.md Sec4/Sec9. ---
-	TestFloorDivI64C31UnitWitnessDivergesFromNativeTruncatingDivision();
-	TestRmsNormSiteC31UsesFloorDivisionMechanismPin();
-	TestRmsNormSiteC31FloorDivisionWitnessAgainstTheRealFunnel();
-	TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel();
-	TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix();
-	TestBiasReconcileC28SignInvertedNegativeControl();
-	TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
-	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
-	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
-
-	// --- Sec13.1 cells 2 and 3 (D-SLM417, board T-1336): owed against S3.2's
-	//     already-green production code. ---
-	TestIndependentReaderRecoversBia1AndBiasQbMatchingModelView();
-	TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThroughLoad();
-	TestTokenizerDriveEveryEncodedIdAddressesItsOwnValidEmbeddingRow();
-
-	// S3.3 -- the attention interior (Claude/Curie/
-	// superslm-s3.3-attention-interior-test-design-2026-07-28.md).
-	TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1();
-	TestC33ClampWitnessesGenuinelyExceedTheirTargetRangesAgainstTheRealRopeApplyPair();
-	TestKvLandingReciprocalBoundMatchesTheRealDynamicScaleReciprocalDomainEndpoints();
-
-	// S3.3, second pass -- the header contract landed; the blocked cells are
-	// now authored (record Sec6-Sec8).
-	TestLandingRescaleFeatureOracleAgainstResidualReconcileWitnesses();
-	TestLandingRescaleSaturationCounterExactValueOnKnownClampedElements();
-	TestLandingRescaleSaturationCounterMonotoneAcrossTokens();
-	TestLandingRescaleSaturationCounterWholeRowClamp();
-	TestLandingRescaleSaturationCountHasNoEffectOnReturnValue();
-	TestClampRopeCodeAgainstC33Witnesses();
-	TestCheckSoftmaxRowWidthDomainAgainstDerivedCasesAndTheRoutedBandCase();
-	TestSoftmaxRowQ15AgainstComposedShippedPrimitivesOracle();
-	TestGemmProbQ15AccumulateFeatureOracleAndOrderFreedomCertification();
-	TestKvLandingScalesRejectsHostileMantissaBothSignsAndAcceptsTheBoundary();
-	TestKvLandingReciprocalsRejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
-	TestKvLandingReciprocalsExponentFloorAcceptsAtBoundRejectsOnePast();
-	TestKvLandingScalesAndReciprocalsRejectMakeMinimalValidKvc1sOwnGammaRow();
-
-	// S3.3 red-regression suite (Curie, 2026-07-28) -- Claude/Curie/
-	// superslm-s3.3-attention-interior-red-regression-2026-07-28.md.
-	TestCheckSoftmaxRowWidthDomainRejectsAWitnessWhoseOwnThresholdOverflowsInt64();
-	TestLandingRescaleIsOddSymmetricInMAAgainstResidualReconcile();
-	TestLandingRescaleSaturationCounterFiresOnAnExtremeUncheckedExponent();
-	TestSoftmaxRowQ15RefusesATripleWhoseIExpConstructionIsInvalid();
-
-	// Remediation-confirmation red suite (Curie, 2026-07-28) -- Claude/Poirot/
-	// ad6bd09-s3.3-remediation-confirmation-review-2026-07-28.md.
-	TestLandingRescaleSaturationCounterFiresOnRoundDivideBranchPrecisionLoss();
-	TestKvLandingReciprocalsLoadRejectsAnExtremeUncheckedExponentRegardlessOfRT();
-
-	// C32 softmax-row width-gate red suite (Curie, 2026-07-28) -- Claude/Popper/
-	// superslm-c32-softmax-denominator-2026-07-28.md.
-	TestCheckSoftmaxRowWidthDomainAcceptsAWitnessWhoseRealPeakVastlyExceedsTheCeiling();
-	TestSoftmaxRowQ15NeverReportsWellFormedWithAnOutOfRangeProbability();
-	TestCheckSoftmaxRowWidthDomainMZeroBypassIsIndependentOfWidth();
-	TestCheckSoftmaxRowWidthDomainMustNotBeMorePermissiveForNegativeMThanPositiveOfEqualMagnitude();
-	TestSoftmaxRowQ15RejectsOffRatioWitnessWithNonnegativeQcThatPassesTheGate();
-
-	// T-1411 (whole-tree review b9dcbe0, Significant 1).
-	TestCheckSoftmaxRowWidthDomainRejectsZeroWidth();
-
-	// D-SLM497 (Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-
-	// confirmation-2026-07-31.md Significant 1, closed).
-	TestSoftmaxRowQ15GuardsZeroWidthAgainstNullScoresWithoutCrashing();
-
-	// T-1324 (BLOCKING; D-SLM409) -- Claude/Curie/72b0c7f-s3.3-rope-site-and-
-	// c32-softmax-confirmation-test-design-2026-07-28.md.
-	TestSoftmaxRowQ15MustNotReportWellFormedWhenShiftedMaxElementExceedsTheSafeShiftCeiling();
-
-	// S3.3 -- the RoPE application site (D-SLM376, D-SLM383, D-SLM384,
-	// D-SLM385; Claude/Curie/superslm-s3.3-rope-application-site-test-design-
-	// 2026-07-28.md). The three cells below are the first C++ exercise of a
-	// real, declared, deliberately-wrong RopeApplySite (commit 13dfcfd's
-	// stub, unconditionally WorkspaceTooSmall) -- the fully specified Sec6
-	// cells, now landed red against the real symbol:
-	TestCheckPositionOverCapBoundaryMatrixAcrossMultipleCaps();
-	TestRopeSitePositionZeroAndCapMinusOneAgainstRealPrimitives();
-	TestRopeTableSectionRoundTripsThroughRealLoadAtEveryPinnedRow();
-
-	// §13.1 cell 4 -- the config-geometry x tensor-shape join at
-	// SslmModel::Load (D-SLM410, D-SLM420-D-SLM423, board T-1333). Symbols
-	// declared and stubbed at commit 6bb6b92; every hostile cell below is red
-	// against the real symbols' unconditional-Ok stub bodies.
-	TestCell4LoadAcceptsFullyConformantConfigGeometryAndRopeShapeJoin();
-	TestCell4LoadRejectsHiddenSizeMismatchAgainstHeadsTimesHeadDim();
-	TestCell4LoadRejectsHeadsNotDivisibleByKvHeads();
-	TestCell4LoadRejectsKvHeadsExceedsHeads();
-	TestCell4LoadRejectsRopeCosShapeMismatchWithSinCorrect();
-	TestCell4LoadRejectsRopeSinShapeMismatchWithCosCorrect();
-
-	TestRopeApplySiteFeatureOracleAtPositionZeroAndCapMinusOne();
-	TestRopeApplySiteRejectsPositionAtOrAboveCapBeforeAnyTableRead();
-	TestRopeApplySiteGuardFiresBeforeOutOfBoundsTensorReadUnderAsan();
-
-	// Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md remediation
-	// red suite (Curie, 2026-07-28).
-	TestRopeApplySiteRejectsMissingCosSinTensorsInsteadOfDereferencingNull();
-	TestRopeApplySiteRejectsPositionFarPastTensorExtentInsteadOfReadingUnmappedMemory();
-	TestRopeApplySiteReturnsOkWhenReadingPastTensorExtentWithinContextCap();
-	TestParseConfigRejectsOddHeadDimAtLoadTime();
-
-	// S3.4 -- the SwiGLU activation site (C34, §5.4, §6.3 step 11; T-1345;
-	// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md). The
-	// three cells below are the first C++ exercise of a real, declared,
-	// deliberately-wrong MlpActSite (WorkspaceTooSmall stub, this pass's own
-	// declare-and-stub commit).
-	TestMlpActSiteC34FeatureOracleAgainstTheRealFunnelAndLut();
-	TestMlpActSiteC34RejectsOutOfDomainGateScaleBeforeComputingSigmoid();
-	TestMlpActSiteC34IExpSigmoidWitnessDivergesFromTheLutAtIndex60();
-
-	// S3.5 -- C26's residual-reconciliation site and the layer loop (T-1347;
-	// Claude/Curie/superslm-s3.5-residual-and-layer-loop-test-design-2026-07-29.md).
-	// Symbols declared and stubbed at this pass's own commit; every cell below
-	// is red against the real symbols' unconditional-WorkspaceTooSmall stubs.
-	TestResidualReconcileSiteC26FeatureOracleAgainstTheRealPrimitives();
-	TestResidualReconcileSiteC26AssociationOrderWitnessDivergesUnderRightAssociation();
-	// T-1377 / D-SLM457 (§7.2b, §14.14, §11 S3.5's new red cell).
-	TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater();
-	TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain();
-	// T-1606 (Poirot 8f63577-t1602, Significant 4): the Step-0 guard's own
-	// vitality cell -- fails without the guard, for the reason named above it.
-	TestResidualReconcileSiteStepZeroGuardIsLoadBearing();
-	// T-1380 / D-SLM462/463 (§11 S3.5's negative-k half, the clause's own
-	// stated negative control -- pins the branch the pair above cannot reach).
-	TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness();
-	TestResidualReconcileSiteRejectsNegativeKMagnitudeOutOfDomain();
-	// T-1384 (Poirot 5eff945-t1380-t1381-t1382-review-2026-07-31.md,
-	// Significant 2): pins BOTH of T-1382's production UB fixes at the
-	// INT64_MIN witness -- see each cell's own comment above.
-	TestLandingRescaleUnsignedNegationPinsInt64MinWitness();
-	TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd();
-	// D-SLM487/T-1403: TwoLayerFixture's construction regression guard --
-	// registered here, immediately before the first cell that consumes
-	// TwoLayerFixture, so a future reintroduction of the dangling-pointer
-	// shape fails at the fixture itself rather than surfacing as an
-	// unexplained wrong value three call frames away.
-	TestTwoLayerFixtureSelfPointersSurviveConstructionByAddress();
-	TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite();
-	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
-	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
-	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
-	TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection();
-	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
-	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();
-	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit();
-	TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls();
-	TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold();
-	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
-	TestRunLayerLoopCachesKPostRotationNotPreRotation();
-	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
-
-	// S3.7 -- multi-position attention, the K/V store accessor, the fail-fast
-	// guard, and the RoPE write-back correction (T-1418, T-1411, T-1442..
-	// T-1447; Claude/Curie/superslm-s3.7-multiposition-attention-test-design-
-	// 2026-07-31.md §3, Cells 1-9).
-	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
-	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
-	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
-	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
-	TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse();
-	TestRunGreedyDecodeLoopRestoredStateNullHiddenCodesRejected();
-	TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions();
-	TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor();
-	TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore();
-	TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers();
-	TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength();
-	TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite();
-	TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite();
-	TestRunLayerLoopRestoredStateNullHiddenCodesRejected();
-	TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard();
-	TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorruption();
-	TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit();
-	TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged();
-	TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases();
-	TestCalibrationBandBoundaryEndpointsAreInclusive();
-	TestCalibrationBandHostileBandsAreLoadRejections();
-	TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown();
-
-	// S3.6 -- the head and the greedy decode loop (C16, §9.1; master plan
-	// §6.4; §10.1; T-1389;
-	// Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md).
-	// Symbols declared and stubbed at this pass's own commit; every cell
-	// below is red against the real symbols' stubs.
-	TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits();
-	TestLogitsSiteFeatureOracleAgainstRealGemmAndNarrow();
-	TestLogitsSiteRejectsRealGemmOverflowRatherThanWrapping();
-	TestArgmaxLowestIndexTieBreakSelectsLowerIndexOnExactTie();
-	TestArgmaxLowestIndexTieBreakTieNotAtTheEdges();
-	TestArgmaxLowestIndexTieBreakNegativeValuesTieIsStillLowestIndex();
-	TestArgmaxLowestIndexTieBreakDistinctMaximumNoTie();
-	TestArgmaxLowestIndexTieBreakSingleElementRow();
-	TestRunGreedyDecodeLoopRejectsOutOfRangePromptTokenBeforeAnyStateChanges();
-	TestRunGreedyDecodeLoopRejectsOutOfRangeStopIdBeforeTheLoopStarts();
-	TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount();
-	TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests();
-	TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly();
+	RunAllRegisteredTests();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
