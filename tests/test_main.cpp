@@ -15926,18 +15926,21 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 	// does not change what `e` itself flows onward as); the fold's own
 	// renormalization branch (`m < 2^30`) fires once more and decrements
 	// that saturated exponent by exactly one, `e -= 1`, landing on
-	// `INT64_MAX - 1` rather than wrapping past it (the `if (e > INT64_MIN)`
-	// guard in that same function is the OTHER direction of this same
-	// class -- not exercised by this witness, since the fold saturates
-	// toward `+infinity` here, not `-infinity`). Deleted each guard from a
+	// `INT64_MAX - 1` rather than wrapping past it. That decrement is
+	// unconditional: T-1613 (`52ea2f6`) deleted the `if (e > INT64_MIN)`
+	// that used to sit on it, because `e` at that line is
+	// `SaturatingAdd64(X, 31)` and so is never below `INT64_MIN + 31` --
+	// the floor direction is closed by the arithmetic rather than by a
+	// branch, and this witness exercises the `+infinity` direction either
+	// way. Deleted each guard from a
 	// scratch copy of this exact tree in turn and rebuilt on plain MSVC
 	// (T-1596 build log, `Claude/Brunel/`): deleting `ComposedExponent`
 	// moves `status_b` OFF `Ok`, to
 	// `ResidualReconciliationMagnitudeOutOfDomain`, and also changes this
-	// exact committed value; deleting `SaturatingAdd64`/its paired
-	// decrement guard leaves `status_b` at `Ok` but changes this exact
-	// committed value to the naive computation's own wraparound-derived
-	// one instead. The two guards are not equivalent under this witness.
+	// exact committed value; deleting `SaturatingAdd64` leaves `status_b`
+	// at `Ok` but changes this exact committed value to the naive
+	// computation's own wraparound-derived one instead. The two guards are
+	// not equivalent under this witness.
 	CHECK_MSG(committed_scale_b.e == INT64_MAX - 1,
 	          "T-1596: RunLayerLoop(hidden_scale.e=INT64_MAX) committed seq.hidden_scale.e == %lld, "
 	          "want %lld (INT64_MAX - 1) -- the class fix's own deterministic saturate-then-"
