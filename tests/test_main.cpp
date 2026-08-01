@@ -14736,6 +14736,43 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	          "context axis sub-cell 4: seq.kv_saturation_count must be left untouched -- no layer "
 	          "ran");
 
+	// Sub-cell 4 continued (dim 11, guard vitality): the checks above confirm
+	// `seq`'s own fields are untouched, but the guard's actual job is to stop
+	// the call BEFORE the K/V landing write inside the layer body runs at
+	// all -- a guard that fires one line too late still leaves every `seq`
+	// field above bit-identical (the landing write touches only the K/V
+	// store, never `seq`) while corrupting the store a caller reads through
+	// `KeyRow`/`ValueRow`. `workspace` was poisoned to 0xEE above, before this
+	// call, at every position including `position == context_cap` -- the
+	// position this rejected call's own `context_length` names and the exact
+	// position `MutableKeyRow`/`MutableValueRow` would land at (layer 0, head
+	// 0) if the guard let the call through. Reading it back through the same
+	// accessor a caller uses is the only way to observe that the rejection
+	// happened before the landing write, not merely before the `seq` commit
+	// at the bottom of the loop body -- five checks above pass under a guard
+	// that fires one comparison too late; this one does not.
+	const int8_t kWorkspacePoison = static_cast<int8_t>(0xEE);
+	const int8_t* const k_row_rejected =
+	    superslm::KeyRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+	                      /*kv_head=*/0, /*position=*/kContextCap);
+	const int8_t* const v_row_rejected =
+	    superslm::ValueRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+	                        /*kv_head=*/0, /*position=*/kContextCap);
+	CHECK_MSG(k_row_rejected[0] == kWorkspacePoison && k_row_rejected[1] == kWorkspacePoison,
+	          "context axis sub-cell 4: KeyRow(layer=0, head=0, position=context_cap) must stay "
+	          "poisoned (0xEE) on KvCapacityExhausted -- got {%d, %d}, want {%d, %d} (a landing "
+	          "write into the K store before the guard's own rejection fires would leave this row "
+	          "changed while every seq field above still passes)",
+	          static_cast<int>(k_row_rejected[0]), static_cast<int>(k_row_rejected[1]),
+	          static_cast<int>(kWorkspacePoison), static_cast<int>(kWorkspacePoison));
+	CHECK_MSG(v_row_rejected[0] == kWorkspacePoison && v_row_rejected[1] == kWorkspacePoison,
+	          "context axis sub-cell 4: ValueRow(layer=0, head=0, position=context_cap) must stay "
+	          "poisoned (0xEE) on KvCapacityExhausted -- got {%d, %d}, want {%d, %d} (a landing "
+	          "write into the V store before the guard's own rejection fires would leave this row "
+	          "changed while every seq field above still passes)",
+	          static_cast<int>(v_row_rejected[0]), static_cast<int>(v_row_rejected[1]),
+	          static_cast<int>(kWorkspacePoison), static_cast<int>(kWorkspacePoison));
+
 	// Guard-vitality: a second call at the SAME state rejects the identical
 	// way rather than corrupting the handle -- the rejection is idempotent.
 	const auto reject_again = superslm::RunLayerLoop(
