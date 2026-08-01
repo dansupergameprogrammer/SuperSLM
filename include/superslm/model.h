@@ -200,6 +200,10 @@ enum class SslmModelStatus {
 	                                      // prior walk of elem_count / 3 triples left a trailing
 	                                      // partial triple's elements unvalidated. Rejected outright
 	                                      // rather than walked partially.
+	// --- S3.7 (§8.3): the calibration band's own hostile-value gate ---
+	CalibrationBandOutOfDomain,          // a CalibrationBand entry's (min, max) violates min <= max
+	                                      // or max != 0 -- ValidateCalibrationBandDomain (model.cpp),
+	                                      // wired into ValidateSectionValues.
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -387,6 +391,14 @@ struct SslmModelView {
 	SslmKeyedConstants kv_landing_reciprocals;
 	bool has_kv_landing_reciprocals = false;
 
+	// S3.7 (§8.3): the calibration band -- a KVC1 keyed blob, parsed
+	// structurally like CompositionConstants/KvLandingScales above. OPTIONAL:
+	// `has_calibration_band == false` is a valid artifact (every artifact the
+	// tree emits today), never a rejection on its own; `ClassifyCalibrationBand`
+	// below reports `BandUnknown` for it.
+	SslmKeyedConstants calibration_band;
+	bool has_calibration_band = false;
+
 	// The tokenizer join (S-HARDEN-2, F18/F6/F7/F15): present iff the artifact
 	// carries BOTH the Tokenizer and UnicodeTables sections and TokenizerView::Open
 	// accepted them structurally. An artifact carrying neither is a valid
@@ -471,6 +483,8 @@ private:
 		has_kv_landing_scales = other.has_kv_landing_scales;
 		kv_landing_reciprocals = std::move(other.kv_landing_reciprocals);
 		has_kv_landing_reciprocals = other.has_kv_landing_reciprocals;
+		calibration_band = std::move(other.calibration_band);
+		has_calibration_band = other.has_calibration_band;
 		tokenizer = std::move(other.tokenizer);
 		has_tokenizer = other.has_tokenizer;
 		trace_hook = other.trace_hook;
@@ -493,6 +507,7 @@ private:
 		other.has_composition_constants = false;
 		other.has_kv_landing_scales = false;
 		other.has_kv_landing_reciprocals = false;
+		other.has_calibration_band = false;
 		other.has_tokenizer = false;
 		other.trace_hook = SslmTraceHookState{};
 	}
@@ -517,6 +532,46 @@ private:
 class SslmModel {
 public:
 	static SslmModelStatus Load(const uint8_t* data, size_t size, SslmModelView& out, std::string* err);
+};
+
+// S3.7 (§8.3, §8.4): the calibration band's own verdict. `InBand` and the
+// two out-of-band values are achievement claims (a token count is compared
+// against the artifact-carried (min, max)); `BandUnknown` is the section-
+// absent case (§13 dim 9's own version-stability cell), never conflated with
+// an in-band or out-of-band verdict.
+enum class SslmCalibrationBandVerdict : uint32_t {
+	InBand = 0,
+	AboveBand = 1,
+	BelowBand = 2,
+	BandUnknown = 3,
+};
+
+// Classifies `token_length` against `view`'s own CalibrationBand entry
+// (named "token_length", the KVC1-shaped fixture family §8.3's costed table
+// specifies). Returns `BandUnknown` when the section is absent
+// (`!view.has_calibration_band`) or carries no entry of that name -- never a
+// rejection; the band is optional at the current container version.
+// `min`/`max` are read as word 0/word 1 of the entry (§8.3's inclusive-at-
+// both-endpoints statement: `token_length < min` is `BelowBand`,
+// `token_length > max` is `AboveBand`, and `token_length == min` or
+// `token_length == max` is `InBand`). `SslmModel::Load`'s own
+// `ValidateCalibrationBandDomain` (model.cpp) already rejects a hostile band
+// (`min > max` or `max == 0`) at load time, so a successfully loaded `view`
+// with `has_calibration_band == true` always carries a well-formed band
+// here.
+SslmCalibrationBandVerdict ClassifyCalibrationBand(const SslmModelView& view,
+                                                    int64_t token_length) noexcept;
+
+// S3.7 (§8.4): the decode-step status this sub-slot's mechanism declares.
+// Carries the calibration-band verdict alongside a decode step; excluded
+// from both digests per §10.2's rule (it is a diagnostic classification, not
+// part of the decode's own numeric output). Not yet wired into
+// `RunGreedyDecodeLoop` -- no cell in this sub-slot's own suite asserts a
+// wiring that does not exist, matching this file's existing declared-scope
+// convention for a struct whose consumer is a separate, later obligation
+// (LayerWeights' own header comment states the same pattern).
+struct SslmDecodeStepStatus {
+	SslmCalibrationBandVerdict calibration_band_verdict = SslmCalibrationBandVerdict::BandUnknown;
 };
 
 } // namespace superslm

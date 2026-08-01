@@ -57,6 +57,12 @@ enum class SslmSectionType : uint32_t {
 	UnicodeTables = 22, // S1: pinned NFC + \p{L}/\p{N}/\s tables
 	// Reserved — introduced at a later slot.
 	SchemaMasks = 30,   // S5
+	// S3.7 (§8.3): the token-length calibration band -- a KVC1 keyed blob,
+	// like CompositionConstants/KvLandingScales/KvLandingReciprocals above,
+	// carrying one entry's (min, max) token-count pair. OPTIONAL at the
+	// current container version, not a CFG1 extension and not a version
+	// bump -- absence loads exactly as before this type existed.
+	CalibrationBand = 31,
 };
 
 enum class SslmDtype : uint32_t {

@@ -398,6 +398,17 @@ struct SequenceLayerState {
 	// never resets it -- reset on sequence create / `sslm_seq_reset` is the
 	// caller's own responsibility, per LandingRescale's own header.
 	uint64_t kv_saturation_count = 0;
+
+	// S3.7 (§11 S3.7 "The mechanism", §9.4): the number of positions of this
+	// sequence already committed to the K/V store -- distinct from
+	// `layer_index`, which counts progress through the CURRENT token's layers
+	// and resets to 0 every token. `context_length` is never reset by a fresh
+	// token embed; it advances by exactly one, at RunLayerLoop's own single
+	// existing commit point, when the layer that just committed is the
+	// token's last (`layer_index == num_hidden_layers` after the increment).
+	// A fresh sequence starts at 0, giving `width == 1` on its first token --
+	// the exact case S3a already builds and gates.
+	int64_t context_length = 0;
 };
 
 // C26's residual-reconciliation site (§6.2 step 8 "attn_residual", §6.3 step
@@ -635,11 +646,8 @@ struct LayerWeights {
 //
 // This function performs NO WGT1/KVC1-by-name resolution (see LayerWeights'
 // own header comment) and reads `context_cap`-worth of K/V state through
-// NO accessor of its own -- S3.7's `KeyRow`-style accessor (§9.4) does not
-// exist yet, so this test-design pass's own fixtures exercise `context_cap
-// == 1` (a single position, no multi-token K/V history) -- the accessor's
-// eventual backing is a separate, later obligation this declaration does not
-// invent.
+// S3.7's own `KeyRow`/`ValueRow` accessors, declared just below -- every
+// position 0..context_cap-1 is reachable, not only position 0.
 //
 // `layers` has `num_hidden_layers` entries. `rope_tables` is the loaded ROP1
 // view, shared across every layer (ROP1 is model-wide, never per-layer).
@@ -647,6 +655,14 @@ struct LayerWeights {
 // internal funnel call, with each site's own per-layer name appended (e.g.
 // `"layer0.attn_norm"`) -- the same convention RmsNormSite's own doc
 // comment states, extended across the whole loop.
+//
+// S3.7 (§11 S3.7 "Fail fast on a full cache"): when a fresh token is about
+// to start (`seq.layer_index == 0`) and `seq.context_length >= context_cap`,
+// this returns `KvCapacityExhausted` before any layer runs, `seq` left
+// bit-identical -- "defined and resumable" (the status enum's own comment):
+// the sequence is left valid and query-able, and a second call at the SAME
+// state rejects the identical way rather than corrupting the handle. S3a
+// builds no eviction or truncation remedy for a full cache; that stays S4's.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t intermediate_size,
@@ -654,6 +670,29 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  uint8_t* workspace, size_t workspace_size,
                                  std::string_view site_prefix = {}, size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
+
+// S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
+// K/V store is per-(layer, head)-major, position-minor --
+// `offset(kv_head, position, d) = kv_head * context_cap * head_dim +
+// position * head_dim + d`, inside the K half (starting at `workspace`, at
+// `layer * context_cap * num_heads * head_dim * 2`) or the V half (the same
+// base plus `context_cap * num_heads * head_dim`). `KeyRow`/`ValueRow`
+// return a pointer to `head_dim` contiguous int8 codes at that address;
+// `MutableKeyRow`/`MutableValueRow` return the same address non-const, for
+// the landing write. `workspace`/`layer`/`context_cap`/`num_heads`/
+// `head_dim` are the identical values a caller already has from its own
+// RunLayerLoop call over the same sequence -- no bounds checking is
+// performed here (`position < context_cap` and `kv_head < num_heads` are the
+// caller's own responsibility, exactly as RunLayerLoop's guards already
+// establish before any accessor call it makes).
+const int8_t* KeyRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                      size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept;
+const int8_t* ValueRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                        size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept;
+int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
+                       size_t head_dim, size_t kv_head, int64_t position) noexcept;
+int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
+                         size_t head_dim, size_t kv_head, int64_t position) noexcept;
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16). This is
@@ -782,6 +821,14 @@ enum class SslmDecodeStopReason {
 // own (LayerWeights' own header comment); `embed_weights`/`head_weights` are
 // the same kind of raw, caller-resolved pointer EmbedEntry/LogitsSite above
 // already take.
+//
+// S3.7 (§14.4, §11 S3.7 "The int16 narrowing"): `kv_precision` is checked
+// FIRST, before `seq`, `workspace`, or any output parameter is touched, and
+// before any token is embedded -- `SslmKvPrecision::Int16` is a defined,
+// load-legal CFG1 value (§14.4 is a declared quality narrowing, not a
+// hostile-input rejection) rejected here with `KvPrecisionUnsupported`;
+// `SslmKvPrecision::Int8` (the default) is unaffected and proceeds exactly
+// as before this parameter existed.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
     size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
@@ -793,7 +840,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens,
     uint8_t* workspace, size_t workspace_size,
     int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
-    size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason);
+    size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason,
+    SslmKvPrecision kv_precision = SslmKvPrecision::Int8);
 
 }  // namespace superslm
 

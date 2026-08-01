@@ -101,10 +101,14 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
 |    30 | `SchemaMasks`           | `Raw`        | S5   | reserved — compiled DFA mask pages                 |
+|    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band (§8.3) — a `KVC1` keyed blob; **optional** |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
 **reserved for S5** — a v1 artifact may carry it and it is parsed structurally, but the
-runtime does not yet interpret it. Types outside this table are rejected.
+runtime does not yet interpret it. `CalibrationBand` (31) is optional at the current
+container version — a new section type, not a version bump or a CFG1 extension; its
+absence loads exactly as it did before this type existed. Types outside this table are
+rejected.
 
 ## Dtypes (`SslmDtype`)
 
@@ -242,6 +246,7 @@ entry carries (`value_words`), and the blob restates it so the parse can reject 
 | `CompositionConstants` (7)    | 2 | `(m, e)` — canonical carried scale (C26) |
 | `KvLandingScales` (8)         | 2 | `(m, e)` — per-head K/V landing target (C27) |
 | `KvLandingReciprocals` (9)    | 3 | `(m, e, R)` — the landing composite's offline reciprocal (C27/D-SLM58) |
+| `CalibrationBand` (31)        | 2 | `(min, max)` — inclusive token-length calibration band (§8.3), entry named `token_length` |
 
 Every value is stored as a little-endian **`int64`**, including `e` (a small exponent that fits
 trivially) — one uniform layout serves both the 2-word and 3-word sections. All offsets are from

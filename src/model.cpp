@@ -120,6 +120,7 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::ConfigGeometryHeadsNotDivisibleByKv: return "ConfigGeometryHeadsNotDivisibleByKv";
 		case SslmModelStatus::ConfigGeometryHiddenSizeMismatch: return "ConfigGeometryHiddenSizeMismatch";
 		case SslmModelStatus::RopeTablesShapeMismatchConfig: return "RopeTablesShapeMismatchConfig";
+		case SslmModelStatus::CalibrationBandOutOfDomain: return "CalibrationBandOutOfDomain";
 	}
 	return "Unknown";
 }
@@ -129,6 +130,7 @@ const uint8_t* ConstantsMagicFor(SslmSectionType type) noexcept {
 		case SslmSectionType::CompositionConstants:
 		case SslmSectionType::KvLandingScales:
 		case SslmSectionType::KvLandingReciprocals:
+		case SslmSectionType::CalibrationBand:
 			return kConstantsMagic;
 		default:
 			return nullptr;
@@ -140,6 +142,7 @@ uint32_t ExpectedValueWords(SslmSectionType type) noexcept {
 		case SslmSectionType::CompositionConstants: return 2;  // (m, e)
 		case SslmSectionType::KvLandingScales: return 2;       // (m, e)
 		case SslmSectionType::KvLandingReciprocals: return 3;  // (m, e, R)
+		case SslmSectionType::CalibrationBand: return 2;       // (min, max)
 		default: return 0;
 	}
 }
@@ -899,6 +902,28 @@ SslmModelStatus ValidateKvLandingReciprocalsDomain(const SslmKeyedConstants& kv_
 	return SslmModelStatus::Ok;
 }
 
+// S3.7 (§8.3): the calibration band's own hostile-value gate -- "hostile
+// bands min > max and max == 0 are load rejections" (test design §3 Cell
+// 13), walked over every entry the same way ValidateKvLandingScalesDomain
+// walks its own section's entries, before any entry is exposed to a
+// classification call.
+SslmModelStatus ValidateCalibrationBandDomain(const SslmKeyedConstants& calibration_band,
+                                               std::string* err) {
+	for (const SslmConstantEntry& e : calibration_band.Entries()) {
+		const int64_t min_v = SslmKeyedConstants::Value(e, 0);
+		const int64_t max_v = SslmKeyedConstants::Value(e, 1);
+		if (min_v > max_v || max_v == 0) {
+			if (err) {
+				*err = "CalibrationBand entry \"" + std::string(e.name) + "\" (min=" +
+				       std::to_string(min_v) + ", max=" + std::to_string(max_v) +
+				       ") violates min <= max and max != 0";
+			}
+			return SslmModelStatus::CalibrationBandOutOfDomain;
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
 // S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
 // "enforced at a named API" -- this is that API. The two blobs are parsed by
 // entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
@@ -1036,6 +1061,10 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 		const SslmModelStatus s = ValidateKvLandingReciprocalsDomain(view.kv_landing_reciprocals, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
+	if (view.has_calibration_band) {
+		const SslmModelStatus s = ValidateCalibrationBandDomain(view.calibration_band, err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
 	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.
 	{
 		const SslmModelStatus s = ValidateTokenizerVocabSizeJoin(view, err);
@@ -1119,6 +1148,10 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 				s = SslmKeyedConstants::Parse(section, out.kv_landing_reciprocals, err);
 				out.has_kv_landing_reciprocals = (s == SslmModelStatus::Ok);
 				break;
+			case SslmSectionType::CalibrationBand:
+				s = SslmKeyedConstants::Parse(section, out.calibration_band, err);
+				out.has_calibration_band = (s == SslmModelStatus::Ok);
+				break;
 			default:
 				// No sub-parser owns this section type here (Provenance, Scales,
 				// Calibration, GoldenHashes, Tokenizer, ChatTemplate, UnicodeTables,
@@ -1166,6 +1199,23 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 	}
 
 	return SslmModelStatus::Ok;
+}
+
+// S3.7 (§8.3): looks up the "token_length" entry by name -- the fixture
+// family's own naming convention (§8.3's costed table, "the Recommended
+// row") -- rather than assuming the section carries exactly one entry
+// unconditionally. `ValidateCalibrationBandDomain` (above) already rejects a
+// hostile (min, max) at load time, so any entry reached here is well-formed.
+SslmCalibrationBandVerdict ClassifyCalibrationBand(const SslmModelView& view,
+                                                    int64_t token_length) noexcept {
+	if (!view.has_calibration_band) return SslmCalibrationBandVerdict::BandUnknown;
+	const SslmConstantEntry* entry = view.calibration_band.Entry("token_length");
+	if (entry == nullptr) return SslmCalibrationBandVerdict::BandUnknown;
+	const int64_t min_v = SslmKeyedConstants::Value(*entry, 0);
+	const int64_t max_v = SslmKeyedConstants::Value(*entry, 1);
+	if (token_length < min_v) return SslmCalibrationBandVerdict::BelowBand;
+	if (token_length > max_v) return SslmCalibrationBandVerdict::AboveBand;
+	return SslmCalibrationBandVerdict::InBand;
 }
 
 } // namespace superslm

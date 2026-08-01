@@ -43,6 +43,7 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 		case SslmSectionType::ChatTemplate:
 		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
+		case SslmSectionType::CalibrationBand:
 			return true;
 	}
 	return false;
@@ -72,6 +73,7 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 		case SslmSectionType::ChatTemplate:
 		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
+		case SslmSectionType::CalibrationBand:
 			return SslmDtype::Raw;
 	}
 	return SslmDtype::Raw; // unknown type — callers gate on IsKnownSectionType first

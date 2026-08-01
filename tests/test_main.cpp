@@ -12763,6 +12763,12 @@ namespace {
 // TestCtxFoldJoinIdentityVsIndependentlyDecomposedNonIdentityOnHandBuiltWsc1
 // above).
 struct TwoLayerFixture {
+	// S3.7: the fixture's own CFG1 `context_cap` and ROP1 row count (T-1571,
+	// the multi-position bump below). Not the `context_cap` any individual
+	// call site passes to RunLayerLoop/RunGreedyDecodeLoop -- those remain
+	// each call's own explicit argument.
+	static constexpr int32_t kContextCap = 16;
+
 	superslm::SslmModelView view;  // owns the backing store rope_tables points into
 	superslm::LayerWeights layers[2];
 	// Backing arrays LayerWeights points into -- kept alive for the fixture's
@@ -12820,13 +12826,27 @@ struct TwoLayerFixture {
 		spec.num_key_value_heads = 1;
 		spec.head_dim = 2;
 		spec.intermediate_size = 2;
-		spec.context_cap = 1;
+		// S3.7: bumped from 1 to kTwoLayerFixtureContextCap (16) so this
+		// fixture's own ROP1 table carries enough rows for a multi-position
+		// caller to drive `context_length` past 0 -- every existing call site
+		// that passes RunLayerLoop its own explicit `context_cap=1` literal is
+		// unaffected (CheckPositionOverCap/RopeApplySite bound `position`
+		// against the CALLER's own `context_cap` argument, never CFG1's, so a
+		// bigger table changes nothing for a caller that only ever asks for
+		// position 0). The K/V workspace size is likewise driven by each
+		// call's own `context_cap` argument, not this fixture's CFG1 value.
+		spec.context_cap = TwoLayerFixture::kContextCap;
 		spec.kv_precision = 0;  // Int8
 		spec.kv_block_size = 1;
 		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
-		const int64_t cos_flat[1] = {INT64_C(1073741824)};  // identity rotation: cos(0)==2^30
-		const int64_t sin_flat[1] = {0};
-		FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+		// Identity rotation (cos(0)==2^30, sin==0) at every one of the
+		// fixture's `kContextCap` rows -- every existing cell in this suite
+		// that reads this fixture's rope table still sees identity at
+		// position 0, unchanged from before this bump.
+		std::vector<int64_t> cos_flat(TwoLayerFixture::kContextCap, INT64_C(1073741824));
+		std::vector<int64_t> sin_flat(TwoLayerFixture::kContextCap, INT64_C(0));
+		FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/TwoLayerFixture::kContextCap,
+		                                               /*pairs=*/1, cos_flat.data(), sin_flat.data());
 		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
 		std::string err;
 		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
@@ -14295,6 +14315,1082 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	          SslmForwardStatusName(result), seq.layer_index);
 }
 
+// --- S3.7: multi-position attention, the K/V store accessor, the calibration
+// band, and the decode-step status (SuperSLM_S3a_WalkingSkeleton_Plan.md §11
+// S3.7; §9.4; §8.3/§8.4; T-1418, T-1411, T-1442..T-1447;
+// Claude/Curie/superslm-s3.7-multiposition-attention-test-design-2026-07-31.md
+// §3). Every cell below drives `seq.context_length` past 0, which S3.7's own
+// mechanism (`RunLayerLoop`'s `context_length`/`KeyRow`/`ValueRow`, the
+// fail-fast guard, the RoPE write-back correction) is what first makes
+// possible; before this pass, no test in this suite could construct
+// `width >= 2` at all. --------------------------------------------------
+
+namespace {
+
+// Cell 1's own fixture gap (test design §3 Cell 1): `TwoLayerFixture` aliases
+// `q_weight`/`k_weight` to the SAME `identity2x2` array, so a mutation to one
+// mutates both tensors at once and a discrimination cell cannot attribute a
+// difference to either alone. This fixture is `TwoLayerFixture`'s own
+// construction with `q_weight`/`k_weight` given DISTINCT backing storage per
+// layer; every other field is wired identically (v/o/gate/up/down still
+// share `identity2x2`, matching `TwoLayerFixture`'s own real, plan-sanctioned
+// degenerate case).
+struct TwoLayerDistinctQKFixture {
+	static constexpr int32_t kContextCap = TwoLayerFixture::kContextCap;
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[2];
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	// Distinct per-layer backing for q_weight/k_weight -- the one property
+	// this fixture adds over TwoLayerFixture.
+	int8_t q_weight_arr[2][4] = {{1, 0, 0, 1}, {1, 0, 0, 1}};
+	int8_t k_weight_arr[2][4] = {{1, 0, 0, 1}, {1, 0, 0, 1}};
+
+	TwoLayerDistinctQKFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		TwoLayerDistinctQKFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 2;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		std::vector<int64_t> cos_flat(kContextCap, INT64_C(1073741824));
+		std::vector<int64_t> sin_flat(kContextCap, INT64_C(0));
+		FixtureSection rope =
+		    MakeRop1SectionMultiRow(/*context_cap=*/kContextCap, /*pairs=*/1, cos_flat.data(),
+		                            sin_flat.data());
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "TwoLayerDistinctQKFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		for (int l = 0; l < 2; ++l) {
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain;
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.q_weight_arr[l];
+			lw.k_weight = f.k_weight_arr[l];
+			lw.v_weight = f.identity2x2;
+			lw.o_weight = f.identity2x2;
+			lw.proj_identity = 1;
+			lw.proj_mult = 0;
+			lw.proj_shift = 0;
+			lw.q_site_constant = canonical;
+			lw.o_site_constant = canonical;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			lw.q_ln2 = INT64_C(2081104);
+			lw.q_b_iexp = INT64_C(4062246);
+			lw.q_c_iexp = INT64_C(8649804928567);
+			lw.mlp_norm_gain = f.norm_gain;
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.identity2x2;
+			lw.up_weight = f.identity2x2;
+			lw.down_weight = f.identity2x2;
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+			lw.down_site_constant = canonical;
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+
+	TwoLayerDistinctQKFixture(const TwoLayerDistinctQKFixture&) = delete;
+	TwoLayerDistinctQKFixture& operator=(const TwoLayerDistinctQKFixture&) = delete;
+	TwoLayerDistinctQKFixture(TwoLayerDistinctQKFixture&&) = delete;
+	TwoLayerDistinctQKFixture& operator=(TwoLayerDistinctQKFixture&&) = delete;
+};
+
+// Drives `fixture.layers` through one WHOLE token (both layers, in one call)
+// on `seq`, starting fresh at `seq.layer_index = 0` with `token_codes` as the
+// token's own pre-norm input -- the same "one whole token" composition
+// RunGreedyDecodeLoop's own RunWholeToken uses, spelled out here because
+// these cells drive `RunLayerLoop` directly rather than through the decode
+// loop (no embedding table is part of any cell's own claim).
+superslm::SslmForwardStatus RunOneWholeTokenDirect(superslm::SequenceLayerState& seq,
+                                                     const superslm::LayerWeights* layers,
+                                                     const superslm::SslmTensorManifest& rope_tables,
+                                                     int8_t token_codes[2], int64_t context_cap,
+                                                     uint8_t* workspace, size_t workspace_size,
+                                                     uint32_t num_hidden_layers = 2) {
+	seq.hidden_codes[0] = token_codes[0];
+	seq.hidden_codes[1] = token_codes[1];
+	seq.hidden_scale = superslm::CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	return superslm::RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
+	                               /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                               context_cap, rope_tables, workspace, workspace_size);
+}
+
+}  // namespace
+
+// T-1418's own obligation, discharged for the first time here (test design
+// §3 Cell 1). Baseline: token A lands at position 0 (width==1, the case S3a
+// already built), then token B is run at `context_length==1` (width==2) --
+// the call under comparison. Mutant: an INDEPENDENT fixture, identical to
+// the baseline in every respect, except one element of `layer{L}.q_weight`
+// (respectively `k_weight`) is flipped AFTER token A's own call and BEFORE
+// token B's -- so token A's landed K/V (what token B attends to) is bit-
+// identical between baseline and mutant, and only token B's own q/k
+// computation differs. PASS iff every one of the `2*num_hidden_layers`
+// mutated runs differs from baseline; FAIL iff any reproduces baseline
+// bit-for-bit (softmax over one element is always 1.0, so at width==1 no q/k
+// weight can reach the output -- D-SLM505/T-1418 -- which is exactly what
+// this cell would observe if S3.7's mechanism failed to reach width>=2, or
+// if the score GEMM read the wrong store, D-SLM516's A3 shape).
+// Drives `fixture.layers` through token A (whole token, full budget) and
+// then, for token B, ONLY through layer `stop_after_layer` (layer_budget==1
+// repeated up to and including that layer) -- so the comparison reads the
+// STAGED per-layer commit (`seq.hidden_codes` at the layer boundary
+// immediately after the layer under test) rather than the output of every
+// downstream layer. This is the discriminating construction this cell needs:
+// a further layer's own RmsNormSite/funnel chain re-normalizes and clamps
+// its OWN input from scratch, which (measured, on this fixture's own small
+// hidden_size=2 geometry) can saturate a real, non-zero difference produced
+// by an EARLIER layer's own q/k mutation into an identical clamped extreme
+// two layers down -- a fact about this fixture's own aggressive scale
+// constants, not about whether q/k reaches the attention output at the
+// layer actually mutated, which is this cell's own claim (test design §3
+// Cell 1: "changes the attention output" -- read at the site the mutation
+// is IN, not laundered through an unrelated downstream layer's own clamp).
+// This cell isolates the layer under test with `num_hidden_layers==1`,
+// pointing `layers` at exactly ONE slot of `TwoLayerDistinctQKFixture`'s own
+// two (`&fixture.layers[layer]`) -- so `RunLayerLoop`'s own loop only ever
+// touches the one `LayerWeights` under test, and the comparison is never
+// laundered through a FURTHER layer's own independent RmsNormSite/funnel
+// chain. Measured: chaining both layers in one call (this fixture's own
+// aggressive norm-gain constants, shared with every RunLayerLoop fixture in
+// this suite) saturates a real, non-zero difference produced by layer 0 into
+// an identical clamped extreme by the time layer 1 re-normalizes its own
+// input from scratch -- a fact about this fixture's own scale constants at
+// hidden_size==2, not about whether q/k reaches the attention output at the
+// layer actually mutated, which is this cell's own claim (test design §3
+// Cell 1: "changes the attention output", read at the site the mutation is
+// IN). `layers[l]`'s own per-layer addressing inside RunLayerLoop's while
+// loop is independently exercised by this suite's existing multi-layer
+// cells (TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit
+// and siblings); this cell's own unique contribution is the width>=2
+// discrimination property, which is layer-index-agnostic by construction --
+// the SAME code path runs for `layers[0]` and `layers[1]` alike.
+static void TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	int8_t token_a[2] = {5, -5};
+	int8_t token_b[2] = {3, -7};
+
+	for (uint32_t layer = 0; layer < 2; ++layer) {
+		for (int tensor = 0; tensor < 2; ++tensor) {  // 0 = q_weight, 1 = k_weight
+			// Baseline: token A lands at position 0 (width==1), token B
+			// (width==2) is the call under comparison, both against the ONE
+			// isolated layer.
+			TwoLayerDistinctQKFixture baseline;
+			int8_t baseline_codes[2] = {};
+			SequenceLayerState baseline_seq;
+			baseline_seq.hidden_codes = baseline_codes;
+			uint8_t baseline_ws[1 * TwoLayerDistinctQKFixture::kContextCap * 1 * 2 * 2] = {};
+			auto st = RunOneWholeTokenDirect(baseline_seq, &baseline.layers[layer],
+			                                  baseline.view.rope_tables, token_a,
+			                                  TwoLayerDistinctQKFixture::kContextCap, baseline_ws,
+			                                  sizeof(baseline_ws), /*num_hidden_layers=*/1);
+			CHECK_MSG(st == SslmForwardStatus::Ok, "cell 1 baseline token A status == %s, want Ok",
+			          SslmForwardStatusName(st));
+			CHECK_MSG(baseline_seq.context_length == 1,
+			          "cell 1 baseline token A: context_length == %lld, want 1",
+			          static_cast<long long>(baseline_seq.context_length));
+			st = RunOneWholeTokenDirect(baseline_seq, &baseline.layers[layer],
+			                            baseline.view.rope_tables, token_b,
+			                            TwoLayerDistinctQKFixture::kContextCap, baseline_ws,
+			                            sizeof(baseline_ws), /*num_hidden_layers=*/1);
+			CHECK_MSG(st == SslmForwardStatus::Ok, "cell 1 baseline token B status == %s, want Ok",
+			          SslmForwardStatusName(st));
+			CHECK_MSG(baseline_seq.context_length == 2,
+			          "cell 1 baseline token B: context_length == %lld, want 2 (width==2 for "
+			          "this call)", static_cast<long long>(baseline_seq.context_length));
+			const int8_t baseline_out[2] = {baseline_codes[0], baseline_codes[1]};
+			const CarriedScale baseline_scale = baseline_seq.hidden_scale;
+
+			// Mutant: identical driver, token A identical, then the tensor
+			// under test flipped AFTER token A's own call (so the K/V token
+			// B attends to is bit-identical between baseline and mutant) and
+			// BEFORE token B's own call.
+			TwoLayerDistinctQKFixture mutant;
+			int8_t mutant_codes[2] = {};
+			SequenceLayerState mutant_seq;
+			mutant_seq.hidden_codes = mutant_codes;
+			uint8_t mutant_ws[1 * TwoLayerDistinctQKFixture::kContextCap * 1 * 2 * 2] = {};
+			st = RunOneWholeTokenDirect(mutant_seq, &mutant.layers[layer], mutant.view.rope_tables,
+			                            token_a, TwoLayerDistinctQKFixture::kContextCap, mutant_ws,
+			                            sizeof(mutant_ws), /*num_hidden_layers=*/1);
+			CHECK_MSG(st == SslmForwardStatus::Ok, "cell 1 mutant token A status == %s, want Ok",
+			          SslmForwardStatusName(st));
+
+			// A large delta, not a +1 LSB nudge: a one-LSB score change does
+			// not reliably flip which position the softmax favours, and a
+			// Q15 softmax already near a saturated extreme is insensitive to
+			// further score movement that does not flip the ordering. This
+			// cell's job is to prove q/k reach the output, not to bound the
+			// smallest detectable perturbation.
+			if (tensor == 0) {
+				mutant.q_weight_arr[layer][0] = INT8_C(-60);
+			} else {
+				mutant.k_weight_arr[layer][0] = INT8_C(60);
+			}
+
+			st = RunOneWholeTokenDirect(mutant_seq, &mutant.layers[layer], mutant.view.rope_tables,
+			                            token_b, TwoLayerDistinctQKFixture::kContextCap, mutant_ws,
+			                            sizeof(mutant_ws), /*num_hidden_layers=*/1);
+			CHECK_MSG(st == SslmForwardStatus::Ok, "cell 1 mutant token B status == %s, want Ok",
+			          SslmForwardStatusName(st));
+
+			const bool differs = mutant_codes[0] != baseline_out[0] ||
+			                      mutant_codes[1] != baseline_out[1] ||
+			                      mutant_seq.hidden_scale.m != baseline_scale.m ||
+			                      mutant_seq.hidden_scale.e != baseline_scale.e;
+			CHECK_MSG(differs,
+			          "layer=%u tensor=%s: mutating one element left the width>=2 attention "
+			          "output unchanged {%d,%d}(%lld,%lld) -- q/k is not load-bearing at this "
+			          "site once width reaches 2, or the score/context GEMMs are reading the "
+			          "wrong store",
+			          layer, tensor == 0 ? "q_weight" : "k_weight", static_cast<int>(mutant_codes[0]),
+			          static_cast<int>(mutant_codes[1]),
+			          static_cast<long long>(mutant_seq.hidden_scale.m),
+			          static_cast<long long>(mutant_seq.hidden_scale.e));
+		}
+	}
+}
+
+// §11 S3.7 red cells (`context ∈ {0, 1, context_cap-1, context_cap}`) + the
+// `KvCapacityExhausted` fail-fast guard-vitality row (test design §3 Cell 2).
+static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	const int64_t kContextCap = 2;  // small cap so the boundary is reachable quickly
+	uint8_t workspace[2 * 16 * 1 * 2 * 2] = {};  // sized for kContextCap<=16
+
+	int8_t codes[2] = {};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+
+	// Sub-cell 1: context_length==0, a fresh sequence's first token -- width==1, Ok.
+	int8_t token1[2] = {5, -5};
+	auto st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token1,
+	                                  kContextCap, workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 1 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.context_length == 1, "context axis sub-cell 1: context_length == %lld, want 1",
+	          static_cast<long long>(seq.context_length));
+
+	// Sub-cell 2: context_length==1 (== context_cap-1), the next token is
+	// accepted and context_length becomes context_cap afterward.
+	int8_t token2[2] = {3, -7};
+	st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token2, kContextCap,
+	                            workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 2/3 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.context_length == kContextCap,
+	          "context axis sub-cell 2/3: context_length == %lld, want context_cap (%lld)",
+	          static_cast<long long>(seq.context_length), static_cast<long long>(kContextCap));
+
+	// Sub-cell 4: context_length == context_cap -- the next whole token is
+	// rejected with KvCapacityExhausted BEFORE any layer runs, seq poisoned
+	// then asserted bit-identical.
+	const int8_t poison_codes[2] = {INT8_C(-88), INT8_C(-88)};
+	codes[0] = poison_codes[0];
+	codes[1] = poison_codes[1];
+	const CarriedScale poison_scale{INT64_C(-88), INT64_C(-88)};
+	seq.hidden_scale = poison_scale;
+	seq.layer_index = 0;
+	const int64_t pre_context_length = seq.context_length;
+	const uint64_t pre_saturation = seq.kv_saturation_count;
+	std::memset(workspace, 0xEE, sizeof(workspace));
+	// A rejected call never reads `seq.hidden_codes` as an input at all (the
+	// guard fires before any layer runs), so the poisoned bytes set above
+	// are exactly what this call sees and exactly what it must leave behind.
+	const auto reject_status = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2, /*hidden_size=*/2,
+	    /*head_dim=*/2, /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables, workspace,
+	    sizeof(workspace));
+	CHECK_MSG(reject_status == SslmForwardStatus::KvCapacityExhausted,
+	          "context axis sub-cell 4: status == %s, want KvCapacityExhausted (context_length==%lld "
+	          "== context_cap==%lld)",
+	          SslmForwardStatusName(reject_status), static_cast<long long>(pre_context_length),
+	          static_cast<long long>(kContextCap));
+	CHECK_MSG(codes[0] == poison_codes[0] && codes[1] == poison_codes[1],
+	          "context axis sub-cell 4: seq.hidden_codes must be left exactly as poisoned on "
+	          "KvCapacityExhausted");
+	CHECK_MSG(seq.hidden_scale.m == poison_scale.m && seq.hidden_scale.e == poison_scale.e,
+	          "context axis sub-cell 4: seq.hidden_scale must be left exactly as poisoned");
+	CHECK_MSG(seq.context_length == pre_context_length,
+	          "context axis sub-cell 4: seq.context_length must be left exactly as it was "
+	          "(%lld), got %lld", static_cast<long long>(pre_context_length),
+	          static_cast<long long>(seq.context_length));
+	CHECK_MSG(seq.layer_index == 0,
+	          "context axis sub-cell 4: seq.layer_index must be left exactly as it was (0)");
+	CHECK_MSG(seq.kv_saturation_count == pre_saturation,
+	          "context axis sub-cell 4: seq.kv_saturation_count must be left untouched -- no layer "
+	          "ran");
+
+	// Guard-vitality: a second call at the SAME state rejects the identical
+	// way rather than corrupting the handle -- the rejection is idempotent.
+	const auto reject_again = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2, /*hidden_size=*/2,
+	    /*head_dim=*/2, /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables, workspace,
+	    sizeof(workspace));
+	CHECK_MSG(reject_again == SslmForwardStatus::KvCapacityExhausted,
+	          "context axis guard-vitality: re-issuing the SAME rejected call gave %s, want "
+	          "KvCapacityExhausted again (the rejection must be idempotent, not a one-shot poison "
+	          "of the handle)",
+	          SslmForwardStatusName(reject_again));
+}
+
+// §13 dim 8's cache-state axis (test design §3 Cell 3): cold prefill and
+// incremental decode to the same position produce bit-identical attention
+// output and K/V store contents there. Path A: one call per token, whole
+// budget each time. Path B: the SAME three tokens, but the third token's
+// layers are split across two resumed calls (the RESUME axis §11 S3.5
+// already exercises, crossed here with the position axis S3.7 adds).
+static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = TwoLayerFixture::kContextCap;
+	int8_t t0[2] = {5, -5}, t1[2] = {3, -7}, t2[2] = {-4, 6};
+
+	// Path A.
+	TwoLayerFixture fixture_a;
+	uint8_t ws_a[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	int8_t codes_a[2] = {};
+	SequenceLayerState seq_a;
+	seq_a.hidden_codes = codes_a;
+	for (int8_t* tok : {t0, t1, t2}) {
+		const auto st = RunOneWholeTokenDirect(seq_a, fixture_a.layers, fixture_a.view.rope_tables,
+		                                        tok, kContextCap, ws_a, sizeof(ws_a));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path A status == %s, want Ok",
+		          SslmForwardStatusName(st));
+	}
+	CHECK_MSG(seq_a.context_length == 3, "cell 3 path A: context_length == %lld, want 3",
+	          static_cast<long long>(seq_a.context_length));
+
+	// Path B: token 0 and token 1 run whole-budget, token 2 split at
+	// layer_index==1 (num_hidden_layers==2, so this is a single mid-token
+	// resume).
+	TwoLayerFixture fixture_b;
+	uint8_t ws_b[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	int8_t codes_b[2] = {};
+	SequenceLayerState seq_b;
+	seq_b.hidden_codes = codes_b;
+	for (int8_t* tok : {t0, t1}) {
+		const auto st = RunOneWholeTokenDirect(seq_b, fixture_b.layers, fixture_b.view.rope_tables,
+		                                        tok, kContextCap, ws_b, sizeof(ws_b));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path B (t0/t1) status == %s, want Ok",
+		          SslmForwardStatusName(st));
+	}
+	codes_b[0] = t2[0];
+	codes_b[1] = t2[1];
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.layer_index = 0;
+	auto st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2,
+	                                  /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+	                                  /*intermediate_size=*/2, kContextCap, fixture_b.view.rope_tables,
+	                                  ws_b, sizeof(ws_b));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path B (t2, first half) status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq_b.layer_index == 1, "cell 3 path B (t2, first half): layer_index == %u, want 1",
+	          seq_b.layer_index);
+	CHECK_MSG(seq_b.context_length == 2,
+	          "cell 3 path B (t2, first half): context_length must NOT have advanced yet (still "
+	          "mid-token) -- got %lld, want 2", static_cast<long long>(seq_b.context_length));
+	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path B (t2, second half) status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq_b.context_length == 3,
+	          "cell 3 path B (t2, second half): context_length == %lld, want 3",
+	          static_cast<long long>(seq_b.context_length));
+
+	CHECK_MSG(codes_a[0] == codes_b[0] && codes_a[1] == codes_b[1],
+	          "cell 3: path A hidden_codes {%d,%d} != path B hidden_codes {%d,%d} at the same "
+	          "position -- cold prefill and incremental (resumed) decode must agree",
+	          static_cast<int>(codes_a[0]), static_cast<int>(codes_a[1]),
+	          static_cast<int>(codes_b[0]), static_cast<int>(codes_b[1]));
+	CHECK_MSG(seq_a.hidden_scale.m == seq_b.hidden_scale.m && seq_a.hidden_scale.e == seq_b.hidden_scale.e,
+	          "cell 3: path A hidden_scale (%lld,%lld) != path B hidden_scale (%lld,%lld)",
+	          static_cast<long long>(seq_a.hidden_scale.m), static_cast<long long>(seq_a.hidden_scale.e),
+	          static_cast<long long>(seq_b.hidden_scale.m), static_cast<long long>(seq_b.hidden_scale.e));
+	for (uint32_t l = 0; l < 2; ++l) {
+		const int8_t* row_a = superslm::KeyRow(ws_a, l, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+		                                        /*kv_head=*/0, /*position=*/2);
+		const int8_t* row_b = superslm::KeyRow(ws_b, l, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+		                                        /*kv_head=*/0, /*position=*/2);
+		CHECK_MSG(row_a[0] == row_b[0] && row_a[1] == row_b[1],
+		          "cell 3: layer %u K store at position 2 differs between path A {%d,%d} and path "
+		          "B {%d,%d}",
+		          l, static_cast<int>(row_a[0]), static_cast<int>(row_a[1]),
+		          static_cast<int>(row_b[0]), static_cast<int>(row_b[1]));
+		const int8_t* vrow_a = superslm::ValueRow(ws_a, l, kContextCap, /*num_heads=*/1,
+		                                           /*head_dim=*/2, /*kv_head=*/0, /*position=*/2);
+		const int8_t* vrow_b = superslm::ValueRow(ws_b, l, kContextCap, /*num_heads=*/1,
+		                                           /*head_dim=*/2, /*kv_head=*/0, /*position=*/2);
+		CHECK_MSG(vrow_a[0] == vrow_b[0] && vrow_a[1] == vrow_b[1],
+		          "cell 3: layer %u V store at position 2 differs between path A {%d,%d} and path "
+		          "B {%d,%d}",
+		          l, static_cast<int>(vrow_a[0]), static_cast<int>(vrow_a[1]),
+		          static_cast<int>(vrow_b[0]), static_cast<int>(vrow_b[1]));
+	}
+}
+
+// The RoPE write-back correction's own witness (test design §3 Cell 5): a
+// NON-identity rotation table (TwoLayerFixture's own is identity, which
+// makes this cell structurally unreachable there -- reusing the same
+// 90-degree-table pattern TestRunLayerLoopCachesKPostRotationNotPreRotation
+// already established, extended to a multi-row table). Position 0's post-
+// RoPE K row must be UNCHANGED by position 1's own landing write, read
+// through KeyRow -- a regression to a whole-region flat copy would overwrite
+// it.
+static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using namespace superslm_test;
+
+	const int64_t kContextCap = 4;
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = static_cast<uint32_t>(kContextCap);
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	// A 90-degree rotation at EVERY row (cos_q30=0, sin_q30=2^30), matching
+	// TestRunLayerLoopCachesKPostRotationNotPreRotation's own non-identity
+	// table, so position 0 and position 1 rotate identically per-row (this
+	// cell's own claim is about the WRITE-BACK, not about per-position
+	// rotation angle -- distinguishing the two positions' own landed
+	// pre-rotation K is enough, since RopeApplyPair(x,y,0,2^30)==(-y,x)
+	// applied to two DIFFERENT (x,y) pairs still gives two different rows).
+	std::vector<int64_t> cos_flat(kContextCap, INT64_C(0));
+	std::vector<int64_t> sin_flat(kContextCap, INT64_C(1) << 30);
+	FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/static_cast<int32_t>(kContextCap),
+	                                               /*pairs=*/1, cos_flat.data(), sin_flat.data());
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+	superslm::SslmModelView view;
+	std::string err;
+	const auto load_status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(load_status == superslm::SslmModelStatus::Ok,
+	          "cell 5's own 90-degree-rotation artifact failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(load_status), err.c_str());
+	if (load_status != superslm::SslmModelStatus::Ok) return;
+
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+	const int64_t kv_landing_r_t_arr[1] = {r_t};
+	const int64_t kv_landing_e_t_arr[1] = {0};
+	const int32_t ctx_fold_identity_arr[1] = {1};
+	const int32_t ctx_fold_mult_arr[1] = {0};
+	const int32_t ctx_fold_shift_arr[1] = {0};
+
+	superslm::LayerWeights lw{};
+	lw.attn_norm_gain = norm_gain;
+	lw.attn_norm_site_constant = canonical;
+	lw.q_weight = identity2x2;
+	lw.k_weight = identity2x2;
+	lw.v_weight = identity2x2;
+	lw.o_weight = identity2x2;
+	lw.proj_identity = 1;
+	lw.proj_mult = 0;
+	lw.proj_shift = 0;
+	lw.q_site_constant = canonical;
+	lw.o_site_constant = canonical;
+	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_k = kv_landing_e_t_arr;
+	lw.kv_landing_r_t_v = kv_landing_r_t_arr;
+	lw.kv_landing_e_t_v = kv_landing_e_t_arr;
+	lw.ctx_fold_identity = ctx_fold_identity_arr;
+	lw.ctx_fold_mult = ctx_fold_mult_arr;
+	lw.ctx_fold_shift = ctx_fold_shift_arr;
+	lw.ctx_fold_site_constant = canonical;
+	lw.attn_residual_site_constant = canonical;
+	lw.q_ln2 = INT64_C(2081104);
+	lw.q_b_iexp = INT64_C(4062246);
+	lw.q_c_iexp = INT64_C(8649804928567);
+	lw.mlp_norm_gain = norm_gain;
+	lw.mlp_norm_site_constant = canonical;
+	lw.gate_weight = identity2x2;
+	lw.up_weight = identity2x2;
+	lw.down_weight = identity2x2;
+	lw.gate_site_constant = canonical;
+	lw.up_site_constant = canonical;
+	lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+	lw.down_site_constant = canonical;
+	lw.mlp_residual_site_constant = canonical;
+
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	uint8_t workspace[1 * 4 * 1 * 2 * 2] = {};
+
+	int8_t t0[2] = {5, -5};
+	auto st = RunOneWholeTokenDirect(seq, &lw, view.rope_tables, t0, kContextCap, workspace,
+	                                  sizeof(workspace), /*num_hidden_layers=*/1);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 5 token 0 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const int8_t* row0_after_t0 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
+	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*position=*/0);
+	const int8_t row0_snapshot[2] = {row0_after_t0[0], row0_after_t0[1]};
+
+	int8_t t1[2] = {2, 9};
+	st = RunOneWholeTokenDirect(seq, &lw, view.rope_tables, t1, kContextCap, workspace,
+	                            sizeof(workspace), /*num_hidden_layers=*/1);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 5 token 1 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+
+	const int8_t* row0_after_t1 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
+	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*position=*/0);
+	const int8_t* row1_after_t1 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
+	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*position=*/1);
+
+	CHECK_MSG(row0_after_t1[0] == row0_snapshot[0] && row0_after_t1[1] == row0_snapshot[1],
+	          "cell 5: position 0's K row changed from {%d,%d} to {%d,%d} after position 1's own "
+	          "landing write -- a regression to a whole-region flat copy overwrites every earlier "
+	          "position with the newest token's own rotation",
+	          static_cast<int>(row0_snapshot[0]), static_cast<int>(row0_snapshot[1]),
+	          static_cast<int>(row0_after_t1[0]), static_cast<int>(row0_after_t1[1]));
+	CHECK_MSG(row0_after_t1[0] != row1_after_t1[0] || row0_after_t1[1] != row1_after_t1[1],
+	          "cell 5: position 0's K row {%d,%d} equals position 1's {%d,%d} -- two DIFFERENT "
+	          "tokens' landed pre-rotation K should not coincide, and this witness's premise "
+	          "(rotation is observable per-row) requires them distinguishable",
+	          static_cast<int>(row0_after_t1[0]), static_cast<int>(row0_after_t1[1]),
+	          static_cast<int>(row1_after_t1[0]), static_cast<int>(row1_after_t1[1]));
+}
+
+// The K/V store's context_cap-sized reservation, exercised at its own
+// boundary (test design §3 Cell 6): a position exactly context_cap-1 writes
+// and reads correctly through KeyRow/ValueRow.
+static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+	uint8_t workspace[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	int8_t codes[2] = {};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+
+	int8_t tokens[3][2] = {{5, -5}, {3, -7}, {-4, 6}};
+	for (auto& tok : tokens) {
+		const auto st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, tok,
+		                                        kContextCap, workspace, sizeof(workspace));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "cell 6 status == %s, want Ok",
+		          SslmForwardStatusName(st));
+	}
+	CHECK_MSG(seq.context_length == kContextCap,
+	          "cell 6: context_length == %lld, want context_cap (%lld)",
+	          static_cast<long long>(seq.context_length), static_cast<long long>(kContextCap));
+
+	// Independently re-derive the landed K/V for the LAST token (position
+	// context_cap-1==2) the same way TestRunLayerLoopKvLandingClampsAndWires
+	// SaturationCounter's own oracle already does for position 0.
+	int8_t normed[2] = {};
+	CarriedScale normed_scale{};
+	const CarriedScale canonical{INT64_C(1073741824), INT64_C(-30)};
+	const auto norm_st = superslm::RmsNormSite(tokens[2], fixture.layers[0].attn_norm_gain, 2,
+	                                            CarriedScale{INT64_C(1073741824), 0}, canonical,
+	                                            normed, &normed_scale);
+	CHECK_MSG(norm_st == SslmForwardStatus::Ok, "cell 6 oracle RmsNormSite status == %s, want Ok",
+	          SslmForwardStatusName(norm_st));
+	int64_t kacc[2] = {}, vacc[2] = {};
+	superslm::GemmInt8AccumulateRow(normed, fixture.layers[0].k_weight, 2, 2, kacc);
+	superslm::GemmInt8AccumulateRow(normed, fixture.layers[0].v_weight, 2, 2, vacc);
+	int8_t expected_k[2] = {}, expected_v[2] = {};
+	for (int i = 0; i < 2; ++i) {
+		const int64_t kf = superslm::ApplyWeightScaleFold(kacc[i], 1, 0, 0);
+		const int64_t vf = superslm::ApplyWeightScaleFold(vacc[i], 1, 0, 0);
+		expected_k[i] = static_cast<int8_t>(superslm::ClampRopeCode(superslm::LandingRescale(
+		    kf, normed_scale.m, fixture.layers[0].kv_landing_r_t_k[0], normed_scale.e,
+		    fixture.layers[0].kv_landing_e_t_k[0])));
+		expected_v[i] = static_cast<int8_t>(superslm::ClampRopeCode(superslm::LandingRescale(
+		    vf, normed_scale.m, fixture.layers[0].kv_landing_r_t_v[0], normed_scale.e,
+		    fixture.layers[0].kv_landing_e_t_v[0])));
+	}
+	// TwoLayerFixture's own rope table is identity (cos=2^30, sin=0), so
+	// RoPE leaves the landed K unchanged -- the oracle above IS the
+	// post-rotation value here, matching TwoLayerFixture's own convention
+	// throughout this suite.
+
+	const int8_t* actual_k = superslm::KeyRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1,
+	                                           /*head_dim=*/2, /*kv_head=*/0,
+	                                           /*position=*/kContextCap - 1);
+	const int8_t* actual_v = superslm::ValueRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1,
+	                                             /*head_dim=*/2, /*kv_head=*/0,
+	                                             /*position=*/kContextCap - 1);
+	CHECK_MSG(actual_k[0] == expected_k[0] && actual_k[1] == expected_k[1],
+	          "cell 6: K at position context_cap-1 == {%d,%d}, want the independently-derived "
+	          "{%d,%d}", static_cast<int>(actual_k[0]), static_cast<int>(actual_k[1]),
+	          static_cast<int>(expected_k[0]), static_cast<int>(expected_k[1]));
+	CHECK_MSG(actual_v[0] == expected_v[0] && actual_v[1] == expected_v[1],
+	          "cell 6: V at position context_cap-1 == {%d,%d}, want the independently-derived "
+	          "{%d,%d}", static_cast<int>(actual_v[0]), static_cast<int>(actual_v[1]),
+	          static_cast<int>(expected_v[0]), static_cast<int>(expected_v[1]));
+}
+
+// S3.7's own poison-fill cell, restated for the multi-position K/V store
+// (test design §3 Cell 7, T-1442): sequence A commits k>=2 positions;
+// release the handle (poison-fill the shared workspace); sequence B, created
+// fresh in the same slot, must read poison -- not A's committed codes -- at
+// every position 0..k-1, before B has written that position itself.
+static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+	uint8_t workspace[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+
+	// Sequence A: commit 2 positions.
+	{
+		int8_t codes[2] = {};
+		SequenceLayerState seq_a;
+		seq_a.hidden_codes = codes;
+		int8_t t0[2] = {5, -5}, t1[2] = {3, -7};
+		for (int8_t* tok : {t0, t1}) {
+			const auto st = RunOneWholeTokenDirect(seq_a, fixture.layers, fixture.view.rope_tables,
+			                                        tok, kContextCap, workspace, sizeof(workspace));
+			CHECK_MSG(st == SslmForwardStatus::Ok, "cell 7 sequence A status == %s, want Ok",
+			          SslmForwardStatusName(st));
+		}
+		CHECK_MSG(seq_a.context_length == 2, "cell 7 sequence A: context_length == %lld, want 2",
+		          static_cast<long long>(seq_a.context_length));
+	}
+
+	// Release: poison-fill the shared workspace, matching this suite's
+	// existing single-position poison-fill cells.
+	std::memset(workspace, 0xEE, sizeof(workspace));
+
+	// Sequence B: fresh, in the SAME workspace slot.
+	SequenceLayerState seq_b;
+	int8_t codes_b[2] = {};
+	seq_b.hidden_codes = codes_b;
+	CHECK_MSG(seq_b.context_length == 0, "cell 7 sequence B: a fresh SequenceLayerState's own "
+	          "context_length default must be 0, got %lld",
+	          static_cast<long long>(seq_b.context_length));
+
+	for (uint32_t l = 0; l < 2; ++l) {
+		for (int64_t pos = 0; pos < 2; ++pos) {  // positions 0..k-1, k==2
+			const int8_t* krow = superslm::KeyRow(workspace, l, kContextCap, /*num_heads=*/1,
+			                                       /*head_dim=*/2, /*kv_head=*/0, pos);
+			const int8_t* vrow = superslm::ValueRow(workspace, l, kContextCap, /*num_heads=*/1,
+			                                         /*head_dim=*/2, /*kv_head=*/0, pos);
+			CHECK_MSG(static_cast<uint8_t>(krow[0]) == 0xEE && static_cast<uint8_t>(krow[1]) == 0xEE,
+			          "cell 7: layer %u position %lld K row reads {%d,%d} on sequence B before B "
+			          "wrote it -- want the poison pattern (0xEE,0xEE), not A's committed codes",
+			          l, static_cast<long long>(pos), static_cast<int>(krow[0]),
+			          static_cast<int>(krow[1]));
+			CHECK_MSG(static_cast<uint8_t>(vrow[0]) == 0xEE && static_cast<uint8_t>(vrow[1]) == 0xEE,
+			          "cell 7: layer %u position %lld V row reads {%d,%d} on sequence B before B "
+			          "wrote it -- want the poison pattern (0xEE,0xEE), not A's committed codes",
+			          l, static_cast<long long>(pos), static_cast<int>(vrow[0]),
+			          static_cast<int>(vrow[1]));
+		}
+	}
+}
+
+// §13 dim 8's intra-token layer-resume x width stability (test design §3
+// Cell 8, T-1445): resuming mid-token must not recompute position/width from
+// a stale or double-advanced context_length -- both must stay constant
+// across every layer of ONE token, since context_length only advances at the
+// token's LAST layer.
+static void TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = TwoLayerFixture::kContextCap;
+	int8_t t0[2] = {5, -5}, t1[2] = {3, -7}, t2[2] = {-4, 6};
+
+	// Run (a): the third token in ONE call (full budget).
+	TwoLayerFixture fixture_a;
+	uint8_t ws_a[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	int8_t codes_a[2] = {};
+	SequenceLayerState seq_a;
+	seq_a.hidden_codes = codes_a;
+	for (int8_t* tok : {t0, t1}) {
+		const auto st = RunOneWholeTokenDirect(seq_a, fixture_a.layers, fixture_a.view.rope_tables,
+		                                        tok, kContextCap, ws_a, sizeof(ws_a));
+		CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (a) t0/t1 status == %s, want Ok",
+		          SslmForwardStatusName(st));
+	}
+	auto st = RunOneWholeTokenDirect(seq_a, fixture_a.layers, fixture_a.view.rope_tables, t2,
+	                                  kContextCap, ws_a, sizeof(ws_a));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (a) t2 (single call) status == %s, want Ok",
+	          SslmForwardStatusName(st));
+
+	// Run (b): the SAME third token, split at layer_index==1 (the only
+	// interior boundary at num_hidden_layers==2 -- both the design's own
+	// {1, num_hidden_layers-1} endpoints coincide here).
+	TwoLayerFixture fixture_b;
+	uint8_t ws_b[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	int8_t codes_b[2] = {};
+	SequenceLayerState seq_b;
+	seq_b.hidden_codes = codes_b;
+	for (int8_t* tok : {t0, t1}) {
+		const auto st2 = RunOneWholeTokenDirect(seq_b, fixture_b.layers, fixture_b.view.rope_tables,
+		                                         tok, kContextCap, ws_b, sizeof(ws_b));
+		CHECK_MSG(st2 == SslmForwardStatus::Ok, "cell 8 run (b) t0/t1 status == %s, want Ok",
+		          SslmForwardStatusName(st2));
+	}
+	codes_b[0] = t2[0];
+	codes_b[1] = t2[1];
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.layer_index = 0;
+	const int64_t context_length_before_t2 = seq_b.context_length;
+	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (b) t2 first half status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq_b.context_length == context_length_before_t2,
+	          "cell 8: context_length must not move mid-token (before %lld, after first half %lld)",
+	          static_cast<long long>(context_length_before_t2),
+	          static_cast<long long>(seq_b.context_length));
+	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (b) t2 second half status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq_b.context_length == context_length_before_t2 + 1,
+	          "cell 8: context_length must advance by exactly 1 once the token's last layer "
+	          "completes -- before %lld, after %lld",
+	          static_cast<long long>(context_length_before_t2),
+	          static_cast<long long>(seq_b.context_length));
+
+	CHECK_MSG(codes_a[0] == codes_b[0] && codes_a[1] == codes_b[1] &&
+	              seq_a.hidden_scale.m == seq_b.hidden_scale.m &&
+	              seq_a.hidden_scale.e == seq_b.hidden_scale.e,
+	          "cell 8: run (a) {%d,%d}(%lld,%lld) != run (b) {%d,%d}(%lld,%lld) -- resuming "
+	          "mid-token must not change the width/position the resumed layers see",
+	          static_cast<int>(codes_a[0]), static_cast<int>(codes_a[1]),
+	          static_cast<long long>(seq_a.hidden_scale.m), static_cast<long long>(seq_a.hidden_scale.e),
+	          static_cast<int>(codes_b[0]), static_cast<int>(codes_b[1]),
+	          static_cast<long long>(seq_b.hidden_scale.m), static_cast<long long>(seq_b.hidden_scale.e));
+}
+
+// §13 dim 9's snapshot/restore, now including context_length (test design §3
+// Cell 9): memcpy the sequence-state struct at a layer boundary mid-token,
+// continue the original, restore the snapshot into a FRESH handle (with its
+// own hidden_codes buffer, memcpy'd from the snapshot's own pointee -- never
+// the pointer itself), continue the restored copy, and assert the two token
+// streams are identical.
+static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = TwoLayerFixture::kContextCap;
+	TwoLayerFixture fixture;
+	uint8_t workspace[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+
+	int8_t codes[2] = {};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	int8_t t0[2] = {5, -5};
+	auto st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, t0, kContextCap,
+	                                  workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 t0 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.context_length == 1, "cell 9 t0: context_length == %lld, want 1",
+	          static_cast<long long>(seq.context_length));
+
+	// Snapshot mid-token, at layer_index==1: start token 1's own layers, run
+	// only the first, snapshot, then continue the original to completion.
+	int8_t t1[2] = {3, -7};
+	codes[0] = t1[0];
+	codes[1] = t1[1];
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            kContextCap, fixture.view.rope_tables, workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 t1 first half status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.layer_index == 1, "cell 9: mid-token snapshot point layer_index == %u, want 1",
+	          seq.layer_index);
+
+	SequenceLayerState snapshot;
+	std::memcpy(&snapshot, &seq, sizeof(SequenceLayerState));
+	int8_t snapshot_codes[2] = {codes[0], codes[1]};
+	snapshot.hidden_codes = snapshot_codes;  // fresh buffer, memcpy'd from the pointee, not aliased
+
+	// Continue the ORIGINAL to completion.
+	st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            kContextCap, fixture.view.rope_tables, workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 original t1 second half status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.context_length == 2, "cell 9: original context_length == %lld after t1, want 2",
+	          static_cast<long long>(seq.context_length));
+
+	// Continue the RESTORED copy, into a fresh handle -- same workspace
+	// (S3a's own single-sequence model; the property under test is the
+	// struct's own addressability, not workspace independence).
+	st = superslm::RunLayerLoop(snapshot, fixture.layers, /*num_hidden_layers=*/2,
+	                            /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+	                            /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables,
+	                            workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 restored t1 second half status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(snapshot.context_length == 2,
+	          "cell 9: restored copy's context_length == %lld after t1, want 2 -- the copy must "
+	          "carry context_length forward as part of the struct's own addressable unit",
+	          static_cast<long long>(snapshot.context_length));
+
+	CHECK_MSG(codes[0] == snapshot_codes[0] && codes[1] == snapshot_codes[1],
+	          "cell 9: original token stream {%d,%d} != restored token stream {%d,%d} -- either "
+	          "some sequence-relevant state lives outside SequenceLayerState, or context_length "
+	          "specifically was not carried by the copy",
+	          static_cast<int>(codes[0]), static_cast<int>(codes[1]),
+	          static_cast<int>(snapshot_codes[0]), static_cast<int>(snapshot_codes[1]));
+	CHECK_MSG(seq.hidden_scale.m == snapshot.hidden_scale.m &&
+	              seq.hidden_scale.e == snapshot.hidden_scale.e,
+	          "cell 9: original hidden_scale (%lld,%lld) != restored hidden_scale (%lld,%lld)",
+	          static_cast<long long>(seq.hidden_scale.m), static_cast<long long>(seq.hidden_scale.e),
+	          static_cast<long long>(snapshot.hidden_scale.m),
+	          static_cast<long long>(snapshot.hidden_scale.e));
+}
+
+// --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
+// design §3, "Cells 10-14 -- the calibration band"). Cell 14 (the
+// converter-side cell) is a second, independent blocker outside this
+// ticket's Writable scope (`tools/convert_model.py` is non-test source in
+// D:\SuperSLM, read-only per this ticket) and is not built here -- named
+// explicitly in the handoff rather than silently omitted. -----------------
+
+namespace {
+
+// Builds a minimal, otherwise-valid artifact (Config + SigmoidLut, the v2
+// required pair) with an OPTIONAL CalibrationBand KVC1 section carrying one
+// "token_length" entry `(min, max)` -- the fixture family test design §3's
+// own text specifies ("KVC1-shaped, dtype = Raw, value_words = 2, one entry
+// named token_length carrying (min, max) as two u64 values"). Pass
+// `include_band = false` for the absence cells.
+superslm::SslmModelStatus LoadCalibrationBandFixture(bool include_band, int64_t min_v, int64_t max_v,
+                                                       superslm::SslmModelView& out, std::string* err) {
+	using namespace superslm_test;
+	Cfg1Spec spec{};
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	std::vector<FixtureSection> sections = {config, MakeSigmoidLutSection()};
+	if (include_band) {
+		auto kvc1 = BuildKvc1(/*declared_value_words=*/2, {{"token_length", {min_v, max_v}}});
+		sections.push_back(
+		    MakeSection(SslmSectionType::CalibrationBand, SslmDtype::Raw, kvc1.bytes));
+	}
+	auto built = BuildArtifact(sections);
+	return superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), out, err);
+}
+
+}  // namespace
+
+// Cell 10 -- absence and version stability (dim 9, §13.1 cell 1): an
+// artifact WITHOUT the section reports `band_unknown`, and every existing
+// v2 fixture in the suite still loads (this cell checks the one this pass's
+// own fixture uses; the suite-wide "every fixture still loads" claim is what
+// the unchanged 23,117-check baseline, reconfirmed in this pass's own build
+// log, already establishes -- the section is OPTIONAL and no existing
+// section-loop arm changed). `kArtifactFormatVersion`, `kConfigBytes`, and
+// CFG1's own `version` field are unchanged, asserted at the constants
+// themselves (they are compile-time constants this pass did not touch).
+static void TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged() {
+	using superslm::SslmCalibrationBandVerdict;
+	using superslm::SslmModelStatus;
+
+	superslm::SslmModelView view;
+	std::string err;
+	const auto status = LoadCalibrationBandFixture(/*include_band=*/false, 0, 0, view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "cell 10: artifact without CalibrationBand failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(!view.has_calibration_band,
+	          "cell 10: has_calibration_band == true on an artifact that never carried the section");
+	const auto verdict = superslm::ClassifyCalibrationBand(view, /*token_length=*/100);
+	CHECK_MSG(verdict == SslmCalibrationBandVerdict::BandUnknown,
+	          "cell 10: ClassifyCalibrationBand on a section-absent view == %d, want BandUnknown (3)",
+	          static_cast<int>(verdict));
+	CHECK_MSG(superslm::kArtifactFormatVersion == 2,
+	          "cell 10: kArtifactFormatVersion == %u, want 2 unchanged -- CalibrationBand is a new "
+	          "OPTIONAL section type, not a version bump",
+	          superslm::kArtifactFormatVersion);
+	CHECK_MSG(superslm::kConfigBytes == 84,
+	          "cell 10: kConfigBytes == %u, want 84 unchanged -- CalibrationBand touches no CFG1 field",
+	          superslm::kConfigBytes);
+}
+
+// Cell 11 -- per-verdict cell (dim 10, achievement): four sub-cells, one per
+// verdict, each a DIFFERENT constructed input against the SAME band
+// (min=10, max=20). PASS iff each reports exactly its own named verdict --
+// an achievement claim per §13 dim 10 (a golden-hash or consistency oracle
+// would pass on a verdict enum that always returned the same member).
+static void TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases() {
+	using superslm::SslmCalibrationBandVerdict;
+	using superslm::SslmModelStatus;
+
+	superslm::SslmModelView view;
+	std::string err;
+	const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/10, /*max=*/20, view,
+	                                                &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "cell 11: artifact with CalibrationBand(10,20) failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(status), err.c_str());
+	CHECK_MSG(view.has_calibration_band, "cell 11: has_calibration_band == false, want true");
+
+	struct Case {
+		int64_t token_length;
+		SslmCalibrationBandVerdict want;
+		const char* name;
+	};
+	const Case cases[] = {
+	    {15, SslmCalibrationBandVerdict::InBand, "in_band"},        // strictly between 10 and 20
+	    {25, SslmCalibrationBandVerdict::AboveBand, "above_band"},  // > max
+	    {5, SslmCalibrationBandVerdict::BelowBand, "below_band"},   // < min
+	};
+	for (const Case& c : cases) {
+		const auto got = superslm::ClassifyCalibrationBand(view, c.token_length);
+		CHECK_MSG(got == c.want, "cell 11: ClassifyCalibrationBand(token_length=%lld) == %d, want %s (%d)",
+		          static_cast<long long>(c.token_length), static_cast<int>(got), c.name,
+		          static_cast<int>(c.want));
+	}
+	// The fourth verdict, band_unknown, is dim 9's own case (cited, not
+	// duplicated) -- TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged
+	// above already asserts it. Confirmed here that no two of the four
+	// enumerators collapse to the same underlying value.
+	CHECK_MSG(static_cast<uint32_t>(SslmCalibrationBandVerdict::InBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::AboveBand) &&
+	              static_cast<uint32_t>(SslmCalibrationBandVerdict::InBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::BelowBand) &&
+	              static_cast<uint32_t>(SslmCalibrationBandVerdict::InBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::BandUnknown) &&
+	              static_cast<uint32_t>(SslmCalibrationBandVerdict::AboveBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::BelowBand) &&
+	              static_cast<uint32_t>(SslmCalibrationBandVerdict::AboveBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::BandUnknown) &&
+	              static_cast<uint32_t>(SslmCalibrationBandVerdict::BelowBand) !=
+	                  static_cast<uint32_t>(SslmCalibrationBandVerdict::BandUnknown),
+	          "cell 11: the four verdict enumerators are not pairwise distinct");
+}
+
+// Cell 12 -- boundary cells (dim 6): four constructed lengths against band
+// (min=10, max=20) -- exactly `min` (in_band, §8.3's "inclusive at both
+// endpoints"), `min-1` (below_band), exactly `max` (in_band), `max+1`
+// (above_band). PASS iff each reports the verdict its own inclusive-endpoint
+// reading demands; FAIL iff `min`/`max` themselves report below/above (an
+// off-by-one on the inclusive claim).
+static void TestCalibrationBandBoundaryEndpointsAreInclusive() {
+	using superslm::SslmCalibrationBandVerdict;
+	using superslm::SslmModelStatus;
+
+	superslm::SslmModelView view;
+	std::string err;
+	const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/10, /*max=*/20, view,
+	                                                &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "cell 12: artifact with CalibrationBand(10,20) failed to load: got %s (%s)",
+	          superslm::SslmModelStatusName(status), err.c_str());
+
+	struct Case {
+		int64_t token_length;
+		SslmCalibrationBandVerdict want;
+		const char* name;
+	};
+	const Case cases[] = {
+	    {10, SslmCalibrationBandVerdict::InBand, "in_band (== min)"},
+	    {9, SslmCalibrationBandVerdict::BelowBand, "below_band (min-1)"},
+	    {20, SslmCalibrationBandVerdict::InBand, "in_band (== max)"},
+	    {21, SslmCalibrationBandVerdict::AboveBand, "above_band (max+1)"},
+	};
+	for (const Case& c : cases) {
+		const auto got = superslm::ClassifyCalibrationBand(view, c.token_length);
+		CHECK_MSG(got == c.want, "cell 12: token_length=%lld (%s) == %d, want %d",
+		          static_cast<long long>(c.token_length), c.name, static_cast<int>(got),
+		          static_cast<int>(c.want));
+	}
+}
+
+// Cell 13 -- hostile bands (dim 2, trust boundary): `min > max` and
+// `max == 0`, each a load-time rejection naming the section (D-SLM143
+// pattern). PASS iff SslmModel::Load rejects both with CalibrationBandOutOfDomain;
+// FAIL iff either loads Ok (the artifact becomes a hostile-input path).
+static void TestCalibrationBandHostileBandsAreLoadRejections() {
+	using superslm::SslmModelStatus;
+
+	{
+		superslm::SslmModelView view;
+		std::string err;
+		const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/20, /*max=*/10,
+		                                                view, &err);
+		CHECK_MSG(status == SslmModelStatus::CalibrationBandOutOfDomain,
+		          "cell 13: CalibrationBand(min=20,max=10) [min > max] status == %s, want "
+		          "CalibrationBandOutOfDomain",
+		          superslm::SslmModelStatusName(status));
+		CHECK_MSG(!view.has_calibration_band && !view.has_config,
+		          "cell 13: a rejected Load must leave the view fully default, not a partial view");
+	}
+	{
+		superslm::SslmModelView view;
+		std::string err;
+		const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/0, /*max=*/0,
+		                                                view, &err);
+		CHECK_MSG(status == SslmModelStatus::CalibrationBandOutOfDomain,
+		          "cell 13: CalibrationBand(min=0,max=0) [max == 0] status == %s, want "
+		          "CalibrationBandOutOfDomain",
+		          superslm::SslmModelStatusName(status));
+		CHECK_MSG(!view.has_calibration_band && !view.has_config,
+		          "cell 13: a rejected Load must leave the view fully default, not a partial view");
+	}
+}
+
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16; §10.1;
 // Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md).
@@ -14669,7 +15765,12 @@ struct DecodeLoopCallFixture {
 	DecodeLoopFixture model;
 	superslm::SequenceLayerState seq{};
 	int8_t hidden_codes[DecodeLoopFixture::kHiddenSize] = {INT8_C(-77), INT8_C(-77)};
-	uint8_t workspace[64];
+	// S3.7: sized for TwoLayerFixture::kContextCap (16), num_hidden_layers=2,
+	// num_heads=1, head_dim=2 -- `2*16*1*2*2` = 128 bytes -- now that
+	// `context_length` is real and a multi-token decode genuinely commits
+	// more than one position (the old 64-byte buffer only ever needed to
+	// hold `context_cap=1`'s single position per layer).
+	uint8_t workspace[128];
 	std::vector<int32_t> out_tokens;
 	std::vector<int32_t> out_logit_rows;
 	size_t tokens_produced = 7777;  // poison
@@ -14717,7 +15818,8 @@ struct DecodeLoopCallFixture {
 	                                  size_t max_new_tokens) {
 		return superslm::RunGreedyDecodeLoop(
 		    seq, model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
-		    /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
+		    /*head_dim=*/2, /*intermediate_size=*/2,
+		    /*context_cap=*/TwoLayerFixture::kContextCap,
 		    model.layers_fixture.view.rope_tables, prompt_tokens.data(), prompt_tokens.size(),
 		    model.embed_weights, model.embed_site_constant, model.final_norm_gain(),
 		    model.final_norm_site_constant, model.head_weights, DecodeLoopFixture::kVocabSize,
@@ -14745,6 +15847,44 @@ struct DecodeLoopCallFixture {
 };
 
 }  // namespace
+
+// S3.7's §14.4 int16 narrowing (test design §3 Cell 4): checked before the
+// workspace is sized or any token is embedded. A too-small workspace is the
+// witness that the check runs FIRST -- if the width check ran after sizing,
+// WorkspaceTooSmall (or a crash) would fire instead.
+static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
+	using superslm::SslmForwardStatus;
+	using superslm::SslmKvPrecision;
+
+	DecodeLoopCallFixture f(/*out_capacity=*/2);
+	uint8_t tiny_workspace[1] = {};
+	const std::vector<int32_t> prompt = {0};
+	const std::vector<int32_t> stop_ids = {};
+	const auto result = superslm::RunGreedyDecodeLoop(
+	    f.seq, f.model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
+	    /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/TwoLayerFixture::kContextCap,
+	    f.model.layers_fixture.view.rope_tables, prompt.data(), prompt.size(),
+	    f.model.embed_weights, f.model.embed_site_constant, f.model.final_norm_gain(),
+	    f.model.final_norm_site_constant, f.model.head_weights, DecodeLoopFixture::kVocabSize,
+	    stop_ids.data(), stop_ids.size(), /*max_new_tokens=*/1, tiny_workspace, sizeof(tiny_workspace),
+	    f.out_tokens.data(), f.out_logit_rows.data(), f.out_tokens.size(), &f.tokens_produced,
+	    &f.stop_reason, SslmKvPrecision::Int16);
+	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
+	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
+	          "KvPrecisionUnsupported (checked before the workspace is sized -- a 1-byte workspace "
+	          "would otherwise surface WorkspaceTooSmall, proving the check ran too late)",
+	          SslmForwardStatusName(result));
+	f.CheckEverythingUntouched("RunGreedyDecodeLoop(kv_precision=Int16)");
+
+	// Positive control: Int8 (the default) is unaffected on the SAME call
+	// shape, this time with a real workspace.
+	DecodeLoopCallFixture g(/*out_capacity=*/4);
+	const auto ok_result = g.Run(/*prompt_tokens=*/{0}, /*stop_ids=*/{}, /*max_new_tokens=*/1);
+	CHECK_MSG(ok_result == SslmForwardStatus::Ok,
+	          "RunGreedyDecodeLoop(kv_precision=Int8 (default)) status == %s, want Ok -- the "
+	          "int16 guard must not also reject the legal value",
+	          SslmForwardStatusName(ok_result));
+}
 
 // §9.1/§13 dim 2/5: a host-supplied PROMPT token id outside [0, vocab_size)
 // is TokenIdOutOfRange, "on the same rule as" a stop id -- checked as each
@@ -15542,6 +16682,24 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
 	TestRunLayerLoopCachesKPostRotationNotPreRotation();
 	TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt();
+
+	// S3.7 -- multi-position attention, the K/V store accessor, the fail-fast
+	// guard, and the RoPE write-back correction (T-1418, T-1411, T-1442..
+	// T-1447; Claude/Curie/superslm-s3.7-multiposition-attention-test-design-
+	// 2026-07-31.md §3, Cells 1-9).
+	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
+	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
+	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
+	TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse();
+	TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions();
+	TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughAccessor();
+	TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore();
+	TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers();
+	TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength();
+	TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged();
+	TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases();
+	TestCalibrationBandBoundaryEndpointsAreInclusive();
+	TestCalibrationBandHostileBandsAreLoadRejections();
 
 	// S3.6 -- the head and the greedy decode loop (C16, §9.1; master plan
 	// §6.4; §10.1; T-1389;

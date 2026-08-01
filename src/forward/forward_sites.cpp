@@ -675,6 +675,48 @@ std::string LayerSite(std::string_view site_prefix, uint32_t layer, const char* 
 
 }  // namespace
 
+namespace {
+// S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
+// one offset formula every KeyRow/ValueRow accessor below shares --
+// per-(layer, head)-major, position-minor.
+inline size_t KvHalfOffset(uint32_t layer, int64_t context_cap, size_t num_heads, size_t head_dim) {
+	return (static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_heads * head_dim) * 2u;
+}
+inline size_t KvRowOffsetWithinHalf(int64_t context_cap, size_t head_dim, size_t kv_head,
+                                     int64_t position) {
+	return static_cast<size_t>(kv_head) * static_cast<size_t>(context_cap) * head_dim +
+	       static_cast<size_t>(position) * head_dim;
+}
+}  // namespace
+
+const int8_t* KeyRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
+                      size_t head_dim, size_t kv_head, int64_t position) noexcept {
+	const int8_t* const kv_base = reinterpret_cast<const int8_t*>(workspace);
+	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_heads, head_dim);
+	return k_store + KvRowOffsetWithinHalf(context_cap, head_dim, kv_head, position);
+}
+
+const int8_t* ValueRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                        size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept {
+	const int8_t* const kv_base = reinterpret_cast<const int8_t*>(workspace);
+	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_heads, head_dim);
+	const int8_t* const v_store =
+	    k_store + static_cast<size_t>(context_cap) * num_heads * head_dim;
+	return v_store + KvRowOffsetWithinHalf(context_cap, head_dim, kv_head, position);
+}
+
+int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
+                       size_t head_dim, size_t kv_head, int64_t position) noexcept {
+	return const_cast<int8_t*>(
+	    KeyRow(workspace, layer, context_cap, num_heads, head_dim, kv_head, position));
+}
+
+int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
+                         size_t head_dim, size_t kv_head, int64_t position) noexcept {
+	return const_cast<int8_t*>(
+	    ValueRow(workspace, layer, context_cap, num_heads, head_dim, kv_head, position));
+}
+
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t intermediate_size,
@@ -754,15 +796,27 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// so ordering relative to them changes no cell's observable contract.
 	if (seq.layer_index >= num_hidden_layers) return SslmForwardStatus::SequenceAlreadyComplete;
 
-	// This sub-slot's declared scope is a single position. §9.4's multi-
-	// position accessor (`KeyRow(layer, kv_head, position)`) is S3.7's and does
-	// not exist; the signature carries no position parameter, so position 0
-	// with a one-key attention row is the only reading the declared surface
-	// admits.
-	const size_t width = 1;
-	const int64_t position = 0;
+	// S3.7 (§11 S3.7 "Fail fast on a full cache"): a fresh token about to
+	// start against an already-full cache is rejected before any layer runs,
+	// `seq` left untouched -- checked only at `layer_index == 0` because
+	// `context_length` cannot change mid-token (it advances once, at the
+	// commit point below, only when the token's LAST layer completes), so a
+	// resumed call mid-token never needs to re-check it.
+	if (seq.layer_index == 0 && seq.context_length >= context_cap) {
+		return SslmForwardStatus::KvCapacityExhausted;
+	}
 
-	int8_t* const kv_base = reinterpret_cast<int8_t*>(workspace);
+	// S3.7 (§11 S3.7 "The mechanism"): the current token attends to every
+	// already-committed position (`seq.context_length` of them) plus its own
+	// just-landed K/V at `position` -- ordinary causal self-attention, never
+	// 0 by this construction (`context_length >= 0`, so `width >= 1`; the
+	// minimum is `context_length == 0` on a sequence's first token, giving
+	// `width == 1`, the exact case S3a already builds and gates). Constant
+	// across every layer of this token, since `context_length` only advances
+	// at the token's last layer (§13 dim 8's own resume/width-stability
+	// cell).
+	const int64_t position = seq.context_length;
+	const size_t width = static_cast<size_t>(seq.context_length) + 1;
 
 	std::vector<int8_t> normed(hidden_size), q_codes(hidden_size), o_codes(hidden_size);
 	std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size), ctx_codes(hidden_size);
@@ -798,11 +852,10 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
-		// through LandingRescale (§8.1), writing straight into the K/V store.
-		int8_t* const k_store =
-		    kv_base + (static_cast<size_t>(l) * static_cast<size_t>(context_cap) * num_heads *
-		               head_dim) * 2u;
-		int8_t* const v_store = k_store + static_cast<size_t>(context_cap) * num_heads * head_dim;
+		// through LandingRescale (§8.1), writing straight into the K/V store,
+		// through the S3.7 accessor -- one row per head, at THIS token's own
+		// `position`, never a whole-hidden_size flat write (§9.4's real
+		// per-(layer, head)-major, position-minor layout).
 		{
 			std::vector<int64_t> kacc(hidden_size), vacc(hidden_size);
 			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, hidden_size,
@@ -810,6 +863,10 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, hidden_size,
 			                      vacc.data());
 			for (size_t h = 0; h < num_heads; ++h) {
+				int8_t* const k_row =
+				    MutableKeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+				int8_t* const v_row =
+				    MutableValueRow(workspace, l, context_cap, num_heads, head_dim, h, position);
 				for (size_t d = 0; d < head_dim; ++d) {
 					const size_t i = h * head_dim + d;
 					const int64_t kf = ApplyWeightScaleFold(kacc[i], lw.proj_identity,
@@ -822,26 +879,43 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					// already implements. T-518's saturation counter (§8.2) is
 					// wired into seq's own per-sequence accumulator, the one
 					// call in this tree that composes the landing.
-					k_store[i] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 					    kf, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
 					    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
-					v_store[i] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 					    vf, normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
 					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
 				}
 			}
 		}
 
-		// RoPE on q and on the just-landed k, per head (§6.2 step 3).
+		// RoPE on q and on the just-landed k, per head (§6.2 step 3). k is
+		// read/written through the S3.7 accessor at THIS token's own
+		// `position` -- never a flat `hidden_size` offset, which under the
+		// real per-head layout would read/write the wrong head once
+		// `context_cap > 1`.
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 			                   rope_tables, q_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
-			st = RopeApplySite(k_store + h * head_dim, head_dim, position, context_cap, rope_tables,
+			const int8_t* const k_row_before_rotate =
+			    KeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
 			                   k_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
-		for (size_t i = 0; i < hidden_size; ++i) k_store[i] = k_rot[i];
+		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
+		// head's row is written back individually, through `MutableKeyRow` at
+		// THIS token's own `position` -- the old `for (i<hidden_size)
+		// k_store[i] = k_rot[i]` copy was only valid at `context_cap == 1`
+		// (the whole per-token K region WAS exactly `hidden_size` contiguous
+		// bytes at position 0); under the real layout it would overwrite
+		// EVERY committed position's row with this token's own rotation.
+		for (size_t h = 0; h < num_heads; ++h) {
+			int8_t* const k_row =
+			    MutableKeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+			for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+		}
 
 		// Attention proper (§6.2 step 5). No named site for this composition
 		// exists anywhere in this tree; this is where it is first composed.
@@ -858,8 +932,17 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			std::vector<int64_t> ctx_wide(hidden_size);
 			for (size_t h = 0; h < num_heads; ++h) {
 				std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
-				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_store + h * head_dim, head_dim,
-				                      width, scores.data());
+				// S3.7: the score row reads `width` contiguous rows of this
+				// head's own K store, starting at position 0 (the store's
+				// position-minor layout makes positions 0..width-1 for one
+				// head contiguous) -- q·K, never q·V (D-SLM516/D-SLM503's A3
+				// mutant, which this closes the K side of by construction:
+				// reading the wrong store here is exactly what a k_weight
+				// mutation cell (§3 Cell 1) would fail to distinguish).
+				const int8_t* const k_rows_base =
+				    KeyRow(workspace, l, context_cap, num_heads, head_dim, h, 0);
+				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
+				                      scores.data());
 				if (!SoftmaxRowQ15(scores.data(), width, lw.q_ln2, lw.q_b_iexp, lw.q_c_iexp,
 				                   probs.data())) {
 					// Minor A (Poirot e4b398c review): the kernel refused after
@@ -870,7 +953,9 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					// already in domain).
 					return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 				}
-				GemmProbQ15Accumulate(probs.data(), v_store + h * head_dim, width, head_dim,
+				const int8_t* const v_rows_base =
+				    ValueRow(workspace, l, context_cap, num_heads, head_dim, h, 0);
+				GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim,
 				                      ctx_acc.data());
 				for (size_t d = 0; d < head_dim; ++d) {
 					// D-SLM57's per-head dispatch (§6.2 step 6): WSC1's
@@ -971,6 +1056,16 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
 		seq.hidden_scale = stream_scale;
 		seq.layer_index = l + 1;
+		// S3.7 (§11 S3.7 "The mechanism"): `context_length` advances at this
+		// SAME commit point, once, only when the layer that just committed is
+		// the token's last -- reusing the loop's existing atomicity rather
+		// than adding a second commit point (§9.3/Critical 4's law). No other
+		// call site resets or touches it; unlike `layer_index`, a fresh-token
+		// embed never zeroes it, because it counts committed cache slots, not
+		// progress through the token in flight.
+		if (seq.layer_index == num_hidden_layers) {
+			seq.context_length += 1;
+		}
 		++advanced;
 	}
 
@@ -1058,7 +1153,15 @@ SslmForwardStatus RunGreedyDecodeLoop(
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens, uint8_t* workspace,
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows,
     size_t out_tokens_capacity, size_t* out_tokens_produced,
-    SslmDecodeStopReason* out_stop_reason) {
+    SslmDecodeStopReason* out_stop_reason, SslmKvPrecision kv_precision) {
+	// S3.7 (§14.4): checked FIRST, before `seq`, `workspace`, or any output
+	// parameter is touched, and before any token is embedded -- an artifact
+	// carrying `kv_precision = Int16` loads today (CFG1's own domain check
+	// only rejects a value outside {0,1}), but S3a builds int8 only.
+	if (kv_precision == SslmKvPrecision::Int16) {
+		return SslmForwardStatus::KvPrecisionUnsupported;
+	}
+
 	// Caller-ensures `out_tokens_capacity >= max_new_tokens` (header comment,
 	// forward_sites.h) -- a workspace-sizing question this call does not
 	// scope, matching this file's existing caller-ensures convention for

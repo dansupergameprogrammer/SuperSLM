@@ -3,17 +3,20 @@
 # (S-HARDEN-7, design Sec3.1, T-411). One site per line: header:line:name
 # Regenerate with: python tests/ci/derive_bad_alloc_membership.py
 #
-# 19 sites. (T-1475: proof_manifest.h's JsonEscape was promoted out of its
-# anonymous namespace and into the header (T-1449), making it the population's
-# 19th member; wrapped the same rename-and-wrap shape as its siblings.)
-artifact.h:154:OpenFromMemory
-artifact.h:160:OpenFromFile
-artifact.h:168:FingerprintHex
-model.h:224:Parse
-model.h:274:Parse
-model.h:298:ParseConfig
-model.h:321:ParseSigmoidLut
-model.h:519:Load
+# 19 sites, unchanged in count (T-1571, S3.7): artifact.h gained a
+# CalibrationBand section-type enumerator and model.h gained
+# SslmCalibrationBandVerdict/ClassifyCalibrationBand/SslmDecodeStepStatus,
+# all noexcept or non-function declarations, so none joins this population --
+# only line numbers moved, regenerated against the real headers on disk
+# rather than hand-adjusted.
+artifact.h:160:OpenFromMemory
+artifact.h:166:OpenFromFile
+artifact.h:174:FingerprintHex
+model.h:228:Parse
+model.h:278:Parse
+model.h:302:ParseConfig
+model.h:325:ParseSigmoidLut
+model.h:534:Load
 proof_manifest.h:52:JsonEscape
 proof_manifest.h:101:ComputeTensorEvidence
 proof_manifest.h:117:ComputeWeightScaleEvidence
