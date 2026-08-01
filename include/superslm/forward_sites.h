@@ -456,6 +456,17 @@ struct SequenceLayerState {
 // order (D-SLM57).
 //
 // Performs, in this order and no other:
+//   0. If `stream_scale.m` does not fit int32_t's own range, returns
+//      `CarriedScaleMantissaOutOfDomain` immediately, with
+//      `out_codes`/`*out_scale` untouched -- the funnel's own
+//      `RequantChainChecked` step-0 precondition (`CarriedScaleMantissaFitsInt32`,
+//      checked_chain_funnel.cpp), enforced here at the door instead of two
+//      steps later (T-1604; Poirot 8f63577-t1602, Significant 2/3). This
+//      step changes this function's returned status, relative to the
+//      version documented before T-1604, on `stream_scale.m` in
+//      `(kInt32Max, 2281701375]` per sign -- a band that was fully defined
+//      before this step existed and previously reached step 2 or step 4
+//      below.
 //   1. r_h = DynamicScaleReciprocal(stream_scale.m) -- C19, over the
 //      STREAM's own mantissa, never the branch's (§6.2 step 8's own text:
 //      "R_h = C19 over the stream mantissa").
@@ -485,11 +496,12 @@ struct SequenceLayerState {
 // this site, §4.1). On Ok, `out_codes`/`*out_scale` are written; on any
 // rejection, neither is touched (§7.2's convention).
 //
-// **T-1377 / D-SLM457 (§7.2b, §14.14): step 2's own derived-operand predicate.**
+// **T-1377 / D-SLM457 (§7.2b, §14.14): step 2's own derived-operand predicate,
+// reached only when step 0 above has not already rejected the call.**
 // `LandingRescale`'s second out-parameter (`out_magnitude_exceeded_int64`) is
 // checked for every element BEFORE step 4's funnel call runs. If any element's
-// flag is set, this function returns `ResidualReconciliationMagnitudeOutOfDomain`
-// immediately, with `out_codes`/`*out_scale` untouched -- the same
+// flag is set, this function returns `ResidualReconciliationMagnitudeOutOfDomain`,
+// with `out_codes`/`*out_scale` untouched -- the same
 // "reject leaves output untouched" contract every other funnel rejection
 // already honours. This is a runtime check on `LandingRescale`'s own
 // already-computed loss signal, not a static exponent-range threshold: no

@@ -555,23 +555,43 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
                                           int8_t* out_codes, CarriedScale* out_scale,
                                           std::string_view site, size_t token_index,
                                           SslmTraceHookState* trace_hook_state) {
-	// Step 0 (Poirot 76a9776-t1599, Significant 2): `stream_scale.m` must fit
-	// int32_t's own range before it reaches the reciprocal below.
+	// Step 0 (Poirot 76a9776-t1599, Significant 2; the claim below corrected
+	// by Poirot 8f63577-t1602, Significant 2, and T-1604): `stream_scale.m`
+	// must fit int32_t's own range before it reaches the reciprocal below --
 	// `CarriedScaleReciprocal` (checked_chain_funnel.h's own exported door,
 	// T-1357/D-SLM433) forwards straight to the funnel's own C19 leaf --
 	// deliberately unnamed here, matching this file's own convention below
 	// (§7.3's CI source check matches text, not calls) -- whose seed
-	// computation is signed-overflow UB once its operand sits outside that
-	// range -- reachable here because `RequantChainChecked`'s own step-0
-	// rejection (`CarriedScaleMantissaOutOfDomain`, checked_chain_funnel.cpp)
-	// runs on `incoming`/`site_constant` only AFTER this call, at step 5, not
-	// before it: the exemption at this loop's own guard block below claims
-	// the mantissa "reaches only pure arithmetic ... confirmed at source",
-	// which is true of the call but not of the domain it is applied to. Same
-	// test as `CarriedScaleMantissaFitsInt32` (checked_chain_funnel.cpp,
-	// TU-local), same status the fold would have returned two steps later,
-	// so no caller observes a different outcome -- only an earlier, defined
-	// one.
+	// computation is signed-overflow UB once its operand's magnitude exceeds
+	// 2281701375 (`INT64_MAX / kC32_2`, intmath.cpp's own reciprocal seed),
+	// a bound 2^27 values per sign WIDER than int32_t's own range. This check
+	// does not track that wider UB boundary -- it enforces the funnel's own
+	// narrower int32 precondition at the door instead, the SAME test as
+	// `CarriedScaleMantissaFitsInt32` (checked_chain_funnel.cpp, TU-local),
+	// deliberately: `RequantChainChecked`'s own step-0 rejection
+	// (`CarriedScaleMantissaOutOfDomain`) runs on `incoming`/`site_constant`
+	// only AFTER this call, at step 5 (the exemption at this loop's own
+	// guard block below claims the mantissa "reaches only pure arithmetic
+	// ... confirmed at source", true of the call but not of the domain it is
+	// applied to), so this hoists that SAME funnel precondition to the door
+	// instead of leaving it to be enforced two steps later.
+	//
+	// That hoist is NOT status-neutral on the whole domain it covers.
+	// `stream_scale.m` in `(kInt32Max, 2281701375]` per sign -- 2^27 values,
+	// the gap between int32's range and the reciprocal's own UB boundary --
+	// executed no undefined behaviour before this check existed (verified
+	// under this project's own UBSan instrument at interior points) and
+	// returned whatever the loop's per-element magnitude predicate
+	// (`LandingRescale`'s `out_magnitude_exceeded_int64`, T-1377/D-SLM457) or
+	// `RequantChainChecked`'s own step 0 returned, two steps later. Poirot
+	// 8f63577-t1602 (Significant 2) swept 1,408 inputs to this exported
+	// function and measured 481 that changed returned status because of
+	// this check alone; an independently constructed 1,408-input sweep of a
+	// different shape (T-1604 build log, `Claude/Brunel/`) reproduces the
+	// same class of change (220 of 1,408 on that sweep's own grid). This
+	// check is the funnel's own precondition, returned earlier and at the
+	// door -- the better place for it to live -- not the no-op the prior
+	// version of this comment claimed.
 	if (stream_scale.m < static_cast<int64_t>(kInt32Min) ||
 	    stream_scale.m > static_cast<int64_t>(kInt32Max)) {
 		return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;

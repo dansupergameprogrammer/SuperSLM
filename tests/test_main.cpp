@@ -12531,6 +12531,76 @@ static void TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOf
 	}
 }
 
+// T-1606 (Poirot 8f63577-t1602-hidden-scale-remedies-confirmation-2026-08-01,
+// Significant 4): the Step-0 mantissa guard added by T-1599 (forward_sites.cpp,
+// "Step 0" comment above `ResidualReconcileSite`) had no cell that fails
+// without it -- deleting the whole block and rebuilding reproduced the exact
+// same suite count, because the ONLY existing cell that reaches it
+// (`TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit`'s
+// sub-case A, `hidden_scale.m = INT64_MAX`) is rejected with the SAME status
+// two steps later by `RequantChainChecked`'s own step 0 even with Step 0
+// removed, so its assertion cannot distinguish the two programs.
+//
+// This cell can, by construction, stated before it is run: `stream_scale.m =
+// kInt32Max + 1` (2147483648) is one past int32_t's own range -- Step 0 must
+// reject it -- but is still inside the reciprocal's own UB-free band (<=
+// 2281701375, this file's own Step-0 comment), so removing Step 0 introduces
+// no undefined behaviour here, only a different code path. `branch_scale =
+// {2^30, 56}`, `stream_scale.e = -40` is the SAME operand pair
+// `TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness` below already
+// proves drives `LandingRescale`'s `out_magnitude_exceeded_int64` flag TRUE
+// (the negative-`k` witness, T-1380/D-SLM462/463) -- reused here rather than
+// re-derived, at the new out-of-int32 `stream_scale.m`. So: WITH Step 0
+// present (shipped), this call is rejected at the door with
+// `CarriedScaleMantissaOutOfDomain` before `LandingRescale` ever runs.
+// WITHOUT Step 0 (deleted), the call reaches `LandingRescale`, the magnitude
+// predicate fires, and the loop returns
+// `ResidualReconciliationMagnitudeOutOfDomain` instead -- a DIFFERENT status
+// than this cell asserts, on the shipped MSVC path, with no sanitizer
+// required. Confirmed by direct
+// execution against an out-of-repo copy with the Step-0 block deleted (T-1606
+// build log, `Claude/Brunel/`): this exact call returns
+// `ResidualReconciliationMagnitudeOutOfDomain` there and
+// `CarriedScaleMantissaOutOfDomain` at HEAD.
+static void TestResidualReconcileSiteStepZeroGuardIsLoadBearing() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+
+	constexpr size_t kHidden = 1;
+	const int8_t branch_code[kHidden] = {127};
+	const int8_t stream_code[kHidden] = {0};
+	// The negative-k witness's own operands (below, kNegKBranchM/E =
+	// {2^30, 56}), reused as literals here rather than by name because those
+	// constants are declared later in this file, per this cell's own comment
+	// above.
+	const CarriedScale branch_scale{/*m=*/INT64_C(1) << 30, /*e=*/56};
+	// One past int32_t's own range, still inside the reciprocal's UB-free
+	// band -- the exact cell S2's remedy names.
+	const CarriedScale stream_scale{/*m=*/static_cast<int64_t>(superslm::kInt32Max) + 1,
+	                                  /*e=*/-40};
+	const CarriedScale site_constant{/*m=*/INT64_C(1958312769), /*e=*/-9};
+
+	std::vector<int8_t> out_codes(kHidden, INT8_C(-99));
+	CarriedScale out_scale{INT64_C(-99), INT64_C(-99)};
+	auto result = superslm::ResidualReconcileSite(branch_code, branch_scale, stream_code,
+	                                                stream_scale, kHidden, site_constant,
+	                                                out_codes.data(), &out_scale);
+	CHECK_MSG(result == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	          "ResidualReconcileSite(stream_scale.m=kInt32Max+1=%lld) status == %s, want "
+	          "CarriedScaleMantissaOutOfDomain -- this fires at the Step-0 guard added by T-1599; "
+	          "without it, branch_scale={2^30,56}/stream_scale.e=-40 (the negative-k witness's own "
+	          "operands, reused) drives LandingRescale's magnitude predicate and this call returns "
+	          "ResidualReconciliationMagnitudeOutOfDomain instead (T-1606, Poirot "
+	          "8f63577-t1602 Significant 4)",
+	          static_cast<long long>(stream_scale.m), SslmForwardStatusName(result));
+	CHECK_MSG(out_codes[0] == INT8_C(-99),
+	          "out_codes[0] == %d after rejection, want the sentinel -99 untouched",
+	          static_cast<int>(out_codes[0]));
+	CHECK_MSG(out_scale.m == INT64_C(-99) && out_scale.e == INT64_C(-99),
+	          "out_scale == (%lld, %lld) after rejection, want the sentinel (-99, -99) untouched",
+	          static_cast<long long>(out_scale.m), static_cast<long long>(out_scale.e));
+}
+
 // ---------------------------------------------------------------------------
 // T-1380 / D-SLM462/463 (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.5, §13
 // dim 5/6/7, §14.14): the NEGATIVE-`k` half of the same predicate. The
@@ -14711,11 +14781,12 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	TwoLayerFixture fixture;
 	const int64_t kContextCap = 3;  // smallest cap giving 0, 1, context_cap-1, context_cap four distinct values
 	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
-	// head_dim=2 -> 24 bytes) -- was sized for a 16-cap fixture default this
-	// function never actually calls with (128 bytes), oversized by 104 bytes
-	// relative to what every call below actually needs (Poirot
-	// 76a9776-t1599, Minor 2: measured at `e24b971` via `git show`, correcting
-	// this comment's own prior 296).
+	// head_dim=2 -> 24 bytes) -- was sized with a deliberate `kContextCap <=
+	// 16` margin (128 bytes; `e24b971`'s own comment: "sized for
+	// kContextCap<=16"), oversized by 104 bytes relative to what every call
+	// below actually needs (Poirot 76a9776-t1599, Minor 2: measured at
+	// `e24b971` via `git show`, correcting this comment's own prior 296; T-1601
+	// corrected the same characterization in the test-design record).
 	uint8_t workspace[2 * 3 * 1 * 2 * 2] = {};
 
 	int8_t codes[2] = {};
@@ -15691,11 +15762,14 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 
 // T-1590 (Poirot cd2e75a review): `hidden_scale` admits the identical
 // caller-restored-state argument -- probed rather than reasoned. An
-// out-of-int32-range mantissa reaches only pure arithmetic
-// (CarriedScaleReciprocal, LandingRescale) computed into LOCAL buffers
-// before RequantChainChecked's own step 0 rejects it
-// (CarriedScaleMantissaOutOfDomain) inside ResidualReconcileSite -- and
-// that rejection is reached before this layer's ONE commit point
+// out-of-int32-range mantissa is now rejected by `ResidualReconcileSite`'s
+// OWN Step 0 (`CarriedScaleMantissaOutOfDomain`, forward_sites.cpp -- added
+// T-1599, corrected T-1604) before it ever reaches the pure arithmetic
+// (CarriedScaleReciprocal, LandingRescale) -- not, as this comment previously
+// said, arithmetic computed into LOCAL buffers before `RequantChainChecked`'s
+// own step 0 rejects it two steps later; that was true before T-1599's guard
+// existed, and is not true of the shipped code this cell now exercises. That
+// rejection is reached before this layer's ONE commit point
 // (forward_sites.cpp, "the ONE commit point for the whole layer"), so
 // `seq.hidden_codes` is never written for a `hidden_scale` that fails this
 // check. `hidden_scale` never participates in the K/V landing write's own
@@ -15797,8 +15871,8 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 	const SslmForwardStatus status_a = RunRingedCase(CarriedScale{INT64_MAX, 0}, "out-of-domain m");
 	CHECK_MSG(status_a == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 	          "T-1590: RunLayerLoop(hidden_scale.m=INT64_MAX) status == %s, want "
-	          "CarriedScaleMantissaOutOfDomain -- RequantChainChecked's own step 0 rejects it "
-	          "inside ResidualReconcileSite, before this layer's commit point",
+	          "CarriedScaleMantissaOutOfDomain -- ResidualReconcileSite's own Step 0 rejects it "
+	          "(T-1604), before this layer's commit point",
 	          SslmForwardStatusName(status_a));
 
 	// Sub-case B: T-1597/S1, corrected by T-1599/S1 -- `e` pushed to
@@ -17381,6 +17455,9 @@ int main(int argc, char** argv) {
 	// T-1377 / D-SLM457 (§7.2b, §14.14, §11 S3.5's new red cell).
 	TestLandingRescaleMagnitudeFlagAcceptsAtOperatingPointRejectsOneExponentLater();
 	TestResidualReconcileSiteRejectsResidualReconciliationMagnitudeOutOfDomain();
+	// T-1606 (Poirot 8f63577-t1602, Significant 4): the Step-0 guard's own
+	// vitality cell -- fails without the guard, for the reason named above it.
+	TestResidualReconcileSiteStepZeroGuardIsLoadBearing();
 	// T-1380 / D-SLM462/463 (§11 S3.5's negative-k half, the clause's own
 	// stated negative control -- pins the branch the pair above cannot reach).
 	TestLandingRescaleMagnitudeFlagRejectsAtNegativeKWitness();
