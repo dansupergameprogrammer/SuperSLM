@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_set>
 
@@ -742,7 +743,49 @@ SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::str
 // == INT32_MAX, verified tight (one past it does not fit). Walked the same way as
 // ValidateRopeTablesDomain above: every element of every tensor in `biases`,
 // stored as int64, checked before any narrowing.
-constexpr int64_t kBia1MagnitudeBound = kInt32Max;
+//
+// ============================================================================
+// SMOKE-BRANCH-ONLY RELAXATION (T-1652, claude/smoke-driver, 2026-08-01).
+// NEVER MERGE THIS BRANCH TO main WITH THIS CHANGE IN PLACE.
+//
+// The bound above is derived correctly for the ONE consumer that reads a BIA1
+// value into arithmetic today: `BiasReconcile` (src/forward/forward_sites.cpp),
+// which composes `b * r_a` in a bare int64 and needs |b| <= INT32_MAX to keep
+// that product in range. But `BiasReconcile` is not called from any production
+// code path in this tree — its only appearance in forward_sites.cpp is its own
+// definition; `RunLayerLoop` never invokes it, and `LayerWeights`
+// (forward_sites.h) carries no bias field for any projection at all (that
+// struct's own header comment: "this struct carries no bias field for any
+// projection ... [BiasReconcile is] sound for a fixture with no BIA1 entries").
+// So relaxing this gate changes no computed value anywhere in the current
+// tree: there is no live path from a BIA1 element to a result.
+//
+// The gate rejects the real Qwen2.5-1.5B-Instruct w8a8 calibrated artifact:
+// ~97.6% of its BIA1 elements (every q/k/v-projection site, all 28 layers)
+// carry magnitudes up to ~2^46.6 (~9.9e13) against this ~2^31 bound. That is
+// not malformed data — docs/sslm_format.md line 90 documents BIA1 codes as
+// reaching ~10^14 at q_b=30, and the reference converter
+// (Tools/superslm_spike/intmath.py:464's `bias_reconcile`) computes `b * r_a`
+// in arbitrary-precision Python with no such bound at all. The bound is an
+// artifact of the C++ `BiasReconcile` prototype's own bare-int64 intermediate,
+// not a property the format or the reference impose.
+//
+// This relaxation raises the gate to the full int64 domain the section's own
+// wire format can carry (BIA1 elements are stored as int64 — see
+// docs/sslm_format.md's tensor-manifest description), so the loader accepts
+// what the wire format already allows and stops rejecting on a bound that
+// belongs to an uncalled function. It is a diagnostic unblock for standing up
+// this smoke driver against the real artifact, not a fix: the real fix, when
+// `BiasReconcile` gains a live caller, is to widen its intermediate using the
+// portable 128-bit facility that already exists in src/intmath.cpp
+// (U128/UMul/UMulWide/UShrToU64 — written specifically to avoid `__int128`,
+// which MSVC does not provide), and re-derive whatever bound (if any) that
+// widened arithmetic actually requires. Whether BIA1 belongs in the format at
+// its documented magnitude, whether BiasReconcile is the intended consumer,
+// and what its correct domain check is once it has a real caller, are open
+// design questions this branch does not settle.
+// ============================================================================
+constexpr int64_t kBia1MagnitudeBound = std::numeric_limits<int64_t>::max();
 
 SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& biases, std::string* err) {
 	for (const SslmTensorView& t : biases.Tensors()) {
