@@ -14741,37 +14741,32 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	// the call BEFORE the K/V landing write inside the layer body runs at
 	// all -- a guard that fires one line too late still leaves every `seq`
 	// field above bit-identical (the landing write touches only the K/V
-	// store, never `seq`) while corrupting the store a caller reads through
-	// `KeyRow`/`ValueRow`. `workspace` was poisoned to 0xEE above, before this
-	// call, at every position including `position == context_cap` -- the
-	// position this rejected call's own `context_length` names and the exact
-	// position `MutableKeyRow`/`MutableValueRow` would land at (layer 0, head
-	// 0) if the guard let the call through. Reading it back through the same
-	// accessor a caller uses is the only way to observe that the rejection
-	// happened before the landing write, not merely before the `seq` commit
-	// at the bottom of the loop body -- five checks above pass under a guard
-	// that fires one comparison too late; this one does not.
-	const int8_t kWorkspacePoison = static_cast<int8_t>(0xEE);
-	const int8_t* const k_row_rejected =
-	    superslm::KeyRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
-	                      /*kv_head=*/0, /*position=*/kContextCap);
-	const int8_t* const v_row_rejected =
-	    superslm::ValueRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
-	                        /*kv_head=*/0, /*position=*/kContextCap);
-	CHECK_MSG(k_row_rejected[0] == kWorkspacePoison && k_row_rejected[1] == kWorkspacePoison,
-	          "context axis sub-cell 4: KeyRow(layer=0, head=0, position=context_cap) must stay "
-	          "poisoned (0xEE) on KvCapacityExhausted -- got {%d, %d}, want {%d, %d} (a landing "
-	          "write into the K store before the guard's own rejection fires would leave this row "
-	          "changed while every seq field above still passes)",
-	          static_cast<int>(k_row_rejected[0]), static_cast<int>(k_row_rejected[1]),
-	          static_cast<int>(kWorkspacePoison), static_cast<int>(kWorkspacePoison));
-	CHECK_MSG(v_row_rejected[0] == kWorkspacePoison && v_row_rejected[1] == kWorkspacePoison,
-	          "context axis sub-cell 4: ValueRow(layer=0, head=0, position=context_cap) must stay "
-	          "poisoned (0xEE) on KvCapacityExhausted -- got {%d, %d}, want {%d, %d} (a landing "
-	          "write into the V store before the guard's own rejection fires would leave this row "
-	          "changed while every seq field above still passes)",
-	          static_cast<int>(v_row_rejected[0]), static_cast<int>(v_row_rejected[1]),
-	          static_cast<int>(kWorkspacePoison), static_cast<int>(kWorkspacePoison));
+	// store, never `seq`) while corrupting the store. `workspace` was
+	// poisoned to 0xEE above, before this call, in full.
+	//
+	// T-1587 (Poirot 0d64462 review, Significant 2): this used to read back
+	// two rows through `KeyRow`/`ValueRow` at `position == context_cap`,
+	// which is OUTSIDE the store's own position domain -- there is no row
+	// there, so the accessor's un-bounds-checked arithmetic resolves both
+	// calls onto memory belonging to OTHER, in-domain rows (measured:
+	// `KeyRow(layer=0, head=0, position=context_cap)` lands on layer 0's own
+	// V row 0; `ValueRow(layer=0, head=0, position=context_cap)` lands on
+	// layer 1's own K row 0), and at `num_heads > 1` the first of the two
+	// becomes a real committed row (`KeyRow(head=1, position=0)`) rather
+	// than an out-of-domain one, silently changing what the assertion means
+	// while its text stays the same. A single comparison of the WHOLE
+	// workspace against its own poison pattern makes no accessor call,
+	// names no coordinate that can be wrong, and is therefore both correct
+	// at this geometry and stable under any future one (including the
+	// GQA/`num_heads > 1` case §11 S3.7 defers by name) -- it also catches
+	// every neighbouring store-corruption defect, not only a landing write
+	// at exactly these two addresses.
+	uint8_t expected_workspace[sizeof(workspace)];
+	std::memset(expected_workspace, 0xEE, sizeof(expected_workspace));
+	CHECK_MSG(std::memcmp(workspace, expected_workspace, sizeof(workspace)) == 0,
+	          "context axis sub-cell 4: the K/V workspace must stay entirely poisoned (0xEE) on "
+	          "KvCapacityExhausted -- a landing write before the guard's own rejection fires would "
+	          "change some byte of it while every seq field above still passes");
 
 	// Guard-vitality: a second call at the SAME state rejects the identical
 	// way rather than corrupting the handle -- the rejection is idempotent.
@@ -15333,6 +15328,73 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 	          static_cast<long long>(snapshot.hidden_scale.e));
 }
 
+// T-1585 (Poirot 0d64462 review, Critical 1): a caller-restored
+// SequenceLayerState at a NON-ZERO layer_index, against a full cache, used
+// to reach the K/V landing write before the deeper
+// RopeApplySite/CheckPositionOverCap check could reject it -- the
+// KvCapacityExhausted guard above used to be qualified `layer_index == 0`
+// on the reasoning that a resumed mid-token call never needs to re-check
+// `context_length`, which is true only for a state this loop itself
+// produced and false for one a caller assembled via §13 dim 9's own
+// snapshot/restore (the cell directly above this one). The workspace below
+// is sized to EXACTLY `kv_bytes_needed` for this call's own geometry
+// (num_hidden_layers=2, context_cap=3, num_heads=1, head_dim=2 -> 24 bytes)
+// with two trailing canary bytes that are never part of the declared
+// `workspace_size` the call receives -- bytes the earlier size check
+// (`workspace_size < kv_bytes_needed`) has already certified the call does
+// not need and must not touch.
+//
+// On the unfixed guard this call reaches layer 1's landing write at
+// `position == context_length == context_cap`, clobbers the two canary
+// bytes, and returns PositionOverCap from the deeper check that fires only
+// after the damage is done (measured in the review this regresses: status
+// PositionOverCap, canary bytes clobbered). A guard checked on every call
+// rejects before any layer runs: status KvCapacityExhausted, canary bytes
+// untouched, `seq` left bit-identical.
+static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+
+	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
+	uint8_t workspace[kDeclaredWorkspaceSize + 2];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+	constexpr uint8_t kCanary = 0x5A;
+	workspace[kDeclaredWorkspaceSize] = kCanary;
+	workspace[kDeclaredWorkspaceSize + 1] = kCanary;
+
+	int8_t codes[2] = {1, -1};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1), 0};
+	seq.layer_index = 1;               // a restored, mid-token state -- not a fresh call
+	seq.context_length = kContextCap;  // full cache
+
+	const auto st = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+
+	CHECK_MSG(st == SslmForwardStatus::KvCapacityExhausted,
+	          "T-1585 regression: RunLayerLoop(layer_index=1, context_length==context_cap==%lld) "
+	          "status == %s, want KvCapacityExhausted -- a restored state at a non-zero "
+	          "layer_index against a full cache must be rejected before any layer runs, the same "
+	          "as a fresh call at layer_index==0 (an unfixed guard proceeds into the layer body "
+	          "and returns PositionOverCap instead, after the landing write already ran)",
+	          static_cast<long long>(kContextCap), SslmForwardStatusName(st));
+	CHECK_MSG(workspace[kDeclaredWorkspaceSize] == kCanary &&
+	              workspace[kDeclaredWorkspaceSize + 1] == kCanary,
+	          "T-1585 regression: the two bytes immediately past the declared workspace_size "
+	          "(%zu) must stay 0x5A -- got {%d,%d}; an unfixed guard reaches the K/V landing "
+	          "write for layer 1 at position==context_cap and clobbers exactly these two bytes, "
+	          "past a workspace_size the earlier size check had already validated as sufficient",
+	          kDeclaredWorkspaceSize, static_cast<int>(workspace[kDeclaredWorkspaceSize]),
+	          static_cast<int>(workspace[kDeclaredWorkspaceSize + 1]));
+}
+
 // --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
 // design §3, "Cells 10-14 -- the calibration band"). Cell 14 (the
 // converter-side cell) is a second, independent blocker outside this
@@ -15595,7 +15657,10 @@ static void TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown() {
 	const auto verdict = superslm::ClassifyCalibrationBand(view, /*token_length=*/15);
 	CHECK_MSG(verdict == SslmCalibrationBandVerdict::BandUnknown,
 	          "ClassifyCalibrationBand on a present-but-misnamed band == %d, want BandUnknown (3) -- "
-	          "a present section with no \"token_length\" entry is policy-equivalent to an absent one",
+	          "at ClassifyCalibrationBand's own call, a present section with no \"token_length\" "
+	          "entry is policy-equivalent to an absent one; this equivalence is scoped to "
+	          "classification and does NOT extend to SslmModel::Load, which still walks every "
+	          "CalibrationBand entry regardless of name and rejects one carrying hostile values",
 	          static_cast<int>(verdict));
 }
 
@@ -16905,6 +16970,7 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore();
 	TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers();
 	TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength();
+	TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite();
 	TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged();
 	TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases();
 	TestCalibrationBandBoundaryEndpointsAreInclusive();

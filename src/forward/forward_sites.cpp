@@ -796,13 +796,26 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// so ordering relative to them changes no cell's observable contract.
 	if (seq.layer_index >= num_hidden_layers) return SslmForwardStatus::SequenceAlreadyComplete;
 
-	// S3.7 (§11 S3.7 "Fail fast on a full cache"): a fresh token about to
-	// start against an already-full cache is rejected before any layer runs,
-	// `seq` left untouched -- checked only at `layer_index == 0` because
-	// `context_length` cannot change mid-token (it advances once, at the
-	// commit point below, only when the token's LAST layer completes), so a
-	// resumed call mid-token never needs to re-check it.
-	if (seq.layer_index == 0 && seq.context_length >= context_cap) {
+	// S3.7 (§11 S3.7 "Fail fast on a full cache"): a full cache is rejected
+	// before any layer runs, `seq` left untouched. Checked on EVERY call,
+	// not only at `layer_index == 0`: `context_length` is stable across a
+	// resumed mid-token call only for states this loop itself produced, and
+	// this check runs against `seq` as the caller hands it in, which is not
+	// restricted to that provenance -- `SequenceLayerState` documents only
+	// `0 <= layer_index <= num_hidden_layers`, no joint constraint against
+	// `context_length >= context_cap`, and §13 dim 9 pins the struct as
+	// "addressable as a unit", an explicit invitation for a caller to save
+	// and restore one. A caller-restored state at a non-zero `layer_index`
+	// with a full cache used to reach the landing write below -- past the
+	// deeper `RopeApplySite`/`CheckPositionOverCap` check that would
+	// otherwise catch it -- and write through `MutableKeyRow`/
+	// `MutableValueRow` up to `head_dim` bytes past a `workspace_size` the
+	// call had already validated as sufficient (Poirot 0d64462 review,
+	// Critical 1). Re-checking every call costs nothing extra on the
+	// provenance this comment used to rely on: for a state this loop itself
+	// produced, `context_length` did not change since the last check, so
+	// the comparison repeats the same true/false it already computed.
+	if (seq.context_length >= context_cap) {
 		return SslmForwardStatus::KvCapacityExhausted;
 	}
 

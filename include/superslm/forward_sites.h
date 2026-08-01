@@ -656,13 +656,18 @@ struct LayerWeights {
 // `"layer0.attn_norm"`) -- the same convention RmsNormSite's own doc
 // comment states, extended across the whole loop.
 //
-// S3.7 (§11 S3.7 "Fail fast on a full cache"): when a fresh token is about
-// to start (`seq.layer_index == 0`) and `seq.context_length >= context_cap`,
-// this returns `KvCapacityExhausted` before any layer runs, `seq` left
-// bit-identical -- "defined and resumable" (the status enum's own comment):
-// the sequence is left valid and query-able, and a second call at the SAME
-// state rejects the identical way rather than corrupting the handle. S3a
-// builds no eviction or truncation remedy for a full cache; that stays S4's.
+// S3.7 (§11 S3.7 "Fail fast on a full cache"): on EVERY call, when
+// `seq.context_length >= context_cap`, this returns `KvCapacityExhausted`
+// before any layer runs, `seq` left bit-identical -- "defined and resumable"
+// (the status enum's own comment): the sequence is left valid and
+// query-able, and a second call at the SAME state rejects the identical way
+// rather than corrupting the handle. Checked without regard to
+// `seq.layer_index`: a caller-restored `seq` (§13 dim 9 pins the struct as
+// addressable as a unit, for exactly this save/restore use) is not bound to
+// have come from this loop's own resume path, so a full cache at a non-zero
+// `layer_index` is rejected here rather than reaching the landing write
+// (Poirot 0d64462 review, Critical 1). S3a builds no eviction or truncation
+// remedy for a full cache; that stays S4's.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t intermediate_size,
