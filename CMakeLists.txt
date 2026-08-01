@@ -67,6 +67,7 @@ add_executable(superslm_tests
 	tests/areas/bad_alloc_contract.cpp
 	tests/areas/loader.cpp
 	tests/areas/tokenizer.cpp
+	tests/areas/tensor_manifest.cpp
 )
 target_include_directories(superslm_tests PRIVATE tests)
 target_link_libraries(superslm_tests PRIVATE superslm_test_injection)
