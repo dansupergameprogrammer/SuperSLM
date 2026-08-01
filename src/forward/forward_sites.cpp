@@ -310,11 +310,14 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	// namespace, above), not by the direct `62 - (e_a - e_t)` this line used
 	// to read -- neither subtraction is safe in plain `int64_t` over the
 	// domain `e_a`/`e_t` actually carry (see that function's own comment).
-	// The VALUE `k` takes for every input the direct computation already
-	// computed without overflow is unchanged; what changes is that an input
-	// which used to execute signed-overflow UB here now resolves to a
-	// clamped, defined k that reaches the same saturating path (below) an
-	// in-range but merely-large k already reaches.
+	// The RESULT this function returns for every input the direct
+	// computation already computed without overflow is unchanged -- `k`
+	// itself is clamped once its magnitude passes the 128-bit ceiling
+	// `U128Shl`/`U128Shr` already saturate at, at which point neither
+	// branch's decision below depends on `k`'s own value; what changes is
+	// that an input which used to execute signed-overflow UB here now
+	// resolves to a clamped, defined k that reaches the same saturating
+	// path (below) an in-range but merely-large k already reaches.
 	const int64_t k = ComposedExponent(e_a, e_t);
 	int64_t raw;
 	// Popper 2026-07-28 §3.2 / finding 3: neither e_t nor e_a carries a domain
