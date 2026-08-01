@@ -68,19 +68,40 @@ def static_sslm_test_calls() -> dict[str, dict]:
     return result
 
 
-def static_non_test_symbol_hashes() -> dict[str, str]:
-    """qualified symbol name -> body hash, for every non-test function-like
-    definition across the checked source files PLUS tests/support/*.{h,cpp}
-    (mirrors the population tests/support/check_site_hashes.txt was generated
-    from -- a relocated shared fixture like TwoLayerFixture lives in
-    tests/support/ from Stage 0 onward, not in a checked test-content file)."""
-    result: dict[str, str] = {}
+def static_non_test_symbol_hashes() -> tuple[dict[str, str], list[str]]:
+    """(qualified symbol name -> body hash, list of divergent-duplicate
+    failure messages), for every non-test function-like definition across
+    the checked source files PLUS tests/support/*.{h,cpp} (mirrors the
+    population tests/support/check_site_hashes.txt was generated from -- a
+    relocated shared fixture like TwoLayerFixture lives in tests/support/
+    from Stage 0 onward, not in a checked test-content file).
+
+    Every body hash seen for a qualified name is collected, not just the
+    last one scanned: if a shared fixture is ever COPIED into an area file
+    rather than included -- the exact thing later stages' exit checks exist
+    to prevent -- a plain last-wins map lets tests/support/'s hash (scanned
+    last) silently overwrite the copy's, hiding a divergent duplicate that,
+    for an in-class member, is also a silent ODR violation (T-1632 Minor
+    3). A name with more than one distinct hash is reported here instead."""
+    seen: dict[str, dict[str, tuple[str, int]]] = {}  # qualified -> {hash: (file, line)}
     for path in scan.checked_source_files() + scan.support_source_files():
         text = open(path, encoding="utf-8").read()
+        lines = scan.line_of(text)
         for fn in scan.find_function_definitions(text):
             body_text = text[fn["open"]:fn["close"] + 1]
-            result[fn["qualified"]] = scan.normalized_hash(body_text)
-    return result
+            h = scan.normalized_hash(body_text)
+            rel = os.path.relpath(path, scan.REPO_ROOT)
+            line = lines[fn["open"]]
+            seen.setdefault(fn["qualified"], {}).setdefault(h, (rel, line))
+
+    result: dict[str, str] = {}
+    duplicates: list[str] = []
+    for name, hashes in seen.items():
+        if len(hashes) > 1:
+            sites = "; ".join(f"{h} at {rel}:{line}" for h, (rel, line) in hashes.items())
+            duplicates.append(f"non-test symbol '{name}' has {len(hashes)} divergent bodies: {sites}")
+        result[name] = next(iter(hashes))
+    return result, duplicates
 
 
 def load_test_order() -> list[tuple[str, int, str]]:
@@ -159,7 +180,8 @@ def main() -> int:
                 f"({static_tests[name]['file']}:{static_tests[name]['line']})"
             )
 
-    non_test_hashes = static_non_test_symbol_hashes()
+    non_test_hashes, divergent_duplicates = static_non_test_symbol_hashes()
+    failures.extend(divergent_duplicates)
     for name, expected_hash in load_check_site_hashes():
         if name not in non_test_hashes:
             failures.append(f"check_site_hashes.txt: symbol '{name}' not found in current source")
