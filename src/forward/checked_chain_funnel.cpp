@@ -144,14 +144,20 @@ CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	int64_t m = static_cast<int64_t>(SaturatingRoundingDoublingHighMul(ma, mb));
 	if (m < (int64_t{1} << 30)) {
 		m <<= 1;
-		// `e -= 1` directly would be signed-overflow UB at `e == INT64_MIN` --
-		// exactly the value the saturation above produces for an operand pair
-		// whose true summed exponent underflows int64_t, so this decrement is
-		// reachable at the class's own floor, not merely a defensive margin.
-		// `e` already carries no domain check reaching it (same class as
-		// above); a value already AT the floor stays at the floor rather than
-		// wrapping past it.
-		if (e > INT64_MIN) e -= 1;
+		// `e -= 1` here is never signed-overflow UB, because `e` here is never
+		// `INT64_MIN`: `e` is `SaturatingAdd64(X, 31)` for some `X`, and
+		// `AddOverflows64` only reports an overflow when both operands share
+		// a sign -- 31 is positive, so overflow can occur only when `X` is
+		// also non-negative, which saturates `e` UPWARD to `INT64_MAX`, never
+		// down. When `X` is negative the signs differ, no saturation fires,
+		// and the exact sum `X + 31` is returned -- whose minimum, at
+		// `X == INT64_MIN`, is `INT64_MIN + 31`. So `e >= INT64_MIN + 31`
+		// always holds at this line, and the decrement below never reaches
+		// the floor. This property depends on the outer add's second operand
+		// staying the positive literal `31` above; changing that operand's
+		// sign or making it computed rather than a literal would reopen the
+		// question this comment currently closes by construction.
+		e -= 1;
 	}
 	return CarriedScale{m, e};
 }
