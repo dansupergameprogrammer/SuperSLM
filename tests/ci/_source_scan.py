@@ -148,7 +148,26 @@ _SKIP_FIRST_WORDS = {
     "if", "for", "while", "switch", "else", "do", "try", "catch", "struct", "class",
     "namespace", "enum", "union", "extern", "using", "return",
 }
-_NIADIC_VOID_RE = re.compile(r"^(?:static\s+)?void\s+[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*$", re.S)
+# T-1632 Significant 1: the registry's `void(*)()` contract, and therefore
+# SSLM_TEST's own registration path, accepts `inline`/`constexpr` in front of
+# `void`, a `noexcept` specifier, a leading attribute (`[[maybe_unused]]`,
+# `[[nodiscard]]`, ...), and an explicit `(void)` parameter list -- `&Name`
+# converts to `void(*)()` in every one of those shapes. A prior version of
+# this pattern (`(?:static\s+)?void\s+Name\s*\(\s*\)\s*$`) matched only two of
+# the six niladic-void shapes measured against a population of six
+# unregistered definitions compiled in together (T-1632); the other four --
+# `inline`, `noexcept`, `[[maybe_unused]]`, and `(void)` -- are exactly the
+# shapes MSVC's C4505 warning (which fires only for the `static` shape this
+# pattern already caught) pushes an author toward. Widened here to accept any
+# of the registerable shapes, not narrowed by exempting the ones it missed.
+_ATTR_RE = r"(?:\[\[[^\]]*\]\]\s*)*"
+_SPEC_RE = r"(?:(?:static|inline|constexpr)\s+)*"
+_NIADIC_VOID_RE = re.compile(
+    r"^" + _ATTR_RE + _SPEC_RE +
+    r"void\s+[A-Za-z_][A-Za-z0-9_]*\s*\(\s*(?:void\s*)?\)\s*"
+    r"(?:noexcept\s*(?:\([^)]*\)\s*)?)?" + _ATTR_RE + r"$",
+    re.S,
+)
 
 
 def find_function_definitions(text: str) -> list[dict]:
