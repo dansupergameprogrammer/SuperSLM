@@ -201,9 +201,9 @@ enum class SslmModelStatus {
 	                                      // partial triple's elements unvalidated. Rejected outright
 	                                      // rather than walked partially.
 	// --- S3.7 (§8.3): the calibration band's own hostile-value gate ---
-	CalibrationBandOutOfDomain,          // a CalibrationBand entry's (min, max) violates min <= max
-	                                      // or max != 0 -- ValidateCalibrationBandDomain (model.cpp),
-	                                      // wired into ValidateSectionValues.
+	CalibrationBandOutOfDomain,          // a CalibrationBand entry's (min, max) violates min <= max,
+	                                      // min >= 0, or max > 0 -- ValidateCalibrationBandDomain
+	                                      // (model.cpp), wired into ValidateSectionValues.
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -549,28 +549,46 @@ enum class SslmCalibrationBandVerdict : uint32_t {
 // Classifies `token_length` against `view`'s own CalibrationBand entry
 // (named "token_length", the KVC1-shaped fixture family §8.3's costed table
 // specifies). Returns `BandUnknown` when the section is absent
-// (`!view.has_calibration_band`) or carries no entry of that name -- never a
-// rejection; the band is optional at the current container version.
-// `min`/`max` are read as word 0/word 1 of the entry (§8.3's inclusive-at-
-// both-endpoints statement: `token_length < min` is `BelowBand`,
-// `token_length > max` is `AboveBand`, and `token_length == min` or
-// `token_length == max` is `InBand`). `SslmModel::Load`'s own
-// `ValidateCalibrationBandDomain` (model.cpp) already rejects a hostile band
-// (`min > max` or `max == 0`) at load time, so a successfully loaded `view`
-// with `has_calibration_band == true` always carries a well-formed band
-// here.
+// (`!view.has_calibration_band`) -- the band is optional at the current
+// container version -- **or when the section is present but carries no entry
+// of that name.** That second case is a deliberate, tested policy, not a
+// rejection: a present-but-misnamed CalibrationBand section is
+// indistinguishable from an absent one at this call (D-SLM563,
+// `TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown`,
+// `tests/test_main.cpp`); §8.3 does not define behaviour for that case, and
+// the D-SLM143 pattern every other section's hostile-value handling follows
+// would instead make it a load-time rejection. `min`/`max` are read as word
+// 0/word 1 of the entry (§8.3's inclusive-at-both-endpoints statement:
+// `token_length < min` is `BelowBand`, `token_length > max` is `AboveBand`,
+// and `token_length == min` or `token_length == max` is `InBand`).
+// `SslmModel::Load`'s own `ValidateCalibrationBandDomain` (model.cpp)
+// already rejects a hostile band (`min > max`, `min < 0`, or `max <= 0`) at
+// load time, so a successfully loaded `view` with `has_calibration_band ==
+// true` always carries a well-formed, non-negative band under a
+// `token_length` entry, if one is present under that name.
 SslmCalibrationBandVerdict ClassifyCalibrationBand(const SslmModelView& view,
                                                     int64_t token_length) noexcept;
 
-// S3.7 (§8.4): the decode-step status this sub-slot's mechanism declares.
-// Carries the calibration-band verdict alongside a decode step; excluded
-// from both digests per §10.2's rule (it is a diagnostic classification, not
-// part of the decode's own numeric output). Not yet wired into
-// `RunGreedyDecodeLoop` -- no cell in this sub-slot's own suite asserts a
-// wiring that does not exist, matching this file's existing declared-scope
-// convention for a struct whose consumer is a separate, later obligation
-// (LayerWeights' own header comment states the same pattern).
+// S3.7 (§8.4): the decode-step status this sub-slot's mechanism declares --
+// "one struct, returned by every decode step, carrying: the produced token
+// (or 'pending' under a partial layer budget), the per-sequence saturation
+// count, and the band verdict" (plan §8.4). Every field is excluded from
+// every hash and digest per §10.2's rule -- none of the three is part of the
+// decode's own numeric output. Not yet wired into `RunGreedyDecodeLoop` -- no
+// cell in this sub-slot's own suite asserts a wiring that does not exist,
+// matching this file's existing declared-scope convention for a struct whose
+// consumer is a separate, later obligation (LayerWeights' own header comment
+// states the same pattern).
 struct SslmDecodeStepStatus {
+	// The token this step produced, or the sentinel `-1` when the step left
+	// the sequence mid-token under a partial layer budget ("pending" per
+	// §8.4) -- `-1` is never a producible token id, since every host-facing
+	// token id is validated non-negative against `config.vocab_size` (§9.1,
+	// F-S3-8) before it can reach an output slot.
+	int32_t produced_token = -1;
+	// The per-sequence K/V landing saturation count (§8.2, `SequenceLayerState::kv_saturation_count`)
+	// at the moment this step returned.
+	uint64_t saturation_count = 0;
 	SslmCalibrationBandVerdict calibration_band_verdict = SslmCalibrationBandVerdict::BandUnknown;
 };
 

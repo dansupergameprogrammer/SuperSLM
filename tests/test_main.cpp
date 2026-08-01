@@ -14587,15 +14587,70 @@ static void TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo() {
 	}
 }
 
+// T-1576 (Poirot b8ecff5 review, Significant 1): a direct unit cell on
+// `KeyRow`/`ValueRow` themselves, at `num_heads == 2, context_cap == 3` --
+// the one geometry no `RunLayerLoop`/`RunGreedyDecodeLoop` call in this
+// suite reaches (every multi-head call runs at `context_cap == 1`, where
+// head-major and position-major coincide, per §9.4/D-SLM500's own derived
+// layout). No fixture, no forward pass: this cell measures the accessor's
+// own offset arithmetic against §9.4's formula directly.
+//
+// The head stride is `kv_head * context_cap * head_dim` (`KvRowOffsetWithinHalf`,
+// forward_sites.cpp) -- dropping the `context_cap` factor (using
+// `kv_head * head_dim` instead) aliases head 1's rows onto head 0's from
+// position 1 onward, and that mutation drives 23,270 checks to 0 failures
+// without this cell.
+static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
+	using namespace superslm;
+
+	uint8_t workspace[1 * 3 * 2 * 2 * 2] = {};  // 1 layer * cap 3 * 2 heads * head_dim 2 * 2 (K+V)
+	const int64_t kContextCap = 3;
+	const size_t kNumHeads = 2, kHeadDim = 2;
+
+	const int8_t* const k_base =
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+	const int8_t* const k_h0_p1 =
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/1);
+	const int8_t* const k_h1_p0 =
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/1, /*position=*/0);
+	const int8_t* const v_h0_p0 =
+	    ValueRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+
+	const ptrdiff_t off_h0_p1 = k_h0_p1 - k_base;
+	const ptrdiff_t off_h1_p0 = k_h1_p0 - k_base;
+	const ptrdiff_t off_v = v_h0_p0 - k_base;
+
+	CHECK_MSG(off_h0_p1 == 2, "KeyRow(head=0, position=1) - KeyRow(head=0, position=0) == %lld, want 2",
+	          static_cast<long long>(off_h0_p1));
+	CHECK_MSG(off_h1_p0 == 6, "KeyRow(head=1, position=0) - KeyRow(head=0, position=0) == %lld, want 6 "
+	          "(the head stride kv_head * context_cap * head_dim -- a head stride missing the "
+	          "context_cap factor collapses this to the same offset as (head=0, position=1))",
+	          static_cast<long long>(off_h1_p0));
+	CHECK_MSG(off_h1_p0 != off_h0_p1,
+	          "KeyRow(head=1, position=0) and KeyRow(head=0, position=1) address the SAME offset "
+	          "(%lld) -- the head stride is aliasing head 1's rows onto head 0's",
+	          static_cast<long long>(off_h1_p0));
+	CHECK_MSG(off_v == 12, "ValueRow(head=0, position=0) - KeyRow(head=0, position=0) == %lld, want "
+	          "context_cap * num_heads * head_dim == 12",
+	          static_cast<long long>(off_v));
+}
+
 // §11 S3.7 red cells (`context ∈ {0, 1, context_cap-1, context_cap}`) + the
 // `KvCapacityExhausted` fail-fast guard-vitality row (test design §3 Cell 2).
+//
+// T-1581 (Poirot b8ecff5 review, Minor 4): at `context_cap == 2`, sub-cell 2
+// ("context_length == 1, an intermediate value") and sub-cell 3
+// ("context_length == context_cap - 1") name the SAME run, because 1 == 2-1
+// -- the axis's own comment used to say so ("context axis sub-cell 2/3").
+// `context_cap == 3` gives the axis four DISTINCT integers (0, 1, 2, 3), so
+// each of the four sub-cells below is its own call and its own assertion.
 static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
 	TwoLayerFixture fixture;
-	const int64_t kContextCap = 2;  // small cap so the boundary is reachable quickly
+	const int64_t kContextCap = 3;  // smallest cap giving 0, 1, context_cap-1, context_cap four distinct values
 	uint8_t workspace[2 * 16 * 1 * 2 * 2] = {};  // sized for kContextCap<=16
 
 	int8_t codes[2] = {};
@@ -14611,15 +14666,28 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	CHECK_MSG(seq.context_length == 1, "context axis sub-cell 1: context_length == %lld, want 1",
 	          static_cast<long long>(seq.context_length));
 
-	// Sub-cell 2: context_length==1 (== context_cap-1), the next token is
-	// accepted and context_length becomes context_cap afterward.
+	// Sub-cell 2: context_length==1, strictly between the floor (0) and the
+	// boundary (context_cap-1 == 2) at this cap -- the axis's own
+	// intermediate point, distinct from sub-cell 3 below.
 	int8_t token2[2] = {3, -7};
 	st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token2, kContextCap,
 	                            workspace, sizeof(workspace));
-	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 2/3 status == %s, want Ok",
+	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 2 status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(seq.context_length == 2,
+	          "context axis sub-cell 2: context_length == %lld, want 2 (an intermediate value, "
+	          "strictly between the floor 0 and the boundary context_cap-1 == %lld)",
+	          static_cast<long long>(seq.context_length), static_cast<long long>(kContextCap - 1));
+
+	// Sub-cell 3: context_length==context_cap-1 (2), the next token is
+	// accepted and context_length becomes context_cap afterward.
+	int8_t token3[2] = {-6, 4};
+	st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token3, kContextCap,
+	                            workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 3 status == %s, want Ok",
 	          SslmForwardStatusName(st));
 	CHECK_MSG(seq.context_length == kContextCap,
-	          "context axis sub-cell 2/3: context_length == %lld, want context_cap (%lld)",
+	          "context axis sub-cell 3: context_length == %lld, want context_cap (%lld)",
 	          static_cast<long long>(seq.context_length), static_cast<long long>(kContextCap));
 
 	// Sub-cell 4: context_length == context_cap -- the next whole token is
@@ -14883,6 +14951,25 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 	                            sizeof(workspace), /*num_hidden_layers=*/1);
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 5 token 1 status == %s, want Ok",
 	          SslmForwardStatusName(st));
+
+	// T-1577 (Poirot b8ecff5 review, Significant 2): this fixture's own
+	// 90-degree rotation table already makes its K and V stores diverge
+	// (measured: K0={127,127}/V0={127,-127}, K1={-127,39}/V1={39,127}), so
+	// token 1's committed hidden_codes/hidden_scale are the distinguishing
+	// state that closes §11 S3.7's own named open gap -- the context
+	// accumulate (GemmProbQ15Accumulate) reading the K store in place of the
+	// V store moves these exact values from {127,6} (scale 1962924544, 21) to
+	// {0,127} (scale 2048844800, 21). Everything above this point in the cell
+	// already existed and asserts only the K-side write-back; this is the
+	// V-side witness.
+	CHECK_MSG(seq.hidden_codes[0] == 127 && seq.hidden_codes[1] == 6,
+	          "cell 5: token 1's committed hidden_codes == {%d,%d}, want {127,6} -- the context "
+	          "accumulate must read the V store, not the K store",
+	          static_cast<int>(seq.hidden_codes[0]), static_cast<int>(seq.hidden_codes[1]));
+	CHECK_MSG(seq.hidden_scale.m == INT64_C(1962924544) && seq.hidden_scale.e == INT64_C(21),
+	          "cell 5: token 1's committed hidden_scale == (%lld,%lld), want (1962924544,21) -- the "
+	          "context accumulate must read the V store, not the K store",
+	          static_cast<long long>(seq.hidden_scale.m), static_cast<long long>(seq.hidden_scale.e));
 
 	const int8_t* row0_after_t1 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
 	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
@@ -15362,6 +15449,14 @@ static void TestCalibrationBandBoundaryEndpointsAreInclusive() {
 // `max == 0`, each a load-time rejection naming the section (D-SLM143
 // pattern). PASS iff SslmModel::Load rejects both with CalibrationBandOutOfDomain;
 // FAIL iff either loads Ok (the artifact becomes a hostile-input path).
+//
+// T-1579 (Poirot b8ecff5 review, Minor 2; D-SLM562): §8.3's two named
+// hostile cases left a negative `max` admitted -- `(min=-10, max=-1)` used
+// to load `Ok` and classify a 5-token sequence `AboveBand`. Two more
+// sub-cases pin the widened gate: a fully negative band (`min < 0` and
+// `max <= 0` both present), and `min < 0` alone against a positive `max`
+// (isolated from the pre-existing `max <= 0` rejection, so this sub-case is
+// not redundant with it).
 static void TestCalibrationBandHostileBandsAreLoadRejections() {
 	using superslm::SslmModelStatus;
 
@@ -15389,6 +15484,75 @@ static void TestCalibrationBandHostileBandsAreLoadRejections() {
 		CHECK_MSG(!view.has_calibration_band && !view.has_config,
 		          "cell 13: a rejected Load must leave the view fully default, not a partial view");
 	}
+	{
+		superslm::SslmModelView view;
+		std::string err;
+		const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/-10, /*max=*/-1,
+		                                                view, &err);
+		CHECK_MSG(status == SslmModelStatus::CalibrationBandOutOfDomain,
+		          "cell 13: CalibrationBand(min=-10,max=-1) [fully negative] status == %s, want "
+		          "CalibrationBandOutOfDomain -- a negative max is the same species of nonsense as a "
+		          "zero one",
+		          superslm::SslmModelStatusName(status));
+		CHECK_MSG(!view.has_calibration_band && !view.has_config,
+		          "cell 13: a rejected Load must leave the view fully default, not a partial view");
+	}
+	{
+		// min < 0 with max > 0, isolated from max's own gate: min == -3 alone
+		// is the only hostile condition present, distinguishing this rejection
+		// from the (already-covered) max <= 0 case.
+		superslm::SslmModelView view;
+		std::string err;
+		const auto status = LoadCalibrationBandFixture(/*include_band=*/true, /*min=*/-3, /*max=*/5,
+		                                                view, &err);
+		CHECK_MSG(status == SslmModelStatus::CalibrationBandOutOfDomain,
+		          "cell 13: CalibrationBand(min=-3,max=5) [min < 0 alone, max > 0] status == %s, "
+		          "want CalibrationBandOutOfDomain",
+		          superslm::SslmModelStatusName(status));
+		CHECK_MSG(!view.has_calibration_band && !view.has_config,
+		          "cell 13: a rejected Load must leave the view fully default, not a partial view");
+	}
+}
+
+// T-1580 (Poirot b8ecff5 review, Minor 3): a well-formed CalibrationBand
+// section whose single entry is named anything other than "token_length"
+// loads Ok, sets has_calibration_band == true, and ClassifyCalibrationBand
+// reports BandUnknown for every input -- indistinguishable, from the
+// verdict alone, from the section being absent. §8.3 defines absence as the
+// band_unknown case; it defines nothing for a present-but-misnamed section,
+// and the D-SLM143 pattern governing every other section's hostile-value
+// handling would make this a load rejection instead. Recorded as current
+// truth (D-SLM563) rather than changed: this pins the shipped behaviour so
+// it is a deliberate, tested policy rather than one that can drift with no
+// cell noticing, per §11 S3.7's own domain-gate discipline.
+static void TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown() {
+	using namespace superslm_test;
+	using superslm::SslmCalibrationBandVerdict;
+	using superslm::SslmModelStatus;
+
+	Cfg1Spec spec{};
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	auto kvc1 = BuildKvc1(/*declared_value_words=*/2, {{"not_token_length", {10, 20}}});
+	FixtureSection band = MakeSection(SslmSectionType::CalibrationBand, SslmDtype::Raw, kvc1.bytes);
+	auto built = BuildArtifact({config, MakeSigmoidLutSection(), band});
+
+	superslm::SslmModelView view;
+	std::string err;
+	const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "misnamed-entry CalibrationBand section (well-formed (min,max), wrong entry name) "
+	          "failed to load: got %s (%s) -- this cell pins the shipped POLICY, whichever way it "
+	          "goes; if this is now a rejection, update the cell to match the new decision",
+	          superslm::SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK_MSG(view.has_calibration_band,
+	          "has_calibration_band == false on an artifact that carried a well-formed "
+	          "CalibrationBand section under an unexpected entry name");
+	const auto verdict = superslm::ClassifyCalibrationBand(view, /*token_length=*/15);
+	CHECK_MSG(verdict == SslmCalibrationBandVerdict::BandUnknown,
+	          "ClassifyCalibrationBand on a present-but-misnamed band == %d, want BandUnknown (3) -- "
+	          "a present section with no \"token_length\" entry is policy-equivalent to an absent one",
+	          static_cast<int>(verdict));
 }
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
@@ -16688,6 +16852,7 @@ int main(int argc, char** argv) {
 	// T-1447; Claude/Curie/superslm-s3.7-multiposition-attention-test-design-
 	// 2026-07-31.md §3, Cells 1-9).
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
+	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
 	TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse();
@@ -16700,6 +16865,7 @@ int main(int argc, char** argv) {
 	TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases();
 	TestCalibrationBandBoundaryEndpointsAreInclusive();
 	TestCalibrationBandHostileBandsAreLoadRejections();
+	TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown();
 
 	// S3.6 -- the head and the greedy decode loop (C16, §9.1; master plan
 	// §6.4; §10.1; T-1389;

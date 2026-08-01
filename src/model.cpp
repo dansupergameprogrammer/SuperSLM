@@ -907,16 +907,24 @@ SslmModelStatus ValidateKvLandingReciprocalsDomain(const SslmKeyedConstants& kv_
 // 13), walked over every entry the same way ValidateKvLandingScalesDomain
 // walks its own section's entries, before any entry is exposed to a
 // classification call.
+//
+// T-1579 (Poirot b8ecff5 review, Minor 2): a band's (min, max) is "the
+// calibration corpus's observed extremes" in tokens (§8.3) -- a negative
+// extreme is the same species of nonsense as a zero one, and §8.3's own two
+// named hostile cases (min > max, max == 0) left it admitted. `max_v == 0`
+// is subsumed by `max_v <= 0` below; `min_v < 0` is the added rejection.
+// Without it, `(min=-10, max=-1)` loaded `Ok` and classified a 5-token
+// sequence `AboveBand` against a band whose maximum is -1.
 SslmModelStatus ValidateCalibrationBandDomain(const SslmKeyedConstants& calibration_band,
                                                std::string* err) {
 	for (const SslmConstantEntry& e : calibration_band.Entries()) {
 		const int64_t min_v = SslmKeyedConstants::Value(e, 0);
 		const int64_t max_v = SslmKeyedConstants::Value(e, 1);
-		if (min_v > max_v || max_v == 0) {
+		if (min_v > max_v || min_v < 0 || max_v <= 0) {
 			if (err) {
 				*err = "CalibrationBand entry \"" + std::string(e.name) + "\" (min=" +
 				       std::to_string(min_v) + ", max=" + std::to_string(max_v) +
-				       ") violates min <= max and max != 0";
+				       ") violates min <= max, min >= 0, and max > 0";
 			}
 			return SslmModelStatus::CalibrationBandOutOfDomain;
 		}
