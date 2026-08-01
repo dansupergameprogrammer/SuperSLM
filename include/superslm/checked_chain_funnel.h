@@ -176,7 +176,7 @@ enum class SslmForwardStatus {
 	                                          // `out_saturation_count`/[-127,127] clamp signal, which
 	                                          // is C27's own and stays coupled to that caller's clamp
 	                                          // range.
-	// --- Poirot cd2e75a-s3.7-review-fold-confirmation-2026-07-31.md ---
+	// --- Poirot cd2e75a-t1585-t1587-t1588-confirmation-2026-07-31.md ---
 	InvalidHiddenCodes,                       // T-1590: RunLayerLoop's `seq.hidden_codes == nullptr`
 	                                          // -- a caller-restored `SequenceLayerState` carries no
 	                                          // provenance guarantee (§13 dim 9's own addressable-as-
