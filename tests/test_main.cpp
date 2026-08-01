@@ -15929,12 +15929,15 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 	// `INT64_MAX - 1` rather than wrapping past it (the `if (e > INT64_MIN)`
 	// guard in that same function is the OTHER direction of this same
 	// class -- not exercised by this witness, since the fold saturates
-	// toward `+infinity` here, not `-infinity`). Deleting either
-	// `ComposedExponent` or `SaturatingAdd64`/its paired decrement guard
-	// from a scratch copy of this exact tree and rebuilding on plain MSVC
-	// (T-1596 build log, `Claude/Brunel/`) leaves `status_b` at `Ok` but
-	// changes this exact committed value to the naive computation's own
-	// wraparound-derived one instead.
+	// toward `+infinity` here, not `-infinity`). Deleted each guard from a
+	// scratch copy of this exact tree in turn and rebuilt on plain MSVC
+	// (T-1596 build log, `Claude/Brunel/`): deleting `ComposedExponent`
+	// moves `status_b` OFF `Ok`, to
+	// `ResidualReconciliationMagnitudeOutOfDomain`, and also changes this
+	// exact committed value; deleting `SaturatingAdd64`/its paired
+	// decrement guard leaves `status_b` at `Ok` but changes this exact
+	// committed value to the naive computation's own wraparound-derived
+	// one instead. The two guards are not equivalent under this witness.
 	CHECK_MSG(committed_scale_b.e == INT64_MAX - 1,
 	          "T-1596: RunLayerLoop(hidden_scale.e=INT64_MAX) committed seq.hidden_scale.e == %lld, "
 	          "want %lld (INT64_MAX - 1) -- the class fix's own deterministic saturate-then-"
