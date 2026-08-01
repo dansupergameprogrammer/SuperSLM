@@ -15395,6 +15395,240 @@ static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() 
 	          static_cast<int>(workspace[kDeclaredWorkspaceSize + 1]));
 }
 
+// T-1590 (Poirot cd2e75a review, Critical 1): the identical provenance
+// argument the cell above closes on the UPPER bound of context_length --
+// bounds NONE of the domain below it. `SequenceLayerState` states no
+// domain at all for `context_length`; a caller-restored state with a
+// NEGATIVE one used to reach `KvRowOffsetWithinHalf`'s unguarded
+// `static_cast<size_t>` (forward_sites.cpp, the S3.7 accessor block ahead
+// of RunLayerLoop), turning a negative `position` into a near-SIZE_MAX
+// quantity and landing the K/V write `head_dim * |context_length|` bytes
+// BELOW the workspace base -- after this call's own workspace-size check
+// had already certified the workspace sufficient. Measured in the review
+// this regresses (context_cap=3, num_heads=1, head_dim=2,
+// context_length=-1): status PositionOverCap, bytes at offsets [-2,-1]
+// overwritten.
+static void TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+
+	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
+	constexpr size_t kGuardBytes = 4;  // covers context_length==-1's 2-byte reach, with margin
+	uint8_t buffer[kGuardBytes + kDeclaredWorkspaceSize];
+	std::memset(buffer, 0xEE, sizeof(buffer));
+	constexpr uint8_t kCanary = 0x5A;
+	buffer[kGuardBytes - 2] = kCanary;
+	buffer[kGuardBytes - 1] = kCanary;
+	uint8_t* const workspace = buffer + kGuardBytes;  // the declared workspace base
+
+	int8_t codes[2] = {1, -1};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1), 0};
+	seq.layer_index = 0;
+	seq.context_length = -1;  // caller-restored, outside the struct's documented domain
+
+	const auto st = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+
+	CHECK_MSG(st == SslmForwardStatus::PositionOverCap,
+	          "T-1590 regression: RunLayerLoop(context_length=-1) status == %s, want "
+	          "PositionOverCap -- a restored state with a negative context_length must be "
+	          "rejected before any layer runs (an unguarded loop instead reaches the K/V "
+	          "landing write and returns PositionOverCap from the deeper check that fires "
+	          "only after the write already ran)",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(buffer[kGuardBytes - 2] == kCanary && buffer[kGuardBytes - 1] == kCanary,
+	          "T-1590 regression: the two bytes immediately BELOW the workspace base (offsets "
+	          "[-2,-1] from `workspace`) must stay 0x5A -- got {%d,%d}; an unguarded loop's K/V "
+	          "landing write for context_length=-1 lands exactly here, "
+	          "head_dim * |context_length| == 2 bytes before the workspace pointer",
+	          static_cast<int>(buffer[kGuardBytes - 2]), static_cast<int>(buffer[kGuardBytes - 1]));
+}
+
+// T-1590 (Poirot cd2e75a review): `hidden_codes` admits the identical
+// caller-restored-state argument `context_length`'s guard above closes --
+// `SequenceLayerState`'s own default member initializer sets it to
+// nullptr, and RmsNormSite dereferences it unconditionally (`h[i]` for i in
+// [0, hidden_size)) at this loop's very first read of it, with no guard
+// between. Unlike `context_length`'s out-of-bounds WRITE, a null
+// `hidden_codes` is an out-of-bounds READ through a null pointer -- a
+// process-terminating crash, not a value this suite's own CHECK_MSG
+// harness can observe as a red check (there is no check left to run once
+// the process is gone). The guard's absence was confirmed by a standalone
+// reproduction outside this suite (recorded in this ticket's build log,
+// not committed here); this cell asserts the GUARDED behavior, the one
+// shape safe to assert in-process.
+static void TestRunLayerLoopRestoredStateNullHiddenCodesRejected() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;
+	uint8_t workspace[kDeclaredWorkspaceSize];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+
+	SequenceLayerState seq;  // default-constructed: hidden_codes == nullptr
+	seq.hidden_scale = CarriedScale{INT64_C(1), 0};
+	seq.layer_index = 0;
+	seq.context_length = 0;
+
+	const auto st = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+
+	CHECK_MSG(st == SslmForwardStatus::InvalidHiddenCodes,
+	          "T-1590: RunLayerLoop(hidden_codes=nullptr) status == %s, want InvalidHiddenCodes "
+	          "-- a default-constructed or zeroed restored state must be rejected before "
+	          "RmsNormSite dereferences hidden_codes",
+	          SslmForwardStatusName(st));
+}
+
+// T-1590 (Poirot cd2e75a review): `layer_index`'s domain claim -- unsigned,
+// so "negative" is not a domain it can occupy, and every use past the
+// `SequenceAlreadyComplete` guard immediately below RunLayerLoop's entry is
+// as an array index the `while` loop's own condition (`seq.layer_index <
+// num_hidden_layers`) re-proves on every iteration, so no value that
+// passes the guard can ever index `layers[]` out of bounds. Probed at the
+// unsigned type's own maximum, not merely at the boundary already covered
+// by TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk's
+// Witness 1 (`layer_index == num_hidden_layers`) -- a caller-restored
+// state assembled from truncated or garbage bytes could carry UINT32_MAX
+// specifically, not only the boundary value.
+static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	int8_t codes[2] = {1, -1};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1), 0};
+	seq.layer_index = UINT32_MAX;  // caller-restored, far past num_hidden_layers
+	seq.context_length = 0;
+
+	uint8_t workspace[64];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+	const auto st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                        /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
+	                                        /*intermediate_size=*/2, /*context_cap=*/3,
+	                                        fixture.view.rope_tables, workspace, sizeof(workspace));
+	CHECK_MSG(st == SslmForwardStatus::SequenceAlreadyComplete,
+	          "T-1590: RunLayerLoop(layer_index=UINT32_MAX) status == %s, want "
+	          "SequenceAlreadyComplete -- the existing >= num_hidden_layers guard already "
+	          "bounds this field's full unsigned domain, not only the layer_index==num_hidden_layers "
+	          "boundary",
+	          SslmForwardStatusName(st));
+}
+
+// T-1590 (Poirot cd2e75a review): `kv_saturation_count`'s domain claim --
+// a restored value is never read back as a size, offset, or index anywhere
+// in this loop or its callees, so an arbitrary one, including one already
+// at the counter's own maximum, cannot corrupt memory when it advances.
+// Probed rather than reasoned: this cell restores the counter AT
+// UINT64_MAX (the value a caller-restored, very-long-saturated sequence
+// could plausibly carry) and confirms LandingRescale reports the SAME
+// classification and the SAME wrapped count it would report counting up
+// from 0 -- unsigned overflow is well-defined wraparound in C++, and this
+// asserts the counter actually takes that path, not merely that nothing
+// crashes.
+static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorruption() {
+	uint64_t count_from_zero = 0;
+	const int64_t raw_from_zero =
+	    superslm::LandingRescale(200, kSatCounterMA, kSatCounterRT, 0, 0, &count_from_zero);
+	CHECK_MSG(count_from_zero == 1, "control: count from 0 after one saturating site == %llu, want 1",
+	          static_cast<unsigned long long>(count_from_zero));
+
+	uint64_t count_from_max = UINT64_MAX;  // the caller-restored value under test
+	const int64_t raw_from_max =
+	    superslm::LandingRescale(200, kSatCounterMA, kSatCounterRT, 0, 0, &count_from_max);
+	CHECK_MSG(raw_from_max == raw_from_zero,
+	          "T-1590: LandingRescale's own returned value must not depend on the counter's "
+	          "restored starting value -- got %lld at UINT64_MAX vs %lld at 0",
+	          static_cast<long long>(raw_from_max), static_cast<long long>(raw_from_zero));
+	CHECK_MSG(count_from_max == 0,
+	          "T-1590: kv_saturation_count restored at UINT64_MAX, after one saturating site, == "
+	          "%llu, want 0 -- the well-defined unsigned wraparound of UINT64_MAX + 1, confirming "
+	          "the counter takes the same +1 path from any restored starting value and touches no "
+	          "other state",
+	          static_cast<unsigned long long>(count_from_max));
+}
+
+// T-1590 (Poirot cd2e75a review): `hidden_scale` admits the identical
+// caller-restored-state argument -- probed rather than reasoned. An
+// out-of-int32-range mantissa reaches only pure arithmetic
+// (CarriedScaleReciprocal, LandingRescale) computed into LOCAL buffers
+// before RequantChainChecked's own step 0 rejects it
+// (CarriedScaleMantissaOutOfDomain) inside ResidualReconcileSite -- and
+// that rejection is reached before this layer's ONE commit point
+// (forward_sites.cpp, "the ONE commit point for the whole layer"), so
+// `seq.hidden_codes` is never written for a `hidden_scale` that fails this
+// check. `hidden_scale` never participates in the K/V landing write's own
+// address computation (that write already ran, using `context_length` and
+// the layer's k/v weights, before ResidualReconcileSite is ever called),
+// so the canary bytes past the declared workspace must be exactly as
+// untouched as they are on any other call.
+static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	const int64_t kContextCap = 3;
+	TwoLayerFixture fixture;
+
+	constexpr size_t kDeclaredWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // kv_bytes_needed, exactly
+	uint8_t workspace[kDeclaredWorkspaceSize + 2];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+	constexpr uint8_t kCanary = 0x5A;
+	workspace[kDeclaredWorkspaceSize] = kCanary;
+	workspace[kDeclaredWorkspaceSize + 1] = kCanary;
+
+	int8_t codes[2] = {1, -1};
+	const int8_t codes_before[2] = {1, -1};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	// INT64_MAX does not fit int32_t -- out of CombineCarriedScale's own
+	// precondition, and a value a caller-restored struct's raw bytes could
+	// carry with no construction path through this loop's own code.
+	seq.hidden_scale = CarriedScale{INT64_MAX, 0};
+	seq.layer_index = 0;
+	seq.context_length = 0;
+
+	const auto st = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+
+	CHECK_MSG(st == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+	          "T-1590: RunLayerLoop(hidden_scale.m=INT64_MAX) status == %s, want "
+	          "CarriedScaleMantissaOutOfDomain -- RequantChainChecked's own step 0 rejects it "
+	          "inside ResidualReconcileSite, before this layer's commit point",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(workspace[kDeclaredWorkspaceSize] == kCanary &&
+	              workspace[kDeclaredWorkspaceSize + 1] == kCanary,
+	          "T-1590: the two bytes past the declared workspace_size must stay 0x5A regardless "
+	          "of hidden_scale's domain -- got {%d,%d}; hidden_scale never participates in any "
+	          "K/V address computation",
+	          static_cast<int>(workspace[kDeclaredWorkspaceSize]),
+	          static_cast<int>(workspace[kDeclaredWorkspaceSize + 1]));
+	CHECK_MSG(codes[0] == codes_before[0] && codes[1] == codes_before[1],
+	          "T-1590: seq.hidden_codes must be untouched after a rejected call -- got {%d,%d}, "
+	          "want {%d,%d}; a difference would mean the layer's commit point ran despite the "
+	          "rejection",
+	          static_cast<int>(codes[0]), static_cast<int>(codes[1]),
+	          static_cast<int>(codes_before[0]), static_cast<int>(codes_before[1]));
+}
+
 // --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
 // design §3, "Cells 10-14 -- the calibration band"). Cell 14 (the
 // converter-side cell) is a second, independent blocker outside this
@@ -16971,6 +17205,11 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers();
 	TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLength();
 	TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite();
+	TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite();
+	TestRunLayerLoopRestoredStateNullHiddenCodesRejected();
+	TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard();
+	TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorruption();
+	TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit();
 	TestCalibrationBandAbsentReportsUnknownAndVersionConstantsUnchanged();
 	TestCalibrationBandPerVerdictClassifiesEachOfTheFourCases();
 	TestCalibrationBandBoundaryEndpointsAreInclusive();

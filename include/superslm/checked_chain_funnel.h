@@ -176,6 +176,20 @@ enum class SslmForwardStatus {
 	                                          // `out_saturation_count`/[-127,127] clamp signal, which
 	                                          // is C27's own and stays coupled to that caller's clamp
 	                                          // range.
+	// --- Poirot cd2e75a-s3.7-review-fold-confirmation-2026-07-31.md ---
+	InvalidHiddenCodes,                       // T-1590: RunLayerLoop's `seq.hidden_codes == nullptr`
+	                                          // -- a caller-restored `SequenceLayerState` carries no
+	                                          // provenance guarantee (§13 dim 9's own addressable-as-
+	                                          // a-unit save/restore), the same argument that motivated
+	                                          // the `context_length` guards below, applied to the one
+	                                          // other field this loop dereferences unconditionally.
+	                                          // `hidden_codes` is a caller-owned pointer with no length
+	                                          // carried in the struct, so a too-short buffer is not a
+	                                          // domain this check (or any check) can detect; `nullptr`
+	                                          // is the one value that is both detectable and the
+	                                          // struct's own default member initializer, and was
+	                                          // previously dereferenced unconditionally at this loop's
+	                                          // first read of it.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

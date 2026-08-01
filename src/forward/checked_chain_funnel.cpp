@@ -52,6 +52,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 			return "SoftmaxKernelRefusedAfterGateAccepted";
 		case SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain:
 			return "ResidualReconciliationMagnitudeOutOfDomain";
+		case SslmForwardStatus::InvalidHiddenCodes: return "InvalidHiddenCodes";
 	}
 	return "?";
 }

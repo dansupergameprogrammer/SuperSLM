@@ -386,6 +386,17 @@ SslmForwardStatus EmbedEntry(int32_t token_id, int32_t vocab_size,
 // starting a fresh token resets it to 0 (§9.3: "a sequence resting between
 // whole tokens carries a marker at layer 0 and a zero-length residual" --
 // realized here as `layer_index == 0`, `hidden_codes` not yet meaningful).
+//
+// T-1590: §13 dim 9 pins this struct as "addressable as a unit", an
+// explicit invitation for a caller to save and restore one -- which means a
+// value RunLayerLoop receives in any of these five fields carries no
+// guarantee of having come from this loop's own resume path. RunLayerLoop's
+// own top-of-function guard block enumerates all five against that
+// possibility; see it for what is validated, what is not, and why in each
+// case. `hidden_codes == nullptr` and `context_length < 0` are rejected
+// there. `layer_index` is already fully bounded by the guard immediately
+// following it. `kv_saturation_count` and `hidden_scale` need no guard --
+// neither is ever read back as a size, offset, or index.
 struct SequenceLayerState {
 	int8_t* hidden_codes = nullptr;
 	CarriedScale hidden_scale;

@@ -778,6 +778,52 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
 	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
 
+	// T-1590 (Poirot cd2e75a review, Critical 1): every caller-settable field
+	// of `seq` is enumerated and validated here, before any of them is read
+	// or written -- the same "addressable as a unit" invitation (§13 dim 9)
+	// that motivated the KvCapacityExhausted guard below to run on every
+	// call, applied to the whole struct rather than to `context_length`
+	// alone (that guard's own remedy closed one side of `context_length`'s
+	// domain and left `hidden_codes` unprobed; both are closed here). Per
+	// field:
+	//
+	//   - `hidden_codes`: a caller-owned pointer with no length carried in
+	//     the struct (`hidden_size` is this call's own parameter, never a
+	//     struct member), so a too-short buffer is not a domain any check
+	//     here can detect -- the same unavoidable gap as any C API taking a
+	//     pointer and a separate length. `nullptr` specifically IS
+	//     detectable, is exactly what the struct's own default member
+	//     initializer produces, and used to be dereferenced unconditionally
+	//     at RmsNormSite's very first read of it a few lines below --
+	//     rejected here instead of left to crash the process.
+	//   - `layer_index`: already fully bounded by the very next check below
+	//     (`>= num_hidden_layers`) -- unsigned, so "negative" is not a
+	//     domain it can occupy, and every later use is as an array index the
+	//     `while` loop's own condition re-proves `< num_hidden_layers` on
+	//     every iteration. No further guard needed.
+	//   - `kv_saturation_count`: a monotonically-incremented `uint64_t`
+	//     diagnostic counter (T-518 / D-SLM201 option 2) -- never read back
+	//     as a size, offset, or index anywhere in this loop or its callees,
+	//     so an arbitrary restored value, including one that wraps to 0 on
+	//     its very next increment, changes no memory this call touches.
+	//     Probed, not merely reasoned: T-1590's kv_saturation_count cell
+	//     restores it at UINT64_MAX and confirms the call's outcome and the
+	//     workspace are identical to the same call at 0. No guard needed.
+	//   - `context_length`: validated `>= 0` immediately below, beside the
+	//     pre-existing `>= context_cap` check it sits next to -- the exact
+	//     remedy this ticket's own review prescribed.
+	//   - `hidden_scale`: reaches only pure arithmetic
+	//     (`CarriedScaleReciprocal`, `LandingRescale`), never a size, count,
+	//     or offset, and `RequantChainChecked`'s own step 0 rejects an
+	//     out-of-int32 mantissa (`CarriedScaleMantissaOutOfDomain`) before
+	//     any output is written -- confirmed at source (checked_chain_funnel.cpp)
+	//     and probed, not merely reasoned: T-1590's hidden_scale cell
+	//     restores it at an out-of-domain `(m, e)` pair against workspace and
+	//     `hidden_codes` buffers ringed with canaries and confirms both
+	//     canary rings untouched regardless of the call's returned status.
+	//     No guard needed.
+	if (seq.hidden_codes == nullptr) return SslmForwardStatus::InvalidHiddenCodes;
+
 	// Significant 6 (Poirot e4b398c review): the SAME livelock the
 	// `layer_budget == 0` check above exists to reject also arises when
 	// there is nothing left to advance through for a REASON OTHER than the
@@ -815,6 +861,21 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// provenance this comment used to rely on: for a state this loop itself
 	// produced, `context_length` did not change since the last check, so
 	// the comparison repeats the same true/false it already computed.
+	//
+	// T-1590 (Poirot cd2e75a review, Critical 1): the identical provenance
+	// argument above bounds `context_length` on the upper side only.
+	// `SequenceLayerState` states no domain at all for `context_length`, and
+	// a caller-restored state with a NEGATIVE one used to reach
+	// `KvRowOffsetWithinHalf`'s unguarded `static_cast<size_t>` (this file,
+	// the S3.7 accessor block above `RunLayerLoop`), which turns a negative
+	// `position` into a near-`SIZE_MAX` quantity and lands the K/V write
+	// `head_dim * |context_length|` bytes BELOW the workspace base -- after
+	// this call's own size check above had already certified the workspace
+	// sufficient. `CheckPositionOverCap` already rejects `position < 0` with
+	// exactly this status; this hoists that existing rejection ahead of the
+	// write instead of inventing a new one, so no caller-observable status
+	// changes for any input this guard was not already going to reject.
+	if (seq.context_length < 0) return SslmForwardStatus::PositionOverCap;
 	if (seq.context_length >= context_cap) {
 		return SslmForwardStatus::KvCapacityExhausted;
 	}
