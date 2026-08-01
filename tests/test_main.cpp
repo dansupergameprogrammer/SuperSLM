@@ -14666,21 +14666,28 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	CHECK_MSG(seq.context_length == 1, "context axis sub-cell 1: context_length == %lld, want 1",
 	          static_cast<long long>(seq.context_length));
 
-	// Sub-cell 2: context_length==1, strictly between the floor (0) and the
-	// boundary (context_cap-1 == 2) at this cap -- the axis's own
-	// intermediate point, distinct from sub-cell 3 below.
+	// Sub-cell 2: this call runs AT context_length==1 -- the axis's own
+	// intermediate point, strictly between the floor (0, sub-cell 1's own
+	// pre-state) and the boundary (context_cap-1 == 2, sub-cell 3's own
+	// pre-state below) -- already pinned as the state entering this call by
+	// sub-cell 1's own check above (context_length == 1). Afterward,
+	// context_length advances to 2, which is context_cap-1 -- the boundary
+	// sub-cell 3 runs its own call from.
 	int8_t token2[2] = {3, -7};
 	st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token2, kContextCap,
 	                            workspace, sizeof(workspace));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "context axis sub-cell 2 status == %s, want Ok",
 	          SslmForwardStatusName(st));
 	CHECK_MSG(seq.context_length == 2,
-	          "context axis sub-cell 2: context_length == %lld, want 2 (an intermediate value, "
-	          "strictly between the floor 0 and the boundary context_cap-1 == %lld)",
+	          "context axis sub-cell 2: context_length == %lld after the call made AT the "
+	          "intermediate context_length==1, want 2 (== context_cap-1 == %lld, the boundary "
+	          "sub-cell 3 runs its own call from)",
 	          static_cast<long long>(seq.context_length), static_cast<long long>(kContextCap - 1));
 
-	// Sub-cell 3: context_length==context_cap-1 (2), the next token is
-	// accepted and context_length becomes context_cap afterward.
+	// Sub-cell 3: this call runs AT context_length==context_cap-1 (2) --
+	// the axis's own boundary point, established by sub-cell 2's own check
+	// above. The next token is accepted and context_length becomes
+	// context_cap afterward.
 	int8_t token3[2] = {-6, 4};
 	st = RunOneWholeTokenDirect(seq, fixture.layers, fixture.view.rope_tables, token3, kContextCap,
 	                            workspace, sizeof(workspace));
