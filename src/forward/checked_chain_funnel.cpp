@@ -59,6 +59,44 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 
 namespace {
 
+// T-1596's class fix, extended here (found by execution, not by reading):
+// `CombineCarriedScale`'s own `a.e + b.e + 31` chains two signed additions
+// over `CarriedScale.e` fields this tree documents as carrying no domain
+// check anywhere (forward_sites.cpp's own `hidden_scale` exemption
+// comment) -- reachable at this exact site because `RequantChainChecked`'s
+// own fold (below) passes the first `incoming` factor straight through as
+// `running` with no combine and no check, then folds `site_constant` into
+// it via THIS function, whose own precondition comment (below) documents a
+// mantissa bound but never an exponent one. Reached with production code
+// otherwise unmodified, holding the ticket's own required witness fixed
+// (`hidden_scale = {1, INT64_MAX}` through the public `RunLayerLoop`):
+// fixing `LandingRescale`'s own composed-exponent overflow let the
+// project's hard-abort MSVC-ABI ASan+UBSan instrument (`-fno-sanitize-
+// recover=all`) run far enough into that SAME call to reach this SECOND,
+// previously-masked overflow at the very next stage -- `checked_chain_
+// funnel.cpp:105`'s addition, confirmed by execution
+// (`src\forward\checked_chain_funnel.cpp:105:24: signed integer overflow:
+// 9223372036854775777 + 31`).
+//
+// `SaturatingAdd64` mirrors `forward_sites.cpp`'s `SaturatingSub64` (same
+// unsigned-wraparound-then-sign-test technique, for `+` instead of `-`):
+// two operands of the SAME sign overflow exactly when the wrapped result's
+// sign does not match theirs, and the saturated replacement is
+// `INT64_MAX`/`INT64_MIN` keyed off that shared sign.
+inline bool AddOverflows64(int64_t a, int64_t b, int64_t* out) {
+	const uint64_t ua = static_cast<uint64_t>(a);
+	const uint64_t ub = static_cast<uint64_t>(b);
+	*out = static_cast<int64_t>(ua + ub);  // well-defined: unsigned wraparound, then C++20's
+	                                        // mandated two's-complement narrowing (P0907R4)
+	return (a >= 0) == (b >= 0) && (*out >= 0) != (a >= 0);
+}
+
+inline int64_t SaturatingAdd64(int64_t a, int64_t b) {
+	int64_t out;
+	if (!AddOverflows64(a, b, &out)) return out;
+	return (a >= 0) ? INT64_MAX : INT64_MIN;
+}
+
 // C26's carried-scale product step, generalized to combine any two CarriedScale
 // operands (SuperSLM_Plan.md C26 row): one C1/C2 high-mul per combination
 // (SaturatingRoundingDoublingHighMul, ties toward +infinity), then renormalize the
@@ -102,11 +140,18 @@ namespace {
 CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	const int32_t ma = static_cast<int32_t>(a.m);
 	const int32_t mb = static_cast<int32_t>(b.m);
-	int64_t e = a.e + b.e + 31;
+	int64_t e = SaturatingAdd64(SaturatingAdd64(a.e, b.e), 31);
 	int64_t m = static_cast<int64_t>(SaturatingRoundingDoublingHighMul(ma, mb));
 	if (m < (int64_t{1} << 30)) {
 		m <<= 1;
-		e -= 1;
+		// `e -= 1` directly would be signed-overflow UB at `e == INT64_MIN` --
+		// exactly the value the saturation above produces for an operand pair
+		// whose true summed exponent underflows int64_t, so this decrement is
+		// reachable at the class's own floor, not merely a defensive margin.
+		// `e` already carries no domain check reaching it (same class as
+		// above); a value already AT the floor stays at the floor rather than
+		// wrapping past it.
+		if (e > INT64_MIN) e -= 1;
 	}
 	return CarriedScale{m, e};
 }

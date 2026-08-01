@@ -130,6 +130,82 @@ inline U128 U128Shr(U128 v, int k) {
 	return U128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
 }
 
+// --- LandingRescale's composed-exponent arithmetic, made overflow-safe as a class (T-1596) ---
+//
+// `k = 62 - (e_a - e_t)` is two chained signed subtractions, and neither
+// `e_a` nor `e_t` carries a domain check on every path that reaches this
+// site: `ResidualReconcileSite`'s `e_t` is `hidden_scale.e`, a
+// caller-restorable `SequenceLayerState` field the tree has never bounded
+// (forward_sites.cpp's own `hidden_scale` exemption comment, below), and
+// `RunLayerLoop`'s direct K/V-landing call (two call sites below in this
+// file) passes `KvLandingReciprocals`' word 1 as `e_t`, which
+// `model.cpp::ValidateKvLandingReciprocalsDomain` checks against only a
+// FLOOR (`kKvLandingExponentMin = -60`), never a ceiling. Computing either
+// subtraction directly in signed `int64_t` executes signed-integer-overflow
+// UB whenever that step's true (infinite-precision) result falls outside
+// `int64_t`'s range -- reached directly through the public `RunLayerLoop`
+// (Poirot 8f63577-t1602 Significant 1's own witness: `hidden_scale = {1,
+// INT64_MAX}` drives the FIRST subtraction over, `e_a=-2, e_t=INT64_MAX`,
+// reported verbatim as "-2 - 9223372036854775807").
+//
+// `SubOverflows64` computes `a - b` with unsigned wraparound (well-defined)
+// and the standard two's-complement overflow test -- operand signs differ
+// AND the wrapped result's sign does not match the minuend's `a`. The
+// wrapped value itself is NOT a usable fallback: for this exact witness it
+// wraps to `INT64_MAX`, the OPPOSITE sign from the true (very negative)
+// difference, verified by execution below. `SaturatingSub64` instead
+// substitutes `INT64_MAX`/`INT64_MIN` on overflow, keyed off `a`'s own sign
+// (the correct direction: `a - b` overflows toward `+infinity` exactly when
+// `a >= 0` and `b < 0`, and toward `-infinity` exactly when `a < 0` and
+// `b >= 0`).
+//
+// `ComposedExponent` applies this twice -- `e_a - e_t`, then `62 -` that
+// result -- and clamps the outcome to a small magnitude before either
+// branch below ever narrows `k` (or `-k`) to `int`. Neither branch needs an
+// exact `k` once its magnitude reaches the 128-bit shift ceiling
+// `U128Shl`/`U128Shr` already saturate at (the `shift >= 128` special case
+// below, and the round-divide branch's own "floors correctly to 0 for
+// arbitrarily large k" comment): both branches' own decision is unchanged
+// by clamping any k whose magnitude already exceeds that ceiling to a
+// smaller one that still exceeds it. The clamp is not merely cosmetic: an
+// unclamped `int64_t` k of astronomical magnitude, narrowed straight to
+// `int` (well-defined per C++20, but not the intended value), can land on
+// an ARBITRARY small `int` rather than one that reads as "huge" -- verified
+// by execution: this witness's own naive (overflowing) computation, if the
+// overflow were merely left to wrap rather than fixed, truncates to a
+// `shift` of `-63`, a small negative number that would misroute the
+// left-shift branch's own `shift >= 128` dispatch entirely. Clamping to a
+// bound safely inside `int` and safely past 128 removes both hazards at
+// once, and changes no result this function's own realistic operand range
+// (Popper's derived `e_a` range `[-80, 39]`, `e_t`'s load-time floor `-60`)
+// ever produced, because that range never approached the clamp.
+inline bool SubOverflows64(int64_t a, int64_t b, int64_t* out) {
+	const uint64_t ua = static_cast<uint64_t>(a);
+	const uint64_t ub = static_cast<uint64_t>(b);
+	*out = static_cast<int64_t>(ua - ub);  // well-defined: unsigned wraparound, then C++20's
+	                                        // mandated two's-complement narrowing (P0907R4)
+	return (a >= 0) != (b >= 0) && (*out >= 0) != (a >= 0);
+}
+
+inline int64_t SaturatingSub64(int64_t a, int64_t b) {
+	int64_t out;
+	if (!SubOverflows64(a, b, &out)) return out;
+	return (a >= 0) ? INT64_MAX : INT64_MIN;
+}
+
+// Comfortably past the 128-bit shift ceiling either branch below treats
+// specially, and comfortably inside `int`'s own range -- see the comment
+// above `SubOverflows64`.
+constexpr int64_t kComposedExponentClamp = 4096;
+
+inline int64_t ComposedExponent(int64_t e_a, int64_t e_t) {
+	const int64_t diff = SaturatingSub64(e_a, e_t);
+	int64_t k = SaturatingSub64(int64_t{62}, diff);
+	if (k > kComposedExponentClamp) k = kComposedExponentClamp;
+	if (k < -kComposedExponentClamp) k = -kComposedExponentClamp;
+	return k;
+}
+
 }  // namespace
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
@@ -230,7 +306,16 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 	    m_a_negative ? (~static_cast<uint64_t>(m_a) + 1u) : static_cast<uint64_t>(m_a);
 	const U128 magnitude = U128MulSmall(U128Mul64(abs_branch, abs_m_a), static_cast<uint64_t>(r_t));
 
-	const int64_t k = 62 - (e_a - e_t);
+	// T-1596: computed by `ComposedExponent` (this file's own anonymous
+	// namespace, above), not by the direct `62 - (e_a - e_t)` this line used
+	// to read -- neither subtraction is safe in plain `int64_t` over the
+	// domain `e_a`/`e_t` actually carry (see that function's own comment).
+	// The VALUE `k` takes for every input the direct computation already
+	// computed without overflow is unchanged; what changes is that an input
+	// which used to execute signed-overflow UB here now resolves to a
+	// clamped, defined k that reaches the same saturating path (below) an
+	// in-range but merely-large k already reaches.
+	const int64_t k = ComposedExponent(e_a, e_t);
 	int64_t raw;
 	// Popper 2026-07-28 §3.2 / finding 3: neither e_t nor e_a carries a domain
 	// check anywhere in this tree, and an extreme composed exponent drives
@@ -857,26 +942,44 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	//   - `hidden_scale`: reaches only pure arithmetic
 	//     (`CarriedScaleReciprocal`, `LandingRescale`), never a size, count,
 	//     or offset. `ResidualReconcileSite`'s own Step 0 (Poirot
-	//     76a9776-t1599, Significant 2) rejects an out-of-int32 mantissa
+	//     76a9776-t1599, Significant 2) rejects an out-of-int32 MANTISSA
 	//     (`CarriedScaleMantissaOutOfDomain`) BEFORE the reciprocal call --
 	//     not `RequantChainChecked`'s step 0, which runs two steps later and
 	//     was reached only after the reciprocal had already executed
 	//     signed-overflow UB on the out-of-domain mantissa (measured;
 	//     `intmath.cpp:224`, the funnel's own C19 leaf's seed computation --
 	//     deliberately unnamed here, matching this file's own convention).
-	//     "Reaches only pure arithmetic" is therefore true of the domain this
-	//     arithmetic is actually applied to, not merely of the call site --
-	//     confirmed at source (`forward_sites.cpp`, this file) and probed,
-	//     not merely reasoned: T-1590's hidden_scale cell runs TWO sub-cases
-	//     -- an out-of-domain mantissa `m` (rejected before the reciprocal
-	//     runs), and, per T-1596, an extreme in-domain exponent `e` (the one
-	//     field checked_chain_funnel.h's own comment states carries no
-	//     domain check anywhere in this tree, run through to whatever status
-	//     it actually returns -- `Ok`, measured) -- against workspace and
-	//     `hidden_codes` buffers each ringed with a canary immediately
-	//     before AND after their declared region, and confirms all four
-	//     canaries untouched regardless of which status either sub-case
-	//     returns. No guard needed beyond the Step-0 mantissa check above.
+	//     The EXPONENT half carries no analogous rejection -- an extreme `e`
+	//     is never rejected, it is COMPUTED THROUGH. What changed (T-1596,
+	//     closing three prior rounds' own open finding at this exact site,
+	//     Poirot 8f63577-t1602 Significant 1) is that the arithmetic it is
+	//     computed through no longer executes UB doing so: `LandingRescale`'s
+	//     own composed exponent (`ComposedExponent`, this file's anonymous
+	//     namespace, beside the `U128` facility) and `CombineCarriedScale`'s
+	//     own exponent fold (`checked_chain_funnel.cpp`, `SaturatingAdd64`)
+	//     both compute with unsigned-wraparound overflow detection and
+	//     saturate rather than overflow -- closing not only the subtraction
+	//     this file's own `62 - (e_a - e_t)` used to execute directly, but a
+	//     SECOND site the same witness reaches one call later
+	//     (`CombineCarriedScale`'s `a.e + b.e + 31`, in `RequantChainChecked`'s
+	//     own fold), found by execution when closing the first let the
+	//     project's hard-abort ASan+UBSan instrument run far enough into the
+	//     same call to reach it. Probed, not merely reasoned: T-1590's
+	//     hidden_scale cell runs TWO sub-cases -- an out-of-domain mantissa
+	//     `m` (rejected before the reciprocal runs), and, per T-1596, the
+	//     field's own TRUE extreme exponent, `e = INT64_MAX` (the value this
+	//     tree has always documented as carrying no domain check anywhere,
+	//     run through to whatever status it actually returns -- `Ok`,
+	//     measured, and the committed `seq.hidden_scale.e` this call produces
+	//     pinned to its own deterministic saturated value) -- against
+	//     workspace and `hidden_codes` buffers each ringed with a canary
+	//     immediately before AND after their declared region, confirming all
+	//     four canaries untouched regardless of which status either sub-case
+	//     returns, and confirmed under this project's own MSVC-ABI
+	//     ASan+UBSan instrument to produce zero UBSan reports. No REJECTING
+	//     guard exists for the exponent, and none is needed: the arithmetic
+	//     it reaches is itself now defined over the field's whole `int64_t`
+	//     domain.
 	if (seq.hidden_codes == nullptr) return SslmForwardStatus::InvalidHiddenCodes;
 
 	// Significant 6 (Poirot e4b398c review): the SAME livelock the

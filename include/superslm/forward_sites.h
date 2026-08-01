@@ -174,7 +174,20 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a);
 // counts it as a clamp event even when the narrowed `raw` itself does not
 // look out of range -- the return value stays exactly as unreliable in that
 // class as it always was (caller-ensures: neither e_t nor e_a is domain-
-// checked here), but the counter is not fooled by it. Whenever the
+// checked here), but the counter is not fooled by it.
+//
+// The composed exponent `62 - (e_a - e_t)` ITSELF is computed without
+// signed-integer-overflow UB regardless of `e_a`/`e_t`'s values (T-1596,
+// closing Popper's own finding above): both subtractions use unsigned-
+// wraparound overflow detection and saturate to `INT64_MIN`/`INT64_MAX`
+// rather than overflow, and the result is clamped to a small magnitude
+// before either branch below narrows it to `int` for a shift amount --
+// closing a second, silent-truncation hazard the same extreme composed
+// exponent reaches (an unclamped magnitude narrowed straight to `int`
+// lands on an arbitrary small value, not one that reads as "past the
+// 128-bit width"). This is UNDEFINEDNESS safety, not a domain check: the
+// return value is exactly as unreliable, for the same reason stated above,
+// as it always was. Whenever the
 // return value itself IS out of `[-127, 127]`, or this internal detection
 // fires, `*out_saturation_count` is INCREMENTED by exactly one (never reset,
 // never assigned): the accumulator

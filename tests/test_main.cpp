@@ -15796,24 +15796,30 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 // comment; T-1596) -- which runs the call through to whatever status it
 // actually returns rather than assuming a rejection.
 //
-// Poirot 76a9776-t1599 (Significant 1): sub-case B originally used
-// `e = INT64_MAX`, which is NOT an in-domain exponent for this expression --
-// `forward_sites.cpp`'s `LandingRescale` computes `62 - (e_a - e_t)`, and at
-// this fixture's own `e_a` (branch_scale.e == -2, measured), `e_t = INT64_MAX`
-// drives that subtraction into real signed-overflow UB (T-1596's own open
-// site), which the project's MSVC-ABI ASan+UBSan instrument confirms as a
-// hard abort under its own flags. A cell whose own run is undefined proves
-// nothing about the status it happens to print. `e = INT64_MAX / 2` is the
-// value used instead: still an extreme, far-outside-canonical-range exponent
-// (the property this sub-case exists to stress; T-1596), but with roughly
-// `INT64_MAX / 2` of headroom below the actual overflow boundary at this
-// fixture's own `e_a` (`e_t <= INT64_MAX - 64`, derived from the expression
-// above) rather than sitting on it -- deliberately not the tightest in-domain
-// value, so the margin holds even if a future change to this fixture's data
-// moves `e_a` by any amount a real composition could plausibly produce.
-// Confirmed by this project's own instrument to produce zero UBSan reports,
-// and the call genuinely runs to completion and returns `Ok` -- a real
-// non-rejection, not an artifact of undefined behavior.
+// Poirot 76a9776-t1599 (Significant 1) found sub-case B's original
+// `e = INT64_MAX` drove `LandingRescale`'s `62 - (e_a - e_t)` into real
+// signed-overflow UB at this fixture's own `e_a` (branch_scale.e == -2,
+// measured) -- T-1596's own site. Poirot 8f63577-t1602 (Significant 1)
+// found the interim remedy -- substituting `e = INT64_MAX / 2`, comfortably
+// inside the boundary -- moved the probe off the defect rather than closing
+// it (D-SLM572): the field this comment block itself names as carrying no
+// domain check anywhere in this tree was, after that remedy, never actually
+// driven to its own extreme by any cell in this suite.
+//
+// T-1596 is closed as a class, not by picking a safer constant:
+// `forward_sites.cpp`'s `ComposedExponent` (its own anonymous namespace,
+// beside the `U128` facility) computes `e_a - e_t` and `62 -` that result
+// with unsigned-wraparound overflow detection, saturating to
+// `INT64_MAX`/`INT64_MIN` on either step's overflow rather than executing
+// UB, then clamps the composed exponent's magnitude before it is ever
+// narrowed to `int` for either branch's shift amount -- closing both the
+// signed-overflow site and the separate silent-truncation hazard an
+// astronomic `k` narrowed straight to `int` would otherwise reach (that
+// function's own comment derives and the T-1596 build log's probe confirms
+// by execution: the naive computation's own wraparound value truncates to a
+// small, WRONG-signed `int` shift, `-63`, for this exact witness). `e` is
+// therefore restored to the true extreme, `INT64_MAX`, below -- the value
+// this sub-case's own name and comment always claimed to stress.
 static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCommit() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
@@ -15861,34 +15867,80 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 		          "-- got {%d,%d}, status %s",
 		          label, static_cast<int>(codes_buf[0]), static_cast<int>(codes_buf[3]),
 		          SslmForwardStatusName(st));
-		return st;
+		// T-1596: also return the COMMITTED `seq.hidden_scale` -- when `st ==
+		// Ok`, this is `RunLayerLoop`'s own "ONE commit point" write
+		// (forward_sites.cpp), the same field this sub-case restored the call
+		// with, now carrying whatever the layer's two `ResidualReconcileSite`
+		// calls (attn_residual, then mlp_residual, the second one consuming
+		// the first's own output scale as ITS `e_t`) computed forward from it.
+		// A wrong composed-exponent computation propagates through both
+		// calls into this committed value -- the class fix's own vitality
+		// cell (below) pins it, not merely the returned status.
+		return std::make_pair(st, seq.hidden_scale);
 	};
 
 	// Sub-case A: the out-of-domain MANTISSA, unchanged from before --
 	// INT64_MAX does not fit int32_t, out of CombineCarriedScale's own
 	// precondition, and a value a caller-restored struct's raw bytes could
 	// carry with no construction path through this loop's own code.
-	const SslmForwardStatus status_a = RunRingedCase(CarriedScale{INT64_MAX, 0}, "out-of-domain m");
+	const SslmForwardStatus status_a = RunRingedCase(CarriedScale{INT64_MAX, 0}, "out-of-domain m").first;
 	CHECK_MSG(status_a == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 	          "T-1590: RunLayerLoop(hidden_scale.m=INT64_MAX) status == %s, want "
 	          "CarriedScaleMantissaOutOfDomain -- ResidualReconcileSite's own Step 0 rejects it "
 	          "(T-1604), before this layer's commit point",
 	          SslmForwardStatusName(status_a));
 
-	// Sub-case B: T-1597/S1, corrected by T-1599/S1 -- `e` pushed to
-	// `INT64_MAX / 2`, an extreme exponent kept comfortably inside
-	// `LandingRescale`'s `62 - (e_a - e_t)` domain at this fixture's own
-	// `e_a` (see the comment above this function), with `m` left in-domain
-	// so the call is not rejected on `m`'s account. The two rings above must
-	// stay intact regardless of the call's returned status; this sub-case
-	// additionally pins the status itself, since a defined run now lets it
-	// be pinned rather than merely printed.
-	const SslmForwardStatus status_b = RunRingedCase(CarriedScale{1, INT64_MAX / 2}, "extreme e");
+	// Sub-case B: T-1590/T-1597/T-1599, closed as a class by T-1596 -- `e`
+	// pushed to the TRUE extreme, `INT64_MAX`, the field this file's own
+	// `hidden_scale` exemption comment (forward_sites.cpp) names as carrying
+	// no domain check anywhere in this tree, with `m` left in-domain so the
+	// call is not rejected on `m`'s account. `LandingRescale`'s own
+	// `ComposedExponent` (T-1596) makes this witness's composed-exponent
+	// arithmetic well-defined regardless of how extreme `e` is -- there is
+	// no longer a narrower "safe extreme" to substitute. The two rings above
+	// must stay intact regardless of the call's returned status; this
+	// sub-case additionally pins the status itself, since a defined run
+	// lets it be pinned rather than merely printed.
+	const auto [status_b, committed_scale_b] = RunRingedCase(CarriedScale{1, INT64_MAX}, "extreme e");
 	CHECK_MSG(status_b == SslmForwardStatus::Ok,
-	          "T-1599: RunLayerLoop(hidden_scale.e=INT64_MAX/2) status == %s, want Ok -- measured "
+	          "T-1596: RunLayerLoop(hidden_scale.e=INT64_MAX) status == %s, want Ok -- measured "
 	          "under this project's own MSVC-ABI ASan+UBSan instrument with zero UBSan reports, "
-	          "the first defined run of this sub-case",
+	          "the first defined run of this sub-case at the field's own true extreme",
 	          SslmForwardStatusName(status_b));
+
+	// T-1596's own guard-vitality cell, plain MSVC, no sanitizer required:
+	// pins the COMMITTED `seq.hidden_scale` this call produced, not merely
+	// its status -- the returned status alone is Ok whether the composed-
+	// exponent arithmetic underneath is correct or is silently wrapped
+	// garbage (nothing in `RequantChainChecked` checks a running scale's
+	// EXPONENT, only its mantissa), so the status check above cannot by
+	// itself distinguish the fixed class from the naive, UB-executing one
+	// this ticket replaced. Measured by execution, not derived: `INT64_MAX -
+	// 1`. `CombineCarriedScale`'s own `SaturatingAdd64` (checked_chain_
+	// funnel.cpp) saturates the exponent fold to `INT64_MAX` at
+	// `mlp_residual`'s own `RequantChainChecked` call (the second of this
+	// layer's two `ResidualReconcileSite` calls, whose `e_t` is
+	// `attn_residual`'s own output scale -- itself already carrying this
+	// witness's extreme `e` forward, since `LandingRescale`'s
+	// `ComposedExponent` saturates the FIRST call's composed exponent but
+	// does not change what `e` itself flows onward as); the fold's own
+	// renormalization branch (`m < 2^30`) fires once more and decrements
+	// that saturated exponent by exactly one, `e -= 1`, landing on
+	// `INT64_MAX - 1` rather than wrapping past it (the `if (e > INT64_MIN)`
+	// guard in that same function is the OTHER direction of this same
+	// class -- not exercised by this witness, since the fold saturates
+	// toward `+infinity` here, not `-infinity`). Deleting either
+	// `ComposedExponent` or `SaturatingAdd64`/its paired decrement guard
+	// from a scratch copy of this exact tree and rebuilding on plain MSVC
+	// (T-1596 build log, `Claude/Brunel/`) leaves `status_b` at `Ok` but
+	// changes this exact committed value to the naive computation's own
+	// wraparound-derived one instead.
+	CHECK_MSG(committed_scale_b.e == INT64_MAX - 1,
+	          "T-1596: RunLayerLoop(hidden_scale.e=INT64_MAX) committed seq.hidden_scale.e == %lld, "
+	          "want %lld (INT64_MAX - 1) -- the class fix's own deterministic saturate-then-"
+	          "decrement path; a different value is the signature of the naive, unguarded "
+	          "composed-exponent computation this ticket replaced",
+	          static_cast<long long>(committed_scale_b.e), static_cast<long long>(INT64_MAX - 1));
 }
 
 // --- S3.7's calibration band (§8.3, §13.1 cell 1) -- Cells 10-13 (test
