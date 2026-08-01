@@ -15,6 +15,7 @@ import glob
 import hashlib
 import os
 import re
+import subprocess
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
@@ -289,3 +290,82 @@ def normalized_hash(body_text: str) -> str:
     tests/support/check_site_hashes.txt were generated with."""
     normalized = re.sub(r"\s+", " ", body_text).strip()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+class StaleBinaryError(RuntimeError):
+    """Raised when every candidate superslm_tests binary predates the sources
+    a check is about to validate it against. A check that reports on a
+    binary older than the sources it just scanned can pass vacuously (T-1632
+    Significant 2: demonstrated on a stale build/Release binary reporting a
+    since-un-registered test as still registered) -- this is the refuse-
+    rather-than-proceed path StandardsDocument.md §4 requires when currency
+    cannot be established."""
+
+
+def candidate_binaries() -> list[str]:
+    """Every path a superslm_tests binary can land at, across this project's
+    two build surfaces (CMake's build/ and build.bat's out/) and platforms.
+    Order is not significance -- both locate_or_build_binary()'s currency
+    check and its caller-visible error messages consider every one of these,
+    not just the first that exists."""
+    root = REPO_ROOT
+    return [
+        os.path.join(root, "build", "Release", "superslm_tests.exe"),
+        os.path.join(root, "build", "superslm_tests.exe"),
+        os.path.join(root, "build", "superslm_tests"),
+        os.path.join(root, "out", "superslm_tests.exe"),
+        os.path.join(root, "out", "superslm_tests"),
+    ]
+
+
+def _newest_mtime(paths: list[str]) -> float:
+    return max(os.path.getmtime(p) for p in paths)
+
+
+def locate_or_build_binary(scanned_paths: list[str]) -> str:
+    """Returns a path to a superslm_tests binary whose mtime is at least as
+    new as every path in `scanned_paths` -- the exact source population the
+    calling check is about to scan and compare the binary's `--list-tests`/
+    `--count-tests` report against. A binary older than any of those sources
+    is stale: it may not reflect the source edit the check exists to catch,
+    so it is never returned silently.
+
+    Prefers the first candidate (in `candidate_binaries()` order) that is
+    already current. If none is, and a CMake `build/` directory is
+    configured, rebuilds `superslm_tests` there and re-checks currency --
+    the same recovery `locate_or_build_binary()` already performed when no
+    binary existed at all. If no candidate is current and nothing can be
+    rebuilt (no `build/` directory -- e.g. only a stale build.bat `out/`
+    binary is present), raises `StaleBinaryError` naming every stale
+    candidate and its mtime rather than returning one of them: proceeding
+    with a binary that cannot be shown current is the exact failure this
+    guards against (T-1632 Significant 2)."""
+    newest_source = _newest_mtime(scanned_paths)
+    stale: list[str] = []
+    for path in candidate_binaries():
+        if os.path.isfile(path):
+            if os.path.getmtime(path) >= newest_source:
+                return path
+            stale.append(path)
+
+    build_dir = os.path.join(REPO_ROOT, "build")
+    if os.path.isdir(build_dir):
+        subprocess.run(
+            ["cmake", "--build", "build", "--target", "superslm_tests", "--config", "Release"],
+            cwd=REPO_ROOT, check=True,
+        )
+        for path in candidate_binaries():
+            if os.path.isfile(path) and os.path.getmtime(path) >= newest_source:
+                return path
+
+    if stale:
+        detail = "; ".join(f"{p} (mtime {os.path.getmtime(p)})" for p in stale)
+        raise StaleBinaryError(
+            f"every candidate superslm_tests binary predates the sources this check scans "
+            f"(newest scanned source mtime {newest_source}): {detail} -- rebuild (build.bat, or "
+            "`cmake --build build --config Release`) before re-running this check"
+        )
+    raise FileNotFoundError(
+        "no built superslm_tests binary found and `build/` is not configured -- run "
+        "`cmake -B build` first, or build.bat, then re-run this check"
+    )

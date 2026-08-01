@@ -62,36 +62,6 @@ def test_shaped_definitions() -> dict[str, tuple[str, int]]:
     return result
 
 
-def _candidate_binaries() -> list[str]:
-    root = scan.REPO_ROOT
-    return [
-        os.path.join(root, "build", "Release", "superslm_tests.exe"),
-        os.path.join(root, "build", "superslm_tests.exe"),
-        os.path.join(root, "build", "superslm_tests"),
-        os.path.join(root, "out", "superslm_tests.exe"),
-        os.path.join(root, "out", "superslm_tests"),
-    ]
-
-
-def locate_or_build_binary() -> str:
-    for path in _candidate_binaries():
-        if os.path.isfile(path):
-            return path
-    build_dir = os.path.join(scan.REPO_ROOT, "build")
-    if os.path.isdir(build_dir):
-        subprocess.run(
-            ["cmake", "--build", "build", "--target", "superslm_tests", "--config", "Release"],
-            cwd=scan.REPO_ROOT, check=True,
-        )
-        for path in _candidate_binaries():
-            if os.path.isfile(path):
-                return path
-    raise FileNotFoundError(
-        "no built superslm_tests binary found and `build/` is not configured -- run "
-        "`cmake -B build` first, or build.bat, then re-run this check"
-    )
-
-
 def registered_test_names(binary: str) -> set[str]:
     proc = subprocess.run([binary, "--list-tests"], cwd=scan.REPO_ROOT, capture_output=True, text=True,
                            check=True)
@@ -107,7 +77,11 @@ def registered_test_names(binary: str) -> set[str]:
 
 def main() -> int:
     defined = test_shaped_definitions()
-    binary = locate_or_build_binary()
+    # Currency: the binary must be at least as new as every file this scan
+    # just read, or "registered" is a claim about a stale build rather than
+    # the tree the "defined" side above was actually computed from (T-1632
+    # Significant 2).
+    binary = scan.locate_or_build_binary(scan.checked_source_files())
     registered = registered_test_names(binary)
 
     missing = sorted(set(defined) - registered)

@@ -38,40 +38,6 @@ import _source_scan as scan  # noqa: E402
 _SSLM_TEST_CALL_RE = re.compile(r"\bSSLM_TEST\s*\(\s*([A-Za-z_]\w*)\s*,\s*([^,)]+?)\s*\)\s*")
 
 
-def _candidate_binaries() -> list[str]:
-    root = scan.REPO_ROOT
-    return [
-        os.path.join(root, "build", "Release", "superslm_tests.exe"),
-        os.path.join(root, "build", "superslm_tests.exe"),
-        os.path.join(root, "build", "superslm_tests"),
-        os.path.join(root, "out", "superslm_tests.exe"),
-        os.path.join(root, "out", "superslm_tests"),
-    ]
-
-
-def locate_or_build_binary() -> str:
-    """Returns a path to a built superslm_tests binary, building it via
-    `cmake --build build --target superslm_tests` (assumes `build/` is
-    already configured, matching this project's CI convention) if none of
-    the conventional output paths exist yet."""
-    for path in _candidate_binaries():
-        if os.path.isfile(path):
-            return path
-    build_dir = os.path.join(scan.REPO_ROOT, "build")
-    if os.path.isdir(build_dir):
-        subprocess.run(
-            ["cmake", "--build", "build", "--target", "superslm_tests", "--config", "Release"],
-            cwd=scan.REPO_ROOT, check=True,
-        )
-        for path in _candidate_binaries():
-            if os.path.isfile(path):
-                return path
-    raise FileNotFoundError(
-        "no built superslm_tests binary found and `build/` is not configured -- run "
-        "`cmake -B build` first, or build.bat, then re-run this check"
-    )
-
-
 def static_sslm_test_calls() -> dict[str, dict]:
     """name -> {order, hash, file, line} for every `SSLM_TEST(Name, Order) { ... }`
     call across the checked source files."""
@@ -154,7 +120,12 @@ def main() -> int:
     static_tests = static_sslm_test_calls()
     static_count = len(static_tests)
 
-    binary = locate_or_build_binary()
+    # Currency: this check also scans tests/support/ (static_non_test_symbol_
+    # hashes below), so the binary must be at least as new as the union of
+    # both populations, or "static" and "runtime" are compared against a
+    # source tree the binary never actually reflects (T-1632 Significant 2).
+    scanned_paths = scan.checked_source_files() + scan.support_source_files()
+    binary = scan.locate_or_build_binary(scanned_paths)
     runtime_count = int(run_binary(binary, "--count-tests").strip())
 
     if static_count != runtime_count:
