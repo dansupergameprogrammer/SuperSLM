@@ -983,6 +983,21 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	//     guard exists for the exponent, and none is needed: the arithmetic
 	//     it reaches is itself now defined over the field's whole `int64_t`
 	//     domain.
+	//     How that claim was established, and what would reopen it: the two
+	//     sites named above (`ComposedExponent`, `SaturatingAdd64`) are the
+	//     two the project's own hard-abort ASan+UBSan instrument reported,
+	//     one at a time -- closing the first and re-running let the same
+	//     witness reach the second (T-1596). That witness drives one call
+	//     path through `ResidualReconcileSite` -> `RequantChainChecked`;
+	//     `-fno-sanitize-recover=all` reports the first UB site it reaches
+	//     on a path and stops there, so "no reports remain" means no
+	//     reports remain ON THE PATHS THIS WITNESS DRIVES, not that the
+	//     reachable call graph's membership has been enumerated or is
+	//     closed. Nothing in this tree pins these two sites as the whole of
+	//     the exponent-arithmetic call graph's membership: a third
+	//     exponent-composition site added later anywhere under this same
+	//     call graph would make this comment silently false, with no build
+	//     failure, until someone re-runs the instrument and finds it.
 	if (seq.hidden_codes == nullptr) return SslmForwardStatus::InvalidHiddenCodes;
 
 	// Significant 6 (Poirot e4b398c review): the SAME livelock the
