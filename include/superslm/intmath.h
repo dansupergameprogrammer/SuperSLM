@@ -138,11 +138,18 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 // existing int64 domain; this function widens the NUMERATOR, not the exponent's own
 // range. This function checks the composed exponent q_B + 62 + e_a itself
 // (RoundingDivideByPotComposedExponentInDomain, D-SLM676) before it forms 2^exponent
-// to divide by. CheckBiasReconcileMagnitudeDomain and CheckBiasAccumulateMagnitudeDomain
-// (checked_chain_funnel.h) are each exactly `BiasReconcileWide(...) == true`, so they
-// inherit this same exponent rejection and report it as BiasReconcileProductOutOfDomain
-// -- the identical status an in-domain-exponent magnitude failure produces
-// (T-1657 Poirot N-9, confirmation pass 3f37ba2). CheckRoundingDivideByPotExponentDomain
+// to divide by. CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h) is exactly
+// `BiasReconcileWide(...) == true`. CheckBiasAccumulateMagnitudeDomain calls
+// BiasReconcileWide FIRST and inherits the same exponent rejection, but is NOT equivalent
+// to it: on the path where BiasReconcileWide returns true it additionally proves
+// `acc_i + result` representable in int64_t, and rejects when that sum overflows. The two
+// therefore disagree on real inputs -- pinned by execution at b = INT64_MAX, q_b = -62,
+// r_a = 1, e_a = 0, acc_i = 1, where the first returns Ok and the second rejects
+// (tests/test_main.cpp, T-1678; the claim that they are identical was written and
+// corrected four times before a cell was made to hold it). Both report an exponent-domain
+// failure as BiasReconcileProductOutOfDomain -- the identical status an
+// in-domain-exponent magnitude failure produces (T-1657 Poirot N-9, confirmation pass
+// 3f37ba2, N-17 at 53de03e). CheckRoundingDivideByPotExponentDomain
 // (checked_chain_funnel.h) is unchanged and still required at the call site for a
 // diagnosis that names the right mechanism -- a caller that skips it and reads either
 // magnitude predicate's status alone will attribute an exponent-domain rejection to the
