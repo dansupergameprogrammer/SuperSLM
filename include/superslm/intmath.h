@@ -136,23 +136,26 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 // r_a, and over exponent in [kRoundingDivideByPotExponentMinI64,
 // kRoundingDivideByPotExponentMaxI64] -- unchanged from RoundingDivideByPOT's own
 // existing int64 domain; this function widens the NUMERATOR, not the exponent's own
-// range. T-1657 Poirot N-1 (confirmation pass, 5156477): unlike
-// CheckBiasReconcileMagnitudeDomain and CheckBiasAccumulateMagnitudeDomain
-// (checked_chain_funnel.h), which do NOT check the exponent domain and still require
-// the caller's own CheckRoundingDivideByPotExponentDomain call first, THIS function
-// checks the composed exponent q_B + 62 + e_a itself
-// (RoundingDivideByPotComposedExponentInDomain, D-SLM676) -- it must form 2^exponent
-// to divide by, so it cannot defer that check the way the two predicates above do.
-// Two distinct false-return paths, not one:
+// range. This function checks the composed exponent q_B + 62 + e_a itself
+// (RoundingDivideByPotComposedExponentInDomain, D-SLM676) before it forms 2^exponent
+// to divide by. CheckBiasReconcileMagnitudeDomain and CheckBiasAccumulateMagnitudeDomain
+// (checked_chain_funnel.h) are each exactly `BiasReconcileWide(...) == true`, so they
+// inherit this same exponent rejection and report it as BiasReconcileProductOutOfDomain
+// -- the identical status an in-domain-exponent magnitude failure produces
+// (T-1657 Poirot N-9, confirmation pass 3f37ba2). CheckRoundingDivideByPotExponentDomain
+// (checked_chain_funnel.h) is unchanged and still required at the call site for a
+// diagnosis that names the right mechanism -- a caller that skips it and reads either
+// magnitude predicate's status alone will attribute an exponent-domain rejection to the
+// magnitude. This function has three outcomes, not two:
 //   * Exponent out of domain: returns false with *out = 0. There is no wide result to
 //     narrow on this path -- the divide never runs.
-//   * Exponent in domain, magnitude out of range: writes the correctly-rounded (C3,
-//     ties away from zero) result to *out and returns true when it fits int64_t;
-//     returns false with *out set to the low 64 bits of the true wide result when it
-//     does not, matching this file's own established "may be numerically wrong
-//     outside its domain, never UB" convention for an out-of-domain-but-still-total
-//     function (IExpEvaluate's own kNotRepresentable outcome above is the precedent
-//     this follows).
+//   * Exponent in domain, magnitude out of range: returns false with *out set to the
+//     low 64 bits of the true wide result, matching this file's own established "may be
+//     numerically wrong outside its domain, never UB" convention for an
+//     out-of-domain-but-still-total function (IExpEvaluate's own kNotRepresentable
+//     outcome above is the precedent this follows).
+//   * Exponent in domain, magnitude in range: writes the correctly-rounded (C3, ties
+//     away from zero) result to *out and returns true.
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out);
 
 // T-1657 Poirot Significant 3 (D-SLM676): the ONE derivation of C28's composed exponent

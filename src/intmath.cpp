@@ -65,9 +65,10 @@ inline bool SLt(S128 a, S128 b) { return a < b; }
 inline int64_t SShrToI64(S128 v, int k) { return static_cast<int64_t>(v >> k); }
 // T-1657/D-SLM621/D-SLM675: full-width arithmetic (floor) right shift, unlike
 // SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
-// k in [0,63] -- RoundingDivideByPOTWide's own only caller passes an exponent already
-// bounded to that range (BiasReconcile's unchanged exponent-domain contract,
-// forward_sites.h). T-1657 Poirot Minor 3: narrowed from a documented [0,127] (this
+// k in [0,63] -- RoundingDivideByPOTWide's own only caller is BiasReconcileWide, which
+// calls it only after BiasReconcileWide's own internal
+// RoundingDivideByPotComposedExponentInDomain check (D-SLM675) confirms the composed
+// exponent is in that range; no caller-side gate is what enforces this. T-1657 Poirot Minor 3: narrowed from a documented [0,127] (this
 // path's own MSVC struct sibling below had two branches, k>=64 and k>=128, that no
 // caller of THIS function ever drove) to the range the one real caller actually
 // needs; the native __int128 shift below is well-defined over the narrower range
@@ -188,8 +189,10 @@ inline int64_t SShrToI64(S128 v, int k) {
 // T-1657/D-SLM621/D-SLM675: full-width arithmetic (floor) right shift, unlike
 // SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
 // k in [0,63] -- this function's own only caller, RoundingDivideByPOTWide, is itself
-// only ever called with an exponent already bounded to that range (BiasReconcile's
-// unchanged exponent-domain contract, forward_sites.h). T-1657 Poirot Minor 3: this
+// only ever called by BiasReconcileWide, which calls it only after BiasReconcileWide's
+// own internal RoundingDivideByPotComposedExponentInDomain check (D-SLM675) confirms
+// the composed exponent is in that range; no caller-side gate is what enforces this.
+// T-1657 Poirot Minor 3: this
 // used to document and implement k in [0,127] (mirroring UShrFull's own [0,127]
 // convention above, generalized to a SIGNED, sign-extending shift) with two branches,
 // k >= 64 and k >= 128, that no caller of THIS function ever drove -- correct on
@@ -344,8 +347,10 @@ namespace {
 // C3's tie-away-from-zero rule (RoundingDivideByPOTImpl<T> above), generalized to a
 // 128-bit numerator divided by 2^exponent (T-1657, D-SLM621/641/645) -- the SAME rule,
 // generalized only in the numerator's width, never the exponent's own domain or the
-// rounding rule itself. Because exponent <= 63 always (BiasReconcile's unchanged
-// caller-side gate, CheckRoundingDivideByPotExponentDomain), the rounding remainder
+// rounding rule itself. Because exponent <= 63 always (this function's own only
+// caller, BiasReconcileWide, returns before this divide runs when the composed
+// exponent is outside [0,63] -- D-SLM675 -- the contract is enforced upstream, not
+// assumed), the rounding remainder
 // and threshold are exactly the low 64 bits of `x`'s own two's-complement pattern
 // masked to `exponent` bits -- no 128-bit remainder arithmetic is needed, only a
 // 128-bit arithmetic shift for the quotient itself.
