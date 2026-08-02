@@ -9265,6 +9265,69 @@ static void TestBiasReconcileWideTieAwayFromZeroBothSignsAtWideMagnitude() {
 	          static_cast<long long>(kBia1WideTieWrongNeg));
 }
 
+// T-1657 Poirot N-11 (confirmation pass 3f37ba2): BiasReconcileWide's own
+// exponent-out-of-domain branch (intmath.cpp, `*out = 0; return false;` when
+// RoundingDivideByPotComposedExponentInDomain rejects the composed sum
+// q_b + 62 + e_a) was executed by no cell in this suite -- every existing
+// BiasReconcileWide/CheckBiasReconcileMagnitudeDomain cell passes an
+// in-domain exponent (a magnitude-only cell), and the only cells that reach a
+// composed-exponent rejection go through CheckRoundingDivideByPotExponentDomain,
+// which returns the OTHER status (RoundingDivideByPotExponentOutOfDomain) and
+// therefore cannot witness the conflation the three call sites below share.
+// This cell drives one out-of-domain composed exponent (b=4, q_b=30, r_a=1,
+// e_a=-200; sum = 30+62-200 = -108, outside [0,63]) through all four surfaces
+// at once, so a future edit that reintroduces a second derivation, or that
+// makes any one surface disagree with BiasReconcileWide's own boolean, fails
+// here instead of surviving as an unread prose claim.
+static void TestBiasReconcileWideExponentOutOfDomainConflatedAcrossAllSurfaces() {
+	using superslm::BiasReconcileWide;
+	using superslm::CheckBiasAccumulateMagnitudeDomain;
+	using superslm::CheckBiasReconcileMagnitudeDomain;
+	using superslm::CheckRoundingDivideByPotExponentDomain;
+	using superslm::SslmForwardStatus;
+
+	constexpr int64_t kB = 4;
+	constexpr int64_t kQB = 30;
+	constexpr int64_t kRA = 1;
+	constexpr int64_t kEA = -200;  // sum = kQB + 62 + kEA = -108, outside [0,63]
+
+	int64_t out = 12345;
+	const bool fits = BiasReconcileWide(kB, kQB, kRA, kEA, &out);
+	CHECK_MSG(!fits,
+	          "BiasReconcileWide(b=%lld, q_b=%lld, r_a=%lld, e_a=%lld) fits == true, want "
+	          "false (composed exponent -108 is outside [0,63])",
+	          static_cast<long long>(kB), static_cast<long long>(kQB),
+	          static_cast<long long>(kRA), static_cast<long long>(kEA));
+	CHECK_MSG(out == 0,
+	          "BiasReconcileWide's out-of-domain branch: *out == %lld, want 0 (defined-but-"
+	          "not-meaningful, never left at the caller's prior value)",
+	          static_cast<long long>(out));
+
+	const SslmForwardStatus magnitude_status = CheckBiasReconcileMagnitudeDomain(kB, kQB, kRA, kEA);
+	CHECK_MSG(magnitude_status == SslmForwardStatus::BiasReconcileProductOutOfDomain,
+	          "CheckBiasReconcileMagnitudeDomain at an out-of-domain composed exponent == %s, "
+	          "want BiasReconcileProductOutOfDomain -- it must inherit BiasReconcileWide's "
+	          "own rejection, not merely its magnitude check",
+	          SslmForwardStatusName(magnitude_status));
+
+	const SslmForwardStatus accumulate_status =
+	    CheckBiasAccumulateMagnitudeDomain(/*acc_i=*/0, kB, kQB, kRA, kEA);
+	CHECK_MSG(accumulate_status == SslmForwardStatus::BiasReconcileProductOutOfDomain,
+	          "CheckBiasAccumulateMagnitudeDomain at an out-of-domain composed exponent == %s, "
+	          "want BiasReconcileProductOutOfDomain -- same inheritance as "
+	          "CheckBiasReconcileMagnitudeDomain, through the same BiasReconcileWide call",
+	          SslmForwardStatusName(accumulate_status));
+
+	const SslmForwardStatus exponent_gate_status =
+	    CheckRoundingDivideByPotExponentDomain(kQB, kEA);
+	CHECK_MSG(exponent_gate_status == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+	          "CheckRoundingDivideByPotExponentDomain at the SAME composed exponent == %s, "
+	          "want RoundingDivideByPotExponentOutOfDomain -- the call-site gate reports the "
+	          "DIFFERENT status the two magnitude predicates above do not, which is exactly "
+	          "the conflation a caller reading only the magnitude predicate's status cannot see",
+	          SslmForwardStatusName(exponent_gate_status));
+}
+
 // Sec4.7/Sec4.8 (BIA1, Sec7.2a third limb): the load-time magnitude descriptor.
 // Builds a single-tensor BIA1 (int64) manifest with one element set to the
 // value under test -- the same "one otherwise-valid v2 artifact, one hostile
@@ -19120,6 +19183,7 @@ int main(int argc, char** argv) {
 	TestBiasReconcileWideStrikeWitnessRawOverflowResultInRange();
 	TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide();
 	TestBiasReconcileWideTieAwayFromZeroBothSignsAtWideMagnitude();
+	TestBiasReconcileWideExponentOutOfDomainConflatedAcrossAllSurfaces();
 	TestBia1AcceptsFormerBoundaryValuesBothSignsNowThatTheLoadTimeCheckIsGone();
 	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
 	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
