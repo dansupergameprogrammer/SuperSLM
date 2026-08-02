@@ -15787,18 +15787,18 @@ static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition()
 	          static_cast<long long>(seq_a.hidden_scale.m), static_cast<long long>(seq_a.hidden_scale.e),
 	          static_cast<long long>(seq_b.hidden_scale.m), static_cast<long long>(seq_b.hidden_scale.e));
 	for (uint32_t l = 0; l < 2; ++l) {
-		const int8_t* row_a = superslm::KeyRow(ws_a, l, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+		const int8_t* row_a = superslm::KeyRow(ws_a, l, kContextCap, /*num_kv_heads=*/1, /*head_dim=*/2,
 		                                        /*kv_head=*/0, /*position=*/2);
-		const int8_t* row_b = superslm::KeyRow(ws_b, l, kContextCap, /*num_heads=*/1, /*head_dim=*/2,
+		const int8_t* row_b = superslm::KeyRow(ws_b, l, kContextCap, /*num_kv_heads=*/1, /*head_dim=*/2,
 		                                        /*kv_head=*/0, /*position=*/2);
 		CHECK_MSG(row_a[0] == row_b[0] && row_a[1] == row_b[1],
 		          "cell 3: layer %u K store at position 2 differs between path A {%d,%d} and path "
 		          "B {%d,%d}",
 		          l, static_cast<int>(row_a[0]), static_cast<int>(row_a[1]),
 		          static_cast<int>(row_b[0]), static_cast<int>(row_b[1]));
-		const int8_t* vrow_a = superslm::ValueRow(ws_a, l, kContextCap, /*num_heads=*/1,
+		const int8_t* vrow_a = superslm::ValueRow(ws_a, l, kContextCap, /*num_kv_heads=*/1,
 		                                           /*head_dim=*/2, /*kv_head=*/0, /*position=*/2);
-		const int8_t* vrow_b = superslm::ValueRow(ws_b, l, kContextCap, /*num_heads=*/1,
+		const int8_t* vrow_b = superslm::ValueRow(ws_b, l, kContextCap, /*num_kv_heads=*/1,
 		                                           /*head_dim=*/2, /*kv_head=*/0, /*position=*/2);
 		CHECK_MSG(vrow_a[0] == vrow_b[0] && vrow_a[1] == vrow_b[1],
 		          "cell 3: layer %u V store at position 2 differs between path A {%d,%d} and path "
@@ -15910,7 +15910,7 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 5 token 0 status == %s, want Ok",
 	          SslmForwardStatusName(st));
 	const int8_t* row0_after_t0 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
-	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
 	                                                /*position=*/0);
 	const int8_t row0_snapshot[2] = {row0_after_t0[0], row0_after_t0[1]};
 
@@ -15940,10 +15940,10 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 	          static_cast<long long>(seq.hidden_scale.m), static_cast<long long>(seq.hidden_scale.e));
 
 	const int8_t* row0_after_t1 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
-	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
 	                                                /*position=*/0);
 	const int8_t* row1_after_t1 = superslm::KeyRow(workspace, /*layer=*/0, kContextCap,
-	                                                /*num_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                                /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
 	                                                /*position=*/1);
 
 	CHECK_MSG(row0_after_t1[0] == row0_snapshot[0] && row0_after_t1[1] == row0_snapshot[1],
@@ -16022,10 +16022,10 @@ static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughA
 	// post-rotation value here, matching TwoLayerFixture's own convention
 	// throughout this suite.
 
-	const int8_t* actual_k = superslm::KeyRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1,
+	const int8_t* actual_k = superslm::KeyRow(workspace, /*layer=*/0, kContextCap, /*num_kv_heads=*/1,
 	                                           /*head_dim=*/2, /*kv_head=*/0,
 	                                           /*position=*/kContextCap - 1);
-	const int8_t* actual_v = superslm::ValueRow(workspace, /*layer=*/0, kContextCap, /*num_heads=*/1,
+	const int8_t* actual_v = superslm::ValueRow(workspace, /*layer=*/0, kContextCap, /*num_kv_heads=*/1,
 	                                             /*head_dim=*/2, /*kv_head=*/0,
 	                                             /*position=*/kContextCap - 1);
 	CHECK_MSG(actual_k[0] == expected_k[0] && actual_k[1] == expected_k[1],
@@ -16086,9 +16086,9 @@ static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
 
 	for (uint32_t l = 0; l < 2; ++l) {
 		for (int64_t pos = 0; pos < 2; ++pos) {  // positions 0..k-1, k==2
-			const int8_t* krow = superslm::KeyRow(workspace, l, kContextCap, /*num_heads=*/1,
+			const int8_t* krow = superslm::KeyRow(workspace, l, kContextCap, /*num_kv_heads=*/1,
 			                                       /*head_dim=*/2, /*kv_head=*/0, pos);
-			const int8_t* vrow = superslm::ValueRow(workspace, l, kContextCap, /*num_heads=*/1,
+			const int8_t* vrow = superslm::ValueRow(workspace, l, kContextCap, /*num_kv_heads=*/1,
 			                                         /*head_dim=*/2, /*kv_head=*/0, pos);
 			CHECK_MSG(static_cast<uint8_t>(krow[0]) == 0xEE && static_cast<uint8_t>(krow[1]) == 0xEE,
 			          "cell 7: layer %u position %lld K row reads {%d,%d} on sequence B before B "

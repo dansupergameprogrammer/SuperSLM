@@ -687,10 +687,9 @@ struct LayerWeights {
 // `context_cap < 1` is `InvalidContextCap`, checked before the workspace size
 // is computed from it -- `context_cap` sizes the required K/V workspace
 // (`num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2`),
-// and every
-// value outside `[1, INT64_MAX]` (zero or negative) is invalid for the same
-// reason: neither is a legitimate count of cache positions. One check covers
-// both, because both violate the identical domain requirement.
+// and every value outside `[1, INT64_MAX]` (zero or negative) is invalid for
+// the same reason: neither is a legitimate count of cache positions. One
+// check covers both, because both violate the identical domain requirement.
 //
 // A layer commits atomically. Every checked call between `attn_norm` and
 // `mlp_residual` (inclusive) can reject; on ANY rejection inside a layer,
