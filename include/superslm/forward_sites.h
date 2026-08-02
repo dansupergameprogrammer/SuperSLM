@@ -575,11 +575,10 @@ struct LayerWeights {
 	CarriedScale attn_norm_site_constant;
 
 	// q/k/v/o projections (§6.2 step 2/6/7): GemmInt8Accumulate against the
-	// weight matrix, then the shared WSC1 fold (`proj_identity`/`proj_mult`/
-	// `proj_shift`) -- one fold config per layer, reused at every projection
-	// site this test-design pass's own fixture exercises (a real, plan-
-	// sanctioned degenerate case, not an invented shortcut: WSC1 `identity`
-	// heads are themselves a real composition, §6.2 item 2). q_proj/o_proj
+	// weight matrix, then the WSC1 fold, one (identity, mult, shift) triple
+	// PER OUTPUT CHANNEL (T-1666: `q_fold_identity`/`q_fold_mult`/
+	// `q_fold_shift` and the k/v/o siblings below, replacing the single
+	// scalar triple every projection used to reuse). q_proj/o_proj
 	// then funnel (RequantChainChecked, via `q_site_constant`/
 	// `o_site_constant`); k_proj/v_proj do NOT funnel -- they land at the
 	// static per-head scale through `LandingRescale` (§8.1), using
@@ -589,9 +588,26 @@ struct LayerWeights {
 	const int8_t* k_weight;
 	const int8_t* v_weight;
 	const int8_t* o_weight;
-	int32_t proj_identity;
-	int32_t proj_mult;
-	int32_t proj_shift;
+	// q/k/v/o projections' WSC1 fold, ONE (identity, mult, shift) TRIPLE PER OUTPUT
+	// CHANNEL (T-1666, replacing the single shared scalar triple every projection
+	// used to reuse -- the real artifact's WSC1 data is per-output-channel and not
+	// degenerate, driver log Claude/Brunel/t1664-...-2026-08-02.md §4). Same
+	// ownership convention as ctx_fold_identity/_mult/_shift (below) and
+	// q_bias/k_bias/v_bias (below): caller-resolved, no runtime length field --
+	// the caller's own out_channels/kv_hidden_size argument (already threaded
+	// through ProjectAndFunnel and the K/V landing loop) is what bounds every read.
+	const int32_t* q_fold_identity;  // hidden_size
+	const int32_t* q_fold_mult;      // hidden_size
+	const int32_t* q_fold_shift;     // hidden_size
+	const int32_t* k_fold_identity;  // num_key_value_heads * head_dim
+	const int32_t* k_fold_mult;      // num_key_value_heads * head_dim
+	const int32_t* k_fold_shift;     // num_key_value_heads * head_dim
+	const int32_t* v_fold_identity;  // num_key_value_heads * head_dim
+	const int32_t* v_fold_mult;      // num_key_value_heads * head_dim
+	const int32_t* v_fold_shift;     // num_key_value_heads * head_dim
+	const int32_t* o_fold_identity;  // hidden_size
+	const int32_t* o_fold_mult;      // hidden_size
+	const int32_t* o_fold_shift;     // hidden_size
 	CarriedScale q_site_constant;
 	CarriedScale o_site_constant;
 
@@ -657,6 +673,17 @@ struct LayerWeights {
 	const int8_t* gate_weight;  // intermediate_size x hidden_size
 	const int8_t* up_weight;    // intermediate_size x hidden_size
 	const int8_t* down_weight;  // hidden_size x intermediate_size
+	// gate/up/down projections' WSC1 fold, one triple per output channel
+	// (T-1666); the q/k/v/o siblings of these fields are declared above.
+	const int32_t* gate_fold_identity;  // intermediate_size
+	const int32_t* gate_fold_mult;      // intermediate_size
+	const int32_t* gate_fold_shift;     // intermediate_size
+	const int32_t* up_fold_identity;    // intermediate_size
+	const int32_t* up_fold_mult;        // intermediate_size
+	const int32_t* up_fold_shift;       // intermediate_size
+	const int32_t* down_fold_identity;  // hidden_size
+	const int32_t* down_fold_mult;      // hidden_size
+	const int32_t* down_fold_shift;     // hidden_size
 	// T-1355: gate_proj and up_proj each funnel in their own right (§6.3 step
 	// 10, "each with the funnel"), so each owns a KVC1 site constant --
 	// `layerL.gate_proj.requant` and `layerL.up_proj.requant`. The declaring

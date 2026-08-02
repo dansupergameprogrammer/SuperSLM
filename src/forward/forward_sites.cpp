@@ -831,15 +831,20 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 // matching today's behaviour exactly; the q_proj call site passes `lw.q_bias`.
 SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale,
                                     const int8_t* weight, size_t in_channels, size_t out_channels,
-                                    int32_t identity, int32_t mult, int32_t shift,
+                                    const int32_t* identity, const int32_t* mult, const int32_t* shift,
                                     CarriedScale site_constant, const int64_t* bias,
                                     int8_t* out_codes, CarriedScale* out_scale,
                                     std::string_view site, size_t token_index,
                                     SslmTraceHookState* trace_hook_state) {
 	std::vector<int64_t> acc(out_channels);
 	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
+	// T-1666 manifest landing (D3): identity/mult/shift are now per-channel arrays,
+	// but this loop still reads element 0 for every i -- the per-channel indexed
+	// read is landed by the follow-on implementation commit, not this one, so
+	// this suite's existing uniform-identity fixtures still observe unchanged
+	// behavior (D6's scrub) while the per-channel contract remains unmet.
 	for (size_t i = 0; i < out_channels; ++i) {
-		acc[i] = ApplyWeightScaleFold(acc[i], identity, mult, shift);
+		acc[i] = ApplyWeightScaleFold(acc[i], identity[0], mult[0], shift[0]);
 	}
 	// T-1656/D-SLM642, §5.3: inserted between the WSC1 fold loop above and the funnel
 	// call below -- the exact composition slot the reference's `biased_fold_row`
@@ -1192,7 +1197,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		if (st != SslmForwardStatus::Ok) return st;
 
 		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
-		                      lw.proj_identity, lw.proj_mult, lw.proj_shift, lw.q_site_constant,
+		                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
 		                      lw.q_bias, q_codes.data(), &q_scale,
 		                      LayerSite(site_prefix, l, "q_proj.requant"),
 		                      token_index, trace_hook_state);
@@ -1215,9 +1220,14 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
 			                      vacc.data());
+			// T-1666 manifest landing (D5): same broadcast-placeholder disposition as
+			// ProjectAndFunnel's loop above -- element 0 for every i until the
+			// follow-on implementation commit lands the indexed read.
 			for (size_t i = 0; i < kv_hidden_size; ++i) {
-				kacc[i] = ApplyWeightScaleFold(kacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
-				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.proj_identity, lw.proj_mult, lw.proj_shift);
+				kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[0], lw.k_fold_mult[0],
+				                               lw.k_fold_shift[0]);
+				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[0], lw.v_fold_mult[0],
+				                               lw.v_fold_shift[0]);
 			}
 			// T-1656/D-SLM642, §5.3: the identical bias insertion ProjectAndFunnel's
 			// q_proj call site carries, written a second time here -- a separate
@@ -1417,7 +1427,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		}
 
 		st = ProjectAndFunnel(ctx_codes.data(), ctx_scale, lw.o_weight, hidden_size, hidden_size,
-		                      lw.proj_identity, lw.proj_mult, lw.proj_shift, lw.o_site_constant,
+		                      lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift, lw.o_site_constant,
 		                      /*bias=*/nullptr, o_codes.data(), &o_scale,
 		                      LayerSite(site_prefix, l, "o_proj.requant"),
 		                      token_index, trace_hook_state);
@@ -1446,14 +1456,16 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		if (st != SslmForwardStatus::Ok) return st;
 
 		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.gate_weight, hidden_size,
-		                      intermediate_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
-		                      lw.gate_site_constant, /*bias=*/nullptr, gate_codes.data(), &gate_scale,
+		                      intermediate_size, lw.gate_fold_identity, lw.gate_fold_mult,
+		                      lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr,
+		                      gate_codes.data(), &gate_scale,
 		                      LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
 		                      trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size,
-		                      intermediate_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
-		                      lw.up_site_constant, /*bias=*/nullptr, up_codes.data(), &up_scale,
+		                      intermediate_size, lw.up_fold_identity, lw.up_fold_mult,
+		                      lw.up_fold_shift, lw.up_site_constant, /*bias=*/nullptr,
+		                      up_codes.data(), &up_scale,
 		                      LayerSite(site_prefix, l, "up_proj.requant"), token_index,
 		                      trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
@@ -1471,8 +1483,9 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		if (st != SslmForwardStatus::Ok) return st;
 
 		st = ProjectAndFunnel(act_codes.data(), act_scale, lw.down_weight, intermediate_size,
-		                      hidden_size, lw.proj_identity, lw.proj_mult, lw.proj_shift,
-		                      lw.down_site_constant, /*bias=*/nullptr, down_codes.data(), &down_scale,
+		                      hidden_size, lw.down_fold_identity, lw.down_fold_mult,
+		                      lw.down_fold_shift, lw.down_site_constant, /*bias=*/nullptr,
+		                      down_codes.data(), &down_scale,
 		                      LayerSite(site_prefix, l, "down_proj.requant"), token_index,
 		                      trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;

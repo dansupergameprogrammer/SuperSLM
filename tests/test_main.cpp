@@ -13033,6 +13033,25 @@ static void TestResidualReconcileSitePinsInt64MinWitnessAgainstUnguardedAdd() {
 
 namespace {
 
+// Shared identity-fold arrays (T-1666): every element {identity=1, mult=0,
+// shift=0} -- safe to alias across every projection of every degenerate-
+// fixture layer, because each array is only ever read up to that
+// projection's own out_channels/kv_hidden_size argument (never its own
+// declared length); no fixture in this suite needs more than
+// kMaxTestFoldChannels of either. Design §7's own sizing rationale: the real
+// checkpoint's own largest projection width is intermediate_size = 8960,
+// three orders of magnitude larger than any fixture in this suite.
+constexpr size_t kMaxTestFoldChannels = 16384;
+struct IdentityFoldArrayInit {
+	int32_t values[kMaxTestFoldChannels];
+	constexpr IdentityFoldArrayInit() : values{} {
+		for (size_t i = 0; i < kMaxTestFoldChannels; ++i) values[i] = 1;
+	}
+};
+constexpr IdentityFoldArrayInit kIdentityFoldArrayInit{};
+const int32_t* const kIdentityFoldArr = kIdentityFoldArrayInit.values;
+const int32_t kZeroFoldArr[kMaxTestFoldChannels] = {};  // every element 0, by aggregate-init default
+
 // A minimal, real, two-layer LayerWeights fixture (hidden_size=2, one
 // MHA-degenerate head, head_dim=2, intermediate_size=2, context_cap=1 --
 // §13 dim 4's own accepted MHA-degenerate case) for RunLayerLoop's own
@@ -13155,9 +13174,13 @@ struct TwoLayerFixture {
 			lw.k_weight = f.identity2x2;
 			lw.v_weight = f.identity2x2;
 			lw.o_weight = f.identity2x2;
-			lw.proj_identity = 1;
-			lw.proj_mult = 0;
-			lw.proj_shift = 0;
+			lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+			lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+			lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+			lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+			lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+			lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+			lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 			lw.q_site_constant = canonical;
 			lw.o_site_constant = canonical;
 			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
@@ -13341,9 +13364,13 @@ struct CriticalOneFixture {
 		lw.k_weight = saturating ? f.saturating_weight : f.identity2x2;
 		lw.v_weight = saturating ? f.saturating_weight : f.identity2x2;
 		lw.o_weight = f.identity2x2;
-		lw.proj_identity = 1;
-		lw.proj_mult = 0;
-		lw.proj_shift = 0;
+		lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+		lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+		lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+		lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+		lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+		lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+		lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 		lw.q_site_constant = canonical;
 		lw.o_site_constant = canonical;
 		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
@@ -13495,9 +13522,13 @@ struct GqaGroupingFixture {
 			lw.k_weight = f.k_selector4x8;
 			lw.v_weight = f.v_selector4x8;
 			lw.o_weight = f.identity8x8;
-			lw.proj_identity = 1;
-			lw.proj_mult = 0;
-			lw.proj_shift = 0;
+			lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+			lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+			lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+			lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+			lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+			lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+			lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 			lw.q_site_constant = canonical;
 			lw.o_site_constant = canonical;
 			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
@@ -15065,9 +15096,13 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	lw.k_weight = identity4x4;
 	lw.v_weight = identity4x4;
 	lw.o_weight = identity4x4;
-	lw.proj_identity = 1;
-	lw.proj_mult = 0;
-	lw.proj_shift = 0;
+	lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+	lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+	lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+	lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+	lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+	lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+	lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 	lw.q_site_constant = canonical;
 	lw.o_site_constant = canonical;
 	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
@@ -15347,9 +15382,13 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 	lw.k_weight = identity2x2;
 	lw.v_weight = identity2x2;
 	lw.o_weight = identity2x2;
-	lw.proj_identity = 1;
-	lw.proj_mult = 0;
-	lw.proj_shift = 0;
+	lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+	lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+	lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+	lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+	lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+	lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+	lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 	lw.q_site_constant = canonical;
 	lw.o_site_constant = canonical;
 	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
@@ -15559,9 +15598,13 @@ struct TwoLayerDistinctQKFixture {
 			lw.k_weight = f.k_weight_arr[l];
 			lw.v_weight = f.identity2x2;
 			lw.o_weight = f.identity2x2;
-			lw.proj_identity = 1;
-			lw.proj_mult = 0;
-			lw.proj_shift = 0;
+			lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+			lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+			lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+			lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+			lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+			lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+			lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 			lw.q_site_constant = canonical;
 			lw.o_site_constant = canonical;
 			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
@@ -16121,9 +16164,13 @@ static void TestRunLayerLoopRopeWriteBackDoesNotOverwriteEarlierPositions() {
 	lw.k_weight = identity2x2;
 	lw.v_weight = identity2x2;
 	lw.o_weight = identity2x2;
-	lw.proj_identity = 1;
-	lw.proj_mult = 0;
-	lw.proj_shift = 0;
+	lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+	lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+	lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+	lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+	lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+	lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+	lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
 	lw.q_site_constant = canonical;
 	lw.o_site_constant = canonical;
 	lw.kv_landing_r_t_k = kv_landing_r_t_arr;
