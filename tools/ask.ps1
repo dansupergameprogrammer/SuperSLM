@@ -76,13 +76,32 @@ try {
     # 151645 = <|im_end|>, 151643 = <|endoftext|>. The .sslm format carries no
     # end-of-sequence id and the tokenizer view exposes none by design, so the
     # stop set is supplied by the caller (DecisionLog D-SLM684).
-    $raw = & $exe $Model $Tokenizer $prompt --max-new $MaxNew --stop 151645,151643 2>&1
-    $rawText = ($raw | Out-String)
+    #
+    # stderr goes to its own file rather than being merged into the success stream.
+    # The driver writes an informational preflight line to stderr on every healthy
+    # run, and under Windows PowerShell 5.1 a native program writing to stderr while
+    # $ErrorActionPreference is 'Stop' raises a terminating NativeCommandError -- so
+    # merging with 2>&1 makes a normal run look like a crash on 5.1 while working
+    # fine on PowerShell 7. The stderr text is kept and shown if the run fails.
+    $errFile = [System.IO.Path]::GetTempFileName()
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $raw = & $exe $Model $Tokenizer $prompt --max-new $MaxNew --stop 151645,151643 2> $errFile
+    }
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    $driverExit = $LASTEXITCODE
+    $stderrText = if (Test-Path $errFile) { Get-Content $errFile -Raw } else { "" }
+    Remove-Item $errFile -ErrorAction SilentlyContinue
 
-    $idLine = ($raw | Select-String -Pattern '^output_tokens \(\d+\):').ToString()
+    $idMatch = $raw | Select-String -Pattern '^output_tokens \(\d+\):'
+    $idLine = if ($idMatch) { $idMatch.ToString() } else { $null }
     if (-not $idLine) {
-        Write-Host "the driver did not produce output tokens:" -ForegroundColor Red
-        Write-Host $rawText
+        Write-Host "the driver did not produce output tokens (exit $driverExit):" -ForegroundColor Red
+        Write-Host ($raw | Out-String)
+        Write-Host $stderrText
         exit 1
     }
     $ids = ($idLine -replace '^output_tokens \(\d+\):\s*', '').Trim()
@@ -93,8 +112,10 @@ try {
     # other id the model produced is shown, including anything unexpected.
     $stopSet = @('151645', '151643')
     $ids = (($ids -split '\s+') | Where-Object { $_ -and ($stopSet -notcontains $_) }) -join ' '
-    $stopLine = ($raw | Select-String -Pattern '^stop_reason:').ToString()
-    $timeLine = ($raw | Select-String -Pattern '^wall_time_seconds:').ToString()
+    $stopMatch = $raw | Select-String -Pattern '^stop_reason:'
+    $stopLine = if ($stopMatch) { $stopMatch.ToString() } else { "" }
+    $timeMatch = $raw | Select-String -Pattern '^wall_time_seconds:'
+    $timeLine = if ($timeMatch) { $timeMatch.ToString() } else { "" }
 
     if ($ShowIds) {
         ($raw | Select-String -Pattern '^prompt_tokens')
