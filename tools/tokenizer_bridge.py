@@ -25,8 +25,7 @@ BPE merge vocabulary plus the same 22 added special tokens (151665 live ids
 total). The artifact reports vocab_size = 151936; that number is the padded
 embedding-matrix width Qwen2.5 configs use (151936 = 151665 rounded up to a
 multiple of 128), not the tokenizer's own live vocabulary size, and it is
-identical in both cached checkpoints' config.json. See the build log in
-D:\\Wizard\\Claude\\Brunel\\ for the full comparison this claim rests on.
+identical in both cached checkpoints' config.json.
 
 Usage
 -----
@@ -81,6 +80,21 @@ DEFAULT_TOKENIZER = Path(
 # looks like one of the tokenizer's own special tokens but is supplied as
 # ordinary user content (must round-trip as plain text, not be swallowed as
 # a control token).
+#
+# Encoded via `encode_ids` -- the function this tool's `encode` command
+# actually ships, which routes through `apply_chat_template` -- rather than
+# a plain `tokenizer(...)` call, so the proof exercises the production path.
+# Because the chat template wraps every case in role markup, the encoded ids
+# no longer decode back to the case text exactly; the proof instead checks
+# containment after `skip_special_tokens=True` decoding (see cmd_roundtrip).
+# A case's text that decodes with the template's own special tokens
+# stripped still contains the case verbatim when the bridge tokenized it as
+# literal text; it does NOT when the bridge instead recognized a
+# special-token-shaped substring inside the case and encoded it as an actual
+# control token, because that substring is then indistinguishable from the
+# template's own scaffolding and is stripped along with it. This is what
+# makes the case at index 8 (the literal `<|im_start|>...<|im_end|>` text)
+# a real proof of the swallow risk rather than a decorative one.
 ROUNDTRIP_CASES: tuple[str, ...] = (
     "Hello, world!",
     "What's on the menu today?",
@@ -117,9 +131,10 @@ def _load_tokenizer(tokenizer_path: Path):
 def encode_ids(tokenizer, prompt: str, system: str | None) -> list[int]:
     """Apply Qwen2.5-Instruct's chat template and return input token ids.
 
-    Mirrors the reference call shape in
-    D:\\Wizard\\Tools\\superslm_spike\\baseline.py (add_generation_prompt=True,
-    return_dict=True) so ids produced here match what the reference
+    Calls `apply_chat_template(messages, add_generation_prompt=True,
+    return_tensors=None, return_dict=True)` -- the same call shape the
+    reference implementation this project's conversion pipeline was
+    validated against uses, so ids produced here match what that reference
     implementation would produce for the same messages.
     """
     if tokenizer.chat_template is None:
@@ -178,9 +193,18 @@ def cmd_roundtrip(args: argparse.Namespace) -> int:
     tokenizer = _load_tokenizer(Path(args.tokenizer))
     failures = []
     for case in ROUNDTRIP_CASES:
-        encoded = tokenizer(case, add_special_tokens=False)["input_ids"]
-        decoded = tokenizer.decode(encoded)
-        ok = decoded == case
+        # Route through encode_ids -- the function this tool's `encode`
+        # command ships, which applies the chat template -- not a bare
+        # tokenizer() call, so this proof exercises the path actually used
+        # in production (Finding 2, Poirot casebook 59d764c). Decoding with
+        # skip_special_tokens=True strips the template's own role markup;
+        # the case text still appears verbatim in what remains unless the
+        # bridge itself swallowed a special-token-shaped substring of the
+        # case into an actual control token, in which case that substring
+        # is stripped too and containment fails.
+        encoded = encode_ids(tokenizer, case, system=None)
+        decoded = tokenizer.decode(encoded, skip_special_tokens=True)
+        ok = case in decoded
         status = "OK  " if ok else "FAIL"
         preview = case if len(case) <= 50 else case[:47] + "..."
         print(f"[{status}] {preview!r}")
