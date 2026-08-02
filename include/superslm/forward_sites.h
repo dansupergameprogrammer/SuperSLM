@@ -546,11 +546,13 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // not discharge and does not block on.
 //
 // All weight matrices are row-major [out_channels, in_channels] (WGT1's own
-// layout, matmul.h). `hidden_size == num_attention_heads * head_dim`; this
-// test-design pass's own fixtures exercise the MHA-degenerate case
-// (`num_key_value_heads == num_attention_heads`, §13 dim 4's own accepted
-// case) only -- GQA grouping is not this sub-slot's own red cell and is
-// unexercised here.
+// layout, matmul.h). `hidden_size == num_attention_heads * head_dim`.
+// `k_weight`/`v_weight` are `[num_key_value_heads * head_dim, hidden_size]`,
+// distinct from `q_weight`/`o_weight`/`gate_weight`/`up_weight`/`down_weight`
+// (each `[hidden_size, hidden_size]` or `[intermediate_size, hidden_size]`/
+// `[hidden_size, intermediate_size]` as already documented below) -- GQA
+// group dispatch, including this shape, is owned by §11 S3.8a (T-1654,
+// D-SLM619/D-SLM623).
 //
 // C28's bias reconciliation (§6.2 step 2's third component, "then C28's bias
 // reconciliation where the site has a BIA1 entry", F-S3-4) is likewise a
@@ -591,12 +593,16 @@ struct LayerWeights {
 	// per-(head, projection), and the reference reads two distinct artifact
 	// keys per head (`kv_landing_reciprocals[f"{prefix}.k_head{head}"]` and
 	// the matching `v_head{head}` entry). Caller-resolved, like every other
-	// field on this struct: `num_heads` entries each (`num_heads ==
-	// hidden_size / head_dim`).
-	const int64_t* kv_landing_r_t_k;  // num_heads
-	const int64_t* kv_landing_e_t_k;  // num_heads
-	const int64_t* kv_landing_r_t_v;  // num_heads
-	const int64_t* kv_landing_e_t_v;  // num_heads
+	// field on this struct: `num_key_value_heads` entries each (T-1654,
+	// S3.8a -- corrected from "num_heads entries each", a transcription
+	// error the MHA-degenerate fixture population never exposed, since
+	// num_heads == num_key_value_heads at every such fixture; the
+	// reference has always read these per KV head, not per query head,
+	// `Tools/superslm_spike/dynamic_engine.py:369-370`).
+	const int64_t* kv_landing_r_t_k;  // num_key_value_heads
+	const int64_t* kv_landing_e_t_k;  // num_key_value_heads
+	const int64_t* kv_landing_r_t_v;  // num_key_value_heads
+	const int64_t* kv_landing_e_t_v;  // num_key_value_heads
 
 	// The D-SLM57 per-head ctx_fold dispatch (§6.2 step 6): WSC1's
 	// `layer{L}.ctx_fold` row for EACH head, applied via ApplyWeightScaleFold
@@ -742,20 +748,31 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // base plus `context_cap * num_heads * head_dim`). `KeyRow`/`ValueRow`
 // return a pointer to `head_dim` contiguous int8 codes at that address;
 // `MutableKeyRow`/`MutableValueRow` return the same address non-const, for
-// the landing write. `workspace`/`layer`/`context_cap`/`num_heads`/
+// the landing write. `workspace`/`layer`/`context_cap`/`num_kv_heads`/
 // `head_dim` are the identical values a caller already has from its own
 // RunLayerLoop call over the same sequence -- no bounds checking is
-// performed here (`position < context_cap` and `kv_head < num_heads` are the
-// caller's own responsibility, exactly as RunLayerLoop's guards already
+// performed here (`position < context_cap` and `kv_head < num_kv_heads` are
+// the caller's own responsibility, exactly as RunLayerLoop's guards already
 // establish before any accessor call it makes).
+//
+// T-1654 (S3.8a): this parameter is named `num_kv_heads`, not `num_heads` --
+// it is always the KV-head count, never the query-head count RunLayerLoop's
+// own `num_heads` local names. The old name invited exactly this sub-slot's
+// own defect: a call site written against a parameter named `num_heads` has
+// every reason to pass the query head count. The arithmetic these four
+// functions perform is unchanged; only the name is corrected.
 const int8_t* KeyRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
-                      size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept;
+                      size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                      int64_t position) noexcept;
 const int8_t* ValueRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
-                        size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept;
-int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
-                       size_t head_dim, size_t kv_head, int64_t position) noexcept;
-int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
-                         size_t head_dim, size_t kv_head, int64_t position) noexcept;
+                        size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                        int64_t position) noexcept;
+int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                       size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                       int64_t position) noexcept;
+int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                         size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                         int64_t position) noexcept;
 
 // --- S3.6: the head and the greedy decode loop (SuperSLM_S3a_WalkingSkeleton_
 // Plan.md §11 S3.6; §9.1; master plan §6.4; C16, D-SLM35 row C16). This is

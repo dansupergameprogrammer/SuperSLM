@@ -809,8 +809,10 @@ namespace {
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
 // one offset formula every KeyRow/ValueRow accessor below shares --
 // per-(layer, head)-major, position-minor.
-inline size_t KvHalfOffset(uint32_t layer, int64_t context_cap, size_t num_heads, size_t head_dim) {
-	return (static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_heads * head_dim) * 2u;
+inline size_t KvHalfOffset(uint32_t layer, int64_t context_cap, size_t num_kv_heads,
+                            size_t head_dim) {
+	return (static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_kv_heads *
+	        head_dim) * 2u;
 }
 inline size_t KvRowOffsetWithinHalf(int64_t context_cap, size_t head_dim, size_t kv_head,
                                      int64_t position) {
@@ -819,32 +821,36 @@ inline size_t KvRowOffsetWithinHalf(int64_t context_cap, size_t head_dim, size_t
 }
 }  // namespace
 
-const int8_t* KeyRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
-                      size_t head_dim, size_t kv_head, int64_t position) noexcept {
+const int8_t* KeyRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                      size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                      int64_t position) noexcept {
 	const int8_t* const kv_base = reinterpret_cast<const int8_t*>(workspace);
-	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_heads, head_dim);
+	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_kv_heads, head_dim);
 	return k_store + KvRowOffsetWithinHalf(context_cap, head_dim, kv_head, position);
 }
 
 const int8_t* ValueRow(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
-                        size_t num_heads, size_t head_dim, size_t kv_head, int64_t position) noexcept {
+                        size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                        int64_t position) noexcept {
 	const int8_t* const kv_base = reinterpret_cast<const int8_t*>(workspace);
-	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_heads, head_dim);
+	const int8_t* const k_store = kv_base + KvHalfOffset(layer, context_cap, num_kv_heads, head_dim);
 	const int8_t* const v_store =
-	    k_store + static_cast<size_t>(context_cap) * num_heads * head_dim;
+	    k_store + static_cast<size_t>(context_cap) * num_kv_heads * head_dim;
 	return v_store + KvRowOffsetWithinHalf(context_cap, head_dim, kv_head, position);
 }
 
-int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
-                       size_t head_dim, size_t kv_head, int64_t position) noexcept {
+int8_t* MutableKeyRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                       size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                       int64_t position) noexcept {
 	return const_cast<int8_t*>(
-	    KeyRow(workspace, layer, context_cap, num_heads, head_dim, kv_head, position));
+	    KeyRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
 }
 
-int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap, size_t num_heads,
-                         size_t head_dim, size_t kv_head, int64_t position) noexcept {
+int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
+                         size_t num_kv_heads, size_t head_dim, size_t kv_head,
+                         int64_t position) noexcept {
 	return const_cast<int8_t*>(
-	    ValueRow(workspace, layer, context_cap, num_heads, head_dim, kv_head, position));
+	    ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
 }
 
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
@@ -854,13 +860,6 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
                                  size_t workspace_size, std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state) {
-	// T-1654 (S3.8a), commit 1 of the sub-slot's phased sequence: the
-	// parameter is accepted here and threaded through the signature; it is
-	// not yet read by any guard or sizing formula in this commit. The guard
-	// (KvHeadGeometryMismatch), the corrected K/V workspace sizing formula,
-	// and the three re-indexed per-layer call sites land together in the
-	// sub-slot's behavioral commit, on top of this mechanical one.
-	(void)num_key_value_heads;
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
 	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
@@ -884,10 +883,6 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	// and MlpActSite already do in this same translation unit. The required
 	// size is therefore computed from the parameters rather than chosen here.
 	//
-	// The signature carries no `num_key_value_heads`, so the MHA-degenerate
-	// case is not a fixture choice this body is free to make -- it is forced by
-	// the declared surface, and a GQA loop needs a parameter that does not
-	// exist yet.
 	// Significant 1 (Poirot e4b398c review): this is a fact about the CFG1
 	// geometry the caller supplied (`hidden_size` is not an exact multiple of
 	// `head_dim`, or `head_dim == 0`), never a fact about `workspace` --
@@ -898,14 +893,39 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
 		return SslmForwardStatus::HeadDimGeometryMismatch;
 	}
+	// T-1654 (S3.8a): `num_key_value_heads` gets the identical treatment as
+	// `num_heads` above, for the identical reason -- a caller-suppliable
+	// scalar is untrusted at this function's own boundary regardless of what
+	// any other caller (the loader's `ValidateConfigGeometryJoin`) already
+	// checked. Checked immediately after `HeadDimGeometryMismatch`, on the
+	// query head count that check has just proven in-domain, and before
+	// `kv_bytes_needed` is formed below (design record §4).
+	if (num_key_value_heads == 0 || num_key_value_heads > num_heads ||
+	    num_heads % num_key_value_heads != 0) {
+		return SslmForwardStatus::KvHeadGeometryMismatch;
+	}
+	// Loop-invariant across every layer and every token, exactly like
+	// `num_heads` itself. Integer division is exact by construction: the
+	// guard immediately above has just proven `num_heads % num_key_value_heads
+	// == 0`.
+	const size_t group = num_heads / num_key_value_heads;
 	// The size product itself, overflow-guarded factor by factor (the same
 	// `product > SIZE_MAX / factor` idiom model.cpp's tensor-shape check
 	// already uses) -- `context_cap` is now known positive, but the product
 	// of four caller-supplied dimensions can still overflow size_t for a
 	// sufficiently large one, and an overflowed product would silently
 	// under-size the same guard C2/C3 exist to keep sound.
+	//
+	// T-1654 (S3.8a): the third factor is `num_key_value_heads`, not
+	// `num_heads` -- the K/V store holds one row per KV head per position
+	// per layer per half (K or V), not one row per query head (§9.4's own
+	// design intent, matching `KeyRow`/`ValueRow`'s own already-correct
+	// addressing). At `num_key_value_heads == num_heads` (every existing
+	// fixture), the two factors are the same number, so this substitution
+	// changes nothing the pre-existing suite already computes.
 	size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
-	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_heads, head_dim, 2u};
+	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads,
+	                             head_dim, 2u};
 	for (size_t factor : kv_factors) {
 		if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
 			return SslmForwardStatus::InvalidContextCap;
@@ -1114,16 +1134,22 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// `position`, never a whole-hidden_size flat write (§9.4's real
 		// per-(layer, head)-major, position-minor layout).
 		{
-			std::vector<int64_t> kacc(hidden_size), vacc(hidden_size);
-			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, hidden_size,
+			// T-1654 (S3.8a): the K/V landing write's loop bound narrows from
+			// `num_heads` to `num_key_value_heads` -- this is a resize, not a
+			// substitution, because `kacc`/`vacc` only have `kv_hidden_size`
+			// elements once the GEMM calls below are corrected; there is no `h`
+			// beyond `num_key_value_heads` to index.
+			const size_t kv_hidden_size = num_key_value_heads * head_dim;
+			std::vector<int64_t> kacc(kv_hidden_size), vacc(kv_hidden_size);
+			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size,
 			                      kacc.data());
-			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, hidden_size,
+			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
 			                      vacc.data());
-			for (size_t h = 0; h < num_heads; ++h) {
-				int8_t* const k_row =
-				    MutableKeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
-				int8_t* const v_row =
-				    MutableValueRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+			for (size_t h = 0; h < num_key_value_heads; ++h) {
+				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
+				                                    num_key_value_heads, head_dim, h, position);
+				int8_t* const v_row = MutableValueRow(workspace, l, context_cap,
+				                                      num_key_value_heads, head_dim, h, position);
 				for (size_t d = 0; d < head_dim; ++d) {
 					const size_t i = h * head_dim + d;
 					const int64_t kf = ApplyWeightScaleFold(kacc[i], lw.proj_identity,
@@ -1155,8 +1181,14 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 			                   rope_tables, q_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
+			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
+			// reference's own grouping (`dynamic_engine.py:410`,
+			// `kv_head = head // group`). This loop's own bound stays `num_heads`
+			// (`q_rot` is query-head-sized); only the K accessor's index and its
+			// own size argument change.
+			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
-			    KeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
 			                   k_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
@@ -1169,8 +1201,13 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// bytes at position 0); under the real layout it would overwrite
 		// EVERY committed position's row with this token's own rotation.
 		for (size_t h = 0; h < num_heads; ++h) {
-			int8_t* const k_row =
-			    MutableKeyRow(workspace, l, context_cap, num_heads, head_dim, h, position);
+			// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
+			// same KV row is written once per query head sharing it (redundant
+			// but sound, design record §6.2: every read above happens before
+			// any write here, so no partially-rotated store is ever observed).
+			const size_t kv_head = h / group;
+			int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
+			                                    head_dim, kv_head, position);
 			for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
 		}
 
@@ -1189,15 +1226,19 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			std::vector<int64_t> ctx_wide(hidden_size);
 			for (size_t h = 0; h < num_heads; ++h) {
 				std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
+				// T-1654 (S3.8a): `h / group`, the reference's own grouping
+				// (`dynamic_engine.py:410-419`) -- this loop's own bound stays
+				// `num_heads` (`ctx_wide`/`ctx_fold_identity` are query-head-sized).
+				const size_t kv_head = h / group;
 				// S3.7: the score row reads `width` contiguous rows of this
-				// head's own K store, starting at position 0 (the store's
+				// KV head's own K store, starting at position 0 (the store's
 				// position-minor layout makes positions 0..width-1 for one
 				// head contiguous) -- q·K, never q·V (D-SLM516/D-SLM503's A3
 				// mutant, which this closes the K side of by construction:
 				// reading the wrong store here is exactly what a k_weight
 				// mutation cell (§3 Cell 1) would fail to distinguish).
 				const int8_t* const k_rows_base =
-				    KeyRow(workspace, l, context_cap, num_heads, head_dim, h, 0);
+				    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
 				                      scores.data());
 				if (!SoftmaxRowQ15(scores.data(), width, lw.q_ln2, lw.q_b_iexp, lw.q_c_iexp,
@@ -1211,7 +1252,7 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
 				}
 				const int8_t* const v_rows_base =
-				    ValueRow(workspace, l, context_cap, num_heads, head_dim, h, 0);
+				    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
 				GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim,
 				                      ctx_acc.data());
 				for (size_t d = 0; d < head_dim; ++d) {

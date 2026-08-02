@@ -13155,6 +13155,150 @@ struct CriticalOneFixture {
 	CriticalOneFixture& operator=(CriticalOneFixture&&) = delete;
 };
 
+// D-SLM624 (T-1654, S3.8a): GqaGroupingFixture -- num_attention_heads=4,
+// num_key_value_heads=2 (group=2), chosen so head // group ({0,1}->0, {2,3}->1)
+// and head % num_key_value_heads ({0,2}->0, {1,3}->1) disagree (design record
+// §9 item 3). k_weight/v_weight are [4,8] (num_key_value_heads * head_dim,
+// hidden_size) row-SELECTOR matrices, not a full identity (which cannot
+// discriminate): KV head 0's two rows (0,1) each select one of input channels
+// {0,1}; KV head 1's two rows (2,3) each select one of input channels {2,3} --
+// distinct, non-degenerate content per KV head by construction (different
+// rows of a [4,8] matrix, so a mutation confined to one KV head's rows cannot
+// reach the other's). K and V each get their OWN backing array (not aliased)
+// so 3a/3b can mutate one tensor without touching the other (D-SLM624's own
+// isolation ruling). Every other weight matrix is the hidden_size=8
+// generalization of TwoLayerFixture's own identity2x2 recipe, on the same
+// canonical scale and the same tuned mlp_act_site_constant (e=-96) that
+// recipe already needed to stay inside C29's chain-input domain -- reused
+// rather than re-derived, since the drift the tuning corrects lives entirely
+// in one site constant's own exponent, independent of width (TwoLayerFixture's
+// own comment above).
+struct GqaGroupingFixture {
+	static constexpr int32_t kContextCap = 16;
+
+	superslm::SslmModelView view;  // owns the backing store rope_tables points into
+	superslm::LayerWeights layers[2];
+	// T-1654/D-SLM624: this fixture's own geometry has 2 KV heads, so the
+	// per-(head,projection) landing arrays have 2 entries each -- the landing
+	// SCALE is the same canonical (r_t, e_t=0) pair at both KV heads (only the
+	// WEIGHT content below discriminates between them; §8.1's landing scale and
+	// the K/V weight tensors are independent knobs).
+	int64_t kv_landing_r_t_arr[2];
+	int64_t kv_landing_e_t_arr[2] = {0, 0};
+	// Query-head-sized (4 entries): unchanged under GQA (design record §3).
+	int32_t ctx_fold_identity_arr[4] = {1, 1, 1, 1};
+	int32_t ctx_fold_mult_arr[4] = {0, 0, 0, 0};
+	int32_t ctx_fold_shift_arr[4] = {0, 0, 0, 0};
+	int32_t norm_gain[8] = {16384, 16384, 16384, 16384, 16384, 16384, 16384, 16384};
+	// q_weight/o_weight/gate_weight/up_weight/down_weight: the hidden_size=8
+	// generalization of TwoLayerFixture's identity2x2 -- a true 8x8 identity,
+	// row-major [out_channels, in_channels].
+	int8_t identity8x8[64] = {
+	    1, 0, 0, 0, 0, 0, 0, 0,
+	    0, 1, 0, 0, 0, 0, 0, 0,
+	    0, 0, 1, 0, 0, 0, 0, 0,
+	    0, 0, 0, 1, 0, 0, 0, 0,
+	    0, 0, 0, 0, 1, 0, 0, 0,
+	    0, 0, 0, 0, 0, 1, 0, 0,
+	    0, 0, 0, 0, 0, 0, 1, 0,
+	    0, 0, 0, 0, 0, 0, 0, 1,
+	};
+	// k_weight/v_weight, [num_key_value_heads * head_dim, hidden_size] = [4, 8]:
+	// the top 4 rows of an 8x8 identity -- KV head 0 (rows 0-1) selects input
+	// channels {0,1}; KV head 1 (rows 2-3) selects input channels {2,3}. Two
+	// SEPARATE arrays (not the same buffer as each other, and not aliased to
+	// `identity8x8`), so a per-layer mutation to one is never visible through
+	// the other or through any query-side tensor.
+	int8_t k_selector4x8[32] = {
+	    1, 0, 0, 0, 0, 0, 0, 0,
+	    0, 1, 0, 0, 0, 0, 0, 0,
+	    0, 0, 1, 0, 0, 0, 0, 0,
+	    0, 0, 0, 1, 0, 0, 0, 0,
+	};
+	int8_t v_selector4x8[32] = {
+	    1, 0, 0, 0, 0, 0, 0, 0,
+	    0, 1, 0, 0, 0, 0, 0, 0,
+	    0, 0, 1, 0, 0, 0, 0, 0,
+	    0, 0, 0, 1, 0, 0, 0, 0,
+	};
+
+	GqaGroupingFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		GqaGroupingFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 8;
+		spec.num_hidden_layers = 2;
+		spec.num_attention_heads = 4;
+		spec.num_key_value_heads = 2;
+		spec.head_dim = 2;
+		spec.intermediate_size = 8;
+		spec.context_cap = GqaGroupingFixture::kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		std::vector<int64_t> cos_flat(GqaGroupingFixture::kContextCap, INT64_C(1073741824));
+		std::vector<int64_t> sin_flat(GqaGroupingFixture::kContextCap, INT64_C(0));
+		FixtureSection rope = MakeRop1SectionMultiRow(
+		    /*context_cap=*/GqaGroupingFixture::kContextCap, /*pairs=*/1, cos_flat.data(),
+		    sin_flat.data());
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "GqaGroupingFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		f.kv_landing_r_t_arr[1] = r_t;
+		for (int l = 0; l < 2; ++l) {
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain;
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.identity8x8;
+			lw.k_weight = f.k_selector4x8;
+			lw.v_weight = f.v_selector4x8;
+			lw.o_weight = f.identity8x8;
+			lw.proj_identity = 1;
+			lw.proj_mult = 0;
+			lw.proj_shift = 0;
+			lw.q_site_constant = canonical;
+			lw.o_site_constant = canonical;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			lw.q_ln2 = INT64_C(2081104);
+			lw.q_b_iexp = INT64_C(4062246);
+			lw.q_c_iexp = INT64_C(8649804928567);
+			lw.mlp_norm_gain = f.norm_gain;
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.identity8x8;
+			lw.up_weight = f.identity8x8;
+			lw.down_weight = f.identity8x8;
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+			lw.down_site_constant = canonical;
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+
+	GqaGroupingFixture(const GqaGroupingFixture&) = delete;
+	GqaGroupingFixture& operator=(const GqaGroupingFixture&) = delete;
+	GqaGroupingFixture(GqaGroupingFixture&&) = delete;
+	GqaGroupingFixture& operator=(GqaGroupingFixture&&) = delete;
+};
+
 }  // namespace
 
 // Regression guard for D-SLM487/T-1403: a `TwoLayerFixture` built by
@@ -13695,28 +13839,348 @@ static void TestRunLayerLoopKvCapacityExhaustedFiresAtGroupGreaterThanOneBoundar
 }
 
 // D-SLM624 (T-1654, S3.8a): the grouping/discrimination cell, 3a/3b, and its boundary-accept
-// companion 4a. GqaGroupingFixture and its calibration are built and measured once D1-D6 and the
-// per-layer re-indexing (design record §6.1-§6.3) land -- commit 3 of this sub-slot's phased
-// sequence (D-SLM625's mitigation for the 77-site scrub). Executing these against the pre-fix
-// engine would read past GqaGroupingFixture's own GQA-shaped (kv-head-sized) k_weight/v_weight
-// buffers, which the pre-fix per-layer body indexes as if they were query-head-sized -- undefined
-// behavior, not merely a wrong answer -- so no body is landed here ahead of the fix that makes the
-// buffer shape and the read shape agree (test design record §1, §6).
+// companion 4a. All three drive `GqaGroupingFixture` (Â§6 above) directly through
+// `RunLayerLoop`, one whole token per call (the same "one whole token" composition
+// `RunOneWholeTokenDirect` already establishes) -- the mutation-differential pattern is baseline
+// vs. an INDEPENDENT mutant fixture, the mutation applied AFTER the shared unmutated token(s)'
+// own landing and BEFORE the token under comparison's own call, so every position the comparison
+// call attends to that is NOT the mutated KV head's own row is bit-identical between baseline and
+// mutant by construction (T-1418's own established convention, Â§11 S3.7).
+//
+// The assertion is on the S3.1a trace instrument's own `layer0.attn_ctx` record (per-query-head
+// context accumulate, before o_proj/residual/MLP) rather than on the fully composed committed
+// `seq.hidden_codes` -- measured directly (`StandardsDocument` Â§5.4): this fixture's own
+// `mlp_act_site_constant` (reused from `TwoLayerFixture`'s tuning, Â§6 above) saturates the MLP
+// half to an identical extreme regardless of the attention-side mutation once the composition
+// reaches `hidden_size=8`, which would make an assertion on the final committed codes pass
+// vacuously (both baseline and mutant collapse to the same clamped output downstream of the very
+// mechanism under test). `attn_ctx` is the site this sub-slot's own grouping mechanism (the
+// `h / group` substitution, Â§6.2/Â§6.3) directly computes into, and it is where cell 1's own
+// existing convention (`TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite` and the
+// ctx_fold join cell) already reads a trace record rather than the final commit -- not a novel
+// technique, this sub-slot's own application of it. Values below are measured-from-this-
+// implementation regression pins (D-SLM498/D-SLM533), not independently derived oracles: hand-
+// deriving eleven composed integer kernels' output by construction is exactly the "confident
+// by-construction reasoning" the standard warns produces silent modeling errors, so they were
+// obtained by building this exact fixture and executing it, once D1-D6 and the per-layer
+// re-indexing (Â§6.1-Â§6.3) had landed.
+
+// 3a: a Î´=+1 mutation on KV head 0's `k_weight` alone (`v_selector4x8[9]`, the second row's
+// diagonal entry -- KV head 0's OWN row, reading input channel 1), `v_weight` unmutated. Two
+// unmutated tokens establish a real width-2 attention (token A lands at position 0; token B, the
+// call under comparison, attends to both positions) -- `token_a`/`token_b` chosen with distinct,
+// non-uniform per-channel magnitude so RmsNorm's own normalization does not drive every channel to
+// the same saturated extreme (a uniform-magnitude row normalizes to an identical code at every
+// channel regardless of which channel a mutation lands on, which cannot discriminate).
 static void TestRunLayerLoopGqaGroupingKAloneMovesOnlySharedQueryHeads() {
-	// TODO(build seat, once D1-D6 land and GqaGroupingFixture's calibration is measured by execution):
-	// GqaGroupingFixture baseline;
-	// ... RunGreedyDecodeLoop(baseline) -> baseline_tokens/baseline_logits ...
-	// GqaGroupingFixture mutant; mutant.layers[L].k_weight[<kv-head-0 element>] += 1;
-	// ... RunGreedyDecodeLoop(mutant) -> mutant_tokens/mutant_logits ...
-	// CHECK_MSG(<heads 0,1 differ by the measured exact signed delta>, ...);
-	// CHECK_MSG(<heads 2,3 byte-identical to baseline>, ...);
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	constexpr int64_t kCallContextCap = 3;
+	constexpr size_t kWorkspaceSize = 2 * 3 * 2 * 2 * 2;  // layers*cap*kv_heads*head_dim*halves
+
+	int8_t token_a[8] = {5, -1, 5, -1, 5, -1, 5, -1};
+	int8_t token_b[8] = {4, -2, 4, -2, 4, -2, 4, -2};
+
+	// Drives ONE whole token (both layers, in one call) -- the same composition
+	// `RunOneWholeTokenDirect` (Â§11 S3.7) uses, at this cell's own hidden_size=8/num_key_value_
+	// heads=2 geometry. `hidden_scale` is reset to the same starting (m,e) every call, matching
+	// `RunOneWholeTokenDirect`'s own convention: each call embeds a FRESH token, never the previous
+	// call's own committed residual scale.
+	auto RunToken = [&](GqaGroupingFixture& fx, SequenceLayerState& seq, const int8_t* token,
+	                     uint8_t* ws, SslmTraceHookState* hook) -> SslmForwardStatus {
+		for (int i = 0; i < 8; ++i) seq.hidden_codes[i] = token[i];
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		return superslm::RunLayerLoop(seq, fx.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		                               /*hidden_size=*/8, /*head_dim=*/2, /*num_key_value_heads=*/2,
+		                               /*intermediate_size=*/8, kCallContextCap, fx.view.rope_tables,
+		                               ws, kWorkspaceSize, /*site_prefix=*/{}, /*token_index=*/0, hook);
+	};
+
+	// Finds `layer0.attn_ctx`'s own x_int row (the per-query-head context accumulate, hidden_size=8
+	// wide: [head0.d0, head0.d1, head1.d0, head1.d1, head2.d0, head2.d1, head3.d0, head3.d1]) in a
+	// trace sink -- exactly one such record per call, since only one RunLayerLoop call is hooked at a
+	// time and layer0's own attn_ctx site fires once per call.
+	auto FindLayer0Ctx = [](const std::vector<ChainTraceSinkRecord>& sink) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == "layer0.attn_ctx") return &r;
+		}
+		return nullptr;
+	};
+
+	// Baseline.
+	GqaGroupingFixture baseline;
+	int8_t baseline_codes[8] = {};
+	SequenceLayerState baseline_seq;
+	baseline_seq.hidden_codes = baseline_codes;
+	uint8_t baseline_ws[kWorkspaceSize] = {};
+	auto st = RunToken(baseline, baseline_seq, token_a, baseline_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3a baseline token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	std::vector<ChainTraceSinkRecord> baseline_sink;
+	SslmTraceHookState baseline_hook;
+	superslm::SslmSetTraceHook(baseline_hook, &ChainTraceSinkHookFn, &baseline_sink);
+	st = RunToken(baseline, baseline_seq, token_b, baseline_ws, &baseline_hook);
+	superslm::SslmSetTraceHook(baseline_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3a baseline token B status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* baseline_ctx = FindLayer0Ctx(baseline_sink);
+	CHECK_MSG(baseline_ctx != nullptr && baseline_ctx->x_int.size() == 8,
+	          "cell 3a baseline: layer0.attn_ctx trace record missing or wrong width");
+	if (baseline_ctx == nullptr || baseline_ctx->x_int.size() != 8) return;
+
+	// Mutant: an INDEPENDENT fixture, token A identical (so token A's own landed K/V, what token B
+	// attends to at position 0, is bit-identical between baseline and mutant), then KV head 0's
+	// `k_weight` mutated AFTER token A's own call and BEFORE token B's.
+	GqaGroupingFixture mutant;
+	int8_t mutant_codes[8] = {};
+	SequenceLayerState mutant_seq;
+	mutant_seq.hidden_codes = mutant_codes;
+	uint8_t mutant_ws[kWorkspaceSize] = {};
+	st = RunToken(mutant, mutant_seq, token_a, mutant_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3a mutant token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	mutant.k_selector4x8[9] = INT8_C(2);  // KV head 0's own row 1, col 1: 1 -> 2 (delta +1)
+	std::vector<ChainTraceSinkRecord> mutant_sink;
+	SslmTraceHookState mutant_hook;
+	superslm::SslmSetTraceHook(mutant_hook, &ChainTraceSinkHookFn, &mutant_sink);
+	st = RunToken(mutant, mutant_seq, token_b, mutant_ws, &mutant_hook);
+	superslm::SslmSetTraceHook(mutant_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3a mutant token B status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* mutant_ctx = FindLayer0Ctx(mutant_sink);
+	CHECK_MSG(mutant_ctx != nullptr && mutant_ctx->x_int.size() == 8,
+	          "cell 3a mutant: layer0.attn_ctx trace record missing or wrong width");
+	if (mutant_ctx == nullptr || mutant_ctx->x_int.size() != 8) return;
+
+	// Measured, D1-D6 landed: heads 0,1 (indices 0-3, mapped to KV head 0 under h/group at group=2)
+	// move by an exact -368 on their own dim-1 element (the mutated row); their dim-0 element (the
+	// OTHER row of KV head 0, untouched) does not move. Heads 2,3 (indices 4-7, mapped to KV head 1)
+	// are byte-identical to baseline -- an unmutated V-side and an unmutated OTHER KV head cannot
+	// supply the movement, so any movement observed on heads 0,1 is attributable to K-routing alone
+	// through KV head 0 (Charpy delta re-temper Â§3, isolation confirmed by construction of the call
+	// graph independent of this fixture's own numbers).
+	const int64_t* b = baseline_ctx->x_int.data();
+	const int64_t* m = mutant_ctx->x_int.data();
+	CHECK_MSG(m[0] == b[0] && m[2] == b[2],
+	          "cell 3a: heads 0,1's own dim-0 element (KV head 0's OTHER row, unmutated) moved -- "
+	          "want byte-identical to baseline (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[0], (long long)b[2], (long long)m[0], (long long)m[2]);
+	CHECK_MSG(m[1] == b[1] - 368 && m[3] == b[3] - 368,
+	          "cell 3a: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the "
+	          "measured exact delta -368 -- baseline (%lld,%lld), want (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[1], (long long)b[3], (long long)(b[1] - 368), (long long)(b[3] - 368),
+	          (long long)m[1], (long long)m[3]);
+	CHECK_MSG(m[4] == b[4] && m[5] == b[5] && m[6] == b[6] && m[7] == b[7],
+	          "cell 3a: heads 2,3 (mapped to KV head 1, untouched by this mutation) must be "
+	          "byte-identical to baseline -- baseline (%lld,%lld,%lld,%lld), got (%lld,%lld,%lld,%lld)",
+	          (long long)b[4], (long long)b[5], (long long)b[6], (long long)b[7], (long long)m[4],
+	          (long long)m[5], (long long)m[6], (long long)m[7]);
 }
-// 3b: symmetric on v_weight alone, k_weight unmutated. Same structure, same TODO.
-static void TestRunLayerLoopGqaGroupingVAloneMovesOnlySharedQueryHeads() { /* TODO, symmetric to 3a */ }
-// 4a: boundary-accept, at context_length == context_cap - 1 on the same GqaGroupingFixture,
-// extending 3a/3b's own baseline/mutated pattern to the KV store's own maximal-extent boundary
-// position (design record §9 item 4, Mendeleev delta coverage audit finding 1). Same TODO shape.
-static void TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne() { /* TODO, mirrors 3a/3b at context_length = context_cap - 1 */ }
+
+// 3b: symmetric on `v_weight` alone (`v_selector4x8[9]`), `k_weight` unmutated. Same construction
+// as 3a; only the mutated array and the measured delta differ.
+static void TestRunLayerLoopGqaGroupingVAloneMovesOnlySharedQueryHeads() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	constexpr int64_t kCallContextCap = 3;
+	constexpr size_t kWorkspaceSize = 2 * 3 * 2 * 2 * 2;
+
+	int8_t token_a[8] = {5, -1, 5, -1, 5, -1, 5, -1};
+	int8_t token_b[8] = {4, -2, 4, -2, 4, -2, 4, -2};
+
+	auto RunToken = [&](GqaGroupingFixture& fx, SequenceLayerState& seq, const int8_t* token,
+	                     uint8_t* ws, SslmTraceHookState* hook) -> SslmForwardStatus {
+		for (int i = 0; i < 8; ++i) seq.hidden_codes[i] = token[i];
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		return superslm::RunLayerLoop(seq, fx.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		                               /*hidden_size=*/8, /*head_dim=*/2, /*num_key_value_heads=*/2,
+		                               /*intermediate_size=*/8, kCallContextCap, fx.view.rope_tables,
+		                               ws, kWorkspaceSize, /*site_prefix=*/{}, /*token_index=*/0, hook);
+	};
+	auto FindLayer0Ctx = [](const std::vector<ChainTraceSinkRecord>& sink) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == "layer0.attn_ctx") return &r;
+		}
+		return nullptr;
+	};
+
+	GqaGroupingFixture baseline;
+	int8_t baseline_codes[8] = {};
+	SequenceLayerState baseline_seq;
+	baseline_seq.hidden_codes = baseline_codes;
+	uint8_t baseline_ws[kWorkspaceSize] = {};
+	auto st = RunToken(baseline, baseline_seq, token_a, baseline_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3b baseline token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	std::vector<ChainTraceSinkRecord> baseline_sink;
+	SslmTraceHookState baseline_hook;
+	superslm::SslmSetTraceHook(baseline_hook, &ChainTraceSinkHookFn, &baseline_sink);
+	st = RunToken(baseline, baseline_seq, token_b, baseline_ws, &baseline_hook);
+	superslm::SslmSetTraceHook(baseline_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3b baseline token B status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* baseline_ctx = FindLayer0Ctx(baseline_sink);
+	CHECK_MSG(baseline_ctx != nullptr && baseline_ctx->x_int.size() == 8,
+	          "cell 3b baseline: layer0.attn_ctx trace record missing or wrong width");
+	if (baseline_ctx == nullptr || baseline_ctx->x_int.size() != 8) return;
+
+	GqaGroupingFixture mutant;
+	int8_t mutant_codes[8] = {};
+	SequenceLayerState mutant_seq;
+	mutant_seq.hidden_codes = mutant_codes;
+	uint8_t mutant_ws[kWorkspaceSize] = {};
+	st = RunToken(mutant, mutant_seq, token_a, mutant_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3b mutant token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	mutant.v_selector4x8[9] = INT8_C(2);  // KV head 0's own row 1, col 1: 1 -> 2 (delta +1)
+	std::vector<ChainTraceSinkRecord> mutant_sink;
+	SslmTraceHookState mutant_hook;
+	superslm::SslmSetTraceHook(mutant_hook, &ChainTraceSinkHookFn, &mutant_sink);
+	st = RunToken(mutant, mutant_seq, token_b, mutant_ws, &mutant_hook);
+	superslm::SslmSetTraceHook(mutant_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3b mutant token B status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* mutant_ctx = FindLayer0Ctx(mutant_sink);
+	CHECK_MSG(mutant_ctx != nullptr && mutant_ctx->x_int.size() == 8,
+	          "cell 3b mutant: layer0.attn_ctx trace record missing or wrong width");
+	if (mutant_ctx == nullptr || mutant_ctx->x_int.size() != 8) return;
+
+	// Measured, D1-D6 landed: heads 0,1 move by an exact -753986 on their own dim-1 element; dim-0
+	// unmoved; heads 2,3 byte-identical to baseline -- an unmutated K-side and an unmutated OTHER KV
+	// head cannot supply the movement, so any movement observed on heads 0,1 is attributable to
+	// V-routing alone through KV head 0.
+	const int64_t* b = baseline_ctx->x_int.data();
+	const int64_t* m = mutant_ctx->x_int.data();
+	CHECK_MSG(m[0] == b[0] && m[2] == b[2],
+	          "cell 3b: heads 0,1's own dim-0 element (KV head 0's OTHER row, unmutated) moved -- "
+	          "want byte-identical to baseline (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[0], (long long)b[2], (long long)m[0], (long long)m[2]);
+	CHECK_MSG(m[1] == b[1] - 753986 && m[3] == b[3] - 753986,
+	          "cell 3b: heads 0,1's own dim-1 element (KV head 0's mutated row) did not move by the "
+	          "measured exact delta -753986 -- baseline (%lld,%lld), want (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[1], (long long)b[3], (long long)(b[1] - 753986), (long long)(b[3] - 753986),
+	          (long long)m[1], (long long)m[3]);
+	CHECK_MSG(m[4] == b[4] && m[5] == b[5] && m[6] == b[6] && m[7] == b[7],
+	          "cell 3b: heads 2,3 (mapped to KV head 1, untouched by this mutation) must be "
+	          "byte-identical to baseline -- baseline (%lld,%lld,%lld,%lld), got (%lld,%lld,%lld,%lld)",
+	          (long long)b[4], (long long)b[5], (long long)b[6], (long long)b[7], (long long)m[4],
+	          (long long)m[5], (long long)m[6], (long long)m[7]);
+}
+
+// 4a: boundary-accept, closing the coverage audit's dim-4 finding (D-SLM624). `kCallContextCap=2`
+// -- the smallest cap that admits a real group>1 boundary -- so the SECOND token lands at
+// `context_length == context_cap - 1` by construction: the store's own maximal-extent boundary
+// row, not an interior position with slack either side. Same construction and same mutation
+// (`v_selector4x8`) as 3b, re-driven at this smaller, tightly-sized workspace -- an addressing
+// defect specific to the boundary (reading or writing past the declared `kv_bytes_needed`) would
+// corrupt this tightly-sized workspace where cell 3b's own larger-cap workspace has slack to
+// absorb it silently, per the design record's own Â§9 item 4 reasoning (`KvRowOffsetWithinHalf`'s
+// `kv_head` and `position` terms are additive with no cross term, so a defect at this boundary
+// specific to `group > 1` could only come from the re-indexing itself -- exactly what this cell
+// exercises). Measured: identical numeric delta to cell 3b (the same computation, width=2, at
+// position 1) -- expected, since the claim under test here is addressing safety at the boundary,
+// not a new arithmetic outcome.
+static void TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	constexpr int64_t kCallContextCap = 2;
+	constexpr size_t kWorkspaceSize = 2 * 2 * 2 * 2 * 2;
+
+	int8_t token_a[8] = {5, -1, 5, -1, 5, -1, 5, -1};
+	int8_t token_b[8] = {4, -2, 4, -2, 4, -2, 4, -2};
+
+	auto RunToken = [&](GqaGroupingFixture& fx, SequenceLayerState& seq, const int8_t* token,
+	                     uint8_t* ws, SslmTraceHookState* hook) -> SslmForwardStatus {
+		for (int i = 0; i < 8; ++i) seq.hidden_codes[i] = token[i];
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		return superslm::RunLayerLoop(seq, fx.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		                               /*hidden_size=*/8, /*head_dim=*/2, /*num_key_value_heads=*/2,
+		                               /*intermediate_size=*/8, kCallContextCap, fx.view.rope_tables,
+		                               ws, kWorkspaceSize, /*site_prefix=*/{}, /*token_index=*/0, hook);
+	};
+	auto FindLayer0Ctx = [](const std::vector<ChainTraceSinkRecord>& sink) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == "layer0.attn_ctx") return &r;
+		}
+		return nullptr;
+	};
+
+	GqaGroupingFixture baseline;
+	int8_t baseline_codes[8] = {};
+	SequenceLayerState baseline_seq;
+	baseline_seq.hidden_codes = baseline_codes;
+	uint8_t baseline_ws[kWorkspaceSize] = {};
+	auto st = RunToken(baseline, baseline_seq, token_a, baseline_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 4a baseline token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	CHECK_MSG(baseline_seq.context_length == kCallContextCap - 1,
+	          "cell 4a baseline: context_length == %lld after token A, want %lld (== context_cap - 1, "
+	          "the boundary position this cell's own second call lands at)",
+	          (long long)baseline_seq.context_length, (long long)(kCallContextCap - 1));
+	std::vector<ChainTraceSinkRecord> baseline_sink;
+	SslmTraceHookState baseline_hook;
+	superslm::SslmSetTraceHook(baseline_hook, &ChainTraceSinkHookFn, &baseline_sink);
+	st = RunToken(baseline, baseline_seq, token_b, baseline_ws, &baseline_hook);
+	superslm::SslmSetTraceHook(baseline_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "cell 4a baseline token B (at the context_cap boundary) status == %s, want Ok -- the "
+	          "forward pass must accept one more token at position == context_cap - 1",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* baseline_ctx = FindLayer0Ctx(baseline_sink);
+	CHECK_MSG(baseline_ctx != nullptr && baseline_ctx->x_int.size() == 8,
+	          "cell 4a baseline: layer0.attn_ctx trace record missing or wrong width");
+	if (baseline_ctx == nullptr || baseline_ctx->x_int.size() != 8) return;
+
+	GqaGroupingFixture mutant;
+	int8_t mutant_codes[8] = {};
+	SequenceLayerState mutant_seq;
+	mutant_seq.hidden_codes = mutant_codes;
+	uint8_t mutant_ws[kWorkspaceSize] = {};
+	st = RunToken(mutant, mutant_seq, token_a, mutant_ws, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 4a mutant token A status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	mutant.v_selector4x8[9] = INT8_C(2);  // KV head 0's own row 1, col 1: 1 -> 2 (delta +1)
+	std::vector<ChainTraceSinkRecord> mutant_sink;
+	SslmTraceHookState mutant_hook;
+	superslm::SslmSetTraceHook(mutant_hook, &ChainTraceSinkHookFn, &mutant_sink);
+	st = RunToken(mutant, mutant_seq, token_b, mutant_ws, &mutant_hook);
+	superslm::SslmSetTraceHook(mutant_hook, nullptr, nullptr);
+	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 4a mutant token B (boundary) status == %s, want Ok",
+	          SslmForwardStatusName(st));
+	const ChainTraceSinkRecord* mutant_ctx = FindLayer0Ctx(mutant_sink);
+	CHECK_MSG(mutant_ctx != nullptr && mutant_ctx->x_int.size() == 8,
+	          "cell 4a mutant: layer0.attn_ctx trace record missing or wrong width");
+	if (mutant_ctx == nullptr || mutant_ctx->x_int.size() != 8) return;
+
+	const int64_t* b = baseline_ctx->x_int.data();
+	const int64_t* m = mutant_ctx->x_int.data();
+	CHECK_MSG(m[0] == b[0] && m[2] == b[2],
+	          "cell 4a: heads 0,1's own dim-0 element moved at the boundary -- want byte-identical "
+	          "to baseline (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[0], (long long)b[2], (long long)m[0], (long long)m[2]);
+	CHECK_MSG(m[1] == b[1] - 753986 && m[3] == b[3] - 753986,
+	          "cell 4a: heads 0,1's own dim-1 element did not move by the measured exact delta "
+	          "-753986 at the boundary -- baseline (%lld,%lld), want (%lld,%lld), got (%lld,%lld)",
+	          (long long)b[1], (long long)b[3], (long long)(b[1] - 753986), (long long)(b[3] - 753986),
+	          (long long)m[1], (long long)m[3]);
+	CHECK_MSG(m[4] == b[4] && m[5] == b[5] && m[6] == b[6] && m[7] == b[7],
+	          "cell 4a: heads 2,3 must be byte-identical to baseline at the boundary -- baseline "
+	          "(%lld,%lld,%lld,%lld), got (%lld,%lld,%lld,%lld)",
+	          (long long)b[4], (long long)b[5], (long long)b[6], (long long)b[7], (long long)m[4],
+	          (long long)m[5], (long long)m[6], (long long)m[7]);
+}
 
 // Minor A (Poirot e4b398c review): when `SoftmaxRowQ15` refuses after
 // `CheckSoftmaxRowWidthDomain` has already accepted, the loop must report a
