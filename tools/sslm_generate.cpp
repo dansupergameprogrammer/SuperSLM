@@ -66,8 +66,32 @@ bool ReadFile(const char* path, std::vector<uint8_t>& out) {
 }
 
 void PrintUsage(const char* argv0) {
-	std::fprintf(stderr, "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" [--max-new N]\n",
+	std::fprintf(stderr,
+	             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" [--max-new N] [--stop "
+	             "a,b,c] [--dump-logits <path>]\n",
 	             argv0);
+}
+
+// T-1681: writes `out_logit_rows` (RunGreedyDecodeLoop's own raw int32 logit
+// output, one row of `vocab_size` elements per produced token, populated
+// immediately before that token's argmax -- see forward_sites.h's
+// RunGreedyDecodeLoop comment) to a flat binary file for offline analysis.
+// This is a read-only dump of an array the driver already computes and
+// already owns (`out_logit_rows` was already sized and passed into
+// RunGreedyDecodeLoop before this flag existed) -- no forward-path
+// computation changes. Format: `rows_produced` (uint64 LE) then
+// `vocab_size` (uint64 LE) then `rows_produced * vocab_size` little-endian
+// int32 values, row-major (row i = the logit row that produced out_tokens[i]).
+bool DumpLogitRows(const char* path, const int32_t* rows, size_t rows_produced,
+                    size_t vocab_size) {
+	std::ofstream f(path, std::ios::binary | std::ios::trunc);
+	if (!f) return false;
+	const uint64_t rp = static_cast<uint64_t>(rows_produced);
+	const uint64_t vs = static_cast<uint64_t>(vocab_size);
+	f.write(reinterpret_cast<const char*>(&rp), sizeof(rp));
+	f.write(reinterpret_cast<const char*>(&vs), sizeof(vs));
+	f.write(reinterpret_cast<const char*>(rows), sizeof(int32_t) * rows_produced * vocab_size);
+	return static_cast<bool>(f);
 }
 
 // Little-endian byte-assembly read of one int32 element -- WGT1/WSC1/BIA1
@@ -402,8 +426,11 @@ int main(int argc, char** argv) {
 	// stop set is supplied here rather than defaulted. Qwen2.5-instruct uses 151645
 	// (<|im_end|>) and 151643 (<|endoftext|>); a different model family uses different ids.
 	std::vector<int32_t> stop_ids;
+	std::string dump_logits_path;
 	for (int i = 4; i < argc; ++i) {
-		if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
+		if (std::strcmp(argv[i], "--dump-logits") == 0 && i + 1 < argc) {
+			dump_logits_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
 			const std::string val = argv[++i];
 			try {
 				max_new_tokens = static_cast<size_t>(std::stoul(val));
@@ -606,6 +633,17 @@ int main(int argc, char** argv) {
 	for (size_t i = 0; i < out_tokens_produced; ++i) std::printf(" %d", out_tokens[i]);
 	std::printf("\n");
 	std::printf("stop_reason: %d\n", static_cast<int>(stop_reason));
+
+	if (!dump_logits_path.empty()) {
+		if (!DumpLogitRows(dump_logits_path.c_str(), out_logit_rows.data(), out_tokens_produced,
+		                    static_cast<size_t>(model_view.config.vocab_size))) {
+			std::fprintf(stderr, "FAILED at stage=dump_logits: could not write \"%s\"\n",
+			             dump_logits_path.c_str());
+			return 1;
+		}
+		std::printf("logit_rows_dumped: %zu rows x %u vocab -> %s\n", out_tokens_produced,
+		            model_view.config.vocab_size, dump_logits_path.c_str());
+	}
 
 	const auto t_end = std::chrono::steady_clock::now();
 	std::printf("wall_time_seconds: %.3f\n", std::chrono::duration<double>(t_end - t_start).count());
