@@ -838,13 +838,11 @@ SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale
                                     SslmTraceHookState* trace_hook_state) {
 	std::vector<int64_t> acc(out_channels);
 	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
-	// T-1666 manifest landing (D3): identity/mult/shift are now per-channel arrays,
-	// but this loop still reads element 0 for every i -- the per-channel indexed
-	// read is landed by the follow-on implementation commit, not this one, so
-	// this suite's existing uniform-identity fixtures still observe unchanged
-	// behavior (D6's scrub) while the per-channel contract remains unmet.
+	// T-1666: identity/mult/shift are per-channel arrays -- one distinct fold
+	// triple per output channel, read at the same index i this loop already
+	// computes (design §5, cells 1-7 pin this at every projection).
 	for (size_t i = 0; i < out_channels; ++i) {
-		acc[i] = ApplyWeightScaleFold(acc[i], identity[0], mult[0], shift[0]);
+		acc[i] = ApplyWeightScaleFold(acc[i], identity[i], mult[i], shift[i]);
 	}
 	// T-1656/D-SLM642, §5.3: inserted between the WSC1 fold loop above and the funnel
 	// call below -- the exact composition slot the reference's `biased_fold_row`
@@ -1220,14 +1218,13 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
 			                      vacc.data());
-			// T-1666 manifest landing (D5): same broadcast-placeholder disposition as
-			// ProjectAndFunnel's loop above -- element 0 for every i until the
-			// follow-on implementation commit lands the indexed read.
+			// T-1666: per-channel indexed read, the K/V-landing sibling of
+			// ProjectAndFunnel's loop above (design §5, cells 6-7).
 			for (size_t i = 0; i < kv_hidden_size; ++i) {
-				kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[0], lw.k_fold_mult[0],
-				                               lw.k_fold_shift[0]);
-				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[0], lw.v_fold_mult[0],
-				                               lw.v_fold_shift[0]);
+				kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[i], lw.k_fold_mult[i],
+				                               lw.k_fold_shift[i]);
+				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[i], lw.v_fold_mult[i],
+				                               lw.v_fold_shift[i]);
 			}
 			// T-1656/D-SLM642, §5.3: the identical bias insertion ProjectAndFunnel's
 			// q_proj call site carries, written a second time here -- a separate
