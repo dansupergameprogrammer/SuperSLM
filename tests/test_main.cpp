@@ -9328,6 +9328,79 @@ static void TestBiasReconcileWideExponentOutOfDomainConflatedAcrossAllSurfaces()
 	          SslmForwardStatusName(exponent_gate_status));
 }
 
+// T-1678/N-17 (D-SLM681): intmath.h:141-142's own contract comment states
+// CheckBiasReconcileMagnitudeDomain and CheckBiasAccumulateMagnitudeDomain "are
+// each exactly `BiasReconcileWide(...) == true`". The first is exactly that
+// (checked_chain_funnel.cpp: one call, one ternary). The second is not --
+// CheckBiasAccumulateMagnitudeDomain returns early on BiasReconcileWide's own
+// false, and then, on the path where BiasReconcileWide(...) == true,
+// ADDITIONALLY runs a two's-complement overflow test on acc_i + term and
+// rejects when it fires. That extra branch is T-1657 Critical C-1's entire
+// reason to exist. This cell drives one direct-unit input where
+// BiasReconcileWide(...) == true and CheckBiasReconcileMagnitudeDomain == Ok,
+// while CheckBiasAccumulateMagnitudeDomain == BiasReconcileProductOutOfDomain
+// on the SAME (b, q_b, r_a, e_a): b=INT64_MAX, q_b=-62, r_a=1, e_a=0 compose
+// to exponent 0 (q_b+62+e_a), the identity divide (RoundingDivideByPOTWide's
+// own mask==0 branch, no rounding), so the wide product b*r_a passes through
+// unrounded and un-narrowed -- term == INT64_MAX exactly, and fits. acc_i=1
+// is the smallest accumulator that then overflows int64_t against that term.
+// A future edit that removes the accumulator's own overflow check -- i.e. that
+// makes CheckBiasAccumulateMagnitudeDomain assert only BiasReconcileWide's
+// boolean, which is exactly what would make the two predicates identical --
+// turns the last CHECK_MSG below from passing to failing. Proved non-vacuous
+// by mutation against the unmutated build (test-design record, Claude/Curie/).
+static void TestCheckBiasAccumulateMagnitudeDomainRejectsWhereReconcileMagnitudeDomainAcceptsOnAccumulatorOverflow() {
+	using superslm::BiasReconcileWide;
+	using superslm::CheckBiasAccumulateMagnitudeDomain;
+	using superslm::CheckBiasReconcileMagnitudeDomain;
+	using superslm::SslmForwardStatus;
+
+	constexpr int64_t kB = INT64_MAX;
+	constexpr int64_t kQB = -62;
+	constexpr int64_t kRA = 1;
+	constexpr int64_t kEA = 0;  // sum = kQB + 62 + kEA = 0, in [0,63]; exponent 0 is the
+	                            // identity divide (RoundingDivideByPOTWide's own mask==0
+	                            // branch), so the wide product b*r_a passes through
+	                            // unrounded and un-narrowed: term == kB exactly.
+	constexpr int64_t kAccI = 1;  // acc_i + term = 1 + INT64_MAX overflows int64_t by
+	                              // exactly 1 -- the smallest input that forces the
+	                              // two's-complement overflow test in
+	                              // CheckBiasAccumulateMagnitudeDomain to fire.
+
+	int64_t term = 12345;
+	const bool wide_fits = BiasReconcileWide(kB, kQB, kRA, kEA, &term);
+	CHECK_MSG(wide_fits && term == kB,
+	          "BiasReconcileWide(b=%lld, q_b=%lld, r_a=%lld, e_a=%lld) fits=%d out=%lld, want "
+	          "fits=true out=%lld (exponent 0 is the identity divide; the wide product must "
+	          "pass through unrounded and un-narrowed) -- this cell's premise depends on this "
+	          "holding, so a failure here means the fixture needs re-deriving before the cell "
+	          "below means anything",
+	          static_cast<long long>(kB), static_cast<long long>(kQB),
+	          static_cast<long long>(kRA), static_cast<long long>(kEA), wide_fits ? 1 : 0,
+	          static_cast<long long>(term), static_cast<long long>(kB));
+
+	const SslmForwardStatus reconcile_status =
+	    CheckBiasReconcileMagnitudeDomain(kB, kQB, kRA, kEA);
+	CHECK_MSG(reconcile_status == SslmForwardStatus::Ok,
+	          "CheckBiasReconcileMagnitudeDomain at the SAME inputs == %s, want Ok -- this "
+	          "predicate IS exactly BiasReconcileWide(...) == true, and BiasReconcileWide "
+	          "fits at this input (checked above)",
+	          SslmForwardStatusName(reconcile_status));
+
+	const SslmForwardStatus accumulate_status =
+	    CheckBiasAccumulateMagnitudeDomain(kAccI, kB, kQB, kRA, kEA);
+	CHECK_MSG(accumulate_status == SslmForwardStatus::BiasReconcileProductOutOfDomain,
+	          "CheckBiasAccumulateMagnitudeDomain(acc_i=%lld) at the SAME (b,q_b,r_a,e_a) == "
+	          "%s, want BiasReconcileProductOutOfDomain -- BiasReconcileWide(...) == true and "
+	          "CheckBiasReconcileMagnitudeDomain == Ok at this exact input (both checked "
+	          "above), so anything other than the rejection here means "
+	          "CheckBiasAccumulateMagnitudeDomain has stopped proving acc_i + term "
+	          "representable and has collapsed onto CheckBiasReconcileMagnitudeDomain's own "
+	          "weaker property -- intmath.h:141-142's claim that the two predicates are "
+	          "identical, which is false at this input on the code as authored",
+	          static_cast<long long>(kAccI), SslmForwardStatusName(accumulate_status));
+}
+
 // Sec4.7/Sec4.8 (BIA1, Sec7.2a third limb): the load-time magnitude descriptor.
 // Builds a single-tensor BIA1 (int64) manifest with one element set to the
 // value under test -- the same "one otherwise-valid v2 artifact, one hostile
@@ -19939,6 +20012,7 @@ int main(int argc, char** argv) {
 	TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide();
 	TestBiasReconcileWideTieAwayFromZeroBothSignsAtWideMagnitude();
 	TestBiasReconcileWideExponentOutOfDomainConflatedAcrossAllSurfaces();
+	TestCheckBiasAccumulateMagnitudeDomainRejectsWhereReconcileMagnitudeDomainAcceptsOnAccumulatorOverflow();
 	TestBia1AcceptsFormerBoundaryValuesBothSignsNowThatTheLoadTimeCheckIsGone();
 	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
 	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
