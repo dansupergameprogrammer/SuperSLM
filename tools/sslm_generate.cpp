@@ -1,7 +1,8 @@
-// sslm_generate.cpp -- the real-model decode driver (T-1664). Loads a `.sslm`
-// model artifact and a `.sslm` tokenizer artifact, encodes a prompt, marshals
-// the artifact's raw manifests into a `LayerWeights[]` for all 28 layers, and
-// runs `RunGreedyDecodeLoop` to produce output token ids.
+// sslm_generate.cpp -- the real-model decode driver (T-1664, WSC1 marshaling
+// completed T-1666-driver). Loads a `.sslm` model artifact and a `.sslm`
+// tokenizer artifact, encodes a prompt, marshals the artifact's raw
+// manifests into a `LayerWeights[]` for all 28 layers, and runs
+// `RunGreedyDecodeLoop` to produce output token ids.
 //
 // THIS BUILD'S STATUS, STATED PLAINLY. T-1657/T-1654/T-1655/T-1656 closed the
 // four blockers a prior pass (T-1652/T-1653, branch claude/smoke-driver)
@@ -9,59 +10,29 @@
 // artifact with NO relaxation, on `main`'s own gate), RunLayerLoop is
 // GQA-capable, LayerWeights carries a bias field with a live caller, and the
 // per-query i-exp constants are derived from artifact composition constants
-// rather than fixed per-layer. This driver marshals every field those four
-// tickets made representable.
+// rather than fixed per-layer.
 //
-// ONE FIELD IS NOT REPRESENTABLE, discovered by this build (T-1664) and
-// verified against the real artifact's own bytes, never assumed: LayerWeights'
-// `proj_identity`/`proj_mult`/`proj_shift` are a SINGLE SCALAR TRIPLE, shared
-// by construction across every output channel of every projection (q/k/v/o/
-// gate/up/down) in a layer (forward_sites.h's own header comment names this a
-// "plan-sanctioned degenerate case" for the S3.2 test-design fixtures). The
+// THE FIELD T-1664 FOUND NOT REPRESENTABLE IS NOW REPRESENTABLE. T-1664
+// discovered and verified against the real artifact's own bytes that the
 // real Qwen2.5-1.5B-Instruct artifact's WSC1 weight-scale-fold data is
-// genuinely PER-OUTPUT-CHANNEL for all seven projections -- confirmed by
-// direct scan of every layer's WSC1 tensors, not sampled: q_proj/o_proj/
+// genuinely PER-OUTPUT-CHANNEL for all seven projections -- q_proj/o_proj/
 // down_proj carry 1536 distinct (identity,mult,shift) triples, k_proj/v_proj
-// carry 256, gate_proj/up_proj carry 8960 -- one per output channel, and the
-// decoded triples differ channel to channel by hundreds of millions in `mult`
-// and by several units in `shift`, not by rounding noise. Only `ctx_fold`
-// (already a `num_heads`-sized array in LayerWeights, T-518/D-SLM57) is
-// uniform in this artifact. Using LayerWeights' scalar field would mean
-// picking ONE channel's fold triple and applying it to every other channel of
-// the same projection -- not an adapter decision, silently wrong output on
-// >99% of every projection's channels. This driver does not do that: per
-// this task's own instruction ("do not widen a bound or invent a design to
-// get output; if output requires that, the finding is that it requires it"),
-// it detects the mismatch structurally (row count of the artifact's WSC1
-// tensor vs. the single triple LayerWeights can hold) and fails loudly,
-// naming the exact field and layer, rather than fabricating a value.
-//
-// What closing this requires: extending LayerWeights' q/k/v/o/gate/up/down
-// fold fields from a shared scalar triple to seven per-projection arrays
-// (mirroring the ctx_fold_identity/mult/shift precedent already in the
-// struct), and widening ProjectAndFunnel's/the k/v-landing fold loop's
-// ApplyWeightScaleFold calls to index by output channel instead of applying
-// one triple to the whole row. That is a production change to RunLayerLoop's
-// control flow and LayerWeights' shape of the same kind and size as T-1654's
-// GQA extension -- which was its own ticket, its own design decision
-// (D-SLM619/623), and its own Curie-authored red test-design pass before a
-// builder touched it. The committed suite's own coverage confirms this is
-// unproven territory: every LayerWeights fixture in tests/test_main.cpp (22
-// call sites) sets proj_identity=1/mult=0/shift=0 -- the identity, no-op
-// case -- so no committed cell anywhere proves ApplyWeightScaleFold's
-// non-identity branch correct through the full per-channel path at all. This
-// driver's own boundary (T-1664's contract) permits a production fix only
-// for "a genuine defect," called out prominently rather than folded in
-// quietly, and does not authorize Brunel to design and self-test a change of
-// this shape solo -- that is exactly the "stop and ask, do not invent design
-// to fill the gap" case the builder persona's own discipline exists for.
-//
-// So this driver does the part that IS well-defined -- load the tokenizer,
-// encode the prompt, load the model artifact through the real production
-// entry point (now unconditionally, no branch-only relaxation), and marshal
-// every LayerWeights field this tree can represent -- and fails loudly and
-// specifically at the one field it cannot, rather than press on with
-// fabricated per-channel data.
+// carry 256, gate_proj/up_proj carry 8960 -- while `LayerWeights` (at that
+// time) carried only a single scalar triple shared across a whole
+// projection. T-1666 (design doc
+// Claude/Vitruvius/superslm-t1666-wsc1-per-channel-fold-design-2026-08-02.md)
+// closed that gap in production: `LayerWeights` now carries seven per-
+// projection `{proj}_fold_identity`/`{proj}_fold_mult`/`{proj}_fold_shift`
+// arrays (forward_sites.h), one triple per output channel, and
+// `ProjectAndFunnel`/the k/v-landing fold loop index them by output channel
+// (forward_sites.cpp). This driver's job -- marshaling the artifact's real
+// WSC1 rows into those arrays, for every layer and all seven projections --
+// is what this file now does. Every array is sized to the exact output-
+// channel count `ProjectAndFunnel`/the k/v-landing loop read it at: hidden_size
+// for q/o/down, `num_key_value_heads * head_dim` for k/v, intermediate_size
+// for gate/up (§8.2 "Weight-scale fold blob", docs/sslm_format.md: each WSC1
+// tensor is a row-major `[num_channels, 3]` int32 array, row i's triple at
+// elements `[3i, 3i+3)` -- identity, mult, shift in that column order).
 //
 // Usage: sslm_generate <model.sslm> <tokenizer.sslm> "<prompt>" [--max-new N]
 
@@ -146,7 +117,50 @@ struct LayerBacking {
 	std::vector<int64_t> kv_r_t_k, kv_e_t_k, kv_r_t_v, kv_e_t_v;
 	std::vector<int64_t> iexp_m, iexp_e;
 	std::vector<int32_t> ctx_identity, ctx_mult, ctx_shift;
+	// T-1666: one (identity, mult, shift) array per output channel, per
+	// projection -- the per-channel WSC1 fold backing this driver marshals
+	// from the artifact's own WSC1 rows (see this file's header comment).
+	std::vector<int32_t> q_fold_identity, q_fold_mult, q_fold_shift;
+	std::vector<int32_t> k_fold_identity, k_fold_mult, k_fold_shift;
+	std::vector<int32_t> v_fold_identity, v_fold_mult, v_fold_shift;
+	std::vector<int32_t> o_fold_identity, o_fold_mult, o_fold_shift;
+	std::vector<int32_t> gate_fold_identity, gate_fold_mult, gate_fold_shift;
+	std::vector<int32_t> up_fold_identity, up_fold_mult, up_fold_shift;
+	std::vector<int32_t> down_fold_identity, down_fold_mult, down_fold_shift;
 };
+
+// Marshals one projection's per-output-channel WSC1 fold tensor into three
+// owned arrays. `t` is the artifact's WSC1 tensor for this projection
+// (row-major [channels, 3] int32, per docs/sslm_format.md "Weight-scale fold
+// blob"); `channels` is the exact output-channel count ProjectAndFunnel/the
+// k-v-landing loop will index these arrays at (forward_sites.cpp). Returns
+// false and a diagnostic in `*err` if the tensor is missing or its row count
+// does not match `channels` -- this is the structural check T-1664's driver
+// used to fail loudly on; now it is the input-shape check the per-channel
+// marshal itself performs before trusting the artifact's row count.
+bool MarshalProjectionFold(const SslmTensorView* t, uint64_t channels, const std::string& label,
+                            std::vector<int32_t>& id, std::vector<int32_t>& mult,
+                            std::vector<int32_t>& shift, std::string* err) {
+	if (!t) {
+		*err = label + ": missing WSC1 weight-scale tensor";
+		return false;
+	}
+	if (t->elem_count != channels * 3) {
+		*err = label + ": WSC1 carries " + std::to_string(t->elem_count / 3) +
+		       " per-output-channel (identity,mult,shift) rows, expected " + std::to_string(channels) +
+		       " (one per output channel this projection's ProjectAndFunnel/k-v-landing call uses)";
+		return false;
+	}
+	id.resize(channels);
+	mult.resize(channels);
+	shift.resize(channels);
+	for (uint64_t i = 0; i < channels; ++i) {
+		id[i] = RdI32(t->data + (i * 3 + 0) * 4);
+		mult[i] = RdI32(t->data + (i * 3 + 1) * 4);
+		shift[i] = RdI32(t->data + (i * 3 + 2) * 4);
+	}
+	return true;
+}
 
 // Attempts to marshal layer `l` into `out`/`backing`. Returns true and a
 // populated LayerWeights on success. Returns false and a diagnostic in `err`
@@ -190,49 +204,58 @@ bool MarshalLayer(const SslmModelView& view, uint32_t l, uint32_t num_heads,
 	out.attn_norm_gain = backing.attn_norm_gain.data();
 	out.mlp_norm_gain = backing.mlp_norm_gain.data();
 
-	// --- THE BLOCKER: WSC1 per-output-channel fold vs. LayerWeights' single
-	// scalar triple. Checked for every one of the seven projections -- the
-	// first one found wrong is reported; the caller (main) has already run
-	// a full 28-layer x 7-projection scan (see PreflightScanWscFolds) so this
-	// function's own diagnostic is corroborated, not a lone sample.
-	struct ProjCheck {
-		const char* name;
-		const SslmTensorView* t;
-	};
-	const ProjCheck checks[] = {{"q_proj", Wsc("q_proj")}, {"k_proj", Wsc("k_proj")},
-	                            {"v_proj", Wsc("v_proj")}, {"o_proj", Wsc("o_proj")},
-	                            {"gate_proj", Wsc("gate_proj")}, {"up_proj", Wsc("up_proj")},
-	                            {"down_proj", Wsc("down_proj")}};
-	for (const ProjCheck& c : checks) {
-		if (!c.t) {
-			*err = prefix + "." + c.name + ": missing WSC1 weight-scale tensor";
-			return false;
-		}
-		const uint64_t rows = c.t->elem_count / 3;
-		if (rows != 1) {
-			*err = prefix + "." + c.name + ": WSC1 carries " + std::to_string(rows) +
-			       " per-output-channel (identity,mult,shift) rows; LayerWeights.proj_identity/"
-			       "proj_mult/proj_shift can hold exactly one scalar triple shared across the "
-			       "whole projection. This is the structural gap this file's header documents -- "
-			       "not a data problem, a LayerWeights/RunLayerLoop shape limit.";
-			return false;
-		}
+	// --- WSC1 per-output-channel fold (T-1666): one (identity, mult, shift)
+	// array per output channel, per projection. Channel counts match exactly
+	// what ProjectAndFunnel/the k-v-landing fold loop index these arrays at
+	// (forward_sites.cpp): hidden_size for q/o/down, num_key_value_heads *
+	// head_dim for k/v, intermediate_size for gate/up.
+	const uint64_t hidden_size = view.config.hidden_size;
+	const uint64_t intermediate_size = view.config.intermediate_size;
+	const uint64_t kv_hidden_size =
+	    static_cast<uint64_t>(num_key_value_heads) * view.config.head_dim;
+
+	if (!MarshalProjectionFold(Wsc("q_proj"), hidden_size, prefix + ".q_proj", backing.q_fold_identity,
+	                            backing.q_fold_mult, backing.q_fold_shift, err) ||
+	    !MarshalProjectionFold(Wsc("k_proj"), kv_hidden_size, prefix + ".k_proj",
+	                            backing.k_fold_identity, backing.k_fold_mult, backing.k_fold_shift,
+	                            err) ||
+	    !MarshalProjectionFold(Wsc("v_proj"), kv_hidden_size, prefix + ".v_proj",
+	                            backing.v_fold_identity, backing.v_fold_mult, backing.v_fold_shift,
+	                            err) ||
+	    !MarshalProjectionFold(Wsc("o_proj"), hidden_size, prefix + ".o_proj", backing.o_fold_identity,
+	                            backing.o_fold_mult, backing.o_fold_shift, err) ||
+	    !MarshalProjectionFold(Wsc("gate_proj"), intermediate_size, prefix + ".gate_proj",
+	                            backing.gate_fold_identity, backing.gate_fold_mult,
+	                            backing.gate_fold_shift, err) ||
+	    !MarshalProjectionFold(Wsc("up_proj"), intermediate_size, prefix + ".up_proj",
+	                            backing.up_fold_identity, backing.up_fold_mult, backing.up_fold_shift,
+	                            err) ||
+	    !MarshalProjectionFold(Wsc("down_proj"), hidden_size, prefix + ".down_proj",
+	                            backing.down_fold_identity, backing.down_fold_mult,
+	                            backing.down_fold_shift, err)) {
+		return false;
 	}
-	// Unreachable for this artifact (every layer fails the check above), kept
-	// for a hypothetical artifact whose calibration happens to produce a
-	// uniform fold: read the sole row of q_proj's WSC1 tensor as the shared
-	// scalar triple every projection call site reuses (LayerWeights' own
-	// documented shape).
-	{
-		int32_t id, mult, shift;
-		const SslmTensorView* qwsc = Wsc("q_proj");
-		id = RdI32(qwsc->data + 0 * 4);
-		mult = RdI32(qwsc->data + 1 * 4);
-		shift = RdI32(qwsc->data + 2 * 4);
-		out.proj_identity = id;
-		out.proj_mult = mult;
-		out.proj_shift = shift;
-	}
+	out.q_fold_identity = backing.q_fold_identity.data();
+	out.q_fold_mult = backing.q_fold_mult.data();
+	out.q_fold_shift = backing.q_fold_shift.data();
+	out.k_fold_identity = backing.k_fold_identity.data();
+	out.k_fold_mult = backing.k_fold_mult.data();
+	out.k_fold_shift = backing.k_fold_shift.data();
+	out.v_fold_identity = backing.v_fold_identity.data();
+	out.v_fold_mult = backing.v_fold_mult.data();
+	out.v_fold_shift = backing.v_fold_shift.data();
+	out.o_fold_identity = backing.o_fold_identity.data();
+	out.o_fold_mult = backing.o_fold_mult.data();
+	out.o_fold_shift = backing.o_fold_shift.data();
+	out.gate_fold_identity = backing.gate_fold_identity.data();
+	out.gate_fold_mult = backing.gate_fold_mult.data();
+	out.gate_fold_shift = backing.gate_fold_shift.data();
+	out.up_fold_identity = backing.up_fold_identity.data();
+	out.up_fold_mult = backing.up_fold_mult.data();
+	out.up_fold_shift = backing.up_fold_shift.data();
+	out.down_fold_identity = backing.down_fold_identity.data();
+	out.down_fold_mult = backing.down_fold_mult.data();
+	out.down_fold_shift = backing.down_fold_shift.data();
 
 	// --- ctx_fold (WSC1, per-head -- LayerWeights already carries this as an
 	// array, T-518/D-SLM57) ------------------------------------------------
@@ -356,8 +379,8 @@ void PreflightScanWscFolds(const SslmModelView& view) {
 	std::fprintf(stderr,
 	             "preflight: %u/%u layers carry a non-degenerate (per-output-channel) WSC1 fold "
 	             "tensor on at least one of q/k/v/o/gate/up/down_proj; worst case %llu rows in a "
-	             "single tensor (LayerWeights can hold exactly 1 scalar triple per projection per "
-	             "layer)\n",
+	             "single tensor (LayerWeights now carries one fold triple per output channel per "
+	             "projection, T-1666; MarshalLayer marshals every row)\n",
 	             layers_affected, view.config.num_hidden_layers,
 	             static_cast<unsigned long long>(max_rows_seen));
 }
@@ -452,7 +475,9 @@ int main(int argc, char** argv) {
 	// --- Stage 3: the marshaling adapter. Full artifact-wide scan first ----
 	// (this file's header comment; §3.1-style extent confirmation), then a
 	// real attempt at every layer, in order -- stopping at the first field
-	// this tree's LayerWeights cannot represent.
+	// this tree's LayerWeights cannot represent (missing/wrong-shaped
+	// tensors remain possible; the per-channel WSC1 fold gap T-1664 found is
+	// closed as of T-1666).
 	PreflightScanWscFolds(model_view);
 
 	std::vector<LayerBacking> backings(num_hidden_layers);
@@ -465,17 +490,14 @@ int main(int argc, char** argv) {
 			             l, marshal_err.c_str());
 			std::fprintf(stderr,
 			             "The tokenizer and model both load and are real. The LayerWeights[] "
-			             "marshaling adapter cannot represent this layer's projection weight-scale "
-			             "fold data in the current struct shape -- see this file's header comment "
-			             "for the full finding. No forward pass was attempted; RunGreedyDecodeLoop "
-			             "was never called.\n");
+			             "marshaling adapter cannot represent this layer's data in the current struct "
+			             "shape -- see the diagnostic above for the exact field. No forward pass was "
+			             "attempted; RunGreedyDecodeLoop was never called.\n");
 			return 1;
 		}
 	}
 
-	// --- Unreachable for this artifact (every layer fails Stage 3 above), --
-	// kept so a future artifact/production fix exercises real code, not a
-	// stub: embed/final_norm/head marshaling, workspace sizing, and the
+	// --- embed/final_norm/head marshaling, workspace sizing, and the -------
 	// RunGreedyDecodeLoop call.
 	const SslmTensorView* embed_w = model_view.weights.Tensor("embed");
 	const SslmTensorView* final_gain_w = model_view.weights.Tensor("final_norm.gain");
