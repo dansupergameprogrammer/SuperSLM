@@ -13472,7 +13472,7 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 	seq.layer_index = 0xFFFFFFFFu;  // poison -- not a legal layer_index for num_hidden_layers=2
 
 	// T-1594: sized to EXACTLY kv_bytes_needed for this call's own geometry
-	// (num_hidden_layers=2, context_cap=1, num_heads=1, head_dim=2 -> 8
+	// (num_hidden_layers=2, context_cap=1, num_key_value_heads=1, head_dim=2 -> 8
 	// bytes), not the suite's old generic 64-byte convention -- a workspace
 	// larger than kv_bytes_needed lets a write past the declared size land
 	// inside the true allocation, invisible to any memory-safety instrument.
@@ -13525,7 +13525,7 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 		seq.layer_index = 2;  // == num_hidden_layers: already complete
 
 		// T-1594: exact for this call's own valid geometry (num_hidden_layers=2,
-		// context_cap=1, num_heads=1, head_dim=2 -> 8 bytes) rather than the
+		// context_cap=1, num_key_value_heads=1, head_dim=2 -> 8 bytes) rather than the
 		// old generic 64-byte convention.
 		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 		uint8_t workspace[kWorkspaceSize];
@@ -14310,7 +14310,7 @@ static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
 	seq.layer_index = 0;
 
 	// T-1594: exact for this call's geometry (num_hidden_layers=2, context_cap=1,
-	// num_heads=1, head_dim=2 -> 8 bytes).
+	// num_key_value_heads=1, head_dim=2 -> 8 bytes).
 	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 	uint8_t workspace[kWorkspaceSize] = {};
 	const auto gate_status = superslm::CheckSoftmaxRowWidthDomain(
@@ -14450,7 +14450,7 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		seq.layer_index = 0;
 
-		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_key_value_heads=1,
 		// head_dim=2 -> 8 bytes); budget does not affect kv_bytes_needed.
 		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 		uint8_t workspace[kWorkspaceSize] = {};
@@ -14501,7 +14501,7 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	full_seq.hidden_codes = full_codes;
 	full_seq.hidden_scale = kInitialScale;
 	full_seq.layer_index = 0;
-	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_key_value_heads=1,
 	// head_dim=2 -> 8 bytes), shared by both the straight-through and
 	// resumed runs below since both use the identical geometry.
 	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
@@ -14591,7 +14591,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 		seq.hidden_codes = codes;
 		seq.hidden_scale = kInitialScale;
 		seq.layer_index = 0;
-		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_key_value_heads=1,
 		// head_dim=2 -> 8 bytes).
 		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 		uint8_t workspace[kWorkspaceSize] = {};
@@ -14863,7 +14863,7 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 	// T-1594: exact for this call's geometry (num_hidden_layers=1, context_cap=1,
-	// num_heads=2 [hidden_size=4/head_dim=2], head_dim=2 -> 8 bytes).
+	// num_key_value_heads=2 [hidden_size=4/head_dim=2], head_dim=2 -> 8 bytes).
 	constexpr size_t kWorkspaceSize = 1 * 1 * 2 * 2 * 2;
 	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result =
@@ -14949,8 +14949,8 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 // anywhere in the layer) as the counter's own negative control, asserting
 // it stays at its initial 0. Reading `workspace` directly (not a trace hook)
 // is sound here because `RunLayerLoop`'s own K/V store offset arithmetic
-// (`kv_base + layer*context_cap*num_heads*head_dim*2`, `context_cap=1`,
-// `num_heads=1`, `head_dim=2`, `layer=0`) places k_store at workspace[0..1]
+// (`kv_base + layer*context_cap*num_key_value_heads*head_dim*2`, `context_cap=1`,
+// `num_key_value_heads=1`, `head_dim=2`, `layer=0`) places k_store at workspace[0..1]
 // and v_store at workspace[2..3] by construction, and V is never
 // subsequently rewritten by RoPE (only K is).
 static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
@@ -14965,7 +14965,7 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 		seq.hidden_codes = hidden_codes;
 		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		seq.layer_index = 0;
-		// T-1594: exact (num_hidden_layers=1, context_cap=1, num_heads=1,
+		// T-1594: exact (num_hidden_layers=1, context_cap=1, num_key_value_heads=1,
 		// head_dim=2 -> 4 bytes).
 		constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
 		uint8_t workspace[kWorkspaceSize] = {};
@@ -15134,7 +15134,7 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 	seq.hidden_codes = hidden_codes;
 	seq.hidden_scale = kInitialScale;
 	seq.layer_index = 0;
-	// T-1594: exact (num_hidden_layers=1, context_cap=1, num_heads=1,
+	// T-1594: exact (num_hidden_layers=1, context_cap=1, num_key_value_heads=1,
 	// head_dim=2 -> 4 bytes).
 	constexpr size_t kWorkspaceSize = 1 * 1 * 1 * 2 * 2;
 	uint8_t workspace[kWorkspaceSize] = {};
@@ -15147,7 +15147,7 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 	          SslmForwardStatusName(result));
 	if (result != SslmForwardStatus::Ok) return;
 
-	// k_store lands at workspace[0..1] (context_cap=1, num_heads=1, head_dim=2,
+	// k_store lands at workspace[0..1] (context_cap=1, num_kv_heads=1, head_dim=2,
 	// layer=0 -- the same offset arithmetic
 	// TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter's own comment
 	// derives), and is never subsequently rewritten except by the
@@ -15197,7 +15197,7 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	seq.hidden_codes = hidden_codes;
 	seq.hidden_scale = kInitialScale;
 	seq.layer_index = 0;
-	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+	// T-1594: exact (num_hidden_layers=2, context_cap=1, num_key_value_heads=1,
 	// head_dim=2 -> 8 bytes).
 	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 	uint8_t workspace[kWorkspaceSize] = {};
@@ -15509,7 +15509,7 @@ static void TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo() {
 }
 
 // T-1576 (Poirot b8ecff5 review, Significant 1): a direct unit cell on
-// `KeyRow`/`ValueRow` themselves, at `num_heads == 2, context_cap == 3` --
+// `KeyRow`/`ValueRow` themselves, at `num_kv_heads == 2, context_cap == 3` --
 // the one geometry no `RunLayerLoop`/`RunGreedyDecodeLoop` call in this
 // suite reaches (every multi-head call runs at `context_cap == 1`, where
 // head-major and position-major coincide, per §9.4/D-SLM500's own derived
@@ -15526,16 +15526,16 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 
 	uint8_t workspace[1 * 3 * 2 * 2 * 2] = {};  // 1 layer * cap 3 * 2 heads * head_dim 2 * 2 (K+V)
 	const int64_t kContextCap = 3;
-	const size_t kNumHeads = 2, kHeadDim = 2;
+	const size_t kNumKvHeads = 2, kHeadDim = 2;
 
 	const int8_t* const k_base =
-	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
 	const int8_t* const k_h0_p1 =
-	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/1);
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/0, /*position=*/1);
 	const int8_t* const k_h1_p0 =
-	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/1, /*position=*/0);
+	    KeyRow(workspace, /*layer=*/0, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/1, /*position=*/0);
 	const int8_t* const v_h0_p0 =
-	    ValueRow(workspace, /*layer=*/0, kContextCap, kNumHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+	    ValueRow(workspace, /*layer=*/0, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
 
 	const ptrdiff_t off_h0_p1 = k_h0_p1 - k_base;
 	const ptrdiff_t off_h1_p0 = k_h1_p0 - k_base;
@@ -15552,7 +15552,7 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 	          "(%lld) -- the head stride is aliasing head 1's rows onto head 0's",
 	          static_cast<long long>(off_h1_p0));
 	CHECK_MSG(off_v == 12, "ValueRow(head=0, position=0) - KeyRow(head=0, position=0) == %lld, want "
-	          "context_cap * num_heads * head_dim == 12",
+	          "context_cap * num_kv_heads * head_dim == 12",
 	          static_cast<long long>(off_v));
 }
 
@@ -15572,7 +15572,7 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 
 	TwoLayerFixture fixture;
 	const int64_t kContextCap = 3;  // smallest cap giving 0, 1, context_cap-1, context_cap four distinct values
-	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_key_value_heads=1,
 	// head_dim=2 -> 24 bytes) -- was sized with a deliberate `kContextCap <=
 	// 16` margin (128 bytes; `e24b971`'s own comment: "sized for
 	// kContextCap<=16"), oversized by 104 bytes relative to what every call
@@ -15679,14 +15679,14 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	// calls onto memory belonging to OTHER, in-domain rows (measured:
 	// `KeyRow(layer=0, head=0, position=context_cap)` lands on layer 0's own
 	// V row 0; `ValueRow(layer=0, head=0, position=context_cap)` lands on
-	// layer 1's own K row 0), and at `num_heads > 1` the first of the two
+	// layer 1's own K row 0), and at `num_kv_heads > 1` the first of the two
 	// becomes a real committed row (`KeyRow(head=1, position=0)`) rather
 	// than an out-of-domain one, silently changing what the assertion means
 	// while its text stays the same. A single comparison of the WHOLE
 	// workspace against its own poison pattern makes no accessor call,
 	// names no coordinate that can be wrong, and is therefore both correct
 	// at this geometry and stable under any future one (including the
-	// GQA/`num_heads > 1` case §11 S3.7 defers by name) -- it also catches
+	// GQA/`num_kv_heads > 1` case §11 S3.7 defers by name) -- it also catches
 	// every neighbouring store-corruption defect, not only a landing write
 	// at exactly these two addresses.
 	uint8_t expected_workspace[sizeof(workspace)];
@@ -15970,7 +15970,7 @@ static void TestRunLayerLoopBoundaryPositionContextCapMinusOneRoundTripsThroughA
 
 	const int64_t kContextCap = 3;
 	TwoLayerFixture fixture;
-	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_key_value_heads=1,
 	// head_dim=2 -> 24 bytes) -- was sized against TwoLayerFixture's own
 	// 16-cap default instead of the context_cap this test actually calls
 	// with (128 bytes), oversized by 104 bytes (Poirot 76a9776-t1599, Minor
@@ -16050,7 +16050,7 @@ static void TestRunLayerLoopPoisonFillRedriveAcrossMultiPositionStore() {
 
 	const int64_t kContextCap = 3;
 	TwoLayerFixture fixture;
-	// T-1594: exact for kContextCap (num_hidden_layers=2, num_heads=1,
+	// T-1594: exact for kContextCap (num_hidden_layers=2, num_key_value_heads=1,
 	// head_dim=2 -> 24 bytes) -- was sized against TwoLayerFixture's own
 	// 16-cap default instead of the context_cap this test actually calls
 	// with.
@@ -16281,7 +16281,7 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 // produced and false for one a caller assembled via §13 dim 9's own
 // snapshot/restore (the cell directly above this one). The workspace below
 // is sized to EXACTLY `kv_bytes_needed` for this call's own geometry
-// (num_hidden_layers=2, context_cap=3, num_heads=1, head_dim=2 -> 24 bytes)
+// (num_hidden_layers=2, context_cap=3, num_key_value_heads=1, head_dim=2 -> 24 bytes)
 // with two trailing canary bytes that are never part of the declared
 // `workspace_size` the call receives -- bytes the earlier size check
 // (`workspace_size < kv_bytes_needed`) has already certified the call does
@@ -16348,7 +16348,7 @@ static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() 
 // quantity and landing the K/V write `head_dim * |context_length|` bytes
 // BELOW the workspace base -- after this call's own workspace-size check
 // had already certified the workspace sufficient. Measured in the review
-// this regresses (context_cap=3, num_heads=1, head_dim=2,
+// this regresses (context_cap=3, num_key_value_heads=1, head_dim=2,
 // context_length=-1): status PositionOverCap, bytes at offsets [-2,-1]
 // overwritten.
 static void TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLandingWrite() {
@@ -16461,7 +16461,7 @@ static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard(
 	seq.context_length = 0;
 
 	// T-1594: exact for this call's geometry (num_hidden_layers=2, context_cap=3,
-	// num_heads=1, head_dim=2 -> 24 bytes).
+	// num_key_value_heads=1, head_dim=2 -> 24 bytes).
 	constexpr size_t kWorkspaceSize = 2 * 3 * 1 * 2 * 2;
 	uint8_t workspace[kWorkspaceSize];
 	std::memset(workspace, 0xEE, sizeof(workspace));
@@ -17205,7 +17205,7 @@ static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
 		seq.hidden_codes = embed_codes;
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
-		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_heads=1,
+		// T-1594: exact (num_hidden_layers=2, context_cap=1, num_key_value_heads=1,
 		// head_dim=2 -> 8 bytes).
 		constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
 		uint8_t workspace[kWorkspaceSize] = {};
@@ -17395,7 +17395,7 @@ struct DecodeLoopCallFixture {
 	superslm::SequenceLayerState seq{};
 	int8_t hidden_codes[DecodeLoopFixture::kHiddenSize] = {INT8_C(-77), INT8_C(-77)};
 	// S3.7: sized for TwoLayerFixture::kContextCap (16), num_hidden_layers=2,
-	// num_heads=1, head_dim=2 -- `2*16*1*2*2` = 128 bytes -- now that
+	// num_key_value_heads=1, head_dim=2 -- `2*16*1*2*2` = 128 bytes -- now that
 	// `context_length` is real and a multi-token decode genuinely commits
 	// more than one position (the old 64-byte buffer only ever needed to
 	// hold `context_cap=1`'s single position per layer).
