@@ -18259,7 +18259,7 @@ static void TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutpu
 	for (const DdDifferentialCell& cell : kDdDifferentialCells) {
 		DecodeDiscriminationFixture fixture;
 		int8_t* arr = DdWeightArray(fixture, cell.tensor_id, cell.layer);
-		// T-1408 RED-STATE PROBE (reverted before green commit): arr[cell.elem] = static_cast<int8_t>(arr[cell.elem] + 1);
+		arr[cell.elem] = static_cast<int8_t>(arr[cell.elem] + 1);
 
 		bool any_not_ok = false;
 		DdRunOutput results[4];
@@ -18305,7 +18305,7 @@ static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline(
 	for (int layer = 0; layer < 2; ++layer) {
 		for (int t = 0; t < kDdNumTensors; ++t) {
 			int8_t* arr = DdWeightArray(fixture, t, layer);
-			// T-1408 RED-STATE PROBE (reverted before green commit): for (int e = 0; e < 4; ++e) arr[e] = 0;
+			for (int e = 0; e < 4; ++e) arr[e] = 0;
 		}
 	}
 
@@ -18346,7 +18346,7 @@ static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseli
 		for (int t = 0; t < kDdNumTensors; ++t) {
 			DecodeDiscriminationFixture fixture;
 			int8_t* arr = DdWeightArray(fixture, t, layer);
-			// T-1408 RED-STATE PROBE (reverted before green commit): for (int e = 0; e < 4; ++e) arr[e] = 0;
+			for (int e = 0; e < 4; ++e) arr[e] = 0;
 
 			bool any_not_ok = false;
 			bool any_differs = false;
