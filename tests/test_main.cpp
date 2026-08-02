@@ -17700,7 +17700,7 @@ static void TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly() {
 // four-precondition ruling, Claude/Plans/SuperSLM_S3a_WalkingSkeleton_Plan.md
 // §11 S3.7). This is scaffolding for the coverage-audit-owed guard-vitality
 // confirmation (Mendeleev's dim-11 findings F4/D1, the delta audit's routing
-// of items 2/4 to T-1650 and item 3 to T-1651) -- the fixture, the three
+// of items 2/4 to T-1650 and item 3 to T-1651) -- the fixture, the six
 // static_asserts, and one baseline cell reading the kv_saturation_count
 // diagnostic pin, built here so each property can be shown able to fail
 // before Curie authors the 72-cell red suite this design specifies. The 56
@@ -17793,6 +17793,12 @@ constexpr int8_t kDdL1QWeight[4] = {1, 2, 1, 0};
 constexpr int8_t kDdL0KWeight[4] = {1, 1, 1, 2};
 constexpr int8_t kDdL1KWeight[4] = {2, 0, 1, 1};
 
+// The element count all four of kDdL{0,1}{Q,K}Weight share, used below to
+// bound DecodeDiscriminationFixture's constructor copy loop structurally
+// (T-1408 Minor 3, Poirot a37c641) instead of a literal that can drift from
+// the tables it copies or the q_weight_arr/k_weight_arr rows it copies into.
+constexpr size_t kDdMixingWeightWidth = sizeof(kDdL0QWeight) / sizeof(kDdL0QWeight[0]);
+
 constexpr int32_t DdDeterminant2x2(const int8_t* m) {
 	return static_cast<int32_t>(m[0]) * static_cast<int32_t>(m[3]) -
 	       static_cast<int32_t>(m[1]) * static_cast<int32_t>(m[2]);
@@ -17864,6 +17870,12 @@ struct DecodeDiscriminationFixture {
 	// (Critical 1, D-279 review 369a808).
 	int8_t q_weight_arr[2][4];
 	int8_t k_weight_arr[2][4];
+	static_assert(sizeof(q_weight_arr[0]) / sizeof(q_weight_arr[0][0]) == kDdMixingWeightWidth &&
+	                  sizeof(k_weight_arr[0]) / sizeof(k_weight_arr[0][0]) == kDdMixingWeightWidth,
+	              "T-1408 (Poirot a37c641 Minor 3): q_weight_arr/k_weight_arr row width must "
+	              "match kDdMixingWeightWidth -- the constructor's copy loop below is bounded by "
+	              "that constant, and a row-width drift here would make the loop overrun or "
+	              "under-fill a row");
 	int8_t v_weight_arr[2][4] = {{1, 1, 0, 1}, {0, 1, 1, 0}};
 	int8_t o_weight_arr[2][4] = {{1, 0, 1, 1}, {1, 1, 1, 0}};
 	int8_t gate_weight_arr[2][4] = {{1, 1, 1, 0}, {1, 0, 1, 1}};
@@ -17885,8 +17897,12 @@ struct DecodeDiscriminationFixture {
 		// embed_weights are copied here from the T-1650 guarded constexpr
 		// tables rather than carrying a second literal, so the
 		// static_asserts above are attached to the exact bytes this fixture
-		// runs, not to a separately-maintained shadow.
-		for (size_t d = 0; d < 4; ++d) {
+		// runs, not to a separately-maintained shadow. Bounded by
+		// kDdMixingWeightWidth (T-1408 Minor 3, Poirot a37c641), not a
+		// literal, and the static_assert beside q_weight_arr/k_weight_arr's
+		// declaration above couples that constant to both members' actual
+		// row width.
+		for (size_t d = 0; d < kDdMixingWeightWidth; ++d) {
 			f.q_weight_arr[0][d] = kDdL0QWeight[d];
 			f.q_weight_arr[1][d] = kDdL1QWeight[d];
 			f.k_weight_arr[0][d] = kDdL0KWeight[d];
@@ -17996,14 +18012,27 @@ constexpr DdBaselineCase kDdBaselineCases[4] = {
 
 // Significant 4 fix (D-279 review 369a808): the in-source comment above
 // promises "a fifth prompt added later is checked by the same assert with no
-// additional code," but kDdBaselineCases was hard-coded to 4 entries while
-// two consumers index it by kDdNumPrompts -- a fifth prompt would read one
-// element past this table's end with zero diagnostics under /W4. This
-// static_assert makes the size-coupling explicit and gives a compile error
-// instead of a silent out-of-bounds read the day a fifth prompt is added.
+// additional code," but kDdBaselineCases was hard-coded to 4 entries.
+// kDdBaselineCases must cover every prompt: the baseline cell
+// (TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic, below)
+// iterates it directly by a range-for, and the differential cells index it
+// by cell.prompt_idx (kDdDifferentialCells, below). A fifth prompt added to
+// kDdPrompts without a matching fifth entry here would not fail to compile
+// or crash -- the baseline cell would silently check only four of the five
+// prompts, with no diagnostic under /W4. This static_assert makes the
+// size-coupling explicit and gives a compile error instead of that silent
+// under-coverage. Significant 2 fix (Poirot review a37c641): the original
+// wording here claimed "two consumers index it by kDdNumPrompts" and named
+// an out-of-bounds read; Critical 2's fix removed both indexings this
+// static_assert was written against, and the differential cells' own
+// indexing is bounded by kDdDifferentialCells' constexpr prompt_idx values,
+// not by kDdNumPrompts. The out-of-bounds write the original wording named
+// is closed separately, and correctly, by DdRunOutput
+// results[kDdNumPrompts] in the differential-cell loop below.
 static_assert(sizeof(kDdBaselineCases) / sizeof(kDdBaselineCases[0]) == kDdNumPrompts,
-              "T-1408: kDdBaselineCases must carry exactly kDdNumPrompts entries -- both zero "
-              "control functions index it by kDdNumPrompts");
+              "T-1408: kDdBaselineCases must carry exactly kDdNumPrompts entries -- the "
+              "baseline cell iterates it directly by range-for, and a size mismatch would "
+              "leave prompts silently unchecked rather than fail to compile");
 
 }  // namespace
 
@@ -18343,7 +18372,7 @@ static void TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutpu
 // answer to the board's "READ THIS BEFORE CITING A GREEN COUNT" header --
 // zeroing the entire attention+MLP stack failed none of 23,054 pre-existing
 // checks; here it must move decode output on at least one prompt).
-static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline() {
+static void TestDecodeDiscriminationFixtureWholeStackZeroMapMovesDecodeOutput() {
 	using superslm::SslmForwardStatus;
 
 	DecodeDiscriminationFixture fixture;
@@ -18354,6 +18383,12 @@ static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline(
 		}
 	}
 
+	// T-1408 Minor 4 (Poirot a37c641): any_not_ok is set only on the
+	// mutated run's own status, not on the fresh unmutated comparison
+	// run's. The fresh run already has its own accurate CHECK_MSG right
+	// below where it happens; feeding its failure into this flag as well
+	// would make the post-loop CHECK_MSG below ("with every weight tensor
+	// zeroed") fire for a run that had nothing zeroed.
 	bool any_not_ok = false;
 	bool any_differs = false;
 	for (size_t p = 0; p < kDdNumPrompts; ++p) {
@@ -18371,10 +18406,7 @@ static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline(
 		          "T-1408 whole-stack zero-map control: the fresh unmutated comparison run for "
 		          "prompt starting %d returned a non-Ok status",
 		          kDdPrompts[p].tokens[0]);
-		if (fresh_out.status != SslmForwardStatus::Ok) {
-			any_not_ok = true;
-			continue;
-		}
+		if (fresh_out.status != SslmForwardStatus::Ok) continue;
 		if (DdOutputsDiffer(out, fresh_out)) any_differs = true;
 	}
 	CHECK_MSG(!any_not_ok,
@@ -18390,14 +18422,16 @@ static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline(
 // The 14 per-tensor whole-zero controls (D-SLM610, reversing D-SLM605's
 // original exclusion): for each of the seven weight tensors, both layers,
 // zero that one tensor alone (the other six left at this calibration's own
-// non-identity values) and assert the committed output differs from
-// baseline on at least one prompt. Closes the gap the 56 δ=+1 cells and the
-// one whole-stack control cannot see between them: a δ=+1 mutation never
-// constructs a zero tensor, and the whole-stack control zeros all seven at
-// once, so a defect scoped to one tensor's own zero-handling can hide behind
-// the other six tensors' unaffected contribution to the same aggregate
-// "differs from baseline" assertion (plan §11 S3.7, the F3 ruling).
-static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseline() {
+// non-identity values) and assert the committed output differs from a
+// freshly-executed unmutated run of the same fixture in the same build, on
+// at least one prompt (Critical 2 fix, D-279 review 369a808). Closes the gap
+// the 56 δ=+1 cells and the one whole-stack control cannot see between them:
+// a δ=+1 mutation never constructs a zero tensor, and the whole-stack
+// control zeros all seven at once, so a defect scoped to one tensor's own
+// zero-handling can hide behind the other six tensors' unaffected
+// contribution to the same aggregate "differs from the fresh run" assertion
+// (plan §11 S3.7, the F3 ruling).
+static void TestDecodeDiscriminationFixturePerTensorZeroControlsMoveDecodeOutput() {
 	using superslm::SslmForwardStatus;
 
 	for (int layer = 0; layer < 2; ++layer) {
@@ -18406,6 +18440,9 @@ static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseli
 			int8_t* arr = DdWeightArray(fixture, t, layer);
 			for (int e = 0; e < 4; ++e) arr[e] = 0;
 
+			// T-1408 Minor 4 (Poirot a37c641): any_not_ok is set only on the
+			// mutated run's own status, not on the fresh unmutated comparison
+			// run's -- see the whole-stack control above for the reasoning.
 			bool any_not_ok = false;
 			bool any_differs = false;
 			for (size_t p = 0; p < kDdNumPrompts; ++p) {
@@ -18427,10 +18464,7 @@ static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseli
 				          "T-1408 per-tensor zero control (%s layer %d): the fresh unmutated "
 				          "comparison run for prompt starting %d returned a non-Ok status",
 				          DdTensorName(t), layer, kDdPrompts[p].tokens[0]);
-				if (fresh_out.status != SslmForwardStatus::Ok) {
-					any_not_ok = true;
-					continue;
-				}
+				if (fresh_out.status != SslmForwardStatus::Ok) continue;
 				if (DdOutputsDiffer(out, fresh_out)) any_differs = true;
 			}
 			CHECK_MSG(!any_not_ok,
@@ -19158,7 +19192,7 @@ int main(int argc, char** argv) {
 	TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly();
 
 	// T-1648/T-1650/T-1651 -- can-fail proofs for the T-1408/T-1641 committed
-	// cell design's structural guards (the three static_asserts run at
+	// cell design's structural guards (the six static_asserts run at
 	// compile time above; this is the one runtime cell, the kv_saturation_count
 	// diagnostic pin's baseline).
 	TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic();
@@ -19169,8 +19203,8 @@ int main(int argc, char** argv) {
 	// -fold-2026-08-01.md/-fold2-2026-08-01.md): 56 per-element differential
 	// cells, 1 whole-stack zero-map control, 14 per-tensor zero controls.
 	TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutput();
-	TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline();
-	TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseline();
+	TestDecodeDiscriminationFixtureWholeStackZeroMapMovesDecodeOutput();
+	TestDecodeDiscriminationFixturePerTensorZeroControlsMoveDecodeOutput();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
