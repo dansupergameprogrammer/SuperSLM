@@ -3,12 +3,16 @@
 // Produced by tests/gen_s3_2_fixtures.py. Every witness below is derived by
 // EXECUTING the vendored reference (tests/reference/superslm_spike/intmath.py)
 // or by arithmetic checked against it -- never copied from a probe, never
-// hand-computed. None of these structs has a production consumer yet: S3.2's
-// forward-composition entry points (the RMSNorm site, the WSC1 fold-apply, the
-// C28 bias-reconciliation site, BIA1's value-domain descriptor) do not exist in
-// D:\SuperSLM (verified by grep, recorded in the test-design record). This
-// header exists so the moment Brunel's header contract lands, the S3.2 red
-// cells drop in directly against these witnesses -- no further derivation owed.
+// hand-computed.
+//
+// T-1657 Poirot review, Observation 1 (corrected): this file's own preamble
+// used to state that S3.2's forward-composition entry points (the RMSNorm
+// site, the WSC1 fold-apply, the C28 bias-reconciliation site, BIA1's
+// value-domain descriptor) "do not exist in D:\\SuperSLM" -- true only at the
+// S3.2 red-phase authoring of this generator, and false since the green
+// phase (src/forward/forward_sites.cpp, src/forward/checked_chain_funnel.cpp).
+// The witnesses below are consumed by tests/test_main.cpp's own S3.2/T-1657
+// cells against those real bodies, not staged for a future build.
 //
 // Re-running this script must reproduce this file byte-for-byte.
 //
@@ -69,7 +73,6 @@ inline constexpr int kC24CodeRefNearIdentity = 127;
 inline constexpr int kC24CodeXNearIdentity = 26;  // differs from kC24CodeXPassThrough via the shared D'
 
 // --- BIA1 (Sec7.2a) magnitude descriptor -----------------------------------
-inline constexpr long long kBia1RaMax = 4294967296LL;
 inline constexpr long long kBia1HostileValue = 2147483648LL;  // one past the FORMER bound -- must now accept
 inline constexpr long long kBia1HostileValueNegated = -2147483648LL;
 inline constexpr long long kBia1AcceptBoundaryValue = 2147483647LL;  // == INT32_MAX, the former bound itself -- must accept

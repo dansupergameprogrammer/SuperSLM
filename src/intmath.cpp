@@ -63,10 +63,18 @@ inline bool SGe(S128 a, S128 b) { return a >= b; }
 inline bool SLt(S128 a, S128 b) { return a < b; }
 // Arithmetic (floor) right shift; result assumed to fit in i64.
 inline int64_t SShrToI64(S128 v, int k) { return static_cast<int64_t>(v >> k); }
-// T-1657/D-SLM621: full-width arithmetic (floor) right shift, unlike SShrToI64 above
-// which assumes (and narrows to) only the low 64 bits. k in [0,127] stays a native,
-// well-defined __int128 shift; BiasReconcileWide's own caller uses k in [0,63] only
-// (BiasReconcile's unchanged exponent-domain contract, forward_sites.h).
+// T-1657/D-SLM621/D-SLM650: full-width arithmetic (floor) right shift, unlike
+// SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
+// k in [0,63] -- RoundingDivideByPOTWide's own only caller passes an exponent already
+// bounded to that range (BiasReconcile's unchanged exponent-domain contract,
+// forward_sites.h). T-1657 Poirot Minor 3: narrowed from a documented [0,127] (this
+// path's own MSVC struct sibling below had two branches, k>=64 and k>=128, that no
+// caller of THIS function ever drove) to the range the one real caller actually
+// needs; the native __int128 shift below is well-defined over the narrower range
+// exactly as it was over the wider one, so this is a contract narrowing, not a
+// behavior change. A future caller needing [0,127] gets it from UShrFull's own wider
+// contract (that function DOES have a caller needing the full width, IExpScaleConstants)
+// rather than reviving an unexercised branch here.
 inline S128 SShrFull(S128 v, int k) { return v >> k; }
 // Representable in int64_t: the high bits are exactly the sign-extension of the low
 // 64 bits (IExpEvaluate's own narrowing comment, made an explicit, checked test here).
@@ -177,24 +185,25 @@ inline int64_t SShrToI64(S128 v, int k) {
 	return static_cast<int64_t>(lo);
 }
 
-// T-1657/D-SLM621: full-width arithmetic (floor) right shift, unlike SShrToI64 above
-// which assumes (and narrows to) only the low 64 bits. k in [0,127]; k <= 0 is the
-// identity and k >= 128 saturates to the sign fill (mirrors UShrFull's own [0,127]
-// convention above, generalized to a SIGNED, sign-extending shift). Two's-complement
-// {lo, hi}: v = hi*2^64 + lo with hi read as signed -- shifting right by k >= 64
-// leaves the low word as an arithmetic shift of hi alone (the unsigned lo contributes
-// nothing past bit 63, since 0 <= lo < 2^64), and shifting by k in [1,63] combines
+// T-1657/D-SLM621/D-SLM650: full-width arithmetic (floor) right shift, unlike
+// SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
+// k in [0,63] -- this function's own only caller, RoundingDivideByPOTWide, is itself
+// only ever called with an exponent already bounded to that range (BiasReconcile's
+// unchanged exponent-domain contract, forward_sites.h). T-1657 Poirot Minor 3: this
+// used to document and implement k in [0,127] (mirroring UShrFull's own [0,127]
+// convention above, generalized to a SIGNED, sign-extending shift) with two branches,
+// k >= 64 and k >= 128, that no caller of THIS function ever drove -- correct on
+// inspection, but relied on by nothing the suite executes. Narrowed to the range the
+// one real caller actually needs rather than left standing for a future caller to
+// rely on unverified; a future k in [64,127] need gets it from UShrFull's own wider
+// contract (that function DOES have a caller needing the full width,
+// IExpScaleConstants), not from reviving branches here. Two's-complement {lo, hi}:
+// v = hi*2^64 + lo with hi read as signed -- shifting right by k in [1,63] combines
 // bits from both words exactly as UShrToU64 does, but with hi's OWN right shift kept
-// arithmetic (sign-extending) rather than logical.
+// arithmetic (sign-extending) rather than logical; k == 0 is the identity (the
+// combined-word formula below is itself UB at k == 0, `hi << 64`).
 inline S128 SShrFull(S128 v, int k) {
-	const bool negative = static_cast<int64_t>(v.hi) < 0;
-	const uint64_t fill = negative ? ~0ull : 0ull;
 	if (k <= 0) return v;
-	if (k >= 128) return S128{fill, fill};
-	if (k >= 64) {
-		const int64_t shifted_hi = static_cast<int64_t>(v.hi) >> (k - 64);
-		return S128{static_cast<uint64_t>(shifted_hi), fill};
-	}
 	const uint64_t lo = (v.lo >> k) | (v.hi << (64 - k));
 	const int64_t hi = static_cast<int64_t>(v.hi) >> k;
 	return S128{lo, static_cast<uint64_t>(hi)};
@@ -356,10 +365,37 @@ S128 RoundingDivideByPOTWide(S128 x, int exponent) {
 }
 }  // namespace
 
+bool RoundingDivideByPotComposedExponentInDomain(int64_t q_B, int64_t e_a, int64_t* out_exponent) {
+	// T-1657 Poirot Significant 3 (D-SLM650): q_B + 62 + e_a formed in the SAME
+	// portable 128-bit facility BiasReconcileWide's own product uses, never as plain
+	// int64_t arithmetic (see intmath.h for why: the naive sum can overflow -- signed
+	// UB -- even when the true mathematical exponent is inside [0,63]). SFromI64 is an
+	// exact int64_t -> S128 widen (always representable, no overflow possible); SAdd on
+	// two such widened terms cannot itself overflow S128 (each term's magnitude is
+	// under 2^63, and three of them sum to under 2^65, far inside S128's ~2^127 range).
+	const S128 sum = SAdd(SAdd(SFromI64(q_B), SFromI64(62)), SFromI64(e_a));
+	const bool in_domain =
+	    SGe(sum, SFromI64(kRoundingDivideByPotExponentMinI64)) &&
+	    SLt(sum, SFromI64(int64_t{kRoundingDivideByPotExponentMaxI64} + 1));
+	*out_exponent = SLow64(sum);  // meaningful only when in_domain is true
+	return in_domain;
+}
+
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out) {
 	// C28's widened bias-reconciliation core (T-1657, D-SLM621/641/645) -- see
 	// intmath.h for the full contract.
-	const int64_t exponent = q_b + 62 + e_a;
+	int64_t exponent = 0;
+	if (!RoundingDivideByPotComposedExponentInDomain(q_b, e_a, &exponent)) {
+		// T-1657 Poirot Significant 3: the composed exponent itself is out of
+		// [0,63] (or would only appear in range by wrapping int64_t, which is not
+		// this function's story to tell) -- this file's own established
+		// out-of-domain-but-total convention (IExpEvaluate's precedent): report
+		// non-representable, write a defined-but-not-meaningful value, never UB.
+		// `RoundingDivideByPOTWide`'s own [0,63] contract is never invoked with an
+		// out-of-contract shift.
+		*out = 0;
+		return false;
+	}
 	const S128 wide = SMul(b, r_a);  // exact, total over the full int64_t domain of
 	                                  // both operands (SMul's own contract, this file).
 	const S128 rounded = RoundingDivideByPOTWide(wide, static_cast<int>(exponent));

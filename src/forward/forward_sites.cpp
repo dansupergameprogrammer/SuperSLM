@@ -776,20 +776,22 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // because the real body honours that contract, not because a stub does.
 namespace {
 
-// T-1656/T-1663, D-SLM642/645: the per-element magnitude-domain guard shared by every
-// C28 bias-reconciliation insertion in this file (ProjectAndFunnel's q_proj call and
-// the k/v landing path below) -- two passes over `out_channels` so a rejection
+// T-1656/T-1657/T-1663, D-SLM642/645/650: the per-element magnitude-domain guard shared
+// by every C28 bias-reconciliation insertion in this file (ProjectAndFunnel's q_proj call
+// and the k/v landing path below) -- two passes over `out_channels` so a rejection
 // anywhere in the row leaves `acc` untouched, matching this file's own "reject leaves
 // output untouched" convention (ResidualReconcileSite's own two-pass construction).
 // Returns Ok having applied every element's bias into `acc`, or
 // BiasReconcileProductOutOfDomain having applied none of them -- `bias` is assumed
-// non-null by every caller (the caller checks first). T-1663: the per-element
-// predicate is CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h), which
-// answers whether BiasReconcile's own rounded, divided result fits int64_t -- the
-// design's own T-1657 §8 amendment, replacing the retired BiasReconcileProductFitsInt64
-// (which tested the wrong, now-obsolete condition: whether the RAW product fit
-// int64_t, a strictly stronger and over-rejecting test once BiasReconcile's own
-// arithmetic widened past plain int64_t, T-1657).
+// non-null by every caller (the caller checks first). T-1657 Poirot Critical C-1: the
+// per-element predicate is CheckBiasAccumulateMagnitudeDomain (checked_chain_funnel.h),
+// which answers whether `acc[i] + BiasReconcile(...)` -- the SAME expression the second
+// loop below computes -- fits int64_t. The narrower CheckBiasReconcileMagnitudeDomain
+// (T-1663's own predicate, answering only whether BiasReconcile's own rounded, divided
+// result fits int64_t) is necessary but not sufficient here: a result 1 away from
+// int64_t's boundary is representable on its own and overflows against this row's own
+// running accumulator, which is exactly the site's own quantity, not a second
+// derivation of BiasReconcile's domain.
 SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const int64_t* bias,
                                          int64_t in_scale_m, int64_t in_scale_e) {
 	const SslmForwardStatus gate = CheckRoundingDivideByPotExponentDomain(kBiasQFormat, in_scale_e);
@@ -797,7 +799,7 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 	const int64_t r_a = CarriedScaleReciprocal(in_scale_m);  // loop-invariant, computed once
 	bool any_out_of_domain = false;
 	for (size_t i = 0; i < out_channels; ++i) {
-		if (CheckBiasReconcileMagnitudeDomain(bias[i], kBiasQFormat, r_a, in_scale_e) !=
+		if (CheckBiasAccumulateMagnitudeDomain(acc[i], bias[i], kBiasQFormat, r_a, in_scale_e) !=
 		    SslmForwardStatus::Ok) {
 			any_out_of_domain = true;
 		}
@@ -806,7 +808,9 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 		return SslmForwardStatus::BiasReconcileProductOutOfDomain;
 	}
 	for (size_t i = 0; i < out_channels; ++i) {
-		acc[i] += BiasReconcile(bias[i], kBiasQFormat, r_a, in_scale_e);  // now proven not to overflow
+		// Proven representable above, over both terms of this exact sum
+		// (CheckBiasAccumulateMagnitudeDomain), not merely over BiasReconcile's own result.
+		acc[i] += BiasReconcile(bias[i], kBiasQFormat, r_a, in_scale_e);
 	}
 	return SslmForwardStatus::Ok;
 }

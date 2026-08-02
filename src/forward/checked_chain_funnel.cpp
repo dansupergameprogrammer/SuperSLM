@@ -415,11 +415,16 @@ static_assert(kCompositionScaleMinE >= kSiluCompositionRuntimeMinE,
 
 SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a) {
 	// C28's own derived-operand pair predicate (§7.2 second limb, §4.4; S3.2):
-	// 0 <= q_B + 62 + e_a <= 63, named against RoundingDivideByPOT's own int64
-	// exponent domain constants rather than the literals 0 and 63, so neither
-	// side can drift from the primitive without failing a compile.
-	const int64_t k = q_B + 62 + e_a;
-	if (k < kRoundingDivideByPotExponentMinI64 || k > kRoundingDivideByPotExponentMaxI64) {
+	// 0 <= q_B + 62 + e_a <= 63. T-1657 Poirot Significant 3 (D-SLM650): the sum is
+	// computed by RoundingDivideByPotComposedExponentInDomain (intmath.h), the ONE
+	// place this exact derivation lives -- not by this function's own plain int64_t
+	// `q_B + 62 + e_a`, which was undefined behavior on overflow reachable even for a
+	// true sum inside [0,63] (executed: q_B = INT64_MAX, e_a = -INT64_MAX). Sharing the
+	// derivation with BiasReconcileWide's own identical need is deliberate: two
+	// independent copies of the same three-term sum is exactly the drift this
+	// predicate's own header comment already guards against for the 0/63 literals.
+	int64_t unused = 0;
+	if (!RoundingDivideByPotComposedExponentInDomain(q_B, e_a, &unused)) {
 		return SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain;
 	}
 	return SslmForwardStatus::Ok;
@@ -436,6 +441,36 @@ SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b, int6
 	int64_t unused = 0;
 	return BiasReconcileWide(b, q_b, r_a, e_a, &unused) ? SslmForwardStatus::Ok
 	                                                     : SslmForwardStatus::BiasReconcileProductOutOfDomain;
+}
+
+SslmForwardStatus CheckBiasAccumulateMagnitudeDomain(int64_t acc_i, int64_t b, int64_t q_b,
+                                                      int64_t r_a, int64_t e_a) {
+	// T-1657 Poirot Critical C-1: proves the call site's own composed expression,
+	// `acc_i + BiasReconcile(...)`, representable in int64_t -- see
+	// checked_chain_funnel.h for the full contract and why this is a different
+	// property from CheckBiasReconcileMagnitudeDomain's own (which proves only the
+	// second term).
+	int64_t term = 0;
+	if (!BiasReconcileWide(b, q_b, r_a, e_a, &term)) {
+		return SslmForwardStatus::BiasReconcileProductOutOfDomain;
+	}
+	// acc_i and term are each already-valid int64_t values (BiasReconcileWide's own
+	// `fits` having just confirmed the second). Their sum can still overflow
+	// int64_t's range, and signed overflow is UB in C++ -- so the sum and its
+	// overflow condition are both computed in the unsigned domain (two's-complement,
+	// no UB), the same convention this file's own S128 struct path (intmath.cpp)
+	// already uses for every signed add/subtract on the MSVC toolchain. Overflow of
+	// a signed add is exactly "both operands share a sign, and the sum's sign
+	// differs from theirs" -- the standard two's-complement overflow test.
+	const uint64_t ua = static_cast<uint64_t>(acc_i);
+	const uint64_t ub = static_cast<uint64_t>(term);
+	const uint64_t sum = ua + ub;
+	const bool same_sign_operands = ((ua ^ ub) >> 63) == 0;
+	const bool sum_sign_differs = ((ua ^ sum) >> 63) != 0;
+	if (same_sign_operands && sum_sign_differs) {
+		return SslmForwardStatus::BiasReconcileProductOutOfDomain;
+	}
+	return SslmForwardStatus::Ok;
 }
 
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {

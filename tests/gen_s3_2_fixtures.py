@@ -252,28 +252,33 @@ def build_c24_witness() -> dict:
 # ---------------------------------------------------------------------------
 
 def build_bia1_bound() -> dict:
+    # T-1657/D-SLM621/D-SLM650/D-SLM665 (Poirot T-1657 review, Minor 2): the derived
+    # bound this function used to compute (INT64_MAX // r_a_max) and assert tight
+    # against R_a's own maximum is retired along with the load-time gate it fed --
+    # there is no live constraint left that ties the fixture values below to R_a's
+    # maximum, so re-deriving and asserting that relationship here proved a
+    # constraint nothing enforces any more. r_a_max itself is kept and still
+    # asserted: it is a genuine, still-true property of the vendored C19 reciprocal
+    # (dynamic_scale_reciprocal is monotonically decreasing in Dn, so its maximum
+    # over Dn in [2**30, 2**31) is attained at the domain's left endpoint,
+    # Dn = 2**30) independent of any load-time gate, and this assertion is what
+    # would catch that formula drifting.
     r_a_max = im.dynamic_scale_reciprocal(1 << 30)
     assert r_a_max == 1 << 32, (
         f"R_a's derived maximum is {r_a_max}, not 2**32 -- C19's reciprocal "
         f"formula or its vendored implementation changed"
     )
-    bound = INT64_MAX // r_a_max
-    assert bound == INT32_MAX, (
-        f"BIA1's derived magnitude bound is {bound}, not INT32_MAX -- re-derive "
-        f"before pinning it into the S-HARDEN-1 descriptor table"
-    )
-    assert bound * r_a_max <= INT64_MAX, "the bound itself must keep B[j]*R_a in int64"
-    assert (bound + 1) * r_a_max > INT64_MAX, (
-        "one past the derived bound must NOT keep B[j]*R_a in int64 -- otherwise "
-        "the bound is not tight and the hostile-value fixture below would not "
-        "actually be hostile"
-    )
+    # The three fixture values below are the FORMER load-time bound's own former-
+    # boundary witnesses (INT32_MAX and one past it) -- fixed historical constants
+    # now, kept only because design §10 cell 7 proves the REVERSE claim against
+    # them: that all three load successfully, with no load-time gate left to
+    # reject any of them.
+    former_bound = INT32_MAX
     return {
         "r_a_max": r_a_max,
-        "bound": bound,                     # |B[j]| <= bound is the descriptor
-        "hostile_value": bound + 1,          # one past the bound -- must reject
-        "hostile_value_negated": -(bound + 1),
-        "accept_boundary_value": bound,      # exactly at the bound -- must accept
+        "hostile_value": former_bound + 1,          # one past the FORMER bound
+        "hostile_value_negated": -(former_bound + 1),
+        "accept_boundary_value": former_bound,      # the former bound itself
     }
 
 
@@ -566,8 +571,14 @@ def _fmt_bia1(bound: dict) -> list[str]:
     # longer, so there is no bound left to name here. The three fixture values
     # below (the former bound's own former-boundary witnesses) are kept: they
     # now prove the REVERSE claim, that all three load successfully.
+    #
+    # T-1657 Poirot review, Minor 2: `kBia1RaMax` (r_a_max, above) is not emitted
+    # here -- it fed only the retired bound derivation, is referenced by no C++
+    # code, and HEAD holds current truth (StandardsDocument §6.6): a constant with
+    # no reader is not a fixture, it is a stale name. build_bia1_bound()'s own
+    # assertion on r_a_max stays, as the live regression guard on the vendored
+    # reciprocal's maximum.
     return [
-        "inline constexpr long long kBia1RaMax = %dLL;" % bound["r_a_max"],
         "inline constexpr long long kBia1HostileValue = %dLL;  // one past the FORMER bound -- must now accept" % bound["hostile_value"],
         "inline constexpr long long kBia1HostileValueNegated = %dLL;" % bound["hostile_value_negated"],
         "inline constexpr long long kBia1AcceptBoundaryValue = %dLL;  // == INT32_MAX, the former bound itself -- must accept" % bound["accept_boundary_value"],
@@ -667,12 +678,16 @@ def generate() -> str:
         "// Produced by tests/gen_s3_2_fixtures.py. Every witness below is derived by",
         "// EXECUTING the vendored reference (tests/reference/superslm_spike/intmath.py)",
         "// or by arithmetic checked against it -- never copied from a probe, never",
-        "// hand-computed. None of these structs has a production consumer yet: S3.2's",
-        "// forward-composition entry points (the RMSNorm site, the WSC1 fold-apply, the",
-        "// C28 bias-reconciliation site, BIA1's value-domain descriptor) do not exist in",
-        "// D:\\SuperSLM (verified by grep, recorded in the test-design record). This",
-        "// header exists so the moment Brunel's header contract lands, the S3.2 red",
-        "// cells drop in directly against these witnesses -- no further derivation owed.",
+        "// hand-computed.",
+        "//",
+        "// T-1657 Poirot review, Observation 1 (corrected): this file's own preamble",
+        "// used to state that S3.2's forward-composition entry points (the RMSNorm",
+        "// site, the WSC1 fold-apply, the C28 bias-reconciliation site, BIA1's",
+        "// value-domain descriptor) \"do not exist in D:\\\\SuperSLM\" -- true only at the",
+        "// S3.2 red-phase authoring of this generator, and false since the green",
+        "// phase (src/forward/forward_sites.cpp, src/forward/checked_chain_funnel.cpp).",
+        "// The witnesses below are consumed by tests/test_main.cpp's own S3.2/T-1657",
+        "// cells against those real bodies, not staged for a future build.",
         "//",
         "// Re-running this script must reproduce this file byte-for-byte.",
         "//",

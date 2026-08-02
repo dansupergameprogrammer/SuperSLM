@@ -146,6 +146,23 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 // kNotRepresentable outcome above is the precedent this follows).
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out);
 
+// T-1657 Poirot Significant 3 (D-SLM650): the ONE derivation of C28's composed exponent
+// domain, `0 <= q_B + 62 + e_a <= 63`, that both `BiasReconcileWide` above and
+// `CheckRoundingDivideByPotExponentDomain` (checked_chain_funnel.h) call, rather than
+// each computing `q_B + 62 + e_a` as plain int64_t arithmetic independently. Plain
+// int64_t addition is undefined behavior on overflow, and the overflow is reachable
+// even when the TRUE mathematical exponent is inside [0,63]: `q_B = INT64_MAX,
+// e_a = -INT64_MAX` sums to 62, but forming `q_B + 62` first overflows before `e_a` is
+// added. This function computes the sum in the same portable 128-bit facility
+// `BiasReconcileWide`'s own product uses, so no ordering of the three terms can
+// overflow. Total over the full int64_t domain of both `q_B` and `e_a`: returns
+// whether the true sum lies in `[kRoundingDivideByPotExponentMinI64,
+// kRoundingDivideByPotExponentMaxI64]`, and writes the sum's low 64 bits to
+// `*out_exponent` unconditionally (meaningful only when the return is true — the same
+// "narrow the wide result, meaningful only in-domain" convention `BiasReconcileWide`
+// itself uses).
+bool RoundingDivideByPotComposedExponentInDomain(int64_t q_B, int64_t e_a, int64_t* out_exponent);
+
 // --- F-S3-7 / §7.2 wide-row (int64 input width) siblings ---------------------
 //
 // The declarations below are the funnel's approved API surface (§7.2, §5.5, §4.7's

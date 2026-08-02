@@ -206,19 +206,20 @@ enum class SslmForwardStatus {
 	                                          // status answers "no triple could be formed", C30's own
 	                                          // upstream construction domain
 	                                          // (kBadCoefficient/kNegativeShift/kNotRepresentable).
-	BiasReconcileProductOutOfDomain,          // T-1656/T-1663, D-SLM642/645: the magnitude-domain
-	                                          // guard at the C28 bias-reconciliation call sites
-	                                          // (ProjectAndFunnel's q_proj insertion and the k/v
-	                                          // landing path's identical insertion) found
-	                                          // BiasReconcile's own rounded, divided RESULT (not
-	                                          // the raw product -- T-1657 widened the intermediate
-	                                          // past int64_t, intmath.h's BiasReconcileWide) does
-	                                          // not fit int64_t, though the operand's own mantissa
-	                                          // fit int32_t and the exponent gate
-	                                          // (CheckRoundingDivideByPotExponentDomain) already
-	                                          // passed -- distinct from both: the operand fits, the
-	                                          // exponent gate passed, and the ROUNDED RESULT still
-	                                          // does not fit.
+	BiasReconcileProductOutOfDomain,          // T-1656/T-1657/T-1663, D-SLM642/645/650: the
+	                                          // magnitude-domain guard at the C28 bias-reconciliation
+	                                          // call sites (ProjectAndFunnel's q_proj insertion and
+	                                          // the k/v landing path's identical insertion) found
+	                                          // either BiasReconcile's own rounded, divided RESULT
+	                                          // (intmath.h's BiasReconcileWide) does not fit
+	                                          // int64_t, or -- T-1657 Poirot Critical C-1 -- that
+	                                          // result, though itself representable, does not fit
+	                                          // int64_t once added to the call site's own running
+	                                          // acc[i], the composed quantity the site actually
+	                                          // forms (CheckBiasAccumulateMagnitudeDomain below).
+	                                          // Both conditions are checked before either loop body
+	                                          // in ApplyBiasReconcileRow applies anything, so a
+	                                          // rejection for either reason leaves acc untouched.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,
@@ -423,8 +424,38 @@ SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_
 // rejected -- are accepted here as well. Does not check the exponent domain --
 // `CheckRoundingDivideByPotExponentDomain` is unchanged and still required first,
 // at the call site.
-SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b, int64_t r_a,
-                                                     int64_t e_a);
+//
+// T-1657 Poirot Minor 1 (D-SLM650): `[[nodiscard]]`, restored. The retired
+// `BiasReconcileProductFitsInt64` (T-1656) carried the sole `[[nodiscard]]` in this
+// header; this predicate matched its `Check*` siblings -- none of which have ever had
+// it -- rather than the guard it replaced, silently propagating the weaker convention
+// onto a guard predicate whose return value being dropped is a silent security
+// failure. Matching an unaudited sibling's convention is the `StandardsDocument` §7
+// sibling-pinning trap this repeats: the fix states the property directly rather than
+// copying a neighbor that was never checked for it.
+[[nodiscard]] SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b,
+                                                                   int64_t r_a, int64_t e_a);
+
+// C28's accumulate domain predicate (T-1657 Poirot Critical C-1, D-SLM650). The line
+// this guards -- forward_sites.cpp's ApplyBiasReconcileRow, `acc[i] += BiasReconcile(...)`
+// -- forms `acc[i] + result`, not `result` alone.
+// `CheckBiasReconcileMagnitudeDomain` proves the second term of that sum representable;
+// it proves nothing about the sum, which is a different property (a value 1 away from
+// int64_t's boundary is representable on its own and overflows against any nonzero
+// `acc[i]` of the same sign). This predicate proves the SAME expression the call site
+// forms: `acc_i + BiasReconcile(b, q_b, r_a, e_a)` representable in int64_t, over BOTH
+// terms of the sum -- the existing per-term magnitude domain (unchanged, computed here
+// via the same BiasReconcileWide call `CheckBiasReconcileMagnitudeDomain` uses) AND the
+// addition against the caller's own accumulator. Reuses `BiasReconcileProductOutOfDomain`
+// (D-SLM642) for both failure conditions, since the status already means "the C28 site's
+// own composed quantity does not fit int64_t" and the accumulate is that quantity's next
+// term, not a new one. Does not check the exponent domain -- the caller's existing
+// `CheckRoundingDivideByPotExponentDomain` call is unchanged and still required first, at
+// the call site, exactly as it was for `CheckBiasReconcileMagnitudeDomain`.
+// `[[nodiscard]]` for the same reason as that predicate's own (T-1657 Poirot Minor 1).
+[[nodiscard]] SslmForwardStatus CheckBiasAccumulateMagnitudeDomain(int64_t acc_i, int64_t b,
+                                                                    int64_t q_b, int64_t r_a,
+                                                                    int64_t e_a);
 
 // C32/D-SLM366's own numerator ceiling (§7.2 second limb; §14.1; §11 S3.3 §6.2,
 // §3; T-1304, D-SLM365/366/367). D-SLM365 derives a softmax row's largest i-exp

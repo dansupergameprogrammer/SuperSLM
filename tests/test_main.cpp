@@ -18473,22 +18473,26 @@ static void TestRunLayerLoopMixedProjectionBiasWiredIndependently() {
 	          static_cast<int>(k_unbiased[0]), static_cast<int>(k_unbiased[1]));
 }
 
-// §5.5 cells 3c/3d, composed: the guard actually wired into ProjectAndFunnel's
-// q_proj insertion rejects a real, composed non-canonical in_scale rather
-// than only a direct unit call -- BiasReconcileProductOutOfDomain, seq left
-// untouched.
-static void TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath() {
+// §5.5 cells 3c/3d, composed, T-1657 Poirot S-2 corrected: this fixture (bias
+// magnitude at INT32_MAX -- BIA1's former load-time bound, now unchecked at load per
+// T-1657/D-SLM621 -- against an all-zero token's degenerate D'=1 floor) is
+// DETERMINISTIC, not a four-way disjunction, and the deterministic outcome is
+// ChainInputOutOfDomain -- a downstream, unrelated guard (C29's accumulator-magnitude
+// check on the FUNNEL's own input, RequantChainChecked) rejecting first, never the
+// bias-magnitude guard this fixture's old name claimed to exercise. Measured
+// (T-1657 Poirot review, S-2): the retired and the new bias-magnitude predicate agree
+// (both accept) at every element this fixture drives, so this cell cannot and does not
+// discriminate the bias guard -- it discriminates C29's own guard instead, which is a
+// real and worth-keeping composed cell, just not the one its old name and four-way
+// CHECK_MSG claimed. Renamed and pinned to the one status this fixture actually
+// produces; TestRunLayerLoopBiasAccumulateGuardRejectsThroughComposedPath (below) is
+// the composed cell that drives the bias-magnitude guard's own rejection branch.
+static void TestRunLayerLoopHugeQBiasAllZeroTokenRejectsAtChainInputGuard() {
 	using superslm::CarriedScale;
 	using superslm::SequenceLayerState;
 	using superslm::SslmForwardStatus;
 
 	TwoLayerFixture fixture;
-	// A bias magnitude at INT32_MAX (BIA1's former load-time bound, now unchecked
-	// at load per T-1657/D-SLM621) composed against a sufficiently large r_a
-	// (driven by a small-magnitude in_scale.m the funnel's own D' factor can
-	// produce for a degenerate token) may still overflow CheckBiasReconcile
-	// MagnitudeDomain's own rounded-result test, though that test is strictly
-	// more permissive than the retired raw-product guard was (T-1657 §4).
 	static const int64_t kHugeBias[2] = {superslm::kInt32Max, superslm::kInt32Max};
 	fixture.layers[0].q_bias = kHugeBias;
 
@@ -18507,33 +18511,66 @@ static void TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath(
 	uint8_t ws[kWorkspaceSize] = {};
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, 2, 1, 2, 2, 1, 2, 1,
 	                                            fixture.view.rope_tables, ws, kWorkspaceSize);
-	// This composed witness may land Ok (the guard correctly admits it),
-	// BiasReconcileProductOutOfDomain (the magnitude guard correctly rejects
-	// it), IExpScaleDerivationOutOfDomain (the all-zero token drives a
-	// degenerate q_scale that Section A's own derivation separately rejects,
-	// upstream of and independent of this guard), or ChainInputOutOfDomain
-	// (the bias term itself, once admitted by the magnitude guard, drives the
-	// funnel's own C29 accumulator-magnitude check -- a downstream, unrelated
-	// guard also doing its job) -- all four are sound outcomes of guards doing
-	// their job; what this cell actually requires is that the call never
-	// crashes and never silently corrupts seq on a rejection. The direct-call
-	// cells above (TestBiasReconcileWideStrikeWitnessRawOverflowResultInRange,
-	// TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide) are this
-	// build's own can-fail proof for the guard itself.
-	CHECK_MSG(result == SslmForwardStatus::Ok ||
-	              result == SslmForwardStatus::BiasReconcileProductOutOfDomain ||
-	              result == SslmForwardStatus::IExpScaleDerivationOutOfDomain ||
-	              result == SslmForwardStatus::ChainInputOutOfDomain,
+	CHECK_MSG(result == SslmForwardStatus::ChainInputOutOfDomain,
 	          "cell 3c/3d composed: RunLayerLoop(q_bias=INT32_MAX, all-zero token) status == %s, "
-	          "want Ok, BiasReconcileProductOutOfDomain, IExpScaleDerivationOutOfDomain, or "
-	          "ChainInputOutOfDomain (never a crash, never a fifth status)",
+	          "want ChainInputOutOfDomain -- executed and deterministic (T-1657 Poirot S-2); a "
+	          "different result means this fixture's own composition changed and the status "
+	          "this cell pins needs re-deriving, not widening back into a disjunction",
 	          SslmForwardStatusName(result));
-	if (result == SslmForwardStatus::BiasReconcileProductOutOfDomain) {
-		CHECK_MSG(seq.hidden_codes[0] == 0 && seq.hidden_codes[1] == 0,
-		          "cell 3c/3d composed: seq.hidden_codes must be left untouched on rejection, "
-		          "got {%d,%d}",
-		          static_cast<int>(seq.hidden_codes[0]), static_cast<int>(seq.hidden_codes[1]));
-	}
+	CHECK_MSG(seq.hidden_codes[0] == 0 && seq.hidden_codes[1] == 0,
+	          "cell 3c/3d composed: seq.hidden_codes must be left untouched on rejection, got "
+	          "{%d,%d}",
+	          static_cast<int>(seq.hidden_codes[0]), static_cast<int>(seq.hidden_codes[1]));
+}
+
+// T-1657 Poirot Significant 1/Critical C-1, closed: the bias-magnitude guard's own
+// rejection branch (ApplyBiasReconcileRow, forward_sites.cpp -- the loop that returns
+// BiasReconcileProductOutOfDomain and leaves acc untouched) is entered by NO cell in
+// this suite prior to this one (measured by instrumentation, T-1657 Poirot review S-1).
+// This fixture drives it through the REAL composed RunLayerLoop path -- not a direct
+// unit call -- using values read off this build's own execution, not hand-derived:
+// codes={5,-5}, hidden_scale={2^30,0}, attn_norm_site_constant.e=-90 compose (measured)
+// to r_a=2^32, in_scale.e=-60 at the q_proj call, giving a composed exponent of exactly
+// 32 (kBiasQFormat(30)+62-60) -- at which BiasReconcile(b,...) == b EXACTLY (r_a/2^32 ==
+// 1, no rounding), so the bias field controls the per-element term with full int64_t
+// precision. bias[0]=INT64_MAX makes term[0]==INT64_MAX exactly; the row's own
+// pre-bias GEMM accumulator at this fixture is {127,-127} (measured, identity-weighted
+// normalized codes), so acc[0]+term[0] overflows past INT64_MAX by 127. bias[1]=
+// INT64_MIN is the negative-side mirror, overflowing past INT64_MIN. This is
+// CheckBiasAccumulateMagnitudeDomain's own rejection (T-1657 Critical C-1's remedy),
+// not C29's downstream guard (contrast the previous cell, which drives that one
+// instead) -- both channels are individually representable
+// (CheckBiasReconcileMagnitudeDomain would accept both terms on their own) and reject
+// only once summed against this row's own accumulator, which is exactly the property
+// C-1's remedy exists to check.
+static void TestRunLayerLoopBiasAccumulateGuardRejectsThroughComposedPath() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	fixture.layers[0].attn_norm_site_constant.e = -90;
+	fixture.iexp_softmax_khead_e_arr[0] = -44;
+	static const int64_t kBoundaryBias[2] = {INT64_MAX, INT64_MIN};
+	fixture.layers[0].q_bias = kBoundaryBias;
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws[kWorkspaceSize] = {};
+	const auto result = superslm::RunLayerLoop(seq, fixture.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                            fixture.view.rope_tables, ws, kWorkspaceSize);
+	CHECK_MSG(result == SslmForwardStatus::BiasReconcileProductOutOfDomain,
+	          "cell (T-1657 S-1/C-1) composed: RunLayerLoop(q_bias={INT64_MAX,INT64_MIN}, "
+	          "codes={5,-5}) status == %s, want BiasReconcileProductOutOfDomain -- the "
+	          "bias-magnitude guard's own rejection branch, driven through the real composed "
+	          "path",
+	          SslmForwardStatusName(result));
+	CHECK_MSG(seq.hidden_codes[0] == 5 && seq.hidden_codes[1] == -5,
+	          "cell (T-1657 S-1/C-1) composed: seq.hidden_codes must be left untouched on "
+	          "rejection, got {%d,%d}",
+	          static_cast<int>(seq.hidden_codes[0]), static_cast<int>(seq.hidden_codes[1]));
 }
 
 // §6.1: the cross-section composition cell (T-1655 x T-1656) -- a nonzero
@@ -19298,7 +19335,8 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopBiasExponentGateRejectsAtBothIndependentSites();
 	TestRunLayerLoopKvLandingBiasCompositionDiffersFromUnbiased();
 	TestRunLayerLoopMixedProjectionBiasWiredIndependently();
-	TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath();
+	TestRunLayerLoopHugeQBiasAllZeroTokenRejectsAtChainInputGuard();
+	TestRunLayerLoopBiasAccumulateGuardRejectsThroughComposedPath();
 	TestRunLayerLoopCrossSectionBiasPresentDoesNotBreakPerKvHeadDerivation();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

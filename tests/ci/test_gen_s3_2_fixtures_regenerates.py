@@ -104,12 +104,19 @@ def test_c31_site_case_is_reachable_and_genuinely_diverges():
         assert e["h"] < 0, "a divergent element must be negative (F-S3-2's own class)"
 
 
-def test_bia1_bound_is_int32_max_and_is_tight():
+def test_bia1_former_bound_witnesses_are_int32_max_and_r_a_max_still_asserted():
+    # T-1657 Poirot review, Minor 2: build_bia1_bound() no longer re-derives or
+    # asserts tightness of the retired load-time bound (there is no live
+    # constraint left for "tight" to describe) -- this test now checks the two
+    # properties that ARE still live: r_a_max is the vendored reciprocal's own
+    # genuine maximum, and the three fixture values are the former bound's fixed
+    # historical witnesses (INT32_MAX and one past it), independent of any
+    # derivation from r_a_max.
     bound = gen.build_bia1_bound()
     assert bound["r_a_max"] == 1 << 32
-    assert bound["bound"] == (1 << 31) - 1
-    assert bound["bound"] * bound["r_a_max"] <= (1 << 63) - 1
-    assert (bound["bound"] + 1) * bound["r_a_max"] > (1 << 63) - 1
+    assert bound["accept_boundary_value"] == (1 << 31) - 1
+    assert bound["hostile_value"] == (1 << 31)
+    assert bound["hostile_value_negated"] == -(1 << 31)
 
 
 def test_c28_domain_boundary_rejects_outside_0_63_and_accepts_the_endpoints():
