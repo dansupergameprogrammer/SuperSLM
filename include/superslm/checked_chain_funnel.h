@@ -146,6 +146,12 @@ enum class SslmForwardStatus {
 	                                          // `WorkspaceTooSmall` used to be returned here, which
 	                                          // sends a host that enlarges its buffer into an infinite
 	                                          // retry against a size no buffer satisfies.
+	KvHeadGeometryMismatch,                   // num_key_value_heads == 0, or num_key_value_heads >
+	                                          // num_heads, or num_heads % num_key_value_heads != 0 --
+	                                          // a CFG1 geometry fact, mirroring HeadDimGeometryMismatch's
+	                                          // own class; checked immediately after it, on the query
+	                                          // head count HeadDimGeometryMismatch's own check has just
+	                                          // proven in-domain (T-1654, S3.8a).
 	SequenceAlreadyComplete,                  // Significant 6: `seq.layer_index >= num_hidden_layers`
 	                                          // at entry -- there are no more layers to advance
 	                                          // through for this token, whether because the sequence

@@ -849,11 +849,18 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
-                                 size_t hidden_size, size_t head_dim, size_t intermediate_size,
-                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 uint8_t* workspace, size_t workspace_size,
-                                 std::string_view site_prefix, size_t token_index,
-                                 SslmTraceHookState* trace_hook_state) {
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, std::string_view site_prefix,
+                                 size_t token_index, SslmTraceHookState* trace_hook_state) {
+	// T-1654 (S3.8a), commit 1 of the sub-slot's phased sequence: the
+	// parameter is accepted here and threaded through the signature; it is
+	// not yet read by any guard or sizing formula in this commit. The guard
+	// (KvHeadGeometryMismatch), the corrected K/V workspace sizing formula,
+	// and the three re-indexed per-layer call sites land together in the
+	// sub-slot's behavioral commit, on top of this mechanical one.
+	(void)num_key_value_heads;
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
 	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
@@ -1396,8 +1403,9 @@ int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {
 // in.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
-    size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
-    const SslmTensorManifest& rope_tables, const int32_t* prompt_tokens, size_t prompt_len,
+    size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size,
+    int64_t context_cap, const SslmTensorManifest& rope_tables, const int32_t* prompt_tokens,
+    size_t prompt_len,
     const int8_t* embed_weights, CarriedScale embed_site_constant, const int32_t* final_norm_gain,
     CarriedScale final_norm_site_constant, const int8_t* head_weights, int32_t vocab_size,
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens, uint8_t* workspace,
@@ -1471,8 +1479,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
 		return RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
-		                     hidden_size, head_dim, intermediate_size, context_cap, rope_tables,
-		                     workspace, workspace_size);
+		                     hidden_size, head_dim, num_key_value_heads, intermediate_size,
+		                     context_cap, rope_tables, workspace, workspace_size);
 	};
 
 	// Prefill: every prompt token except the last (the last is folded into

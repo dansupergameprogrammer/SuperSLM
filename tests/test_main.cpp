@@ -13338,7 +13338,8 @@ static void TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUncha
 
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                             /*layer_budget=*/0, /*hidden_size=*/2,
-	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                                             /*intermediate_size=*/2,
 	                                             /*context_cap=*/1, fixture.view.rope_tables,
 	                                             workspace, sizeof(workspace));
 	CHECK_MSG(result == SslmForwardStatus::InvalidLayerBudget,
@@ -13387,7 +13388,8 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
-		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                                             /*intermediate_size=*/2,
 		                                             /*context_cap=*/1, fixture.view.rope_tables,
 		                                             workspace, sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::SequenceAlreadyComplete,
@@ -13421,7 +13423,8 @@ static void TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk() {
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/0,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
-		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                                             /*intermediate_size=*/2,
 		                                             /*context_cap=*/1, fixture.view.rope_tables,
 		                                             workspace, /*workspace_size=*/0);
 		CHECK_MSG(result == SslmForwardStatus::SequenceAlreadyComplete,
@@ -13469,7 +13472,8 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 		                                             /*layer_budget=*/1, /*hidden_size=*/3,
-		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                                             /*intermediate_size=*/2,
 		                                             /*context_cap=*/1, fixture.view.rope_tables,
 		                                             workspace, sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::HeadDimGeometryMismatch,
@@ -13495,7 +13499,8 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
-		                                             /*head_dim=*/0, /*intermediate_size=*/2,
+		                                             /*head_dim=*/0, /*num_key_value_heads=*/1,
+		                                             /*intermediate_size=*/2,
 		                                             /*context_cap=*/1, fixture.view.rope_tables,
 		                                             workspace, sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::HeadDimGeometryMismatch,
@@ -13544,7 +13549,8 @@ static void TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection() {
 
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                             /*layer_budget=*/1, /*hidden_size=*/2,
-	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                                             /*intermediate_size=*/2,
 	                                             /*context_cap=*/1, fixture.view.rope_tables,
 	                                             workspace, sizeof(workspace));
 	CHECK_MSG(result == SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted,
@@ -13594,7 +13600,8 @@ static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSi
 		seq.layer_index = 0xFFFFFFFEu;
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 		                                             /*layer_budget=*/1, /*hidden_size=*/2,
-		                                             /*head_dim=*/2, /*intermediate_size=*/2,
+		                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                                             /*intermediate_size=*/2,
 		                                             /*context_cap=*/0, fixture.view.rope_tables,
 		                                             /*workspace=*/nullptr, /*workspace_size=*/0);
 		CHECK_MSG(result == SslmForwardStatus::InvalidContextCap,
@@ -13631,7 +13638,7 @@ static void TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSi
 		std::memset(workspace, 0xEE, sizeof(workspace));
 		const auto result = superslm::RunLayerLoop(
 		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/2,
-		    /*head_dim=*/2, /*intermediate_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
 		    /*context_cap=*/-(INT64_C(1) << 62), fixture.view.rope_tables, workspace,
 		    sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::InvalidContextCap,
@@ -13674,6 +13681,7 @@ static void TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget() {
 		uint8_t workspace[kWorkspaceSize] = {};
 		const auto result = superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, budget,
 		                                             /*hidden_size=*/2, /*head_dim=*/2,
+		                                             /*num_key_value_heads=*/1,
 		                                             /*intermediate_size=*/2, /*context_cap=*/1,
 		                                             fixture.view.rope_tables, workspace,
 		                                             sizeof(workspace));
@@ -13725,7 +13733,8 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	uint8_t full_workspace[kWorkspaceSize] = {};
 	const auto full_result =
 	    superslm::RunLayerLoop(full_seq, fixture.layers, kNumLayers, /*layer_budget=*/kNumLayers,
-	                             /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                             /*intermediate_size=*/2,
 	                             /*context_cap=*/1, fixture.view.rope_tables, full_workspace,
 	                             sizeof(full_workspace));
 	CHECK_MSG(full_result == SslmForwardStatus::Ok,
@@ -13741,7 +13750,8 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	uint8_t resumed_workspace[kWorkspaceSize] = {};
 	const auto first_step =
 	    superslm::RunLayerLoop(resumed_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
-	                             /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                             /*intermediate_size=*/2,
 	                             /*context_cap=*/1, fixture.view.rope_tables, resumed_workspace,
 	                             sizeof(resumed_workspace));
 	CHECK_MSG(first_step == SslmForwardStatus::Ok,
@@ -13750,7 +13760,8 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 	          SslmForwardStatusName(first_step));
 	const auto second_step =
 	    superslm::RunLayerLoop(resumed_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
-	                             /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                             /*intermediate_size=*/2,
 	                             /*context_cap=*/1, fixture.view.rope_tables, resumed_workspace,
 	                             sizeof(resumed_workspace));
 	CHECK_MSG(second_step == SslmForwardStatus::Ok,
@@ -13811,6 +13822,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 		uint8_t workspace[kWorkspaceSize] = {};
 		const auto first = superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
 		                                            /*hidden_size=*/2, /*head_dim=*/2,
+		                                            /*num_key_value_heads=*/1,
 		                                            /*intermediate_size=*/2, /*context_cap=*/1,
 		                                            fixture.view.rope_tables, workspace,
 		                                            sizeof(workspace));
@@ -13819,6 +13831,7 @@ static void TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCall
 		}
 		const auto second = superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
 		                                             /*hidden_size=*/2, /*head_dim=*/2,
+		                                             /*num_key_value_heads=*/1,
 		                                             /*intermediate_size=*/2, /*context_cap=*/1,
 		                                             fixture.view.rope_tables, workspace,
 		                                             sizeof(workspace));
@@ -14080,7 +14093,8 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result =
 	    superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
-	                             /*hidden_size=*/4, /*head_dim=*/2, /*intermediate_size=*/2,
+	                             /*hidden_size=*/4, /*head_dim=*/2, /*num_key_value_heads=*/2,
+	                             /*intermediate_size=*/2,
 	                             /*context_cap=*/1, view.rope_tables, workspace,
 	                             sizeof(workspace), /*site_prefix=*/{}, /*token_index=*/0,
 	                             &hook_state);
@@ -14182,8 +14196,8 @@ static void TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter() {
 		uint8_t workspace[kWorkspaceSize] = {};
 		const auto result = superslm::RunLayerLoop(
 		    seq, &fixture.layer, /*num_hidden_layers=*/1, /*layer_budget=*/1,
-		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
-		    fixture.view.rope_tables, workspace, sizeof(workspace));
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/1, fixture.view.rope_tables, workspace, sizeof(workspace));
 		CHECK_MSG(result == SslmForwardStatus::Ok,
 		          "RunLayerLoop(saturating=%d) status == %s, want Ok", saturating ? 1 : 0,
 		          SslmForwardStatusName(result));
@@ -14351,6 +14365,7 @@ static void TestRunLayerLoopCachesKPostRotationNotPreRotation() {
 	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result = superslm::RunLayerLoop(seq, &lw, /*num_hidden_layers=*/1, /*layer_budget=*/1,
 	                                             /*hidden_size=*/2, /*head_dim=*/2,
+	                                             /*num_key_value_heads=*/1,
 	                                             /*intermediate_size=*/2, /*context_cap=*/1,
 	                                             view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(result == SslmForwardStatus::Ok, "RunLayerLoop status == %s, want Ok",
@@ -14413,7 +14428,8 @@ static void TestRunLayerLoopMidLayerRejectionLeavesSeqExactlyAsBeforeTheAttempt(
 	uint8_t workspace[kWorkspaceSize] = {};
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                             /*layer_budget=*/1, /*hidden_size=*/2,
-	                                             /*head_dim=*/2, /*intermediate_size=*/2,
+	                                             /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                                             /*intermediate_size=*/2,
 	                                             /*context_cap=*/1, fixture.view.rope_tables,
 	                                             workspace, sizeof(workspace));
 	CHECK_MSG(result != SslmForwardStatus::Ok,
@@ -14573,8 +14589,9 @@ superslm::SslmForwardStatus RunOneWholeTokenDirect(superslm::SequenceLayerState&
 	seq.hidden_scale = superslm::CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 	return superslm::RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
-	                               /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
-	                               context_cap, rope_tables, workspace, workspace_size);
+	                               /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                               /*intermediate_size=*/2, context_cap, rope_tables, workspace,
+	                               workspace_size);
 }
 
 }  // namespace
@@ -14850,8 +14867,8 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	// are exactly what this call sees and exactly what it must leave behind.
 	const auto reject_status = superslm::RunLayerLoop(
 	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2, /*hidden_size=*/2,
-	    /*head_dim=*/2, /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables, workspace,
-	    sizeof(workspace));
+	    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(reject_status == SslmForwardStatus::KvCapacityExhausted,
 	          "context axis sub-cell 4: status == %s, want KvCapacityExhausted (context_length==%lld "
 	          "== context_cap==%lld)",
@@ -14908,8 +14925,8 @@ static void TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast() {
 	// way rather than corrupting the handle -- the rejection is idempotent.
 	const auto reject_again = superslm::RunLayerLoop(
 	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2, /*hidden_size=*/2,
-	    /*head_dim=*/2, /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables, workspace,
-	    sizeof(workspace));
+	    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, kContextCap,
+	    fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(reject_again == SslmForwardStatus::KvCapacityExhausted,
 	          "context axis guard-vitality: re-issuing the SAME rejected call gave %s, want "
 	          "KvCapacityExhausted again (the rejection must be idempotent, not a one-shot poison "
@@ -14966,8 +14983,8 @@ static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition()
 	seq_b.layer_index = 0;
 	auto st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2,
 	                                  /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
-	                                  /*intermediate_size=*/2, kContextCap, fixture_b.view.rope_tables,
-	                                  ws_b, sizeof(ws_b));
+	                                  /*num_key_value_heads=*/1, /*intermediate_size=*/2, kContextCap,
+	                                  fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path B (t2, first half) status == %s, want Ok",
 	          SslmForwardStatusName(st));
 	CHECK_MSG(seq_b.layer_index == 1, "cell 3 path B (t2, first half): layer_index == %u, want 1",
@@ -14976,7 +14993,8 @@ static void TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition()
 	          "cell 3 path B (t2, first half): context_length must NOT have advanced yet (still "
 	          "mid-token) -- got %lld, want 2", static_cast<long long>(seq_b.context_length));
 	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                            /*intermediate_size=*/2,
 	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 3 path B (t2, second half) status == %s, want Ok",
 	          SslmForwardStatusName(st));
@@ -15361,7 +15379,8 @@ static void TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers() {
 	seq_b.layer_index = 0;
 	const int64_t context_length_before_t2 = seq_b.context_length;
 	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                            /*intermediate_size=*/2,
 	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (b) t2 first half status == %s, want Ok",
 	          SslmForwardStatusName(st));
@@ -15370,7 +15389,8 @@ static void TestRunLayerLoopIntraTokenResumeKeepsWidthStableAcrossLayers() {
 	          static_cast<long long>(context_length_before_t2),
 	          static_cast<long long>(seq_b.context_length));
 	st = superslm::RunLayerLoop(seq_b, fixture_b.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                            /*intermediate_size=*/2,
 	                            kContextCap, fixture_b.view.rope_tables, ws_b, sizeof(ws_b));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 8 run (b) t2 second half status == %s, want Ok",
 	          SslmForwardStatusName(st));
@@ -15425,7 +15445,8 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 	st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                            /*intermediate_size=*/2,
 	                            kContextCap, fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 t1 first half status == %s, want Ok",
 	          SslmForwardStatusName(st));
@@ -15439,7 +15460,8 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 
 	// Continue the ORIGINAL to completion.
 	st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	                            /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2,
+	                            /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                            /*intermediate_size=*/2,
 	                            kContextCap, fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 original t1 second half status == %s, want Ok",
 	          SslmForwardStatusName(st));
@@ -15451,8 +15473,8 @@ static void TestRunLayerLoopSnapshotRestoreAddressableAsUnitIncludingContextLeng
 	// struct's own addressability, not workspace independence).
 	st = superslm::RunLayerLoop(snapshot, fixture.layers, /*num_hidden_layers=*/2,
 	                            /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
-	                            /*intermediate_size=*/2, kContextCap, fixture.view.rope_tables,
-	                            workspace, sizeof(workspace));
+	                            /*num_key_value_heads=*/1, /*intermediate_size=*/2, kContextCap,
+	                            fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(st == SslmForwardStatus::Ok, "cell 9 restored t1 second half status == %s, want Ok",
 	          SslmForwardStatusName(st));
 	CHECK_MSG(snapshot.context_length == 2,
@@ -15521,8 +15543,8 @@ static void TestRunLayerLoopRestoredStateAtFullCacheRejectsBeforeLandingWrite() 
 
 	const auto st = superslm::RunLayerLoop(
 	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    kContextCap, fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
 
 	CHECK_MSG(st == SslmForwardStatus::KvCapacityExhausted,
 	          "T-1585 regression: RunLayerLoop(layer_index=1, context_length==context_cap==%lld) "
@@ -15580,8 +15602,8 @@ static void TestRunLayerLoopRestoredStateNegativeContextLengthRejectedBeforeLand
 
 	const auto st = superslm::RunLayerLoop(
 	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    kContextCap, fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
 
 	CHECK_MSG(st == SslmForwardStatus::PositionOverCap,
 	          "T-1590 regression: RunLayerLoop(context_length=-1) status == %s, want "
@@ -15629,8 +15651,8 @@ static void TestRunLayerLoopRestoredStateNullHiddenCodesRejected() {
 
 	const auto st = superslm::RunLayerLoop(
 	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-	    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    kContextCap, fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
 
 	CHECK_MSG(st == SslmForwardStatus::InvalidHiddenCodes,
 	          "T-1590: RunLayerLoop(hidden_codes=nullptr) status == %s, want InvalidHiddenCodes "
@@ -15670,7 +15692,8 @@ static void TestRunLayerLoopRestoredStateLayerIndexAtMaxRejectedByExistingGuard(
 	std::memset(workspace, 0xEE, sizeof(workspace));
 	const auto st = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
 	                                        /*layer_budget=*/1, /*hidden_size=*/2, /*head_dim=*/2,
-	                                        /*intermediate_size=*/2, /*context_cap=*/3,
+	                                        /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	                                        /*context_cap=*/3,
 	                                        fixture.view.rope_tables, workspace, sizeof(workspace));
 	CHECK_MSG(st == SslmForwardStatus::SequenceAlreadyComplete,
 	          "T-1590: RunLayerLoop(layer_index=UINT32_MAX) status == %s, want "
@@ -15741,8 +15764,8 @@ static void TestRunLayerLoopRestoredStateKvSaturationCountAtMaxWrapsWithoutCorru
 		std::vector<uint8_t> workspace(kWorkspaceSize, 0xEE);
 		const SslmForwardStatus st = superslm::RunLayerLoop(
 		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-		    fixture.view.rope_tables, workspace.data(), kWorkspaceSize);
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    kContextCap, fixture.view.rope_tables, workspace.data(), kWorkspaceSize);
 		return std::make_pair(st, workspace);
 	};
 
@@ -15851,8 +15874,8 @@ static void TestRunLayerLoopRestoredStateOutOfDomainHiddenScaleRejectedWithoutCo
 
 		const SslmForwardStatus st = superslm::RunLayerLoop(
 		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
-		    /*hidden_size=*/2, /*head_dim=*/2, /*intermediate_size=*/2, kContextCap,
-		    fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    kContextCap, fixture.view.rope_tables, workspace, kDeclaredWorkspaceSize);
 
 		CHECK_MSG(workspace_buf[0] == kCanary && workspace_buf[sizeof(workspace_buf) - 1] == kCanary,
 		          "T-1597 (%s): the workspace ring (one byte immediately before, one immediately "
@@ -16413,7 +16436,8 @@ static void TestDecodeLoopFixtureRealCompositionMatchesItsOwnDerivedLogits() {
 		uint8_t workspace[kWorkspaceSize] = {};
 		const auto lst = superslm::RunLayerLoop(
 		    seq, fixture.layers_fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
-		    DecodeLoopFixture::kHiddenSize, /*head_dim=*/2, /*intermediate_size=*/2,
+		    DecodeLoopFixture::kHiddenSize, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2,
 		    /*context_cap=*/1, fixture.layers_fixture.view.rope_tables, workspace,
 		    sizeof(workspace));
 		CHECK_MSG(lst == SslmForwardStatus::Ok, "RunLayerLoop(token=%d) status == %s, want Ok",
@@ -16648,7 +16672,7 @@ struct DecodeLoopCallFixture {
 	                                  size_t max_new_tokens) {
 		return superslm::RunGreedyDecodeLoop(
 		    seq, model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
-		    /*head_dim=*/2, /*intermediate_size=*/2,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
 		    /*context_cap=*/TwoLayerFixture::kContextCap,
 		    model.layers_fixture.view.rope_tables, prompt_tokens.data(), prompt_tokens.size(),
 		    model.embed_weights, model.embed_site_constant, model.final_norm_gain(),
@@ -16692,7 +16716,8 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	const std::vector<int32_t> stop_ids = {};
 	const auto result = superslm::RunGreedyDecodeLoop(
 	    f.seq, f.model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
-	    /*head_dim=*/2, /*intermediate_size=*/2, /*context_cap=*/TwoLayerFixture::kContextCap,
+	    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/TwoLayerFixture::kContextCap,
 	    f.model.layers_fixture.view.rope_tables, prompt.data(), prompt.size(),
 	    f.model.embed_weights, f.model.embed_site_constant, f.model.final_norm_gain(),
 	    f.model.final_norm_site_constant, f.model.head_weights, DecodeLoopFixture::kVocabSize,

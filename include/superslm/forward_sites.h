@@ -727,10 +727,11 @@ struct LayerWeights {
 // remedy for a full cache; that stays S4's.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
-                                 size_t hidden_size, size_t head_dim, size_t intermediate_size,
-                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 uint8_t* workspace, size_t workspace_size,
-                                 std::string_view site_prefix = {}, size_t token_index = 0,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, std::string_view site_prefix = {},
+                                 size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
@@ -893,8 +894,8 @@ enum class SslmDecodeStopReason {
 // as before this parameter existed.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
-    size_t hidden_size, size_t head_dim, size_t intermediate_size, int64_t context_cap,
-    const SslmTensorManifest& rope_tables,
+    size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size,
+    int64_t context_cap, const SslmTensorManifest& rope_tables,
     const int32_t* prompt_tokens, size_t prompt_len,
     const int8_t* embed_weights, CarriedScale embed_site_constant,
     const int32_t* final_norm_gain, CarriedScale final_norm_site_constant,

@@ -47,6 +47,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::RopeTableExtentExceeded: return "RopeTableExtentExceeded";
 		case SslmForwardStatus::InvalidContextCap: return "InvalidContextCap";
 		case SslmForwardStatus::HeadDimGeometryMismatch: return "HeadDimGeometryMismatch";
+		case SslmForwardStatus::KvHeadGeometryMismatch: return "KvHeadGeometryMismatch";
 		case SslmForwardStatus::SequenceAlreadyComplete: return "SequenceAlreadyComplete";
 		case SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted:
 			return "SoftmaxKernelRefusedAfterGateAccepted";
