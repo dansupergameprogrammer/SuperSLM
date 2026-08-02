@@ -17693,6 +17693,350 @@ static void TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly() {
 	          "stop_reason == %d, want MaxTokensReached", static_cast<int>(f.stop_reason));
 }
 
+// ---------------------------------------------------------------------------
+// T-1648/T-1650/T-1651 -- can-fail proofs for the T-1408/T-1641 committed
+// cell design's structural guards (Claude/Vitruvius/superslm-t1408-t1641-
+// decode-discrimination-committed-cell-design-2026-08-01.md §6; the fold's
+// four-precondition ruling, Claude/Plans/SuperSLM_S3a_WalkingSkeleton_Plan.md
+// §11 S3.7). This is scaffolding for the coverage-audit-owed guard-vitality
+// confirmation (Mendeleev's dim-11 findings F4/D1, the delta audit's routing
+// of items 2/4 to T-1650 and item 3 to T-1651) -- the fixture, the three
+// static_asserts, and one baseline cell reading the kv_saturation_count
+// diagnostic pin, built here so each property can be shown able to fail
+// before Curie authors the 72-cell red suite this design specifies. The 56
+// differential cells and the 15 zero-map controls are NOT authored here --
+// those are Curie's, per T-1408's own gate.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The calibration's own fixed prompt set (Claude/Laplace/superslm-t1641-
+// decode-discriminating-calibration-2026-08-01.md §4), redeclared as a
+// fixed-size constexpr table rather than the banked harness's runtime
+// std::vector<std::vector<int32_t>> -- the design's own §6 requirement for a
+// compile-time check to be possible at all.
+struct DecodeDiscriminationPrompt {
+	const int32_t* tokens;
+	size_t len;
+};
+
+constexpr int32_t kDdPrompt0[] = {0, 1};
+constexpr int32_t kDdPrompt1[] = {1, 2};
+constexpr int32_t kDdPrompt2[] = {2, 0};
+constexpr int32_t kDdPrompt3[] = {1};
+constexpr DecodeDiscriminationPrompt kDdPrompts[] = {
+    {kDdPrompt0, 2},
+    {kDdPrompt1, 2},
+    {kDdPrompt2, 2},
+    {kDdPrompt3, 1},
+};
+constexpr size_t kDdNumPrompts = sizeof(kDdPrompts) / sizeof(kDdPrompts[0]);
+
+// T-1648 / design §6: every prompt's own tokens are pairwise distinct across
+// its positions. Null 5 of the falsification pass (D-SLM601) measured that a
+// prompt set violating this property makes the whole q/k discrimination axis
+// go silent (no committed-output difference at all). Loops over kDdPrompts by
+// its OWN size, not a fixed unroll keyed to today's four prompts, so a fifth
+// prompt added later is checked by the same assert with no additional code.
+constexpr bool AllPromptsHaveDistinctTokensPerPosition(const DecodeDiscriminationPrompt* prompts,
+                                                        size_t count) {
+	for (size_t p = 0; p < count; ++p) {
+		for (size_t i = 0; i < prompts[p].len; ++i) {
+			for (size_t j = i + 1; j < prompts[p].len; ++j) {
+				if (prompts[p].tokens[i] == prompts[p].tokens[j]) return false;
+			}
+		}
+	}
+	return true;
+}
+static_assert(AllPromptsHaveDistinctTokensPerPosition(kDdPrompts, kDdNumPrompts),
+              "T-1648: every DecodeDiscriminationFixture prompt must carry pairwise-distinct "
+              "tokens across its own positions -- a repeated token collapses the q/k "
+              "discrimination axis silently (D-SLM601 Null 5)");
+
+// T-1650, precondition 2's first predicate (plan §11 S3.7 "Mixing weights"):
+// the three embed rows for the only token ids the committed prompt set uses
+// (0, 1, 2) are pairwise distinct -- an all-pairs compare of the same shape
+// as the prompt-table check above.
+constexpr int8_t kDdEmbedWeights[6] = {5, -3, 7, 2, -4, 6};  // [vocab=3, hidden=2], row-major
+constexpr size_t kDdEmbedHidden = 2;
+constexpr size_t kDdEmbedVocab = 3;
+
+constexpr bool DdEmbedRowsEqual(const int8_t* weights, size_t hidden, size_t row_a, size_t row_b) {
+	for (size_t d = 0; d < hidden; ++d) {
+		if (weights[row_a * hidden + d] != weights[row_b * hidden + d]) return false;
+	}
+	return true;
+}
+
+constexpr bool AllEmbedRowsForUsedTokensAreDistinct(const int8_t* weights, size_t hidden,
+                                                     size_t vocab) {
+	for (size_t a = 0; a < vocab; ++a) {
+		for (size_t b = a + 1; b < vocab; ++b) {
+			if (DdEmbedRowsEqual(weights, hidden, a, b)) return false;
+		}
+	}
+	return true;
+}
+static_assert(AllEmbedRowsForUsedTokensAreDistinct(kDdEmbedWeights, kDdEmbedHidden, kDdEmbedVocab),
+              "T-1650: DecodeDiscriminationFixture's embed rows for token ids 0/1/2 must be "
+              "pairwise distinct -- a duplicate row collapses two distinct token ids into the "
+              "same pre-quantization K/Q code");
+
+// T-1650, precondition 2's second predicate: q_weight/k_weight, both layers,
+// are non-degenerate 2x2 integer matrices at this fixture's exact geometry
+// (hidden_size=2, head_dim=2) -- determinant ad-bc nonzero, so the matrix is
+// injective over the reals and cannot map two distinct embed rows to the same
+// pre-quantization output (design's own reasoning, plan §11 S3.7).
+constexpr int8_t kDdL0QWeight[4] = {2, 1, 1, 1};
+constexpr int8_t kDdL1QWeight[4] = {1, 2, 1, 0};
+constexpr int8_t kDdL0KWeight[4] = {1, 1, 1, 2};
+constexpr int8_t kDdL1KWeight[4] = {2, 0, 1, 1};
+
+constexpr int32_t DdDeterminant2x2(const int8_t* m) {
+	return static_cast<int32_t>(m[0]) * static_cast<int32_t>(m[3]) -
+	       static_cast<int32_t>(m[1]) * static_cast<int32_t>(m[2]);
+}
+
+constexpr bool AllMixingWeightsAreNonDegenerate() {
+	return DdDeterminant2x2(kDdL0QWeight) != 0 && DdDeterminant2x2(kDdL1QWeight) != 0 &&
+	       DdDeterminant2x2(kDdL0KWeight) != 0 && DdDeterminant2x2(kDdL1KWeight) != 0;
+}
+static_assert(AllMixingWeightsAreNonDegenerate(),
+              "T-1650: DecodeDiscriminationFixture's q_weight/k_weight must be non-degenerate "
+              "(nonzero determinant) at both layers -- a degenerate matrix can map two distinct "
+              "embed rows to the same pre-quantization code, silently collapsing discrimination");
+
+// T-1650, precondition 4 (plan §11 S3.7 "RoPE pinned to the identity
+// rotation"): the fixture's RoPE cos/sin tables are pinned to the identity
+// rotation at every one of this calibration's context_cap=4 rows -- the
+// cheapest of the four checks, a literal equality against named constants.
+constexpr int64_t kDdRopeIdentityCos = INT64_C(1073741824);  // 2^30
+constexpr int64_t kDdRopeIdentitySin = INT64_C(0);
+constexpr int64_t kDdContextCap = 4;
+constexpr int64_t kDdRopeCosTable[4] = {kDdRopeIdentityCos, kDdRopeIdentityCos, kDdRopeIdentityCos,
+                                        kDdRopeIdentityCos};
+constexpr int64_t kDdRopeSinTable[4] = {kDdRopeIdentitySin, kDdRopeIdentitySin, kDdRopeIdentitySin,
+                                        kDdRopeIdentitySin};
+
+constexpr bool RopeTablesAreIdentity(const int64_t* cos_table, const int64_t* sin_table,
+                                      size_t rows) {
+	for (size_t i = 0; i < rows; ++i) {
+		if (cos_table[i] != kDdRopeIdentityCos || sin_table[i] != kDdRopeIdentitySin) return false;
+	}
+	return true;
+}
+static_assert(RopeTablesAreIdentity(kDdRopeCosTable, kDdRopeSinTable,
+                                     static_cast<size_t>(kDdContextCap)),
+              "T-1650: DecodeDiscriminationFixture's RoPE tables must stay pinned to the "
+              "identity rotation -- this calibration's scores = q.K argument depends on RoPE "
+              "staying inert");
+
+// The committed calibration itself (Laplace §4), carried by a new sibling
+// fixture beside TwoLayerFixture/TwoLayerDistinctQKFixture (D-SLM603) -- its
+// own full construction, not an extension of either precedent, because this
+// calibration's softmax and residual-reconcile constants differ from both.
+// Built here ONLY far enough to run the baseline decode (T-1651's own
+// diagnostic-pin probe); the 56 differential cells and 15 zero-map controls
+// are Curie's, not authored here.
+struct DecodeDiscriminationFixture {
+	static constexpr int32_t kContextCap = static_cast<int32_t>(kDdContextCap);
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[2];
+
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_k_arr[2];  // per layer: {1, 2}
+	int64_t kv_landing_e_t_v_arr[2];  // per layer: {1, 2} (K and V alike, per §4)
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+
+	// Distinct per-tensor, per-layer backing arrays -- none of the seven
+	// tensors is identity at this calibration (Laplace §4's own table).
+	int8_t q_weight_arr[2][4] = {{2, 1, 1, 1}, {1, 2, 1, 0}};
+	int8_t k_weight_arr[2][4] = {{1, 1, 1, 2}, {2, 0, 1, 1}};
+	int8_t v_weight_arr[2][4] = {{1, 1, 0, 1}, {0, 1, 1, 0}};
+	int8_t o_weight_arr[2][4] = {{1, 0, 1, 1}, {1, 1, 1, 0}};
+	int8_t gate_weight_arr[2][4] = {{1, 1, 1, 0}, {1, 0, 1, 1}};
+	int8_t up_weight_arr[2][4] = {{2, 1, 1, 1}, {1, 1, 0, 2}};
+	int8_t down_weight_arr[2][4] = {{1, 1, 0, 1}, {2, 1, 1, 1}};
+
+	int8_t embed_weights[6] = {5, -3, 7, 2, -4, 6};   // [vocab=3, hidden=2]
+	int8_t head_weights[6] = {9, -2, -3, 8, 5, 5};    // [vocab=3, hidden=2]
+	superslm::CarriedScale embed_site_constant{INT64_C(1073741824), INT64_C(0)};
+	superslm::CarriedScale final_norm_site_constant{INT64_C(1073741824), INT64_C(-30)};
+
+	DecodeDiscriminationFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		DecodeDiscriminationFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 2;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		FixtureSection rope = MakeRop1SectionMultiRow(
+		    /*context_cap=*/kContextCap, /*pairs=*/1, kDdRopeCosTable, kDdRopeSinTable);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "DecodeDiscriminationFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		// Laplace §3.2: e_t = 1 (layer 0), e_t = 2 (layer 1), K and V alike.
+		f.kv_landing_e_t_k_arr[0] = 1;
+		f.kv_landing_e_t_k_arr[1] = 2;
+		f.kv_landing_e_t_v_arr[0] = 1;
+		f.kv_landing_e_t_v_arr[1] = 2;
+
+		for (int l = 0; l < 2; ++l) {
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain;
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.q_weight_arr[l];
+			lw.k_weight = f.k_weight_arr[l];
+			lw.v_weight = f.v_weight_arr[l];
+			lw.o_weight = f.o_weight_arr[l];
+			lw.proj_identity = 1;
+			lw.proj_mult = 0;
+			lw.proj_shift = 0;
+			lw.q_site_constant = canonical;
+			// Laplace §4: o_site_constant.e -- layer 0 = -26, layer 1 = -7.
+			lw.o_site_constant = CarriedScale{INT64_C(1073741824), l == 0 ? INT64_C(-26) : INT64_C(-7)};
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = &f.kv_landing_e_t_k_arr[l];
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = &f.kv_landing_e_t_v_arr[l];
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			// Laplace §3.1, the E=-43 row: q_ln2=4064, q_b=7934, q_c=32,996,387.
+			lw.q_ln2 = INT64_C(4064);
+			lw.q_b_iexp = INT64_C(7934);
+			lw.q_c_iexp = INT64_C(32996387);
+			lw.mlp_norm_gain = f.norm_gain;
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.gate_weight_arr[l];
+			lw.up_weight = f.up_weight_arr[l];
+			lw.down_weight = f.down_weight_arr[l];
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+			// Laplace §4: down_site_constant.e -- layer 0 = -34, layer 1 = -18.
+			lw.down_site_constant =
+			    CarriedScale{INT64_C(1073741824), l == 0 ? INT64_C(-34) : INT64_C(-18)};
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+
+	DecodeDiscriminationFixture(const DecodeDiscriminationFixture&) = delete;
+	DecodeDiscriminationFixture& operator=(const DecodeDiscriminationFixture&) = delete;
+	DecodeDiscriminationFixture(DecodeDiscriminationFixture&&) = delete;
+	DecodeDiscriminationFixture& operator=(DecodeDiscriminationFixture&&) = delete;
+};
+
+// Laplace §4's own baseline table -- the labeled regression pin of this
+// construction at this commit (D-SLM533's cell-form condition: never a
+// correctness claim). `kv_saturation_count` here is T-1651's own subject: the
+// fold's own D-SLM616 ruling reclassifies it from a fourth guard to a
+// diagnostic, but T-1651's can-fail probe is unchanged by that ruling (fold2
+// §6) -- the mechanism must still be shown to actually fire.
+struct DdBaselineCase {
+	const int32_t* prompt;
+	size_t prompt_len;
+	int32_t expected_tokens[3];
+	int32_t expected_logits[3][3];
+	uint64_t expected_kv_saturation_count;
+};
+
+constexpr DdBaselineCase kDdBaselineCases[4] = {
+    {kDdPrompt0, 2, {0, 0, 0}, {{1037, 43, 900}, {1037, 43, 900}, {1037, 43, 900}}, 1},
+    {kDdPrompt1, 2, {2, 2, 2}, {{995, 211, 1005}, {989, 235, 1020}, {983, 259, 1035}}, 1},
+    {kDdPrompt2, 2, {0, 0, 0}, {{1019, 115, 945}, {1025, 91, 930}, {1027, 83, 925}}, 0},
+    {kDdPrompt3, 1, {0, 0, 0}, {{1027, 83, 925}, {1031, 67, 915}, {1031, 67, 915}}, 1},
+};
+
+}  // namespace
+
+// T-1651's own baseline cell: runs the real driver over all four of Laplace
+// §4's prompts against a fresh DecodeDiscriminationFixture/sequence each, and
+// asserts BOTH the labeled regression pin (tokens, logits) AND the
+// kv_saturation_count diagnostic pin's baseline values (1, 1, 0, 1) -- the
+// value T-1651's can-fail probe (build clean, hand-edit one pinned count,
+// confirm the freshly-built test fails, revert) is run against.
+static void TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmDecodeStopReason;
+
+	for (const DdBaselineCase& c : kDdBaselineCases) {
+		DecodeDiscriminationFixture fixture;
+
+		int8_t hidden_codes[2] = {INT8_C(-77), INT8_C(-77)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+
+		// Laplace §4: workspace 32 bytes (2 layers * context_cap=4 * 1 kv_head *
+		// head_dim=2 * 2 (K+V)) -- the exact required size.
+		uint8_t workspace[32] = {};
+		int32_t out_tokens[3] = {INT32_C(-99), INT32_C(-99), INT32_C(-99)};
+		int32_t out_logit_rows[9] = {INT32_C(-99), INT32_C(-99), INT32_C(-99), INT32_C(-99),
+		                              INT32_C(-99), INT32_C(-99), INT32_C(-99), INT32_C(-99),
+		                              INT32_C(-99)};
+		size_t tokens_produced = 7777;
+		SslmDecodeStopReason stop_reason = static_cast<SslmDecodeStopReason>(7777);
+		const int32_t stop_ids[1] = {};
+
+		const auto status = superslm::RunGreedyDecodeLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*hidden_size=*/2, /*head_dim=*/2,
+		    /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/DecodeDiscriminationFixture::kContextCap, fixture.view.rope_tables,
+		    c.prompt, c.prompt_len, fixture.embed_weights, fixture.embed_site_constant,
+		    fixture.layers[0].attn_norm_gain, fixture.final_norm_site_constant, fixture.head_weights,
+		    /*vocab_size=*/3, stop_ids, /*stop_count=*/0, /*max_new_tokens=*/3, workspace,
+		    sizeof(workspace), out_tokens, out_logit_rows, /*out_tokens_capacity=*/3, &tokens_produced,
+		    &stop_reason);
+		CHECK_MSG(status == SslmForwardStatus::Ok,
+		          "T-1651 baseline: RunGreedyDecodeLoop(prompt starting %d) status == %s, want Ok",
+		          c.prompt[0], SslmForwardStatusName(status));
+		if (status != SslmForwardStatus::Ok) continue;
+
+		for (int i = 0; i < 3; ++i) {
+			CHECK_MSG(out_tokens[i] == c.expected_tokens[i],
+			          "T-1651 baseline (prompt starting %d): out_tokens[%d] == %d, want %d",
+			          c.prompt[0], i, out_tokens[i], c.expected_tokens[i]);
+			for (int v = 0; v < 3; ++v) {
+				CHECK_MSG(out_logit_rows[i * 3 + v] == c.expected_logits[i][v],
+				          "T-1651 baseline (prompt starting %d): out_logit_rows[%d][%d] == %d, "
+				          "want %d",
+				          c.prompt[0], i, v, out_logit_rows[i * 3 + v], c.expected_logits[i][v]);
+			}
+		}
+		// T-1651's own subject: the kv_saturation_count diagnostic pin.
+		CHECK_MSG(seq.kv_saturation_count == c.expected_kv_saturation_count,
+		          "T-1651: seq.kv_saturation_count (prompt starting %d) == %llu, want %llu -- "
+		          "the diagnostic pin's own baseline value (Laplace §4)",
+		          c.prompt[0], static_cast<unsigned long long>(seq.kv_saturation_count),
+		          static_cast<unsigned long long>(c.expected_kv_saturation_count));
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -18401,6 +18745,12 @@ int main(int argc, char** argv) {
 	TestRunGreedyDecodeLoopEmptyStopSetRunsToMaxTokenCount();
 	TestRunGreedyDecodeLoopStopIdMatchTerminatesWithTokenInOutputAndBothDigests();
 	TestRunGreedyDecodeLoopNeverProducedStopIdDoesNotTerminateEarly();
+
+	// T-1648/T-1650/T-1651 -- can-fail proofs for the T-1408/T-1641 committed
+	// cell design's structural guards (the three static_asserts run at
+	// compile time above; this is the one runtime cell, the kv_saturation_count
+	// diagnostic pin's baseline).
+	TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
