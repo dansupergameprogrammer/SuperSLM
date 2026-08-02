@@ -58,6 +58,18 @@ import argparse
 import sys
 from pathlib import Path
 
+# The default Windows console encoding is cp1252, which cannot represent most of
+# what this tool exists to print -- CJK, Cyrillic, Arabic and emoji all raise
+# UnicodeEncodeError on write. Force UTF-8 on both streams at import so the tool
+# works on a bare console instead of requiring the caller to remember
+# PYTHONIOENCODING. errors="replace" keeps a display-only limitation from ever
+# masquerading as a tokenization failure.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # non-reconfigurable stream; nothing to do
+        pass
+
 DEFAULT_TOKENIZER = Path(
     r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v1-merged"
 )
