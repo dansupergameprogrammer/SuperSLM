@@ -40,6 +40,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -403,16 +404,31 @@ int main(int argc, char** argv) {
 	std::vector<int32_t> stop_ids;
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
-			max_new_tokens = static_cast<size_t>(std::stoul(argv[++i]));
+			const std::string val = argv[++i];
+			try {
+				max_new_tokens = static_cast<size_t>(std::stoul(val));
+			} catch (const std::exception&) {
+				std::fprintf(stderr, "invalid --max-new value: \"%s\" (expected an unsigned integer)\n",
+				             val.c_str());
+				PrintUsage(argv[0]);
+				return 2;
+			}
 		} else if (std::strcmp(argv[i], "--stop") == 0 && i + 1 < argc) {
 			const std::string spec = argv[++i];
 			size_t pos = 0;
-			while (pos < spec.size()) {
-				const size_t comma = spec.find(',', pos);
-				const std::string one = spec.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
-				if (!one.empty()) stop_ids.push_back(static_cast<int32_t>(std::stol(one)));
-				if (comma == std::string::npos) break;
-				pos = comma + 1;
+			try {
+				while (pos < spec.size()) {
+					const size_t comma = spec.find(',', pos);
+					const std::string one = spec.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+					if (!one.empty()) stop_ids.push_back(static_cast<int32_t>(std::stol(one)));
+					if (comma == std::string::npos) break;
+					pos = comma + 1;
+				}
+			} catch (const std::exception&) {
+				std::fprintf(stderr, "invalid --stop value: \"%s\" (expected comma-separated integers)\n",
+				             spec.c_str());
+				PrintUsage(argv[0]);
+				return 2;
 			}
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
@@ -531,10 +547,32 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	const int8_t* embed_weights = reinterpret_cast<const int8_t*>(embed_w->data);
-	// tie_word_embeddings: the head reuses the embedding matrix; no separate
-	// lm_head WGT1 tensor exists in this artifact (verified: only "embed" is
-	// present at the [vocab_size, hidden_size] shape).
-	const int8_t* head_weights = embed_weights;
+	// tie_word_embeddings is the CALLER's resolution (forward_sites.h:828,
+	// "weights[tie ? \"embed\" : \"lm_head\"]"): when the artifact ties the
+	// head to the embedding matrix, the head reuses embed_weights; when it
+	// does not, a dedicated "lm_head" WGT1 tensor must be present. This
+	// artifact happens to tie (tie=1, printed above), but that is a fact
+	// about THIS artifact, not a fact this driver may assume -- CFG1's
+	// tie_word_embeddings is a legal 0 (accepted by SslmModel::Load,
+	// src/model.cpp:483; already produced by
+	// tools/sslm_pinned_calibration_fixture.py and
+	// tools/test_sslm_convert_loader_join.py). An unconditional embed
+	// fallback would compute logits against the wrong matrix on a tie=0
+	// artifact and exit 0 -- the only silent-wrong-answer path in a file
+	// whose every other stage fails loudly.
+	const int8_t* head_weights = nullptr;
+	if (model_view.config.tie_word_embeddings) {
+		head_weights = embed_weights;
+	} else {
+		const SslmTensorView* lm_head_w = model_view.weights.Tensor("lm_head");
+		if (!lm_head_w) {
+			std::fprintf(stderr,
+			             "FAILED at stage=head_marshal: tie_word_embeddings=0 but no \"lm_head\" WGT1 "
+			             "tensor is present -- cannot resolve the head weight matrix\n");
+			return 1;
+		}
+		head_weights = reinterpret_cast<const int8_t*>(lm_head_w->data);
+	}
 
 	const int64_t context_cap = static_cast<int64_t>(model_view.config.context_cap);
 	const size_t kv_bytes = static_cast<size_t>(num_hidden_layers) * static_cast<size_t>(context_cap) *
