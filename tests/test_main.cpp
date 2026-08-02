@@ -15019,9 +15019,10 @@ static void TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold()
 	int64_t oracle_vacc[4] = {};
 	superslm::GemmInt8AccumulateRow(oracle_normed, oracle_identity4x4, 4, 4, oracle_vacc);
 
-	// proj_identity=1/mult=0/shift=0 in this cell's own LayerWeights below,
-	// so ApplyWeightScaleFold(acc, 1, 0, 0) == acc unchanged (pass-through)
-	// -- matching the production call site's own `vf` ahead of landing.
+	// v_fold_identity=1/v_fold_mult=0/v_fold_shift=0 in this cell's own
+	// LayerWeights below, so ApplyWeightScaleFold(acc, 1, 0, 0) == acc
+	// unchanged (pass-through) -- matching the production call site's own
+	// `vf` ahead of landing.
 	int8_t oracle_v_landed[4] = {};
 	for (int i = 0; i < 4; ++i) {
 		const int64_t vf = superslm::ApplyWeightScaleFold(oracle_vacc[i], /*identity=*/1,
