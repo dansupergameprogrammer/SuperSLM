@@ -437,13 +437,20 @@ bool BiasReconcileProductFitsInt64(int64_t b, int64_t r_a) {
 	// which would misread a magnitude of exactly 2^63 as negative) -- representability
 	// is then a plain unsigned test: the high 64 bits are zero and the low 64 bits do
 	// not exceed INT64_MAX.
-	// RED DEMONSTRATION (temporary, this commit only): the guard's own body is
-	// stubbed to the pre-fix, always-admits behaviour so the newly-authored
-	// red suite can be shown failing against it before the real body (the
-	// next commit) makes it pass.
-	(void)b;
-	(void)r_a;
-	return true;
+	const uint64_t abs_b = b < 0 ? (~static_cast<uint64_t>(b) + 1u) : static_cast<uint64_t>(b);
+	const uint64_t abs_r = r_a < 0 ? (~static_cast<uint64_t>(r_a) + 1u) : static_cast<uint64_t>(r_a);
+	const uint64_t ll = (abs_b & 0xFFFFFFFFull) * (abs_r & 0xFFFFFFFFull);
+	const uint64_t lh = (abs_b & 0xFFFFFFFFull) * (abs_r >> 32);
+	const uint64_t hl = (abs_b >> 32) * (abs_r & 0xFFFFFFFFull);
+	const uint64_t hh = (abs_b >> 32) * (abs_r >> 32);
+	const uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFull) + (hl & 0xFFFFFFFFull);
+	const uint64_t lo = (ll & 0xFFFFFFFFull) | (mid << 32);
+	const uint64_t hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+	// The deliberate one-ULP safety margin (temper finding 2): a magnitude of exactly
+	// 2^63 (INT64_MAX + 1) is rejected here even though, with true sign negative, it
+	// would be representable as INT64_MIN -- this guard never has to distinguish that
+	// case by sign.
+	return hi == 0 && lo <= static_cast<uint64_t>(INT64_MAX);
 }
 
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {
