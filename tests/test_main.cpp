@@ -13865,7 +13865,7 @@ static void TestRunLayerLoopKvCapacityExhaustedFiresAtGroupGreaterThanOneBoundar
 // obtained by building this exact fixture and executing it, once D1-D6 and the per-layer
 // re-indexing (Â§6.1-Â§6.3) had landed.
 
-// 3a: a Î´=+1 mutation on KV head 0's `k_weight` alone (`v_selector4x8[9]`, the second row's
+// 3a: a Î´=+1 mutation on KV head 0's `k_weight` alone (`k_selector4x8[9]`, the second row's
 // diagonal entry -- KV head 0's OWN row, reading input channel 1), `v_weight` unmutated. Two
 // unmutated tokens establish a real width-2 attention (token A lands at position 0; token B, the
 // call under comparison, attends to both positions) -- `token_a`/`token_b` chosen with distinct,
@@ -14180,6 +14180,108 @@ static void TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne() {
 	          "(%lld,%lld,%lld,%lld), got (%lld,%lld,%lld,%lld)",
 	          (long long)b[4], (long long)b[5], (long long)b[6], (long long)b[7], (long long)m[4],
 	          (long long)m[5], (long long)m[6], (long long)m[7]);
+}
+
+// D-SLM624 (T-1654, S3.8a; Poirot 01720cf-t1654-s3.8a-gqa-group-dispatch-2026-08-01.md Finding 2):
+// pins the property cells 3a/3b/4a's own header comment states in prose and nothing in the suite
+// checked -- `GqaGroupingFixture` reuses `TwoLayerFixture`'s `mlp_act_site_constant` (e=-96), tuned
+// for a hidden_size=2 geometry, and at this fixture's hidden_size=8 that constant drives the fully
+// composed `seq.hidden_codes` to the same clamped constant regardless of which K/V weight is
+// mutated -- measured directly (`POIROT_PROBE committed_codes_identical=1 baseline=[127 0 127 0 127
+// 0 127 0] mutant=[127 0 127 0 127 0 127 0]`, the review's own probe). That is exactly why cells
+// 3a/3b/4a assert on the `layer0.attn_ctx` trace record instead of on the committed output -- the
+// committed-output assertion the design record and the plan specify would pass vacuously here. The
+// review's own finding is that this necessary relocation was recorded only in a comment: nothing
+// pinned the saturation ITSELF, so a future author who follows the record's specified oracle (assert
+// on `seq.hidden_codes`, per design record §9 item 3 and plan §11 S3.8a) writes a cell that passes on
+// every run, including against every mutation, and is silently testing the clamp rather than the
+// grouping mechanism it names. Re-tuning `mlp_act_site_constant` for this geometry later would
+// silently invalidate that assumption with nothing failing.
+//
+// This cell closes that gap directly: it asserts the composed output IS the saturated constant, at
+// both baseline and the same `v_selector4x8[9]` mutation cell 3b/4a use, so the day this fixture
+// stops saturating -- a re-tuned site constant, a fixture geometry change, or a real fix to whatever
+// produces the clamp -- this cell fails and says so, instead of a future cell passing vacuously with
+// nothing to catch it. It is not a claim that saturation is desirable; it is a claim about what this
+// fixture currently does, held under the same discipline as every other measured pin in this file
+// (`StandardsDocument.md` §5.4 -- verified by execution, not by construction).
+static void TestGqaGroupingFixtureComposedOutputSaturatesAtBaselineAndMutant() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	constexpr int64_t kCallContextCap = 3;
+	constexpr size_t kWorkspaceSize = 2 * 3 * 2 * 2 * 2;
+
+	int8_t token_a[8] = {5, -1, 5, -1, 5, -1, 5, -1};
+	int8_t token_b[8] = {4, -2, 4, -2, 4, -2, 4, -2};
+
+	auto RunToken = [&](GqaGroupingFixture& fx, SequenceLayerState& seq, const int8_t* token,
+	                     uint8_t* ws) -> SslmForwardStatus {
+		for (int i = 0; i < 8; ++i) seq.hidden_codes[i] = token[i];
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		return superslm::RunLayerLoop(seq, fx.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		                               /*hidden_size=*/8, /*head_dim=*/2, /*num_key_value_heads=*/2,
+		                               /*intermediate_size=*/8, kCallContextCap, fx.view.rope_tables,
+		                               ws, kWorkspaceSize, /*site_prefix=*/{}, /*token_index=*/0,
+		                               nullptr);
+	};
+
+	const int8_t kSaturated[8] = {127, 0, 127, 0, 127, 0, 127, 0};
+
+	// Baseline: unmutated fixture, the same two-token composition cells 3a/3b/4a drive.
+	GqaGroupingFixture baseline;
+	int8_t baseline_codes[8] = {};
+	SequenceLayerState baseline_seq;
+	baseline_seq.hidden_codes = baseline_codes;
+	uint8_t baseline_ws[kWorkspaceSize] = {};
+	auto st = RunToken(baseline, baseline_seq, token_a, baseline_ws);
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "saturation pin: baseline token A status == %s, want Ok", SslmForwardStatusName(st));
+	st = RunToken(baseline, baseline_seq, token_b, baseline_ws);
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "saturation pin: baseline token B status == %s, want Ok", SslmForwardStatusName(st));
+	CHECK_MSG(
+	    std::memcmp(baseline_codes, kSaturated, sizeof(kSaturated)) == 0,
+	    "saturation pin: baseline composed seq.hidden_codes == "
+	    "{%d,%d,%d,%d,%d,%d,%d,%d}, want {127,0,127,0,127,0,127,0} -- this fixture's own "
+	    "mlp_act_site_constant (e=-96, reused from TwoLayerFixture's hidden_size=2 tuning) is "
+	    "documented to saturate the composed output at this fixture's hidden_size=8; if this "
+	    "assertion now fails, cells 3a/3b/4a's own justification for asserting on the "
+	    "layer0.attn_ctx trace record instead of the committed output no longer holds and their "
+	    "header comments need revisiting",
+	    baseline_codes[0], baseline_codes[1], baseline_codes[2], baseline_codes[3],
+	    baseline_codes[4], baseline_codes[5], baseline_codes[6], baseline_codes[7]);
+
+	// Mutant: the same `v_selector4x8[9]` delta cell 3b/4a use -- a real, load-bearing change to the
+	// attention-side mechanism this fixture exists to discriminate -- to prove the saturation is
+	// independent of that mutation, not merely unobserved at one fixed set of weights.
+	GqaGroupingFixture mutant;
+	int8_t mutant_codes[8] = {};
+	SequenceLayerState mutant_seq;
+	mutant_seq.hidden_codes = mutant_codes;
+	uint8_t mutant_ws[kWorkspaceSize] = {};
+	st = RunToken(mutant, mutant_seq, token_a, mutant_ws);
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "saturation pin: mutant token A status == %s, want Ok", SslmForwardStatusName(st));
+	mutant.v_selector4x8[9] = INT8_C(2);  // KV head 0's own row 1, col 1: 1 -> 2 (delta +1)
+	st = RunToken(mutant, mutant_seq, token_b, mutant_ws);
+	CHECK_MSG(st == SslmForwardStatus::Ok,
+	          "saturation pin: mutant token B status == %s, want Ok", SslmForwardStatusName(st));
+	CHECK_MSG(
+	    std::memcmp(mutant_codes, kSaturated, sizeof(kSaturated)) == 0,
+	    "saturation pin: mutant composed seq.hidden_codes == "
+	    "{%d,%d,%d,%d,%d,%d,%d,%d}, want {127,0,127,0,127,0,127,0} -- a real attention-side "
+	    "mutation (v_selector4x8[9], the same delta cell 3b/4a apply) must still land on the "
+	    "same saturated constant for the vacuity claim to hold",
+	    mutant_codes[0], mutant_codes[1], mutant_codes[2], mutant_codes[3], mutant_codes[4],
+	    mutant_codes[5], mutant_codes[6], mutant_codes[7]);
+	CHECK_MSG(std::memcmp(baseline_codes, mutant_codes, sizeof(kSaturated)) == 0,
+	          "saturation pin: baseline and mutant composed outputs differ -- the whole point of "
+	          "this pin is that they are identical (a real attention-side change produces no "
+	          "visible difference at the committed output), which is what makes an assertion on "
+	          "seq.hidden_codes vacuous for this fixture");
 }
 
 // Minor A (Poirot e4b398c review): when `SoftmaxRowQ15` refuses after
@@ -18240,6 +18342,10 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopGqaGroupingKAloneMovesOnlySharedQueryHeads();
 	TestRunLayerLoopGqaGroupingVAloneMovesOnlySharedQueryHeads();
 	TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne();
+	// Poirot 01720cf-t1654-s3.8a-gqa-group-dispatch-2026-08-01.md Finding 2: pins the fixture
+	// saturation property cells 3a/3b/4a's own comments state in prose and depend on but nothing
+	// checked -- registered immediately after them for the same reason.
+	TestGqaGroupingFixtureComposedOutputSaturatesAtBaselineAndMutant();
 	TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection();
 	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
 	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();

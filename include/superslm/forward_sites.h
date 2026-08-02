@@ -686,7 +686,8 @@ struct LayerWeights {
 //
 // `context_cap < 1` is `InvalidContextCap`, checked before the workspace size
 // is computed from it -- `context_cap` sizes the required K/V workspace
-// (`num_hidden_layers * context_cap * num_heads * head_dim * 2`), and every
+// (`num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2`),
+// and every
 // value outside `[1, INT64_MAX]` (zero or negative) is invalid for the same
 // reason: neither is a legitimate count of cache positions. One check covers
 // both, because both violate the identical domain requirement.
@@ -744,8 +745,8 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // K/V store is per-(layer, head)-major, position-minor --
 // `offset(kv_head, position, d) = kv_head * context_cap * head_dim +
 // position * head_dim + d`, inside the K half (starting at `workspace`, at
-// `layer * context_cap * num_heads * head_dim * 2`) or the V half (the same
-// base plus `context_cap * num_heads * head_dim`). `KeyRow`/`ValueRow`
+// `layer * context_cap * num_kv_heads * head_dim * 2`) or the V half (the
+// same base plus `context_cap * num_kv_heads * head_dim`). `KeyRow`/`ValueRow`
 // return a pointer to `head_dim` contiguous int8 codes at that address;
 // `MutableKeyRow`/`MutableValueRow` return the same address non-const, for
 // the landing write. `workspace`/`layer`/`context_cap`/`num_kv_heads`/
