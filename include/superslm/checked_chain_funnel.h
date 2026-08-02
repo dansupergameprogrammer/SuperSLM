@@ -206,7 +206,7 @@ enum class SslmForwardStatus {
 	                                          // status answers "no triple could be formed", C30's own
 	                                          // upstream construction domain
 	                                          // (kBadCoefficient/kNegativeShift/kNotRepresentable).
-	BiasReconcileProductOutOfDomain,          // T-1656/T-1657/T-1663, D-SLM642/645/650: the
+	BiasReconcileProductOutOfDomain,          // T-1656/T-1657/T-1663, D-SLM642/645/674: the
 	                                          // magnitude-domain guard at the C28 bias-reconciliation
 	                                          // call sites (ProjectAndFunnel's q_proj insertion and
 	                                          // the k/v landing path's identical insertion) found
@@ -352,6 +352,14 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 // not before, and not as a knob that does nothing in the meantime.
 SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32);
 
+// T-1657 Poirot N-4 (confirmation pass 5156477): `[[nodiscard]]` added here and on
+// CheckSiluCompositionScaleDomain, CheckRoundingDivideByPotExponentDomain,
+// CheckSoftmaxRowWidthDomain, and CheckPositionOverCap below -- the five `Check*`
+// siblings in this file that had not yet been swept when M-1 (T-1657 Poirot Minor 1,
+// above) fixed only the two bias predicates it was flagged against. `intmath.h`
+// states the doctrine this sweep completes: "[[nodiscard]] is load-bearing, not
+// decoration". Every `Check*` predicate declared in this file now carries it.
+//
 // C30's derived-operand predicate (§7.2 second limb). The not-yet-built C30
 // derivation site (S3.3) forms (q_ln2, q_b, q_c) from a per-query carried scale via
 // C30's own formula and calls this on the result. THIS FUNCTION ENCODES NO THRESHOLD
@@ -369,7 +377,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // decomposition oracle at every swept point. `IExpConstantsInDomain` is the total,
 // sole domain authority; this function implements that ruling rather than
 // paraphrasing it.**
-SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b,
+[[nodiscard]] SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b,
                                              int64_t q_c);
 
 // C34's derived-operand predicate (§7.2 second limb, §5.4). The SwiGLU activation
@@ -392,7 +400,7 @@ SslmForwardStatus CheckIExpConstantsDomain(int64_t q, int64_t q_ln2, int64_t q_b
 // mirroring static_assert next to this predicate's definition
 // (src/forward/checked_chain_funnel.cpp) proves that ordering at compile time: the
 // load-time ceiling never exceeds this predicate's own ceiling.
-SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
+[[nodiscard]] SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 
 // C28's derived-operand pair predicate (§7.2 second limb, §4.4; S3.2). The
 // C28 bias-reconciliation site (forward_sites.h's BiasReconcile) checks this
@@ -405,9 +413,11 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 //
 // Re-staged unchanged from its original declaration at commit 32aca0c (removed the
 // same day, f98eee9, as belonging to S3.2 rather than S3.1) -- see the file header
-// comment above. The real 0 <= q_B + 62 + e_a <= 63 comparison is written in
-// src/forward/checked_chain_funnel.cpp (S3.2's green phase).
-SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
+// comment above. T-1657 Poirot N-5 (confirmation pass 5156477, D-SLM676): the real
+// 0 <= q_B + 62 + e_a <= 63 comparison now lives in
+// RoundingDivideByPotComposedExponentInDomain (src/intmath.cpp); this function
+// (src/forward/checked_chain_funnel.cpp, S3.2's green phase) only delegates to it.
+[[nodiscard]] SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
 
 // C28's magnitude domain predicate (T-1657/T-1663, D-SLM621/641/642/645). Exactly
 // `BiasReconcileWide(b, q_b, r_a, e_a, &unused) == true` -- it validates the SAME
@@ -421,22 +431,30 @@ SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_
 // (T-1657 §4): every input the retired `BiasReconcileProductFitsInt64` guard
 // accepted is accepted here too, and some inputs whose raw product overflows
 // int64_t but whose rounded result does not -- which the retired guard wrongly
-// rejected -- are accepted here as well. Does not check the exponent domain --
-// `CheckRoundingDivideByPotExponentDomain` is unchanged and still required first,
-// at the call site.
+// rejected -- are accepted here as well. T-1657 Poirot N-1 (confirmation pass
+// 5156477): because this predicate is exactly `BiasReconcileWide(...) == true`, and
+// that function now checks the composed exponent domain itself before it checks the
+// magnitude (D-SLM676), this predicate ALSO rejects an out-of-domain exponent -- but
+// reports it as `BiasReconcileProductOutOfDomain`, the identical status an
+// in-domain-exponent magnitude failure produces. It does not distinguish the two.
+// `CheckRoundingDivideByPotExponentDomain` is unchanged and still required first, at
+// the call site, for a diagnosis that names the right mechanism -- a caller that
+// skips it and reads this predicate's status alone will attribute an
+// exponent-domain rejection to the magnitude.
 //
-// T-1657 Poirot Minor 1 (D-SLM650): `[[nodiscard]]`, restored. The retired
+// T-1657 Poirot Minor 1: `[[nodiscard]]`, restored. The retired
 // `BiasReconcileProductFitsInt64` (T-1656) carried the sole `[[nodiscard]]` in this
-// header; this predicate matched its `Check*` siblings -- none of which have ever had
-// it -- rather than the guard it replaced, silently propagating the weaker convention
-// onto a guard predicate whose return value being dropped is a silent security
-// failure. Matching an unaudited sibling's convention is the `StandardsDocument` §7
-// sibling-pinning trap this repeats: the fix states the property directly rather than
+// header at the time; this predicate matched its `Check*` siblings -- at the time,
+// none of which had it -- rather than the guard it replaced, silently propagating
+// the weaker convention onto a guard predicate whose return value being dropped is a
+// silent security failure. Matching an unaudited sibling's convention is the
+// `StandardsDocument` §7 sibling-pinning trap this repeats: the fix states the
+// property directly rather than
 // copying a neighbor that was never checked for it.
 [[nodiscard]] SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b,
                                                                    int64_t r_a, int64_t e_a);
 
-// C28's accumulate domain predicate (T-1657 Poirot Critical C-1, D-SLM650). The line
+// C28's accumulate domain predicate (T-1657 Poirot Critical C-1, D-SLM674). The line
 // this guards -- forward_sites.cpp's ApplyBiasReconcileRow, `acc[i] += BiasReconcile(...)`
 // -- forms `acc[i] + result`, not `result` alone.
 // `CheckBiasReconcileMagnitudeDomain` proves the second term of that sum representable;
@@ -449,9 +467,13 @@ SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_
 // addition against the caller's own accumulator. Reuses `BiasReconcileProductOutOfDomain`
 // (D-SLM642) for both failure conditions, since the status already means "the C28 site's
 // own composed quantity does not fit int64_t" and the accumulate is that quantity's next
-// term, not a new one. Does not check the exponent domain -- the caller's existing
-// `CheckRoundingDivideByPotExponentDomain` call is unchanged and still required first, at
-// the call site, exactly as it was for `CheckBiasReconcileMagnitudeDomain`.
+// term, not a new one. T-1657 Poirot N-1 (confirmation pass 5156477): this predicate calls
+// `BiasReconcileWide` too, so it inherits the same conflation `CheckBiasReconcileMagnitudeDomain`
+// carries -- an out-of-domain exponent is ALSO rejected here, reported as the same
+// `BiasReconcileProductOutOfDomain` an in-domain-exponent magnitude or accumulate
+// failure produces. `CheckRoundingDivideByPotExponentDomain` is unchanged and still
+// required first, at the call site, exactly as it was for `CheckBiasReconcileMagnitudeDomain`
+// -- skipping it and reading this predicate's status alone misattributes the rejection.
 // `[[nodiscard]]` for the same reason as that predicate's own (T-1657 Poirot Minor 1).
 [[nodiscard]] SslmForwardStatus CheckBiasAccumulateMagnitudeDomain(int64_t acc_i, int64_t b,
                                                                     int64_t q_b, int64_t r_a,
@@ -521,7 +543,7 @@ inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kPro
 // (`SoftmaxRowQ15` also guards `width == 0` inside the kernel itself,
 // D-SLM497; this gate's rejection is independently required under
 // reject-over-degrade and is unchanged by that guard.)
-SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
+[[nodiscard]] SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
 
 // C33's own position-cap guard (§11 S3.3's own gate line: "a position ==
 // context_cap is rejected before a table read"; Board T-1308). `position` is
@@ -539,7 +561,7 @@ SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t wi
 // corrected here as part of the site's own build rather than as a separate
 // pass): forward_sites.h's RopeApplySite calls this predicate first, before
 // any ROP1 table read, exactly the ordering §11 S3.3's own gate line names.
-SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap);
+[[nodiscard]] SslmForwardStatus CheckPositionOverCap(int64_t position, int64_t context_cap);
 
 }  // namespace superslm
 

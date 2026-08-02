@@ -415,7 +415,7 @@ static_assert(kCompositionScaleMinE >= kSiluCompositionRuntimeMinE,
 
 SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a) {
 	// C28's own derived-operand pair predicate (§7.2 second limb, §4.4; S3.2):
-	// 0 <= q_B + 62 + e_a <= 63. T-1657 Poirot Significant 3 (D-SLM650): the sum is
+	// 0 <= q_B + 62 + e_a <= 63. T-1657 Poirot Significant 3 (D-SLM676): the sum is
 	// computed by RoundingDivideByPotComposedExponentInDomain (intmath.h), the ONE
 	// place this exact derivation lives -- not by this function's own plain int64_t
 	// `q_B + 62 + e_a`, which was undefined behavior on overflow reachable even for a

@@ -274,17 +274,25 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// reach ~2^126, past what a plain int64_t multiply can hold, so this now
 	// forwards to BiasReconcileWide (intmath.h), which forms the product and
 	// the C3 (ties-away-from-zero) divide in the same portable 128-bit
-	// facility RequantTokenCode/IExpEvaluate already use internally. The
-	// composed exponent's domain is still the caller's own check
+	// facility RequantTokenCode/IExpEvaluate already use internally. T-1657
+	// Poirot N-1/N-7 (confirmation pass 5156477): this function itself performs
+	// no domain check of its own -- but the composed exponent's domain IS now
+	// checked one level down, inside BiasReconcileWide (D-SLM676), because that
+	// function must form 2^exponent to divide by. This function discards
+	// BiasReconcileWide's boolean return and forwards whatever value it wrote:
+	// 0 on an out-of-domain exponent, the low 64 bits of the true wide result
+	// on an in-domain-exponent magnitude overflow, the correct result
+	// otherwise. The composed exponent's domain remains the caller's own check
 	// (CheckRoundingDivideByPotExponentDomain, checked_chain_funnel.h) before
-	// this function is ever invoked; it performs no domain check of its own.
-	// The boolean representability outcome is discarded here deliberately --
-	// this function keeps its pre-existing "caller-ensures" contract (a
-	// caller that has not separately confirmed the magnitude is in domain,
-	// via CheckBiasReconcileMagnitudeDomain, gets a possibly-wrong int64_t
-	// back with no diagnostic, exactly as calling any other total-but-
-	// unchecked primitive in this tree out of its intended domain already
-	// does).
+	// this function is ever invoked, because skipping it no longer risks
+	// undefined behavior but still risks a silently wrong or zero int64_t with
+	// no diagnostic -- this function keeps its pre-existing "caller-ensures"
+	// contract (a caller that has not separately confirmed the magnitude is in
+	// domain, via CheckBiasAccumulateMagnitudeDomain (the predicate
+	// ApplyBiasReconcileRow's production call site actually uses; see its own
+	// contract, checked_chain_funnel.h), gets a possibly-wrong int64_t back
+	// with no diagnostic, exactly as calling any other total-but-unchecked
+	// primitive in this tree out of its intended domain already does).
 	int64_t result = 0;
 	BiasReconcileWide(b, q_b, r_a, e_a, &result);
 	return result;
@@ -776,7 +784,7 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // because the real body honours that contract, not because a stub does.
 namespace {
 
-// T-1656/T-1657/T-1663, D-SLM642/645/650: the per-element magnitude-domain guard shared
+// T-1656/T-1657/T-1663, D-SLM642/645/674: the per-element magnitude-domain guard shared
 // by every C28 bias-reconciliation insertion in this file (ProjectAndFunnel's q_proj call
 // and the k/v landing path below) -- two passes over `out_channels` so a rejection
 // anywhere in the row leaves `acc` untouched, matching this file's own "reject leaves

@@ -20,10 +20,14 @@ against (the vendored reference's `i_sqrt`, `dynamic_scale_reciprocal`, or
 This is the D-SLM357 mechanism-claim proof for this pass's own authored work:
 every claim the generator's docstrings and inline comments make (the F-S3-2
 table reproduces; the site witness's root is reachable and genuinely diverges
-at two elements and not at the third; BIA1's bound is exactly INT32_MAX and is
-tight; the C28 tie witness is genuine and the wrong candidate disagrees only on
-the negative sign) is an assertion inside the generator itself, so importing
-and calling it here IS running that proof, not merely regenerating a file.
+at two elements and not at the third; R_a's own derived maximum is exactly
+2**32, still a genuine property of the vendored C19 reciprocal independent of
+any load-time gate -- T-1657 Poirot N-6, confirmation pass 5156477: the prior
+"BIA1's bound is exactly INT32_MAX and is tight" claim was retired along with
+the load-time gate it fed, M-2's own remedy, `build_bia1_bound()`; the C28 tie
+witness is genuine and the wrong candidate disagrees only on the negative
+sign) is an assertion inside the generator itself, so importing and calling it
+here IS running that proof, not merely regenerating a file.
 
 Line-ending normalization matches the S3.1 precedent exactly (this Windows
 checkout has core.autocrlf=true; `generate()`/`main()` always emit LF, and

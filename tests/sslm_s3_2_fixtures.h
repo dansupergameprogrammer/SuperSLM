@@ -8,7 +8,7 @@
 // T-1657 Poirot review, Observation 1 (corrected): this file's own preamble
 // used to state that S3.2's forward-composition entry points (the RMSNorm
 // site, the WSC1 fold-apply, the C28 bias-reconciliation site, BIA1's
-// value-domain descriptor) "do not exist in D:\\SuperSLM" -- true only at the
+// value-domain descriptor) "do not exist in D:\SuperSLM" -- true only at the
 // S3.2 red-phase authoring of this generator, and false since the green
 // phase (src/forward/forward_sites.cpp, src/forward/checked_chain_funnel.cpp).
 // The witnesses below are consumed by tests/test_main.cpp's own S3.2/T-1657

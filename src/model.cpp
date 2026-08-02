@@ -1034,7 +1034,12 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 	// joint with a runtime-derived reciprocal and exponent (R_a, e_a) that do not
 	// exist until the C28 call site -- the same shape already ruled for bias.q_b
 	// (SuperSLM_S3a_WalkingSkeleton_Plan.md §4.4/§7.2). The check lives at
-	// CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h), not here.
+	// CheckBiasAccumulateMagnitudeDomain (checked_chain_funnel.h, T-1657 Poirot
+	// Critical C-1, D-SLM674), not here. (Its sibling CheckBiasReconcileMagnitudeDomain
+	// checks only BiasReconcile's own per-element magnitude and has no production
+	// caller; the per-element gate ApplyBiasReconcileRow (forward_sites.cpp) actually
+	// runs is the accumulate predicate, which additionally proves the running
+	// accumulator sum representable.)
 	if (view.has_kv_landing_scales) {
 		const SslmModelStatus s = ValidateKvLandingScalesDomain(view.kv_landing_scales, err);
 		if (s != SslmModelStatus::Ok) return s;

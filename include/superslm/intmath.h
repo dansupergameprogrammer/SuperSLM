@@ -130,23 +130,32 @@ int64_t DynamicScaleReciprocal(int64_t dn);
 // Returns the int8 code in [−127, 127].
 int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 
-// C28's widened bias-reconciliation core (T-1657, D-SLM621/641/645): forms B*R_a and
+// C28's widened bias-reconciliation core (T-1657, D-SLM621/641/645/676): forms B*R_a and
 // divides by 2^exponent in the SAME portable 128-bit facility RequantTokenCode/
 // IExpEvaluate already use internally. TOTAL over the full int64_t domain of b and
 // r_a, and over exponent in [kRoundingDivideByPotExponentMinI64,
 // kRoundingDivideByPotExponentMaxI64] -- unchanged from RoundingDivideByPOT's own
 // existing int64 domain; this function widens the NUMERATOR, not the exponent's own
-// range, and performs no exponent-domain check of its own (the caller's existing
-// CheckRoundingDivideByPotExponentDomain obligation, forward_sites.h, is unchanged).
-// Writes the correctly-rounded (C3, ties away from zero) result to *out and returns
-// true when it fits int64_t. Returns false when the true rounded result does not fit
-// int64_t -- *out is then the low 64 bits of the true wide result, matching this
-// file's own established "may be numerically wrong outside its domain, never UB"
-// convention for an out-of-domain-but-still-total function (IExpEvaluate's own
-// kNotRepresentable outcome above is the precedent this follows).
+// range. T-1657 Poirot N-1 (confirmation pass, 5156477): unlike
+// CheckBiasReconcileMagnitudeDomain and CheckBiasAccumulateMagnitudeDomain
+// (checked_chain_funnel.h), which do NOT check the exponent domain and still require
+// the caller's own CheckRoundingDivideByPotExponentDomain call first, THIS function
+// checks the composed exponent q_B + 62 + e_a itself
+// (RoundingDivideByPotComposedExponentInDomain, D-SLM676) -- it must form 2^exponent
+// to divide by, so it cannot defer that check the way the two predicates above do.
+// Two distinct false-return paths, not one:
+//   * Exponent out of domain: returns false with *out = 0. There is no wide result to
+//     narrow on this path -- the divide never runs.
+//   * Exponent in domain, magnitude out of range: writes the correctly-rounded (C3,
+//     ties away from zero) result to *out and returns true when it fits int64_t;
+//     returns false with *out set to the low 64 bits of the true wide result when it
+//     does not, matching this file's own established "may be numerically wrong
+//     outside its domain, never UB" convention for an out-of-domain-but-still-total
+//     function (IExpEvaluate's own kNotRepresentable outcome above is the precedent
+//     this follows).
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out);
 
-// T-1657 Poirot Significant 3 (D-SLM650): the ONE derivation of C28's composed exponent
+// T-1657 Poirot Significant 3 (D-SLM676): the ONE derivation of C28's composed exponent
 // domain, `0 <= q_B + 62 + e_a <= 63`, that both `BiasReconcileWide` above and
 // `CheckRoundingDivideByPotExponentDomain` (checked_chain_funnel.h) call, rather than
 // each computing `q_B + 62 + e_a` as plain int64_t arithmetic independently. Plain

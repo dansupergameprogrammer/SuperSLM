@@ -118,7 +118,14 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // CheckRoundingDivideByPotExponentDomain (checked_chain_funnel.h) at the call
 // site before this function forms the divide — this function itself performs
 // no domain check of its own; the domain check and the compute are separate
-// calls. (Several computes in this tree guard their own degenerate-length
+// calls. T-1657 Poirot N-1/N-7 (confirmation pass 5156477): the composed
+// exponent IS checked one level down, inside BiasReconcileWide (intmath.h,
+// D-SLM676), because that function must form 2^exponent to divide by — an
+// out-of-domain exponent no longer risks undefined behavior, only a silently
+// wrong or zero result with no diagnostic, which is why the call-site check
+// above stays required. See BiasReconcileWide's own contract for the two
+// distinct false-return paths this delegates to. (Several computes in this
+// tree guard their own degenerate-length
 // case inside the kernel instead of relying on a separate call-site gate —
 // `SoftmaxRowQ15`, `RowBoundsWide` (intmath.h) — see each one's own contract
 // for its guard; that is a different property from this function's own

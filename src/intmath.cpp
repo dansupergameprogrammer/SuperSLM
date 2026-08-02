@@ -63,7 +63,7 @@ inline bool SGe(S128 a, S128 b) { return a >= b; }
 inline bool SLt(S128 a, S128 b) { return a < b; }
 // Arithmetic (floor) right shift; result assumed to fit in i64.
 inline int64_t SShrToI64(S128 v, int k) { return static_cast<int64_t>(v >> k); }
-// T-1657/D-SLM621/D-SLM650: full-width arithmetic (floor) right shift, unlike
+// T-1657/D-SLM621/D-SLM675: full-width arithmetic (floor) right shift, unlike
 // SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
 // k in [0,63] -- RoundingDivideByPOTWide's own only caller passes an exponent already
 // bounded to that range (BiasReconcile's unchanged exponent-domain contract,
@@ -185,7 +185,7 @@ inline int64_t SShrToI64(S128 v, int k) {
 	return static_cast<int64_t>(lo);
 }
 
-// T-1657/D-SLM621/D-SLM650: full-width arithmetic (floor) right shift, unlike
+// T-1657/D-SLM621/D-SLM675: full-width arithmetic (floor) right shift, unlike
 // SShrToI64 above which assumes (and narrows to) only the low 64 bits. Contract is
 // k in [0,63] -- this function's own only caller, RoundingDivideByPOTWide, is itself
 // only ever called with an exponent already bounded to that range (BiasReconcile's
@@ -366,7 +366,7 @@ S128 RoundingDivideByPOTWide(S128 x, int exponent) {
 }  // namespace
 
 bool RoundingDivideByPotComposedExponentInDomain(int64_t q_B, int64_t e_a, int64_t* out_exponent) {
-	// T-1657 Poirot Significant 3 (D-SLM650): q_B + 62 + e_a formed in the SAME
+	// T-1657 Poirot Significant 3 (D-SLM676): q_B + 62 + e_a formed in the SAME
 	// portable 128-bit facility BiasReconcileWide's own product uses, never as plain
 	// int64_t arithmetic (see intmath.h for why: the naive sum can overflow -- signed
 	// UB -- even when the true mathematical exponent is inside [0,63]). SFromI64 is an
