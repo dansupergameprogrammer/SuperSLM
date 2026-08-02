@@ -18037,6 +18037,341 @@ static void TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T-1408 -- the 56 per-element differential cells, the 1 whole-stack zero-map
+// control, and the 14 per-tensor zero controls (Claude/Vitruvius/superslm-
+// t1408-t1641-decode-discrimination-committed-cell-design-2026-08-01.md §5,
+// amended by the -fold-2026-08-01.md and -fold2-2026-08-01.md records).
+// Closes D-SLM493 at decode level: the pre-existing suite's asserted decode
+// outputs were fixed by the embedding and the head alone (zeroing the whole
+// attention+MLP stack failed none of 23,054 pre-existing checks), and the
+// attention interior specifically was never scored by q.K at all
+// (D-SLM503) -- these cells run on DecodeDiscriminationFixture, above,
+// T-1651's own can-fail-proven calibration, where the zero-map control and
+// every one of the 56 per-element mutations are already known, by
+// independent execution, to move decode output (Claude/Laplace/superslm-
+// t1641-decode-discriminating-calibration-2026-08-01.md §5 E2/E3, §6;
+// reproduced byte-identical by Claude/Laplace/superslm-t1641-popper-
+// falsification-2026-08-01.md across MSVC /O2, clang-cl /O2, and MSVC /Od).
+// Every expected value below is that independently-executed, three-way-
+// reproduced measurement, transcribed as this suite's own failure criterion
+// before it was ever built against this fixture -- not a value read back
+// from this test's own first run.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Tensor identity, shared by the differential-cell table and both zero
+// controls below.
+constexpr int kDdTensorQ = 0;
+constexpr int kDdTensorK = 1;
+constexpr int kDdTensorV = 2;
+constexpr int kDdTensorO = 3;
+constexpr int kDdTensorGate = 4;
+constexpr int kDdTensorUp = 5;
+constexpr int kDdTensorDown = 6;
+constexpr int kDdNumTensors = 7;
+
+const char* DdTensorName(int tensor_id) {
+	static const char* const kNames[kDdNumTensors] = {"q_weight",    "k_weight",  "v_weight",
+	                                                   "o_weight",    "gate_weight",
+	                                                   "up_weight",   "down_weight"};
+	return kNames[tensor_id];
+}
+
+// The one backing array DecodeDiscriminationFixture carries per tensor per
+// layer (Laplace §4's table) -- the same arrays the fixture's own constructor
+// wires LayerWeights to point at, so a post-construction write here is a
+// write to the exact bytes the driven kernels read.
+int8_t* DdWeightArray(DecodeDiscriminationFixture& f, int tensor_id, int layer) {
+	switch (tensor_id) {
+		case kDdTensorQ: return f.q_weight_arr[layer];
+		case kDdTensorK: return f.k_weight_arr[layer];
+		case kDdTensorV: return f.v_weight_arr[layer];
+		case kDdTensorO: return f.o_weight_arr[layer];
+		case kDdTensorGate: return f.gate_weight_arr[layer];
+		case kDdTensorUp: return f.up_weight_arr[layer];
+		case kDdTensorDown: return f.down_weight_arr[layer];
+	}
+	CHECK_MSG(false, "DdWeightArray: unknown tensor_id %d", tensor_id);
+	return nullptr;
+}
+
+// One RunGreedyDecodeLoop call over a fresh fixture/sequence, mirroring
+// T-1651's own baseline cell's call site exactly -- the only difference cell
+// to cell is which fixture and which prompt are passed in.
+struct DdRunOutput {
+	superslm::SslmForwardStatus status = superslm::SslmForwardStatus::Ok;
+	int32_t tokens[3] = {};
+	int32_t logits[9] = {};
+};
+
+DdRunOutput DdRunPrompt(DecodeDiscriminationFixture& fixture, const int32_t* prompt,
+                         size_t prompt_len) {
+	using superslm::SequenceLayerState;
+	using superslm::SslmDecodeStopReason;
+
+	DdRunOutput out;
+	int8_t hidden_codes[2] = {INT8_C(-77), INT8_C(-77)};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	uint8_t workspace[32] = {};
+	int32_t out_tokens[3] = {INT32_C(-99), INT32_C(-99), INT32_C(-99)};
+	int32_t out_logit_rows[9] = {INT32_C(-99), INT32_C(-99), INT32_C(-99), INT32_C(-99),
+	                              INT32_C(-99), INT32_C(-99), INT32_C(-99), INT32_C(-99),
+	                              INT32_C(-99)};
+	size_t tokens_produced = 7777;
+	SslmDecodeStopReason stop_reason = static_cast<SslmDecodeStopReason>(7777);
+	const int32_t stop_ids[1] = {};
+
+	out.status = superslm::RunGreedyDecodeLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*hidden_size=*/2, /*head_dim=*/2,
+	    /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/DecodeDiscriminationFixture::kContextCap, fixture.view.rope_tables,
+	    prompt, prompt_len, fixture.embed_weights, fixture.embed_site_constant,
+	    fixture.layers[0].attn_norm_gain, fixture.final_norm_site_constant, fixture.head_weights,
+	    /*vocab_size=*/3, stop_ids, /*stop_count=*/0, /*max_new_tokens=*/3, workspace,
+	    sizeof(workspace), out_tokens, out_logit_rows, /*out_tokens_capacity=*/3, &tokens_produced,
+	    &stop_reason);
+	for (int i = 0; i < 3; ++i) out.tokens[i] = out_tokens[i];
+	for (int i = 0; i < 9; ++i) out.logits[i] = out_logit_rows[i];
+	return out;
+}
+
+// The zero controls' oracle: "differs from baseline" against the same
+// labeled regression pin T-1651's own cell asserts equal to (kDdBaselineCases,
+// Laplace §4).
+bool DdOutputDiffersFromBaseline(const DdRunOutput& out, const DdBaselineCase& baseline) {
+	for (int i = 0; i < 3; ++i) {
+		if (out.tokens[i] != baseline.expected_tokens[i]) return true;
+	}
+	for (int i = 0; i < 3; ++i) {
+		for (int v = 0; v < 3; ++v) {
+			if (out.logits[i * 3 + v] != baseline.expected_logits[i][v]) return true;
+		}
+	}
+	return false;
+}
+
+// The 56 per-element differential cells (Laplace §6's own table, transcribed
+// verbatim): tensor, layer, element index, which of the four prompts
+// (kDdPrompts' own order -- #0={0,1}, #1={1,2}, #2={2,0} -- matches Laplace
+// §6's own "#0/#1/#2" prompt numbering exactly) and which flattened logit
+// index (out_logit_rows[9], row-major [token][vocab]) first differs, the
+// baseline value there (T-1651's own pinned baseline, cross-checked here),
+// and the value after a +1 mutation to that one element. D-SLM533's cell
+// form: the exact per-element signed delta, never a headline move/silent/
+// refuse count.
+struct DdDifferentialCell {
+	const char* name;
+	int tensor_id;
+	int layer;
+	int elem;
+	size_t prompt_idx;
+	int logit_idx;
+	int32_t before;
+	int32_t after;
+};
+
+constexpr DdDifferentialCell kDdDifferentialCells[56] = {
+    // q_weight
+    {"L0.q[0]", kDdTensorQ, 0, 0, 0, 0, 1037, 1035},
+    {"L0.q[1]", kDdTensorQ, 0, 1, 1, 0, 995, 1009},
+    {"L0.q[2]", kDdTensorQ, 0, 2, 0, 0, 1037, 1035},
+    {"L0.q[3]", kDdTensorQ, 0, 3, 0, 3, 1037, 1039},
+    {"L1.q[0]", kDdTensorQ, 1, 0, 2, 0, 1019, 1017},
+    {"L1.q[1]", kDdTensorQ, 1, 1, 2, 0, 1019, 1017},
+    {"L1.q[2]", kDdTensorQ, 1, 2, 0, 3, 1037, 1035},
+    {"L1.q[3]", kDdTensorQ, 1, 3, 0, 0, 1037, 1035},
+    // k_weight
+    {"L0.k[0]", kDdTensorK, 0, 0, 0, 3, 1037, 1039},
+    {"L0.k[1]", kDdTensorK, 0, 1, 0, 0, 1037, 1035},
+    {"L0.k[2]", kDdTensorK, 0, 2, 0, 0, 1037, 1035},
+    {"L0.k[3]", kDdTensorK, 0, 3, 1, 0, 995, 993},
+    {"L1.k[0]", kDdTensorK, 1, 0, 0, 3, 1037, 1035},
+    {"L1.k[1]", kDdTensorK, 1, 1, 0, 0, 1037, 1035},
+    {"L1.k[2]", kDdTensorK, 1, 2, 1, 0, 995, 997},
+    {"L1.k[3]", kDdTensorK, 1, 3, 0, 0, 1037, 1035},
+    // v_weight
+    {"L0.v[0]", kDdTensorV, 0, 0, 0, 0, 1037, 1029},
+    {"L0.v[1]", kDdTensorV, 0, 1, 0, 0, 1037, 1029},
+    {"L0.v[2]", kDdTensorV, 0, 2, 0, 0, 1037, 1023},
+    {"L0.v[3]", kDdTensorV, 0, 3, 0, 0, 1037, 1039},
+    {"L1.v[0]", kDdTensorV, 1, 0, 0, 0, 1037, 999},
+    {"L1.v[1]", kDdTensorV, 1, 1, 0, 0, 1037, 1025},
+    {"L1.v[2]", kDdTensorV, 1, 2, 0, 0, 1037, 1063},
+    {"L1.v[3]", kDdTensorV, 1, 3, 0, 0, 1037, 1043},
+    // o_weight
+    {"L0.o[0]", kDdTensorO, 0, 0, 1, 0, 995, 1011},
+    {"L0.o[1]", kDdTensorO, 0, 1, 0, 0, 1037, 1043},
+    {"L0.o[2]", kDdTensorO, 0, 2, 0, 0, 1037, 1021},
+    {"L0.o[3]", kDdTensorO, 0, 3, 0, 0, 1037, 1039},
+    {"L1.o[0]", kDdTensorO, 1, 0, 0, 0, 1037, 1043},
+    {"L1.o[1]", kDdTensorO, 1, 1, 0, 0, 1037, 1061},
+    {"L1.o[2]", kDdTensorO, 1, 2, 0, 0, 1037, 1019},
+    {"L1.o[3]", kDdTensorO, 1, 3, 0, 0, 1037, 961},
+    // gate_weight
+    {"L0.gate[0]", kDdTensorGate, 0, 0, 0, 0, 1037, 1049},
+    {"L0.gate[1]", kDdTensorGate, 0, 1, 0, 0, 1037, 1045},
+    {"L0.gate[2]", kDdTensorGate, 0, 2, 0, 0, 1037, 1019},
+    {"L0.gate[3]", kDdTensorGate, 0, 3, 0, 0, 1037, 1029},
+    {"L1.gate[0]", kDdTensorGate, 1, 0, 0, 0, 1037, 1031},
+    {"L1.gate[1]", kDdTensorGate, 1, 1, 0, 0, 1037, 1035},
+    {"L1.gate[2]", kDdTensorGate, 1, 2, 0, 0, 1037, 1025},
+    {"L1.gate[3]", kDdTensorGate, 1, 3, 0, 0, 1037, 1033},
+    // up_weight
+    {"L0.up[0]", kDdTensorUp, 0, 0, 0, 0, 1037, 1047},
+    {"L0.up[1]", kDdTensorUp, 0, 1, 0, 0, 1037, 1041},
+    {"L0.up[2]", kDdTensorUp, 0, 2, 0, 0, 1037, 1019},
+    {"L0.up[3]", kDdTensorUp, 0, 3, 0, 0, 1037, 1039},
+    {"L1.up[0]", kDdTensorUp, 1, 0, 0, 0, 1037, 1031},
+    {"L1.up[1]", kDdTensorUp, 1, 1, 0, 0, 1037, 1035},
+    {"L1.up[2]", kDdTensorUp, 1, 2, 0, 0, 1037, 1011},
+    {"L1.up[3]", kDdTensorUp, 1, 3, 0, 0, 1037, 1029},
+    // down_weight
+    {"L0.down[0]", kDdTensorDown, 0, 0, 0, 0, 1037, 1055},
+    {"L0.down[1]", kDdTensorDown, 0, 1, 0, 0, 1037, 1045},
+    {"L0.down[2]", kDdTensorDown, 0, 2, 0, 0, 1037, 977},
+    {"L0.down[3]", kDdTensorDown, 0, 3, 0, 0, 1037, 1007},
+    {"L1.down[0]", kDdTensorDown, 1, 0, 0, 0, 1037, 1055},
+    {"L1.down[1]", kDdTensorDown, 1, 1, 0, 0, 1037, 1047},
+    {"L1.down[2]", kDdTensorDown, 1, 2, 0, 0, 1037, 985},
+    {"L1.down[3]", kDdTensorDown, 1, 3, 0, 0, 1037, 1011},
+};
+constexpr size_t kDdNumDifferentialCells =
+    sizeof(kDdDifferentialCells) / sizeof(kDdDifferentialCells[0]);
+
+}  // namespace
+
+// The 56 per-element differential cells. Fixture form D-SLM533's binding cell
+// condition: no second implementation supplies an expected value -- the
+// expected value is the exact independently-measured, three-way-reproduced
+// number from Laplace §6, and the property asserted is discrimination itself
+// (D-SLM493's negation by construction), not a correctness claim.
+static void TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutput() {
+	using superslm::SslmForwardStatus;
+
+	CHECK_MSG(kDdNumDifferentialCells == 56,
+	          "T-1408: kDdDifferentialCells has %zu entries, want 56 (7 tensors x 4 elements x "
+	          "2 layers)",
+	          kDdNumDifferentialCells);
+
+	for (const DdDifferentialCell& cell : kDdDifferentialCells) {
+		DecodeDiscriminationFixture fixture;
+		int8_t* arr = DdWeightArray(fixture, cell.tensor_id, cell.layer);
+		// T-1408 RED-STATE PROBE (reverted before green commit): arr[cell.elem] = static_cast<int8_t>(arr[cell.elem] + 1);
+
+		bool any_not_ok = false;
+		DdRunOutput results[4];
+		for (size_t p = 0; p < kDdNumPrompts; ++p) {
+			results[p] = DdRunPrompt(fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
+			if (results[p].status != SslmForwardStatus::Ok) any_not_ok = true;
+		}
+		CHECK_MSG(!any_not_ok,
+		          "T-1408 differential cell %s (%s layer %d elem %d, delta +1): at least one of "
+		          "the four prompts returned a non-Ok status -- a differential cell is only "
+		          "counted when every status is Ok (Laplace §5 E2's own counting rule)",
+		          cell.name, DdTensorName(cell.tensor_id), cell.layer, cell.elem);
+		if (any_not_ok) continue;
+
+		const int32_t baseline_got = kDdBaselineCases[cell.prompt_idx].expected_logits
+		    [cell.logit_idx / 3][cell.logit_idx % 3];
+		CHECK_MSG(baseline_got == cell.before,
+		          "T-1408 differential cell %s: this suite's own baseline table disagrees with "
+		          "the cell's transcribed 'before' value at prompt#%zu logit[%d] -- got %d, "
+		          "table says %d (a transcription defect in this file, not a claim about the "
+		          "driven kernels)",
+		          cell.name, cell.prompt_idx, cell.logit_idx, baseline_got, cell.before);
+
+		const int32_t got = results[cell.prompt_idx].logits[cell.logit_idx];
+		CHECK_MSG(got == cell.after,
+		          "T-1408 differential cell %s (%s layer %d elem %d, delta +1): prompt#%zu "
+		          "logit[%d] == %d, want %d (baseline %d) -- this weight element must move "
+		          "decode output at |delta|=1 (Laplace §6; D-SLM493's negation by construction)",
+		          cell.name, DdTensorName(cell.tensor_id), cell.layer, cell.elem, cell.prompt_idx,
+		          cell.logit_idx, got, cell.after, cell.before);
+	}
+}
+
+// The one whole-stack zero-map control: D-SLM493's own named control,
+// re-asserted on a calibration where it actually discriminates (the direct
+// answer to the board's "READ THIS BEFORE CITING A GREEN COUNT" header --
+// zeroing the entire attention+MLP stack failed none of 23,054 pre-existing
+// checks; here it must move decode output on at least one prompt).
+static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline() {
+	using superslm::SslmForwardStatus;
+
+	DecodeDiscriminationFixture fixture;
+	for (int layer = 0; layer < 2; ++layer) {
+		for (int t = 0; t < kDdNumTensors; ++t) {
+			int8_t* arr = DdWeightArray(fixture, t, layer);
+			// T-1408 RED-STATE PROBE (reverted before green commit): for (int e = 0; e < 4; ++e) arr[e] = 0;
+		}
+	}
+
+	bool any_not_ok = false;
+	bool any_differs = false;
+	for (size_t p = 0; p < kDdNumPrompts; ++p) {
+		DdRunOutput out = DdRunPrompt(fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
+		if (out.status != SslmForwardStatus::Ok) {
+			any_not_ok = true;
+			continue;
+		}
+		if (DdOutputDiffersFromBaseline(out, kDdBaselineCases[p])) any_differs = true;
+	}
+	CHECK_MSG(!any_not_ok,
+	          "T-1408 whole-stack zero-map control: at least one prompt returned a non-Ok "
+	          "status with every weight tensor zeroed at both layers");
+	CHECK_MSG(any_differs,
+	          "T-1408 whole-stack zero-map control: committed output equals baseline on every "
+	          "prompt with every weight tensor zeroed -- D-SLM493's own control (the one that "
+	          "fails nothing in the pre-existing suite) passes silently again on this "
+	          "calibration too");
+}
+
+// The 14 per-tensor whole-zero controls (D-SLM610, reversing D-SLM605's
+// original exclusion): for each of the seven weight tensors, both layers,
+// zero that one tensor alone (the other six left at this calibration's own
+// non-identity values) and assert the committed output differs from
+// baseline on at least one prompt. Closes the gap the 56 δ=+1 cells and the
+// one whole-stack control cannot see between them: a δ=+1 mutation never
+// constructs a zero tensor, and the whole-stack control zeros all seven at
+// once, so a defect scoped to one tensor's own zero-handling can hide behind
+// the other six tensors' unaffected contribution to the same aggregate
+// "differs from baseline" assertion (plan §11 S3.7, the F3 ruling).
+static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseline() {
+	using superslm::SslmForwardStatus;
+
+	for (int layer = 0; layer < 2; ++layer) {
+		for (int t = 0; t < kDdNumTensors; ++t) {
+			DecodeDiscriminationFixture fixture;
+			int8_t* arr = DdWeightArray(fixture, t, layer);
+			// T-1408 RED-STATE PROBE (reverted before green commit): for (int e = 0; e < 4; ++e) arr[e] = 0;
+
+			bool any_not_ok = false;
+			bool any_differs = false;
+			for (size_t p = 0; p < kDdNumPrompts; ++p) {
+				DdRunOutput out = DdRunPrompt(fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
+				if (out.status != SslmForwardStatus::Ok) {
+					any_not_ok = true;
+					continue;
+				}
+				if (DdOutputDiffersFromBaseline(out, kDdBaselineCases[p])) any_differs = true;
+			}
+			CHECK_MSG(!any_not_ok,
+			          "T-1408 per-tensor zero control (%s layer %d): at least one prompt "
+			          "returned a non-Ok status with only this tensor zeroed",
+			          DdTensorName(t), layer);
+			CHECK_MSG(any_differs,
+			          "T-1408 per-tensor zero control (%s layer %d): committed output equals "
+			          "baseline on every prompt with only this tensor zeroed -- a single-tensor "
+			          "zero-handling regression on %s would hide behind the other six tensors' "
+			          "own contribution to the aggregate whole-stack control (D-SLM610)",
+			          DdTensorName(t), layer, DdTensorName(t));
+		}
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -18751,6 +19086,15 @@ int main(int argc, char** argv) {
 	// compile time above; this is the one runtime cell, the kv_saturation_count
 	// diagnostic pin's baseline).
 	TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic();
+
+	// T-1408 -- the 72-cell decode-discrimination red suite closing D-SLM493
+	// at decode level (Claude/Vitruvius/superslm-t1408-t1641-decode-
+	// discrimination-committed-cell-design-2026-08-01.md §5, amended by
+	// -fold-2026-08-01.md/-fold2-2026-08-01.md): 56 per-element differential
+	// cells, 1 whole-stack zero-map control, 14 per-tensor zero controls.
+	TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutput();
+	TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline();
+	TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseline();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
