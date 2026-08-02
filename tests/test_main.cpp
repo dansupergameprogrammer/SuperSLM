@@ -17855,15 +17855,22 @@ struct DecodeDiscriminationFixture {
 
 	// Distinct per-tensor, per-layer backing arrays -- none of the seven
 	// tensors is identity at this calibration (Laplace §4's own table).
-	int8_t q_weight_arr[2][4] = {{2, 1, 1, 1}, {1, 2, 1, 0}};
-	int8_t k_weight_arr[2][4] = {{1, 1, 1, 2}, {2, 0, 1, 1}};
+	// q_weight_arr/k_weight_arr/embed_weights are mutated per differential
+	// cell and so must stay non-const members, but they carry no literal of
+	// their own: the constructor copies them from the T-1650 guarded
+	// constexpr tables (kDdL{0,1}{Q,K}Weight, kDdEmbedWeights) above, so
+	// there is exactly one definition of this data and the static_asserts
+	// that guard it are structurally attached to what the fixture runs
+	// (Critical 1, D-279 review 369a808).
+	int8_t q_weight_arr[2][4];
+	int8_t k_weight_arr[2][4];
 	int8_t v_weight_arr[2][4] = {{1, 1, 0, 1}, {0, 1, 1, 0}};
 	int8_t o_weight_arr[2][4] = {{1, 0, 1, 1}, {1, 1, 1, 0}};
 	int8_t gate_weight_arr[2][4] = {{1, 1, 1, 0}, {1, 0, 1, 1}};
 	int8_t up_weight_arr[2][4] = {{2, 1, 1, 1}, {1, 1, 0, 2}};
 	int8_t down_weight_arr[2][4] = {{1, 1, 0, 1}, {2, 1, 1, 1}};
 
-	int8_t embed_weights[6] = {5, -3, 7, 2, -4, 6};   // [vocab=3, hidden=2]
+	int8_t embed_weights[6];                          // [vocab=3, hidden=2]
 	int8_t head_weights[6] = {9, -2, -3, 8, 5, 5};    // [vocab=3, hidden=2]
 	superslm::CarriedScale embed_site_constant{INT64_C(1073741824), INT64_C(0)};
 	superslm::CarriedScale final_norm_site_constant{INT64_C(1073741824), INT64_C(-30)};
@@ -17873,6 +17880,22 @@ struct DecodeDiscriminationFixture {
 		using superslm::CarriedScale;
 
 		DecodeDiscriminationFixture& f = *this;
+
+		// Critical 1 fix (D-279 review 369a808): q_weight_arr/k_weight_arr/
+		// embed_weights are copied here from the T-1650 guarded constexpr
+		// tables rather than carrying a second literal, so the
+		// static_asserts above are attached to the exact bytes this fixture
+		// runs, not to a separately-maintained shadow.
+		for (size_t d = 0; d < 4; ++d) {
+			f.q_weight_arr[0][d] = kDdL0QWeight[d];
+			f.q_weight_arr[1][d] = kDdL1QWeight[d];
+			f.k_weight_arr[0][d] = kDdL0KWeight[d];
+			f.k_weight_arr[1][d] = kDdL1KWeight[d];
+		}
+		for (size_t d = 0; d < kDdEmbedHidden * kDdEmbedVocab; ++d) {
+			f.embed_weights[d] = kDdEmbedWeights[d];
+		}
+
 		Cfg1Spec spec{};
 		spec.hidden_size = 2;
 		spec.num_hidden_layers = 2;
@@ -17971,6 +17994,17 @@ constexpr DdBaselineCase kDdBaselineCases[4] = {
     {kDdPrompt3, 1, {0, 0, 0}, {{1027, 83, 925}, {1031, 67, 915}, {1031, 67, 915}}, 1},
 };
 
+// Significant 4 fix (D-279 review 369a808): the in-source comment above
+// promises "a fifth prompt added later is checked by the same assert with no
+// additional code," but kDdBaselineCases was hard-coded to 4 entries while
+// two consumers index it by kDdNumPrompts -- a fifth prompt would read one
+// element past this table's end with zero diagnostics under /W4. This
+// static_assert makes the size-coupling explicit and gives a compile error
+// instead of a silent out-of-bounds read the day a fifth prompt is added.
+static_assert(sizeof(kDdBaselineCases) / sizeof(kDdBaselineCases[0]) == kDdNumPrompts,
+              "T-1408: kDdBaselineCases must carry exactly kDdNumPrompts entries -- both zero "
+              "control functions index it by kDdNumPrompts");
+
 }  // namespace
 
 // T-1651's own baseline cell: runs the real driver over all four of Laplace
@@ -18029,9 +18063,14 @@ static void TestDecodeDiscriminationFixtureBaselineAndKvSaturationDiagnostic() {
 			}
 		}
 		// T-1651's own subject: the kv_saturation_count diagnostic pin.
+		// Significant 5 fix (D-279 review 369a808): the failure text carries the
+		// D-SLM616 triage directly, so a maintainer does not need the fold
+		// record open to know what a mismatch means.
 		CHECK_MSG(seq.kv_saturation_count == c.expected_kv_saturation_count,
 		          "T-1651: seq.kv_saturation_count (prompt starting %d) == %llu, want %llu -- "
-		          "the diagnostic pin's own baseline value (Laplace §4)",
+		          "D-SLM616 triage: if the 56 differential cells passed in this same run, this "
+		          "is a legitimate recalibration -- re-derive and re-pin this value; if they did "
+		          "not, do not re-pin -- find and revert the regression instead",
 		          c.prompt[0], static_cast<unsigned long long>(seq.kv_saturation_count),
 		          static_cast<unsigned long long>(c.expected_kv_saturation_count));
 	}
@@ -18138,17 +18177,23 @@ DdRunOutput DdRunPrompt(DecodeDiscriminationFixture& fixture, const int32_t* pro
 	return out;
 }
 
-// The zero controls' oracle: "differs from baseline" against the same
-// labeled regression pin T-1651's own cell asserts equal to (kDdBaselineCases,
-// Laplace §4).
-bool DdOutputDiffersFromBaseline(const DdRunOutput& out, const DdBaselineCase& baseline) {
+// The zero controls' oracle (Critical 2 fix, D-279 review 369a808): "differs
+// from a freshly-executed unmutated run of this same fixture, in this same
+// build" -- not from kDdBaselineCases, a constexpr table measured at another
+// commit. Comparing against the frozen table made both controls trivially
+// pass under any regression that also moves the unmutated baseline (measured:
+// under a mutant leaving down_weight entirely unread, both down_weight
+// per-tensor controls passed against the frozen table). The frozen table
+// keeps its own job -- the baseline cell above still asserts equality to it,
+// which is where a regression pin belongs; the zero controls need the
+// property "zeroing this tensor moves THIS build's output", which only a
+// same-build comparison can assert.
+bool DdOutputsDiffer(const DdRunOutput& a, const DdRunOutput& b) {
 	for (int i = 0; i < 3; ++i) {
-		if (out.tokens[i] != baseline.expected_tokens[i]) return true;
+		if (a.tokens[i] != b.tokens[i]) return true;
 	}
-	for (int i = 0; i < 3; ++i) {
-		for (int v = 0; v < 3; ++v) {
-			if (out.logits[i * 3 + v] != baseline.expected_logits[i][v]) return true;
-		}
+	for (int i = 0; i < 9; ++i) {
+		if (a.logits[i] != b.logits[i]) return true;
 	}
 	return false;
 }
@@ -18262,7 +18307,7 @@ static void TestDecodeDiscriminationFixtureSingleElementMutationsMoveDecodeOutpu
 		arr[cell.elem] = static_cast<int8_t>(arr[cell.elem] + 1);
 
 		bool any_not_ok = false;
-		DdRunOutput results[4];
+		DdRunOutput results[kDdNumPrompts];
 		for (size_t p = 0; p < kDdNumPrompts; ++p) {
 			results[p] = DdRunPrompt(fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
 			if (results[p].status != SslmForwardStatus::Ok) any_not_ok = true;
@@ -18317,16 +18362,29 @@ static void TestDecodeDiscriminationFixtureWholeStackZeroMapDiffersFromBaseline(
 			any_not_ok = true;
 			continue;
 		}
-		if (DdOutputDiffersFromBaseline(out, kDdBaselineCases[p])) any_differs = true;
+		// Critical 2 fix: compare against a freshly-executed unmutated run of
+		// this same fixture in this same build, not the frozen kDdBaselineCases
+		// table -- see DdOutputsDiffer's own comment.
+		DecodeDiscriminationFixture fresh_fixture;
+		DdRunOutput fresh_out = DdRunPrompt(fresh_fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
+		CHECK_MSG(fresh_out.status == SslmForwardStatus::Ok,
+		          "T-1408 whole-stack zero-map control: the fresh unmutated comparison run for "
+		          "prompt starting %d returned a non-Ok status",
+		          kDdPrompts[p].tokens[0]);
+		if (fresh_out.status != SslmForwardStatus::Ok) {
+			any_not_ok = true;
+			continue;
+		}
+		if (DdOutputsDiffer(out, fresh_out)) any_differs = true;
 	}
 	CHECK_MSG(!any_not_ok,
 	          "T-1408 whole-stack zero-map control: at least one prompt returned a non-Ok "
 	          "status with every weight tensor zeroed at both layers");
 	CHECK_MSG(any_differs,
-	          "T-1408 whole-stack zero-map control: committed output equals baseline on every "
-	          "prompt with every weight tensor zeroed -- D-SLM493's own control (the one that "
-	          "fails nothing in the pre-existing suite) passes silently again on this "
-	          "calibration too");
+	          "T-1408 whole-stack zero-map control: committed output equals a freshly-executed "
+	          "unmutated run on every prompt with every weight tensor zeroed -- D-SLM493's own "
+	          "control (the one that fails nothing in the pre-existing suite) passes silently "
+	          "again on this calibration too");
 }
 
 // The 14 per-tensor whole-zero controls (D-SLM610, reversing D-SLM605's
@@ -18356,17 +18414,35 @@ static void TestDecodeDiscriminationFixturePerTensorZeroControlsDifferFromBaseli
 					any_not_ok = true;
 					continue;
 				}
-				if (DdOutputDiffersFromBaseline(out, kDdBaselineCases[p])) any_differs = true;
+				// Critical 2 fix: compare against a freshly-executed unmutated run
+				// of this same fixture in this same build, not the frozen
+				// kDdBaselineCases table -- see DdOutputsDiffer's own comment.
+				// Measured: under a mutant leaving down_weight entirely unread,
+				// both down_weight per-tensor controls passed against the frozen
+				// table; both fail against a fresh unmutated run.
+				DecodeDiscriminationFixture fresh_fixture;
+				DdRunOutput fresh_out =
+				    DdRunPrompt(fresh_fixture, kDdPrompts[p].tokens, kDdPrompts[p].len);
+				CHECK_MSG(fresh_out.status == SslmForwardStatus::Ok,
+				          "T-1408 per-tensor zero control (%s layer %d): the fresh unmutated "
+				          "comparison run for prompt starting %d returned a non-Ok status",
+				          DdTensorName(t), layer, kDdPrompts[p].tokens[0]);
+				if (fresh_out.status != SslmForwardStatus::Ok) {
+					any_not_ok = true;
+					continue;
+				}
+				if (DdOutputsDiffer(out, fresh_out)) any_differs = true;
 			}
 			CHECK_MSG(!any_not_ok,
 			          "T-1408 per-tensor zero control (%s layer %d): at least one prompt "
 			          "returned a non-Ok status with only this tensor zeroed",
 			          DdTensorName(t), layer);
 			CHECK_MSG(any_differs,
-			          "T-1408 per-tensor zero control (%s layer %d): committed output equals "
-			          "baseline on every prompt with only this tensor zeroed -- a single-tensor "
-			          "zero-handling regression on %s would hide behind the other six tensors' "
-			          "own contribution to the aggregate whole-stack control (D-SLM610)",
+			          "T-1408 per-tensor zero control (%s layer %d): committed output equals a "
+			          "freshly-executed unmutated run on every prompt with only this tensor "
+			          "zeroed -- a single-tensor zero-handling regression on %s would hide "
+			          "behind the other six tensors' own contribution to the aggregate "
+			          "whole-stack control (D-SLM610)",
 			          DdTensorName(t), layer, DdTensorName(t));
 		}
 	}
