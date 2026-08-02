@@ -9121,6 +9121,150 @@ static void TestBiasReconcileC28SignInvertedNegativeControl() {
 	          static_cast<long long>(kC28TieWrongNeg));
 }
 
+// T-1657 §10 cell 1: BiasReconcileWide's own bit-exact cell against the
+// reference formula, at the strike's own worst-observed real BIA1 magnitude --
+// past the deleted load-time bound, and past what a plain int64_t multiply of
+// b * r_a can hold (~2^47 * ~2^32 ~= 2^79).
+static void TestBiasReconcileWideBitExactAtStrikeWorstMagnitude() {
+	using superslm::BiasReconcileWide;
+
+	int64_t out = 0;
+	const bool fits = BiasReconcileWide(kBia1WideB, kBia1WideQB, kBia1WideRA, kBia1WideEA, &out);
+	CHECK_MSG(fits, "BiasReconcileWide(b=%lld, r_a=%lld) returned false, want true (a "
+	          "finite, representable reference value exists)",
+	          static_cast<long long>(kBia1WideB), static_cast<long long>(kBia1WideRA));
+	CHECK_MSG(out == kBia1WideExpected,
+	          "BiasReconcileWide(b=%lld, r_a=%lld, e_a=%lld) == %lld, want %lld (independent "
+	          "reference, tests/gen_s3_2_fixtures.py's build_bia1_wide_bit_exact)",
+	          static_cast<long long>(kBia1WideB), static_cast<long long>(kBia1WideRA),
+	          static_cast<long long>(kBia1WideEA), static_cast<long long>(out),
+	          static_cast<long long>(kBia1WideExpected));
+}
+
+// T-1657 §10 cell 2: the representability boundary, constructed exactly at
+// int64_t's edge (exponent = 0, so both constructions are exact integer
+// products with no rounding contamination) -- true/bit-exact at the boundary,
+// false one past it, and the false case must not fire a sanitizer report.
+static void TestBiasReconcileWideRepresentabilityBoundaryExact() {
+	using superslm::BiasReconcileWide;
+
+	int64_t fits_out = 0;
+	const bool fits = BiasReconcileWide(kBia1WideBoundaryFitsB, kBia1WideBoundaryQB,
+	                                     kBia1WideBoundaryFitsRA, kBia1WideBoundaryEA, &fits_out);
+	CHECK_MSG(fits && fits_out == kBia1WideBoundaryFitsExpected,
+	          "BiasReconcileWide at the INT64_MAX boundary: fits=%d out=%lld, want fits=true "
+	          "out=%lld",
+	          fits ? 1 : 0, static_cast<long long>(fits_out),
+	          static_cast<long long>(kBia1WideBoundaryFitsExpected));
+
+	int64_t over_out = 0;
+	const bool over_fits = BiasReconcileWide(kBia1WideBoundaryOverB, kBia1WideBoundaryQB,
+	                                          kBia1WideBoundaryOverRA, kBia1WideBoundaryEA,
+	                                          &over_out);
+	CHECK_MSG(!over_fits,
+	          "BiasReconcileWide one past INT64_MAX (b=%lld, r_a=%lld): fits == true, want false",
+	          static_cast<long long>(kBia1WideBoundaryOverB),
+	          static_cast<long long>(kBia1WideBoundaryOverRA));
+}
+
+// T-1657 §10 cell 3: the raw-product-overflow, result-in-range cell -- the
+// case that discriminates this design's own claim from the retired
+// BiasReconcileProductFitsInt64's. The strike's own witness: raw product
+// overflows int64_t (~1.04e20), the rounded result does not.
+static void TestBiasReconcileWideStrikeWitnessRawOverflowResultInRange() {
+	using superslm::BiasReconcileWide;
+
+	int64_t out = 0;
+	const bool fits =
+	    BiasReconcileWide(kBia1WideStrikeB, kBia1WideStrikeQB, kBia1WideStrikeRA,
+	                       kBia1WideStrikeEA, &out);
+	CHECK_MSG(fits,
+	          "BiasReconcileWide(strike witness: b=INT32_MAX, r_a=%lld) returned false, want "
+	          "true -- this is exactly the real-format-legal input the retired "
+	          "BiasReconcileProductFitsInt64 wrongly rejected (its raw-product test overflows "
+	          "here even though the rounded result is small and in-range)",
+	          static_cast<long long>(kBia1WideStrikeRA));
+	CHECK_MSG(out == kBia1WideStrikeExpected,
+	          "BiasReconcileWide(strike witness) == %lld, want %lld (independent reference)",
+	          static_cast<long long>(out), static_cast<long long>(kBia1WideStrikeExpected));
+}
+
+// T-1657 §10 cell 4: CheckBiasReconcileMagnitudeDomain's equivalence to
+// BiasReconcileWide's own boolean, at every cell above's own inputs -- the
+// IExpConstantsInDomain precedent (checked_chain_funnel.h's own doc for this
+// predicate): a divergence here means the predicate re-derived the domain
+// instead of asking the function that defines it.
+static void TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide() {
+	using superslm::BiasReconcileWide;
+	using superslm::CheckBiasReconcileMagnitudeDomain;
+	using superslm::SslmForwardStatus;
+
+	struct Case {
+		const char* label;
+		int64_t b, q_b, r_a, e_a;
+	};
+	const Case cases[] = {
+	    {"cell1", kBia1WideB, kBia1WideQB, kBia1WideRA, kBia1WideEA},
+	    {"cell2 fits", kBia1WideBoundaryFitsB, kBia1WideBoundaryQB, kBia1WideBoundaryFitsRA,
+	     kBia1WideBoundaryEA},
+	    {"cell2 over", kBia1WideBoundaryOverB, kBia1WideBoundaryQB, kBia1WideBoundaryOverRA,
+	     kBia1WideBoundaryEA},
+	    {"cell3 strike", kBia1WideStrikeB, kBia1WideStrikeQB, kBia1WideStrikeRA, kBia1WideStrikeEA},
+	    {"cell8 pos", kBia1WideTieB, kBia1WideTieQB, kBia1WideTieRA, kBia1WideTieEA},
+	    {"cell8 neg", -kBia1WideTieB, kBia1WideTieQB, kBia1WideTieRA, kBia1WideTieEA},
+	};
+	for (const Case& c : cases) {
+		int64_t out = 0;
+		const bool wide_fits = BiasReconcileWide(c.b, c.q_b, c.r_a, c.e_a, &out);
+		const SslmForwardStatus status =
+		    CheckBiasReconcileMagnitudeDomain(c.b, c.q_b, c.r_a, c.e_a);
+		const bool predicate_ok = (status == SslmForwardStatus::Ok);
+		CHECK_MSG(predicate_ok == wide_fits,
+		          "%s: CheckBiasReconcileMagnitudeDomain == %s (Ok iff %d) but "
+		          "BiasReconcileWide's own fits == %d -- divergence between the predicate and "
+		          "the function it is defined in terms of",
+		          c.label, superslm::SslmForwardStatusName(status), predicate_ok ? 1 : 0,
+		          wide_fits ? 1 : 0);
+	}
+}
+
+// T-1657 §10 cell 8: the C3 tie-away-from-zero rule, forced to a genuine tie
+// at a magnitude that exercises the widened 128-bit path (|b*r_a| >
+// INT64_MAX), both signs -- the existing narrow-width tie fixture
+// (TestBiasReconcileC28SignInvertedNegativeControl above) stays inside plain
+// int64_t and is mutation-blind to a defect specific to the 128-bit
+// generalization.
+static void TestBiasReconcileWideTieAwayFromZeroBothSignsAtWideMagnitude() {
+	using superslm::BiasReconcileWide;
+
+	static_assert(kBia1WideTieWrongPos == kBia1WideTieCorrectPos,
+	              "the fixture's own negative-control premise (agreement on the positive tie) no "
+	              "longer holds");
+	static_assert(kBia1WideTieWrongNeg != kBia1WideTieCorrectNeg,
+	              "the fixture's own negative-control premise (disagreement on the negative tie) "
+	              "no longer holds -- the control would have no discriminating power");
+
+	int64_t pos_out = 0;
+	const bool pos_fits =
+	    BiasReconcileWide(kBia1WideTieB, kBia1WideTieQB, kBia1WideTieRA, kBia1WideTieEA, &pos_out);
+	CHECK_MSG(pos_fits && pos_out == kBia1WideTieCorrectPos,
+	          "BiasReconcileWide(+B tie, wide path) fits=%d out=%lld, want fits=true out=%lld "
+	          "(C3, away-from-zero)",
+	          pos_fits ? 1 : 0, static_cast<long long>(pos_out),
+	          static_cast<long long>(kBia1WideTieCorrectPos));
+
+	int64_t neg_out = 0;
+	const bool neg_fits = BiasReconcileWide(-kBia1WideTieB, kBia1WideTieQB, kBia1WideTieRA,
+	                                         kBia1WideTieEA, &neg_out);
+	CHECK_MSG(neg_fits && neg_out == kBia1WideTieCorrectNeg,
+	          "BiasReconcileWide(-B tie, wide path) fits=%d out=%lld, want fits=true out=%lld "
+	          "(C3, away-from-zero) -- a wrong round-half-up implementation would return %lld "
+	          "here instead, agreeing with the correct result only on +B",
+	          neg_fits ? 1 : 0, static_cast<long long>(neg_out),
+	          static_cast<long long>(kBia1WideTieCorrectNeg),
+	          static_cast<long long>(kBia1WideTieWrongNeg));
+}
+
 // Sec4.7/Sec4.8 (BIA1, Sec7.2a third limb): the load-time magnitude descriptor.
 // Builds a single-tensor BIA1 (int64) manifest with one element set to the
 // value under test -- the same "one otherwise-valid v2 artifact, one hostile
@@ -9131,24 +9275,32 @@ static FixtureSection MakeBia1Section(int64_t value) {
 	return MakeSection(SslmSectionType::Biases, SslmDtype::Int64, manifest.bytes, /*alignment=*/64);
 }
 
-static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
-	// Reject: one past the derived bound, both signs (Sec3.4/Sec4.7 -- the
-	// domain is symmetric, so both signs are named rather than assumed to fail
-	// identically).
+// T-1657 §10 cell 7 / D-SLM665: repurposed from
+// TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary. The load-time
+// magnitude descriptor this test named (kBia1MagnitudeBound/ValidateBiasesDomain/
+// BiasCodeOutOfDomain) is deleted (D-SLM621) -- a load-time bound on B[j] alone
+// cannot express a joint constraint over B[j], R_a, and e_a, so BIA1's bias codes
+// now carry no load-time value-domain check at all (model.cpp's own replacement
+// comment, ValidateSectionValues). A deletion is a coverage event in both
+// directions: this test now proves the REVERSE of what it used to -- the same
+// three former-boundary fixture values (one past the old bound on both signs, and
+// exactly at the old bound) all load successfully and expose their view, because
+// nothing at load time inspects B[j]'s magnitude any longer.
+static void TestBia1AcceptsFormerBoundaryValuesBothSignsNowThatTheLoadTimeCheckIsGone() {
 	{
 		auto built = BuildArtifact(
 		    {MakeValidConfigSection(), MakeSigmoidLutSection(), MakeBia1Section(kBia1HostileValue)});
 		SslmModelView view;
 		std::string err;
 		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-		CHECK_MSG(status == SslmModelStatus::BiasCodeOutOfDomain,
-		          "BIA1 B[0]=2^31 (one past INT32_MAX): SslmModel::Load status == %s, want "
-		          "BiasCodeOutOfDomain (%s)",
+		CHECK_MSG(status == SslmModelStatus::Ok,
+		          "BIA1 B[0]=2^31 (one past the FORMER INT32_MAX bound): SslmModel::Load status "
+		          "== %s, want Ok (%s)",
 		          SslmModelStatusName(status), err.c_str());
-		CHECK_MSG(!view.has_biases,
-		          "hostile Biases view exposed on a rejected Load — a view MUST NOT be exposed "
-		          "(Sec4.8's vitality proof: a view never exposed cannot be read by any "
-		          "downstream C28 site, so B[j] categorically cannot reach B[j]*R_a)");
+		CHECK_MSG(view.has_biases,
+		          "a Biases view built from a value the former bound would have rejected must "
+		          "now be exposed -- BIA1's true constraint is enforced at the C28 call site "
+		          "(CheckBiasReconcileMagnitudeDomain), never at load");
 	}
 	{
 		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
@@ -9156,15 +9308,12 @@ static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
 		SslmModelView view;
 		std::string err;
 		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
-		CHECK_MSG(status == SslmModelStatus::BiasCodeOutOfDomain,
-		          "BIA1 B[0]=-2^31 (one past the bound, negative side): SslmModel::Load status "
-		          "== %s, want BiasCodeOutOfDomain (%s)",
+		CHECK_MSG(status == SslmModelStatus::Ok,
+		          "BIA1 B[0]=-2^31 (one past the FORMER bound, negative side): SslmModel::Load "
+		          "status == %s, want Ok (%s)",
 		          SslmModelStatusName(status), err.c_str());
-		CHECK_MSG(!view.has_biases,
-		          "hostile Biases view exposed on a rejected Load — a view MUST NOT be exposed");
+		CHECK_MSG(view.has_biases, "a former-boundary Biases view must be exposed on a successful Load");
 	}
-	// Accept-at-bound: the off-by-one control every S-HARDEN-1 boundary matrix
-	// carries (Sec13 dim 4).
 	{
 		auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
 		                            MakeBia1Section(kBia1AcceptBoundaryValue)});
@@ -9172,7 +9321,7 @@ static void TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary() {
 		std::string err;
 		SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
 		CHECK_MSG(status == SslmModelStatus::Ok,
-		          "BIA1 B[0]==INT32_MAX (exactly at the bound): SslmModel::Load status == %s, "
+		          "BIA1 B[0]==INT32_MAX (the former bound itself): SslmModel::Load status == %s, "
 		          "want Ok (%s)",
 		          SslmModelStatusName(status), err.c_str());
 		CHECK_MSG(view.has_biases, "an in-domain Biases view must be exposed on a successful Load");
@@ -18324,50 +18473,6 @@ static void TestRunLayerLoopMixedProjectionBiasWiredIndependently() {
 	          static_cast<int>(k_unbiased[0]), static_cast<int>(k_unbiased[1]));
 }
 
-// §5.5 cells 3c/3d: the product-magnitude domain-rejection cells -- the
-// strike's own executed witness/control pair, re-run against the BUILT
-// guard rather than read from the casebook (per this project's own
-// discipline: "the maker re-runs it against the remedy"). This is the
-// can-fail proof BiasReconcileProductFitsInt64 has never had against
-// compiled source until this build.
-static void TestBiasReconcileProductFitsInt64RejectsStrikeWitnessAdmitsControl() {
-	using superslm::BiasReconcileProductFitsInt64;
-	using superslm::CarriedScaleReciprocal;
-
-	// The strike's own executed witness (Claude/Loki/superslm-t1655-t1656-
-	// precondition-ruling-strike-2026-08-01.md): in_scale.m = 2 (non-canonical,
-	// int32_t-fitting), r_a = CarriedScaleReciprocal(2).
-	const int64_t r_a_witness = CarriedScaleReciprocal(2);
-	const bool witness_fits = BiasReconcileProductFitsInt64(superslm::kInt32Max, r_a_witness);
-	CHECK_MSG(!witness_fits,
-	          "cells 3c/3d: BiasReconcileProductFitsInt64(INT32_MAX, r_a=%lld) == true, want "
-	          "false -- this is the exact witness that silently returned -1 (true value +22.59, "
-	          "overflow) before this guard existed",
-	          (long long)r_a_witness);
-
-	// The canonical control: in_scale.m = 2^30, r_a = CarriedScaleReciprocal(2^30).
-	const int64_t r_a_control = CarriedScaleReciprocal(superslm::kInt32Max / 2 + 1);
-	const bool control_fits =
-	    BiasReconcileProductFitsInt64(superslm::kInt32Max, r_a_control);
-	CHECK_MSG(control_fits,
-	          "cells 3c/3d: BiasReconcileProductFitsInt64(INT32_MAX, r_a=%lld) == false, want "
-	          "true -- the guard must not reject the canonical case the design's original claim "
-	          "was actually correct about",
-	          (long long)r_a_control);
-
-	// §5.5 cell 8 (partial -- the guard's own boundary, exact): a product
-	// landed exactly at INT64_MAX must be accepted; INT64_MAX + 1 rejected.
-	// b * r_a == INT64_MAX exactly at b = INT64_MAX / r_a when r_a divides it;
-	// constructed directly instead, at r_a = 1 (trivial but exercises the
-	// exact-boundary comparison itself, `<=` vs `<`).
-	CHECK_MSG(BiasReconcileProductFitsInt64(INT64_MAX, 1),
-	          "cell 8: BiasReconcileProductFitsInt64(INT64_MAX, 1) == false, want true (product "
-	          "== INT64_MAX exactly, the guard's own inclusive boundary)");
-	CHECK_MSG(!BiasReconcileProductFitsInt64(INT64_MIN, 1),
-	          "cell 8: BiasReconcileProductFitsInt64(INT64_MIN, 1) == true, want false (|INT64_MIN| "
-	          "== 2^63 == INT64_MAX + 1, the guard's deliberate one-ULP margin)");
-}
-
 // §5.5 cells 3c/3d, composed: the guard actually wired into ProjectAndFunnel's
 // q_proj insertion rejects a real, composed non-canonical in_scale rather
 // than only a direct unit call -- BiasReconcileProductOutOfDomain, seq left
@@ -18378,10 +18483,12 @@ static void TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath(
 	using superslm::SslmForwardStatus;
 
 	TwoLayerFixture fixture;
-	// A bias magnitude at kBia1MagnitudeBound-scale (INT32_MAX) is in-bound by
-	// the current load-time gate but, composed against a sufficiently large
-	// r_a (driven by a small-magnitude in_scale.m the funnel's own D' factor
-	// can produce for a degenerate token), overflows the product guard.
+	// A bias magnitude at INT32_MAX (BIA1's former load-time bound, now unchecked
+	// at load per T-1657/D-SLM621) composed against a sufficiently large r_a
+	// (driven by a small-magnitude in_scale.m the funnel's own D' factor can
+	// produce for a degenerate token) may still overflow CheckBiasReconcile
+	// MagnitudeDomain's own rounded-result test, though that test is strictly
+	// more permissive than the retired raw-product guard was (T-1657 §4).
 	static const int64_t kHugeBias[2] = {superslm::kInt32Max, superslm::kInt32Max};
 	fixture.layers[0].q_bias = kHugeBias;
 
@@ -18401,8 +18508,8 @@ static void TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath(
 	const auto result = superslm::RunLayerLoop(seq, fixture.layers, 2, 1, 2, 2, 1, 2, 1,
 	                                            fixture.view.rope_tables, ws, kWorkspaceSize);
 	// This composed witness may land Ok (the guard correctly admits it),
-	// BiasReconcileProductOutOfDomain (the new magnitude guard correctly
-	// rejects it), IExpScaleDerivationOutOfDomain (the all-zero token drives a
+	// BiasReconcileProductOutOfDomain (the magnitude guard correctly rejects
+	// it), IExpScaleDerivationOutOfDomain (the all-zero token drives a
 	// degenerate q_scale that Section A's own derivation separately rejects,
 	// upstream of and independent of this guard), or ChainInputOutOfDomain
 	// (the bias term itself, once admitted by the magnitude guard, drives the
@@ -18410,8 +18517,9 @@ static void TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath(
 	// guard also doing its job) -- all four are sound outcomes of guards doing
 	// their job; what this cell actually requires is that the call never
 	// crashes and never silently corrupts seq on a rejection. The direct-call
-	// cell above (TestBiasReconcileProductFitsInt64RejectsStrikeWitnessAdmitsControl)
-	// is this build's own can-fail proof for the guard itself.
+	// cells above (TestBiasReconcileWideStrikeWitnessRawOverflowResultInRange,
+	// TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide) are this
+	// build's own can-fail proof for the guard itself.
 	CHECK_MSG(result == SslmForwardStatus::Ok ||
 	              result == SslmForwardStatus::BiasReconcileProductOutOfDomain ||
 	              result == SslmForwardStatus::IExpScaleDerivationOutOfDomain ||
@@ -18970,7 +19078,12 @@ int main(int argc, char** argv) {
 	TestApplyWeightScaleFoldC24IdentityVsNearIdentityAgainstTheRealFunnel();
 	TestCheckRoundingDivideByPotExponentDomainC28BoundaryMatrix();
 	TestBiasReconcileC28SignInvertedNegativeControl();
-	TestBia1RejectsHostileMagnitudeBothSignsAndAcceptsTheBoundary();
+	TestBiasReconcileWideBitExactAtStrikeWorstMagnitude();
+	TestBiasReconcileWideRepresentabilityBoundaryExact();
+	TestBiasReconcileWideStrikeWitnessRawOverflowResultInRange();
+	TestCheckBiasReconcileMagnitudeDomainMatchesBiasReconcileWide();
+	TestBiasReconcileWideTieAwayFromZeroBothSignsAtWideMagnitude();
+	TestBia1AcceptsFormerBoundaryValuesBothSignsNowThatTheLoadTimeCheckIsGone();
 	TestEmbedEntryRejectsHostileTokenIdBeforeAnyReadAndAcceptsTheBoundary();
 	TestRmsNormSiteCarriedScaleIsGainDerivedNotIncomingScale();
 
@@ -19185,7 +19298,6 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopBiasExponentGateRejectsAtBothIndependentSites();
 	TestRunLayerLoopKvLandingBiasCompositionDiffersFromUnbiased();
 	TestRunLayerLoopMixedProjectionBiasWiredIndependently();
-	TestBiasReconcileProductFitsInt64RejectsStrikeWitnessAdmitsControl();
 	TestRunLayerLoopBiasProductMagnitudeGuardRejectsThroughComposedPath();
 	TestRunLayerLoopCrossSectionBiasPresentDoesNotBreakPerKvHeadDerivation();
 

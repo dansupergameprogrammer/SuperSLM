@@ -70,10 +70,9 @@ inline constexpr int kC24CodeXNearIdentity = 26;  // differs from kC24CodeXPassT
 
 // --- BIA1 (Sec7.2a) magnitude descriptor -----------------------------------
 inline constexpr long long kBia1RaMax = 4294967296LL;
-inline constexpr long long kBia1MagnitudeBound = 2147483647LL;  // == INT32_MAX
-inline constexpr long long kBia1HostileValue = 2147483648LL;  // one past the bound -- must reject
+inline constexpr long long kBia1HostileValue = 2147483648LL;  // one past the FORMER bound -- must now accept
 inline constexpr long long kBia1HostileValueNegated = -2147483648LL;
-inline constexpr long long kBia1AcceptBoundaryValue = 2147483647LL;  // exactly at the bound -- must accept
+inline constexpr long long kBia1AcceptBoundaryValue = 2147483647LL;  // == INT32_MAX, the former bound itself -- must accept
 
 // --- C28 (Sec7.2 2nd limb) (q_B, e_a) domain boundary ----------------------
 inline constexpr long long kC28BoundaryBelowMinEA = -93LL;
@@ -99,6 +98,47 @@ inline constexpr long long kC28TieCorrectPos = 1073741825LL;
 inline constexpr long long kC28TieCorrectNeg = -1073741825LL;
 inline constexpr long long kC28TieWrongPos = 1073741825LL;  // wrong candidate; must equal kC28TieCorrectPos
 inline constexpr long long kC28TieWrongNeg = -1073741824LL;  // wrong candidate; must NOT equal kC28TieCorrectNeg
+
+// --- BIA1 widened core (T-1657, Sec10 cell 1): bit-exact at a magnitude
+// --- the deleted load-time bound used to reject -----------------------------
+inline constexpr long long kBia1WideB = 99381983436726LL;
+inline constexpr long long kBia1WideQB = 30LL;
+inline constexpr long long kBia1WideRA = 4294967296LL;
+inline constexpr long long kBia1WideEA = -52LL;
+inline constexpr int kBia1WideExponent = 40;
+inline constexpr long long kBia1WideExpected = 388210872800LL;
+
+// --- BIA1 widened core (T-1657, Sec10 cell 2): representability boundary ---
+inline constexpr long long kBia1WideBoundaryQB = 30LL;
+inline constexpr long long kBia1WideBoundaryEA = -92LL;
+inline constexpr int kBia1WideBoundaryExponent = 0;
+inline constexpr long long kBia1WideBoundaryFitsB = 9223372036854775807LL;
+inline constexpr long long kBia1WideBoundaryFitsRA = 1LL;
+inline constexpr long long kBia1WideBoundaryFitsExpected = 9223372036854775807LL;  // == INT64_MAX
+inline constexpr long long kBia1WideBoundaryOverB = 4611686018427387904LL;
+inline constexpr long long kBia1WideBoundaryOverRA = 2LL;
+// kBia1WideBoundaryOverExpected == INT64_MAX + 1, one past int64_t -- not representable as a literal
+
+// --- BIA1 widened core (T-1657, Sec10 cell 3): the strike's own raw-product-
+// --- overflow, result-in-range discriminating witness -----------------------
+inline constexpr long long kBia1WideStrikeB = 2147483647LL;  // == kBia1AcceptBoundaryValue (INT32_MAX)
+inline constexpr long long kBia1WideStrikeQB = 30LL;
+inline constexpr long long kBia1WideStrikeRA = 48507865471LL;
+inline constexpr long long kBia1WideStrikeEA = -30LL;
+inline constexpr int kBia1WideStrikeExponent = 62;
+inline constexpr long long kBia1WideStrikeExpected = 23LL;
+
+// --- BIA1 widened core (T-1657, Sec10 cell 8): a genuine C3 tie forced onto
+// --- the 128-bit path, both signs --------------------------------------------
+inline constexpr long long kBia1WideTieB = 1099511628032LL;
+inline constexpr long long kBia1WideTieQB = 30LL;
+inline constexpr long long kBia1WideTieRA = 2147483649LL;
+inline constexpr long long kBia1WideTieEA = -83LL;
+inline constexpr int kBia1WideTieK = 9;
+inline constexpr long long kBia1WideTieCorrectPos = 4611686021648613377LL;
+inline constexpr long long kBia1WideTieCorrectNeg = -4611686021648613377LL;
+inline constexpr long long kBia1WideTieWrongPos = 4611686021648613377LL;  // wrong candidate; must equal kBia1WideTieCorrectPos
+inline constexpr long long kBia1WideTieWrongNeg = -4611686021648613376LL;  // wrong candidate; must NOT equal kBia1WideTieCorrectNeg
 
 }  // namespace superslm_test
 

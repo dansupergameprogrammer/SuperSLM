@@ -63,6 +63,15 @@ inline bool SGe(S128 a, S128 b) { return a >= b; }
 inline bool SLt(S128 a, S128 b) { return a < b; }
 // Arithmetic (floor) right shift; result assumed to fit in i64.
 inline int64_t SShrToI64(S128 v, int k) { return static_cast<int64_t>(v >> k); }
+// T-1657/D-SLM621: full-width arithmetic (floor) right shift, unlike SShrToI64 above
+// which assumes (and narrows to) only the low 64 bits. k in [0,127] stays a native,
+// well-defined __int128 shift; BiasReconcileWide's own caller uses k in [0,63] only
+// (BiasReconcile's unchanged exponent-domain contract, forward_sites.h).
+inline S128 SShrFull(S128 v, int k) { return v >> k; }
+// Representable in int64_t: the high bits are exactly the sign-extension of the low
+// 64 bits (IExpEvaluate's own narrowing comment, made an explicit, checked test here).
+inline bool SFitsI64(S128 v) { return v == static_cast<S128>(static_cast<int64_t>(v)); }
+inline int64_t SLow64(S128 v) { return static_cast<int64_t>(v); }
 
 #else  // MSVC and any other toolchain without a native 128-bit integer.
 
@@ -167,6 +176,38 @@ inline int64_t SShrToI64(S128 v, int k) {
 	uint64_t lo = (v.lo >> k) | (v.hi << (64 - k));
 	return static_cast<int64_t>(lo);
 }
+
+// T-1657/D-SLM621: full-width arithmetic (floor) right shift, unlike SShrToI64 above
+// which assumes (and narrows to) only the low 64 bits. k in [0,127]; k <= 0 is the
+// identity and k >= 128 saturates to the sign fill (mirrors UShrFull's own [0,127]
+// convention above, generalized to a SIGNED, sign-extending shift). Two's-complement
+// {lo, hi}: v = hi*2^64 + lo with hi read as signed -- shifting right by k >= 64
+// leaves the low word as an arithmetic shift of hi alone (the unsigned lo contributes
+// nothing past bit 63, since 0 <= lo < 2^64), and shifting by k in [1,63] combines
+// bits from both words exactly as UShrToU64 does, but with hi's OWN right shift kept
+// arithmetic (sign-extending) rather than logical.
+inline S128 SShrFull(S128 v, int k) {
+	const bool negative = static_cast<int64_t>(v.hi) < 0;
+	const uint64_t fill = negative ? ~0ull : 0ull;
+	if (k <= 0) return v;
+	if (k >= 128) return S128{fill, fill};
+	if (k >= 64) {
+		const int64_t shifted_hi = static_cast<int64_t>(v.hi) >> (k - 64);
+		return S128{static_cast<uint64_t>(shifted_hi), fill};
+	}
+	const uint64_t lo = (v.lo >> k) | (v.hi << (64 - k));
+	const int64_t hi = static_cast<int64_t>(v.hi) >> k;
+	return S128{lo, static_cast<uint64_t>(hi)};
+}
+
+// Representable in int64_t: the high word is exactly the sign-extension of the low
+// word's own sign bit (IExpEvaluate's own narrowing comment, made an explicit,
+// checked test here rather than assumed).
+inline bool SFitsI64(S128 v) {
+	const uint64_t sign_ext = (static_cast<int64_t>(v.lo) < 0) ? ~0ull : 0ull;
+	return v.hi == sign_ext;
+}
+inline int64_t SLow64(S128 v) { return static_cast<int64_t>(v.lo); }
 
 #endif  // 128-bit facility
 
@@ -288,6 +329,47 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s) {
 	if (magnitude > 127u) magnitude = 127u;  // clamp before sign; symmetric range [−127,127]
 	int32_t q = static_cast<int32_t>(magnitude);
 	return static_cast<int8_t>(x_i < 0 ? -q : q);
+}
+
+namespace {
+// C3's tie-away-from-zero rule (RoundingDivideByPOTImpl<T> above), generalized to a
+// 128-bit numerator divided by 2^exponent (T-1657, D-SLM621/641/645) -- the SAME rule,
+// generalized only in the numerator's width, never the exponent's own domain or the
+// rounding rule itself. Because exponent <= 63 always (BiasReconcile's unchanged
+// caller-side gate, CheckRoundingDivideByPotExponentDomain), the rounding remainder
+// and threshold are exactly the low 64 bits of `x`'s own two's-complement pattern
+// masked to `exponent` bits -- no 128-bit remainder arithmetic is needed, only a
+// 128-bit arithmetic shift for the quotient itself.
+S128 RoundingDivideByPOTWide(S128 x, int exponent) {
+	const uint64_t mask = (uint64_t{1} << exponent) - 1u;
+#if defined(__SIZEOF_INT128__)
+	const uint64_t x_lo = static_cast<uint64_t>(x);
+	const bool x_negative = x < 0;
+#else
+	const uint64_t x_lo = x.lo;
+	const bool x_negative = static_cast<int64_t>(x.hi) < 0;
+#endif
+	const uint64_t remainder = x_lo & mask;
+	const uint64_t threshold = (mask >> 1) + (x_negative ? 1u : 0u);
+	const S128 shifted = SShrFull(x, exponent);
+	return remainder > threshold ? SAdd(shifted, SFromI64(1)) : shifted;
+}
+}  // namespace
+
+bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out) {
+	// RED STUB (T-1657/T-1663 red-first build, StandardsDocument/D-SLM556): the
+	// pre-fix, always-fits behaviour -- forms the wide product correctly (never
+	// UB, SMul is total) but applies a plain TRUNCATING shift instead of C3's
+	// away-from-zero rounding, and always reports fits=true regardless of the
+	// true rounded result's representability. Deliberately wrong so this
+	// function's own newly authored red cells (§10 cells 1/2/3/8) fail against
+	// it. Replaced by the real body in the green commit.
+	const int64_t exponent = q_b + 62 + e_a;
+	const S128 wide = SMul(b, r_a);  // exact, total over the full int64_t domain of
+	                                  // both operands (SMul's own contract, this file).
+	const S128 truncated = SShrFull(wide, static_cast<int>(exponent));  // no C3 rounding
+	*out = SLow64(truncated);
+	return true;
 }
 
 // --- F-S3-7 / §7.2 wide-row (int64 input width) siblings ---------------------

@@ -110,7 +110,6 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::WeightScaleIdentityNotBool: return "WeightScaleIdentityNotBool";
 		case SslmModelStatus::WeightScaleTripleCountInvalid: return "WeightScaleTripleCountInvalid";
 		case SslmModelStatus::RopeTableEntryOutOfDomain: return "RopeTableEntryOutOfDomain";
-		case SslmModelStatus::BiasCodeOutOfDomain: return "BiasCodeOutOfDomain";
 		case SslmModelStatus::KvLandingScaleOutOfDomain: return "KvLandingScaleOutOfDomain";
 		case SslmModelStatus::KvLandingReciprocalOutOfDomain: return "KvLandingReciprocalOutOfDomain";
 		case SslmModelStatus::TokenizerRejected: return "TokenizerRejected";
@@ -734,33 +733,6 @@ SslmModelStatus ValidateRopeTablesDomain(const SslmTensorManifest& rop, std::str
 	return SslmModelStatus::Ok;
 }
 
-// BIA1's load-time value-domain descriptor (SuperSLM_S3a_WalkingSkeleton_Plan.md
-// §7.2a third limb, §4.4; S3.2; Claude/Curie/superslm-s3.2-weightless-and-
-// projection-sites-test-design-2026-07-28.md §3.4/§4.7). Curie's record derives
-// the bound by execution: R_a's maximum over the C19 reciprocal's own domain is
-// 2^32, so keeping B[j]*R_a inside int64 requires |B[j]| <= floor((2^63-1) / 2^32)
-// == INT32_MAX, verified tight (one past it does not fit). Walked the same way as
-// ValidateRopeTablesDomain above: every element of every tensor in `biases`,
-// stored as int64, checked before any narrowing.
-constexpr int64_t kBia1MagnitudeBound = kInt32Max;
-
-SslmModelStatus ValidateBiasesDomain(const SslmTensorManifest& biases, std::string* err) {
-	for (const SslmTensorView& t : biases.Tensors()) {
-		for (uint64_t i = 0; i < t.elem_count; ++i) {
-			const int64_t v = RdI64(t.data + i * 8);
-			if (v < -kBia1MagnitudeBound || v > kBia1MagnitudeBound) {
-				if (err) {
-					*err = "Biases tensor \"" + std::string(t.name) + "\" element " + std::to_string(i) +
-					       "=" + std::to_string(v) + " outside [-" + std::to_string(kBia1MagnitudeBound) +
-					       "," + std::to_string(kBia1MagnitudeBound) + "]";
-				}
-				return SslmModelStatus::BiasCodeOutOfDomain;
-			}
-		}
-	}
-	return SslmModelStatus::Ok;
-}
-
 // KvLandingScales'/KvLandingReciprocals' load-time value-domain descriptors
 // (SuperSLM_S3a_WalkingSkeleton_Plan.md §7.2a third limb, §8.1; S3.3;
 // Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
@@ -866,10 +838,10 @@ SslmModelStatus ValidateKvLandingScalesDomain(const SslmKeyedConstants& kv_landi
 }
 
 // KvLandingReciprocals' R_t (word 2) checked against the exact domain
-// `DynamicScaleReciprocal` can ever produce -- this is ValidateBiasesDomain's
-// own S3.2 precedent, applied identically here: walk every element of every
-// entry, checked before any narrowing. e_t (word 1) ALSO checked against the
-// joint-bound floor derived above -- LandingRescale's own call
+// `DynamicScaleReciprocal` can ever produce -- the same per-element load-time
+// walk ValidateRopeTablesDomain above uses, applied identically here: walk
+// every element of every entry, checked before any narrowing. e_t (word 1)
+// ALSO checked against the joint-bound floor derived above -- LandingRescale's own call
 // (`landing_rescale_vec(seg, m_a, r_t, e_a, e_t)`, dynamic_engine.py) reads
 // BOTH r_t and e_t from THIS section at runtime, never from KvLandingScales
 // (confirmation review D-SLM372, correcting D-SLM370(c)'s wrong section
@@ -1057,10 +1029,12 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 		const SslmModelStatus s = ValidateRopeTablesDomain(view.rope_tables, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
-	if (view.has_biases) {
-		const SslmModelStatus s = ValidateBiasesDomain(view.biases, err);
-		if (s != SslmModelStatus::Ok) return s;
-	}
+	// BIA1's bias codes carry no load-time value-domain check (T-1657, D-SLM621/641).
+	// Unlike every other section this function validates, B[j]'s true constraint is
+	// joint with a runtime-derived reciprocal and exponent (R_a, e_a) that do not
+	// exist until the C28 call site -- the same shape already ruled for bias.q_b
+	// (SuperSLM_S3a_WalkingSkeleton_Plan.md §4.4/§7.2). The check lives at
+	// CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h), not here.
 	if (view.has_kv_landing_scales) {
 		const SslmModelStatus s = ValidateKvLandingScalesDomain(view.kv_landing_scales, err);
 		if (s != SslmModelStatus::Ok) return s;

@@ -155,10 +155,6 @@ enum class SslmModelStatus {
 	WeightScaleShiftOutOfDomain, // WSC1 shift column outside [0,31] (RoundingDivideByPOT's exponent domain)
 	WeightScaleIdentityNotBool,  // WSC1 identity column not in {0,1}
 	RopeTableEntryOutOfDomain,   // ROP1 element outside [-2^30, 2^30] (RopeApplyPair's yr-addition safety bound)
-	BiasCodeOutOfDomain,         // BIA1 element |B[j]| exceeds the C28 magnitude bound (Sec7.2a third limb,
-	                              // Sec4.4 -- B[j]*R_a must stay in int64, derived bound |B[j]| <= INT32_MAX).
-	                              // Enforced by ValidateBiasesDomain (model.cpp), wired into
-	                              // ValidateSectionValues (S3.2's green phase).
 	KvLandingScaleOutOfDomain,   // KvLandingScales entry's m_t (word 0) outside [kKvLandingScaleMantissaMin,
 	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). Its word 1
 	                              // (e_target) carries no check here -- pending-consumer per D-SLM142

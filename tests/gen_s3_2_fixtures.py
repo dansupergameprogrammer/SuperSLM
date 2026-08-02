@@ -372,6 +372,146 @@ def _finish_c28_tie_witness(b: int, r_a: int, e_a: int, k: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# T-1657 (D-SLM621/641/645, design Sec10 cells 1/2/3/8) -- BiasReconcileWide's
+# own widened-arithmetic witnesses. All four derived by EXECUTING the vendored
+# reference (im.bias_reconcile, arbitrary precision), never by hand.
+# ---------------------------------------------------------------------------
+
+def build_bia1_wide_bit_exact() -> dict:
+    """Sec10 cell 1: bit-exact against the reference at the strike's own worst-
+    observed real BIA1 magnitude (9.938e13, past the deleted INT32_MAX bound),
+    a canonical r_a (Dn = 2**30, the C19 domain's own left endpoint), and a
+    mid-range composed exponent."""
+    b = 99381983436726
+    r_a = im.dynamic_scale_reciprocal(1 << 30)
+    e_a = -52  # exponent = Q_B + 62 + e_a = 30 + 62 - 52 = 40
+    exponent = Q_B + 62 + e_a
+    assert exponent == 40
+    expected = im.bias_reconcile(b, Q_B, r_a, e_a)
+    assert INT64_MIN <= expected <= INT64_MAX, (
+        "cell 1's own witness must land inside int64_t -- it is meant to "
+        "demonstrate the widened arithmetic ACCEPTING a magnitude the deleted "
+        "load-time bound used to reject, not a representability failure"
+    )
+    return {"b": b, "q_b": Q_B, "r_a": r_a, "e_a": e_a, "exponent": exponent, "expected": expected}
+
+
+def build_bia1_wide_representability_boundary() -> dict:
+    """Sec10 cell 2: the representability boundary, constructed exactly at
+    int64_t's edge with exponent = 0 (the identity -- RoundingDivideByPOTWide
+    applies no rounding at exponent 0, so both constructions are exact integer
+    products, not rounding artifacts). e_a = -92 is Q_B + 62 + e_a = 0, the
+    same domain floor the C28 boundary fixtures above already pin."""
+    e_a = -Q_B - 62
+    exponent = Q_B + 62 + e_a
+    assert exponent == 0
+
+    fits_b, fits_r_a = INT64_MAX, 1
+    fits_expected = im.bias_reconcile(fits_b, Q_B, fits_r_a, e_a)
+    assert fits_expected == INT64_MAX
+
+    over_b, over_r_a = 1 << 62, 2
+    over_expected = im.bias_reconcile(over_b, Q_B, over_r_a, e_a)
+    assert over_expected == INT64_MAX + 1, (
+        "the 'one past' construction must land exactly one past INT64_MAX, "
+        "not merely past it, to prove the boundary is tight"
+    )
+    return {
+        "q_b": Q_B, "e_a": e_a, "exponent": exponent,
+        "fits_b": fits_b, "fits_r_a": fits_r_a, "fits_expected": fits_expected,
+        "over_b": over_b, "over_r_a": over_r_a, "over_expected": over_expected,
+    }
+
+
+def build_bia1_wide_strike_witness() -> dict:
+    """Sec10 cell 3: the strike's own raw-product-overflow, result-in-range
+    witness (Claude/Loki/superslm-t1655-t1656-precondition-ruling-strike-
+    2026-08-01.md) -- b = kBia1AcceptBoundaryValue (the FORMER load-time
+    bound, INT32_MAX), r_a = 48507865471, at the composed exponent
+    BiasReconcile's own formula produces for that witness's in_scale.e = -30.
+    This is the case that discriminates T-1657's own claim from the retired
+    BiasReconcileProductFitsInt64's: the RAW product overflows int64_t (so the
+    retired guard would have wrongly rejected it) but the ROUNDED result does
+    not."""
+    b = INT32_MAX
+    r_a = 48507865471
+    e_a = -30
+    exponent = Q_B + 62 + e_a
+    assert exponent == 62
+    raw_product = b * r_a
+    assert raw_product > INT64_MAX, "the witness's own raw product must overflow int64_t"
+    expected = im.bias_reconcile(b, Q_B, r_a, e_a)
+    assert INT64_MIN <= expected <= INT64_MAX, (
+        "the witness's own rounded result must fit int64_t -- that is the "
+        "entire point of this discriminating cell"
+    )
+    return {"b": b, "q_b": Q_B, "r_a": r_a, "e_a": e_a, "exponent": exponent, "expected": expected}
+
+
+def build_bia1_wide_tie_witness() -> dict:
+    """Sec10 cell 8: a genuine C3 tie (remainder == threshold exactly) at a
+    magnitude where |b * r_a| > INT64_MAX, forcing the genuinely-128-bit
+    rounding path -- the existing narrow-width tie fixture (kC28Tie*) stays
+    inside plain int64_t and cannot exercise this. Same search shape as
+    build_c28_tie_witness above, widened: b ranges over int64_t magnitudes
+    large enough that b * r_a exceeds int64_t for at least one candidate r_a,
+    with the tie condition ((b * r_a) mod 2**k == half) checked in exact
+    (unbounded) Python arithmetic."""
+    candidate_r_a = [2147483649, 3000000001, 2500000001, 4294967295, 3221225473]
+    base = 1 << 40  # a band of B large enough that B * R_a can exceed int64_t
+    for e_a in range(-92, 30):
+        k = Q_B + 62 + e_a
+        if not (0 <= k <= 63) or k == 0:
+            continue
+        half = 1 << (k - 1)
+        mod = 1 << k
+        for r_a in candidate_r_a:
+            for delta in range(200000):
+                b = base + delta
+                if b * r_a <= INT64_MAX or (b * r_a) % mod != half:
+                    continue
+                pos = im.bias_reconcile(b, Q_B, r_a, e_a)
+                neg = im.bias_reconcile(-b, Q_B, r_a, e_a)
+                if not (INT64_MIN <= pos <= INT64_MAX and INT64_MIN <= neg <= INT64_MAX):
+                    continue  # representable-result candidates only (cell 2 owns the boundary)
+                return _finish_bia1_wide_tie_witness(b, r_a, e_a, k)
+    raise AssertionError("no wide C28 tie witness found in the searched space -- widen the search")
+
+
+def _finish_bia1_wide_tie_witness(b: int, r_a: int, e_a: int, k: int) -> dict:
+    correct_pos = im.bias_reconcile(b, Q_B, r_a, e_a)
+    correct_neg = im.bias_reconcile(-b, Q_B, r_a, e_a)
+
+    def wrong_bias_reconcile(bb: int) -> int:
+        numerator = bb * r_a
+        if k >= 0:
+            return _round_half_up_ratio(numerator, 1 << k)
+        return numerator << (-k)
+
+    wrong_pos = wrong_bias_reconcile(b)
+    wrong_neg = wrong_bias_reconcile(-b)
+    assert b * r_a > INT64_MAX, "cell 8's own witness must exercise the genuinely-wide path"
+    assert INT64_MIN <= correct_pos <= INT64_MAX and INT64_MIN <= correct_neg <= INT64_MAX, (
+        "cell 8's own witness must itself be representable -- it tests the tie "
+        "rule, not the representability boundary (that is cell 2's job)"
+    )
+    assert wrong_pos == correct_pos, (
+        "the wrong (round-half-up) candidate unexpectedly disagrees with the "
+        "correct (away-from-zero) result on the POSITIVE tie"
+    )
+    assert wrong_neg != correct_neg, (
+        "the wrong (round-half-up) candidate unexpectedly AGREES with the "
+        "correct (away-from-zero) result on the NEGATIVE tie -- no "
+        "discriminating power"
+    )
+    return {
+        "b": b, "q_b": Q_B, "r_a": r_a, "e_a": e_a, "k": k,
+        "correct_pos": correct_pos, "correct_neg": correct_neg,
+        "wrong_pos": wrong_pos, "wrong_neg": wrong_neg,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Emission
 # ---------------------------------------------------------------------------
 
@@ -419,12 +559,18 @@ def _fmt_c24(w: dict) -> list[str]:
 
 
 def _fmt_bia1(bound: dict) -> list[str]:
+    # T-1657/D-SLM621/D-SLM665: kBia1MagnitudeBound is retired along with the
+    # load-time gate it named (kBia1MagnitudeBound/ValidateBiasesDomain/
+    # BiasCodeOutOfDomain, all deleted from src/model.cpp and include/superslm/
+    # model.h) -- BIA1's bias codes carry no load-time value-domain check any
+    # longer, so there is no bound left to name here. The three fixture values
+    # below (the former bound's own former-boundary witnesses) are kept: they
+    # now prove the REVERSE claim, that all three load successfully.
     return [
         "inline constexpr long long kBia1RaMax = %dLL;" % bound["r_a_max"],
-        "inline constexpr long long kBia1MagnitudeBound = %dLL;  // == INT32_MAX" % bound["bound"],
-        "inline constexpr long long kBia1HostileValue = %dLL;  // one past the bound -- must reject" % bound["hostile_value"],
+        "inline constexpr long long kBia1HostileValue = %dLL;  // one past the FORMER bound -- must now accept" % bound["hostile_value"],
         "inline constexpr long long kBia1HostileValueNegated = %dLL;" % bound["hostile_value_negated"],
-        "inline constexpr long long kBia1AcceptBoundaryValue = %dLL;  // exactly at the bound -- must accept" % bound["accept_boundary_value"],
+        "inline constexpr long long kBia1AcceptBoundaryValue = %dLL;  // == INT32_MAX, the former bound itself -- must accept" % bound["accept_boundary_value"],
     ]
 
 
@@ -453,6 +599,56 @@ def _fmt_c28_tie(w: dict) -> list[str]:
     ]
 
 
+def _fmt_bia1_wide_bit_exact(w: dict) -> list[str]:
+    return [
+        "inline constexpr long long kBia1WideB = %dLL;" % w["b"],
+        "inline constexpr long long kBia1WideQB = %dLL;" % w["q_b"],
+        "inline constexpr long long kBia1WideRA = %dLL;" % w["r_a"],
+        "inline constexpr long long kBia1WideEA = %dLL;" % w["e_a"],
+        "inline constexpr int kBia1WideExponent = %d;" % w["exponent"],
+        "inline constexpr long long kBia1WideExpected = %dLL;" % w["expected"],
+    ]
+
+
+def _fmt_bia1_wide_boundary(w: dict) -> list[str]:
+    return [
+        "inline constexpr long long kBia1WideBoundaryQB = %dLL;" % w["q_b"],
+        "inline constexpr long long kBia1WideBoundaryEA = %dLL;" % w["e_a"],
+        "inline constexpr int kBia1WideBoundaryExponent = %d;" % w["exponent"],
+        "inline constexpr long long kBia1WideBoundaryFitsB = %dLL;" % w["fits_b"],
+        "inline constexpr long long kBia1WideBoundaryFitsRA = %dLL;" % w["fits_r_a"],
+        "inline constexpr long long kBia1WideBoundaryFitsExpected = %dLL;  // == INT64_MAX" % w["fits_expected"],
+        "inline constexpr long long kBia1WideBoundaryOverB = %dLL;" % w["over_b"],
+        "inline constexpr long long kBia1WideBoundaryOverRA = %dLL;" % w["over_r_a"],
+        "// kBia1WideBoundaryOverExpected == INT64_MAX + 1, one past int64_t -- not representable as a literal",
+    ]
+
+
+def _fmt_bia1_wide_strike_witness(w: dict) -> list[str]:
+    return [
+        "inline constexpr long long kBia1WideStrikeB = %dLL;  // == kBia1AcceptBoundaryValue (INT32_MAX)" % w["b"],
+        "inline constexpr long long kBia1WideStrikeQB = %dLL;" % w["q_b"],
+        "inline constexpr long long kBia1WideStrikeRA = %dLL;" % w["r_a"],
+        "inline constexpr long long kBia1WideStrikeEA = %dLL;" % w["e_a"],
+        "inline constexpr int kBia1WideStrikeExponent = %d;" % w["exponent"],
+        "inline constexpr long long kBia1WideStrikeExpected = %dLL;" % w["expected"],
+    ]
+
+
+def _fmt_bia1_wide_tie(w: dict) -> list[str]:
+    return [
+        "inline constexpr long long kBia1WideTieB = %dLL;" % w["b"],
+        "inline constexpr long long kBia1WideTieQB = %dLL;" % w["q_b"],
+        "inline constexpr long long kBia1WideTieRA = %dLL;" % w["r_a"],
+        "inline constexpr long long kBia1WideTieEA = %dLL;" % w["e_a"],
+        "inline constexpr int kBia1WideTieK = %d;" % w["k"],
+        "inline constexpr long long kBia1WideTieCorrectPos = %dLL;" % w["correct_pos"],
+        "inline constexpr long long kBia1WideTieCorrectNeg = %dLL;" % w["correct_neg"],
+        "inline constexpr long long kBia1WideTieWrongPos = %dLL;  // wrong candidate; must equal kBia1WideTieCorrectPos" % w["wrong_pos"],
+        "inline constexpr long long kBia1WideTieWrongNeg = %dLL;  // wrong candidate; must NOT equal kBia1WideTieCorrectNeg" % w["wrong_neg"],
+    ]
+
+
 def generate() -> str:
     c31_unit = build_c31_unit_cases()
     c31_site = build_c31_site_case()
@@ -460,6 +656,10 @@ def generate() -> str:
     bia1_bound = build_bia1_bound()
     c28_boundary = build_c28_domain_boundary()
     c28_tie = build_c28_tie_witness()
+    bia1_wide_bit_exact = build_bia1_wide_bit_exact()
+    bia1_wide_boundary = build_bia1_wide_representability_boundary()
+    bia1_wide_strike = build_bia1_wide_strike_witness()
+    bia1_wide_tie = build_bia1_wide_tie_witness()
 
     lines = [
         "// GENERATED FILE. Do not hand-edit.",
@@ -534,6 +734,29 @@ def generate() -> str:
         "// --- C28 (Sec4.4) bias-reconciliation sign-inverted tie witness ------------",
     ]
     lines += _fmt_c28_tie(c28_tie)
+    lines += [
+        "",
+        "// --- BIA1 widened core (T-1657, Sec10 cell 1): bit-exact at a magnitude",
+        "// --- the deleted load-time bound used to reject -----------------------------",
+    ]
+    lines += _fmt_bia1_wide_bit_exact(bia1_wide_bit_exact)
+    lines += [
+        "",
+        "// --- BIA1 widened core (T-1657, Sec10 cell 2): representability boundary ---",
+    ]
+    lines += _fmt_bia1_wide_boundary(bia1_wide_boundary)
+    lines += [
+        "",
+        "// --- BIA1 widened core (T-1657, Sec10 cell 3): the strike's own raw-product-",
+        "// --- overflow, result-in-range discriminating witness -----------------------",
+    ]
+    lines += _fmt_bia1_wide_strike_witness(bia1_wide_strike)
+    lines += [
+        "",
+        "// --- BIA1 widened core (T-1657, Sec10 cell 8): a genuine C3 tie forced onto",
+        "// --- the 128-bit path, both signs --------------------------------------------",
+    ]
+    lines += _fmt_bia1_wide_tie(bia1_wide_tie)
     lines += [
         "",
         "}  // namespace superslm_test",

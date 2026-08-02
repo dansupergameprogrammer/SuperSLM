@@ -206,16 +206,19 @@ enum class SslmForwardStatus {
 	                                          // status answers "no triple could be formed", C30's own
 	                                          // upstream construction domain
 	                                          // (kBadCoefficient/kNegativeShift/kNotRepresentable).
-	BiasReconcileProductOutOfDomain,          // T-1656/D-SLM642, §5.3a: the product-magnitude guard
-	                                          // at the C28 bias-reconciliation call sites
+	BiasReconcileProductOutOfDomain,          // T-1656/T-1663, D-SLM642/645: the magnitude-domain
+	                                          // guard at the C28 bias-reconciliation call sites
 	                                          // (ProjectAndFunnel's q_proj insertion and the k/v
-	                                          // landing path's identical insertion) found `bias[i] *
-	                                          // r_a` does not fit int64_t, though the operand's own
-	                                          // mantissa fit int32_t and the exponent gate
+	                                          // landing path's identical insertion) found
+	                                          // BiasReconcile's own rounded, divided RESULT (not
+	                                          // the raw product -- T-1657 widened the intermediate
+	                                          // past int64_t, intmath.h's BiasReconcileWide) does
+	                                          // not fit int64_t, though the operand's own mantissa
+	                                          // fit int32_t and the exponent gate
 	                                          // (CheckRoundingDivideByPotExponentDomain) already
 	                                          // passed -- distinct from both: the operand fits, the
-	                                          // exponent gate passed, and the PRODUCT still does not
-	                                          // fit.
+	                                          // exponent gate passed, and the ROUNDED RESULT still
+	                                          // does not fit.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,
@@ -294,6 +297,18 @@ struct ChainResult {
 // the site into this TU nor allowlisting its call site preserves that property:
 // the first converts a function-level rule into a file-level exemption, and the
 // second removes the wall at one point permanently. D-SLM433.
+//
+// **`DynamicScaleReciprocal`'s `(2^31, 2^32]` ceiling holds only for a canonical
+// `Dn ∈ [2^30, 2^31)` -- the range `NormalizeScale` produces (T-1657, D-SLM641/645).**
+// This door forwards to it on whatever mantissa the caller supplies, which is not
+// required to be canonical (`CombineCarriedScale`'s own renormalization does not
+// guarantee it). A caller reasoning about the reciprocal's maximum on a
+// mid-composition operand must not assume `2^32`; treat the return value as an
+// arbitrary `int64_t` and use a widened, checked composition downstream
+// (`BiasReconcileWide`, `intmath.h`, is one such consumer) rather than a bound on
+// this function's own output. **operand: the return value of this call --
+// canonical: no, unguarded by this door itself; guarded only by whatever the
+// caller does with it downstream.**
 int64_t CarriedScaleReciprocal(int64_t m);
 
 // T-1655/D-SLM620, §4.3: the second door this design opens, onto C26's own carried-scale
@@ -393,20 +408,23 @@ SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e);
 // src/forward/checked_chain_funnel.cpp (S3.2's green phase).
 SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
 
-// T-1656/D-SLM642, §5.3: the product-magnitude guard the strike's fracture found
-// missing. `bias_reconcile`'s own `B[j] * R_a` is formed and range-checked here in the
-// SAME U128 facility `LandingRescale` (forward_sites.cpp) already uses for the
-// structurally identical `ResidualReconcileSite` product -- never as a plain int64_t
-// multiply, which is genuine signed-overflow UB once `in_scale`/`normed_scale` is
-// non-canonical (reachable: `CombineCarriedScale`'s own renormalization does not
-// guarantee canonicality). Returns true iff `|b| * |r_a| <= INT64_MAX`. The `<=`
-// boundary is a deliberate one-ULP safety margin (temper finding 2): a magnitude of
-// exactly `INT64_MAX + 1` (2^63) with true sign negative is `INT64_MIN`, itself
-// representable as int64_t, so this guard rejects that single boundary product rather
-// than admitting it -- trading a vanishingly rare, exactly-2^63-magnitude legitimate
-// case for a comparison that never has to distinguish it from the overflowing case by
-// sign.
-[[nodiscard]] bool BiasReconcileProductFitsInt64(int64_t b, int64_t r_a);
+// C28's magnitude domain predicate (T-1657/T-1663, D-SLM621/641/642/645). Exactly
+// `BiasReconcileWide(b, q_b, r_a, e_a, &unused) == true` -- it validates the SAME
+// domain `BiasReconcile` itself computes over, never a second derivation of it
+// (the `IExpConstantsInDomain` precedent this predicate follows exactly:
+// intmath.h, "this predicate is exactly IExpConstruct(...) == kOk"). Reuses the
+// existing `BiasReconcileProductOutOfDomain` status (D-SLM642) -- what changed is
+// the CONDITION that produces it, not the status's own meaning: it now answers
+// whether the rounded, divided C28 RESULT fits int64_t, not whether the raw
+// product does. That is a strictly weaker, strictly more permissive condition
+// (T-1657 §4): every input the retired `BiasReconcileProductFitsInt64` guard
+// accepted is accepted here too, and some inputs whose raw product overflows
+// int64_t but whose rounded result does not -- which the retired guard wrongly
+// rejected -- are accepted here as well. Does not check the exponent domain --
+// `CheckRoundingDivideByPotExponentDomain` is unchanged and still required first,
+// at the call site.
+SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b, int64_t r_a,
+                                                     int64_t e_a);
 
 // C32/D-SLM366's own numerator ceiling (§7.2 second limb; §14.1; §11 S3.3 §6.2,
 // §3; T-1304, D-SLM365/366/367). D-SLM365 derives a softmax row's largest i-exp

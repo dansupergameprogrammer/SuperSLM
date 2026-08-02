@@ -68,7 +68,7 @@ def test_the_gate_has_something_to_lose_a_nonvacuous_floor():
     assert committed.count("kC31UnitCases[]") == 1
     assert committed.count("kC31SiteElements[]") == 1
     assert "kC24CodeXNearIdentity" in committed
-    assert "kBia1MagnitudeBound" in committed
+    assert "kBia1AcceptBoundaryValue" in committed
     assert "kC28TieCorrectNeg" in committed
     assert len(committed) > 2000, (
         f"the committed header is only {len(committed)} bytes -- suspiciously "

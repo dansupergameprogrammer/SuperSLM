@@ -270,13 +270,24 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// C28 (§4.4, §6.2 step 2): round_half_away_from_zero(B * R_a /
-	// 2^(q_B + 62 + e_a)). RoundingDivideByPOT's int64 overload already ties
-	// away from zero (C3), which is load-bearing here because B is signed
-	// (§4.4). The composed exponent's domain is the caller's own check
+	// 2^(q_B + 62 + e_a)). T-1657/D-SLM621/641/645: the raw product B*R_a can
+	// reach ~2^126, past what a plain int64_t multiply can hold, so this now
+	// forwards to BiasReconcileWide (intmath.h), which forms the product and
+	// the C3 (ties-away-from-zero) divide in the same portable 128-bit
+	// facility RequantTokenCode/IExpEvaluate already use internally. The
+	// composed exponent's domain is still the caller's own check
 	// (CheckRoundingDivideByPotExponentDomain, checked_chain_funnel.h) before
 	// this function is ever invoked; it performs no domain check of its own.
-	const int64_t exponent = q_b + 62 + e_a;
-	return RoundingDivideByPOT(b * r_a, static_cast<int>(exponent));
+	// The boolean representability outcome is discarded here deliberately --
+	// this function keeps its pre-existing "caller-ensures" contract (a
+	// caller that has not separately confirmed the magnitude is in domain,
+	// via CheckBiasReconcileMagnitudeDomain, gets a possibly-wrong int64_t
+	// back with no diagnostic, exactly as calling any other total-but-
+	// unchecked primitive in this tree out of its intended domain already
+	// does).
+	int64_t result = 0;
+	BiasReconcileWide(b, q_b, r_a, e_a, &result);
+	return result;
 }
 
 int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
@@ -765,14 +776,20 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // because the real body honours that contract, not because a stub does.
 namespace {
 
-// T-1656/D-SLM642, §5.3: the per-element product-magnitude guard shared by every
+// T-1656/T-1663, D-SLM642/645: the per-element magnitude-domain guard shared by every
 // C28 bias-reconciliation insertion in this file (ProjectAndFunnel's q_proj call and
 // the k/v landing path below) -- two passes over `out_channels` so a rejection
 // anywhere in the row leaves `acc` untouched, matching this file's own "reject leaves
 // output untouched" convention (ResidualReconcileSite's own two-pass construction).
 // Returns Ok having applied every element's bias into `acc`, or
 // BiasReconcileProductOutOfDomain having applied none of them -- `bias` is assumed
-// non-null by every caller (the caller checks first).
+// non-null by every caller (the caller checks first). T-1663: the per-element
+// predicate is CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h), which
+// answers whether BiasReconcile's own rounded, divided result fits int64_t -- the
+// design's own T-1657 §8 amendment, replacing the retired BiasReconcileProductFitsInt64
+// (which tested the wrong, now-obsolete condition: whether the RAW product fit
+// int64_t, a strictly stronger and over-rejecting test once BiasReconcile's own
+// arithmetic widened past plain int64_t, T-1657).
 SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const int64_t* bias,
                                          int64_t in_scale_m, int64_t in_scale_e) {
 	const SslmForwardStatus gate = CheckRoundingDivideByPotExponentDomain(kBiasQFormat, in_scale_e);
@@ -780,7 +797,8 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 	const int64_t r_a = CarriedScaleReciprocal(in_scale_m);  // loop-invariant, computed once
 	bool any_out_of_domain = false;
 	for (size_t i = 0; i < out_channels; ++i) {
-		if (!BiasReconcileProductFitsInt64(bias[i], r_a)) {
+		if (CheckBiasReconcileMagnitudeDomain(bias[i], kBiasQFormat, r_a, in_scale_e) !=
+		    SslmForwardStatus::Ok) {
 			any_out_of_domain = true;
 		}
 	}
