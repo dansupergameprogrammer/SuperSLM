@@ -13509,6 +13509,215 @@ static void TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall() {
 	}
 }
 
+// Significant/D5 (T-1654, S3.8a): num_key_value_heads == 0, num_key_value_heads > num_heads, or
+// num_heads % num_key_value_heads != 0 must be reported as KvHeadGeometryMismatch -- a CFG1 geometry
+// fact, checked immediately after HeadDimGeometryMismatch and before any per-head array is touched,
+// mirroring that check's own shape and position exactly. Three witnesses, each independently poisoned.
+static void TestRunLayerLoopKvHeadGeometryMismatchRejectsZeroExceedingAndNonDivisibleKvHeadCounts() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+
+	// Witness 1a: num_key_value_heads == 0, at a valid num_heads == 2 geometry (hidden_size=4,
+	// head_dim=2). workspace/workspace_size are never read at this rejection -- nullptr/0 rules out
+	// coincidental success through an unrelated path.
+	{
+		int8_t hidden_codes[4] = {INT8_C(-31), INT8_C(-31), INT8_C(-31), INT8_C(-31)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-31), INT64_C(-31)};
+		seq.layer_index = 0xFFFFFFF1u;
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/0, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, /*workspace=*/nullptr, /*workspace_size=*/0);
+		CHECK_MSG(result == SslmForwardStatus::KvHeadGeometryMismatch,
+		          "RunLayerLoop(num_heads=2, num_key_value_heads=0) status == %s, want "
+		          "KvHeadGeometryMismatch -- zero KV heads is never a legitimate grouping",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-31) && hidden_codes[1] == INT8_C(-31) &&
+		              hidden_codes[2] == INT8_C(-31) && hidden_codes[3] == INT8_C(-31) &&
+		              seq.hidden_scale.m == INT64_C(-31) && seq.hidden_scale.e == INT64_C(-31) &&
+		              seq.layer_index == 0xFFFFFFF1u,
+		          "RunLayerLoop(num_key_value_heads=0): seq must be left exactly as poisoned -- "
+		          "the domain rejection happens before anything is read or written");
+	}
+
+	// Witness 1b: num_key_value_heads == 3 exceeds num_heads == 2.
+	{
+		int8_t hidden_codes[4] = {INT8_C(-32), INT8_C(-32), INT8_C(-32), INT8_C(-32)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-32), INT64_C(-32)};
+		seq.layer_index = 0xFFFFFFF2u;
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/3, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, /*workspace=*/nullptr, /*workspace_size=*/0);
+		CHECK_MSG(result == SslmForwardStatus::KvHeadGeometryMismatch,
+		          "RunLayerLoop(num_heads=2, num_key_value_heads=3) status == %s, want "
+		          "KvHeadGeometryMismatch -- more KV heads than query heads has no grouping",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-32) && hidden_codes[1] == INT8_C(-32) &&
+		              hidden_codes[2] == INT8_C(-32) && hidden_codes[3] == INT8_C(-32) &&
+		              seq.hidden_scale.m == INT64_C(-32) && seq.hidden_scale.e == INT64_C(-32) &&
+		              seq.layer_index == 0xFFFFFFF2u,
+		          "RunLayerLoop(num_key_value_heads=3 > num_heads=2): seq must be left exactly as "
+		          "poisoned");
+	}
+
+	// Witness 1c: num_heads == 3 (hidden_size=6, head_dim=2), num_key_value_heads == 2 -- 3 % 2 != 0,
+	// neither zero nor exceeding, isolating the divisibility clause specifically.
+	{
+		int8_t hidden_codes[6] = {INT8_C(-33), INT8_C(-33), INT8_C(-33),
+		                           INT8_C(-33), INT8_C(-33), INT8_C(-33)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-33), INT64_C(-33)};
+		seq.layer_index = 0xFFFFFFF3u;
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/6,
+		    /*head_dim=*/2, /*num_key_value_heads=*/2, /*intermediate_size=*/2, /*context_cap=*/1,
+		    fixture.view.rope_tables, /*workspace=*/nullptr, /*workspace_size=*/0);
+		CHECK_MSG(result == SslmForwardStatus::KvHeadGeometryMismatch,
+		          "RunLayerLoop(num_heads=3, num_key_value_heads=2) status == %s, want "
+		          "KvHeadGeometryMismatch -- 3 is not an exact multiple of 2, no integer grouping "
+		          "exists",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-33) && hidden_codes[1] == INT8_C(-33) &&
+		              hidden_codes[2] == INT8_C(-33) && hidden_codes[3] == INT8_C(-33) &&
+		              hidden_codes[4] == INT8_C(-33) && hidden_codes[5] == INT8_C(-33) &&
+		              seq.hidden_scale.m == INT64_C(-33) && seq.hidden_scale.e == INT64_C(-33) &&
+		              seq.layer_index == 0xFFFFFFF3u,
+		          "RunLayerLoop(num_heads=3, num_key_value_heads=2): seq must be left exactly as "
+		          "poisoned");
+	}
+}
+
+// D6 (T-1654, S3.8a): kv_bytes_needed's third factor is num_key_value_heads, not num_heads. At
+// num_hidden_layers=2, context_cap=3, num_key_value_heads=1, head_dim=2, the corrected formula
+// computes 2*3*1*2*2=24; the pre-fix formula (keyed by num_heads=2 at this geometry) would have
+// computed 2*3*2*2*2=48. hidden_codes=nullptr on the accept side turns "cleared the sizing guard"
+// into a second exact, hand-derivable status (InvalidHiddenCodes, the next guard in source order)
+// rather than requiring the per-layer body to execute.
+static void TestRunLayerLoopWorkspaceSizingIsKeyedByKvHeadsNotQueryHeads() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+
+	// Sub-cell: workspace_size = 23, one byte short of the corrected 24 -- WorkspaceTooSmall.
+	{
+		int8_t hidden_codes[4] = {INT8_C(-34), INT8_C(-34), INT8_C(-34), INT8_C(-34)};
+		SequenceLayerState seq;
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{INT64_C(-34), INT64_C(-34)};
+		seq.layer_index = 0xFFFFFFF4u;
+		uint8_t workspace[23];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/3,
+		    fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::WorkspaceTooSmall,
+		          "RunLayerLoop(num_key_value_heads=1, context_cap=3, num_hidden_layers=2, "
+		          "workspace_size=23) status == %s, want WorkspaceTooSmall -- one byte short of "
+		          "the corrected kv_bytes_needed=24",
+		          SslmForwardStatusName(result));
+		CHECK_MSG(hidden_codes[0] == INT8_C(-34) && hidden_codes[1] == INT8_C(-34) &&
+		              hidden_codes[2] == INT8_C(-34) && hidden_codes[3] == INT8_C(-34) &&
+		              seq.hidden_scale.m == INT64_C(-34) && seq.hidden_scale.e == INT64_C(-34) &&
+		              seq.layer_index == 0xFFFFFFF4u,
+		          "RunLayerLoop(workspace_size=23): seq must be left exactly as poisoned");
+	}
+
+	// Sub-cell: workspace_size = 24, exactly kv_bytes_needed under the corrected formula --
+	// hidden_codes deliberately nullptr, so a cleared sizing guard is provable by the very next
+	// guard's own exact status rather than by executing the per-layer body.
+	{
+		SequenceLayerState seq;
+		seq.hidden_codes = nullptr;
+		seq.layer_index = 0;
+		uint8_t workspace[24];
+		std::memset(workspace, 0xEE, sizeof(workspace));
+		const auto result = superslm::RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/4,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/3,
+		    fixture.view.rope_tables, workspace, sizeof(workspace));
+		CHECK_MSG(result == SslmForwardStatus::InvalidHiddenCodes,
+		          "RunLayerLoop(num_key_value_heads=1, context_cap=3, num_hidden_layers=2, "
+		          "workspace_size=24, hidden_codes=nullptr) status == %s, want InvalidHiddenCodes "
+		          "-- the sizing guard at kv_bytes_needed=24 must have cleared to reach the NEXT "
+		          "guard in source order; the pre-fix formula (48) would still return "
+		          "WorkspaceTooSmall here, which this assertion would catch as a status mismatch",
+		          SslmForwardStatusName(result));
+	}
+}
+
+// D-SLM624 (T-1654, S3.8a, closing the coverage audit's dim-4 finding): 4b, the reject side.
+// context_length == context_cap must fire KvCapacityExhausted before any layer runs, at a valid
+// group > 1 geometry -- proving the pre-existing guard's placement (checked before the new D5 guard's
+// own group computation is ever used) is unaffected by this sub-slot's new parameter.
+static void TestRunLayerLoopKvCapacityExhaustedFiresAtGroupGreaterThanOneBoundary() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	constexpr size_t kWorkspaceSize = 2 * 3 * 1 * 2 * 2;  // num_hidden_layers=2, context_cap=3,
+	                                                        // num_key_value_heads=1, head_dim=2
+	int8_t hidden_codes[4] = {INT8_C(-35), INT8_C(-35), INT8_C(-35), INT8_C(-35)};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(-35), INT64_C(-35)};
+	seq.layer_index = 0;
+	seq.context_length = 3;  // == context_cap
+	uint8_t workspace[kWorkspaceSize];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+	const auto result = superslm::RunLayerLoop(
+	    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1, /*hidden_size=*/4,
+	    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/3,
+	    fixture.view.rope_tables, workspace, sizeof(workspace));
+	CHECK_MSG(result == SslmForwardStatus::KvCapacityExhausted,
+	          "RunLayerLoop(num_key_value_heads=1, context_length=context_cap=3) status == %s, "
+	          "want KvCapacityExhausted -- the pre-existing capacity guard, unaffected by this "
+	          "sub-slot's new num_key_value_heads parameter and new KvHeadGeometryMismatch guard "
+	          "ahead of it",
+	          SslmForwardStatusName(result));
+	CHECK_MSG(hidden_codes[0] == INT8_C(-35) && hidden_codes[1] == INT8_C(-35) &&
+	              hidden_codes[2] == INT8_C(-35) && hidden_codes[3] == INT8_C(-35) &&
+	              seq.hidden_scale.m == INT64_C(-35) && seq.hidden_scale.e == INT64_C(-35) &&
+	              seq.layer_index == 0,
+	          "RunLayerLoop(context_length==context_cap): seq must be left exactly as poisoned");
+}
+
+// D-SLM624 (T-1654, S3.8a): the grouping/discrimination cell, 3a/3b, and its boundary-accept
+// companion 4a. GqaGroupingFixture and its calibration are built and measured once D1-D6 and the
+// per-layer re-indexing (design record §6.1-§6.3) land -- commit 3 of this sub-slot's phased
+// sequence (D-SLM625's mitigation for the 77-site scrub). Executing these against the pre-fix
+// engine would read past GqaGroupingFixture's own GQA-shaped (kv-head-sized) k_weight/v_weight
+// buffers, which the pre-fix per-layer body indexes as if they were query-head-sized -- undefined
+// behavior, not merely a wrong answer -- so no body is landed here ahead of the fix that makes the
+// buffer shape and the read shape agree (test design record §1, §6).
+static void TestRunLayerLoopGqaGroupingKAloneMovesOnlySharedQueryHeads() {
+	// TODO(build seat, once D1-D6 land and GqaGroupingFixture's calibration is measured by execution):
+	// GqaGroupingFixture baseline;
+	// ... RunGreedyDecodeLoop(baseline) -> baseline_tokens/baseline_logits ...
+	// GqaGroupingFixture mutant; mutant.layers[L].k_weight[<kv-head-0 element>] += 1;
+	// ... RunGreedyDecodeLoop(mutant) -> mutant_tokens/mutant_logits ...
+	// CHECK_MSG(<heads 0,1 differ by the measured exact signed delta>, ...);
+	// CHECK_MSG(<heads 2,3 byte-identical to baseline>, ...);
+}
+// 3b: symmetric on v_weight alone, k_weight unmutated. Same structure, same TODO.
+static void TestRunLayerLoopGqaGroupingVAloneMovesOnlySharedQueryHeads() { /* TODO, symmetric to 3a */ }
+// 4a: boundary-accept, at context_length == context_cap - 1 on the same GqaGroupingFixture,
+// extending 3a/3b's own baseline/mutated pattern to the KV store's own maximal-extent boundary
+// position (design record §9 item 4, Mendeleev delta coverage audit finding 1). Same TODO shape.
+static void TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne() { /* TODO, mirrors 3a/3b at context_length = context_cap - 1 */ }
+
 // Minor A (Poirot e4b398c review): when `SoftmaxRowQ15` refuses after
 // `CheckSoftmaxRowWidthDomain` has already accepted, the loop must report a
 // status distinct from the gate's own rejection -- not
@@ -17560,6 +17769,13 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged();
 	TestRunLayerLoopSequenceAlreadyCompleteIsRejectedNotSilentlyOk();
 	TestRunLayerLoopHeadDimGeometryMismatchIsNotWorkspaceTooSmall();
+	// T-1654 (S3.8a): GQA group dispatch's own red cells.
+	TestRunLayerLoopKvHeadGeometryMismatchRejectsZeroExceedingAndNonDivisibleKvHeadCounts();
+	TestRunLayerLoopWorkspaceSizingIsKeyedByKvHeadsNotQueryHeads();
+	TestRunLayerLoopKvCapacityExhaustedFiresAtGroupGreaterThanOneBoundary();
+	TestRunLayerLoopGqaGroupingKAloneMovesOnlySharedQueryHeads();
+	TestRunLayerLoopGqaGroupingVAloneMovesOnlySharedQueryHeads();
+	TestRunLayerLoopGqaGroupingBoundaryAcceptAtContextCapMinusOne();
 	TestRunLayerLoopSoftmaxKernelRefusalIsDistinctFromGateRejection();
 	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
 	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();
