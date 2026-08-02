@@ -18718,6 +18718,713 @@ static void TestRunLayerLoopCrossSectionBiasPresentDoesNotBreakPerKvHeadDerivati
 	          SslmForwardStatusName(st));
 }
 
+
+// ===================================================================
+// T-1666 (S3.8b): per-output-channel WSC1 fold -- wiring/discrimination
+// cells, one per projection (q/k/v/o/gate/up/down), each carrying every
+// §8.1 sibling-invariance assertion derived from RunLayerLoop's own causal
+// graph. Per Claude/Curie/superslm-t1666-wsc1-per-channel-fold-test-design-
+// 2026-08-02.md §5/§6 (D:\Wizard worktree).
+// ===================================================================
+
+// Cell 1 -- q_fold: per-channel wiring (does q_fold_mult[1] actually reach the funnel?) plus its
+// §8.1-derived sibling-invariance set {k, v} (T-1666, S3.8b). Baseline: q_fold_* == {1,1}/{0,0}/{0,0}
+// (every channel true pass-through). Mutant: element 1 becomes {identity=0, mult=1073741824, shift=0}
+// (a 0.5x Q31 dequant scale -- NOT this suite's own tests/test_main.cpp:8989-9005 near-identity
+// constant, INT32_MAX/shift=0: that triple is a no-op for any |acc| below ~2^30, per
+// MultiplyByQuantizedMultiplier's own doubling-high-mul arithmetic, and this fixture's int8 GEMM
+// accumulate never exceeds a few hundred -- executed and found by this build pass, T-1666
+// recalibration finding, routed to the test author's own record).
+// element 0 stays identity in both, so any observed movement is attributable to element 1's own fold
+// alone. Oracle per the design's funnel-coupling asymmetry (§8): asserted at layer0.q_proj.requant's
+// own trace record, not an isolated channel-0 claim -- a single-channel mutation can move the whole
+// row's shared D' through the funnel, so the funnel's own record is the site's correct oracle.
+static void TestRunLayerLoopQFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].q_fold_identity = kIdentity;
+	baseline.layers[0].q_fold_mult = kZero;
+	baseline.layers[0].q_fold_shift = kZero;
+	mutant.layers[0].q_fold_identity = kMutIdentity;
+	mutant.layers[0].q_fold_mult = kMutMult;
+	mutant.layers[0].q_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;  // num_hidden_layers*context_cap*num_kv_heads*head_dim*2
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell q_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell q_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* q_a = FindSite(sink_a, "layer0.q_proj.requant");
+	const ChainTraceSinkRecord* q_b = FindSite(sink_b, "layer0.q_proj.requant");
+	CHECK_MSG(q_a != nullptr && q_b != nullptr,
+	          "cell q_fold: layer0.q_proj.requant trace record missing in baseline or mutant");
+	if (q_a == nullptr || q_b == nullptr) return;
+
+	const bool q_moved = q_a->x_int.size() != q_b->x_int.size() ||
+	                      !std::equal(q_a->x_int.begin(), q_a->x_int.end(), q_b->x_int.begin()) ||
+	                      q_a->m_out != q_b->m_out || q_a->e_out != q_b->e_out;
+	CHECK_MSG(q_moved,
+	          "cell q_fold: layer0.q_proj.requant identical between baseline (element-1 fold "
+	          "{1,0,0}) and mutant (element-1 fold {0,1073741824,0}) -- q_fold_mult[1]/q_fold_identity[1] "
+	          "are not being read at index 1 (broadcast-from-index-0 defect), or channel 1's raw "
+	          "accumulate is zero at this fixture (recalibrate the fixture's hidden_codes if so)");
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, /*layer=*/0, /*context_cap=*/1, /*num_kv_heads=*/1,
+	                                      /*head_dim=*/2, /*kv_head=*/0, /*position=*/0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, /*layer=*/0, /*context_cap=*/1, /*num_kv_heads=*/1,
+	                                      /*head_dim=*/2, /*kv_head=*/0, /*position=*/0);
+	const int8_t* v_a = superslm::ValueRow(ws_a, /*layer=*/0, /*context_cap=*/1, /*num_kv_heads=*/1,
+	                                        /*head_dim=*/2, /*kv_head=*/0, /*position=*/0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, /*layer=*/0, /*context_cap=*/1, /*num_kv_heads=*/1,
+	                                        /*head_dim=*/2, /*kv_head=*/0, /*position=*/0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell q_fold, §8.1: K-store row at layer0 must be bit-identical between baseline and "
+	          "mutant -- q is not causally upstream of the K/V landing block; got (%d,%d) vs (%d,%d)",
+	          (int)k_a[0], (int)k_a[1], (int)k_b[0], (int)k_b[1]);
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell q_fold, §8.1: V-store row at layer0 must be bit-identical between baseline and "
+	          "mutant -- q is not causally upstream of the K/V landing block; got (%d,%d) vs (%d,%d)",
+	          (int)v_a[0], (int)v_a[1], (int)v_b[0], (int)v_b[1]);
+}
+
+// Cell 2 -- o_fold: per-channel wiring plus §8.1's derived set {q, k, v}. Same shape as cell 1,
+// mutating o_fold_* instead; the achievement assertion moves to layer0.o_proj.requant, and the
+// sibling-invariance assertions gain layer0.q_proj.requant (o is not upstream of q) alongside K/V.
+static void TestRunLayerLoopOFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].o_fold_identity = kIdentity;
+	baseline.layers[0].o_fold_mult = kZero;
+	baseline.layers[0].o_fold_shift = kZero;
+	mutant.layers[0].o_fold_identity = kMutIdentity;
+	mutant.layers[0].o_fold_mult = kMutMult;
+	mutant.layers[0].o_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell o_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell o_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* o_a = FindSite(sink_a, "layer0.o_proj.requant");
+	const ChainTraceSinkRecord* o_b = FindSite(sink_b, "layer0.o_proj.requant");
+	CHECK_MSG(o_a != nullptr && o_b != nullptr,
+	          "cell o_fold: layer0.o_proj.requant trace record missing in baseline or mutant");
+	if (o_a == nullptr || o_b == nullptr) return;
+	const bool o_moved = o_a->x_int.size() != o_b->x_int.size() ||
+	                      !std::equal(o_a->x_int.begin(), o_a->x_int.end(), o_b->x_int.begin()) ||
+	                      o_a->m_out != o_b->m_out || o_a->e_out != o_b->e_out;
+	CHECK_MSG(o_moved,
+	          "cell o_fold: layer0.o_proj.requant identical between baseline and mutant -- "
+	          "o_fold_mult[1]/o_fold_identity[1] not read at index 1, or channel 1's raw accumulate "
+	          "is zero at this fixture");
+
+	const ChainTraceSinkRecord* q_a = FindSite(sink_a, "layer0.q_proj.requant");
+	const ChainTraceSinkRecord* q_b = FindSite(sink_b, "layer0.q_proj.requant");
+	CHECK_MSG(q_a != nullptr && q_b != nullptr, "cell o_fold, §8.1: layer0.q_proj.requant missing");
+	if (q_a != nullptr && q_b != nullptr) {
+		CHECK_MSG(q_a->x_int.size() == q_b->x_int.size() &&
+		              std::equal(q_a->x_int.begin(), q_a->x_int.end(), q_b->x_int.begin()) &&
+		              q_a->m_out == q_b->m_out && q_a->e_out == q_b->e_out,
+		          "cell o_fold, §8.1: layer0.q_proj.requant must be bit-identical between baseline "
+		          "and mutant -- o is not causally upstream of q");
+	}
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell o_fold, §8.1: K-store row must be bit-identical -- o is not upstream of the K/V "
+	          "landing block");
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell o_fold, §8.1: V-store row must be bit-identical -- o is not upstream of the K/V "
+	          "landing block");
+}
+
+// Cell 3 -- gate_fold: per-channel wiring plus §8.1's derived set {q, k, v, o, up}. Same shape,
+// mutating gate_fold_*; achievement at layer0.gate_proj.requant; siblings gain o_proj and up_proj
+// (up is a sibling of gate under mlp_norm, not downstream of it) alongside q/k/v.
+static void TestRunLayerLoopGateFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].gate_fold_identity = kIdentity;
+	baseline.layers[0].gate_fold_mult = kZero;
+	baseline.layers[0].gate_fold_shift = kZero;
+	mutant.layers[0].gate_fold_identity = kMutIdentity;
+	mutant.layers[0].gate_fold_mult = kMutMult;
+	mutant.layers[0].gate_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell gate_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell gate_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* g_a = FindSite(sink_a, "layer0.gate_proj.requant");
+	const ChainTraceSinkRecord* g_b = FindSite(sink_b, "layer0.gate_proj.requant");
+	CHECK_MSG(g_a != nullptr && g_b != nullptr,
+	          "cell gate_fold: layer0.gate_proj.requant trace record missing in baseline or mutant");
+	if (g_a == nullptr || g_b == nullptr) return;
+	const bool g_moved = g_a->x_int.size() != g_b->x_int.size() ||
+	                      !std::equal(g_a->x_int.begin(), g_a->x_int.end(), g_b->x_int.begin()) ||
+	                      g_a->m_out != g_b->m_out || g_a->e_out != g_b->e_out;
+	CHECK_MSG(g_moved,
+	          "cell gate_fold: layer0.gate_proj.requant identical between baseline and mutant -- "
+	          "gate_fold_mult[1]/identity[1] not read at index 1, or channel 1's raw accumulate is "
+	          "zero at this fixture");
+
+	auto AssertUnchanged = [&](const char* site) {
+		const ChainTraceSinkRecord* a = FindSite(sink_a, site);
+		const ChainTraceSinkRecord* b = FindSite(sink_b, site);
+		CHECK_MSG(a != nullptr && b != nullptr, "cell gate_fold, §8.1: %s trace record missing", site);
+		if (a == nullptr || b == nullptr) return;
+		CHECK_MSG(a->x_int.size() == b->x_int.size() &&
+		              std::equal(a->x_int.begin(), a->x_int.end(), b->x_int.begin()) &&
+		              a->m_out == b->m_out && a->e_out == b->e_out,
+		          "cell gate_fold, §8.1: %s must be bit-identical between baseline and mutant -- "
+		          "gate is not causally upstream of it", site);
+	};
+	AssertUnchanged("layer0.q_proj.requant");
+	AssertUnchanged("layer0.o_proj.requant");
+	AssertUnchanged("layer0.up_proj.requant");
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell gate_fold, §8.1: K-store row must be bit-identical -- gate is not upstream of "
+	          "the K/V landing block");
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell gate_fold, §8.1: V-store row must be bit-identical -- gate is not upstream of "
+	          "the K/V landing block");
+}
+
+// Cell 4 -- up_fold: symmetric to cell 3, mutating up_fold_* instead; achievement at
+// layer0.up_proj.requant; siblings gain gate_proj (the symmetric sibling) alongside q/k/v/o.
+static void TestRunLayerLoopUpFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].up_fold_identity = kIdentity;
+	baseline.layers[0].up_fold_mult = kZero;
+	baseline.layers[0].up_fold_shift = kZero;
+	mutant.layers[0].up_fold_identity = kMutIdentity;
+	mutant.layers[0].up_fold_mult = kMutMult;
+	mutant.layers[0].up_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell up_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell up_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* u_a = FindSite(sink_a, "layer0.up_proj.requant");
+	const ChainTraceSinkRecord* u_b = FindSite(sink_b, "layer0.up_proj.requant");
+	CHECK_MSG(u_a != nullptr && u_b != nullptr,
+	          "cell up_fold: layer0.up_proj.requant trace record missing in baseline or mutant");
+	if (u_a == nullptr || u_b == nullptr) return;
+	const bool u_moved = u_a->x_int.size() != u_b->x_int.size() ||
+	                      !std::equal(u_a->x_int.begin(), u_a->x_int.end(), u_b->x_int.begin()) ||
+	                      u_a->m_out != u_b->m_out || u_a->e_out != u_b->e_out;
+	CHECK_MSG(u_moved,
+	          "cell up_fold: layer0.up_proj.requant identical between baseline and mutant -- "
+	          "up_fold_mult[1]/identity[1] not read at index 1, or channel 1's raw accumulate is "
+	          "zero at this fixture");
+
+	auto AssertUnchanged = [&](const char* site) {
+		const ChainTraceSinkRecord* a = FindSite(sink_a, site);
+		const ChainTraceSinkRecord* b = FindSite(sink_b, site);
+		CHECK_MSG(a != nullptr && b != nullptr, "cell up_fold, §8.1: %s trace record missing", site);
+		if (a == nullptr || b == nullptr) return;
+		CHECK_MSG(a->x_int.size() == b->x_int.size() &&
+		              std::equal(a->x_int.begin(), a->x_int.end(), b->x_int.begin()) &&
+		              a->m_out == b->m_out && a->e_out == b->e_out,
+		          "cell up_fold, §8.1: %s must be bit-identical between baseline and mutant -- "
+		          "up is not causally upstream of it", site);
+	};
+	AssertUnchanged("layer0.q_proj.requant");
+	AssertUnchanged("layer0.o_proj.requant");
+	AssertUnchanged("layer0.gate_proj.requant");
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell up_fold, §8.1: K-store row must be bit-identical -- up is not upstream of the "
+	          "K/V landing block");
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell up_fold, §8.1: V-store row must be bit-identical -- up is not upstream of the "
+	          "K/V landing block");
+}
+
+// Cell 5 -- down_fold: per-channel wiring plus §8.1's derived set {q, k, v, o, gate, up} -- every
+// other site (down has no downstream). Achievement at layer0.down_proj.requant.
+static void TestRunLayerLoopDownFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	// T-1666 recalibration (executed finding, this build pass): with codes_a =
+	// {5,-5} (positive-then-negative), this fixture's down_proj channel 1 raw
+	// accumulate is structurally zero regardless of magnitude (confirmed at
+	// {5,-5}, {7,-3}, {127,-127}, all producing x_int=[127,0] at
+	// layer0.down_proj.requant -- channel 0 saturates to the int8 clamp
+	// ceiling instead). The sign pattern, not the magnitude, determines which
+	// channel saturates: negative-then-positive ({-90,60}, below) puts the
+	// non-degenerate accumulate at channel 1 instead, matching every sibling
+	// cell's own mutated index.
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].down_fold_identity = kIdentity;
+	baseline.layers[0].down_fold_mult = kZero;
+	baseline.layers[0].down_fold_shift = kZero;
+	mutant.layers[0].down_fold_identity = kMutIdentity;
+	mutant.layers[0].down_fold_mult = kMutMult;
+	mutant.layers[0].down_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {-90, 60}, codes_b[2] = {-90, 60};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell down_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell down_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* d_a = FindSite(sink_a, "layer0.down_proj.requant");
+	const ChainTraceSinkRecord* d_b = FindSite(sink_b, "layer0.down_proj.requant");
+	CHECK_MSG(d_a != nullptr && d_b != nullptr,
+	          "cell down_fold: layer0.down_proj.requant trace record missing in baseline or mutant");
+	if (d_a == nullptr || d_b == nullptr) return;
+	const bool d_moved = d_a->x_int.size() != d_b->x_int.size() ||
+	                      !std::equal(d_a->x_int.begin(), d_a->x_int.end(), d_b->x_int.begin()) ||
+	                      d_a->m_out != d_b->m_out || d_a->e_out != d_b->e_out;
+	CHECK_MSG(d_moved,
+	          "cell down_fold: layer0.down_proj.requant identical between baseline and mutant -- "
+	          "down_fold_mult[1]/identity[1] not read at index 1, or channel 1's raw accumulate is "
+	          "zero at this fixture");
+
+	auto AssertUnchanged = [&](const char* site) {
+		const ChainTraceSinkRecord* a = FindSite(sink_a, site);
+		const ChainTraceSinkRecord* b = FindSite(sink_b, site);
+		CHECK_MSG(a != nullptr && b != nullptr, "cell down_fold, §8.1: %s trace record missing", site);
+		if (a == nullptr || b == nullptr) return;
+		CHECK_MSG(a->x_int.size() == b->x_int.size() &&
+		              std::equal(a->x_int.begin(), a->x_int.end(), b->x_int.begin()) &&
+		              a->m_out == b->m_out && a->e_out == b->e_out,
+		          "cell down_fold, §8.1: %s must be bit-identical between baseline and mutant -- "
+		          "down has no downstream, so nothing is exempt from this assertion", site);
+	};
+	AssertUnchanged("layer0.q_proj.requant");
+	AssertUnchanged("layer0.o_proj.requant");
+	AssertUnchanged("layer0.gate_proj.requant");
+	AssertUnchanged("layer0.up_proj.requant");
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell down_fold, §8.1: K-store row must be bit-identical -- down is not upstream of "
+	          "the K/V landing block");
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell down_fold, §8.1: V-store row must be bit-identical -- down is not upstream of "
+	          "the K/V landing block");
+}
+
+// Cell 6 -- k_fold: within-tensor two-sided oracle (mutated channel moves, sibling channel does not)
+// plus §8.1's derived set {q, v}. Mutates k_fold_* element 1 (kv_head 0, head_dim index 1);
+// v_fold_* stays identity throughout, so any V-side movement is attributable to nothing this cell
+// touches (D-SLM624's own K/V-independent-mutation convention, reused).
+static void TestRunLayerLoopKFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].k_fold_identity = kIdentity;
+	baseline.layers[0].k_fold_mult = kZero;
+	baseline.layers[0].k_fold_shift = kZero;
+	mutant.layers[0].k_fold_identity = kMutIdentity;
+	mutant.layers[0].k_fold_mult = kMutMult;
+	mutant.layers[0].k_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell k_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell k_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	// NOTE: RoPE (RopeApplySite) rotates BOTH dims of a head's K row together, in place, after
+	// landing (forward_sites.cpp:1279-1298) -- but it is applied to BOTH baseline and mutant
+	// identically (same position, same rope_tables), so a landing-side difference confined to
+	// dim 1 alone would, after an in-place 2-element rotation, generally show up in BOTH rotated
+	// dims. The within-tensor "dim 0 unaffected" claim is therefore about the LANDED value before
+	// rotation, which this cell cannot observe directly through KeyRow (post-rotation only) --
+	// stated as a finding, not silently asserted: see the test-design record's own §6 note
+	// (Claude/Curie/superslm-t1666-wsc1-per-channel-fold-test-design-2026-08-02.md), which flags
+	// this as a documentation-precision finding on the design's §8 text, not a blocking one.
+	CHECK_MSG(k_a[0] != k_b[0] || k_a[1] != k_b[1],
+	          "cell k_fold: K-store row identical between baseline and mutant -- k_fold_mult[1]/"
+	          "identity[1] not read at index 1, or channel 1's raw accumulate is zero at this "
+	          "fixture (%d,%d) vs (%d,%d)",
+	          (int)k_a[0], (int)k_a[1], (int)k_b[0], (int)k_b[1]);
+
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(v_a[0] == v_b[0] && v_a[1] == v_b[1],
+	          "cell k_fold, §8.1: V-store row must be bit-identical between baseline and mutant -- "
+	          "v_fold_* is untouched by this cell, so any V movement is attributable to a K/V "
+	          "cross-wiring defect, not this cell's own mutation");
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* q_a = FindSite(sink_a, "layer0.q_proj.requant");
+	const ChainTraceSinkRecord* q_b = FindSite(sink_b, "layer0.q_proj.requant");
+	CHECK_MSG(q_a != nullptr && q_b != nullptr, "cell k_fold, §8.1: layer0.q_proj.requant missing");
+	if (q_a != nullptr && q_b != nullptr) {
+		CHECK_MSG(q_a->x_int.size() == q_b->x_int.size() &&
+		              std::equal(q_a->x_int.begin(), q_a->x_int.end(), q_b->x_int.begin()) &&
+		              q_a->m_out == q_b->m_out && q_a->e_out == q_b->e_out,
+		          "cell k_fold, §8.1: layer0.q_proj.requant must be bit-identical -- k is not "
+		          "causally upstream of q (the K/V landing block runs before q_proj's output is "
+		          "read anywhere, and q_proj itself reads only `normed`)");
+	}
+}
+
+// Cell 7 -- v_fold: the v-sibling of cell 6. Mutates v_fold_* element 1; k_fold_* stays identity
+// throughout. Within-tensor two-sided oracle on the V store (no RoPE rotation applies to V --
+// forward_sites.cpp's RoPE loops at :1267-1298 name only q_rot/k_rot; V is read unrotated at
+// :1397-1400 -- so this cell's own "dim 0 unaffected" claim IS directly observable through
+// ValueRow, unlike cell 6's K-side caveat above). §8.1's derived set {q, k}.
+static void TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmTraceHookState;
+
+	static const int32_t kIdentity[2] = {1, 1};
+	static const int32_t kZero[2] = {0, 0};
+	static const int32_t kMutIdentity[2] = {1, 0};
+	static const int32_t kMutMult[2] = {0, 1073741824};  // 2^30 == 0.5x scale in Q31 (T-1666 recalibration, see below)
+	static const int32_t kMutShift[2] = {0, 0};
+
+	TwoLayerFixture baseline;
+	TwoLayerFixture mutant;
+	baseline.layers[0].v_fold_identity = kIdentity;
+	baseline.layers[0].v_fold_mult = kZero;
+	baseline.layers[0].v_fold_shift = kZero;
+	mutant.layers[0].v_fold_identity = kMutIdentity;
+	mutant.layers[0].v_fold_mult = kMutMult;
+	mutant.layers[0].v_fold_shift = kMutShift;
+
+	int8_t codes_a[2] = {5, -5}, codes_b[2] = {5, -5};
+	SequenceLayerState seq_a, seq_b;
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	uint8_t ws_b[kWorkspaceSize] = {};
+
+	std::vector<ChainTraceSinkRecord> sink_a, sink_b;
+	SslmTraceHookState hook_a, hook_b;
+	superslm::SslmSetTraceHook(hook_a, &ChainTraceSinkHookFn, &sink_a);
+	superslm::SslmSetTraceHook(hook_b, &ChainTraceSinkHookFn, &sink_b);
+	const auto st_a = superslm::RunLayerLoop(seq_a, baseline.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          baseline.view.rope_tables, ws_a, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_a);
+	const auto st_b = superslm::RunLayerLoop(seq_b, mutant.layers, 2, 1, 2, 2, 1, 2, 1,
+	                                          mutant.view.rope_tables, ws_b, kWorkspaceSize,
+	                                          /*site_prefix=*/{}, /*token_index=*/0, &hook_b);
+	superslm::SslmSetTraceHook(hook_a, nullptr, nullptr);
+	superslm::SslmSetTraceHook(hook_b, nullptr, nullptr);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "cell v_fold: baseline status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_a));
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "cell v_fold: mutant status == %s, want Ok",
+	          superslm::SslmForwardStatusName(st_b));
+	if (st_a != SslmForwardStatus::Ok || st_b != SslmForwardStatus::Ok) return;
+
+	const int8_t* v_a = superslm::ValueRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* v_b = superslm::ValueRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(v_a[1] != v_b[1],
+	          "cell v_fold: V-store dim 1 (the mutated channel) identical between baseline and "
+	          "mutant -- v_fold_mult[1]/identity[1] not read at index 1, or channel 1's raw "
+	          "accumulate is zero at this fixture (%d vs %d)",
+	          (int)v_a[1], (int)v_b[1]);
+	CHECK_MSG(v_a[0] == v_b[0],
+	          "cell v_fold: V-store dim 0 (unmutated channel, same tensor) must be bit-identical -- "
+	          "a broadcast implementation reading v_fold_mult[0] for every index would move dim 0 "
+	          "too, indistinguishably from a correctly-indexed dim 1 alone (%d vs %d)",
+	          (int)v_a[0], (int)v_b[0]);
+
+	const int8_t* k_a = superslm::KeyRow(ws_a, 0, 1, 1, 2, 0, 0);
+	const int8_t* k_b = superslm::KeyRow(ws_b, 0, 1, 1, 2, 0, 0);
+	CHECK_MSG(k_a[0] == k_b[0] && k_a[1] == k_b[1],
+	          "cell v_fold, §8.1: K-store row must be bit-identical between baseline and mutant -- "
+	          "k_fold_* is untouched by this cell, so any K movement is attributable to a K/V "
+	          "cross-wiring defect, not this cell's own mutation");
+
+	auto FindSite = [](const std::vector<ChainTraceSinkRecord>& sink,
+	                    const char* site) -> const ChainTraceSinkRecord* {
+		for (const auto& r : sink) {
+			if (r.site == site) return &r;
+		}
+		return nullptr;
+	};
+	const ChainTraceSinkRecord* q_a = FindSite(sink_a, "layer0.q_proj.requant");
+	const ChainTraceSinkRecord* q_b = FindSite(sink_b, "layer0.q_proj.requant");
+	CHECK_MSG(q_a != nullptr && q_b != nullptr, "cell v_fold, §8.1: layer0.q_proj.requant missing");
+	if (q_a != nullptr && q_b != nullptr) {
+		CHECK_MSG(q_a->x_int.size() == q_b->x_int.size() &&
+		              std::equal(q_a->x_int.begin(), q_a->x_int.end(), q_b->x_int.begin()) &&
+		              q_a->m_out == q_b->m_out && q_a->e_out == q_b->e_out,
+		          "cell v_fold, §8.1: layer0.q_proj.requant must be bit-identical -- v is not "
+		          "causally upstream of q");
+	}
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -19449,6 +20156,14 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopHugeQBiasAllZeroTokenRejectsAtChainInputGuard();
 	TestRunLayerLoopBiasAccumulateGuardRejectsThroughComposedPath();
 	TestRunLayerLoopCrossSectionBiasPresentDoesNotBreakPerKvHeadDerivation();
+
+	TestRunLayerLoopQFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopOFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopGateFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopUpFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopDownFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopKFoldPerChannelWiringAndSiblingInvariance();
+	TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
