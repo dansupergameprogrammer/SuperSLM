@@ -357,19 +357,15 @@ S128 RoundingDivideByPOTWide(S128 x, int exponent) {
 }  // namespace
 
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out) {
-	// RED STUB (T-1657/T-1663 red-first build, StandardsDocument/D-SLM556): the
-	// pre-fix, always-fits behaviour -- forms the wide product correctly (never
-	// UB, SMul is total) but applies a plain TRUNCATING shift instead of C3's
-	// away-from-zero rounding, and always reports fits=true regardless of the
-	// true rounded result's representability. Deliberately wrong so this
-	// function's own newly authored red cells (§10 cells 1/2/3/8) fail against
-	// it. Replaced by the real body in the green commit.
+	// C28's widened bias-reconciliation core (T-1657, D-SLM621/641/645) -- see
+	// intmath.h for the full contract.
 	const int64_t exponent = q_b + 62 + e_a;
 	const S128 wide = SMul(b, r_a);  // exact, total over the full int64_t domain of
 	                                  // both operands (SMul's own contract, this file).
-	const S128 truncated = SShrFull(wide, static_cast<int>(exponent));  // no C3 rounding
-	*out = SLow64(truncated);
-	return true;
+	const S128 rounded = RoundingDivideByPOTWide(wide, static_cast<int>(exponent));
+	const bool fits = SFitsI64(rounded);
+	*out = SLow64(rounded);
+	return fits;
 }
 
 // --- F-S3-7 / §7.2 wide-row (int64 input width) siblings ---------------------
