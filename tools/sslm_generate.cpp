@@ -396,9 +396,24 @@ int main(int argc, char** argv) {
 	const std::string tokenizer_path = argv[2];
 	const std::string prompt = argv[3];
 	size_t max_new_tokens = 32;
+	// The .sslm format carries no end-of-sequence id and the tokenizer view exposes none
+	// (tokenizer.h: "No BOS/EOS/chat markers are added -- that is the caller's job"), so the
+	// stop set is supplied here rather than defaulted. Qwen2.5-instruct uses 151645
+	// (<|im_end|>) and 151643 (<|endoftext|>); a different model family uses different ids.
+	std::vector<int32_t> stop_ids;
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
 			max_new_tokens = static_cast<size_t>(std::stoul(argv[++i]));
+		} else if (std::strcmp(argv[i], "--stop") == 0 && i + 1 < argc) {
+			const std::string spec = argv[++i];
+			size_t pos = 0;
+			while (pos < spec.size()) {
+				const size_t comma = spec.find(',', pos);
+				const std::string one = spec.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+				if (!one.empty()) stop_ids.push_back(static_cast<int32_t>(std::stol(one)));
+				if (comma == std::string::npos) break;
+				pos = comma + 1;
+			}
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -539,7 +554,7 @@ int main(int argc, char** argv) {
 	    model_view.config.intermediate_size, context_cap, model_view.rope_tables, prompt_tokens.data(),
 	    prompt_tokens.size(), embed_weights, embed_site_constant, final_norm_gain.data(),
 	    final_norm_site_constant, head_weights, static_cast<int32_t>(model_view.config.vocab_size),
-	    /*stop_ids=*/nullptr, /*stop_count=*/0, max_new_tokens, workspace.data(), workspace.size(),
+	    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens, workspace.data(), workspace.size(),
 	    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &out_tokens_produced, &stop_reason,
 	    model_view.config.kv_precision);
 
