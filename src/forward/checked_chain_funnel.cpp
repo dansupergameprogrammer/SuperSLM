@@ -54,6 +54,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::ResidualReconciliationMagnitudeOutOfDomain:
 			return "ResidualReconciliationMagnitudeOutOfDomain";
 		case SslmForwardStatus::InvalidHiddenCodes: return "InvalidHiddenCodes";
+		case SslmForwardStatus::IExpScaleDerivationOutOfDomain: return "IExpScaleDerivationOutOfDomain";
+		case SslmForwardStatus::BiasReconcileProductOutOfDomain: return "BiasReconcileProductOutOfDomain";
 	}
 	return "?";
 }
@@ -138,6 +140,12 @@ inline int64_t SaturatingAdd64(int64_t a, int64_t b) {
 // a value the same caller-side check must catch regardless. The fix belongs on
 // the channel every case funnels through -- the caller's own check on `running` --
 // not on this comparison.
+}  // namespace
+
+// T-1655/D-SLM620, §4.3: exposed as a named, auditable door (checked_chain_funnel.h) so
+// forward_sites.cpp can form carried_scale_product([q_scale, softmax_khead]) without a
+// second derivation of this domain (the F10 drift class). Linkage change only -- the
+// body below is unchanged from its original anonymous-namespace-private definition.
 CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	const int32_t ma = static_cast<int32_t>(a.m);
 	const int32_t mb = static_cast<int32_t>(b.m);
@@ -162,6 +170,8 @@ CarriedScale CombineCarriedScale(CarriedScale a, CarriedScale b) {
 	}
 	return CarriedScale{m, e};
 }
+
+namespace {
 
 // ac34677 S5's fix: the precondition CombineCarriedScale actually needs. Checked
 // on every `incoming` factor and `site_constant` before folding starts (step 0),
@@ -413,6 +423,27 @@ SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_
 		return SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain;
 	}
 	return SslmForwardStatus::Ok;
+}
+
+bool BiasReconcileProductFitsInt64(int64_t b, int64_t r_a) {
+	// T-1656/D-SLM642, §5.3: |b| * |r_a| formed and range-checked at the SAME class of
+	// U128 magnitude construction LandingRescale (forward_sites.cpp) already uses for
+	// the structurally identical ResidualReconcileSite product -- abs-then-unsigned-
+	// multiply, sign tracked separately (not needed here, since only the magnitude is
+	// being range-tested). `r_a` is CarriedScaleReciprocal's own result, positive by
+	// construction (DynamicScaleReciprocal's own contract: R in (2^31, 2^32]); `b` is
+	// the signed bias code and can be negative. The magnitude multiply is genuinely
+	// unsigned throughout (never routed through S128Mul's signed reinterpretation,
+	// which would misread a magnitude of exactly 2^63 as negative) -- representability
+	// is then a plain unsigned test: the high 64 bits are zero and the low 64 bits do
+	// not exceed INT64_MAX.
+	// RED DEMONSTRATION (temporary, this commit only): the guard's own body is
+	// stubbed to the pre-fix, always-admits behaviour so the newly-authored
+	// red suite can be shown failing against it before the real body (the
+	// next commit) makes it pass.
+	(void)b;
+	(void)r_a;
+	return true;
 }
 
 SslmForwardStatus CheckSiluCompositionScaleDomain(int64_t m, int64_t e) {

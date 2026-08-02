@@ -587,6 +587,18 @@ struct LayerWeights {
 	int32_t proj_shift;
 	CarriedScale q_site_constant;
 	CarriedScale o_site_constant;
+
+	// C28's dynamic-arm bias, one array per q/k/v projection this layer's
+	// ProjectAndFunnel/K-V-landing calls consume (§6.2 step 2, T-1656, D-SLM622).
+	// nullptr means this projection carries no BIA1 entry at this layer -- the
+	// composition is unchanged from today's unbiased path, matching the reference's
+	// own `model.dynamic_biases.get(site)` returning None. Non-null arrays hold
+	// hidden_size (q_bias) or num_key_value_heads * head_dim (k_bias/v_bias)
+	// elements, in the SAME projection-output-channel order GemmInt8AccumulateRow
+	// already produces for that projection.
+	const int64_t* q_bias = nullptr;  // hidden_size, or nullptr
+	const int64_t* k_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
+	const int64_t* v_bias = nullptr;  // num_key_value_heads * head_dim, or nullptr
 	// §8.1: per-(head, projection) K/V landing reciprocal/exponent, from
 	// KvLandingReciprocals'/KvLandingScales' own per-head rows -- K and V are
 	// separate arrays because §8.1 states the reciprocal/exponent as
@@ -621,18 +633,17 @@ struct LayerWeights {
 
 	CarriedScale attn_residual_site_constant;
 
-	// C30's per-query i-exp constants (§7.2 second limb). The C30 DERIVATION
-	// SITE that would compute these from a runtime per-query carried scale is
-	// not yet built anywhere in this tree (Claude/Curie/superslm-s3.3-
-	// attention-interior-test-design-2026-07-28.md §9: "still blocked -- no
-	// site exists"). RunLayerLoop's own gate (§11 S3.5) does not depend on
-	// that derivation existing, so this fixture supplies pre-derived,
-	// domain-checked constants directly -- the same substitution every other
-	// blocked-site cell in this suite already makes for an unbuilt
-	// derivation.
-	int64_t q_ln2;
-	int64_t q_b_iexp;
-	int64_t q_c_iexp;
+	// C30's per-query i-exp derivation (§7.2 second limb; T-1655, D-SLM620): the
+	// artifact's CompositionConstants["{prefix}.softmax_khead{kv_head}"] entry, one
+	// per KV head. num_key_value_heads entries each -- indexed by kv_head = h / group,
+	// never by query head h. RunLayerLoop derives, once per distinct kv_head per
+	// token per layer, carried_scale_product([q_scale, {iexp_softmax_khead_m[kv_head],
+	// iexp_softmax_khead_e[kv_head]}]) and then C30's (q_ln2, q_b, q_c) triple from the
+	// result (IExpScaleConstants, intmath.h) -- replacing this struct's prior fixed
+	// per-LAYER q_ln2/q_b_iexp/q_c_iexp substitution, which this design's own header
+	// comment named as standing in for this not-yet-built derivation.
+	const int64_t* iexp_softmax_khead_m = nullptr;  // num_key_value_heads
+	const int64_t* iexp_softmax_khead_e = nullptr;  // num_key_value_heads
 
 	const int32_t* mlp_norm_gain;  // hidden_size
 	CarriedScale mlp_norm_site_constant;

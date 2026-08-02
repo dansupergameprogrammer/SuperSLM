@@ -426,6 +426,48 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // one that makes the parent return a wrapped negative under `NDEBUG`.
 [[nodiscard]] bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
+// C30 — the offline derivation `iexp_scale_constants`, now ported (T-1655, D-SLM620): forms
+// the per-query (q_ln2, q_b, q_c) triple `IExpConstruct`/`IExpEvaluate` consume, from a
+// canonical carried scale `(m, e)` and the format-30 coefficient triple. TOTAL over every
+// int64_t argument, mirroring IExpConstruct's own standard (S-HARDEN-0): every step is
+// checked before the arithmetic it protects, so no input drives this function into
+// undefined behaviour, including the inputs it rejects.
+enum class IExpScaleDomain : int {
+	kOk = 0,             // all three constants formed and int64-representable
+	kBadCoefficient,      // ln2_q <= 0, b_q <= 0, or ca_q <= 0 (C7 N2-5's positivity precondition)
+	kNegativeShift,       // min(shift_ln2, shift_b, shift_c) < 0 -- C30's fine-scale rejection
+	kNotRepresentable,    // a well-formed derivation shift produced a value outside int64_t
+};
+
+// `*out_q_ln2`/`*out_q_b`/`*out_q_c` are written iff the outcome is kOk; left untouched
+// otherwise. `out_q_ln2`/`out_q_b`/`out_q_c` may be null when only the domain answer is
+// wanted, matching IExpConstruct's own convention for `out`.
+[[nodiscard]] IExpScaleDomain IExpScaleConstants(
+    int64_t m, int64_t e,
+    int64_t ln2_q, int ln2_fmt, int64_t b_q, int b_fmt, int64_t ca_q, int ca_fmt,
+    int64_t* out_q_ln2, int64_t* out_q_b, int64_t* out_q_c);
+
+// C30's pinned, per-artifact-independent format-30 coefficient triple (T-1655,
+// D-SLM620): the SAME (ln2_q, b_q, ca_q) `iexp_scale_constants`/
+// `tests/gen_s3_1_c30_iexp_domain_sweep_fixtures.py` derive from the pinned
+// reference's own `_POLY_A`/`_POLY_B`/`_POLY_C` and the pinned ln2 double
+// (`tests/reference/superslm_spike/rope_tables_pinned.json`, "ln2":
+// 0x1.62e42fefa39efp-1) — computed HERE at compile time from the SAME pinned bit
+// pattern, never by hand-typing the resulting integers (`StandardsDocument` §5.4:
+// verified at source or by execution, never by construction). `IExpScaleConstants`'s
+// production call site (RunLayerLoop, forward_sites.cpp) passes these three, format
+// 30 in each, as its own `ln2_q`/`b_q`/`ca_q` arguments.
+inline constexpr double kIExpPinnedLn2 = 0x1.62e42fefa39efp-1;
+inline constexpr double kIExpPolyA = 0.3585;
+inline constexpr double kIExpPolyB = 1.353;
+inline constexpr double kIExpPolyC = 0.344;
+inline constexpr int64_t kIExpLn2Q =
+    static_cast<int64_t>(kIExpPinnedLn2 * static_cast<double>(int64_t{1} << 30));
+inline constexpr int64_t kIExpBQ =
+    static_cast<int64_t>(kIExpPolyB * static_cast<double>(int64_t{1} << 30));
+inline constexpr int64_t kIExpCaQ = static_cast<int64_t>(
+    (kIExpPolyC / kIExpPolyA) * static_cast<double>(int64_t{1} << 30));
+
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
 //
 // Runtime primitive only. The Q2.30 sin/cos TABLES (C12) are generated OFFLINE in double
@@ -434,6 +476,13 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // tables and applies the rotation with a single pinned rounding.
 inline constexpr int ROPE_FRAC_BITS = 30;                 // Q2.30 fixed point
 inline constexpr int32_t ROPE_ONE = 1 << ROPE_FRAC_BITS;  // 1.0 in Q2.30 (2^30)
+
+// C28's bias Q-format (T-1656, D-SLM622, §5.2): the format's bias codes are stored at a
+// fixed q_B = 30 (docs/sslm_format.md, D-SLM621's own text) -- not an artifact-carried,
+// per-tensor value, the same convention this file's other Q-format constants already
+// use. If a future artifact revision carries a per-tensor q_B, this constant is the
+// single edit point.
+inline constexpr int64_t kBiasQFormat = 30;
 
 // The rotated pair, EXACT and UNCLAMPED (see RopeApplyPair). int64 because a rotation can reach
 // ~sqrt(2)·|input|, which exceeds int32 for wide inputs.

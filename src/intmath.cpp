@@ -41,6 +41,18 @@ inline U128 UTwice(U128 a) { return a << 1; }
 inline U128 UAdd64(U128 a, uint64_t b) { return a + b; }
 // Logical right shift of an unsigned 128-bit value; result assumed to fit in u64.
 inline uint64_t UShrToU64(U128 v, int k) { return static_cast<uint64_t>(v >> k); }
+// T-1655/D-SLM620 (IExpScaleConstants): logical right shift keeping the FULL 128-bit
+// result, for k in [0, 127] -- k >= 128 saturates to 0 (never asked of the operator
+// form above, which is only well-defined for k < 128).
+inline U128 UShrFull(U128 v, int k) {
+	if (k >= 128) return static_cast<U128>(0);
+	if (k <= 0) return v;
+	return v >> k;
+}
+// Representable in int64_t: non-negative (by construction of every caller here) and
+// not past INT64_MAX.
+inline bool UFitsI64(U128 v) { return v <= static_cast<U128>(INT64_MAX); }
+inline U128 U128Zero() { return static_cast<U128>(0); }
 
 inline S128 SFromI64(int64_t v) { return static_cast<S128>(v); }
 inline S128 SMul(int64_t a, int64_t b) { return static_cast<S128>(a) * static_cast<S128>(b); }
@@ -92,6 +104,22 @@ inline uint64_t UShrToU64(U128 v, int k) {
 	if (k >= 64) return v.hi >> (k - 64);
 	return (v.lo >> k) | (v.hi << (64 - k));
 }
+
+// T-1655/D-SLM620 (IExpScaleConstants): logical right shift keeping the FULL 128-bit
+// result, for k in [0, 127] -- k >= 128 saturates to 0. The operator-shift form above
+// (UShrToU64) is undefined once k >= 128 (`v.hi >> (k - 64)` becomes an out-of-range
+// shift once `k - 64 >= 64`); this function is never called with k outside [0, 127].
+inline U128 UShrFull(U128 v, int k) {
+	if (k <= 0) return v;
+	if (k >= 128) return U128{0, 0};
+	if (k >= 64) return U128{v.hi >> (k - 64), 0};
+	return U128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
+}
+
+// Representable in int64_t: non-negative (by construction of every caller here) and
+// not past INT64_MAX.
+inline bool UFitsI64(U128 v) { return v.hi == 0 && v.lo <= static_cast<uint64_t>(INT64_MAX); }
+inline U128 U128Zero() { return U128{0, 0}; }
 
 inline S128 SFromI64(int64_t v) {
 	return S128{static_cast<uint64_t>(v), v < 0 ? ~0ull : 0ull};
@@ -518,6 +546,108 @@ bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c) {
 	// already recorded happening once (evaluation record F10), and which the S2.6 design
 	// and the shipped predicate did to each other independently.
 	return IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk;
+}
+
+namespace {
+
+// T-1655/D-SLM620: the same saturating-add technique CombineCarriedScale
+// (checked_chain_funnel.cpp) uses for its own exponent fold, reproduced here rather than
+// shared across a translation-unit boundary -- this file's own convention (see this TU's
+// portable-128-bit facility above) is a small, self-contained helper set per TU rather
+// than a cross-TU dependency for one function. Two operands of the SAME sign overflow
+// exactly when the wrapped result's sign does not match theirs.
+inline bool AddOverflows64ForIExpScale(int64_t a, int64_t b, int64_t* out) {
+	const uint64_t ua = static_cast<uint64_t>(a);
+	const uint64_t ub = static_cast<uint64_t>(b);
+	*out = static_cast<int64_t>(ua + ub);  // well-defined: unsigned wraparound, then C++20's
+	                                        // mandated two's-complement narrowing (P0907R4)
+	return (a >= 0) == (b >= 0) && (*out >= 0) != (a >= 0);
+}
+
+inline int64_t SaturatingAdd64ForIExpScale(int64_t a, int64_t b) {
+	int64_t out;
+	if (!AddOverflows64ForIExpScale(a, b, &out)) return out;
+	return (a >= 0) ? INT64_MAX : INT64_MIN;
+}
+
+}  // namespace
+
+IExpScaleDomain IExpScaleConstants(int64_t m, int64_t e, int64_t ln2_q, int ln2_fmt,
+                                    int64_t b_q, int b_fmt, int64_t ca_q, int ca_fmt,
+                                    int64_t* out_q_ln2, int64_t* out_q_b, int64_t* out_q_c) {
+	// C30's derivation (design §4.2), TOTAL over its full int64_t domain in every
+	// argument -- the same standard IExpConstruct (S-HARDEN-0) holds itself to.
+
+	// Step 1: C7 N2-5's positivity precondition (mirrors the Python ValueError).
+	if (ln2_q <= 0 || b_q <= 0 || ca_q <= 0) return IExpScaleDomain::kBadCoefficient;
+
+	// Step 2: the three derivation shifts, each through the SAME saturating-add
+	// technique CombineCarriedScale already uses, for the identical reason -- `e` is an
+	// unconstrained int64_t and a plain `+`/`2*` here would reproduce the already-fixed
+	// T-1596 defect class at a new call site.
+	const int64_t shift_ln2 = SaturatingAdd64ForIExpScale(
+	    SaturatingAdd64ForIExpScale(static_cast<int64_t>(ln2_fmt), 62), e);
+	const int64_t shift_b = SaturatingAdd64ForIExpScale(
+	    SaturatingAdd64ForIExpScale(static_cast<int64_t>(b_fmt), 62), e);
+	const int64_t two_e = SaturatingAdd64ForIExpScale(e, e);
+	const int64_t shift_c = SaturatingAdd64ForIExpScale(
+	    SaturatingAdd64ForIExpScale(static_cast<int64_t>(ca_fmt), 124), two_e);
+
+	int64_t min_shift = shift_ln2;
+	if (shift_b < min_shift) min_shift = shift_b;
+	if (shift_c < min_shift) min_shift = shift_c;
+	if (min_shift < 0) return IExpScaleDomain::kNegativeShift;
+
+	// Step 3: C19's reciprocal over the canonical/mid-composition mantissa. Same-TU
+	// call, no funnel-ban issue (this function lives in the leaf-owning translation
+	// unit).
+	const int64_t r_m = DynamicScaleReciprocal(m);
+	// r_m is non-negative over this function's full reachable domain -- established by
+	// execution (design §4.2 step 6, the standalone DynamicScaleReciprocal-replica
+	// sweep), not by "any product fits 128 bits". Its unsigned reinterpretation
+	// therefore equals its true value exactly, which is what makes the UMul calls
+	// below exact rather than merely in-range.
+	const uint64_t ur_m = static_cast<uint64_t>(r_m);
+
+	// Step 4 (corrected, D-SLM643): ln2_q*r_m and b_q*r_m are formed WIDE, never as a
+	// plain int64_t multiply -- r_m is not bounded by 2^32 the way the original
+	// derivation assumed, and a plain multiply here is genuine signed-overflow UB at a
+	// reachable, non-canonical mid-composition m (CombineCarriedScale's own
+	// renormalization does not guarantee canonicality, checked_chain_funnel.h's own
+	// CarriedScale doc). Both operands are non-negative (ln2_q/b_q > 0, checked above;
+	// r_m >= 0), so the unsigned product equals the true product exactly.
+	const U128 num_ln2 = UMul(static_cast<uint64_t>(ln2_q), ur_m);
+	const U128 num_b = UMul(static_cast<uint64_t>(b_q), ur_m);
+
+	// Step 6: q_c's wide intermediate, ca_q * r_m^2 -- true magnitude can exceed the
+	// original ~2^94 estimate (step 4's premise no longer holds) but never 2^128 (r_m is
+	// int64_t-domain by construction, so r_m^2 < 2^126, and ca_q < 2^30).
+	const U128 rm2 = UMul(ur_m, ur_m);
+	const U128 num_c = UMulWide(rm2, static_cast<uint64_t>(ca_q));
+
+	// Step 7 (corrected shift-width guard, generalized to all three per step 5): a
+	// shift >= 128 has a floor-shift result of exactly 0 for any value that fits U128
+	// (num_ln2/num_b/num_c all do, by construction above) -- so UShrToU64/UShrFull are
+	// never asked to shift outside their own proven [0, 127] domain.
+	const uint64_t u_q_ln2 = (shift_ln2 >= 128) ? 0 : UShrToU64(num_ln2, static_cast<int>(shift_ln2));
+	const uint64_t u_q_b = (shift_b >= 128) ? 0 : UShrToU64(num_b, static_cast<int>(shift_b));
+	const uint64_t u_q_c = (shift_c >= 128) ? 0 : UShrToU64(num_c, static_cast<int>(shift_c));
+
+	// Step 8: representability, checked against the FULL shifted width -- UShrToU64
+	// assumes/returns only the low 64 bits of the true shifted value, and a genuinely
+	// too-large shifted value can still carry nonzero bits above bit 63 that narrowing
+	// alone would silently drop.
+	const U128 full_ln2 = (shift_ln2 >= 128) ? U128Zero() : UShrFull(num_ln2, static_cast<int>(shift_ln2));
+	const U128 full_b = (shift_b >= 128) ? U128Zero() : UShrFull(num_b, static_cast<int>(shift_b));
+	const U128 full_c = (shift_c >= 128) ? U128Zero() : UShrFull(num_c, static_cast<int>(shift_c));
+	if (!UFitsI64(full_ln2) || !UFitsI64(full_b) || !UFitsI64(full_c)) {
+		return IExpScaleDomain::kNotRepresentable;
+	}
+
+	if (out_q_ln2 != nullptr) *out_q_ln2 = static_cast<int64_t>(u_q_ln2);
+	if (out_q_b != nullptr) *out_q_b = static_cast<int64_t>(u_q_b);
+	if (out_q_c != nullptr) *out_q_c = static_cast<int64_t>(u_q_c);
+	return IExpScaleDomain::kOk;
 }
 
 // --- §6.4 RoPE rotation (C11/C12/C13) -----------------------------------------
