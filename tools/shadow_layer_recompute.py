@@ -233,6 +233,78 @@ def requant_chain_reference(
     return "Ok", codes
 
 
+# =============================================================================
+# RMSNorm site kind (T-1691 build-sequencing session, 2026-08-03) --
+# independently-coded reproduction of RmsNormSite (src/forward/forward_sites.
+# cpp:211-241), the first site kind ported under this session's own
+# per-site-kind decomposition (build log: Claude/Brunel/superslm-t1691-
+# site-comparison-build-2026-08-03.md).
+# =============================================================================
+
+_NORM_FRAC_BITS = 16  # forward_sites.cpp:38, kNormFracBits
+
+
+def isqrt_reference(n: int) -> int:
+    """Independently-coded floor(sqrt(n)) for n >= 0 -- the same
+    mathematical function `ISqrt` (src/intmath.cpp:494-516, a radix-4
+    restoring shift-and-subtract digit algorithm, 32 fixed iterations)
+    computes, via Python's own arbitrary-precision `math.isqrt` (CPython's
+    own long-integer square root, structurally unrelated to a fixed-digit
+    restoring algorithm -- no shared apparatus, design Sec7 step 5's own
+    construction rule applied to this primitive)."""
+    import math
+    if n < 0:
+        raise ValueError("isqrt_reference: n < 0 is out of ISqrt's own stated domain")
+    return math.isqrt(n)
+
+
+def floor_div_i64_reference(a: int, b: int) -> int:
+    """Independently-coded `FloorDivI64` (src/forward/forward_sites.cpp:
+    211-219): the greatest integer q with q*b <= a, for b > 0
+    (caller-ensures, matching the real function's own precondition).
+    Python's own `//` operator is ALREADY floor division for arbitrary-sign
+    numerators (rounds toward negative infinity), the identical mathematical
+    operation the real function's own truncate-then-correct construction
+    computes by a different route -- no shared code path, same function."""
+    if b <= 0:
+        raise ValueError("floor_div_i64_reference: b <= 0 is out of FloorDivI64's own caller-ensures domain")
+    return a // b
+
+
+def rmsnorm_shadow_codes(h: np.ndarray, g: np.ndarray) -> tuple[str, np.ndarray | None]:
+    """Independently-coded `RmsNormSite`'s own real composition
+    (src/forward/forward_sites.cpp:221-241), reproduced end to end:
+
+        sumsq   = sum(h[i]^2)
+        root    = max(isqrt(floor_div(sumsq << 2*NORM_FRAC_BITS, hidden_size)), 1)
+        wide[i] = floor_div(h[i] << 2*NORM_FRAC_BITS, root) * g[i]
+        (status, codes) = RequantChainChecked(wide)  -- `incoming` is empty and
+            `site_constant` plays no part in `codes` (checked_chain_funnel.cpp:
+            269-326: d_prime/r/s and the per-element codes loop read only
+            `wide_row`; `incoming`/`site_constant` feed only the OUTPUT CARRIED
+            SCALE, `running`, which this function does not compute or return --
+            this session's own exact-equality comparison is on `codes` alone).
+
+    `h` is the real, already-captured int8 hidden-state row entering this
+    RMSNorm site (never dequantized: RmsNormSite's own `incoming_scale`
+    parameter is accepted but "never folded in", forward_sites.cpp:224-226).
+    `g` is the widened (int32, sign-extended from the artifact's own int8
+    gain codes) per-channel gain array for this specific norm instance
+    (attn_norm or mlp_norm)."""
+    hidden_size = len(h)
+    if len(g) != hidden_size:
+        raise ValueError(f"rmsnorm_shadow_codes: h has {hidden_size} elements, g has {len(g)}")
+    h64 = [int(x) for x in h]
+    g64 = [int(x) for x in g]
+    sumsq = sum(hi * hi for hi in h64)
+    root = isqrt_reference(floor_div_i64_reference(sumsq << (2 * _NORM_FRAC_BITS), hidden_size))
+    root = root if root > 1 else 1
+    wide = np.array(
+        [floor_div_i64_reference(hi << (2 * _NORM_FRAC_BITS), root) * gi for hi, gi in zip(h64, g64)],
+        dtype=object)
+    return requant_chain_reference(wide)
+
+
 def saturating_rounding_doubling_high_mul_reference(a: int, b: int) -> int:
     """Independently-coded `SaturatingRoundingDoublingHighMul`
     (src/intmath.cpp:230-234): (a*b + 2**30) >> 31, ties toward +infinity,
@@ -546,3 +618,57 @@ def load_kv_context_trailer(path, *, after_offset: int) -> KvContextTrailer:
         k_codes=k_codes,
         v_codes=v_codes,
     )
+
+
+# =============================================================================
+# Site-dump (T-1691 build-sequencing session, 2026-08-03): reads the SEPARATE
+# file `sslm_layer_trace.cpp --site-dump` writes -- one record per
+# RequantChainChecked invocation at each target row (tools/sslm_layer_trace.
+# cpp's own `WriteSiteDump`, this session's own build log). Never the same
+# file as the K/V-context trailer above; no shared parsing code with it.
+# =============================================================================
+
+
+@dataclass
+class SiteRecord:
+    site: str  # e.g. "layer26.attn_norm" -- 0-indexed layer, matching KeyRow's own `layer` parameter
+    x_int: np.ndarray  # int64, the wide row as read at the site (input)
+    codes: np.ndarray  # int8, the site's own real output codes
+    d_prime: int
+    dn: int
+    s: int
+    r: int
+    m_out: int
+    e_out: int
+
+
+def load_site_dump(path) -> list[SiteRecord]:
+    """Reads `WriteSiteDump`'s own format (tools/sslm_layer_trace.cpp): uint64
+    num_records, then per record: uint64 name_len, the name's own bytes,
+    uint64 n_x, n_x int64 x_int values, uint64 n_codes, n_codes int8 codes,
+    int64 d_prime, int64 dn, int32 s, int64 r, int64 m_out, int64 e_out."""
+    data = Path(path).read_bytes()
+    off = 0
+    (n,) = struct.unpack_from("<Q", data, off)
+    off += 8
+    records = []
+    for _ in range(n):
+        (name_len,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        site = data[off : off + name_len].decode()
+        off += name_len
+        (n_x,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        x_int = np.array(struct.unpack_from(f"<{n_x}q", data, off), dtype=np.int64)
+        off += 8 * n_x
+        (n_codes,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        codes = np.frombuffer(data, dtype=np.int8, count=n_codes, offset=off).copy()
+        off += n_codes
+        d_prime, dn, s, r, m_out, e_out = struct.unpack_from("<qqiqqq", data, off)
+        off += 8 + 8 + 4 + 8 + 8 + 8
+        records.append(SiteRecord(site=site, x_int=x_int, codes=codes, d_prime=d_prime, dn=dn, s=s, r=r,
+                                   m_out=m_out, e_out=e_out))
+    if off != len(data):
+        raise ValueError(f"load_site_dump: {len(data) - off} trailing bytes beyond the declared records")
+    return records
