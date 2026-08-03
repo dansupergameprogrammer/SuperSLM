@@ -144,6 +144,13 @@ PROMPT_SET: list[PromptCase] = [
     PromptCase("digit_symbol_nospace", "What is 12+15? Give just the number.", "fail"),
     PromptCase("plain_language_plus", "What is 12 plus 15? Give just the number.", "control-arith"),
     PromptCase("digit_symbol_mult", "What is 17 x 23? Give just the number.", "arith-other"),
+    # T-1683 S6 (strike un-prosecuted plane 6, 2026-08-02): committed here so
+    # this tool and tools/layer_bisection_report.py read all nine of the
+    # layer-bisection instrument's prompts' text from one source, rather than
+    # two independently maintained copies of nine strings -- text unchanged
+    # from the one Popper's T-1682 debunking holdout already quotes
+    # (Claude/Popper/superslm-t1682-logit-margin-flip-attack-2026-08-02.md).
+    PromptCase("capital_of_germany", "What is the capital of Germany?", "control"),
     PromptCase("capital_of_france", "What is the capital of France?", "control"),
     PromptCase("capital_of_japan", "What is the capital of Japan?", "control"),
     PromptCase("largest_planet", "Name the largest planet in the solar system.", "control"),
