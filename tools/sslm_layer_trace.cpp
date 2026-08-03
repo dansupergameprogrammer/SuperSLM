@@ -36,6 +36,26 @@
 // specifically. No production code changes: kv_saturation_count is a public
 // field RunLayerLoop already writes (design S2.1); this tool only reads it.
 //
+// Second trailing section (T-1691, source-attribution design S7 step 4):
+// appended AFTER T-1689's own saturation-delta trailer -- uint64
+// num_target_rows, then num_target_rows uint64 values (the DUMP ROW NUMBER
+// each captured block belongs to -- row N is the state after RunLayerLoop
+// has committed 0-indexed layer N-1, the same `layer` parameter KeyRow/
+// ValueRow take at that row), then uint64 context_length (the number of
+// PRIOR positions captured, 0..context_length-1 -- never the current,
+// freshly-landed position at that row, which the parity shadow computes
+// itself, S7 step 5), uint64 num_key_value_heads, uint64 head_dim, then
+// num_target_rows * context_length * num_key_value_heads * head_dim * 2
+// int8 codes: per captured row, per position (0..context_length-1), a
+// num_key_value_heads*head_dim K block immediately followed by a
+// num_key_value_heads*head_dim V block. Target rows are the design's own
+// band -- {5, 21, 22, ..., 28} -- and a geometry with fewer than 28 layers
+// (this file's own smaller test fixtures) simply never reaches the rows
+// past its own num_hidden_layers, so num_target_rows can be less than 9;
+// no row is ever skipped independently of that bound. No production code
+// changes: KeyRow/ValueRow are already public accessors RunLayerLoop's own
+// landing write and attention interior already use (design S7 step 4).
+//
 // On a self-check mismatch (production vs. manual-replay token id or logit
 // row), this tool exits non-zero with a loud diagnostic and writes no dump --
 // matching this codebase's existing fail-loud convention
@@ -43,6 +63,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -90,7 +111,10 @@ struct LayerSnapshot {
 };
 
 bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_t hidden_size,
-               uint64_t prompt_fingerprint, const std::vector<uint64_t>& saturation_deltas) {
+               uint64_t prompt_fingerprint, const std::vector<uint64_t>& saturation_deltas,
+               const std::vector<uint32_t>& kv_trailer_rows, uint64_t kv_trailer_context_length,
+               uint64_t kv_trailer_num_kv_heads, uint64_t kv_trailer_head_dim,
+               const std::vector<int8_t>& kv_trailer_codes) {
 	std::ofstream f(path, std::ios::binary | std::ios::trunc);
 	if (!f) return false;
 	const uint64_t nrows = static_cast<uint64_t>(rows.size());
@@ -112,6 +136,21 @@ bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_
 	f.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
 	f.write(reinterpret_cast<const char*>(saturation_deltas.data()),
 	        static_cast<std::streamsize>(saturation_deltas.size() * sizeof(uint64_t)));
+
+	// T-1691 trailer (append-only, design S7 step 4, this file's header
+	// comment): new bytes AFTER T-1689's own trailer above -- neither the
+	// 29-row body nor the saturation trailer moves.
+	const uint64_t num_target_rows = static_cast<uint64_t>(kv_trailer_rows.size());
+	f.write(reinterpret_cast<const char*>(&num_target_rows), sizeof(num_target_rows));
+	std::vector<uint64_t> target_rows_u64(kv_trailer_rows.begin(), kv_trailer_rows.end());
+	f.write(reinterpret_cast<const char*>(target_rows_u64.data()),
+	        static_cast<std::streamsize>(target_rows_u64.size() * sizeof(uint64_t)));
+	f.write(reinterpret_cast<const char*>(&kv_trailer_context_length),
+	        sizeof(kv_trailer_context_length));
+	f.write(reinterpret_cast<const char*>(&kv_trailer_num_kv_heads), sizeof(kv_trailer_num_kv_heads));
+	f.write(reinterpret_cast<const char*>(&kv_trailer_head_dim), sizeof(kv_trailer_head_dim));
+	f.write(reinterpret_cast<const char*>(kv_trailer_codes.data()),
+	        static_cast<std::streamsize>(kv_trailer_codes.size()));
 	return static_cast<bool>(f);
 }
 
@@ -350,6 +389,18 @@ int main(int argc, char** argv) {
 	saturation_deltas.reserve(num_hidden_layers);
 	uint64_t prev_saturation_count = trace_seq.kv_saturation_count;
 
+	// T-1691 step 4 (design S7 step 4): the target-layer band, stated as DUMP
+	// ROW NUMBERS (this file's header comment). `kv_trailer_context_length`
+	// is the number of PRIOR positions -- fixed for the whole last-token
+	// walk, taken here (before that walk's first layer runs), matching
+	// `position` itself being "constant across every layer of this token"
+	// (forward_sites.cpp's own comment, quoted in the design).
+	constexpr uint32_t kKvTrailerTargetRows[] = {5, 21, 22, 23, 24, 25, 26, 27, 28};
+	const int64_t kv_trailer_context_length = trace_seq.context_length;
+	std::vector<uint32_t> kv_trailer_rows_captured;
+	std::vector<int8_t> kv_trailer_codes;
+	uint64_t actual_kv_trailer_elements = 0;
+
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
 		const SslmForwardStatus st =
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
@@ -373,6 +424,73 @@ int main(int argc, char** argv) {
 		const uint64_t cur_saturation_count = trace_seq.kv_saturation_count;
 		saturation_deltas.push_back(cur_saturation_count - prev_saturation_count);
 		prev_saturation_count = cur_saturation_count;
+
+		// T-1691 step 4: this dump row's own number is `step + 1` (row 0 is
+		// the embedding, pushed above the loop). `step` itself is the
+		// 0-indexed `layer` parameter KeyRow/ValueRow take -- the exact
+		// value RunLayerLoop's own body just used internally for this same
+		// layer's landing write (forward_sites.cpp: `const uint32_t l =
+		// seq.layer_index;`, taken BEFORE this call's own commit, which is
+		// `step` here since `layer_budget == 1`).
+		const uint32_t row_number = step + 1;
+		bool is_target_row = false;
+		for (uint32_t target : kKvTrailerTargetRows) {
+			if (target == row_number) {
+				is_target_row = true;
+				break;
+			}
+		}
+		if (is_target_row) {
+			kv_trailer_rows_captured.push_back(row_number);
+			for (int64_t pos = 0; pos < kv_trailer_context_length; ++pos) {
+				for (size_t h = 0; h < num_kv_heads; ++h) {
+					const int8_t* const k_row = KeyRow(trace_workspace.data(), step, context_cap,
+					                                    num_kv_heads, model_view.config.head_dim, h, pos);
+					kv_trailer_codes.insert(kv_trailer_codes.end(), k_row,
+					                        k_row + model_view.config.head_dim);
+					actual_kv_trailer_elements += model_view.config.head_dim;
+				}
+				for (size_t h = 0; h < num_kv_heads; ++h) {
+					const int8_t* const v_row = ValueRow(trace_workspace.data(), step, context_cap,
+					                                      num_kv_heads, model_view.config.head_dim, h, pos);
+					kv_trailer_codes.insert(kv_trailer_codes.end(), v_row,
+					                        v_row + model_view.config.head_dim);
+					actual_kv_trailer_elements += model_view.config.head_dim;
+				}
+			}
+		}
+	}
+
+	// T-1691 step 4, design S7 step 4's own two owed cells (D-SLM727b): a
+	// count-reconciliation guard, checked against an INDEPENDENTLY-derived
+	// expected count (num_target_rows actually reached * context_length *
+	// num_kv_heads * head_dim * 2) -- never against the loop's own running
+	// total, which a dropped- or duplicated-position defect in the loop
+	// above would corrupt identically on both sides. Guard vitality: the
+	// env var below (default unset, exercised only by
+	// tools/test_t1691_kv_context_trailer.py's own guard-vitality cell)
+	// deliberately perturbs `actual` by one element, confirming this
+	// comparison -- the real, shipped comparison, not a copy of it -- fires
+	// and rejects before any dump is written.
+	const uint64_t expected_kv_trailer_elements =
+	    static_cast<uint64_t>(kv_trailer_rows_captured.size()) *
+	    static_cast<uint64_t>(kv_trailer_context_length) * static_cast<uint64_t>(num_kv_heads) *
+	    static_cast<uint64_t>(model_view.config.head_dim) * 2;
+	if (const char* force_mismatch = std::getenv("SSLM_T1691_KV_TRAILER_FORCE_MISMATCH")) {
+		if (std::strcmp(force_mismatch, "1") == 0) {
+			actual_kv_trailer_elements += 1;
+		}
+	}
+	if (actual_kv_trailer_elements != expected_kv_trailer_elements) {
+		std::fprintf(stderr,
+		             "FAILED at stage=kv_trailer_count_guard: actual=%llu expected=%llu (rows=%zu "
+		             "context_length=%lld num_kv_heads=%u head_dim=%u) -- a dropped or duplicated "
+		             "position/head/row is the likely cause (no dump written)\n",
+		             static_cast<unsigned long long>(actual_kv_trailer_elements),
+		             static_cast<unsigned long long>(expected_kv_trailer_elements),
+		             kv_trailer_rows_captured.size(), static_cast<long long>(kv_trailer_context_length),
+		             static_cast<unsigned>(num_kv_heads), static_cast<unsigned>(model_view.config.head_dim));
+		return 1;
 	}
 
 	// --- Step 3.5 (N1 remedy, D-SLM705; design S4.2 step 6's own shape --------
@@ -549,16 +667,21 @@ int main(int argc, char** argv) {
 	// --- Step 5 (design S4.1 step 5, T-1689 trailer extension): dump. --------
 	const uint64_t fingerprint = Fnv1a64(prompt);
 	if (!WriteDump(dump_path.c_str(), rows, static_cast<uint64_t>(hidden_size), fingerprint,
-	               saturation_deltas)) {
+	               saturation_deltas, kv_trailer_rows_captured,
+	               static_cast<uint64_t>(kv_trailer_context_length), static_cast<uint64_t>(num_kv_heads),
+	               static_cast<uint64_t>(model_view.config.head_dim), kv_trailer_codes)) {
 		std::fprintf(stderr, "FAILED at stage=dump_write: could not write \"%s\"\n", dump_path.c_str());
 		return 1;
 	}
 	uint64_t total_saturation = 0;
 	for (uint64_t d : saturation_deltas) total_saturation += d;
 	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, prompt_fingerprint=0x%016llX, "
-	            "%zu kv_saturation deltas (total=%llu) -> %s\n",
+	            "%zu kv_saturation deltas (total=%llu), kv_context_trailer: %zu/%zu target rows "
+	            "reached (context_length=%lld, %llu codes) -> %s\n",
 	            rows.size(), hidden_size, static_cast<unsigned long long>(fingerprint),
 	            saturation_deltas.size(), static_cast<unsigned long long>(total_saturation),
-	            dump_path.c_str());
+	            kv_trailer_rows_captured.size(), sizeof(kKvTrailerTargetRows) / sizeof(uint32_t),
+	            static_cast<long long>(kv_trailer_context_length),
+	            static_cast<unsigned long long>(actual_kv_trailer_elements), dump_path.c_str());
 	return 0;
 }

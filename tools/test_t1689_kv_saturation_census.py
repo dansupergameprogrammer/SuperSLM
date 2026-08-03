@@ -109,4 +109,13 @@ def test_existing_29_row_body_unchanged_by_the_trailer_extension(tmp_path):
     trailer = data[body_end:]
     (num_layers,) = struct.unpack("<Q", trailer[:8])
     assert num_layers == FIX.NUM_HIDDEN_LAYERS
-    assert len(trailer) == 8 + 8 * num_layers, "trailer carries exactly num_layers uint64 deltas, no more"
+    # T-1691 (design S7 step 4, D-SLM727a) appends its OWN trailer after this
+    # one, by the identical append-only convention this trailer itself used
+    # against T-1685's body -- so "no more bytes after this trailer" is no
+    # longer the invariant; "this trailer's own span is exactly this many
+    # bytes, checked by byte length, not only by parsed values" still is.
+    # tools/test_t1691_kv_context_trailer.py owns the equivalent assertion
+    # for the section that now follows.
+    own_trailer_span = data[body_end:body_end + 8 + 8 * num_layers]
+    assert len(own_trailer_span) == 8 + 8 * num_layers, (
+        "T-1689's own trailer carries exactly num_layers uint64 deltas, checked by byte length")
