@@ -117,10 +117,10 @@ def _read_container_sections(data: bytes) -> dict[int, bytes]:
 
 
 def _parse_tensor_manifest(blob: bytes, expected_magic: bytes) -> dict[str, np.ndarray]:
-    """WGT1 / WSC1 / ROP1 (docs "Tensor-manifest blob") -> {name: ndarray}.
-    Element dtype is inferred from `expected_magic` (int8 for WGT1, int32 for
-    WSC1, int64 for ROP1), matching the section-type table (docs "Model
-    sub-formats (S2)")."""
+    """WGT1 / WSC1 / ROP1 / BIA1 (docs "Tensor-manifest blob") -> {name:
+    ndarray}. Element dtype is inferred from `expected_magic` (int8 for
+    WGT1, int32 for WSC1, int64 for ROP1 and BIA1 -- docs "Model
+    sub-formats (S2)", `Biases` (3) row: `'BIA1'`, `int64`)."""
     if len(blob) < 16:
         raise SslmArtifactFormatError(f"{expected_magic!r} manifest shorter than the 16-byte header")
     magic = blob[0:4]
@@ -137,8 +137,8 @@ def _parse_tensor_manifest(blob: bytes, expected_magic: bytes) -> dict[str, np.n
         raise SslmArtifactFormatError(f"{expected_magic!r} manifest: descriptors + name blob overrun")
     name_blob = blob[name_blob_off:name_blob_end]
 
-    elem_size = {b"WGT1": 1, b"WSC1": 4, b"ROP1": 8}[expected_magic]
-    np_dtype = {b"WGT1": np.int8, b"WSC1": np.int32, b"ROP1": np.int64}[expected_magic]
+    elem_size = {b"WGT1": 1, b"WSC1": 4, b"ROP1": 8, b"BIA1": 8}[expected_magic]
+    np_dtype = {b"WGT1": np.int8, b"WSC1": np.int32, b"ROP1": np.int64, b"BIA1": np.int64}[expected_magic]
 
     tensors: dict[str, np.ndarray] = {}
     for i in range(tensor_count):
