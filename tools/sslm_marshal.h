@@ -6,17 +6,21 @@
 // adapter, rather than two copies that can silently drift.
 //
 // This header is tools-only -- it is never included from src/ or include/,
-// and it changes no production code. Everything below is a verbatim,
-// unmodified extraction of tools/sslm_generate.cpp's own marshaling
-// functions (ReadFile, RdI32, RdI64, WidenGainToInt32, ReadCarriedScale,
-// LayerBacking, MarshalProjectionFold, MarshalLayer, PreflightScanWscFolds),
-// as they existed on `main`@`aeb931e`. The T-1684 red-first proof is a
+// and it changes no production code. Everything below is a verbatim
+// extraction of tools/sslm_generate.cpp's own marshaling functions
+// (ReadFile, RdI32, RdI64, WidenGainToInt32, ReadCarriedScale, LayerBacking,
+// MarshalProjectionFold, MarshalLayer, PreflightScanWscFolds), as they
+// existed on `main`@`aeb931e` -- every comment carried over unchanged
+// alongside the code, plus `inline` (a header, unlike a .cpp, needs it) and
+// `superslm::` qualification (this header lives outside that namespace,
+// unlike the .cpp it was extracted from). The T-1684 red-first proof is a
 // byte-diff of tools/sslm_generate.exe's own stdout on a fixed prompt,
 // captured before and after this extraction -- see the T-1683 build log.
 #ifndef SUPERSLM_TOOLS_SSLM_MARSHAL_H
 #define SUPERSLM_TOOLS_SSLM_MARSHAL_H
 
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -91,7 +95,7 @@ struct LayerBacking {
 	std::vector<int32_t> ctx_identity, ctx_mult, ctx_shift;
 	// T-1666: one (identity, mult, shift) array per output channel, per
 	// projection -- the per-channel WSC1 fold backing this driver marshals
-	// from the artifact's own WSC1 rows.
+	// from the artifact's own WSC1 rows (see this file's header comment).
 	std::vector<int32_t> q_fold_identity, q_fold_mult, q_fold_shift;
 	std::vector<int32_t> k_fold_identity, k_fold_mult, k_fold_shift;
 	std::vector<int32_t> v_fold_identity, v_fold_mult, v_fold_shift;
@@ -107,7 +111,9 @@ struct LayerBacking {
 // blob"); `channels` is the exact output-channel count ProjectAndFunnel/the
 // k-v-landing loop will index these arrays at (forward_sites.cpp). Returns
 // false and a diagnostic in `*err` if the tensor is missing or its row count
-// does not match `channels`.
+// does not match `channels` -- this is the structural check T-1664's driver
+// used to fail loudly on; now it is the input-shape check the per-channel
+// marshal itself performs before trusting the artifact's row count.
 inline bool MarshalProjectionFold(const superslm::SslmTensorView* t, uint64_t channels,
                                    const std::string& label, std::vector<int32_t>& id,
                                    std::vector<int32_t>& mult, std::vector<int32_t>& shift,
@@ -135,7 +141,11 @@ inline bool MarshalProjectionFold(const superslm::SslmTensorView* t, uint64_t ch
 
 // Attempts to marshal layer `l` into `out`/`backing`. Returns true and a
 // populated LayerWeights on success. Returns false and a diagnostic in `err`
-// the FIRST time a field cannot be represented.
+// the FIRST time a field cannot be represented -- specifically, the WSC1
+// per-channel fold gap this file's header documents. Every field marshaled
+// before that point in this function is real, artifact-sourced data, not a
+// placeholder -- the function does the whole job up to the point the
+// production struct's own shape stops it.
 inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32_t num_heads,
                           uint32_t num_key_value_heads, LayerBacking& backing,
                           superslm::LayerWeights& out, std::string* err) {
@@ -171,7 +181,11 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.attn_norm_gain = backing.attn_norm_gain.data();
 	out.mlp_norm_gain = backing.mlp_norm_gain.data();
 
-	// --- WSC1 per-output-channel fold (T-1666) -----------------------------
+	// --- WSC1 per-output-channel fold (T-1666): one (identity, mult, shift)
+	// array per output channel, per projection. Channel counts match exactly
+	// what ProjectAndFunnel/the k-v-landing fold loop index these arrays at
+	// (forward_sites.cpp): hidden_size for q/o/down, num_key_value_heads *
+	// head_dim for k/v, intermediate_size for gate/up.
 	const uint64_t hidden_size = view.config.hidden_size;
 	const uint64_t intermediate_size = view.config.intermediate_size;
 	const uint64_t kv_hidden_size = static_cast<uint64_t>(num_key_value_heads) * view.config.head_dim;
@@ -219,7 +233,8 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.down_fold_mult = backing.down_fold_mult.data();
 	out.down_fold_shift = backing.down_fold_shift.data();
 
-	// --- ctx_fold (WSC1, per-head) -----------------------------------------
+	// --- ctx_fold (WSC1, per-head -- LayerWeights already carries this as an
+	// array, T-518/D-SLM57) ------------------------------------------------
 	const superslm::SslmTensorView* ctx_wsc = Wsc("ctx_fold");
 	if (!ctx_wsc || ctx_wsc->elem_count != static_cast<uint64_t>(num_heads) * 3) {
 		*err = prefix + ".ctx_fold: missing or wrong-sized WSC1 tensor";
@@ -245,7 +260,11 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.k_bias = kb ? reinterpret_cast<const int64_t*>(kb->data) : nullptr;
 	out.v_bias = vb ? reinterpret_cast<const int64_t*>(vb->data) : nullptr;
 
-	// --- KV landing reciprocals (KVC1, r_t/e_t) -----------------------------
+	// --- KV landing reciprocals (KVC1, r_t/e_t -- LandingRescale's own two
+	// runtime inputs are BOTH KvLandingReciprocals' word 2 (R_t) and word 1
+	// (e_t); KvLandingScales' own word 1 (e_target) is a documented
+	// pending-consumer field LandingRescale does not read, per model.h's
+	// KvLandingScaleOutOfDomain/KvLandingReciprocalOutOfDomain comments) ----
 	backing.kv_r_t_k.resize(num_key_value_heads);
 	backing.kv_e_t_k.resize(num_key_value_heads);
 	backing.kv_r_t_v.resize(num_key_value_heads);
@@ -269,7 +288,8 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.kv_landing_r_t_v = backing.kv_r_t_v.data();
 	out.kv_landing_e_t_v = backing.kv_e_t_v.data();
 
-	// --- per-query i-exp composition inputs (KVC1 composition_constants) ---
+	// --- per-query i-exp composition inputs (KVC1 composition_constants,
+	// T-1655/D-SLM620) -------------------------------------------------------
 	backing.iexp_m.resize(num_key_value_heads);
 	backing.iexp_e.resize(num_key_value_heads);
 	for (uint32_t h = 0; h < num_key_value_heads; ++h) {
@@ -311,9 +331,10 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 
 // Scans every layer's WSC1 fold tensor for every one of the seven
 // projections BEFORE any per-layer marshaling is attempted -- the same
-// "scanned independently, not assumed from one element" discipline. Prints
-// the full extent (layers affected, worst-case row counts) so the report is
-// grounded in the whole artifact, not a sample.
+// "scanned independently, not assumed from one element" discipline T-1652's
+// build log applied to the BIA1 defect it found. Prints the full extent
+// (layers affected, worst-case row counts) so the report below is grounded
+// in the whole artifact, not a sample.
 inline void PreflightScanWscFolds(const superslm::SslmModelView& view) {
 	const char* names[] = {"q_proj", "k_proj", "v_proj", "o_proj",
 	                        "gate_proj", "up_proj", "down_proj"};
