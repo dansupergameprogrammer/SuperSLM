@@ -330,6 +330,138 @@ int main(int argc, char** argv) {
 		    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
 	}
 
+	// --- Step 3.5 (N1 remedy, D-SLM705; design S4.2 step 6's own shape --------
+	// moved to where the int8 rows are actually produced): an independent
+	// interior-row oracle, run every invocation, before any dump is written.
+	// The trace walk above snapshots `rows` by pushing into a vector as it
+	// goes -- exactly the shape a mislabeling defect (a duplicate or dropped
+	// push) corrupts silently, because every check downstream of it only
+	// ever reads the same vector, indexed the same wrong way, the mislabeling
+	// produced. This oracle never reads `rows`: for each row i it recomputes
+	// the value from scratch, on a genuinely separate SequenceLayerState and
+	// a genuinely separate K/V workspace, and compares by POSITION i. A
+	// mislabeled or miscounted entry in `rows` is caught here even though it
+	// was invisible to the self-check above (which only ever compares the
+	// LAST row against production) and to the resumed-walk fixture in
+	// tests/test_main.cpp (which never runs this translation unit at all).
+	//
+	// The oracle's own prefill is redone ONCE, into its own workspace,
+	// completely independent of `trace_workspace` above -- same composition
+	// (EmbedEntry + full-budget RunLayerLoop per prefix token), separate
+	// buffers, so a wiring bug in the trace walk's own state cannot also be
+	// present here. Every row 1..num_hidden_layers then costs exactly one
+	// straight-through RunLayerLoop(layer_budget=i) call from a freshly
+	// embedded copy of the last prompt token -- never the resumed budget=1
+	// walk the trace above uses -- summing to num_hidden_layers *
+	// (num_hidden_layers + 1) / 2 single-layer-equivalent steps on the last
+	// token, on top of the one-time prefill redo.
+	std::vector<uint8_t> oracle_workspace(kv_bytes);
+	std::vector<int8_t> oracle_prefill_codes(hidden_size);
+	SequenceLayerState oracle_prefill_seq;
+	oracle_prefill_seq.hidden_codes = oracle_prefill_codes.data();
+
+	for (size_t i = 0; i + 1 < prompt_tokens.size(); ++i) {
+		std::vector<int8_t> embed_codes(hidden_size);
+		CarriedScale embed_scale{};
+		const SslmForwardStatus est =
+		    EmbedEntry(prompt_tokens[i], static_cast<int32_t>(model_view.config.vocab_size),
+		               embed_weights, hidden_size, embed_site_constant, embed_codes.data(),
+		               &embed_scale);
+		if (est != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=oracle_prefill_embed: position=%zu status=%s\n", i,
+			             SslmForwardStatusName(est));
+			return 1;
+		}
+		for (size_t k = 0; k < hidden_size; ++k) oracle_prefill_seq.hidden_codes[k] = embed_codes[k];
+		oracle_prefill_seq.hidden_scale = embed_scale;
+		oracle_prefill_seq.layer_index = 0;
+		const SslmForwardStatus lst = RunLayerLoop(
+		    oracle_prefill_seq, layers.data(), num_hidden_layers,
+		    /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
+		    model_view.config.intermediate_size, context_cap, model_view.rope_tables,
+		    oracle_workspace.data(), oracle_workspace.size());
+		if (lst != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=oracle_prefill_layers: position=%zu status=%s\n", i,
+			             SslmForwardStatusName(lst));
+			return 1;
+		}
+	}
+	const int64_t oracle_context_length = oracle_prefill_seq.context_length;
+
+	// Row 0 (the embedding row): re-embed the last prompt token independently
+	// -- a separate EmbedEntry call, same inputs, no shared buffer with the
+	// trace walk's own embed -- and compare before any layer is touched.
+	{
+		std::vector<int8_t> oracle_embed_codes(hidden_size);
+		CarriedScale oracle_embed_scale{};
+		const SslmForwardStatus est =
+		    EmbedEntry(prompt_tokens.back(), static_cast<int32_t>(model_view.config.vocab_size),
+		               embed_weights, hidden_size, embed_site_constant, oracle_embed_codes.data(),
+		               &oracle_embed_scale);
+		if (est != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=oracle_row_embed: row=0 status=%s\n",
+			             SslmForwardStatusName(est));
+			return 1;
+		}
+		const bool codes_match =
+		    std::memcmp(oracle_embed_codes.data(), rows[0].codes.data(), hidden_size) == 0;
+		const bool scale_match = oracle_embed_scale.m == rows[0].m && oracle_embed_scale.e == rows[0].e;
+		if (!codes_match || !scale_match) {
+			std::fprintf(stderr,
+			             "FAILED at stage=interior_row_oracle: row=0 (embedding) captured value does "
+			             "not match the independent oracle -- codes_match=%d scale_match=%d (no dump "
+			             "written)\n",
+			             codes_match ? 1 : 0, scale_match ? 1 : 0);
+			return 1;
+		}
+	}
+
+	for (uint32_t i = 1; i <= num_hidden_layers; ++i) {
+		std::vector<int8_t> oracle_row_codes(hidden_size);
+		CarriedScale oracle_row_scale{};
+		const SslmForwardStatus est =
+		    EmbedEntry(prompt_tokens.back(), static_cast<int32_t>(model_view.config.vocab_size),
+		               embed_weights, hidden_size, embed_site_constant, oracle_row_codes.data(),
+		               &oracle_row_scale);
+		if (est != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=oracle_row_embed: row=%u status=%s\n", i,
+			             SslmForwardStatusName(est));
+			return 1;
+		}
+		SequenceLayerState oracle_row_seq;
+		oracle_row_seq.hidden_codes = oracle_row_codes.data();
+		oracle_row_seq.hidden_scale = oracle_row_scale;
+		oracle_row_seq.layer_index = 0;
+		oracle_row_seq.context_length = oracle_context_length;
+
+		const SslmForwardStatus st = RunLayerLoop(
+		    oracle_row_seq, layers.data(), num_hidden_layers, /*layer_budget=*/i, hidden_size,
+		    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size, context_cap,
+		    model_view.rope_tables, oracle_workspace.data(), oracle_workspace.size());
+		if (st != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=oracle_row_layers: row=%u status=%s\n", i,
+			             SslmForwardStatusName(st));
+			return 1;
+		}
+
+		const bool codes_match =
+		    std::memcmp(oracle_row_codes.data(), rows[i].codes.data(), hidden_size) == 0;
+		const bool scale_match =
+		    oracle_row_seq.hidden_scale.m == rows[i].m && oracle_row_seq.hidden_scale.e == rows[i].e;
+		if (!codes_match || !scale_match) {
+			std::fprintf(stderr,
+			             "FAILED at stage=interior_row_oracle: row=%u captured value does not match "
+			             "the independent straight-through budget=%u oracle -- codes_match=%d "
+			             "scale_match=%d (no dump written)\n",
+			             i, i, codes_match ? 1 : 0, scale_match ? 1 : 0);
+			return 1;
+		}
+	}
+	std::printf(
+	    "interior_row_oracle: all %u rows (embedding + %u layers) verified against an independent "
+	    "straight-through oracle (design S4.2 step 6 shape)\n",
+	    num_hidden_layers + 1, num_hidden_layers);
+
 	// final_norm -> logits -> argmax, from the trace's own captured state.
 	std::vector<int8_t> trace_final_codes(hidden_size);
 	CarriedScale trace_final_scale{};
