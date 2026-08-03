@@ -16267,6 +16267,80 @@ static void TestKvRowAccessorHeadStrideIncludesContextCapFactor() {
 	          static_cast<long long>(off_v));
 }
 
+// T-1691 (design Sec7 red-first proof part 8; D-SLM725, S11 dimension 1
+// corrected from NOT APPLICABLE): the K/V store's own lifetime cell -- an
+// early write via MutableKeyRow/MutableValueRow survives at least eight
+// further positions' worth of later writes at the SAME layer, read back
+// through KeyRow/ValueRow. This is the first test this campaign has built
+// against the production K/V store's own read-after-later-write behavior
+// (T-1685's own dump captures no K/V data at all, design Sec2.7) -- a
+// genuine lifetime defect here (aliasing, a stale slot, an off-by-one in
+// the store's own indexing) would already be corrupting the real engine's
+// own attention computation, AND would be structurally invisible to
+// T-1691's own int8-vs-parity-shadow exact-equality test (design Sec9),
+// since both arms read the SAME store through the SAME accessors and would
+// inherit the identical corrupted value. Runs directly against already-real,
+// already-compiled production code -- no fixture-loader workaround is
+// needed here, because KeyRow/MutableKeyRow/ValueRow/MutableValueRow operate
+// on a raw workspace buffer with no SslmModel::Load dependency at all
+// (distinct from T-1689's own fixture-construction constraint, D-SLM721,
+// which applies only to constructions that drive a full model forward).
+static void TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions() {
+	using namespace superslm;
+
+	const int64_t kContextCap = 10;
+	const size_t kNumKvHeads = 2, kHeadDim = 3;
+	const uint32_t kLayer = 0;
+	uint8_t workspace[1 * 10 * 2 * 3 * 2] = {};
+
+	const int8_t kKnownK[3] = {11, -22, 33};
+	const int8_t kKnownV[3] = {-44, 55, -66};
+	int8_t* const k0 =
+	    MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+	int8_t* const v0 =
+	    MutableValueRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, /*kv_head=*/0, /*position=*/0);
+	std::memcpy(k0, kKnownK, kHeadDim);
+	std::memcpy(v0, kKnownV, kHeadDim);
+
+	// Drive the walk forward through eight further positions (1..8), each
+	// getting its OWN distinct, non-zero K/V codes at both kv_heads -- if
+	// position 0's own slot is aliased by a later position, or the store's
+	// own indexing has an off-by-one, one of these later writes silently
+	// corrupts it.
+	for (int64_t pos = 1; pos <= 8; ++pos) {
+		for (size_t h = 0; h < kNumKvHeads; ++h) {
+			int8_t* const k = MutableKeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, h, pos);
+			int8_t* const v = MutableValueRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, h, pos);
+			for (size_t d = 0; d < kHeadDim; ++d) {
+				k[d] = static_cast<int8_t>((pos * 10 + h * 3 + d) % 127);
+				v[d] = static_cast<int8_t>(-static_cast<int64_t>((pos * 10 + h * 3 + d) % 127));
+			}
+		}
+	}
+
+	const int8_t* const k0_read = KeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, 0, 0);
+	const int8_t* const v0_read = ValueRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, 0, 0);
+	CHECK_MSG(std::memcmp(k0_read, kKnownK, kHeadDim) == 0,
+	          "K row written at position 0 does not survive 8 further positions' worth of later "
+	          "writes at the same layer -- an early write does not survive to a late read (design "
+	          "Sec7 part 8, D-SLM725)");
+	CHECK_MSG(std::memcmp(v0_read, kKnownV, kHeadDim) == 0,
+	          "V row written at position 0 does not survive 8 further positions' worth of later "
+	          "writes at the same layer -- an early write does not survive to a late read (design "
+	          "Sec7 part 8, D-SLM725)");
+
+	// Guard vitality: a deliberate off-by-one in the CALLER's own position
+	// argument (reading position 1 instead of 0) must NOT report the same
+	// bytes as position 0's own known value -- confirming the two assertions
+	// above are a live guard, not ones that would pass regardless of what
+	// was actually written (D-SLM715's own standard).
+	const int8_t* const k1_read = KeyRow(workspace, kLayer, kContextCap, kNumKvHeads, kHeadDim, 0, 1);
+	CHECK_MSG(std::memcmp(k1_read, kKnownK, kHeadDim) != 0,
+	          "position 1's K row is byte-identical to position 0's known value -- the assertions "
+	          "above would pass even under an off-by-one that reads the wrong position (guard "
+	          "vitality failed)");
+}
+
 // §11 S3.7 red cells (`context ∈ {0, 1, context_cap-1, context_cap}`) + the
 // `KvCapacityExhausted` fail-fast guard-vitality row (test design §3 Cell 2).
 //
@@ -20532,6 +20606,7 @@ int main(int argc, char** argv) {
 	// 2026-07-31.md §3, Cells 1-9).
 	TestRunLayerLoopQAndKWeightsAreLoadBearingOnceWidthReachesTwo();
 	TestKvRowAccessorHeadStrideIncludesContextCapFactor();
+	TestKvStoreEarlyWriteSurvivesLateReadAcrossEightFurtherPositions();
 	TestRunLayerLoopContextAxisAndCapacityExhaustedFailFast();
 	TestRunLayerLoopColdPrefillAndIncrementalDecodeAgreeAtSamePosition();
 	TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse();
