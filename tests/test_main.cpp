@@ -13366,6 +13366,131 @@ struct TwoLayerFixture {
 	TwoLayerFixture& operator=(TwoLayerFixture&&) = delete;
 };
 
+// T-1683 prerequisite (design §7, "Prerequisite to T-1685"; coverage audit
+// F4; temper Structural finding §2.2/§4.1/§8): `TwoLayerFixture` above is
+// deliberately fixed at `num_hidden_layers=2`, so every existing cell that
+// resumes `RunLayerLoop` at `layer_budget=1` exercises exactly ONE resume.
+// The layer-bisection instrument's own mechanism (design §4.1 step 3) chains
+// 27 resumes at `num_hidden_layers=28`, a count no committed cell reaches.
+// `NLayerFixture<N>` is `TwoLayerFixture`'s own wiring, generalized to an
+// arbitrary layer count N: same geometry per layer (hidden_size=2,
+// head_dim=2, num_attention_heads=1, num_key_value_heads=1,
+// intermediate_size=2, identity q/k/v/o/gate/up/down weights, canonical
+// site constants), the same per-layer field-by-field wiring
+// `TwoLayerFixture`'s constructor performs, replicated across N layers by
+// a loop instead of an unrolled `for (int l = 0; l < 2; ++l)`. Every array
+// this struct owns is deliberately sized 1 (one head) or N (one entry per
+// layer) rather than 2, so the SAME struct serves any N a caller names via
+// its template parameter -- N=28 is not a new fixture design, only a new
+// instantiation of this one.
+template <uint32_t N>
+struct NLayerFixture {
+	static constexpr int32_t kContextCap = 16;
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[N];
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	// One (gain-pair) per layer -- TwoLayerFixture's own norm_gain array is
+	// {16384,16384} shared by both of its two layers; here each layer gets
+	// its own two-element slice of one N*2-sized array, same values.
+	int32_t norm_gain[N][2];
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+
+	NLayerFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		NLayerFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = N;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = NLayerFixture::kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		std::vector<int64_t> cos_flat(NLayerFixture::kContextCap, INT64_C(1073741824));
+		std::vector<int64_t> sin_flat(NLayerFixture::kContextCap, INT64_C(0));
+		FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/NLayerFixture::kContextCap,
+		                                               /*pairs=*/1, cos_flat.data(), sin_flat.data());
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "NLayerFixture<%u>'s own minimal artifact failed to load: got %s (%s)", N,
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		for (uint32_t l = 0; l < N; ++l) {
+			f.norm_gain[l][0] = 16384;
+			f.norm_gain[l][1] = 16384;
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain[l];
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.identity2x2;
+			lw.k_weight = f.identity2x2;
+			lw.v_weight = f.identity2x2;
+			lw.o_weight = f.identity2x2;
+			lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+			lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+			lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+			lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+			lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+			lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+			lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+			lw.q_site_constant = canonical;
+			lw.o_site_constant = canonical;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+			lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+			lw.mlp_norm_gain = f.norm_gain[l];
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.identity2x2;
+			lw.up_weight = f.identity2x2;
+			lw.down_weight = f.identity2x2;
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			// Same off-canonical mlp_act_site_constant TwoLayerFixture uses
+			// (comment there: derived by execution against this exact
+			// per-layer composition, keeps every downstream site in C29's
+			// domain at every enumerated budget) -- unchanged by N, since
+			// each layer's own local composition is identical regardless of
+			// how many layers precede or follow it.
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+			lw.down_site_constant = canonical;
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+
+	// Same reasoning as TwoLayerFixture (D-SLM492/T-1407): every LayerWeights
+	// pointer field wired above points into THIS object's own sibling arrays;
+	// copy/move would leave a second object's LayerWeights pointing at the
+	// original's arrays.
+	NLayerFixture(const NLayerFixture&) = delete;
+	NLayerFixture& operator=(const NLayerFixture&) = delete;
+	NLayerFixture(NLayerFixture&&) = delete;
+	NLayerFixture& operator=(NLayerFixture&&) = delete;
+};
+
 // T-1375/Critical 1 (Poirot e4b398c-s3.4-s3.5-mlp-act-and-layer-loop-review-
 // 2026-07-29.md; fixed at fdb4d13). Single layer, one head, hidden_size=2.
 // `saturating_weight` (row0=[2,0], row1=[0,0]) drives dim0's real K/V
@@ -14906,6 +15031,90 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit()
 		          static_cast<long long>(full_seq.hidden_scale.m),
 		          static_cast<long long>(full_seq.hidden_scale.e));
 	}
+}
+
+// T-1683 prerequisite (design §7; coverage audit F4; temper Structural
+// finding §2.2/§4.1/§8; Claude/Curie/t1683-layer-bisection-test-design-
+// 2026-08-02.md, Cell P1). The sibling above proves ONE resume, at
+// num_hidden_layers=2 -- exactly the count `TestRunLayerLoopResumedAtBudget
+// OneEqualsFullBudgetForwardBitForBit` already covers. The layer-bisection
+// instrument's own mechanism (design §4.1 step 3) chains a straight-through
+// budget=28 call against 28 SEQUENTIAL budget=1 calls (27 resumes) over
+// `NLayerFixture<28>`, the real checkpoint's own layer count. This is a NEW
+// proof at the count this design actually depends on, not a re-assertion of
+// the N=2 cell -- StandardsDocument §5.4 ("a measurement is evidence about
+// the cell it was taken in, and reverses at its neighbours") is exactly why
+// N=2 does not stand in for N=28. `RunLayerLoop` itself is unmodified by
+// this cell.
+static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBitAtN28() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	constexpr uint32_t kNumLayers = 28;
+	NLayerFixture<kNumLayers> fixture;
+	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
+	const int8_t kInitialCodes[2] = {5, -5};
+	// T-1594-shaped workspace sizing: num_hidden_layers=28 (unlike TwoLayer
+	// Fixture's 2) is the ONLY geometry change from the sibling cell above --
+	// the per-layer K/V footprint (num_kv_heads=1, context_cap=1, head_dim=2,
+	// 2 bytes/value) is identical, so the workspace size scales linearly with
+	// the layer count.
+	constexpr size_t kWorkspaceSize = kNumLayers * 1 * 1 * 2 * 2;
+
+	int8_t full_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState full_seq;
+	full_seq.hidden_codes = full_codes;
+	full_seq.hidden_scale = kInitialScale;
+	full_seq.layer_index = 0;
+	uint8_t full_workspace[kWorkspaceSize] = {};
+	const auto full_result =
+	    superslm::RunLayerLoop(full_seq, fixture.layers, kNumLayers, /*layer_budget=*/kNumLayers,
+	                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                             /*intermediate_size=*/2,
+	                             /*context_cap=*/1, fixture.view.rope_tables, full_workspace,
+	                             sizeof(full_workspace));
+	CHECK_MSG(full_result == SslmForwardStatus::Ok,
+	          "the straight-through budget=%u run status == %s, want Ok (built and green)",
+	          kNumLayers, SslmForwardStatusName(full_result));
+
+	int8_t resumed_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState resumed_seq;
+	resumed_seq.hidden_codes = resumed_codes;
+	resumed_seq.hidden_scale = kInitialScale;
+	resumed_seq.layer_index = 0;
+	uint8_t resumed_workspace[kWorkspaceSize] = {};
+	for (uint32_t step = 0; step < kNumLayers; ++step) {
+		const auto st =
+		    superslm::RunLayerLoop(resumed_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
+		                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                             /*intermediate_size=*/2,
+		                             /*context_cap=*/1, fixture.view.rope_tables, resumed_workspace,
+		                             sizeof(resumed_workspace));
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "resumed step %u/%u (budget=1) status == %s, want Ok (built and green)", step,
+		          kNumLayers, SslmForwardStatusName(st));
+		if (st != SslmForwardStatus::Ok) return;
+	}
+
+	CHECK_MSG(resumed_seq.layer_index == full_seq.layer_index,
+	          "resumed layer_index (%u) must equal the straight-through run's (%u) after %u "
+	          "resumes",
+	          resumed_seq.layer_index, full_seq.layer_index, kNumLayers - 1);
+	CHECK_MSG(resumed_codes[0] == full_codes[0] && resumed_codes[1] == full_codes[1],
+	          "resumed hidden_codes == {%d,%d}, want the straight-through run's {%d,%d} at "
+	          "N=%u -- a resume that loses or corrupts the mid-token residual diverges exactly "
+	          "here, and only at this count",
+	          static_cast<int>(resumed_codes[0]), static_cast<int>(resumed_codes[1]),
+	          static_cast<int>(full_codes[0]), static_cast<int>(full_codes[1]), kNumLayers);
+	CHECK_MSG(resumed_seq.hidden_scale.m == full_seq.hidden_scale.m &&
+	              resumed_seq.hidden_scale.e == full_seq.hidden_scale.e,
+	          "resumed hidden_scale == (%lld,%lld), want the straight-through run's (%lld,%lld) "
+	          "at N=%u",
+	          static_cast<long long>(resumed_seq.hidden_scale.m),
+	          static_cast<long long>(resumed_seq.hidden_scale.e),
+	          static_cast<long long>(full_seq.hidden_scale.m),
+	          static_cast<long long>(full_seq.hidden_scale.e), kNumLayers);
 }
 
 // §9.3's own residual-location claim, and master plan §8.2/W1: the residual
@@ -20163,6 +20372,11 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopRejectsContextCapBelowOneBeforeFormingTheWorkspaceSizeProduct();
 	TestRunLayerLoopAcceptsEveryNonZeroEnumeratedBudget();
 	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBit();
+	// T-1683 prerequisite (design §7, coverage audit F4): the same property
+	// at N=28, the count the layer-bisection instrument's own mechanism
+	// depends on -- see Claude/Curie/t1683-layer-bisection-test-design-
+	// 2026-08-02.md, Cell P1.
+	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBitAtN28();
 	TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls();
 	TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold();
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
