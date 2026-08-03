@@ -29,6 +29,19 @@
 // CombineCarriedScale, IExpScaleConstants, SoftmaxRowQ15) -- for the SAME
 // reason and by the SAME convention as the six already here.
 //
+// T-1691 site kind 3/4 (the MLP, this build) extends this probe with ONE
+// further subcommand -- `silu_sigmoid_q15`, calling the REAL compiled
+// `SiluSigmoidQ15` (src/silu_lut.cpp) linked against the SAME canonical SIL1
+// table (`kSiluLutCanonicalTable`, include/superslm/silu_lut_canonical.h)
+// `SslmModel::Load` pins every loaded artifact's own SIL1 section against
+// byte-for-byte -- so this probe's own table is never a stand-in, it is the
+// identical content any real artifact's own runtime table carries. This is
+// T-183/D-SLM312's own most-scrutinised arithmetic (the SwiGLU activation
+// site); no other MLP primitive needs its own subcommand -- gate_proj/
+// up_proj/down_proj reuse ProjectAndFunnel (already probed indirectly via
+// q_proj/o_proj's own real-engine composite comparison) and mlp_residual
+// reuses ResidualReconcileSite (same).
+//
 // Usage:
 //   t1691_primitive_probe normalize_scale <d_prime>
 //   t1691_primitive_probe dynamic_scale_reciprocal <dn>
@@ -42,6 +55,7 @@
 //   t1691_primitive_probe combine_carried_scale <a_m> <a_e> <b_m> <b_e>
 //   t1691_primitive_probe iexp_scale_constants <m> <e> <ln2_q> <b_q> <ca_q>
 //   t1691_primitive_probe softmax_row_q15 <q_ln2> <q_b> <q_c> <n> <s0> ... <s(n-1)>
+//   t1691_primitive_probe silu_sigmoid_q15 <code> <m> <e>
 //
 // Every subcommand prints one line of `key=value` pairs on success and exits
 // 0; a malformed invocation prints a diagnostic to stderr and exits 2 -- it
@@ -52,6 +66,8 @@
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/forward_sites.h"
 #include "superslm/intmath.h"
+#include "superslm/silu_lut.h"
+#include "superslm/silu_lut_canonical.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -237,6 +253,16 @@ int CmdSoftmaxRowQ15(int argc, char** argv) {
 	return 0;
 }
 
+int CmdSiluSigmoidQ15(int argc, char** argv) {
+	if (argc != 5) return Fail("silu_sigmoid_q15 <code> <m> <e>");
+	const int8_t code = static_cast<int8_t>(std::strtol(argv[2], nullptr, 10));
+	const int64_t m = std::strtoll(argv[3], nullptr, 10);
+	const int e = static_cast<int>(std::strtol(argv[4], nullptr, 10));
+	const int32_t sig = SiluSigmoidQ15(kSiluLutCanonicalTable, code, m, e);
+	std::printf("sig=%d\n", sig);
+	return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -246,7 +272,8 @@ int main(int argc, char** argv) {
 		    "<normalize_scale|dynamic_scale_reciprocal|max_abs_reduce_wide|"
 		    "requant_token_code_wide|clamp_rope_code|requant_chain_checked|"
 		    "rope_apply_pair|landing_rescale|bias_reconcile_wide|"
-		    "combine_carried_scale|iexp_scale_constants|softmax_row_q15> ...");
+		    "combine_carried_scale|iexp_scale_constants|softmax_row_q15|"
+		    "silu_sigmoid_q15> ...");
 	}
 	const char* cmd = argv[1];
 	if (std::strcmp(cmd, "normalize_scale") == 0) return CmdNormalizeScale(argc, argv);
@@ -261,6 +288,7 @@ int main(int argc, char** argv) {
 	if (std::strcmp(cmd, "combine_carried_scale") == 0) return CmdCombineCarriedScale(argc, argv);
 	if (std::strcmp(cmd, "iexp_scale_constants") == 0) return CmdIExpScaleConstants(argc, argv);
 	if (std::strcmp(cmd, "softmax_row_q15") == 0) return CmdSoftmaxRowQ15(argc, argv);
+	if (std::strcmp(cmd, "silu_sigmoid_q15") == 0) return CmdSiluSigmoidQ15(argc, argv);
 	std::fprintf(stderr, "t1691_primitive_probe: unrecognized subcommand \"%s\"\n", cmd);
 	return 2;
 }

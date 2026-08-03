@@ -901,6 +901,127 @@ def residual_reconcile_shadow_codes(
 
 
 # =============================================================================
+# MLP site kind (T-1691 site kind 3/4, port order position 3/4, build log
+# Claude/Brunel/superslm-t1691-mlp-site-comparison-build-2026-08-03.md) --
+# independently-coded reproduction of MlpActSite (src/forward/forward_sites.
+# cpp:584-652), T-183/D-SLM312's own most-scrutinised arithmetic (the SwiGLU
+# activation site: the reference forward computes its own sigmoid via a
+# construction C10 excludes, an ~500x fidelity gap at source, an unmet S2.4
+# criterion -- this port is grounded in the REAL compiled MlpActSite and its
+# real four-step body, never in any design's own prose description of it).
+#
+# gate_proj.requant/up_proj.requant/down_proj.requant reuse
+# `project_and_funnel_shadow_codes` unchanged (ProjectAndFunnel is the SAME
+# shared function q_proj/o_proj already exercise -- no new primitive).
+# mlp_residual reuses `residual_reconcile_shadow_codes` unchanged
+# (ResidualReconcileSite is the SAME shared function attn_residual already
+# exercises). Only mlp_act needs new code.
+# =============================================================================
+
+_SILU_LUT_N = 1024      # silu_lut.h kSiluLutN
+_SILU_LUT_LOG2K = 5     # silu_lut.h kSiluLutLog2K
+_SILU_LUT_QIDX = 12     # silu_lut.h kSiluLutQIdx
+_SILU_COMPOSITION_MAX_ABS_M = (1 << 31) - 1  # silu_lut.h kCompositionScaleMaxAbsM, |m| <= 2^31-1
+_SILU_COMPOSITION_RUNTIME_MIN_E = -80  # checked_chain_funnel.cpp kSiluCompositionRuntimeMinE
+_SILU_COMPOSITION_RUNTIME_MAX_E = 8    # checked_chain_funnel.cpp kSiluCompositionRuntimeMaxE
+
+
+def check_silu_composition_scale_domain_reference(m: int, e: int) -> str:
+    """Independently-coded `CheckSiluCompositionScaleDomain`
+    (src/forward/checked_chain_funnel.cpp:476-491) -- `MlpActSite`'s own
+    documented FIRST ACT, before `SiluSigmoidQ15` ever evaluates (step 1 of
+    4). `|m|` is bounded by `kCompositionScaleMaxAbsM` (2^31-1, the same
+    bound `SiluSigmoidQ15`'s own `term = code * m` needs to stay
+    int64-exact); `e` is bounded to the RUNTIME no-UB domain
+    [kSiluCompositionRuntimeMinE, kSiluCompositionRuntimeMaxE] = [-80, 8],
+    the range both of `SiluSigmoidQ15`'s own shift placements need --
+    reproduced directly from source, the same convention
+    `check_softmax_row_width_domain_reference` (site kind 2/4) already used
+    for a bound-comparison-only predicate with no internal state to probe."""
+    if m < -_SILU_COMPOSITION_MAX_ABS_M or m > _SILU_COMPOSITION_MAX_ABS_M:
+        return "SiluCompositionScaleOutOfDomain"
+    if e < _SILU_COMPOSITION_RUNTIME_MIN_E or e > _SILU_COMPOSITION_RUNTIME_MAX_E:
+        return "SiluCompositionScaleOutOfDomain"
+    return "Ok"
+
+
+def silu_sigmoid_q15_reference(table, code: int, m: int, e: int) -> int:
+    """Independently-coded `SiluSigmoidQ15` (src/silu_lut.cpp:16-67): C10's
+    fixed-point sigmoid-LUT construction, step 2 of `MlpActSite`'s four
+    steps. `table` is the real SIL1 table (`kSiluLutN`+1 = 1025 int32 Q15
+    nodes) -- artifact bytes or the compiled canonical constant, a
+    LEGITIMATE SHARED INPUT under this pass's own construction rule (never
+    shared CODE): `SslmModel::Load` pins every loaded artifact's own SIL1
+    section against this same canonical table byte-for-byte, so the two
+    cannot differ for any artifact that loads at all. `code`/`m`/`e` are the
+    gate code and its carried scale.
+
+    `pos_fixed`'s divide-by-2^(-shift) branch uses
+    `rounding_divide_by_pot_wide_reference` (already independently coded and
+    validated, site kind 2/4, against the real `RoundingDivideByPOTWide`).
+    That is a DIFFERENT real function than the one this site actually calls
+    (`RoundingDivideByPOT(int64_t, int)`, src/intmath.cpp:258-263) -- read at
+    source, both delegate to the SAME width-generic `RoundingDivideByPOTImpl<T>`
+    template (src/intmath.cpp:244-251), so the masking-and-floor-shift rule is
+    confirmed identical at int64 width for exponent in [0,63], the domain
+    this call reaches. This reasoning is not the sole verification: the
+    WHOLE composite below is directly validated end to end against the real
+    compiled `SiluSigmoidQ15` (`tests/t1691_primitive_probe.cpp`'s own
+    `silu_sigmoid_q15` subcommand, linked against the identical canonical
+    table), at inputs spanning both the left-shift and right-divide
+    branches -- so the internal int64 divide is exercised on real inputs by
+    that probe, not merely reasoned about from source."""
+    term = int(code) * int(m)  # exact int64: |code|<=127 (<2^7), |m|<=2^31-1 -> |term|<2^38
+    shift = e + _SILU_LUT_LOG2K + _SILU_LUT_QIDX
+    pos_fixed = (term << shift) if shift >= 0 else rounding_divide_by_pot_wide_reference(term, -shift)
+    domain_hi = _SILU_LUT_N << _SILU_LUT_QIDX  # N << Q_idx
+    pos_fixed += domain_hi // 2                # (N<<Q_idx)/2, N even
+    if pos_fixed < 0:
+        pos_fixed = 0
+    elif pos_fixed > domain_hi:
+        pos_fixed = domain_hi
+    i0 = pos_fixed >> _SILU_LUT_QIDX
+    if i0 > _SILU_LUT_N - 1:
+        i0 = _SILU_LUT_N - 1
+    frac = pos_fixed - (i0 << _SILU_LUT_QIDX)
+    lo = int(table[i0])
+    hi = int(table[i0 + 1])
+    diff = hi - lo
+    product = frac * diff
+    delta = rounding_divide_by_pot_wide_reference(product, _SILU_LUT_QIDX)
+    return lo + delta
+
+
+def mlp_act_shadow_codes(
+    gate_codes, gate_scale_m: int, gate_scale_e: int, up_codes, sigmoid_lut_table,
+) -> tuple[str, np.ndarray | None]:
+    """Independently-coded `MlpActSite` (forward_sites.cpp:584-652), all four
+    steps: (1) `CheckSiluCompositionScaleDomain` on the gate scale -- on
+    rejection nothing downstream evaluates, matching the real site's own
+    early return; (2) per-element `SiluSigmoidQ15`; (3) the exact int64
+    triple product `gate[i] * sig[i] * up[i]` (bound 127*2^15*127 < 2^29,
+    comfortably int64-exact, no narrowing); (4) the funnel
+    (`requant_chain_reference`) -- BOTH carried scales (gate then up) fold
+    into the real funnel's own `incoming` span, but `codes` (this function's
+    only return) does not depend on `incoming`/`site_constant`
+    (`requant_chain_reference`'s own docstring: those feed only the output
+    carried scale), so only `gate_scale` is threaded here, for step 1's own
+    domain check."""
+    domain = check_silu_composition_scale_domain_reference(gate_scale_m, gate_scale_e)
+    if domain != "Ok":
+        return domain, None
+    n = len(gate_codes)
+    if len(up_codes) != n:
+        raise ValueError(f"mlp_act_shadow_codes: gate has {n} elements, up has {len(up_codes)}")
+    wide = np.empty(n, dtype=object)
+    for i in range(n):
+        sig = silu_sigmoid_q15_reference(
+            sigmoid_lut_table, int(gate_codes[i]), gate_scale_m, gate_scale_e)
+        wide[i] = int(gate_codes[i]) * sig * int(up_codes[i])
+    return requant_chain_reference(wide)
+
+
+# =============================================================================
 # Part 1 (design Sec7 step 2): the precision shadow's own recovered
 # per-channel real-valued multiplier and dequantized weight matrix.
 # =============================================================================
