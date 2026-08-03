@@ -32,12 +32,21 @@ import argparse
 import struct
 import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from scipy.stats import spearmanr
+
+# T-1683 S3 (code review, 2026-08-02; design S6's own prompt-provenance
+# note): this tool's nine prompts' TEXT is read from logit_margin_report.py's
+# own PROMPT_SET -- the one committed source design S6/T-1687's first build
+# step established -- rather than a second, independently maintained copy of
+# the same nine strings. POPULATION below keeps its own "Role" grouping
+# (mech1/mech2/control, what S5/S10's statistics group by), a different
+# taxonomy from PROMPT_SET's own "group" field (design S6, "label-system
+# collision" note) -- only the (label, question) text comes from PROMPT_SET.
+import logit_margin_report as lmr
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -59,23 +68,44 @@ SYSTEM_PROMPT = "You are Qwen, created by Alibaba Cloud. You are a helpful assis
 # sets -- no new prompt is invented. "Role" is this design's own grouping
 # (what S5/S10's statistics group by); PROMPT_SET's own `group` field in
 # tools/logit_margin_report.py is a different, structural taxonomy and is
-# never read here (design S6, "label-system collision" note).
-POPULATION = [
-    ("digit_symbol_spaced", "What is 12 + 15? Give just the number.", "mech2"),
-    ("digit_symbol_nospace", "What is 12+15? Give just the number.", "mech2"),
-    ("plain_language_plus", "What is 12 plus 15? Give just the number.", "mech2"),
-    ("digit_symbol_mult", "What is 17 x 23? Give just the number.", "mech2"),
-    ("capital_of_germany", "What is the capital of Germany?", "mech1"),
-    ("capital_of_france", "What is the capital of France?", "control"),
-    ("capital_of_japan", "What is the capital of Japan?", "control"),
-    ("largest_planet", "Name the largest planet in the solar system.", "control"),
-    ("days_in_week", "How many days are in a week? Give just the number.", "control"),
-]
+# never read here (design S6, "label-system collision" note). Only the
+# ROLE_BY_LABEL mapping is this tool's own; each label's QUESTION TEXT is
+# looked up from lmr.PROMPT_SET below (S3, this fold) -- one committed
+# source for all nine prompts' text, never a second copy.
+ROLE_BY_LABEL = {
+    "digit_symbol_spaced": "mech2",
+    "digit_symbol_nospace": "mech2",
+    "plain_language_plus": "mech2",
+    "digit_symbol_mult": "mech2",
+    "capital_of_germany": "mech1",
+    "capital_of_france": "control",
+    "capital_of_japan": "control",
+    "largest_planet": "control",
+    "days_in_week": "control",
+}
+
+_PROMPT_TEXT_BY_LABEL = {case.label: case.question for case in lmr.PROMPT_SET}
+_missing_labels = [label for label in ROLE_BY_LABEL if label not in _PROMPT_TEXT_BY_LABEL]
+if _missing_labels:
+    raise SystemExit(
+        f"layer_bisection_report.py: {_missing_labels} not found in "
+        f"logit_margin_report.PROMPT_SET -- the two tools' prompt sets have diverged"
+    )
+
+POPULATION = [(label, _PROMPT_TEXT_BY_LABEL[label], role) for label, role in ROLE_BY_LABEL.items()]
 
 
 class ProvenanceError(Exception):
     """Raised by check_provenance on a shape, fingerprint, or capture_mode
     mismatch -- a loud, non-zero-exit failure per design S5."""
+
+
+class SanityError(Exception):
+    """Raised by the design S7 T-1687 part 4 / coverage audit F8
+    execution-level sanity gate on a non-finite or out-of-range statistic --
+    a loud, non-zero-exit failure that survives `python -O` (M4, code
+    review: a bare `assert` here is stripped under -O, silently reporting
+    tables built on a value the gate exists to catch)."""
 
 
 @dataclass
@@ -105,8 +135,9 @@ class LayerRowStats:
 
 
 def zscore_row(row: np.ndarray) -> np.ndarray:
-    """Verbatim shape of tools/logit_margin_report.py:235-240, returning only
-    the z-scored array (design S5's own machinery, transcribed)."""
+    """Verbatim shape of tools/logit_margin_report.py:242-247 (`zscore_row`),
+    returning only the z-scored array (design S5's own machinery,
+    transcribed)."""
     mean = float(row.mean())
     std = float(row.std())
     if std == 0.0:
@@ -153,35 +184,84 @@ def load_float_layer_dump(path) -> FloatLayerDump:
     )
 
 
-def check_provenance(int8_dump: Int8LayerDump, float_dump: FloatLayerDump) -> None:
+def check_provenance(dump_a: Int8LayerDump | FloatLayerDump,
+                      dump_b: Int8LayerDump | FloatLayerDump) -> None:
     """Design S5's provenance check, run before any statistic. Raises
     ProvenanceError on a rows/hidden_size mismatch, a prompt_fingerprint
     mismatch, or a capture_mode value other than 1 on EITHER side (not
     merely "the two sides disagree" -- a value of 2 on both sides is also
-    rejected, design S5)."""
-    if int8_dump.rows != float_dump.rows:
+    rejected, design S5). `dump_a`/`dump_b` are the two dumps being paired --
+    an int8 dump against a float dump (the cross-engine pairing design S5
+    specifies), or two dumps of the SAME kind (S2, code review: the
+    repeat-vs-repeat resolving-power measurement pairs two int8-trace runs,
+    or two float-dump runs, through this same check)."""
+    if dump_a.rows != dump_b.rows:
+        raise ProvenanceError(f"rows mismatch: dump_a has {dump_a.rows}, dump_b has {dump_b.rows}")
+    if dump_a.hidden_size != dump_b.hidden_size:
         raise ProvenanceError(
-            f"rows mismatch: int8 dump has {int8_dump.rows}, float dump has {float_dump.rows}"
+            f"hidden_size mismatch: dump_a has {dump_a.hidden_size}, dump_b has {dump_b.hidden_size}"
         )
-    if int8_dump.hidden_size != float_dump.hidden_size:
+    if dump_a.prompt_fingerprint != dump_b.prompt_fingerprint:
         raise ProvenanceError(
-            f"hidden_size mismatch: int8 dump has {int8_dump.hidden_size}, float dump has "
-            f"{float_dump.hidden_size}"
-        )
-    if int8_dump.prompt_fingerprint != float_dump.prompt_fingerprint:
-        raise ProvenanceError(
-            f"prompt_fingerprint mismatch: int8 dump has 0x{int8_dump.prompt_fingerprint:016X}, "
-            f"float dump has 0x{float_dump.prompt_fingerprint:016X} -- the two dumps were not "
+            f"prompt_fingerprint mismatch: dump_a has 0x{dump_a.prompt_fingerprint:016X}, "
+            f"dump_b has 0x{dump_b.prompt_fingerprint:016X} -- the two dumps were not "
             f"generated from the same prompt"
         )
-    if int8_dump.capture_mode != 1:
-        raise ProvenanceError(
-            f"int8 dump capture_mode == {int8_dump.capture_mode}, want 1"
-        )
-    if float_dump.capture_mode != 1:
-        raise ProvenanceError(
-            f"float dump capture_mode == {float_dump.capture_mode}, want 1"
-        )
+    if dump_a.capture_mode != 1:
+        raise ProvenanceError(f"dump_a capture_mode == {dump_a.capture_mode}, want 1")
+    if dump_b.capture_mode != 1:
+        raise ProvenanceError(f"dump_b capture_mode == {dump_b.capture_mode}, want 1")
+
+
+def check_execution_sanity(all_stats: dict[str, list[LayerRowStats]]) -> int:
+    """Design S7 T-1687 part 4 / coverage audit F8: every reported Spearman
+    and Pearson value finite and in [-1, 1] (Pearson may also be NaN, its
+    own degenerate-row value), and every max_abs_z_diff finite, across every
+    prompt and every layer boundary already computed. Raises SanityError on
+    the first violation; returns the total cell count checked on success.
+    Factored out of main() (M4, code review) so this gate is itself a unit
+    -testable function rather than only reachable via a full 9-prompt
+    execution."""
+    total_cells = 0
+    for label, row_stats in all_stats.items():
+        for s in row_stats:
+            total_cells += 1
+            if not (np.isfinite(s.spearman) and -1.0 <= s.spearman <= 1.0):
+                raise SanityError(f"{label}: spearman={s.spearman} out of [-1,1] or non-finite")
+            if not (np.isnan(s.pearson) or (np.isfinite(s.pearson) and -1.0 <= s.pearson <= 1.0)):
+                raise SanityError(
+                    f"{label}: pearson={s.pearson} out of [-1,1] or non-finite (and not NaN)")
+            if not np.isfinite(s.max_abs_z_diff):
+                raise SanityError(f"{label}: max_abs_z_diff={s.max_abs_z_diff} non-finite")
+    return total_cells
+
+
+def zscore_diff_rows(row_a: np.ndarray, row_b: np.ndarray) -> float:
+    """Max absolute z-scored difference between two rows of the SAME kind
+    (both int8 codes from two int8-trace runs, or both float32 values from
+    two float-dump runs) -- the repeat-vs-repeat sibling of
+    compare_layer_row's own max_abs_z_diff. compare_layer_row measures a
+    CROSS-engine difference at one boundary; this measures a single side's
+    own measurement noise at that boundary (design S10's "resolving
+    power"), by feeding both rows through the identical zscore_row path
+    compare_layer_row already uses, pre-cast to float64 for the same reason
+    (M's own precision-gap fix, T-1683 build log SS2)."""
+    a64 = row_a.astype(np.float64)
+    b64 = row_b.astype(np.float64)
+    return float(np.max(np.abs(zscore_row(a64) - zscore_row(b64))))
+
+
+def repeat_vs_repeat_dispersion(rows_a: np.ndarray, rows_b: np.ndarray) -> list[float]:
+    """Per-boundary max|z-diff| between two independently captured dumps of
+    the SAME side (both int8-trace runs, or both float-dump runs) on the
+    SAME prompt -- design S10's "repeat-vs-repeat resolving power": the
+    floor below which a cross-engine difference at that boundary cannot be
+    distinguished from this side's own measurement noise (StandardsDocument
+    S5.4: "an effect claimed smaller than either side's own resolving power
+    is not a result"). `rows_a`/`rows_b` must have the same shape."""
+    if rows_a.shape != rows_b.shape:
+        raise ValueError(f"repeat_vs_repeat_dispersion: shape mismatch {rows_a.shape} vs {rows_b.shape}")
+    return [zscore_diff_rows(rows_a[i], rows_b[i]) for i in range(rows_a.shape[0])]
 
 
 def compare_layer_row(int8_codes: np.ndarray, float_row: np.ndarray) -> LayerRowStats:
@@ -229,10 +309,14 @@ def build_prompt(question: str) -> str:
     )
 
 
-def run_int8_trace(label: str, question: str, out_dir: Path) -> Path:
+def run_int8_trace(label: str, question: str, out_dir: Path, suffix: str = "") -> Path:
+    """Runs tools/sslm_layer_trace.exe once. `suffix` (e.g. "repeat") names a
+    SECOND, independent run of the same prompt to a distinct dump path --
+    design S10's own repeat-vs-repeat resolving-power measurement (S2, code
+    review) -- rather than a fresh label."""
     if not DRIVER_EXE.exists():
         raise SystemExit(f"driver not built: {DRIVER_EXE} (run tools\\build_layer_trace.bat)")
-    dump_path = out_dir / f"{label}.int8.bin"
+    dump_path = out_dir / f"{label}{'.' + suffix if suffix else ''}.int8.bin"
     cmd = [str(DRIVER_EXE), str(MODEL_PATH), str(TOKENIZER_PATH), build_prompt(question), "--dump",
            str(dump_path)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -241,8 +325,12 @@ def run_int8_trace(label: str, question: str, out_dir: Path) -> Path:
     return dump_path
 
 
-def run_float_dump(label: str, question: str, out_dir: Path) -> Path:
-    dump_path = out_dir / f"{label}.float.bin"
+def run_float_dump(label: str, question: str, out_dir: Path, suffix: str = "") -> Path:
+    """Runs tools/float_reference_layer_dump.py once. `suffix` names a
+    SECOND, independent run of the same prompt to a distinct dump path --
+    the float side of design S10's own repeat-vs-repeat measurement (S2,
+    code review)."""
+    dump_path = out_dir / f"{label}{'.' + suffix if suffix else ''}.float.bin"
     cmd = [sys.executable, str(REPO_ROOT / "tools" / "float_reference_layer_dump.py"), question,
            "--system", SYSTEM_PROMPT, "--model", str(FLOAT_MODEL_PATH), "--dump", str(dump_path)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
@@ -267,6 +355,13 @@ def main(argv: list[str] | None = None) -> int:
 
     all_stats: dict[str, list[LayerRowStats]] = {}
     groups: dict[str, str] = {}
+    # Design S10, made executed rather than assembled from other build cells
+    # (S2, code review): each side's own repeat-vs-repeat resolving power,
+    # measured HERE, on every prompt in the population, by running each side
+    # a SECOND independent time and comparing the repeat against the
+    # original -- not the docstring's un-backed promise this review found.
+    int8_resolving_vals: list[float] = []
+    float_resolving_vals: list[float] = []
 
     for label, question, group in POPULATION:
         groups[label] = group
@@ -288,21 +383,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    {layer_name:<8} spearman={s.spearman:7.4f} pearson={s.pearson:7.4f} "
                   f"max|z-diff|={s.max_abs_z_diff:8.4f}")
 
+        # --- design S10: each side's own repeat-vs-repeat resolving power, --
+        # measured on this prompt -- a second independent run of each side,
+        # compared against the first (S2, code review).
+        int8_repeat_path = run_int8_trace(label, question, out_dir, suffix="repeat")
+        float_repeat_path = run_float_dump(label, question, out_dir, suffix="repeat")
+        int8_repeat_dump = load_int8_layer_dump(int8_repeat_path)
+        float_repeat_dump = load_float_layer_dump(float_repeat_path)
+        check_provenance(int8_dump, int8_repeat_dump)
+        check_provenance(float_dump, float_repeat_dump)
+        int8_resolving_vals.extend(repeat_vs_repeat_dispersion(int8_dump.codes, int8_repeat_dump.codes))
+        float_resolving_vals.extend(
+            repeat_vs_repeat_dispersion(float_dump.values, float_repeat_dump.values))
+
     # --- design S7 T-1687 part 4 / coverage audit F8: execution-level -------
     # sanity, over the REAL 29x9 execution, before the tables are presented
-    # as the step's result.
+    # as the step's result. An explicit conditional raising SanityError, not
+    # a bare `assert` (M4, code review) -- `python -O` strips `assert`
+    # statements, which would silently disable this gate in exactly the
+    # deployment mode where a stripped guard is least visible.
     n_boundaries = len(next(iter(all_stats.values())))
-    total_cells = 0
-    for label, row_stats in all_stats.items():
-        for s in row_stats:
-            total_cells += 1
-            assert np.isfinite(s.spearman) and -1.0 <= s.spearman <= 1.0, (
-                f"{label}: spearman={s.spearman} out of [-1,1] or non-finite")
-            assert np.isnan(s.pearson) or (np.isfinite(s.pearson) and -1.0 <= s.pearson <= 1.0), (
-                f"{label}: pearson={s.pearson} out of [-1,1] or non-finite (and not NaN)")
-            assert np.isfinite(s.max_abs_z_diff), f"{label}: max_abs_z_diff={s.max_abs_z_diff} non-finite"
+    total_cells = check_execution_sanity(all_stats)
     print(f"\nexecution-level sanity: all {total_cells} cells ({len(all_stats)} prompts x "
-          f"{n_boundaries} boundaries) finite and in-range -- asserted (design S7 T-1687 part 4, "
+          f"{n_boundaries} boundaries) finite and in-range -- checked (design S7 T-1687 part 4, "
           f"coverage audit F8)")
 
     # --- design S10: the control-population distribution, the cell any -----
@@ -318,6 +421,19 @@ def main(argv: list[str] | None = None) -> int:
         arr = np.array(vals)
         print(f"{g:<9} n={len(vals):<5} max|z-diff|: min={arr.min():.4f} median={np.median(arr):.4f} "
               f"p95={np.percentile(arr, 95):.4f} max={arr.max():.4f} mean={arr.mean():.4f}")
+
+    # --- design S10: both sides' own repeat-vs-repeat resolving power, ------
+    # executed over the same population and boundaries above -- the floor a
+    # cross-engine effect must clear before it is a result (StandardsDocument
+    # S5.4). Cell: {len(POPULATION)} prompts x {n_boundaries} boundaries,
+    # this checkpoint, position 0, one repeat run per side per prompt.
+    print(f"\nresolving power (design S10) -- cell: {len(POPULATION)} prompts x {n_boundaries} "
+          f"boundaries, one independent repeat run per side per prompt:")
+    for side_name, vals in (("int8", int8_resolving_vals), ("float", float_resolving_vals)):
+        arr = np.array(vals)
+        print(f"  {side_name:<7} n={len(vals):<5} max|z-diff|: min={arr.min():.6f} "
+              f"median={np.median(arr):.6f} p95={np.percentile(arr, 95):.6f} max={arr.max():.6f} "
+              f"mean={arr.mean():.6f}")
 
     print("\nper-boundary mean max|z-diff|, mech2 group vs. control group:")
     print(f"  {'boundary':<10}{'mech2':>10}{'control':>10}{'ratio':>10}")

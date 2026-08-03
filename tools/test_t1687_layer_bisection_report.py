@@ -336,5 +336,95 @@ def test_compare_layer_row_exactly_zero_std_on_both_sides_returns_zero_z_diff():
     assert result.max_abs_z_diff == 0.0
 
 
+# --- prompt-text provenance (design S6; S3, code review 2026-08-02) ---------
+# layer_bisection_report.POPULATION's text must come from
+# logit_margin_report.PROMPT_SET -- one committed source for all nine
+# prompts, never a second independently maintained copy (the defect the
+# review found: two copies, identical today, drift latent).
+
+def test_population_text_matches_prompt_set_not_a_second_copy():
+    import logit_margin_report as lmr
+
+    prompt_set_by_label = {case.label: case.question for case in lmr.PROMPT_SET}
+    assert len(lbr.POPULATION) == 9
+    for label, question, _role in lbr.POPULATION:
+        assert label in prompt_set_by_label, f"{label} missing from logit_margin_report.PROMPT_SET"
+        assert question == prompt_set_by_label[label], (
+            f"{label}: layer_bisection_report's own text {question!r} != "
+            f"PROMPT_SET's {prompt_set_by_label[label]!r} -- the two copies have diverged"
+        )
+
+
+def test_population_roles_cover_all_three_groups():
+    roles = {role for _label, _question, role in lbr.POPULATION}
+    assert roles == {"mech1", "mech2", "control"}
+
+
+# --- repeat-vs-repeat resolving power (design S10; S2, code review 2026-08-02) --
+
+def test_zscore_diff_rows_identical_rows_is_zero():
+    row = np.array([1, -5, 10, 0, 127], dtype=np.int8)
+    assert lbr.zscore_diff_rows(row, row.copy()) == 0.0
+
+
+def test_zscore_diff_rows_hand_computed():
+    # a = [0,0,0,10]: mean=2.5, population std (ddof=0) = sqrt(mean((x-mean)^2))
+    # = sqrt(75/4) = sqrt(18.75); z = [-2.5, -2.5, -2.5, 7.5] / sqrt(18.75),
+    # z[3] = 7.5/sqrt(18.75) = sqrt(3) (the identical construction and
+    # hand-verified value test_compare_layer_row_formula_correctness_known_z_diff
+    # already establishes for this exact row).
+    # b = [0,0,0,0] -> z = [0,0,0,0] (degenerate row, zscore_row's own rule).
+    # max|z-diff| = sqrt(3) at index 3.
+    a = np.array([0, 0, 0, 10], dtype=np.int8)
+    b = np.array([0, 0, 0, 0], dtype=np.int8)
+    assert abs(lbr.zscore_diff_rows(a, b) - 3 ** 0.5) < 1e-9
+
+
+def test_repeat_vs_repeat_dispersion_per_boundary_hand_computed():
+    rows_a = np.array([[0, 0, 0, 10], [1, 2, 3, 4]], dtype=np.int8)
+    rows_b = np.array([[0, 0, 0, 0], [1, 2, 3, 4]], dtype=np.int8)
+    result = lbr.repeat_vs_repeat_dispersion(rows_a, rows_b)
+    assert len(result) == 2
+    assert abs(result[0] - 3 ** 0.5) < 1e-9  # boundary 0: the hand-computed cell above
+    assert result[1] == 0.0  # boundary 1: identical rows
+
+
+def test_repeat_vs_repeat_dispersion_rejects_shape_mismatch():
+    rows_a = np.zeros((3, 4), dtype=np.float32)
+    rows_b = np.zeros((3, 5), dtype=np.float32)
+    with pytest.raises(ValueError):
+        lbr.repeat_vs_repeat_dispersion(rows_a, rows_b)
+
+
+# --- execution-level sanity gate (design S7 T-1687 part 4, coverage audit ---
+# F8; M4, code review: a bare `assert` is stripped under `python -O` -- this
+# gate is now a checkable function raising SanityError explicitly).
+
+def test_check_execution_sanity_accepts_in_range_finite_stats():
+    all_stats = {
+        "p1": [lbr.LayerRowStats(spearman=0.5, pearson=0.4, max_abs_z_diff=1.2),
+               lbr.LayerRowStats(spearman=-1.0, pearson=float("nan"), max_abs_z_diff=0.0)],
+    }
+    assert lbr.check_execution_sanity(all_stats) == 2
+
+
+def test_check_execution_sanity_rejects_out_of_range_spearman():
+    all_stats = {"p1": [lbr.LayerRowStats(spearman=1.5, pearson=0.0, max_abs_z_diff=0.0)]}
+    with pytest.raises(lbr.SanityError):
+        lbr.check_execution_sanity(all_stats)
+
+
+def test_check_execution_sanity_rejects_non_finite_max_abs_z_diff():
+    all_stats = {"p1": [lbr.LayerRowStats(spearman=0.0, pearson=0.0, max_abs_z_diff=float("inf"))]}
+    with pytest.raises(lbr.SanityError):
+        lbr.check_execution_sanity(all_stats)
+
+
+def test_check_execution_sanity_rejects_out_of_range_non_nan_pearson():
+    all_stats = {"p1": [lbr.LayerRowStats(spearman=0.0, pearson=-1.5, max_abs_z_diff=0.0)]}
+    with pytest.raises(lbr.SanityError):
+        lbr.check_execution_sanity(all_stats)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
