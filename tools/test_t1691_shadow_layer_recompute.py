@@ -89,10 +89,10 @@ own precedent for a not-yet-built sibling module):
       (design Sec9, Sec10: "any code, at any position... that differs...
       is a residual, full stop").
 
-  KV_CONTEXT_TRAILER_MAGIC: bytes
-  class KvContextTrailer  (fields: num_target_layers, context_length,
+  class KvContextTrailer  (fields: target_rows, context_length,
       num_key_value_heads, head_dim, k_codes, v_codes -- k_codes/v_codes
-      shape [num_target_layers, context_length, num_key_value_heads, head_dim])
+      shape [len(target_rows), context_length, num_key_value_heads, head_dim];
+      num_target_layers is a read-only alias for len(target_rows))
   load_kv_context_trailer(path, *, after_offset: int) -> KvContextTrailer
       Design Sec7 step 4: reads the new K/V-context dump section
       `tools/sslm_layer_trace.cpp` gains, appended AFTER T-1689's own
@@ -100,8 +100,11 @@ own precedent for a not-yet-built sibling module):
       that trailer's own end lands at) -- loudly rejects (raises
       KvContextTrailerError) a written element count that does not match
       the independently-derived expected count
-      `num_target_layers * context_length * num_key_value_heads * head_dim * 2`
-      (design Sec7 step 4's own two owed cells, (a)/(b)).
+      `len(target_rows) * context_length * num_key_value_heads * head_dim * 2`
+      (design Sec7 step 4's own two owed cells, (a)/(b)). The real layout
+      carries no magic string (corrected 2026-08-03/04 from a prior version
+      of this reader's own test oracle, which assumed one no production
+      writer emits).
 
 Run with: python -m pytest tools/test_t1691_shadow_layer_recompute.py -v
 """
@@ -393,20 +396,43 @@ def test_parity_shadow_requant_chain_domain_check_guard_vitality():
 # D-SLM503 width==1 blindness).
 # =============================================================================
 
-_TRAILER_HEADER_FMT = "<QQQQ"  # num_target_layers, context_length, num_kv_heads, head_dim
+# The real trailer's own fixed-width header, AFTER its own leading
+# num_target_rows/target_rows[] fields (variable-length) -- context_length,
+# num_kv_heads, head_dim. Corrected 2026-08-03/04 (site-comparison build2,
+# `Claude/Brunel/superslm-t1691-site-comparison-build2-2026-08-03.md`) from a
+# prior version of this test file's own fixture writer, which wrote a
+# magic-prefixed, `num_target_layers`-first, K-block-then-V-block layout no
+# production writer (`tools/sslm_layer_trace.cpp:222-259`, `WriteDump`) ever
+# emits -- this test's own oracle was checked only against itself, the same
+# shape as the BIA1 parser defect this campaign already found once
+# (D-SLM742). Matches `shadow_layer_recompute.py`'s own corrected
+# `_TRAILER_HEADER_FMT`/`load_kv_context_trailer`.
+_TRAILER_HEADER_FMT = "<QQQ"  # context_length, num_kv_heads, head_dim
 
 
-def _write_kv_context_trailer(f, num_target_layers, context_length, num_kv_heads, head_dim,
+def _write_kv_context_trailer(f, target_rows, context_length, num_kv_heads, head_dim,
                                k_codes, v_codes):
-    f.write(slr.KV_CONTEXT_TRAILER_MAGIC)
-    f.write(struct.pack(_TRAILER_HEADER_FMT, num_target_layers, context_length, num_kv_heads,
-                         head_dim))
-    f.write(k_codes.astype(np.int8).tobytes())
-    f.write(v_codes.astype(np.int8).tobytes())
+    """Writes the real byte layout: `num_target_rows` (u64), `target_rows[]`
+    (u64 each), `context_length`/`num_kv_heads`/`head_dim` (u64 each), then
+    per target row, per position (0..context_length-1): K for every kv head
+    THEN V for every kv head -- interleaved per position, never a whole-K-
+    block followed by a whole-V-block. `k_codes`/`v_codes` shape
+    `[len(target_rows), context_length, num_kv_heads, head_dim]`."""
+    num_target_rows = len(target_rows)
+    f.write(struct.pack("<Q", num_target_rows))
+    f.write(struct.pack(f"<{num_target_rows}Q", *target_rows))
+    f.write(struct.pack(_TRAILER_HEADER_FMT, context_length, num_kv_heads, head_dim))
+    k = k_codes.astype(np.int8)
+    v = v_codes.astype(np.int8)
+    for row in range(num_target_rows):
+        for pos in range(context_length):
+            f.write(k[row, pos].tobytes())
+            f.write(v[row, pos].tobytes())
 
 
 def _matching_trailer_bytes(tmp_path, num_target_layers=2, context_length=5, num_kv_heads=2,
                              head_dim=4):
+    target_rows = list(range(1, num_target_layers + 1))
     shape = (num_target_layers, context_length, num_kv_heads, head_dim)
     rng = np.random.default_rng(1)
     k_codes = rng.integers(-127, 128, size=shape, dtype=np.int64)
@@ -414,14 +440,15 @@ def _matching_trailer_bytes(tmp_path, num_target_layers=2, context_length=5, num
     path = tmp_path / "kv_context_trailer.bin"
     with open(path, "wb") as f:
         f.write(b"\x00" * 64)  # stand-in for T-1689's own preceding trailer bytes
-        _write_kv_context_trailer(f, num_target_layers, context_length, num_kv_heads, head_dim,
+        _write_kv_context_trailer(f, target_rows, context_length, num_kv_heads, head_dim,
                                    k_codes, v_codes)
-    return path, k_codes, v_codes
+    return path, k_codes, v_codes, target_rows
 
 
 def test_load_kv_context_trailer_roundtrip(tmp_path):
-    path, k_codes, v_codes = _matching_trailer_bytes(tmp_path)
+    path, k_codes, v_codes, target_rows = _matching_trailer_bytes(tmp_path)
     trailer = slr.load_kv_context_trailer(path, after_offset=64)
+    assert trailer.target_rows == target_rows
     assert trailer.num_target_layers == 2
     assert trailer.context_length == 5
     assert trailer.num_key_value_heads == 2
@@ -433,33 +460,42 @@ def test_load_kv_context_trailer_roundtrip(tmp_path):
 def test_load_kv_context_trailer_rejects_truncated_count(tmp_path):
     # Coverage-model dimension 9 cell (b): a dropped position produces a
     # written element count short of the independently-derived expected
-    # count (num_target_layers * context_length * num_kv_heads * head_dim * 2)
+    # count (len(target_rows) * context_length * num_kv_heads * head_dim * 2)
     # -- must be a loud rejection, not a short read reported as success.
-    num_target_layers, context_length, num_kv_heads, head_dim = 2, 5, 2, 4
-    shape = (num_target_layers, context_length, num_kv_heads, head_dim)
+    target_rows = [1, 2]
+    context_length, num_kv_heads, head_dim = 5, 2, 4
+    shape = (len(target_rows), context_length, num_kv_heads, head_dim)
     rng = np.random.default_rng(2)
-    k_codes = rng.integers(-127, 128, size=shape, dtype=np.int64)
-    v_codes = rng.integers(-127, 128, size=shape, dtype=np.int64)
-    # Drop the last position from V -- a duplicated/dropped-position mutation.
-    v_codes_short = v_codes.reshape(-1)[:-1]
+    k_codes = rng.integers(-127, 128, size=shape, dtype=np.int64).astype(np.int8)
+    v_codes = rng.integers(-127, 128, size=shape, dtype=np.int64).astype(np.int8)
     path = tmp_path / "truncated.bin"
     with open(path, "wb") as f:
         f.write(b"\x00" * 64)
-        f.write(slr.KV_CONTEXT_TRAILER_MAGIC)
-        f.write(struct.pack(_TRAILER_HEADER_FMT, num_target_layers, context_length, num_kv_heads,
-                             head_dim))
-        f.write(k_codes.astype(np.int8).tobytes())
-        f.write(v_codes_short.astype(np.int8).tobytes())
+        f.write(struct.pack("<Q", len(target_rows)))
+        f.write(struct.pack(f"<{len(target_rows)}Q", *target_rows))
+        f.write(struct.pack(_TRAILER_HEADER_FMT, context_length, num_kv_heads, head_dim))
+        # Interleaved K/V per row/position, but drop the LAST position's own V
+        # bytes -- a duplicated/dropped-position mutation, still interleaved
+        # correctly up to the point of the drop.
+        for row in range(len(target_rows)):
+            for pos in range(context_length):
+                f.write(k_codes[row, pos].tobytes())
+                if not (row == len(target_rows) - 1 and pos == context_length - 1):
+                    f.write(v_codes[row, pos].tobytes())
     with pytest.raises(slr.KvContextTrailerError):
         slr.load_kv_context_trailer(path, after_offset=64)
 
 
-def test_load_kv_context_trailer_rejects_mismatched_magic(tmp_path):
-    path = tmp_path / "bad_magic.bin"
+def test_load_kv_context_trailer_rejects_truncated_target_rows_header(tmp_path):
+    # The real format's own leading variable-length field
+    # (`num_target_rows`/`target_rows[]`) has no fixed size -- a file that
+    # ends mid-`target_rows` must be a loud rejection, not a short read
+    # silently reinterpreted as a smaller `num_target_rows`.
+    path = tmp_path / "truncated_header.bin"
     with open(path, "wb") as f:
         f.write(b"\x00" * 64)
-        f.write(b"WRONGMAG")
-        f.write(struct.pack(_TRAILER_HEADER_FMT, 1, 1, 1, 1))
+        f.write(struct.pack("<Q", 3))  # claims 3 target rows
+        f.write(struct.pack("<Q", 1))  # but only one u64 of target_rows[] follows
     with pytest.raises(slr.KvContextTrailerError):
         slr.load_kv_context_trailer(path, after_offset=64)
 
@@ -474,7 +510,7 @@ def test_old_reader_survives_new_trailer_unchanged(tmp_path):
     path = tmp_path / "layered_dump.bin"
     with open(path, "wb") as f:
         f.write(old_trailer_bytes)
-        _write_kv_context_trailer(f, 1, 3, 1, 2, np.zeros((1, 3, 1, 2)), np.zeros((1, 3, 1, 2)))
+        _write_kv_context_trailer(f, [1], 3, 1, 2, np.zeros((1, 3, 1, 2)), np.zeros((1, 3, 1, 2)))
     with open(path, "rb") as f:
         read_back = f.read(len(old_trailer_bytes))
     assert read_back == old_trailer_bytes, (

@@ -307,8 +307,14 @@ class ParsedArtifact:
     embed_site_constant: tuple[int, int]
     final_norm_site_constant: tuple[int, int]
     lm_head: np.ndarray | None  # int8 [vocab_size, hidden_size], only present if not tied
-    rope_cos: np.ndarray  # int64 [context_cap, head_dim/2]
-    rope_sin: np.ndarray
+    rope_cos: np.ndarray  # int64, flat length context_cap*(head_dim/2) -- rank as declared by the
+                           # artifact's own ROP1 tensor descriptor, which every writer in this tree
+                           # sets to 1 (corrected 2026-08-04: a prior version of this comment claimed
+                           # rank 2, `[context_cap, head_dim/2]`; RopeApplySite itself (forward_sites.
+                           # cpp:511-524) never assumes a shape either -- it derives
+                           # `cos_rows = cos->elem_count / pairs` and reads by flat offset
+                           # `position * pairs + i`)
+    rope_sin: np.ndarray  # same layout
     sigmoid_lut: np.ndarray  # int32 [1025], Q15
     layers: list[LayerParityWeights] = field(default_factory=list)
 

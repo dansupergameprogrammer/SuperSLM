@@ -22,6 +22,13 @@
 // superslm core sources unmodified -- no test-only injection, no stub -- so
 // every value it prints is the real engine's own arithmetic.
 //
+// T-1691 site kind 2/4 (the attention interior, build log
+// Claude/Brunel/superslm-t1691-site-comparison-build2-2026-08-03.md) extends
+// this probe with six further subcommands -- the attention interior's own
+// new fixed-point primitives (RopeApplyPair, LandingRescale, BiasReconcileWide,
+// CombineCarriedScale, IExpScaleConstants, SoftmaxRowQ15) -- for the SAME
+// reason and by the SAME convention as the six already here.
+//
 // Usage:
 //   t1691_primitive_probe normalize_scale <d_prime>
 //   t1691_primitive_probe dynamic_scale_reciprocal <dn>
@@ -29,6 +36,12 @@
 //   t1691_primitive_probe requant_token_code_wide <x_i> <r> <s>
 //   t1691_primitive_probe clamp_rope_code <raw>
 //   t1691_primitive_probe requant_chain_checked <n> <x0> <x1> ... <x(n-1)>
+//   t1691_primitive_probe rope_apply_pair <x> <y> <cos_q30> <sin_q30>
+//   t1691_primitive_probe landing_rescale <branch_code> <m_a> <r_t> <e_a> <e_t>
+//   t1691_primitive_probe bias_reconcile_wide <b> <q_b> <r_a> <e_a>
+//   t1691_primitive_probe combine_carried_scale <a_m> <a_e> <b_m> <b_e>
+//   t1691_primitive_probe iexp_scale_constants <m> <e> <ln2_q> <b_q> <ca_q>
+//   t1691_primitive_probe softmax_row_q15 <q_ln2> <q_b> <q_c> <n> <s0> ... <s(n-1)>
 //
 // Every subcommand prints one line of `key=value` pairs on success and exits
 // 0; a malformed invocation prints a diagnostic to stderr and exits 2 -- it
@@ -133,6 +146,97 @@ int CmdRequantChainChecked(int argc, char** argv) {
 	return 0;
 }
 
+int CmdRopeApplyPair(int argc, char** argv) {
+	if (argc != 6) return Fail("rope_apply_pair <x> <y> <cos_q30> <sin_q30>");
+	const int32_t x = static_cast<int32_t>(std::strtol(argv[2], nullptr, 10));
+	const int32_t y = static_cast<int32_t>(std::strtol(argv[3], nullptr, 10));
+	const int32_t cos_q30 = static_cast<int32_t>(std::strtol(argv[4], nullptr, 10));
+	const int32_t sin_q30 = static_cast<int32_t>(std::strtol(argv[5], nullptr, 10));
+	const RopePair p = RopeApplyPair(x, y, cos_q30, sin_q30);
+	std::printf("x=%lld y=%lld\n", static_cast<long long>(p.x), static_cast<long long>(p.y));
+	return 0;
+}
+
+int CmdLandingRescale(int argc, char** argv) {
+	if (argc != 7) return Fail("landing_rescale <branch_code> <m_a> <r_t> <e_a> <e_t>");
+	const int64_t branch_code = std::strtoll(argv[2], nullptr, 10);
+	const int64_t m_a = std::strtoll(argv[3], nullptr, 10);
+	const int64_t r_t = std::strtoll(argv[4], nullptr, 10);
+	const int64_t e_a = std::strtoll(argv[5], nullptr, 10);
+	const int64_t e_t = std::strtoll(argv[6], nullptr, 10);
+	uint64_t sat_count = 0;
+	bool magnitude_exceeded = false;
+	const int64_t raw =
+	    LandingRescale(branch_code, m_a, r_t, e_a, e_t, &sat_count, &magnitude_exceeded);
+	std::printf("raw=%lld magnitude_exceeded=%d saturation_count=%llu\n",
+	            static_cast<long long>(raw), magnitude_exceeded ? 1 : 0,
+	            static_cast<unsigned long long>(sat_count));
+	return 0;
+}
+
+int CmdBiasReconcileWide(int argc, char** argv) {
+	if (argc != 6) return Fail("bias_reconcile_wide <b> <q_b> <r_a> <e_a>");
+	const int64_t b = std::strtoll(argv[2], nullptr, 10);
+	const int64_t q_b = std::strtoll(argv[3], nullptr, 10);
+	const int64_t r_a = std::strtoll(argv[4], nullptr, 10);
+	const int64_t e_a = std::strtoll(argv[5], nullptr, 10);
+	int64_t out = 0;
+	const bool fits = BiasReconcileWide(b, q_b, r_a, e_a, &out);
+	std::printf("out=%lld fits=%d\n", static_cast<long long>(out), fits ? 1 : 0);
+	return 0;
+}
+
+int CmdCombineCarriedScale(int argc, char** argv) {
+	if (argc != 6) return Fail("combine_carried_scale <a_m> <a_e> <b_m> <b_e>");
+	const CarriedScale a{std::strtoll(argv[2], nullptr, 10), std::strtoll(argv[3], nullptr, 10)};
+	const CarriedScale b{std::strtoll(argv[4], nullptr, 10), std::strtoll(argv[5], nullptr, 10)};
+	const CarriedScale r = CombineCarriedScale(a, b);
+	std::printf("m=%lld e=%lld\n", static_cast<long long>(r.m), static_cast<long long>(r.e));
+	return 0;
+}
+
+int CmdIExpScaleConstants(int argc, char** argv) {
+	if (argc != 7) return Fail("iexp_scale_constants <m> <e> <ln2_q> <b_q> <ca_q>");
+	const int64_t m = std::strtoll(argv[2], nullptr, 10);
+	const int64_t e = std::strtoll(argv[3], nullptr, 10);
+	const int64_t ln2_q = std::strtoll(argv[4], nullptr, 10);
+	const int64_t b_q = std::strtoll(argv[5], nullptr, 10);
+	const int64_t ca_q = std::strtoll(argv[6], nullptr, 10);
+	int64_t out_q_ln2 = 0, out_q_b = 0, out_q_c = 0;
+	const IExpScaleDomain domain =
+	    IExpScaleConstants(m, e, ln2_q, 30, b_q, 30, ca_q, 30, &out_q_ln2, &out_q_b, &out_q_c);
+	const char* domain_name = "kUnknown";
+	switch (domain) {
+		case IExpScaleDomain::kOk: domain_name = "kOk"; break;
+		case IExpScaleDomain::kBadCoefficient: domain_name = "kBadCoefficient"; break;
+		case IExpScaleDomain::kNegativeShift: domain_name = "kNegativeShift"; break;
+		case IExpScaleDomain::kNotRepresentable: domain_name = "kNotRepresentable"; break;
+	}
+	std::printf("domain=%s q_ln2=%lld q_b=%lld q_c=%lld\n", domain_name,
+	            static_cast<long long>(out_q_ln2), static_cast<long long>(out_q_b),
+	            static_cast<long long>(out_q_c));
+	return 0;
+}
+
+int CmdSoftmaxRowQ15(int argc, char** argv) {
+	if (argc < 6) return Fail("softmax_row_q15 <q_ln2> <q_b> <q_c> <n> <s0> ... <s(n-1)>");
+	const int64_t q_ln2 = std::strtoll(argv[2], nullptr, 10);
+	const int64_t q_b = std::strtoll(argv[3], nullptr, 10);
+	const int64_t q_c = std::strtoll(argv[4], nullptr, 10);
+	const size_t n = static_cast<size_t>(std::strtoull(argv[5], nullptr, 10));
+	if (argc != static_cast<int>(6 + n)) return Fail("softmax_row_q15: argument count != n");
+	std::vector<int64_t> scores(n);
+	for (size_t i = 0; i < n; ++i) scores[i] = std::strtoll(argv[6 + i], nullptr, 10);
+	std::vector<int64_t> probs(n);
+	const bool well_formed = SoftmaxRowQ15(scores.data(), n, q_ln2, q_b, q_c, probs.data());
+	std::printf("well_formed=%d probs=", well_formed ? 1 : 0);
+	for (size_t i = 0; i < n; ++i) {
+		std::printf("%lld%s", static_cast<long long>(probs[i]), (i + 1 < n) ? "," : "");
+	}
+	std::printf("\n");
+	return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -140,7 +244,9 @@ int main(int argc, char** argv) {
 		return Fail(
 		    "usage: t1691_primitive_probe "
 		    "<normalize_scale|dynamic_scale_reciprocal|max_abs_reduce_wide|"
-		    "requant_token_code_wide|clamp_rope_code|requant_chain_checked> ...");
+		    "requant_token_code_wide|clamp_rope_code|requant_chain_checked|"
+		    "rope_apply_pair|landing_rescale|bias_reconcile_wide|"
+		    "combine_carried_scale|iexp_scale_constants|softmax_row_q15> ...");
 	}
 	const char* cmd = argv[1];
 	if (std::strcmp(cmd, "normalize_scale") == 0) return CmdNormalizeScale(argc, argv);
@@ -149,6 +255,12 @@ int main(int argc, char** argv) {
 	if (std::strcmp(cmd, "requant_token_code_wide") == 0) return CmdRequantTokenCodeWide(argc, argv);
 	if (std::strcmp(cmd, "clamp_rope_code") == 0) return CmdClampRopeCode(argc, argv);
 	if (std::strcmp(cmd, "requant_chain_checked") == 0) return CmdRequantChainChecked(argc, argv);
+	if (std::strcmp(cmd, "rope_apply_pair") == 0) return CmdRopeApplyPair(argc, argv);
+	if (std::strcmp(cmd, "landing_rescale") == 0) return CmdLandingRescale(argc, argv);
+	if (std::strcmp(cmd, "bias_reconcile_wide") == 0) return CmdBiasReconcileWide(argc, argv);
+	if (std::strcmp(cmd, "combine_carried_scale") == 0) return CmdCombineCarriedScale(argc, argv);
+	if (std::strcmp(cmd, "iexp_scale_constants") == 0) return CmdIExpScaleConstants(argc, argv);
+	if (std::strcmp(cmd, "softmax_row_q15") == 0) return CmdSoftmaxRowQ15(argc, argv);
 	std::fprintf(stderr, "t1691_primitive_probe: unrecognized subcommand \"%s\"\n", cmd);
 	return 2;
 }
