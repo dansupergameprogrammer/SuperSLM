@@ -20,6 +20,22 @@
 // the int8 engine's own composition is inherently one-token-at-a-time), then
 // per row: int64 m, int64 e, then hidden_size int8 codes.
 //
+// Trailing section (T-1689, source-attribution design
+// Claude/Vitruvius/superslm-t1683-source-attribution-design-2026-08-02.md
+// S5): appended AFTER the existing 29-row body so every existing consumer of
+// this dump format keeps working unmodified (append-only convention) --
+// uint64 num_hidden_layers, then num_hidden_layers uint64 values: the
+// PER-LAYER, CUMULATIVE-COUNTER DELTA of SequenceLayerState::
+// kv_saturation_count (forward_sites.h) across the last prompt token's own
+// per-layer walk. Snapshot points: once after the embedding row is captured
+// (before the last token's own 28-layer walk begins -- prefill's own
+// saturation events, from every earlier prompt token, are excluded by this
+// baseline) and once after each RunLayerLoop(layer_budget=1) call below;
+// deltas[i] = snapshot[i+1] - snapshot[i], the count of NEW saturation
+// events (K and V landing writes combined, every head) at layer i+1
+// specifically. No production code changes: kv_saturation_count is a public
+// field RunLayerLoop already writes (design S2.1); this tool only reads it.
+//
 // On a self-check mismatch (production vs. manual-replay token id or logit
 // row), this tool exits non-zero with a loud diagnostic and writes no dump --
 // matching this codebase's existing fail-loud convention
@@ -74,7 +90,7 @@ struct LayerSnapshot {
 };
 
 bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_t hidden_size,
-               uint64_t prompt_fingerprint) {
+               uint64_t prompt_fingerprint, const std::vector<uint64_t>& saturation_deltas) {
 	std::ofstream f(path, std::ios::binary | std::ios::trunc);
 	if (!f) return false;
 	const uint64_t nrows = static_cast<uint64_t>(rows.size());
@@ -88,6 +104,14 @@ bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_
 		f.write(reinterpret_cast<const char*>(&row.e), sizeof(row.e));
 		f.write(reinterpret_cast<const char*>(row.codes.data()), row.codes.size());
 	}
+	// T-1689 trailer (append-only, S5/this file's header comment): the
+	// existing 29-row body above is byte-identical to what every prior
+	// consumer of this format already reads; this section is new bytes
+	// AFTER it, never a change to the body's own layout.
+	const uint64_t num_layers = static_cast<uint64_t>(saturation_deltas.size());
+	f.write(reinterpret_cast<const char*>(&num_layers), sizeof(num_layers));
+	f.write(reinterpret_cast<const char*>(saturation_deltas.data()),
+	        static_cast<std::streamsize>(saturation_deltas.size() * sizeof(uint64_t)));
 	return static_cast<bool>(f);
 }
 
@@ -314,6 +338,18 @@ int main(int argc, char** argv) {
 	    std::vector<int8_t>(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size),
 	    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
 
+	// T-1689 (design S5): the saturation-delta baseline, taken here -- AFTER
+	// the embedding row above, BEFORE the last token's own 28-layer walk
+	// starts. Every saturation event from prefill (every earlier prompt
+	// token's own 28-layer walk, above) is already reflected in
+	// trace_seq.kv_saturation_count at this point and is excluded from every
+	// delta below by this baseline subtraction -- the census counts ONLY
+	// the last token's own per-layer landing writes, matching design S5's
+	// "per-layer, cumulative" delta definition.
+	std::vector<uint64_t> saturation_deltas;
+	saturation_deltas.reserve(num_hidden_layers);
+	uint64_t prev_saturation_count = trace_seq.kv_saturation_count;
+
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
 		const SslmForwardStatus st =
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
@@ -328,6 +364,15 @@ int main(int argc, char** argv) {
 		rows.push_back(LayerSnapshot{
 		    std::vector<int8_t>(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size),
 		    trace_seq.hidden_scale.m, trace_seq.hidden_scale.e});
+		// T-1689: this layer's own new saturation events -- the delta since
+		// the previous snapshot (the baseline above, or the previous
+		// iteration's own snapshot). kv_saturation_count is never reset by
+		// RunLayerLoop (design S2.1), so this subtraction is exactly the
+		// count of events NEW at this layer, never a re-count of an earlier
+		// one.
+		const uint64_t cur_saturation_count = trace_seq.kv_saturation_count;
+		saturation_deltas.push_back(cur_saturation_count - prev_saturation_count);
+		prev_saturation_count = cur_saturation_count;
 	}
 
 	// --- Step 3.5 (N1 remedy, D-SLM705; design S4.2 step 6's own shape --------
@@ -501,13 +546,19 @@ int main(int argc, char** argv) {
 	            "logits)\n",
 	            trace_token, vocab_size_z);
 
-	// --- Step 5 (design S4.1 step 5): dump. -----------------------------------
+	// --- Step 5 (design S4.1 step 5, T-1689 trailer extension): dump. --------
 	const uint64_t fingerprint = Fnv1a64(prompt);
-	if (!WriteDump(dump_path.c_str(), rows, static_cast<uint64_t>(hidden_size), fingerprint)) {
+	if (!WriteDump(dump_path.c_str(), rows, static_cast<uint64_t>(hidden_size), fingerprint,
+	               saturation_deltas)) {
 		std::fprintf(stderr, "FAILED at stage=dump_write: could not write \"%s\"\n", dump_path.c_str());
 		return 1;
 	}
-	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, prompt_fingerprint=0x%016llX -> %s\n",
-	            rows.size(), hidden_size, static_cast<unsigned long long>(fingerprint), dump_path.c_str());
+	uint64_t total_saturation = 0;
+	for (uint64_t d : saturation_deltas) total_saturation += d;
+	std::printf("layer_trace_dumped: %zu rows x %zu hidden_size, prompt_fingerprint=0x%016llX, "
+	            "%zu kv_saturation deltas (total=%llu) -> %s\n",
+	            rows.size(), hidden_size, static_cast<unsigned long long>(fingerprint),
+	            saturation_deltas.size(), static_cast<unsigned long long>(total_saturation),
+	            dump_path.c_str());
 	return 0;
 }
