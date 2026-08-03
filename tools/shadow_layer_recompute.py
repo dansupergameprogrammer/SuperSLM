@@ -872,6 +872,73 @@ def attn_ctx_shadow_codes(
     return requant_chain_reference(ctx_wide)
 
 
+def attn_ctx_shadow_codes_from_real_landing_and_rotation(
+    q_rot_real, k_current_rot_real, v_current_real,
+    q_scale_m: int, q_scale_e: int, position: int, width: int, layer,
+    real_k_prior: np.ndarray, real_v_prior: np.ndarray,
+    num_heads: int, num_kv_heads: int, head_dim: int,
+) -> tuple[str, np.ndarray | None]:
+    """The D-SLM749 closure of `attn_ctx_shadow_codes`'s own named limit
+    (D-SLM745/751): the SAME softmax/GEMM/funnel composition
+    (forward_sites.cpp:1269-1424), from the point immediately after Q's own
+    RoPE rotation and the current position's own K/V landing+rotation --
+    but those two steps are no longer this function's own reproduction.
+    `q_rot_real` (shape `[num_heads, head_dim]`), `k_current_rot_real`
+    (shape `[num_kv_heads, head_dim]`), and `v_current_real` (shape
+    `[num_kv_heads, head_dim]`) are the real engine's own captured values,
+    read from the site-dump's `rope_apply.q.hN`/`rope_apply.k.hN`
+    (post-rotation)/`kv_landing.v.hN` (pre-rotation, V is never rotated)
+    records (D-SLM749's production change makes all three observable for
+    the first time). Every input to every comparison this function's own
+    caller makes is therefore the real engine's own captured value, removing
+    the ambiguity `attn_ctx_shadow_codes` alone carries -- exactly like
+    q_proj/o_proj/attn_residual already were (D-SLM751)."""
+    group = num_heads // num_kv_heads
+    ctx_wide = np.empty(num_heads * head_dim, dtype=object)
+    khead_cache: dict[int, tuple[int, int, int]] = {}
+
+    for h in range(num_heads):
+        kv_head = h // group
+        q_rot = q_rot_real[h]
+
+        if kv_head not in khead_cache:
+            if not (INT32_MIN <= q_scale_m <= INT32_MAX):
+                return "CarriedScaleMantissaOutOfDomain", None
+            sm_khead_m = int(layer.iexp_softmax_khead_m[kv_head])
+            sm_khead_e = int(layer.iexp_softmax_khead_e[kv_head])
+            if not (INT32_MIN <= sm_khead_m <= INT32_MAX):
+                return "CarriedScaleMantissaOutOfDomain", None
+            sm_m, sm_e = combine_carried_scale_reference(q_scale_m, q_scale_e, sm_khead_m, sm_khead_e)
+            if not (INT32_MIN <= sm_m <= INT32_MAX):
+                return "CarriedScaleMantissaOutOfDomain", None
+            domain, triple = iexp_scale_constants_reference(
+                sm_m, sm_e, kIExpLn2Q, kIExpBQ, kIExpCaQ)
+            if domain != "kOk":
+                return "IExpScaleDerivationOutOfDomain", None
+            khead_cache[kv_head] = triple
+        q_ln2, q_b, q_c = khead_cache[kv_head]
+
+        gate = check_softmax_row_width_domain_reference(q_b, q_c, width)
+        if gate != "Ok":
+            return gate, None
+
+        k_rows = [real_k_prior[pos, kv_head] for pos in range(width - 1)] + [k_current_rot_real[kv_head]]
+        scores = [gemm_int8_dot_reference(q_rot, k_row) for k_row in k_rows]
+
+        well_formed, probs = softmax_row_q15_reference(scores, width, q_ln2, q_b, q_c)
+        if not well_formed:
+            return "SoftmaxKernelRefusedAfterGateAccepted", None
+
+        v_rows = [real_v_prior[pos, kv_head] for pos in range(width - 1)] + [v_current_real[kv_head]]
+        ctx_acc = gemm_prob_q15_accumulate_reference(probs, v_rows, head_dim)
+
+        for d in range(head_dim):
+            ctx_wide[h * head_dim + d] = apply_weight_scale_fold_reference(
+                ctx_acc[d], int(layer.ctx_fold[h, 0]), int(layer.ctx_fold[h, 1]), int(layer.ctx_fold[h, 2]))
+
+    return requant_chain_reference(ctx_wide)
+
+
 def residual_reconcile_shadow_codes(
     branch_codes, branch_scale_m: int, branch_scale_e: int,
     stream_codes, stream_scale_m: int, stream_scale_e: int, hidden_size: int,

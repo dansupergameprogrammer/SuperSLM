@@ -132,3 +132,58 @@ def test_kv_landing_shadow_codes_matches_the_real_engine_k_and_v_at_the_fixture(
         f"kv_landing.k.h0 mismatch at the fixture: shadow={k_shadow[0].tolist()} real={k_real.codes.tolist()}")
     assert np.array_equal(v_shadow[0], v_real.codes), (
         f"kv_landing.v.h0 mismatch at the fixture: shadow={v_shadow[0].tolist()} real={v_real.codes.tolist()}")
+
+
+@_driver_skip
+def test_attn_ctx_shadow_codes_from_real_landing_and_rotation_matches_the_real_engine_at_the_fixture(
+        tmp_path):
+    """D-SLM749's own closure of `attn_ctx_shadow_codes`'s named limit
+    (D-SLM745/751): `attn_ctx_shadow_codes_from_real_landing_and_rotation`,
+    fed the REAL captured `rope_apply.q.h0`/`rope_apply.k.h0` (post-rotation)
+    and `kv_landing.v.h0` (pre-rotation, V is never rotated) codes -- never
+    this module's own `rope_apply_site_reference`/`kv_landing_shadow_codes`
+    reproduction -- reproduces the real `attn_ctx` codes exactly. Every input
+    to this comparison is now the real engine's own captured value."""
+    tok_path, model_path = FIX.write_fixture(tmp_path)
+    dump_path = str(tmp_path / "closedctx.dump")
+    site_dump_path = str(tmp_path / "closedctx.sitedump")
+    proc = subprocess.run(
+        [_LAYER_TRACE_DRIVER, str(model_path), str(tok_path), FIX.PROMPT, "--dump", dump_path,
+         "--site-dump", site_dump_path],
+        capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, f"driver failed: {proc.stdout}\n{proc.stderr}"
+
+    base = load_int8_layer_dump(dump_path)
+    records, kv_records = S.load_site_dump_full(site_dump_path)
+    by_site = {r.site: r for r in records}
+    kv_by_site = {r.site: r for r in kv_records}
+    artifact = read_artifact(str(model_path))
+    trailer = S.load_kv_context_trailer(dump_path, after_offset=_saturation_trailer_end(dump_path, base))
+
+    layer_index = 4
+    layer = artifact.layers[layer_index]
+    num_heads = artifact.config["num_attention_heads"]
+    num_kv_heads = artifact.config["num_key_value_heads"]
+    head_dim = artifact.config["head_dim"]
+    position = trailer.context_length
+    width = position + 1
+    real_k_prior = trailer.k_codes[0]
+    real_v_prior = trailer.v_codes[0]
+
+    q_rec = by_site[f"layer{layer_index}.q_proj.requant"]
+    q_rot_real = np.stack(
+        [by_site[f"layer{layer_index}.rope_apply.q.h{h}"].codes for h in range(num_heads)])
+    group = num_heads // num_kv_heads
+    k_current_rot_real = np.stack(
+        [by_site[f"layer{layer_index}.rope_apply.k.h{kv * group}"].codes for kv in range(num_kv_heads)])
+    v_current_real = np.stack(
+        [kv_by_site[f"layer{layer_index}.kv_landing.v.h{kv}"].codes for kv in range(num_kv_heads)])
+
+    status, ctx_shadow = S.attn_ctx_shadow_codes_from_real_landing_and_rotation(
+        q_rot_real, k_current_rot_real, v_current_real, q_rec.m_out, q_rec.e_out, position, width,
+        layer, real_k_prior, real_v_prior, num_heads, num_kv_heads, head_dim)
+    ctx_real = by_site[f"layer{layer_index}.attn_ctx"]
+    assert status == "Ok"
+    assert np.array_equal(ctx_shadow, ctx_real.codes), (
+        f"attn_ctx (closed re-drive) mismatch at the fixture: "
+        f"shadow={ctx_shadow.tolist() if ctx_shadow is not None else None} real={ctx_real.codes.tolist()}")
