@@ -60,6 +60,31 @@
 // row), this tool exits non-zero with a loud diagnostic and writes no dump --
 // matching this codebase's existing fail-loud convention
 // (sslm_generate.cpp's own "FAILED at stage=..." lines).
+//
+// Third, OPTIONAL trailing capability (T-1691, build-sequencing session
+// 2026-08-03, Brunel): `--site-dump <path>`, a SEPARATE output file (never
+// appended to the dump above -- the existing 29-row body and both existing
+// trailers are byte-for-byte unaffected by this flag, present or absent).
+// Installs a trace hook (include/superslm/trace_hook.h's own
+// SslmSetTraceHook/SslmTraceHookState -- an EXISTING public seam every
+// RequantChainChecked call site already threads a `trace_hook_state`
+// parameter to and emits a record through, unconditionally, when a hook is
+// installed; this tool is the first caller to actually install one). No
+// production code changes: this is a tool-side caller of an
+// already-shipped, already-wired public API
+// (src/forward/checked_chain_funnel.cpp:341-352 already builds and emits
+// the SAME record this reads). Captures every SslmChainTraceRecord (site
+// name, the wide row AS READ AT THE SITE -- the site's own real input --
+// and the site's own real output codes) for the dump-row band this file's
+// header now also documents: {5, 26, 27, 28} by default (the layer-5
+// control plus the design's own divergence band, T-1691's build-sequencing
+// scope this session -- narrower than the KV-trailer's own {5,21..28},
+// which this flag does not touch or share state with). Filtering is done
+// by TOGGLING hook installation around each target row's own
+// RunLayerLoop(1) call -- SslmSetTraceHook(state, nullptr, nullptr) between
+// target rows -- rather than by inspecting the record's own site string,
+// so a record can never leak from a non-target layer's own call even if a
+// site name were ever reused across layers.
 
 #include <cstdint>
 #include <cstdio>
@@ -73,6 +98,7 @@
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
 #include "superslm/tokenizer.h"
+#include "superslm/trace_hook.h"
 #include "sslm_marshal.h"
 
 using namespace superslm;
@@ -109,6 +135,90 @@ struct LayerSnapshot {
 	int64_t m;
 	int64_t e;
 };
+
+// --- T-1691 site-dump capture (Brunel, build-sequencing session, per-site
+// input/output for the gating step this session's own commission opened
+// with) -------------------------------------------------------------------
+
+// One captured SslmChainTraceRecord, copied out of the hook call's own
+// non-owning spans -- the record's own header comment states those spans
+// are "valid only for the duration of the hook call that carries them; a
+// hook that needs the data after returning copies it." This struct is that
+// copy.
+struct CapturedSite {
+	std::string site;
+	std::vector<int64_t> x_int;  // the wide row, as read at the site (input)
+	std::vector<int8_t> codes;   // the site's own output codes
+	int64_t d_prime = 0;
+	int64_t dn = 0;
+	int32_t s = 0;
+	int64_t r = 0;
+	int64_t m_out = 0;
+	int64_t e_out = 0;
+};
+
+struct SiteCaptureContext {
+	bool active = false;  // toggled by the caller around each target row's own call
+	std::vector<CapturedSite> records;
+};
+
+// The hook callback (SslmTraceHookFn's own signature, trace_hook.h). Only
+// copies a record when `active` -- set by the caller immediately before and
+// after each target row's own RunLayerLoop(1) call, so a record from a
+// non-target layer is never appended even though the hook stays installed
+// throughout (installation is a per-tool-run constant; activity is
+// per-layer). Read-only with respect to the record: no field is written
+// back, matching trace_hook.h's own "read-only by construction" contract.
+void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* /*kv*/,
+                      void* user) {
+	auto* ctx = static_cast<SiteCaptureContext*>(user);
+	if (!ctx->active || chain == nullptr) return;
+	CapturedSite rec;
+	rec.site = std::string(chain->site);
+	rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
+	rec.codes.assign(chain->codes.begin(), chain->codes.end());
+	rec.d_prime = chain->d_prime;
+	rec.dn = chain->dn;
+	rec.s = chain->s;
+	rec.r = chain->r;
+	rec.m_out = chain->m_out;
+	rec.e_out = chain->e_out;
+	ctx->records.push_back(std::move(rec));
+}
+
+// Format: uint64 num_records, then per record: uint64 site_name_len, the
+// name's own bytes, uint64 n_x (x_int's own length), n_x int64 x_int
+// values, uint64 n_codes (codes' own length -- not assumed equal to n_x;
+// a projection site's own output width differs from its input width),
+// n_codes int8 codes, then int64 d_prime, int64 dn, int32 s, int64 r,
+// int64 m_out, int64 e_out. A self-contained file, never appended to or
+// read alongside the dump above.
+bool WriteSiteDump(const char* path, const std::vector<CapturedSite>& records) {
+	std::ofstream f(path, std::ios::binary | std::ios::trunc);
+	if (!f) return false;
+	const uint64_t n = static_cast<uint64_t>(records.size());
+	f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+	for (const CapturedSite& rec : records) {
+		const uint64_t name_len = static_cast<uint64_t>(rec.site.size());
+		f.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+		f.write(rec.site.data(), static_cast<std::streamsize>(name_len));
+		const uint64_t n_x = static_cast<uint64_t>(rec.x_int.size());
+		f.write(reinterpret_cast<const char*>(&n_x), sizeof(n_x));
+		f.write(reinterpret_cast<const char*>(rec.x_int.data()),
+		        static_cast<std::streamsize>(n_x * sizeof(int64_t)));
+		const uint64_t n_codes = static_cast<uint64_t>(rec.codes.size());
+		f.write(reinterpret_cast<const char*>(&n_codes), sizeof(n_codes));
+		f.write(reinterpret_cast<const char*>(rec.codes.data()),
+		        static_cast<std::streamsize>(n_codes));
+		f.write(reinterpret_cast<const char*>(&rec.d_prime), sizeof(rec.d_prime));
+		f.write(reinterpret_cast<const char*>(&rec.dn), sizeof(rec.dn));
+		f.write(reinterpret_cast<const char*>(&rec.s), sizeof(rec.s));
+		f.write(reinterpret_cast<const char*>(&rec.r), sizeof(rec.r));
+		f.write(reinterpret_cast<const char*>(&rec.m_out), sizeof(rec.m_out));
+		f.write(reinterpret_cast<const char*>(&rec.e_out), sizeof(rec.e_out));
+	}
+	return static_cast<bool>(f);
+}
 
 bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_t hidden_size,
                uint64_t prompt_fingerprint, const std::vector<uint64_t>& saturation_deltas,
@@ -165,9 +275,12 @@ int main(int argc, char** argv) {
 	const std::string tokenizer_path = argv[2];
 	const std::string prompt = argv[3];
 	std::string dump_path;
+	std::string site_dump_path;
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
 			dump_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--site-dump") == 0 && i + 1 < argc) {
+			site_dump_path = argv[++i];
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -401,12 +514,47 @@ int main(int argc, char** argv) {
 	std::vector<int8_t> kv_trailer_codes;
 	uint64_t actual_kv_trailer_elements = 0;
 
+	// T-1691 site-dump (this session, gating step): the divergence band plus
+	// the layer-5 control -- Dan's own stated scope for this build-
+	// sequencing pass, independent of (and narrower than) the KV trailer's
+	// own {5,21..28} band above. `trace_hook_state` is installed once (if
+	// requested) and stays installed for the tool's whole run; `site_ctx`'s
+	// own `active` flag is what actually gates which layers' records reach
+	// `site_ctx.records`, toggled around each target row's own call below.
+	constexpr uint32_t kSiteDumpTargetRows[] = {5, 26, 27, 28};
+	auto IsSiteDumpTargetRow = [&](uint32_t row_number) {
+		for (uint32_t target : kSiteDumpTargetRows) {
+			if (target == row_number) return true;
+		}
+		return false;
+	};
+	SiteCaptureContext site_ctx;
+	SslmTraceHookState trace_hook_state;
+	const bool site_dump_requested = !site_dump_path.empty();
+	if (site_dump_requested) {
+		SslmSetTraceHook(trace_hook_state, &SiteCaptureHook, &site_ctx);
+	}
+
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
-		const SslmForwardStatus st =
-		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
-		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
-		                 context_cap, model_view.rope_tables, trace_workspace.data(),
-		                 trace_workspace.size());
+		// This iteration's own dump row number, computed here (rather than
+		// after the call, as the KV-trailer block below still does) because
+		// the site-dump capture must be toggled ON before RunLayerLoop runs
+		// this layer's own sites and OFF immediately after -- a record from
+		// any other layer must never reach `site_ctx.records`, whether or
+		// not this row is a KV-trailer target too.
+		const uint32_t site_dump_row_number = step + 1;
+		if (site_dump_requested) {
+			site_ctx.active = IsSiteDumpTargetRow(site_dump_row_number);
+		}
+		const SslmForwardStatus st = RunLayerLoop(
+		    trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
+		    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size, context_cap,
+		    model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
+		    /*site_prefix=*/{}, /*token_index=*/0,
+		    site_dump_requested ? &trace_hook_state : nullptr);
+		if (site_dump_requested) {
+			site_ctx.active = false;
+		}
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_layer_step: layer=%u status=%s\n", step,
 			             SslmForwardStatusName(st));
@@ -683,5 +831,21 @@ int main(int argc, char** argv) {
 	            kv_trailer_rows_captured.size(), sizeof(kKvTrailerTargetRows) / sizeof(uint32_t),
 	            static_cast<long long>(kv_trailer_context_length),
 	            static_cast<unsigned long long>(actual_kv_trailer_elements), dump_path.c_str());
+
+	// T-1691 site-dump (this session): written only when requested, to its
+	// own separate file, after the self-check above has already confirmed
+	// the trace walk agrees with production -- a site-dump is never written
+	// from a run whose own hidden-state walk was not itself already proven
+	// correct.
+	if (site_dump_requested) {
+		if (!WriteSiteDump(site_dump_path.c_str(), site_ctx.records)) {
+			std::fprintf(stderr, "FAILED at stage=site_dump_write: could not write \"%s\"\n",
+			             site_dump_path.c_str());
+			return 1;
+		}
+		std::printf("site_dump_written: %zu records across %zu target rows -> %s\n",
+		            site_ctx.records.size(), sizeof(kSiteDumpTargetRows) / sizeof(uint32_t),
+		            site_dump_path.c_str());
+	}
 	return 0;
 }
