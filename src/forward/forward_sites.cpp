@@ -450,7 +450,8 @@ int64_t ClampRopeCode(int64_t raw) {
 
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
                                  int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row) {
+                                 int8_t* out_row, std::string_view site, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state) {
 	// §6.2 step 3 / §11 S3.3's own gate line (D-SLM376): CheckPositionOverCap
 	// is the site's documented FIRST ACT, and no ROP1 tensor is read before
 	// it returns. On rejection, `out_row` stays exactly as the caller left
@@ -543,6 +544,33 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 		const RopePair rotated = RopeApplyPair(x, y, cos_q30, sin_q30);
 		out_row[2 * i] = static_cast<int8_t>(ClampRopeCode(rotated.x));
 		out_row[2 * i + 1] = static_cast<int8_t>(ClampRopeCode(rotated.y));
+	}
+
+	// D-SLM749 (T-1691 site kind 4/4): RoPE's own instrumentation seam.
+	// Unlike every other site in this file, RoPE has no `RequantChainChecked`
+	// step -- there is no funnel call to attach an emission to
+	// (checked_chain_funnel.cpp:333-352 is where every other site's record is
+	// built). This block is the whole of that gap's closure: it runs
+	// strictly after `out_row` is fully written by the loop above, reads only
+	// `row` (this call's own pre-rotation input) and `out_row` (the
+	// post-rotation output the loop just produced), writes neither, and does
+	// not run at all when no hook is installed -- so `out_row` and the
+	// returned status are identical whether or not a hook is installed
+	// (§10.3's instrumentation axis). `d_prime`/`dn`/`s`/`r`/`m_out`/`e_out`
+	// are left at `SslmChainTraceRecord`'s own default-constructed zero:
+	// RoPE performs no quantization step and carries no output scale, so
+	// there is nothing real to report in those fields.
+	if (trace_hook_state != nullptr && SslmTraceHookInstalled(*trace_hook_state)) {
+		std::vector<int64_t> x_int(head_dim);
+		for (size_t i = 0; i < head_dim; ++i) {
+			x_int[i] = static_cast<int64_t>(row[i]);
+		}
+		SslmChainTraceRecord record;
+		record.site = site;
+		record.token_index = token_index;
+		record.x_int = std::span<const int64_t>(x_int.data(), x_int.size());
+		record.codes = std::span<const int8_t>(out_row, head_dim);
+		SslmEmitChainTrace(*trace_hook_state, record);
 	}
 
 	return SslmForwardStatus::Ok;
@@ -1263,6 +1291,44 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
 					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
 				}
+				// D-SLM749 (T-1691 site kind 4/4): the pre-rotation landed
+				// value, captured here because it is overwritten in place
+				// below once RoPE rotates k_row (D-SLM745's own named gap --
+				// "the K/V store's pre-rotation write is overwritten by the
+				// post-rotation write within the same opaque
+				// RunLayerLoop(layer_budget=1) call, before the tool regains
+				// control"). v_row is never rotated, so this is also its own
+				// final landed value; captured for the same head/call for
+				// symmetry with k_row and because SslmEmitKvLandingTrace
+				// (trace_hook.h) is the one seam declared for both. Runs
+				// strictly after the loop above has finished writing
+				// k_row/v_row for this head, reads only what that loop
+				// already produced, writes neither, and does not run at all
+				// when no hook is installed (§10.3's instrumentation axis,
+				// matching every other emission in this file).
+				if (trace_hook_state != nullptr && SslmTraceHookInstalled(*trace_hook_state)) {
+					SslmKvLandingTraceRecord k_record;
+					k_record.site =
+					    LayerSite(site_prefix, l, ("kv_landing.k.h" + std::to_string(h)).c_str());
+					k_record.token_index = token_index;
+					k_record.head = static_cast<uint32_t>(h);
+					k_record.x_int = std::span<const int64_t>(kacc.data() + h * head_dim, head_dim);
+					k_record.m_in = normed_scale.m;
+					k_record.e_in = normed_scale.e;
+					k_record.codes = std::span<const int8_t>(k_row, head_dim);
+					SslmEmitKvLandingTrace(*trace_hook_state, k_record);
+
+					SslmKvLandingTraceRecord v_record;
+					v_record.site =
+					    LayerSite(site_prefix, l, ("kv_landing.v.h" + std::to_string(h)).c_str());
+					v_record.token_index = token_index;
+					v_record.head = static_cast<uint32_t>(h);
+					v_record.x_int = std::span<const int64_t>(vacc.data() + h * head_dim, head_dim);
+					v_record.m_in = normed_scale.m;
+					v_record.e_in = normed_scale.e;
+					v_record.codes = std::span<const int8_t>(v_row, head_dim);
+					SslmEmitKvLandingTrace(*trace_hook_state, v_record);
+				}
 			}
 		}
 
@@ -1272,8 +1338,14 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// real per-head layout would read/write the wrong head once
 		// `context_cap > 1`.
 		for (size_t h = 0; h < num_heads; ++h) {
+			// D-SLM749 (T-1691 site kind 4/4): `site`/`token_index`/
+			// `trace_hook_state` forwarded so this call's own isolated
+			// rotation is observable, per head, distinct from the K
+			// rotation below.
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
-			                   rope_tables, q_rot.data() + h * head_dim);
+			                   rope_tables, q_rot.data() + h * head_dim,
+			                   LayerSite(site_prefix, l, ("rope_apply.q.h" + std::to_string(h)).c_str()),
+			                   token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
@@ -1284,7 +1356,9 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
-			                   k_rot.data() + h * head_dim);
+			                   k_rot.data() + h * head_dim,
+			                   LayerSite(site_prefix, l, ("rope_apply.k.h" + std::to_string(h)).c_str()),
+			                   token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each

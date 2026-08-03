@@ -298,10 +298,25 @@ int64_t ClampRopeCode(int64_t raw);
 // Claude/Curie/fa3189a-s3.3-rope-site-and-c32-softmax-remediation-test-
 // design-2026-07-28.md's remediation suite (the null-tensor and
 // extent-exceeded cells for Critical 1 and Critical 2).
+//
+// `site`/`token_index`/`trace_hook_state` (D-SLM749, T-1691 site kind 4/4):
+// the same trailing triple every other site in this header already carries,
+// added here so RoPE's own isolated contribution -- otherwise unobservable,
+// because it has no `RequantChainChecked` step to attach an emission to
+// (D-SLM745) -- can be traced. Defaulted (`""`, `0`, `nullptr`) so every
+// existing caller that omits them compiles and behaves unchanged, matching
+// `RunLayerLoop`'s own optional `trace_hook_state` parameter. Observation
+// only: the emission runs strictly after `out_row` is fully written, reads
+// only `row`/`out_row`, writes neither, and does not run at all when no hook
+// is installed -- `out_row` and the returned status are identical whether or
+// not a hook is installed (§10.3's instrumentation axis, the same guarantee
+// `RequantChainChecked`'s own emission already carries).
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row);
+                                 int8_t* out_row, std::string_view site = "",
+                                 size_t token_index = 0,
+                                 SslmTraceHookState* trace_hook_state = nullptr);
 
 // C34's SwiGLU activation site (§5.4, §6.3 step 11; T-1345). The declaration
 // and a stub were landed first by the test-design pass that authored this

@@ -1342,11 +1342,30 @@ class SiteRecord:
     e_out: int
 
 
-def load_site_dump(path) -> list[SiteRecord]:
-    """Reads `WriteSiteDump`'s own format (tools/sslm_layer_trace.cpp): uint64
-    num_records, then per record: uint64 name_len, the name's own bytes,
-    uint64 n_x, n_x int64 x_int values, uint64 n_codes, n_codes int8 codes,
-    int64 d_prime, int64 dn, int32 s, int64 r, int64 m_out, int64 e_out."""
+@dataclass
+class KvLandingRecord:
+    """The K/V-landing sibling of SiteRecord (D-SLM749, T-1691 RoPE site-
+    comparison session): one `SslmKvLandingTraceRecord` (trace_hook.h), read
+    back from the site-dump's own SECOND section (`WriteSiteDump`'s own
+    K/V-landing block, appended after the chain-record section)."""
+    site: str  # e.g. "layer26.kv_landing.k.h0" -- 0-indexed layer, per-head
+    head: int
+    x_int: np.ndarray  # int64, the head's folded (kacc/vacc) segment
+    m_in: int
+    e_in: int
+    codes: np.ndarray  # int8, the pre-rotation landed codes
+
+
+def load_site_dump_full(path) -> tuple[list[SiteRecord], list[KvLandingRecord]]:
+    """Reads `WriteSiteDump`'s own two-section format (tools/sslm_layer_trace.
+    cpp): section 1 (chain records) -- uint64 num_records, then per record:
+    uint64 name_len, the name's own bytes, uint64 n_x, n_x int64 x_int
+    values, uint64 n_codes, n_codes int8 codes, int64 d_prime, int64 dn,
+    int32 s, int64 r, int64 m_out, int64 e_out. Section 2 (K/V-landing
+    records, D-SLM749) -- uint64 num_kv_records, then per record: uint64
+    name_len, the name's own bytes, uint32 head, uint64 n_x, n_x int64 x_int
+    values, int64 m_in, int64 e_in, uint64 n_codes, n_codes int8 codes.
+    Returns (chain_records, kv_landing_records)."""
     data = Path(path).read_bytes()
     off = 0
     (n,) = struct.unpack_from("<Q", data, off)
@@ -1369,6 +1388,40 @@ def load_site_dump(path) -> list[SiteRecord]:
         off += 8 + 8 + 4 + 8 + 8 + 8
         records.append(SiteRecord(site=site, x_int=x_int, codes=codes, d_prime=d_prime, dn=dn, s=s, r=r,
                                    m_out=m_out, e_out=e_out))
+    (n_kv,) = struct.unpack_from("<Q", data, off)
+    off += 8
+    kv_records = []
+    for _ in range(n_kv):
+        (name_len,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        site = data[off : off + name_len].decode()
+        off += name_len
+        (head,) = struct.unpack_from("<I", data, off)
+        off += 4
+        (n_x,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        x_int = np.array(struct.unpack_from(f"<{n_x}q", data, off), dtype=np.int64)
+        off += 8 * n_x
+        m_in, e_in = struct.unpack_from("<qq", data, off)
+        off += 16
+        (n_codes,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        codes = np.frombuffer(data, dtype=np.int8, count=n_codes, offset=off).copy()
+        off += n_codes
+        kv_records.append(KvLandingRecord(site=site, head=head, x_int=x_int, m_in=m_in, e_in=e_in,
+                                           codes=codes))
     if off != len(data):
-        raise ValueError(f"load_site_dump: {len(data) - off} trailing bytes beyond the declared records")
+        raise ValueError(f"load_site_dump_full: {len(data) - off} trailing bytes beyond the declared "
+                          f"records")
+    return records, kv_records
+
+
+def load_site_dump(path) -> list[SiteRecord]:
+    """Backward-compatible wrapper over `load_site_dump_full`: returns only
+    the chain-record section, matching this function's own pre-D-SLM749
+    contract -- every caller that predates the K/V-landing section (the
+    RMSNorm/attention-interior/MLP drives and their own test suites)
+    continues to read exactly what it read before, unchanged."""
+    records, _kv_records = load_site_dump_full(path)
+    return records
     return records

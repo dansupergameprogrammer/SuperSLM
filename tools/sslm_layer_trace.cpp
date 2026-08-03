@@ -85,7 +85,25 @@
 // target rows -- rather than by inspecting the record's own site string,
 // so a record can never leak from a non-target layer's own call even if a
 // site name were ever reused across layers.
-
+//
+// Fourth, OPTIONAL trailing capability (T-1691, RoPE site-comparison session,
+// Brunel, D-SLM749): the site-dump's own chain-record section now also
+// carries "rope_apply.q.hN"/"rope_apply.k.hN" records -- RopeApplySite gained
+// a trace-hook parameter (the D-SLM749 production-code change) and emits
+// through the SAME SslmChainTraceRecord/SslmEmitChainTrace seam every other
+// site already uses, so this tool's existing SiteCaptureHook picks them up
+// with no change of its own. What DOES need a change here: the K/V-landing
+// sibling record type, SslmKvLandingTraceRecord (trace_hook.h) -- RunLayerLoop
+// now emits one per head per token for both k_proj and v_proj's own
+// PRE-ROTATION landed value (the other half of D-SLM749), through
+// SslmEmitKvLandingTrace, which this file's hook previously discarded
+// (`const SslmKvLandingTraceRecord* /*kv*/`). The site-dump file gains a
+// SECOND section, appended after the existing chain-record section (append-
+// only, matching the existing chain/T-1689/T-1691-trailer convention): uint64
+// num_kv_records, then per record: the same name/x_int/codes shape as a chain
+// record, plus uint32 head, int64 m_in, int64 e_in (trace_hook.h's own
+// SslmKvLandingTraceRecord fields) in place of d_prime/dn/s/r/m_out/e_out --
+// no code changed in the existing chain-record section's own read/write path.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -157,9 +175,23 @@ struct CapturedSite {
 	int64_t e_out = 0;
 };
 
+// The K/V-landing sibling of CapturedSite (D-SLM749, T-1691 RoPE site-
+// comparison session): one captured SslmKvLandingTraceRecord, copied out of
+// the hook call's own non-owning spans for the same "valid only for the
+// duration of the hook call" reason CapturedSite exists.
+struct CapturedKvLanding {
+	std::string site;
+	uint32_t head = 0;
+	std::vector<int64_t> x_int;  // the head's folded segment (kacc/vacc), as landed
+	int64_t m_in = 0;
+	int64_t e_in = 0;
+	std::vector<int8_t> codes;   // the pre-rotation landed codes
+};
+
 struct SiteCaptureContext {
 	bool active = false;  // toggled by the caller around each target row's own call
 	std::vector<CapturedSite> records;
+	std::vector<CapturedKvLanding> kv_records;
 };
 
 // The hook callback (SslmTraceHookFn's own signature, trace_hook.h). Only
@@ -169,21 +201,36 @@ struct SiteCaptureContext {
 // throughout (installation is a per-tool-run constant; activity is
 // per-layer). Read-only with respect to the record: no field is written
 // back, matching trace_hook.h's own "read-only by construction" contract.
-void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* /*kv*/,
+// `chain`/`kv` are never both non-null (trace_hook.h's own "exactly one of
+// the two record pointers non-null per call" contract) -- the two branches
+// below are not mutually exclusive by accident, they mirror that contract.
+void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* kv,
                       void* user) {
 	auto* ctx = static_cast<SiteCaptureContext*>(user);
-	if (!ctx->active || chain == nullptr) return;
-	CapturedSite rec;
-	rec.site = std::string(chain->site);
-	rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
-	rec.codes.assign(chain->codes.begin(), chain->codes.end());
-	rec.d_prime = chain->d_prime;
-	rec.dn = chain->dn;
-	rec.s = chain->s;
-	rec.r = chain->r;
-	rec.m_out = chain->m_out;
-	rec.e_out = chain->e_out;
-	ctx->records.push_back(std::move(rec));
+	if (!ctx->active) return;
+	if (chain != nullptr) {
+		CapturedSite rec;
+		rec.site = std::string(chain->site);
+		rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
+		rec.codes.assign(chain->codes.begin(), chain->codes.end());
+		rec.d_prime = chain->d_prime;
+		rec.dn = chain->dn;
+		rec.s = chain->s;
+		rec.r = chain->r;
+		rec.m_out = chain->m_out;
+		rec.e_out = chain->e_out;
+		ctx->records.push_back(std::move(rec));
+	}
+	if (kv != nullptr) {
+		CapturedKvLanding rec;
+		rec.site = std::string(kv->site);
+		rec.head = kv->head;
+		rec.x_int.assign(kv->x_int.begin(), kv->x_int.end());
+		rec.m_in = kv->m_in;
+		rec.e_in = kv->e_in;
+		rec.codes.assign(kv->codes.begin(), kv->codes.end());
+		ctx->kv_records.push_back(std::move(rec));
+	}
 }
 
 // Format: uint64 num_records, then per record: uint64 site_name_len, the
@@ -191,9 +238,17 @@ void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTrace
 // values, uint64 n_codes (codes' own length -- not assumed equal to n_x;
 // a projection site's own output width differs from its input width),
 // n_codes int8 codes, then int64 d_prime, int64 dn, int32 s, int64 r,
-// int64 m_out, int64 e_out. A self-contained file, never appended to or
-// read alongside the dump above.
-bool WriteSiteDump(const char* path, const std::vector<CapturedSite>& records) {
+// int64 m_out, int64 e_out.
+//
+// SECOND section (D-SLM749, T-1691 RoPE site-comparison session), appended
+// after the section above -- append-only, the section above is byte-for-byte
+// unchanged whether or not any KV-landing record exists: uint64
+// num_kv_records, then per record: uint64 site_name_len, the name's own
+// bytes, uint32 head, uint64 n_x, n_x int64 x_int values, int64 m_in, int64
+// e_in, uint64 n_codes, n_codes int8 codes. A self-contained file, never
+// appended to or read alongside the dump above.
+bool WriteSiteDump(const char* path, const std::vector<CapturedSite>& records,
+                    const std::vector<CapturedKvLanding>& kv_records) {
 	std::ofstream f(path, std::ios::binary | std::ios::trunc);
 	if (!f) return false;
 	const uint64_t n = static_cast<uint64_t>(records.size());
@@ -216,6 +271,24 @@ bool WriteSiteDump(const char* path, const std::vector<CapturedSite>& records) {
 		f.write(reinterpret_cast<const char*>(&rec.r), sizeof(rec.r));
 		f.write(reinterpret_cast<const char*>(&rec.m_out), sizeof(rec.m_out));
 		f.write(reinterpret_cast<const char*>(&rec.e_out), sizeof(rec.e_out));
+	}
+	const uint64_t n_kv = static_cast<uint64_t>(kv_records.size());
+	f.write(reinterpret_cast<const char*>(&n_kv), sizeof(n_kv));
+	for (const CapturedKvLanding& rec : kv_records) {
+		const uint64_t name_len = static_cast<uint64_t>(rec.site.size());
+		f.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+		f.write(rec.site.data(), static_cast<std::streamsize>(name_len));
+		f.write(reinterpret_cast<const char*>(&rec.head), sizeof(rec.head));
+		const uint64_t n_x = static_cast<uint64_t>(rec.x_int.size());
+		f.write(reinterpret_cast<const char*>(&n_x), sizeof(n_x));
+		f.write(reinterpret_cast<const char*>(rec.x_int.data()),
+		        static_cast<std::streamsize>(n_x * sizeof(int64_t)));
+		f.write(reinterpret_cast<const char*>(&rec.m_in), sizeof(rec.m_in));
+		f.write(reinterpret_cast<const char*>(&rec.e_in), sizeof(rec.e_in));
+		const uint64_t n_codes = static_cast<uint64_t>(rec.codes.size());
+		f.write(reinterpret_cast<const char*>(&n_codes), sizeof(n_codes));
+		f.write(reinterpret_cast<const char*>(rec.codes.data()),
+		        static_cast<std::streamsize>(n_codes));
 	}
 	return static_cast<bool>(f);
 }
@@ -838,7 +911,7 @@ int main(int argc, char** argv) {
 	// from a run whose own hidden-state walk was not itself already proven
 	// correct.
 	if (site_dump_requested) {
-		if (!WriteSiteDump(site_dump_path.c_str(), site_ctx.records)) {
+		if (!WriteSiteDump(site_dump_path.c_str(), site_ctx.records, site_ctx.kv_records)) {
 			std::fprintf(stderr, "FAILED at stage=site_dump_write: could not write \"%s\"\n",
 			             site_dump_path.c_str());
 			return 1;
@@ -846,6 +919,8 @@ int main(int argc, char** argv) {
 		std::printf("site_dump_written: %zu records across %zu target rows -> %s\n",
 		            site_ctx.records.size(), sizeof(kSiteDumpTargetRows) / sizeof(uint32_t),
 		            site_dump_path.c_str());
+		std::printf("site_dump_written_kv: %zu kv-landing records -> %s\n",
+		            site_ctx.kv_records.size(), site_dump_path.c_str());
 	}
 	return 0;
 }
