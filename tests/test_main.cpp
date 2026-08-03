@@ -15117,6 +15117,144 @@ static void TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBitAt
 	          static_cast<long long>(full_seq.hidden_scale.e), kNumLayers);
 }
 
+// T-1683 S1 (code review: Claude/Poirot/superslm-t1683-layer-bisection-
+// instrument-review-2026-08-02.md; design §7 T-1685 red-first proof part 2,
+// coverage audit F2). The end-to-end self-check (proven above) and the
+// resume-equivalence proof at N=28 (immediately above) both prove that a
+// 28-call chain of layer_budget=1 resumed calls reaches the SAME END STATE
+// a straight-through layer_budget=28 call reaches. Neither proves that each
+// of the 29 INTERIOR snapshots taken along the way -- the values
+// tools/sslm_layer_trace.cpp actually dumps, one after each resumed call --
+// carries the layer it claims to: a snapshot-to-layer indexing defect
+// inside a per-layer capture loop (a duplicated push, an off-by-one index)
+// can leave the chain's own final state untouched while silently
+// mislabeling an interior row. The code review demonstrated this with an
+// executed body: a mutation duplicating one interior snapshot passed the
+// tool's own self-check, provenance check, and dump write bit-for-bit at
+// every other row, while moving that boundary's Spearman correlation from
+// 0.8810 to 0.6458 -- the same order of movement as the collapse the T-1683
+// campaign's own headline signature rests on. This cell closes that gap.
+//
+// It walks NLayerFixture<28> exactly as tools/sslm_layer_trace.cpp's own
+// manual replay does: snapshot the initial (embedding) state as row 0, then
+// 28 sequential layer_budget=1 calls, snapshotting hidden_codes/hidden_scale
+// after each. It then checks EVERY one of the 29 snapshots INDIVIDUALLY
+// against an independent oracle: a fresh SequenceLayerState, seeded with the
+// identical initial codes/scale, driven through ONE straight-through
+// layer_budget=i call (i == the row's own layer index) rather than i
+// sequential resumed calls. The oracle shares no state and no call sequence
+// with the walk under test -- a bug that mislabels or corrupts one interior
+// row of the walk cannot also be present in the independently reconstructed
+// oracle for that same row, because there is no shared apparatus between the
+// two carrying it (the same structural-independence argument design §4.2
+// step 6 already makes for its own interior-row oracle -- hook capture vs.
+// direct composition -- applied here to RunLayerLoop's own resume mechanism
+// instead).
+//
+// Guard vitality (recorded in the T-1683 fix build log, this pass): a
+// deliberate duplicate-push mutation in this test's own walk loop (row 14
+// seeded from row 13's already-captured values, the same shape as the
+// review's own mutation) was applied, built, and confirmed to trip this
+// cell's per-row assertion at exactly that row -- then reverted. This file
+// carries no diff from that mutation.
+static void TestRunLayerLoopInteriorRowsIndividuallyVerifiedAgainstIndependentBudgetOracle() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	constexpr uint32_t kNumLayers = 28;
+	NLayerFixture<kNumLayers> fixture;
+	const CarriedScale kInitialScale{INT64_C(1073741824), 0};
+	const int8_t kInitialCodes[2] = {5, -5};
+	constexpr size_t kWorkspaceSize = kNumLayers * 1 * 1 * 2 * 2;
+
+	struct Row {
+		int8_t codes[2];
+		CarriedScale scale;
+	};
+	Row rows[kNumLayers + 1];
+
+	// --- The walk under test: 28 sequential layer_budget=1 resumed calls, --
+	// snapshotting after each -- the identical composition
+	// tools/sslm_layer_trace.cpp's own manual replay uses (design §4.1
+	// step 3).
+	int8_t walk_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+	SequenceLayerState walk_seq;
+	walk_seq.hidden_codes = walk_codes;
+	walk_seq.hidden_scale = kInitialScale;
+	walk_seq.layer_index = 0;
+	rows[0].codes[0] = walk_codes[0];
+	rows[0].codes[1] = walk_codes[1];
+	rows[0].scale = walk_seq.hidden_scale;
+
+	uint8_t walk_workspace[kWorkspaceSize] = {};
+	bool walk_ok = true;
+	for (uint32_t step = 0; step < kNumLayers; ++step) {
+		const auto st =
+		    superslm::RunLayerLoop(walk_seq, fixture.layers, kNumLayers, /*layer_budget=*/1,
+		                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                             /*intermediate_size=*/2,
+		                             /*context_cap=*/1, fixture.view.rope_tables, walk_workspace,
+		                             sizeof(walk_workspace));
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "interior-row walk step %u/%u (budget=1) status == %s, want Ok (built and green)",
+		          step, kNumLayers, SslmForwardStatusName(st));
+		if (st != SslmForwardStatus::Ok) {
+			walk_ok = false;
+			break;
+		}
+		rows[step + 1].codes[0] = walk_codes[0];
+		rows[step + 1].codes[1] = walk_codes[1];
+		rows[step + 1].scale = walk_seq.hidden_scale;
+	}
+	if (!walk_ok) return;
+
+	// --- The oracle: row 0 is the initial state itself (no call needed); ---
+	// every row 1..28 is checked against an INDEPENDENT fresh state driven
+	// through one straight-through layer_budget=i call, sharing no state
+	// with the walk above.
+	CHECK_MSG(rows[0].codes[0] == kInitialCodes[0] && rows[0].codes[1] == kInitialCodes[1],
+	          "row 0 (embedding) == the initial codes {%d,%d} it was seeded with, got {%d,%d}",
+	          static_cast<int>(kInitialCodes[0]), static_cast<int>(kInitialCodes[1]),
+	          static_cast<int>(rows[0].codes[0]), static_cast<int>(rows[0].codes[1]));
+	CHECK_MSG(rows[0].scale.m == kInitialScale.m && rows[0].scale.e == kInitialScale.e,
+	          "row 0 (embedding) scale == the initial scale (%lld,%lld) it was seeded with",
+	          static_cast<long long>(kInitialScale.m), static_cast<long long>(kInitialScale.e));
+
+	for (uint32_t i = 1; i <= kNumLayers; ++i) {
+		int8_t oracle_codes[2] = {kInitialCodes[0], kInitialCodes[1]};
+		SequenceLayerState oracle_seq;
+		oracle_seq.hidden_codes = oracle_codes;
+		oracle_seq.hidden_scale = kInitialScale;
+		oracle_seq.layer_index = 0;
+		uint8_t oracle_workspace[kWorkspaceSize] = {};
+		const auto st =
+		    superslm::RunLayerLoop(oracle_seq, fixture.layers, kNumLayers, /*layer_budget=*/i,
+		                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                             /*intermediate_size=*/2,
+		                             /*context_cap=*/1, fixture.view.rope_tables, oracle_workspace,
+		                             sizeof(oracle_workspace));
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "independent oracle for row %u (straight-through budget=%u) status == %s, want Ok",
+		          i, i, SslmForwardStatusName(st));
+		if (st != SslmForwardStatus::Ok) continue;
+
+		CHECK_MSG(rows[i].codes[0] == oracle_codes[0] && rows[i].codes[1] == oracle_codes[1],
+		          "row %u, captured by the resumed walk, == {%d,%d}, want the independent "
+		          "straight-through budget=%u oracle's {%d,%d} -- a mismatch here is exactly the "
+		          "silent interior-row mislabeling design §4.1's own note names as invisible to the "
+		          "end-to-end self-check alone",
+		          i, static_cast<int>(rows[i].codes[0]), static_cast<int>(rows[i].codes[1]), i,
+		          static_cast<int>(oracle_codes[0]), static_cast<int>(oracle_codes[1]));
+		CHECK_MSG(rows[i].scale.m == oracle_seq.hidden_scale.m &&
+		              rows[i].scale.e == oracle_seq.hidden_scale.e,
+		          "row %u scale == (%lld,%lld), want the independent budget=%u oracle's (%lld,%lld)",
+		          i, static_cast<long long>(rows[i].scale.m), static_cast<long long>(rows[i].scale.e),
+		          i, static_cast<long long>(oracle_seq.hidden_scale.m),
+		          static_cast<long long>(oracle_seq.hidden_scale.e));
+	}
+}
+
 // §9.3's own residual-location claim, and master plan §8.2/W1: the residual
 // is NOT in the per-call workspace. Two resumed runs, IDENTICAL initial
 // sequence content, budget=1 then budget=1 again -- one with the workspace
@@ -20377,6 +20515,11 @@ int main(int argc, char** argv) {
 	// depends on -- see Claude/Curie/t1683-layer-bisection-test-design-
 	// 2026-08-02.md, Cell P1.
 	TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBitAtN28();
+	// T-1683 S1 (code review, 2026-08-02; design §7 T-1685 red-first proof
+	// part 2, coverage audit F2): each of the 29 interior snapshots the
+	// layer-bisection instrument dumps, individually verified against an
+	// independent budget-i oracle -- see the cell's own comment.
+	TestRunLayerLoopInteriorRowsIndividuallyVerifiedAgainstIndependentBudgetOracle();
 	TestRunLayerLoopResidualSurvivesWorkspacePoisoningBetweenResumedCalls();
 	TestRunLayerLoopCell9FullThreeWayJoinOnHandBuiltNonIdentityCtxFold();
 	TestRunLayerLoopKvLandingClampsAndWiresSaturationCounter();
