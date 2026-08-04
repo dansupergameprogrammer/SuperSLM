@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""T-1691 build-sequencing session (site kind 4/4, RoPE, D-SLM746/D-SLM749)
--- the real drive: drives `out/sslm_layer_trace.exe` with `--site-dump` and
-`--dump` against the REAL Qwen2.5-1.5B-Instruct artifact, over the same
-nine-prompt population `t1691_rmsnorm_drive.py`/`t1691_attention_drive.py`/
-`t1691_mlp_drive.py` already established, at the divergence band (layers
-26-28) plus the layer-5 control.
+"""T-1691 parity-extension pass (site kind 4/4, RoPE, 2026-08-04, Brunel,
+D-SLM746/D-SLM749) -- the real drive: drives `out/sslm_layer_trace.exe` with
+`--site-dump` and `--dump` against the REAL Qwen2.5-1.5B-Instruct artifact,
+over the same nine-prompt population `t1691_rmsnorm_drive.py`/
+`t1691_attention_drive.py`/`t1691_mlp_drive.py` already established, at ALL
+28 layer rows (widened from the original {5, 26, 27, 28} build-sequencing-
+pass band; the K/V-context trailer's own target-row band in
+`tools/sslm_layer_trace.cpp` was widened from {5,21..28} to all 28 rows in
+the same pass so this drive's own real-K/V-prior inputs reach the reversal
+band too).
 
 Per prompt and target row, checks four things by EXACT integer-code equality
 -- stopping at the first disagreement, per this campaign's own standing rule:
@@ -61,9 +65,10 @@ REPO_ROOT = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 DRIVER_EXE = os.path.join(REPO_ROOT, "out", "sslm_layer_trace.exe")
 OUT_DIR = os.path.join(REPO_ROOT, "out", "t1691_rope_drive")
 
-# Dan's own stated scope for this build-sequencing pass: layers 26-28 plus
-# the layer-5 control -- matches every prior site-kind drive.
-TARGET_ROWS = [5, 26, 27, 28]
+# All 28 rows (parity-extension pass, 2026-08-04): reversal band (12-22)
+# first, per Dan's own stated priority for this pass, then the rest ascending.
+_PRIORITY_ROWS = list(range(12, 23))  # 12..22
+TARGET_ROWS = _PRIORITY_ROWS + [r for r in range(1, 29) if r not in _PRIORITY_ROWS]
 TARGET_LAYER_INDICES = [row - 1 for row in TARGET_ROWS]  # 0-indexed
 
 

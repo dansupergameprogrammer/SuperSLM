@@ -582,7 +582,18 @@ int main(int argc, char** argv) {
 	// walk, taken here (before that walk's first layer runs), matching
 	// `position` itself being "constant across every layer of this token"
 	// (forward_sites.cpp's own comment, quoted in the design).
-	constexpr uint32_t kKvTrailerTargetRows[] = {5, 21, 22, 23, 24, 25, 26, 27, 28};
+	//
+	// Widened to all 28 rows (parity-extension pass, Brunel, 2026-08-04):
+	// originally {5, 21..28} (the design's own divergence band plus the
+	// layer-5 control). The reversal band (rows 12-20, unexplained, upstream
+	// of the divergence onset) was never covered by this trailer, which
+	// blocks the attention-interior and RoPE drives (both need the real
+	// prior-position K/V codes this trailer carries) from reaching it even
+	// though the site-dump band above already does. Independent of (and
+	// still narrower in KIND than) the site-dump band, which this array does
+	// not touch or share state with.
+	constexpr uint32_t kKvTrailerTargetRows[] = {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
+	                                              15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
 	const int64_t kv_trailer_context_length = trace_seq.context_length;
 	std::vector<uint32_t> kv_trailer_rows_captured;
 	std::vector<int8_t> kv_trailer_codes;

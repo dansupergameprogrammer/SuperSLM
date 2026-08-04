@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""T-1691 build-sequencing session (site kind 3/4, the MLP, build log
-Claude/Brunel/superslm-t1691-mlp-site-comparison-build-2026-08-03.md) -- the
-real drive: drives `out/sslm_layer_trace.exe` with `--site-dump` and `--dump`
-against the REAL Qwen2.5-1.5B-Instruct artifact, over the same nine-prompt
-population `t1691_rmsnorm_drive.py`/`t1691_attention_drive.py` already
-established, at the divergence band (layers 26-28) plus the layer-5 control
-(unchanged scope). For each prompt and each of the four target rows, computes
+"""T-1691 parity-extension pass (site kind 3/4, the MLP, 2026-08-04, Brunel)
+-- the real drive: drives `out/sslm_layer_trace.exe` with `--site-dump` and
+`--dump` against the REAL Qwen2.5-1.5B-Instruct artifact, over the same
+nine-prompt population `t1691_rmsnorm_drive.py`/`t1691_attention_drive.py`
+already established, at ALL 28 layer rows (widened from the original
+{5, 26, 27, 28} build-sequencing-pass band -- this site kind needs no K/V
+trailer, so it already reached every row the site-dump band covered; this
+pass simply widens the target-row list to use that full coverage). For each
+prompt and each target row, computes
 gate_proj.requant/up_proj.requant/mlp_act/down_proj.requant/mlp_residual via
 `shadow_layer_recompute.py`'s own MLP-site functions and compares against the
 real engine's own captured codes by EXACT integer-code equality (the same
@@ -60,10 +62,10 @@ REPO_ROOT = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 DRIVER_EXE = os.path.join(REPO_ROOT, "out", "sslm_layer_trace.exe")
 OUT_DIR = os.path.join(REPO_ROOT, "out", "t1691_mlp_drive")
 
-# Dan's own stated scope for this build-sequencing campaign: layers 26-28
-# plus the layer-5 control -- unchanged from the RMSNorm and attention-
-# interior drives and the site-dump extension's own default target-row band.
-TARGET_ROWS = [5, 26, 27, 28]
+# All 28 rows (parity-extension pass, 2026-08-04): reversal band (12-22)
+# first, per Dan's own stated priority for this pass, then the rest ascending.
+_PRIORITY_ROWS = list(range(12, 23))  # 12..22
+TARGET_ROWS = _PRIORITY_ROWS + [r for r in range(1, 29) if r not in _PRIORITY_ROWS]
 TARGET_LAYER_INDICES = [row - 1 for row in TARGET_ROWS]  # 0-indexed
 
 

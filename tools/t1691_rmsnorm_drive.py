@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""T-1691 build-sequencing session (2026-08-03, Brunel) -- the real drive for
+"""T-1691 parity-extension pass (2026-08-04, Brunel) -- the real drive for
 site kind 1/4 (RMSNorm): drives `out/sslm_layer_trace.exe` with `--site-dump`
 against the REAL Qwen2.5-1.5B-Instruct artifact, over the same nine-prompt
 population `kv_saturation_report.py`/`layer_bisection_report.py` already
-established, at the divergence band (layers 26-28) plus the layer-5 control
-(Dan's own stated scope for this build-sequencing pass). For each prompt and
-each of the four target rows, computes `rmsnorm_shadow_codes` for both
-attn_norm and mlp_norm and compares against the real engine's own captured
-codes by EXACT integer-code equality (design Sec9/Sec10's own comparison
-shape for this class of check).
+established, at ALL 28 layer rows (widened from the original {5, 26, 27, 28}
+build-sequencing-pass band -- the coverage gap this pass closes: rows 12-20
+are a reversal band, unexplained and immediately upstream of the divergence
+onset at row 21-22, and were never parity-checked). For each prompt and each
+target row, computes `rmsnorm_shadow_codes` for both attn_norm and mlp_norm
+and compares against the real engine's own captured codes by EXACT
+integer-code equality (design Sec9/Sec10's own comparison shape for this
+class of check).
 
-Per this session's own commission: STOPS at the first disagreement and
-reports it (layer, site, prompt, the two code arrays) -- it does not continue
-comparing further cells once one disagrees, because a single disagreement is
-already the campaign's answer for this site kind.
+Per this campaign's own standing commission: STOPS at the first disagreement
+and reports it (layer, site, prompt, the two code arrays) -- it does not
+continue comparing further cells once one disagrees, because a single
+disagreement is already the campaign's answer for this site kind.
 
 Usage: python tools\\t1691_rmsnorm_drive.py
 """
@@ -36,10 +38,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRIVER_EXE = os.path.join(REPO_ROOT, "out", "sslm_layer_trace.exe")
 OUT_DIR = os.path.join(REPO_ROOT, "out", "t1691_rmsnorm_drive")
 
-# Dan's own stated scope for this build-sequencing pass: layers 26-28 plus
-# the layer-5 control -- narrower than design Sec7's own {5,21..28} band,
-# matching the site-dump extension's own default target-row band.
-TARGET_ROWS = [5, 26, 27, 28]
+# All 28 rows (parity-extension pass, 2026-08-04): the reversal band (12-22,
+# the reversal itself plus the divergence onset) is checked FIRST -- Dan's
+# own stated priority for this pass -- so a run that has to stop partway
+# still covers the least-inspected, most-interesting region before anything
+# else. The remaining rows follow in ascending order.
+_PRIORITY_ROWS = list(range(12, 23))  # 12..22
+TARGET_ROWS = _PRIORITY_ROWS + [r for r in range(1, 29) if r not in _PRIORITY_ROWS]
 TARGET_LAYER_INDICES = [row - 1 for row in TARGET_ROWS]  # 0-indexed
 
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""T-1691 build-sequencing session (site kind 2/4, the attention interior,
-build log Claude/Brunel/superslm-t1691-site-comparison-build2-2026-08-03.md)
--- the real drive: drives `out/sslm_layer_trace.exe` with `--site-dump` and
-`--dump` against the REAL Qwen2.5-1.5B-Instruct artifact, over the same
-nine-prompt population `t1691_rmsnorm_drive.py`/`kv_saturation_report.py`/
-`layer_bisection_report.py` already established, at the divergence band
-(layers 26-28) plus the layer-5 control (Dan's own stated scope, unchanged
-from the RMSNorm drive). For each prompt and each of the four target rows,
-computes q_proj.requant/attn_ctx/o_proj.requant/attn_residual via
+"""T-1691 parity-extension pass (site kind 2/4, the attention interior,
+2026-08-04, Brunel) -- the real drive: drives `out/sslm_layer_trace.exe` with
+`--site-dump` and `--dump` against the REAL Qwen2.5-1.5B-Instruct artifact,
+over the same nine-prompt population `t1691_rmsnorm_drive.py`/
+`kv_saturation_report.py`/`layer_bisection_report.py` already established, at
+ALL 28 layer rows (widened from the original {5, 26, 27, 28} build-
+sequencing-pass band; the K/V-context trailer's own target-row band in
+`tools/sslm_layer_trace.cpp` was widened from {5,21..28} to all 28 rows in
+the same pass so this drive's own K/V-prior-position inputs reach the
+reversal band too -- rows 12-20 were previously unreachable by this drive for
+that reason even where the site-dump itself already covered them). For each
+prompt and each target row, computes q_proj.requant/attn_ctx/o_proj.requant/attn_residual via
 `shadow_layer_recompute.py`'s own attention-interior functions and compares
 against the real engine's own captured codes by EXACT integer-code equality
 (design Sec9/Sec10's own comparison shape for this class of check, the same
@@ -62,10 +65,10 @@ REPO_ROOT = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 DRIVER_EXE = os.path.join(REPO_ROOT, "out", "sslm_layer_trace.exe")
 OUT_DIR = os.path.join(REPO_ROOT, "out", "t1691_attention_drive")
 
-# Dan's own stated scope for this build-sequencing pass: layers 26-28 plus
-# the layer-5 control -- matches the RMSNorm drive and the site-dump
-# extension's own default target-row band.
-TARGET_ROWS = [5, 26, 27, 28]
+# All 28 rows (parity-extension pass, 2026-08-04): reversal band (12-22)
+# first, per Dan's own stated priority for this pass, then the rest ascending.
+_PRIORITY_ROWS = list(range(12, 23))  # 12..22
+TARGET_ROWS = _PRIORITY_ROWS + [r for r in range(1, 29) if r not in _PRIORITY_ROWS]
 TARGET_LAYER_INDICES = [row - 1 for row in TARGET_ROWS]  # 0-indexed
 
 
