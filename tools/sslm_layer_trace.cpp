@@ -105,6 +105,65 @@
 // record, plus uint32 head, int64 m_in, int64 e_in (trace_hook.h's own
 // SslmKvLandingTraceRecord fields) in place of d_prime/dn/s/r/m_out/e_out --
 // no code changed in the existing chain-record section's own read/write path.
+//
+// Fifth, OPTIONAL trailing capability (T-1704, position-axis capture,
+// Brunel, 2026-08-04): `--site-dump-all-positions` (requires --site-dump;
+// rejected otherwise). T-1703 (Claude/Brunel/t1703-token-axis-decomposition-
+// build-2026-08-04.md) found this tool's own site-dump hook was installed
+// only AFTER prefill completed (originally lines ~533-627), so no record was
+// ever emitted for any prompt position except the last -- T-1702 Sec.C's
+// positional test could not be run. This flag activates capture during
+// PREFILL too (every prompt token, not only the last), so every emitted
+// record can be tagged with the absolute prompt position (0-indexed) it came
+// from and the token id occupying that position.
+//
+// Mechanism: `SslmChainTraceRecord`/`SslmKvLandingTraceRecord` (trace_hook.h)
+// already carry a `token_index` field, forwarded unchanged from whatever
+// value the caller passes `RunLayerLoop`'s own `token_index` parameter
+// (production and this tool alike always pass 0 today, since both process
+// one token per call and never batch -- `token_index` is a batch-slot id,
+// not a sequence position, and nothing in forward_sites.cpp reads it for
+// arithmetic, only for record attribution). This flag repurposes that same
+// already-existing, already-invariance-proven-transparent parameter: this
+// tool now passes the token's own ABSOLUTE PROMPT POSITION as `token_index`
+// for every prefill call and (when this flag is set) the last-token walk
+// too, and `SiteCaptureHook` copies it into a new `position` field on each
+// captured record. No production code changes -- `token_index` is metadata
+// only (trace_hook.h's own "read-only by construction" contract: no hook
+// call participates in, or can change, any value a site returns or writes),
+// so varying it cannot perturb any computed value; it only changes what a
+// hook's own record shows. This is verified directly, not merely argued
+// (Claude/Brunel/t1704-all-position-capture-build-2026-08-04.md Sec 2).
+//
+// Backward compatibility, stated explicitly (this flag's own contract):
+// - Without `--site-dump-all-positions`: EVERY line of behavior is
+//   byte-for-byte what it was before this capability existed -- the hook is
+//   still installed only after prefill (line ~622 below, unmoved), prefill's
+//   own RunLayerLoop calls still pass no explicit token_index (defaults to
+//   0, matching every prior build), and `WriteSiteDump`'s OLD format (no
+//   magic, no `position`/`token_id` fields on any record) is written
+//   unchanged. Every existing `.sitedump` file on disk, and every fresh
+//   default-mode dump this tool writes after this change, reads correctly
+//   through `shadow_layer_recompute.load_site_dump`/`load_site_dump_full`
+//   (tools/shadow_layer_recompute.py), UNMODIFIED -- verified by guard
+//   reproduction (T-1704 build log Sec 5), not merely asserted.
+// - With `--site-dump-all-positions`: the hook is installed BEFORE prefill
+//   instead of after (this branch only), `site_ctx.active` is toggled true
+//   around every prefill token's own RunLayerLoop call (previously never
+//   toggled true during prefill at all), and the site-dump file is written
+//   in a NEW, distinct, self-describing format: an 8-byte magic
+//   (`"SSLMAPD2"`) the OLD format never starts with (its own first 8 bytes
+//   are always a small record count, structurally distinguishable), then
+//   every chain/K-V record carries two new trailing fields -- uint64
+//   `position` (0-indexed prompt position), int32 `token_id` (the token
+//   occupying that position, looked up from the prompt's own tokenization at
+//   write time). This is a NEW container format, read by a NEW Python
+//   function (`load_site_dump_all_positions`, tools/shadow_layer_recompute.
+//   py) -- the OLD reader is never pointed at a new-format file by any
+//   consumer this task touches, and if it ever were, the magic prefix makes
+//   the old reader fail loudly (an absurd `num_records` from the magic
+//   bytes triggers an immediate struct/bounds error) rather than silently
+//   misparse.
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -174,6 +233,14 @@ struct CapturedSite {
 	int64_t r = 0;
 	int64_t m_out = 0;
 	int64_t e_out = 0;
+	// T-1704: the record's own `token_index` (trace_hook.h) -- this tool now
+	// passes the absolute prompt position through that already-existing,
+	// metadata-only parameter (see this file's header comment, "Fifth,
+	// OPTIONAL trailing capability"). Always copied (cheap, a size_t), but
+	// only ever WRITTEN to the site-dump file in the new
+	// --site-dump-all-positions format; the default format's WriteSiteDump
+	// path never reads this field.
+	size_t position = 0;
 };
 
 // The K/V-landing sibling of CapturedSite (D-SLM749, T-1691 RoPE site-
@@ -187,12 +254,30 @@ struct CapturedKvLanding {
 	int64_t m_in = 0;
 	int64_t e_in = 0;
 	std::vector<int8_t> codes;   // the pre-rotation landed codes
+	size_t position = 0;         // T-1704: same repurposed token_index, see CapturedSite.
 };
 
 struct SiteCaptureContext {
 	bool active = false;  // toggled by the caller around each target row's own call
 	std::vector<CapturedSite> records;
 	std::vector<CapturedKvLanding> kv_records;
+	// T-1704 fault-injection instrument (mirrors tools/sslm_hook_invariance_
+	// check.cpp's own --corrupt-hook: StandardsDocument.md Sec4's
+	// independent-population-validation habit, applied at n=1 by deliberate
+	// injection since there is no independently-known population of
+	// prefill-hook-perturbation defects to sweep). When true, the hook
+	// additionally overwrites every byte of the FIRST captured chain
+	// record's own `codes` span through a const_cast -- the record's spans
+	// are non-owning views into the SAME buffer RunLayerLoop's own
+	// arithmetic reads next (trace_hook.h's documented lifetime), so this is
+	// a real, physically reachable way a non-conformant hook breaks the
+	// read-only-by-construction contract, exercised specifically on a
+	// PREFILL-position record (never reachable before this task's change,
+	// since no hook was ever installed during prefill). Expected to make
+	// this tool's own self_check (production vs. manual-replay) FAIL. Never
+	// set for a real capture run.
+	bool corrupt_first_prefill_record = false;
+	bool corrupted_once = false;
 };
 
 // The hook callback (SslmTraceHookFn's own signature, trace_hook.h). Only
@@ -210,6 +295,25 @@ void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTrace
 	auto* ctx = static_cast<SiteCaptureContext*>(user);
 	if (!ctx->active) return;
 	if (chain != nullptr) {
+		// T-1704 fault injection (--corrupt-site-hook, all-positions mode
+		// only): corrupt the very FIRST record this run ever captures. In
+		// all-positions mode capture starts at prefill position 0, so this
+		// is guaranteed to be a PREFILL record -- the specific new emission
+		// pattern this task's own invariance obligation names, never
+		// reachable through the pre-existing last-token-only capture. Same
+		// technique as tools/sslm_hook_invariance_check.cpp's own
+		// --corrupt-hook: reach through the `const` span with a const_cast
+		// and write, breaking the read-only-by-construction contract
+		// through a real, physically reachable path (the span is a
+		// non-owning view into the SAME buffer RunLayerLoop's own
+		// arithmetic reads next).
+		if (ctx->corrupt_first_prefill_record && !ctx->corrupted_once) {
+			ctx->corrupted_once = true;
+			auto* mutable_codes = const_cast<int8_t*>(chain->codes.data());
+			for (size_t i = 0; i < chain->codes.size(); ++i) {
+				mutable_codes[i] = static_cast<int8_t>(~mutable_codes[i]);
+			}
+		}
 		CapturedSite rec;
 		rec.site = std::string(chain->site);
 		rec.x_int.assign(chain->x_int.begin(), chain->x_int.end());
@@ -220,6 +324,7 @@ void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTrace
 		rec.r = chain->r;
 		rec.m_out = chain->m_out;
 		rec.e_out = chain->e_out;
+		rec.position = chain->token_index;  // T-1704
 		ctx->records.push_back(std::move(rec));
 	}
 	if (kv != nullptr) {
@@ -230,6 +335,7 @@ void SiteCaptureHook(const SslmChainTraceRecord* chain, const SslmKvLandingTrace
 		rec.m_in = kv->m_in;
 		rec.e_in = kv->e_in;
 		rec.codes.assign(kv->codes.begin(), kv->codes.end());
+		rec.position = kv->token_index;  // T-1704
 		ctx->kv_records.push_back(std::move(rec));
 	}
 }
@@ -294,6 +400,77 @@ bool WriteSiteDump(const char* path, const std::vector<CapturedSite>& records,
 	return static_cast<bool>(f);
 }
 
+// T-1704: the magic prefix for the all-positions site-dump format -- 8 raw
+// ASCII bytes, never the leading 8 bytes of the OLD format (which begins
+// directly with a uint64 record count; a real capture never has anywhere
+// near 2^56 records, so the two formats cannot collide even in principle).
+const char kAllPositionsMagic[8] = {'S', 'S', 'L', 'M', 'A', 'P', 'D', '2'};
+
+// The all-positions site-dump format (T-1704, see this file's header
+// comment, "Fifth, OPTIONAL trailing capability"): kAllPositionsMagic (8
+// bytes), then the SAME two-section shape WriteSiteDump already writes
+// (chain records, then K/V-landing records), with every record gaining two
+// NEW trailing fields: uint64 position, int32 token_id. `prompt_tokens` is
+// used only to resolve token_id = prompt_tokens[record.position] at write
+// time (never stored in CapturedSite -- position alone is sufficient and is
+// what the hook itself actually observed).
+bool WriteSiteDumpAllPositions(const char* path, const std::vector<CapturedSite>& records,
+                                const std::vector<CapturedKvLanding>& kv_records,
+                                const std::vector<int32_t>& prompt_tokens) {
+	std::ofstream f(path, std::ios::binary | std::ios::trunc);
+	if (!f) return false;
+	f.write(kAllPositionsMagic, sizeof(kAllPositionsMagic));
+	auto TokenIdAt = [&](size_t position) -> int32_t {
+		return (position < prompt_tokens.size()) ? prompt_tokens[position] : -1;
+	};
+	const uint64_t n = static_cast<uint64_t>(records.size());
+	f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+	for (const CapturedSite& rec : records) {
+		const uint64_t name_len = static_cast<uint64_t>(rec.site.size());
+		f.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+		f.write(rec.site.data(), static_cast<std::streamsize>(name_len));
+		const uint64_t n_x = static_cast<uint64_t>(rec.x_int.size());
+		f.write(reinterpret_cast<const char*>(&n_x), sizeof(n_x));
+		f.write(reinterpret_cast<const char*>(rec.x_int.data()),
+		        static_cast<std::streamsize>(n_x * sizeof(int64_t)));
+		const uint64_t n_codes = static_cast<uint64_t>(rec.codes.size());
+		f.write(reinterpret_cast<const char*>(&n_codes), sizeof(n_codes));
+		f.write(reinterpret_cast<const char*>(rec.codes.data()), static_cast<std::streamsize>(n_codes));
+		f.write(reinterpret_cast<const char*>(&rec.d_prime), sizeof(rec.d_prime));
+		f.write(reinterpret_cast<const char*>(&rec.dn), sizeof(rec.dn));
+		f.write(reinterpret_cast<const char*>(&rec.s), sizeof(rec.s));
+		f.write(reinterpret_cast<const char*>(&rec.r), sizeof(rec.r));
+		f.write(reinterpret_cast<const char*>(&rec.m_out), sizeof(rec.m_out));
+		f.write(reinterpret_cast<const char*>(&rec.e_out), sizeof(rec.e_out));
+		const uint64_t position = static_cast<uint64_t>(rec.position);
+		f.write(reinterpret_cast<const char*>(&position), sizeof(position));
+		const int32_t token_id = TokenIdAt(rec.position);
+		f.write(reinterpret_cast<const char*>(&token_id), sizeof(token_id));
+	}
+	const uint64_t n_kv = static_cast<uint64_t>(kv_records.size());
+	f.write(reinterpret_cast<const char*>(&n_kv), sizeof(n_kv));
+	for (const CapturedKvLanding& rec : kv_records) {
+		const uint64_t name_len = static_cast<uint64_t>(rec.site.size());
+		f.write(reinterpret_cast<const char*>(&name_len), sizeof(name_len));
+		f.write(rec.site.data(), static_cast<std::streamsize>(name_len));
+		f.write(reinterpret_cast<const char*>(&rec.head), sizeof(rec.head));
+		const uint64_t n_x = static_cast<uint64_t>(rec.x_int.size());
+		f.write(reinterpret_cast<const char*>(&n_x), sizeof(n_x));
+		f.write(reinterpret_cast<const char*>(rec.x_int.data()),
+		        static_cast<std::streamsize>(n_x * sizeof(int64_t)));
+		f.write(reinterpret_cast<const char*>(&rec.m_in), sizeof(rec.m_in));
+		f.write(reinterpret_cast<const char*>(&rec.e_in), sizeof(rec.e_in));
+		const uint64_t n_codes = static_cast<uint64_t>(rec.codes.size());
+		f.write(reinterpret_cast<const char*>(&n_codes), sizeof(n_codes));
+		f.write(reinterpret_cast<const char*>(rec.codes.data()), static_cast<std::streamsize>(n_codes));
+		const uint64_t position = static_cast<uint64_t>(rec.position);
+		f.write(reinterpret_cast<const char*>(&position), sizeof(position));
+		const int32_t token_id = TokenIdAt(rec.position);
+		f.write(reinterpret_cast<const char*>(&token_id), sizeof(token_id));
+	}
+	return static_cast<bool>(f);
+}
+
 bool WriteDump(const char* path, const std::vector<LayerSnapshot>& rows, uint64_t hidden_size,
                uint64_t prompt_fingerprint, const std::vector<uint64_t>& saturation_deltas,
                const std::vector<uint32_t>& kv_trailer_rows, uint64_t kv_trailer_context_length,
@@ -350,11 +527,17 @@ int main(int argc, char** argv) {
 	const std::string prompt = argv[3];
 	std::string dump_path;
 	std::string site_dump_path;
+	bool site_dump_all_positions = false;   // T-1704: opt-in, default off.
+	bool corrupt_site_hook = false;         // T-1704: fault-injection instrument, dev-only.
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
 			dump_path = argv[++i];
 		} else if (std::strcmp(argv[i], "--site-dump") == 0 && i + 1 < argc) {
 			site_dump_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--site-dump-all-positions") == 0) {
+			site_dump_all_positions = true;
+		} else if (std::strcmp(argv[i], "--corrupt-site-hook") == 0) {
+			corrupt_site_hook = true;
 		} else {
 			std::fprintf(stderr, "unrecognized argument: %s\n", argv[i]);
 			PrintUsage(argv[0]);
@@ -363,6 +546,19 @@ int main(int argc, char** argv) {
 	}
 	if (dump_path.empty()) {
 		std::fprintf(stderr, "FAILED at stage=args: --dump <path> is required\n");
+		PrintUsage(argv[0]);
+		return 2;
+	}
+	if (site_dump_all_positions && site_dump_path.empty()) {
+		std::fprintf(stderr,
+		             "FAILED at stage=args: --site-dump-all-positions requires --site-dump <path>\n");
+		PrintUsage(argv[0]);
+		return 2;
+	}
+	if (corrupt_site_hook && !site_dump_all_positions) {
+		std::fprintf(stderr,
+		             "FAILED at stage=args: --corrupt-site-hook requires --site-dump-all-positions (it "
+		             "targets a prefill-position record, only reachable in that mode)\n");
 		PrintUsage(argv[0]);
 		return 2;
 	}
@@ -530,8 +726,31 @@ int main(int argc, char** argv) {
 		return SslmForwardStatus::Ok;
 	};
 
+	// T-1704: declared here (moved up from just before the last-token walk
+	// below, see that site's own comment) so the all-positions branch can
+	// install the hook before prefill runs. In DEFAULT mode
+	// (site_dump_all_positions == false) nothing below this point behaves
+	// any differently than before this task's change: `site_ctx.active`
+	// starts false and is never touched during prefill, the hook is not
+	// installed until after prefill (unchanged location, see
+	// "trace_hook_install_default_mode" below), and every prefill
+	// RunLayerLoop call keeps passing token_index=0 and trace_hook_state=
+	// nullptr, exactly as before.
+	SiteCaptureContext site_ctx;
+	SslmTraceHookState trace_hook_state;
+	const bool site_dump_requested = !site_dump_path.empty();
+	if (site_dump_requested && site_dump_all_positions) {
+		SslmSetTraceHook(trace_hook_state, &SiteCaptureHook, &site_ctx);
+		site_ctx.corrupt_first_prefill_record = corrupt_site_hook;
+	}
+
 	// Prefill: every prompt token except the last -- embed + full-budget
-	// RunLayerLoop, exactly RunWholeToken's own composition.
+	// RunLayerLoop, exactly RunWholeToken's own composition. T-1704: when
+	// --site-dump-all-positions is set, capture is ACTIVE here (previously
+	// never -- T-1703's own finding, see this file's header comment) and
+	// token_index is the token's own absolute prompt position `i`, so every
+	// record `SiteCaptureHook` copies out carries the position it actually
+	// came from.
 	for (size_t i = 0; i + 1 < prompt_tokens.size(); ++i) {
 		SslmForwardStatus st = EmbedWholeToken(prompt_tokens[i]);
 		if (st != SslmForwardStatus::Ok) {
@@ -539,10 +758,15 @@ int main(int argc, char** argv) {
 			             SslmForwardStatusName(st));
 			return 1;
 		}
+		if (site_dump_requested && site_dump_all_positions) site_ctx.active = true;
 		st = RunLayerLoop(trace_seq, layers.data(), num_hidden_layers,
 		                   /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim,
 		                   num_kv_heads, model_view.config.intermediate_size, context_cap,
-		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size());
+		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
+		                   /*site_prefix=*/{},
+		                   /*token_index=*/site_dump_all_positions ? i : size_t{0},
+		                   (site_dump_requested && site_dump_all_positions) ? &trace_hook_state : nullptr);
+		if (site_dump_requested && site_dump_all_positions) site_ctx.active = false;
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(st));
@@ -619,12 +843,18 @@ int main(int argc, char** argv) {
 		}
 		return false;
 	};
-	SiteCaptureContext site_ctx;
-	SslmTraceHookState trace_hook_state;
-	const bool site_dump_requested = !site_dump_path.empty();
-	if (site_dump_requested) {
+	// trace_hook_install_default_mode: in DEFAULT mode (all-positions NOT
+	// requested), this is the ORIGINAL, unmoved install point -- the hook is
+	// installed here, after prefill, exactly as before this task's change.
+	// In all-positions mode the hook was already installed before prefill
+	// (above); this call is skipped so it is never installed twice.
+	if (site_dump_requested && !site_dump_all_positions) {
 		SslmSetTraceHook(trace_hook_state, &SiteCaptureHook, &site_ctx);
 	}
+	// T-1704: the last prompt token's own absolute position, used as
+	// token_index below only in all-positions mode -- default mode keeps
+	// passing 0, unchanged.
+	const size_t last_token_position = prompt_tokens.size() - 1;
 
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
 		// This iteration's own dump row number, computed here (rather than
@@ -641,7 +871,8 @@ int main(int argc, char** argv) {
 		    trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size, context_cap,
 		    model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
-		    /*site_prefix=*/{}, /*token_index=*/0,
+		    /*site_prefix=*/{},
+		    /*token_index=*/site_dump_all_positions ? last_token_position : size_t{0},
 		    site_dump_requested ? &trace_hook_state : nullptr);
 		if (site_dump_requested) {
 			site_ctx.active = false;
@@ -929,14 +1160,19 @@ int main(int argc, char** argv) {
 	// from a run whose own hidden-state walk was not itself already proven
 	// correct.
 	if (site_dump_requested) {
-		if (!WriteSiteDump(site_dump_path.c_str(), site_ctx.records, site_ctx.kv_records)) {
+		const bool write_ok = site_dump_all_positions
+		                           ? WriteSiteDumpAllPositions(site_dump_path.c_str(), site_ctx.records,
+		                                                        site_ctx.kv_records, prompt_tokens)
+		                           : WriteSiteDump(site_dump_path.c_str(), site_ctx.records, site_ctx.kv_records);
+		if (!write_ok) {
 			std::fprintf(stderr, "FAILED at stage=site_dump_write: could not write \"%s\"\n",
 			             site_dump_path.c_str());
 			return 1;
 		}
-		std::printf("site_dump_written: %zu records across %zu target rows -> %s\n",
+		std::printf("site_dump_written: %zu records across %zu target rows (all_positions=%d, prompt "
+		            "positions=%zu) -> %s\n",
 		            site_ctx.records.size(), sizeof(kSiteDumpTargetRows) / sizeof(uint32_t),
-		            site_dump_path.c_str());
+		            site_dump_all_positions ? 1 : 0, prompt_tokens.size(), site_dump_path.c_str());
 		std::printf("site_dump_written_kv: %zu kv-landing records -> %s\n",
 		            site_ctx.kv_records.size(), site_dump_path.c_str());
 	}

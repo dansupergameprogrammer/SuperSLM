@@ -1492,3 +1492,118 @@ def load_site_dump(path) -> list[SiteRecord]:
     records, _kv_records = load_site_dump_full(path)
     return records
     return records
+
+
+# =============================================================================
+# All-position site-dump (T-1704, 2026-08-04): reads the NEW, DISTINCT format
+# `sslm_layer_trace.cpp --site-dump --site-dump-all-positions` writes
+# (`WriteSiteDumpAllPositions`, that file's own header comment, "Fifth,
+# OPTIONAL trailing capability"). This is a SEPARATE reader over a SEPARATE
+# self-describing format (an 8-byte magic prefix the OLD format never
+# starts with) -- `load_site_dump`/`load_site_dump_full` above are NOT
+# modified and are never pointed at a file this reader produced or expects.
+# =============================================================================
+
+_ALL_POSITIONS_MAGIC = b"SSLMAPD2"
+
+
+@dataclass
+class SiteRecordPositional:
+    site: str
+    x_int: np.ndarray
+    codes: np.ndarray
+    d_prime: int
+    dn: int
+    s: int
+    r: int
+    m_out: int
+    e_out: int
+    position: int  # 0-indexed absolute prompt position this record came from
+    token_id: int  # the token occupying that position (-1 if out of range)
+
+
+@dataclass
+class KvLandingRecordPositional:
+    site: str
+    head: int
+    x_int: np.ndarray
+    m_in: int
+    e_in: int
+    codes: np.ndarray
+    position: int
+    token_id: int
+
+
+def load_site_dump_all_positions(
+        path) -> tuple[list[SiteRecordPositional], list[KvLandingRecordPositional]]:
+    """Reads `WriteSiteDumpAllPositions`'s own format (tools/sslm_layer_trace.
+    cpp): 8-byte magic b"SSLMAPD2", then the same two-section shape
+    `load_site_dump_full` reads, with every record gaining two NEW trailing
+    fields: uint64 position, int32 token_id. Raises ValueError immediately
+    (not a silent misparse) if the magic is absent -- e.g. if this reader is
+    pointed at an OLD-format (default-mode) site-dump by mistake, which
+    starts directly with a uint64 record count, never these 8 bytes."""
+    data = Path(path).read_bytes()
+    if data[:8] != _ALL_POSITIONS_MAGIC:
+        raise ValueError(
+            f"load_site_dump_all_positions: {path} does not start with the all-positions magic "
+            f"{_ALL_POSITIONS_MAGIC!r} -- this is not an all-positions site-dump (it is either the "
+            f"OLD default-mode format, read it with load_site_dump_full instead, or not a site-dump "
+            f"at all)")
+    off = 8
+    (n,) = struct.unpack_from("<Q", data, off)
+    off += 8
+    records = []
+    for _ in range(n):
+        (name_len,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        site = data[off:off + name_len].decode()
+        off += name_len
+        (n_x,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        x_int = np.array(struct.unpack_from(f"<{n_x}q", data, off), dtype=np.int64)
+        off += 8 * n_x
+        (n_codes,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        codes = np.frombuffer(data, dtype=np.int8, count=n_codes, offset=off).copy()
+        off += n_codes
+        d_prime, dn, s, r, m_out, e_out = struct.unpack_from("<qqiqqq", data, off)
+        off += 8 + 8 + 4 + 8 + 8 + 8
+        (position,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        (token_id,) = struct.unpack_from("<i", data, off)
+        off += 4
+        records.append(SiteRecordPositional(site=site, x_int=x_int, codes=codes, d_prime=d_prime,
+                                             dn=dn, s=s, r=r, m_out=m_out, e_out=e_out,
+                                             position=position, token_id=token_id))
+    (n_kv,) = struct.unpack_from("<Q", data, off)
+    off += 8
+    kv_records = []
+    for _ in range(n_kv):
+        (name_len,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        site = data[off:off + name_len].decode()
+        off += name_len
+        (head,) = struct.unpack_from("<I", data, off)
+        off += 4
+        (n_x,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        x_int = np.array(struct.unpack_from(f"<{n_x}q", data, off), dtype=np.int64)
+        off += 8 * n_x
+        m_in, e_in = struct.unpack_from("<qq", data, off)
+        off += 16
+        (n_codes,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        codes = np.frombuffer(data, dtype=np.int8, count=n_codes, offset=off).copy()
+        off += n_codes
+        (position,) = struct.unpack_from("<Q", data, off)
+        off += 8
+        (token_id,) = struct.unpack_from("<i", data, off)
+        off += 4
+        kv_records.append(KvLandingRecordPositional(site=site, head=head, x_int=x_int, m_in=m_in,
+                                                      e_in=e_in, codes=codes, position=position,
+                                                      token_id=token_id))
+    if off != len(data):
+        raise ValueError(f"load_site_dump_all_positions: {len(data) - off} trailing bytes beyond the "
+                          f"declared records")
+    return records, kv_records
