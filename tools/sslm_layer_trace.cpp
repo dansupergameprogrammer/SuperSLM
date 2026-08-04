@@ -76,10 +76,11 @@
 // the SAME record this reads). Captures every SslmChainTraceRecord (site
 // name, the wide row AS READ AT THE SITE -- the site's own real input --
 // and the site's own real output codes) for the dump-row band this file's
-// header now also documents: {5, 26, 27, 28} by default (the layer-5
+// header now also documents: all 28 rows (widened 2026-08-04, Brunel, for
+// the onset/amplification pass -- originally {5, 26, 27, 28}, the layer-5
 // control plus the design's own divergence band, T-1691's build-sequencing
-// scope this session -- narrower than the KV-trailer's own {5,21..28},
-// which this flag does not touch or share state with). Filtering is done
+// scope from the earlier session -- narrower than the KV-trailer's own
+// {5,21..28}, which this flag does not touch or share state with). Filtering is done
 // by TOGGLING hook installation around each target row's own
 // RunLayerLoop(1) call -- SslmSetTraceHook(state, nullptr, nullptr) between
 // target rows -- rather than by inspecting the record's own site string,
@@ -587,14 +588,20 @@ int main(int argc, char** argv) {
 	std::vector<int8_t> kv_trailer_codes;
 	uint64_t actual_kv_trailer_elements = 0;
 
-	// T-1691 site-dump (this session, gating step): the divergence band plus
-	// the layer-5 control -- Dan's own stated scope for this build-
-	// sequencing pass, independent of (and narrower than) the KV trailer's
-	// own {5,21..28} band above. `trace_hook_state` is installed once (if
+	// T-1691 site-dump (widened T-1691 onset/amplification pass, Brunel,
+	// 2026-08-04): originally the divergence band plus the layer-5 control
+	// only ({5, 26, 27, 28} -- Dan's own stated scope for the earlier
+	// build-sequencing pass). The onset/amplification question this pass
+	// answers needs the site-level record at EVERY layer, not only the
+	// locus band, so this array now covers all 28 rows (design's own full
+	// depth) -- independent of (and still narrower in KIND than) the KV
+	// trailer's own {5,21..28} band above, which this flag does not touch
+	// or share state with. `trace_hook_state` is installed once (if
 	// requested) and stays installed for the tool's whole run; `site_ctx`'s
 	// own `active` flag is what actually gates which layers' records reach
 	// `site_ctx.records`, toggled around each target row's own call below.
-	constexpr uint32_t kSiteDumpTargetRows[] = {5, 26, 27, 28};
+	constexpr uint32_t kSiteDumpTargetRows[] = {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
+	                                             15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28};
 	auto IsSiteDumpTargetRow = [&](uint32_t row_number) {
 		for (uint32_t target : kSiteDumpTargetRows) {
 			if (target == row_number) return true;
