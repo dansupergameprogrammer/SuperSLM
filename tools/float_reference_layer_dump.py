@@ -61,6 +61,17 @@ Dump format (design S4.2 step 4, matching T-1685's int8-side format):
         rejects any other value on either side)
     rows * hidden_size  float32 values, row-major
 
+COMPUTE PRECISION IS EXPLICIT, NOT RESOLVED SILENTLY FROM THE CHECKPOINT
+(T-1783, correcting an unstated axis T-1782/I1 found: this checkpoint's own
+`config.json` carries `"torch_dtype": "bfloat16"`, so the prior unconditional
+`torch_dtype="auto"` silently ran this reference in bfloat16 -- a fact no
+record stated, even though every captured row here is upcast to float32 at
+the point of capture (`.float()` in `make_hook` below) -- that upcast is the
+CAPTURE's storage precision, not the COMPUTE precision the forward ran at).
+`--dtype` defaults to `auto` (unchanged behavior, currently resolves to
+bfloat16) and accepts `bfloat16` or `float32` to force the compute precision;
+the resolved value is always printed.
+
 Offline only. Loads the local HuggingFace cache with local_files_only=True;
 never touches the network.
 
@@ -68,7 +79,7 @@ Usage
 -----
     python tools\\float_reference_layer_dump.py "What is the capital of France?" \\
         --system "You are Qwen, created by Alibaba Cloud. You are a helpful assistant." \\
-        --dump out\\t1683\\capital_of_france.float.bin
+        --dump out\\t1683\\capital_of_france.float.bin --dtype float32
 """
 
 from __future__ import annotations
@@ -302,6 +313,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--model", default=str(DEFAULT_MODEL), help="path to a local HF checkpoint directory")
     parser.add_argument("--dump", required=True, help="path to write the per-layer float32 dump")
+    parser.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float32"],
+        default="auto",
+        help="compute precision. 'auto' (default) resolves from the checkpoint's own "
+             "config.json -- currently bfloat16 for this checkpoint, unchanged from prior "
+             "behavior. 'float32' forces full-precision compute. Captured rows are always "
+             "upcast to float32 for storage regardless of this setting -- that is a "
+             "serialization format, not the compute precision; the resolved compute dtype is "
+             "always printed.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="'auto' (default, unchanged) picks CUDA if available, else CPU.",
+    )
     args = parser.parse_args(argv)
 
     model_path = _resolve_default_model(Path(args.model))
@@ -311,11 +339,17 @@ def main(argv: list[str] | None = None) -> int:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    dtype_arg = {"auto": "auto", "bfloat16": torch.bfloat16, "float32": torch.float32}[args.dtype]
+
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(str(model_path), local_files_only=True, torch_dtype="auto")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = AutoModelForCausalLM.from_pretrained(str(model_path), local_files_only=True, torch_dtype=dtype_arg)
+    if args.device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = args.device
     model.to(device)
     model.eval()
+    resolved_dtype = next(model.parameters()).dtype
 
     messages = [
         {"role": "system", "content": args.system},
@@ -332,6 +366,9 @@ def main(argv: list[str] | None = None) -> int:
 
     hidden_size = model.config.hidden_size
     n_layers = model.config.num_hidden_layers
+
+    print(f"resolved_dtype: {resolved_dtype}")
+    print(f"resolved_device: {device}")
 
     captured = capture_incremental(model, input_ids, device)
     print(f"capture: direct forward hooks, token-at-a-time incremental (DynamicCache), "

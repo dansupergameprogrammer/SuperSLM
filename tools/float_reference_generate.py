@@ -2,8 +2,7 @@
 """Float reference greedy decode for the T-1679 side-by-side comparison.
 
 WHAT THIS DOES AND DOES NOT ESTABLISH (read this before trusting any output).
-This script runs the same base checkpoint's own float (fp32/bf16, whatever
-`from_pretrained`'s default dtype resolves to) weights through
+This script runs the same base checkpoint's float weights through
 `transformers.AutoModelForCausalLM.generate` with greedy decoding
 (`do_sample=False`). It exists so `tools/compare_float.ps1` can show this
 output next to the .sslm int8 engine's output for the SAME prompt, SAME chat
@@ -15,6 +14,23 @@ separate, unbuilt thing). This script establishes nothing about correctness;
 it is one half of a coarse behavioral side-by-side, and its caller states the
 same limitation again in its own output.
 
+COMPUTE PRECISION IS EXPLICIT, NOT RESOLVED SILENTLY FROM THE CHECKPOINT
+(T-1783, correcting an unstated axis T-1782/I1 found: this checkpoint's own
+`config.json` carries `"torch_dtype": "bfloat16"`, so the prior unconditional
+`torch_dtype="auto"` silently ran this reference in bfloat16 -- a fact no
+record stated). `--dtype` defaults to `auto` (unchanged behavior: whatever
+the checkpoint config resolves to, currently bfloat16) and accepts `bfloat16`
+or `float32` to force a specific compute precision. The resolved dtype is
+always printed (`resolved_dtype:`) so a caller never has to infer it. `float32`
+matches the precision `tests/reference/upstream_pin/gen_upstream_pin.py` (the
+project's one deliberately-pinned float oracle, D-SLM436) already uses; this
+script's `float32` differs from that oracle only in device (this script keeps
+`--device auto`'s CUDA-if-available choice so switching `--dtype` is the only
+variable changed relative to the previous default, per StandardsDocument
+§5.4's "a comparison is evidence only if ... the reference is independent of
+what it grades" -- changing dtype AND device in the same run would conflate
+two variables in one comparison).
+
 Offline only. Loads the local HuggingFace cache with local_files_only=True;
 never touches the network.
 
@@ -22,11 +38,13 @@ Usage
 -----
     python tools\\float_reference_generate.py "What's on the menu today?" \\
         --system "You are Qwen, created by Alibaba Cloud. You are a helpful assistant." \\
-        --max-new 256 --stop 151645 151643
+        --max-new 256 --stop 151645 151643 --dtype float32
 
 Prints, one field per line, machine-parseable by the PowerShell wrapper:
 
     prompt_tokens: <n>
+    resolved_dtype: <torch dtype the checkpoint actually loaded and ran at>
+    resolved_device: <cpu|cuda>
     output_ids: <space-separated ids, generated tokens only, stop id included if emitted>
     stop_reason: 1|0            (1 = stopped on a supplied stop id, 0 = hit the token budget)
     wall_time_seconds: <float>
@@ -88,6 +106,21 @@ def main(argv: list[str] | None = None) -> int:
         default=[151645, 151643],
         help="stop token ids (default: <|im_end|>, <|endoftext|>)",
     )
+    parser.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float32"],
+        default="auto",
+        help="compute precision. 'auto' (default) resolves from the checkpoint's own "
+             "config.json -- currently bfloat16 for this checkpoint, unchanged from prior "
+             "behavior. 'float32' forces full-precision compute, matching "
+             "gen_upstream_pin.py's oracle precision. The resolved value is always printed.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="'auto' (default, unchanged) picks CUDA if available, else CPU.",
+    )
     args = parser.parse_args(argv)
 
     model_path = _resolve_default_model(Path(args.model))
@@ -97,15 +130,21 @@ def main(argv: list[str] | None = None) -> int:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    dtype_arg = {"auto": "auto", "bfloat16": torch.bfloat16, "float32": torch.float32}[args.dtype]
+
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(model_path),
         local_files_only=True,
-        torch_dtype="auto",
+        torch_dtype=dtype_arg,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = args.device
     model.to(device)
     model.eval()
+    resolved_dtype = next(model.parameters()).dtype
 
     messages = [
         {"role": "system", "content": args.system},
@@ -143,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print(f"prompt_tokens: {prompt_len}")
+    print(f"resolved_dtype: {resolved_dtype}")
+    print(f"resolved_device: {device}")
     print(f"output_ids: {' '.join(str(i) for i in output_ids)}")
     print(f"stop_reason: {stopped}")
     print(f"wall_time_seconds: {wall:.3f}")
