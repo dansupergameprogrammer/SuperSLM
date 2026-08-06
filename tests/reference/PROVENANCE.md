@@ -8,12 +8,18 @@ by `tests/reference/check_provenance.py` rather than by this file alone.
 
 ## Source
 
-**Every SHA-256 below is computed over the source file's git-blob content
+**For the six rows below that are full-file vendored copies of a `D:\Wizard`
+file, the recorded SHA-256 is computed over the source file's git-blob content
 (LF-normalized), never a Windows working-tree checkout (CRLF) of it.** `D:\Wizard`
 carries `* text=auto` and this repository carries `*.py eol=lf`, so `git show
 <commit>:<path>` and this directory's own committed copies agree; a raw disk
 read of a Windows checkout of `D:\Wizard`'s `.py` files does not, and hashes
-to a different value for the same content.
+to a different value for the same content. The other three rows --
+`pipeline_prob_width_ceiling.py` (a locally-authored excerpt) and
+`rope_tables_pinned.json`/`criterion2_prompt_pack_pinned.json` (precomputed
+derivatives) -- have no upstream source file to hash against; their recorded
+SHA-256 is a self-hash of this repository's own committed content, for
+self-consistency only, detailed in the notes below the table.
 
 - Source repository: `D:\Wizard` (a separate repository from this one).
 - Source path: `Tools/superslm_spike/{intmath.py,rope.py}` — full-file vendors,
