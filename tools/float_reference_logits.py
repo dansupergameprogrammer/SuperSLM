@@ -28,6 +28,17 @@ argmax at each step matches `model.generate`'s own argmax exactly (both are a
 plain `argmax` over the identical logit row; `model.generate` runs no other
 transform under `do_sample=False`).
 
+COMPUTE PRECISION IS EXPLICIT, NOT RESOLVED SILENTLY FROM THE CHECKPOINT
+(T-1783, correcting an unstated axis T-1782/I1 found: this checkpoint's own
+`config.json` carries `"torch_dtype": "bfloat16"`, so the prior unconditional
+`torch_dtype="auto"` silently ran this reference in bfloat16 -- a fact no
+record stated, even though the row this script dumps is explicitly upcast to
+float32 at capture time (`.detach().to(torch.float32)` below) -- that upcast
+is the DUMP's storage precision, not the COMPUTE precision the forward ran
+at). `--dtype` defaults to `auto` (unchanged behavior, currently resolves to
+bfloat16) and accepts `bfloat16` or `float32` to force the compute precision;
+the resolved value is always printed (`resolved_dtype:`).
+
 Offline only. Loads the local HuggingFace cache with local_files_only=True;
 never touches the network.
 
@@ -35,12 +46,14 @@ Usage
 -----
     python tools\\float_reference_logits.py "What is 12 + 15? Give just the number." \\
         --system "You are Qwen, created by Alibaba Cloud. You are a helpful assistant." \\
-        --max-new 8 --stop 151645 151643 \\
+        --max-new 8 --stop 151645 151643 --dtype float32 \\
         --dump-logits out\\logits\\f_12plus15_digit.bin
 
 Prints the same machine-parseable fields as float_reference_generate.py:
 
     prompt_tokens: <n>
+    resolved_dtype: <torch dtype the checkpoint actually loaded and ran at>
+    resolved_device: <cpu|cuda>
     output_ids: <space-separated ids, generated tokens only, stop id included if emitted>
     stop_reason: 1|0            (1 = stopped on a supplied stop id, 0 = hit the token budget)
     wall_time_seconds: <float>
@@ -118,6 +131,23 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="path to write the per-step float32 logit rows (see this file's docstring)",
     )
+    parser.add_argument(
+        "--dtype",
+        choices=["auto", "bfloat16", "float32"],
+        default="auto",
+        help="compute precision. 'auto' (default) resolves from the checkpoint's own "
+             "config.json -- currently bfloat16 for this checkpoint, unchanged from prior "
+             "behavior. 'float32' forces full-precision compute. The dumped logit rows are "
+             "always upcast to float32 for storage regardless of this setting -- that is a "
+             "serialization format, not the compute precision; the resolved compute dtype is "
+             "always printed.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="'auto' (default, unchanged) picks CUDA if available, else CPU.",
+    )
     args = parser.parse_args(argv)
 
     model_path = _resolve_default_model(Path(args.model))
@@ -127,15 +157,21 @@ def main(argv: list[str] | None = None) -> int:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    dtype_arg = {"auto": "auto", "bfloat16": torch.bfloat16, "float32": torch.float32}[args.dtype]
+
     tokenizer = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
         str(model_path),
         local_files_only=True,
-        torch_dtype="auto",
+        torch_dtype=dtype_arg,
     )
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = args.device
     model.to(device)
     model.eval()
+    resolved_dtype = next(model.parameters()).dtype
 
     messages = [
         {"role": "system", "content": args.system},
@@ -184,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             f.write(row.numpy().tobytes())
 
     print(f"prompt_tokens: {prompt_len}")
+    print(f"resolved_dtype: {resolved_dtype}")
+    print(f"resolved_device: {device}")
     print(f"output_ids: {' '.join(str(i) for i in output_ids)}")
     print(f"stop_reason: {stopped}")
     print(f"wall_time_seconds: {wall:.3f}")
