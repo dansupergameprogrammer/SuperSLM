@@ -20,6 +20,7 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -1359,9 +1360,27 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 					// at all -- caught here, before SoftmaxRowQ15 (or the width
 					// gate below) is ever called for this kv_head.
 					int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+					// T-1775 diagnostic ablation hook. Env-gated, default OFF,
+					// and inert at every layer but 0 -- with the environment
+					// variable unset (the default), this reduces to the exact
+					// original one-argument-different call below, byte for
+					// byte. This is the SAME widening T-1772 applied
+					// (`tools/t1772_layer0_candidates_probe.cpp`, an
+					// `sm.e` offset fed into this SAME production derivation
+					// function), now exercised through the unmodified
+					// production kernel across a full autoregressive decode
+					// instead of a single-layer replay. Not a candidate
+					// remedy -- a diagnostic instrument, scoped and disclaimed
+					// in Claude/Brunel/t1775-layer0-e2e-ablation-2026-08-05.md.
+					static const int64_t kT1775Layer0EOffset = []() -> int64_t {
+						const char* v = std::getenv("SSLM_T1775_LAYER0_EOFFSET");
+						return v ? static_cast<int64_t>(std::atoll(v)) : 0;
+					}();
+					const int64_t sm_e_for_derivation =
+					    (l == 0 && kT1775Layer0EOffset != 0) ? (sm.e + kT1775Layer0EOffset) : sm.e;
 					const IExpScaleDomain scale_domain = IExpScaleConstants(
-					    sm.m, sm.e, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30, &derived_q_ln2,
-					    &derived_q_b, &derived_q_c);
+					    sm.m, sm_e_for_derivation, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30,
+					    &derived_q_ln2, &derived_q_b, &derived_q_c);
 					if (scale_domain != IExpScaleDomain::kOk) {
 						return SslmForwardStatus::IExpScaleDerivationOutOfDomain;
 					}
