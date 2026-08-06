@@ -58,6 +58,30 @@ def _from_import_backslash(name: str) -> str:
     return f"from {_PKG} import \\\n    {name}\n"
 
 
+def _from_import_parenthesized_open_paren_comment(names: list, comment: str) -> str:
+    inner = "".join(f"    {n},\n" for n in names)
+    return f"from {_PKG} import (  # {comment}\n{inner})\n"
+
+
+def _from_import_parenthesized_per_name_comment_before(names: list, comment_index: int, comment: str) -> str:
+    lines = []
+    for i, n in enumerate(names):
+        if i == comment_index:
+            lines.append(f"    {n},  # {comment}\n")
+        else:
+            lines.append(f"    {n},\n")
+    inner = "".join(lines)
+    return f"from {_PKG} import (\n{inner})\n"
+
+
+def _string_literal_mentioning_the_import_form_with_open_paren() -> str:
+    return f'DOC = "from {_PKG} import ("\n'
+
+
+def _comment_mentioning_the_import_form_with_open_paren(module: str) -> str:
+    return f"# see: from {_PKG} import ({module}\n"
+
+
 def _write(tmpdir: str, rel_path: str, content: str) -> str:
     abs_path = os.path.join(tmpdir, rel_path)
     os.makedirs(os.path.dirname(abs_path), exist_ok=True)
@@ -151,6 +175,89 @@ def test_the_backslash_continuation_form_is_detected():
         path = _write(tmp, "site.py", _from_import_backslash("dynamic_engine"))
         hits = ccli.find_banned_import_uses(path)
         assert hits == [(1, "dynamic_engine")]
+
+
+# --- The under-inclusion regressions Poirot found on the D-SLM1058 repair
+# itself (findings B and C, 2414bd4-t1744-review-fold-confirmation.md): a
+# comment on the opening-paren line of a wrapped import dropped every name,
+# a per-name comment dropped every name after it, and the logical-line join
+# swallowed a real import beneath any line merely mentioning the import form
+# with an unbalanced '('. All four are formatter-stable (round-trip
+# byte-identical through black 25.1.0) or, for the join regression, latent
+# in exactly the file class that documents the ban. ---
+
+
+def test_a_comment_on_the_opening_paren_line_does_not_drop_every_name():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "site.py",
+            _from_import_parenthesized_open_paren_comment(["pipeline", "silu_lut"], "noqa: E402"),
+        )
+        hits = ccli.find_banned_import_uses(path)
+        assert {m for _, m in hits} == {"pipeline", "silu_lut"}, f"expected both names caught, got {hits}"
+
+
+def test_a_type_ignore_comment_on_the_opening_paren_line_does_not_drop_every_name():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "site.py",
+            _from_import_parenthesized_open_paren_comment(["dynamic_engine"], "type: ignore"),
+        )
+        hits = ccli.find_banned_import_uses(path)
+        assert {m for _, m in hits} == {"dynamic_engine"}, f"expected the name caught, got {hits}"
+
+
+def test_a_per_name_comment_does_not_drop_every_name_after_it():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp,
+            "site.py",
+            _from_import_parenthesized_per_name_comment_before(
+                ["intmath", "pipeline", "silu_lut"], comment_index=0, comment="noqa"
+            ),
+        )
+        hits = ccli.find_banned_import_uses(path)
+        assert {m for _, m in hits} == {"pipeline", "silu_lut"}, (
+            f"expected both banned names after the comment caught, got {hits}"
+        )
+
+
+def test_a_string_literal_mentioning_the_import_form_does_not_swallow_a_real_import_below():
+    with tempfile.TemporaryDirectory() as tmp:
+        content = _string_literal_mentioning_the_import_form_with_open_paren() + _from_import("pipeline")
+        path = _write(tmp, "site.py", content)
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(2, "pipeline")], f"expected the real import on line 2 caught, got {hits}"
+
+
+def test_a_comment_mentioning_the_import_form_does_not_swallow_a_real_import_two_lines_below():
+    with tempfile.TemporaryDirectory() as tmp:
+        content = (
+            _comment_mentioning_the_import_form_with_open_paren("dynamic_engine")
+            + "import os\n"
+            + _from_import("dynamic_engine")
+        )
+        path = _write(tmp, "site.py", content)
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(3, "dynamic_engine")], f"expected the real import on line 3 caught, got {hits}"
+
+
+def test_a_file_that_does_not_parse_as_python_falls_back_to_the_text_scan():
+    """A file ast.parse cannot read (a broken fixture, a template snippet
+    saved with a .py suffix) must not silently report zero from-import hits
+    -- the text-based logical-line scan is the fallback for exactly this
+    case, per the module docstring."""
+    with tempfile.TemporaryDirectory() as tmp:
+        content = "def broken(\n" + _from_import("pipeline")
+        path = _write(tmp, "site.py", content)
+        with pytest.raises(SyntaxError):
+            import ast as _ast
+
+            _ast.parse(content)
+        hits = ccli.find_banned_import_uses(path)
+        assert (2, "pipeline") in hits, f"expected the fallback text scan to still catch line 2, got {hits}"
 
 
 def test_tools_convert_model_with_a_trailing_noqa_comment_fails_clause_i():

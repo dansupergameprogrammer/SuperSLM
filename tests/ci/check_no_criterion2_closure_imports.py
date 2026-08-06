@@ -66,6 +66,7 @@ should not gratuitously invite.)
 
 from __future__ import annotations
 
+import ast
 import glob
 import os
 import re
@@ -123,19 +124,24 @@ _DEFAULT_TEST_ALLOWLIST = (
 
 
 def _from_import_logical_lines(lines: list[str]) -> list[tuple[int, str]]:
-    """Yields (1-based start line number, joined text) for every physical line
-    that opens a `from superslm_spike import` statement, joining a trailing
+    """FALLBACK ONLY -- used by `find_banned_import_uses` solely when
+    `ast.parse` cannot read the file (D-SLM1087; see that function). Yields
+    (1-based start line number, joined text) for every physical line that
+    OPENS a `from superslm_spike import` statement, joining a trailing
     backslash continuation or an unbalanced opening parenthesis across
     following physical lines into one logical line.
 
-    A single-physical-line scan never rejoins the PEP 8 / black parenthesized
-    multi-line form (`from superslm_spike import (\\n    pipeline,\\n)`) or an
-    explicit backslash continuation (`from superslm_spike import \\\\\\n
-    dynamic_engine`) -- each splits the imported names across a line the
-    from-import regex never reaches (D-SLM1058). Joining is scoped to lines
-    that already open a from-superslm_spike-import statement, so an unrelated
-    multi-line construct elsewhere in the file is never folded in by
-    accident."""
+    This is a heuristic, not a parser: it has twice under-caught real
+    spellings it was extended to catch (D-SLM1058, then the opening-paren-
+    comment and per-name-comment forms Poirot found in the D-SLM1058 repair
+    itself) and it once over-consumed a real import beneath an unrelated
+    line that merely mentioned the import form inside a string or comment
+    with an unbalanced '(' (finding C, 2414bd4-t1744-review-fold-
+    confirmation.md). `ast.parse` is immune to all of these by construction
+    -- it only ever recognizes a statement the interpreter itself would
+    recognize as an import -- which is why it is the primary path and this
+    function now only runs on the (measured: repository-wide zero-today)
+    population of files ast cannot parse."""
     out: list[tuple[int, str]] = []
     i = 0
     n = len(lines)
@@ -160,18 +166,10 @@ def _from_import_logical_lines(lines: list[str]) -> list[tuple[int, str]]:
     return out
 
 
-def find_banned_import_uses(path: str, modules: tuple[str, ...] = BANNED_MODULES) -> list[tuple[int, str]]:
-    """Every (1-based line number, module name) hit in `path`, in file order --
-    dotted-attribute and from-import forms both. A text scan, not an AST walk:
-    a banned name inside a comment or a string literal is still reported; this
-    is a deliberate over-approximation of a ban, not an attempt to classify
-    intent (module docstring)."""
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
+def _from_import_hits_via_text_scan(lines: list[str], modules: tuple[str, ...]) -> list[tuple[int, str]]:
+    """FALLBACK ONLY -- the pre-D-SLM1087 from-import scan, kept for files
+    `ast.parse` cannot read. See `_from_import_logical_lines`."""
     hits: list[tuple[int, str]] = []
-    for lineno, line in enumerate(lines, start=1):
-        for m in _DOTTED_RE.finditer(line):
-            hits.append((lineno, m.group(1)))
     for lineno, joined in _from_import_logical_lines(lines):
         m2 = _FROM_IMPORT_RE.search(joined)
         if not m2:
@@ -189,6 +187,67 @@ def find_banned_import_uses(path: str, modules: tuple[str, ...] = BANNED_MODULES
             tok = re.split(r"\s+as\s+", tok)[0].strip()
             if tok in modules:
                 hits.append((lineno, tok))
+    return hits
+
+
+def _from_import_hits_via_ast(source: str, modules: tuple[str, ...]) -> list[tuple[int, str]] | None:
+    """Every (1-based line number, module name) hit from a `from superslm_spike
+    import ...` statement in `source`, found by parsing it as Python -- or
+    `None` if `source` does not parse, in which case the caller falls back to
+    `_from_import_hits_via_text_scan` (D-SLM1087).
+
+    `ast.parse` recognizes exactly the statements the interpreter itself
+    would recognize as imports: a comment anywhere on any physical line of a
+    wrapped import (on the opening paren, before a name, after a name) is
+    not part of the parse tree and cannot truncate the names list the way a
+    line-oriented text scan can, and a string literal or comment that merely
+    mentions the import form is a `Constant`/no-op node, never an
+    `ImportFrom`, so it cannot be mistaken for one or swallow a real
+    statement beneath it. Reports every alias at its `ImportFrom` node's own
+    line, matching this module's prior behavior of reporting the statement's
+    opening line for every name it binds."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    hits: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module == "superslm_spike":
+            for alias in node.names:
+                if alias.name in modules:
+                    hits.append((node.lineno, alias.name))
+    return hits
+
+
+def find_banned_import_uses(path: str, modules: tuple[str, ...] = BANNED_MODULES) -> list[tuple[int, str]]:
+    """Every (1-based line number, module name) hit in `path`, in file order --
+    dotted-attribute and from-import forms both.
+
+    The dotted-attribute form (the package name, a dot, then a banned
+    submodule name, as an expression rather than an import statement) stays
+    a text scan: a banned name inside a comment or a string literal is still
+    reported, a deliberate over-approximation of a ban rather than an
+    attempt to classify intent (module docstring) -- and it is not the
+    family that has ever under-caught.
+
+    The from-import form is parsed with `ast` (D-SLM1087): every prior and
+    newly-found under-inclusion defect in this checker lived in the
+    hand-rolled from-import line joiner, and the module's stated tolerance
+    is over-inclusion, never under-inclusion, which a parser closes by
+    construction rather than by chasing one more spelling. The text-scan
+    joiner remains as a fallback for the file `ast.parse` cannot read
+    (measured: zero such files in this repository today)."""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        source = f.read()
+    lines = source.splitlines(keepends=True)
+    hits: list[tuple[int, str]] = []
+    for lineno, line in enumerate(lines, start=1):
+        for m in _DOTTED_RE.finditer(line):
+            hits.append((lineno, m.group(1)))
+    from_import_hits = _from_import_hits_via_ast(source, modules)
+    if from_import_hits is None:
+        from_import_hits = _from_import_hits_via_text_scan(lines, modules)
+    hits.extend(from_import_hits)
     hits.sort(key=lambda h: h[0])
     return hits
 
