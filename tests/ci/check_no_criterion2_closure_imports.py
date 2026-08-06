@@ -82,6 +82,7 @@ _DOTTED_RE = re.compile(
     r"superslm_spike\.(" + "|".join(re.escape(m) for m in BANNED_MODULES) + r")\b"
 )
 _FROM_IMPORT_RE = re.compile(r"from\s+superslm_spike\s+import\b(.*)$")
+_FROM_IMPORT_START_RE = re.compile(r"from\s+superslm_spike\s+import\b")
 
 # Clause (i): production code. tools/convert_model.py is named explicitly
 # rather than resolved as an import graph -- see module docstring.
@@ -121,6 +122,44 @@ _DEFAULT_TEST_ALLOWLIST = (
 )
 
 
+def _from_import_logical_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Yields (1-based start line number, joined text) for every physical line
+    that opens a `from superslm_spike import` statement, joining a trailing
+    backslash continuation or an unbalanced opening parenthesis across
+    following physical lines into one logical line.
+
+    A single-physical-line scan never rejoins the PEP 8 / black parenthesized
+    multi-line form (`from superslm_spike import (\\n    pipeline,\\n)`) or an
+    explicit backslash continuation (`from superslm_spike import \\\\\\n
+    dynamic_engine`) -- each splits the imported names across a line the
+    from-import regex never reaches (D-SLM1058). Joining is scoped to lines
+    that already open a from-superslm_spike-import statement, so an unrelated
+    multi-line construct elsewhere in the file is never folded in by
+    accident."""
+    out: list[tuple[int, str]] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if _FROM_IMPORT_START_RE.search(line) is None:
+            i += 1
+            continue
+        start = i + 1
+        joined = line.rstrip("\n")
+        while i + 1 < n and (
+            joined.rstrip().endswith("\\") or joined.count("(") > joined.count(")")
+        ):
+            i += 1
+            nxt = lines[i].rstrip("\n")
+            if joined.rstrip().endswith("\\"):
+                joined = joined.rstrip()[:-1].rstrip() + " " + nxt
+            else:
+                joined = joined + " " + nxt
+        out.append((start, joined))
+        i += 1
+    return out
+
+
 def find_banned_import_uses(path: str, modules: tuple[str, ...] = BANNED_MODULES) -> list[tuple[int, str]]:
     """Every (1-based line number, module name) hit in `path`, in file order --
     dotted-attribute and from-import forms both. A text scan, not an AST walk:
@@ -133,16 +172,24 @@ def find_banned_import_uses(path: str, modules: tuple[str, ...] = BANNED_MODULES
     for lineno, line in enumerate(lines, start=1):
         for m in _DOTTED_RE.finditer(line):
             hits.append((lineno, m.group(1)))
-        m2 = _FROM_IMPORT_RE.search(line)
-        if m2:
-            names_part = m2.group(1)
-            for raw_tok in re.split(r",", names_part):
-                tok = raw_tok.strip().strip("()\\").strip()
-                # Drop an "as alias" suffix so `from superslm_spike import
-                # pipeline as p` is still recognized by its real name.
-                tok = re.split(r"\s+as\s+", tok)[0].strip()
-                if tok in modules:
-                    hits.append((lineno, tok))
+    for lineno, joined in _from_import_logical_lines(lines):
+        m2 = _FROM_IMPORT_RE.search(joined)
+        if not m2:
+            continue
+        names_part = m2.group(1)
+        # A trailing `# comment` (e.g. `# noqa: E402`) or a `;`-separated
+        # following statement is not part of the imported-names list --
+        # strip either before splitting, so the last name is not glued to
+        # what follows it (D-SLM1058).
+        names_part = re.split(r"[#;]", names_part, maxsplit=1)[0]
+        for raw_tok in re.split(r",", names_part):
+            tok = raw_tok.strip().strip("()\\").strip()
+            # Drop an "as alias" suffix so `from superslm_spike import
+            # pipeline as p` is still recognized by its real name.
+            tok = re.split(r"\s+as\s+", tok)[0].strip()
+            if tok in modules:
+                hits.append((lineno, tok))
+    hits.sort(key=lambda h: h[0])
     return hits
 
 

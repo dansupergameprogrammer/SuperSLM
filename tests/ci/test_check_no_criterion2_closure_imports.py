@@ -26,6 +26,8 @@ of the trigger substrings.
 import os
 import tempfile
 
+import pytest
+
 import check_no_criterion2_closure_imports as ccli
 
 _PKG = "superslm_spike"
@@ -37,6 +39,23 @@ def _dotted_call(module: str, tail: str) -> str:
 
 def _from_import(names: str) -> str:
     return f"from {_PKG} import {names}\n"
+
+
+def _from_import_trailing_comment(names: str, comment: str = "noqa: E402") -> str:
+    return f"from {_PKG} import {names}  # {comment}\n"
+
+
+def _from_import_trailing_semicolon(names: str, tail: str = "x = 1") -> str:
+    return f"from {_PKG} import {names}; {tail}\n"
+
+
+def _from_import_parenthesized(names: list) -> str:
+    inner = "".join(f"    {n},\n" for n in names)
+    return f"from {_PKG} import (\n{inner})\n"
+
+
+def _from_import_backslash(name: str) -> str:
+    return f"from {_PKG} import \\\n    {name}\n"
 
 
 def _write(tmpdir: str, rel_path: str, content: str) -> str:
@@ -96,6 +115,62 @@ def test_the_legitimate_intmath_rope_import_is_not_flagged():
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(tmp, "site.py", _from_import("intmath, rope"))
         assert ccli.find_banned_import_uses(path) == []
+
+
+# --- The normalization gap Poirot found (D-SLM1058): the from-import matcher
+# split a comma-separated names list on its own physical line and never
+# removed a trailing comment or statement separator, so a spelling that
+# splits the names across lines, or trails the last name with a comment or a
+# ';', scanned clean. All four are the real spellings measured against
+# tools/convert_model.py:48 and its formatter-produced neighbours. ---
+
+
+def test_from_import_with_a_trailing_comment_is_detected():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "site.py", _from_import_trailing_comment("pipeline"))
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(1, "pipeline")]
+
+
+def test_from_import_with_a_trailing_semicolon_statement_is_detected():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "site.py", _from_import_trailing_semicolon("pipeline"))
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(1, "pipeline")]
+
+
+def test_the_parenthesized_multiline_form_is_detected():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "site.py", _from_import_parenthesized(["pipeline", "silu_lut"]))
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(1, "pipeline"), (1, "silu_lut")]
+
+
+def test_the_backslash_continuation_form_is_detected():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(tmp, "site.py", _from_import_backslash("dynamic_engine"))
+        hits = ccli.find_banned_import_uses(path)
+        assert hits == [(1, "dynamic_engine")]
+
+
+def test_tools_convert_model_with_a_trailing_noqa_comment_fails_clause_i():
+    """Reproduces the exact real-file shape at tools/convert_model.py:48
+    (D-SLM1058) -- a trailing `# noqa: E402` comment on the from-import line
+    that the original matcher folded into the last imported name, so the
+    line scanned clean over a live instance of the condition the check
+    exists to ban."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(
+            tmp,
+            "tools/convert_model.py",
+            _from_import_trailing_comment("artifact_cache, pipeline", "noqa: E402"),
+        )
+        code = ccli.main(
+            production_globs=("tools/convert_model.py",),
+            test_globs=(),
+            repo_root=tmp,
+        )
+        assert code == 1
 
 
 # --- The plan's own four named red cells (item 4). ---
@@ -280,14 +355,28 @@ def test_a_file_just_outside_the_excluded_directory_with_a_similar_name_is_still
 # --- Present truth: the real tree, now that the closure is vendored. ---
 
 
+@pytest.mark.xfail(
+    reason=(
+        "D-SLM1059 (OPEN, planner): tools/convert_model.py:48 genuinely "
+        "imports the vendored closure ('from superslm_spike import "
+        "artifact_cache, pipeline  # noqa: E402'); the from-import parser "
+        "repair (D-SLM1058) now detects it correctly, which is the intended "
+        "effect of that repair. Whether this call site is a clause (i) "
+        "violation or an accepted, allowlisted exception is a planner call "
+        "under T-1745, not this suite's to decide. strict=True so this test "
+        "re-surfaces for review the moment either disposition lands."
+    ),
+    strict=True,
+)
 def test_main_end_to_end_against_the_real_tree():
     """The wiring cell: the real production tree and the real test tree, both
     scanned under the module's own default globs/allowlist, pass end to end --
     nothing in include/, src/, or tools/convert_model.py imports the wide
     closure, and the only files under tests/ that do are the vendored
-    closure's own internal imports (exempted by directory) and, once T-1522
-    lands, the allowlisted producer/comparator (neither exists yet in this
-    build's own scope, so the allowlist is unexercised against real files
-    here, proven instead by the constructed cells above)."""
+    closure's own internal imports (exempted by directory) and the four
+    allowlisted files (the producer, the comparator, the precompute script,
+    and the producer's own test file -- all four exist in this build's own
+    scope and are exercised here against the real files, not only by the
+    constructed cells above)."""
     code = ccli.main()
     assert code == 0

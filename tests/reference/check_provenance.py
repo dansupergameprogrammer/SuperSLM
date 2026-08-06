@@ -118,6 +118,11 @@ def main() -> int:
         if row.digest == "PENDING":
             mismatches.append(f"{rel_path}: PROVENANCE.md still records PENDING, never updated with a real hash")
             continue
+        if row.source_commit == "PENDING":
+            mismatches.append(
+                f"{rel_path}: PROVENANCE.md still records PENDING Source commit, never updated with a real commit"
+            )
+            continue
         abs_path = os.path.join(_THIS_DIR, rel_path)
         if not os.path.isfile(abs_path):
             mismatches.append(f"{rel_path}: file not found on disk at {abs_path}")

@@ -13,8 +13,8 @@ existing constant BY NAME, so a test that checks the tie is checking two
 citations agree, not re-deriving anything from the emitter's own logic.
 
 Verbatim from `Tools/superslm_spike/pipeline.py` lines 191 and 2253 (source
-commit `ca67e90ead90373fc55680a67e2b41e0d7c9abca`, whole-file SHA-256
-`80daca8cd134d8798b3a49b5d315fb06b7b33e73d1c96b564f55d6e9da7a984e` —
+commit `ca67e90ead90373fc55680a67e2b41e0d7c9abca`, whole-file SHA-256 (git-blob,
+LF-normalized) `27affab8d53085532d392d947e01e125859ef8236f55abdebb49eb6b1c0dcf49` --
 PROVENANCE.md). A re-vendor is a deliberate commit: re-copy these two lines,
 recompute the whole-file hash, and update PROVENANCE.md together, the same
 protocol `intmath.py`/`rope.py` already follow.

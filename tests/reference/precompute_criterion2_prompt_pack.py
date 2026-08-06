@@ -21,9 +21,15 @@ tokenizer, `transformers`, or `D:\\Wizard` at build/CI time. `criterion2_prompt_
 is a PRECOMPUTED DERIVATIVE, not a vendored copy of an upstream file -- like
 `rope_tables_pinned.json`, it is hashed by `check_provenance.py` for SELF-consistency only (a
 hand-edit after the fact), not as a byte-identical copy of any one source-repo path; the design
-record it transcribes (D-SLM350) is the specification, and the render's own
-`token_count`/`pack_fingerprint` cross-check below is what proves this transcription is
-faithful to it.
+record it transcribes (D-SLM350) is the specification, and the render's own `token_count`
+cross-check below (`prompt_pack.render` raises on any member whose rendered length disagrees
+with D-SLM350's own table) is what proves this transcription is faithful to it --
+`test_the_real_pinned_prompt_pack_loads_and_matches_the_design_records_counts`
+(`tests/reference/test_run_criterion2_trace.py`) re-asserts the same counts independently
+against the committed JSON. `pack_fingerprint` below is recorded in the output JSON's
+`fingerprint` field as a compact self-identifying label for a hand re-vendor to compare by eye;
+nothing in this repository recomputes or compares it automatically, because doing so would
+require `prompt_pack` itself, which is deliberately not part of the vendored closure.
 
 This script itself is on `check_no_criterion2_closure_imports.py`'s allowlist (T-1523):
 it is not one of item 3's own three named pieces (producer/consumer/comparator), but it is

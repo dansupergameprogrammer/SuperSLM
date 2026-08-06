@@ -158,13 +158,11 @@ def run_member(model, member: dict) -> tuple[list[dict], list[int]]:
     trace: list = []
     logits = dynamic_engine.forward_dynamic_vec(model, member["input_ids"], trace=trace)
     ordered_records = [_order_record(r) for r in trace]
+    # int32 logits is one row per token; the trace record contract only pins
+    # per-site records, so this script does not further validate shape
+    # beyond making it JSON-safe -- the comparator (Stage 4, out of this
+    # build's scope) is the consumer that interprets it.
     logits_list = _jsonable(logits)
-    if logits_list and isinstance(logits_list[0], list):
-        # int32 logits is one row per token; the trace record contract only
-        # pins per-site records, so this script does not further validate
-        # shape beyond making it JSON-safe -- the comparator (Stage 4, out of
-        # this build's scope) is the consumer that interprets it.
-        pass
     return ordered_records, logits_list
 
 

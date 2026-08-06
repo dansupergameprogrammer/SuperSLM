@@ -48,6 +48,17 @@ def test_clean_tree_passes():
     assert code == 0
 
 
+def test_the_checked_file_count_is_named_and_checkable():
+    """`SuperSLM_S3a_WalkingSkeleton_Plan.md` Sec11 S3.1c item 2a's gate names
+    a checked-file count in prose; nothing before this asserted it, so a
+    silent addition or removal from `_CHECKED_FILES` would pass every other
+    cell in this suite without the count itself ever being examined (Poirot
+    observation 11, 2026-08-05). This does not assert what the count SHOULD
+    be against the plan's own wording -- that reconciliation is a planner
+    call -- only that today's actual set is a fixed, named, checkable size."""
+    assert len(cp._CHECKED_FILES) == 9
+
+
 @pytest.mark.parametrize("rel_path", list(cp._CHECKED_FILES))
 def test_tampering_any_vendored_file_is_caught_and_named(rel_path, restore_file):
     import os
@@ -160,6 +171,51 @@ def test_group_disagreement_in_the_real_provenance_file_is_caught_by_main(restor
     code, output = _run_main()
     assert code == 1
     assert "criterion2-closure" in output
+
+
+def test_pending_source_commit_on_one_row_is_its_own_named_mismatch(restore_file):
+    """The gap Poirot found (D-SLM1060): `main()` inspected only the digest
+    column for a `PENDING` placeholder; a `PENDING` Source commit on a single
+    row exited 0 with no message before this repair, silently disabling the
+    group-commit-identity property for the group that row belongs to."""
+    restore_file(cp.PROVENANCE_PATH)
+    with open(cp.PROVENANCE_PATH, "r", encoding="utf-8") as f:
+        text = f.read()
+    real_commit = "ca67e90ead90373fc55680a67e2b41e0d7c9abca"
+    edited = text.replace(
+        f"`superslm_spike/dynamic_engine.py` | `593e9b41dff762d783a620dff28a612e15a086fc85735405c1f41ecb1774a059` | `{real_commit}`",
+        "`superslm_spike/dynamic_engine.py` | `593e9b41dff762d783a620dff28a612e15a086fc85735405c1f41ecb1774a059` | `PENDING`",
+        1,
+    )
+    assert edited != text, "fixture assumption: the targeted row text was found and replaced exactly once"
+    with open(cp.PROVENANCE_PATH, "w", encoding="utf-8") as f:
+        f.write(edited)
+
+    code, output = _run_main()
+    assert code == 1
+    assert "superslm_spike/dynamic_engine.py" in output
+    assert "PENDING" in output
+
+
+def test_pending_source_commit_on_every_criterion2_closure_row_is_caught(restore_file):
+    """All four `criterion2-closure` rows set to `PENDING` at once -- the
+    shape the re-vendor workflow's own gap between writing a row and
+    recording its real commit produces. Exited 0 with no message on all four
+    at once before this repair, the same as it did on one alone."""
+    restore_file(cp.PROVENANCE_PATH)
+    with open(cp.PROVENANCE_PATH, "r", encoding="utf-8") as f:
+        text = f.read()
+    real_commit = "ca67e90ead90373fc55680a67e2b41e0d7c9abca"
+    edited = text.replace(f"| `{real_commit}` | `criterion2-closure` |", "| `PENDING` | `criterion2-closure` |")
+    assert edited.count("`PENDING` | `criterion2-closure`") == 4, (
+        "fixture assumption: exactly four criterion2-closure rows share the real commit"
+    )
+    with open(cp.PROVENANCE_PATH, "w", encoding="utf-8") as f:
+        f.write(edited)
+
+    code, output = _run_main()
+    assert code == 1
+    assert output.count("PENDING") >= 4
 
 
 def test_reverting_the_group_disagreement_passes_again(restore_file):

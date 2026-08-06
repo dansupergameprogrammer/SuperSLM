@@ -8,6 +8,13 @@ by `tests/reference/check_provenance.py` rather than by this file alone.
 
 ## Source
 
+**Every SHA-256 below is computed over the source file's git-blob content
+(LF-normalized), never a Windows working-tree checkout (CRLF) of it.** `D:\Wizard`
+carries `* text=auto` and this repository carries `*.py eol=lf`, so `git show
+<commit>:<path>` and this directory's own committed copies agree; a raw disk
+read of a Windows checkout of `D:\Wizard`'s `.py` files does not, and hashes
+to a different value for the same content.
+
 - Source repository: `D:\Wizard` (a separate repository from this one).
 - Source path: `Tools/superslm_spike/{intmath.py,rope.py}` — full-file vendors,
   imported by `tests/gen_intmath_fixtures.py`/`tests/gen_matmul_fixtures.py`.
@@ -20,8 +27,9 @@ by `tests/reference/check_provenance.py` rather than by this file alone.
   produces a correlated oracle, not an independent one — this excerpt exists
   solely to tie the shipped C++ numerator ceiling to the name Dan's ruling
   ties it to). Source commit `ca67e90ead90373fc55680a67e2b41e0d7c9abca`;
-  whole-file SHA-256 `80daca8cd134d8798b3a49b5d315fb06b7b33e73d1c96b564f55d6e9da7a984e`
-  (recorded here as the re-vendor trigger — ANY edit to `pipeline.py`
+  whole-file SHA-256 `27affab8d53085532d392d947e01e125859ef8236f55abdebb49eb6b1c0dcf49`
+  (the git-blob hash, matching the `criterion2-closure` row below for the same
+  file at the same commit; recorded here as the re-vendor trigger — ANY edit to `pipeline.py`
   invalidates this excerpt's pin, even one outside lines 191/2253, matching
   the same conservative whole-file-invalidates convention `intmath.py`/
   `rope.py` already use).
@@ -41,7 +49,7 @@ by `tests/reference/check_provenance.py` rather than by this file alone.
 | `superslm_spike/intmath.py` | `d780f5f17f1cd9d0db83359adcf541506d413bf375e2468074a25e22741a52da` | `38bc8929e0933f901611ad4e979420d1321f01a7` | `intmath-rope` |
 | `superslm_spike/rope.py` | `4e54dda3cf9004d63700732d63419d0135ee459db8b5ecf428c441c4c08bcff7` | `38bc8929e0933f901611ad4e979420d1321f01a7` | `intmath-rope` |
 | `superslm_spike/rope_tables_pinned.json` | `4e79a90101c3447302296f93ef0bdd3240a7972fbcdb76a3ac6acbf1fe1c66b7` | `38bc8929e0933f901611ad4e979420d1321f01a7` | `intmath-rope` |
-| `superslm_spike/pipeline_prob_width_ceiling.py` | `6f79f2c75e274a8b5218e75b4a58bee20fc35bf9c652afef2d0353e19c46398b` | `ca67e90ead90373fc55680a67e2b41e0d7c9abca` | `pipeline-ceiling` |
+| `superslm_spike/pipeline_prob_width_ceiling.py` | `77ad28077b2f39fc64541ad3dd9be889b273149e30e1eaab5d8455537068f680` | `ca67e90ead90373fc55680a67e2b41e0d7c9abca` | `pipeline-ceiling` |
 | `superslm_spike/dynamic_engine.py` | `593e9b41dff762d783a620dff28a612e15a086fc85735405c1f41ecb1774a059` | `ca67e90ead90373fc55680a67e2b41e0d7c9abca` | `criterion2-closure` |
 | `superslm_spike/pipeline.py` | `27affab8d53085532d392d947e01e125859ef8236f55abdebb49eb6b1c0dcf49` | `ca67e90ead90373fc55680a67e2b41e0d7c9abca` | `criterion2-closure` |
 | `superslm_spike/silu_lut.py` | `be17bf7edfebb7d9931942aa6d01fbf86a769b1b6b94c96db1e273666fbd7995` | `ca67e90ead90373fc55680a67e2b41e0d7c9abca` | `criterion2-closure` |
