@@ -352,15 +352,35 @@ def test_a_file_just_outside_the_excluded_directory_with_a_similar_name_is_still
         assert code == 1
 
 
+# --- This file's own hygiene: FIXTURE CONTENT IS BUILT FROM PARTS applies to
+# every string this file's own source contains, including an xfail reason,
+# not only the helpers above (D-SLM1086; Poirot finding A,
+# 2414bd4-t1744-review-fold-confirmation.md). A prior fix transcribed the
+# literal banned import into the xfail reason below, which the module
+# docstring's own convention forbids in capitals -- this cell is the red cell
+# that convention was always owed. ---
+
+
+def test_this_file_itself_scans_clean():
+    """This file lives under tests/ci/ (clause ii) and is not on the
+    allowlist. A literal contiguous banned substring anywhere in this file's
+    own static source -- in a fixture-building helper, a docstring, or an
+    xfail reason -- trips the checker's text scan the moment it scans
+    itself, which is exactly the failure the module docstring names and this
+    file's own top-of-file convention exists to prevent."""
+    assert ccli.find_banned_import_uses(__file__) == []
+
+
 # --- Present truth: the real tree, now that the closure is vendored. ---
 
 
 @pytest.mark.xfail(
     reason=(
         "D-SLM1059 (OPEN, planner): tools/convert_model.py:48 genuinely "
-        "imports the vendored closure ('from superslm_spike import "
-        "artifact_cache, pipeline  # noqa: E402'); the from-import parser "
-        "repair (D-SLM1058) now detects it correctly, which is the intended "
+        "imports the vendored closure (see that line and column for the "
+        "exact statement -- not transcribed here, D-SLM1086, so this file "
+        "does not trip its own text scan); the from-import parser repair "
+        "(D-SLM1058) now detects it correctly, which is the intended "
         "effect of that repair. Whether this call site is a clause (i) "
         "violation or an accepted, allowlisted exception is a planner call "
         "under T-1745, not this suite's to decide. strict=True so this test "
