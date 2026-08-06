@@ -395,6 +395,33 @@ def test_the_default_allowlist_names_exactly_four_files():
     }
 
 
+# The comparator (compare_criterion2_traces.py) is Stage 4, out of this
+# build's scope, and is not yet on disk -- named here so a claim that it
+# "exists and is exercised" cannot drift back into a docstring without this
+# test catching it (D-SLM1088; Poirot finding D,
+# 2414bd4-t1744-review-fold-confirmation.md).
+_NOT_YET_BUILT_ALLOWLIST_PATHS = frozenset({"tests/reference/compare_criterion2_traces.py"})
+
+
+def test_the_default_allowlists_paths_reconcile_against_the_filesystem():
+    """Each of the four allowlisted paths either exists on disk today or is
+    named in `_NOT_YET_BUILT_ALLOWLIST_PATHS` as not-yet-built -- so a
+    docstring or comment claiming a path "exists and is exercised against
+    the real files" cannot silently go stale again the way finding 9's
+    replacement (D-SLM1058) did within the same week."""
+    for rel in ccli._DEFAULT_TEST_ALLOWLIST:
+        abs_path = os.path.join(ccli._REPO_ROOT, rel)
+        exists = os.path.isfile(abs_path)
+        if rel in _NOT_YET_BUILT_ALLOWLIST_PATHS:
+            assert not exists, (
+                f"{rel} is named not-yet-built but now exists on disk -- "
+                f"update _NOT_YET_BUILT_ALLOWLIST_PATHS and "
+                f"test_main_end_to_end_against_the_real_tree's docstring"
+            )
+        else:
+            assert exists, f"{rel} is allowlisted as existing but was not found at {abs_path}"
+
+
 def test_the_precompute_script_and_its_test_file_pass_even_though_they_import_the_wide_closure():
     with tempfile.TemporaryDirectory() as tmp:
         _write(tmp, "tests/reference/precompute_criterion2_prompt_pack.py", _from_import("pipeline"))
@@ -502,8 +529,14 @@ def test_main_end_to_end_against_the_real_tree():
     closure, and the only files under tests/ that do are the vendored
     closure's own internal imports (exempted by directory) and the four
     allowlisted files (the producer, the comparator, the precompute script,
-    and the producer's own test file -- all four exist in this build's own
-    scope and are exercised here against the real files, not only by the
-    constructed cells above)."""
+    and the producer's own test file). Three of the four -- the producer,
+    the precompute script, and the producer's own test file -- exist in this
+    build's own scope and are exercised here against the real files, not
+    only by the constructed cells above. The comparator
+    (compare_criterion2_traces.py) is Stage 4, out of this build's scope,
+    and is not yet on disk; its absence is asserted by
+    test_the_default_allowlists_paths_reconcile_against_the_filesystem
+    rather than left to drift into this claim again (D-SLM1088; Poirot
+    finding D, 2414bd4-t1744-review-fold-confirmation.md)."""
     code = ccli.main()
     assert code == 0
