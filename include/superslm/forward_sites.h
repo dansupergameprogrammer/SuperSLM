@@ -65,6 +65,25 @@ namespace superslm {
 // below for both the normalization divide and the per-element wide-row divide.
 int64_t FloorDivI64(int64_t a, int64_t b);
 
+// T-1781 (C8/C9): process-wide engagement counters for the two clamps this
+// campaign previously found uninstrumented -- D-SLM770's own text: "whether
+// the int8 floor-at-1 clamp ever actually engages on real data is
+// unmeasured -- no site-dump instrumentation captures the intermediate
+// root"; T-1689's board row, same finding for the RoPE clamp. Both counters
+// increment unconditionally inside RmsNormSite/ClampRopeCode -- a plain
+// integer add, no allocation, no branch on any existing code path, so
+// production output is unchanged whether or not a caller ever reads these.
+// "Engaged" means the clamp CHANGED the value it was given (the pre-clamp
+// quantity was outside the clamped range) -- not merely that the clamp
+// function ran. Not thread-safe: this codebase's tools are single-threaded;
+// a future multithreaded caller would need to make these atomic, which is
+// out of this ticket's scope. ResetClampCensusCounters zeroes all four.
+void ResetClampCensusCounters();
+uint64_t GetRmsNormFloorClampEngagements();
+uint64_t GetRmsNormFloorClampCalls();
+uint64_t GetRopeClampEngagements();
+uint64_t GetRopeClampCalls();
+
 // C31's RMSNorm site (§5.1, §6.2 step 1/9): composes
 //   sumsq   = sum_i (int64)h[i] * (int64)h[i]
 //   root    = max(ISqrt(FloorDivI64(sumsq << (2*NORM_FRAC_BITS), hidden_size)), 1)

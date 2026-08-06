@@ -37,6 +37,14 @@ namespace {
 // wide-row divide both shift by 2*NORM_FRAC_BITS).
 constexpr int kNormFracBits = 16;
 
+// T-1781 (C8/C9): the four census counters -- see forward_sites.h's own
+// comment on the accessor declarations for what "engaged" means and the
+// single-threaded caveat.
+uint64_t g_rmsnorm_floor_clamp_engagements = 0;
+uint64_t g_rmsnorm_floor_clamp_calls = 0;
+uint64_t g_rope_clamp_engagements = 0;
+uint64_t g_rope_clamp_calls = 0;
+
 // Little-endian byte-assembly read of one int64 element from a ROP1 tensor's
 // stored bytes — the same discipline the loader itself uses for this exact
 // section (src/model.cpp's RdI64/ValidateRopeTablesDomain) and for every
@@ -237,6 +245,12 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 	}
 	int64_t root =
 	    ISqrt(FloorDivI64(sumsq << (2 * kNormFracBits), static_cast<int64_t>(hidden_size)));
+	// T-1781 C8: census, before the clamp changes anything -- "engaged" means
+	// the pre-clamp root was outside the floor (root < 1, i.e. ISqrt's
+	// non-negative result was exactly 0), the only value this clamp ever
+	// actually changes.
+	g_rmsnorm_floor_clamp_calls += 1;
+	if (root < 1) g_rmsnorm_floor_clamp_engagements += 1;
 	root = root > 1 ? root : 1;
 
 	std::vector<int64_t> wide(hidden_size);
@@ -443,10 +457,31 @@ int64_t LandingRescale(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_
 int64_t ClampRopeCode(int64_t raw) {
 	// C33 (§5.3): clamp to the pinned CODE range [-127, 127] -- NOT the int8
 	// storage range [-128, 127]; the two differ at exactly the value -128.
-	if (raw > 127) return 127;
-	if (raw < -127) return -127;
+	// T-1781 C9: census, before either branch fires -- "engaged" means raw
+	// was actually outside [-127, 127], the only case either branch changes
+	// the value.
+	g_rope_clamp_calls += 1;
+	if (raw > 127) {
+		g_rope_clamp_engagements += 1;
+		return 127;
+	}
+	if (raw < -127) {
+		g_rope_clamp_engagements += 1;
+		return -127;
+	}
 	return raw;
 }
+
+void ResetClampCensusCounters() {
+	g_rmsnorm_floor_clamp_engagements = 0;
+	g_rmsnorm_floor_clamp_calls = 0;
+	g_rope_clamp_engagements = 0;
+	g_rope_clamp_calls = 0;
+}
+uint64_t GetRmsNormFloorClampEngagements() { return g_rmsnorm_floor_clamp_engagements; }
+uint64_t GetRmsNormFloorClampCalls() { return g_rmsnorm_floor_clamp_calls; }
+uint64_t GetRopeClampEngagements() { return g_rope_clamp_engagements; }
+uint64_t GetRopeClampCalls() { return g_rope_clamp_calls; }
 
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
                                  int64_t context_cap, const SslmTensorManifest& rope_tables,
