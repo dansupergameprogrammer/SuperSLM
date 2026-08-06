@@ -48,6 +48,7 @@ _CHECKED_FILES = (
     "superslm_spike/pipeline.py",
     "superslm_spike/silu_lut.py",
     "superslm_spike/constrain.py",
+    "superslm_spike/criterion2_prompt_pack_pinned.json",
 )
 
 # Matches a four-column `| File | SHA-256 | Source commit | Group |` row. The

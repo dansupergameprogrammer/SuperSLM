@@ -198,6 +198,33 @@ def test_the_allowlisted_producer_and_comparator_pass_even_though_they_import_th
         assert code == 0
 
 
+def test_the_default_allowlist_names_exactly_four_files():
+    """A named, sized set (matching this suite's sibling convention,
+    e.g. check_no_forward_leaf_calls.py's _EXPECTED_REAL_FORWARD_FILES): item
+    3's own producer and comparator, plus the two build-time tooling files
+    T-1522's producer half adds under item 4's own stated principle. A fifth
+    entry landing here without a matching test is caught by this equality
+    assertion, not silently accepted."""
+    assert set(ccli._DEFAULT_TEST_ALLOWLIST) == {
+        "tests/reference/run_criterion2_trace.py",
+        "tests/reference/compare_criterion2_traces.py",
+        "tests/reference/precompute_criterion2_prompt_pack.py",
+        "tests/reference/test_run_criterion2_trace.py",
+    }
+
+
+def test_the_precompute_script_and_its_test_file_pass_even_though_they_import_the_wide_closure():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write(tmp, "tests/reference/precompute_criterion2_prompt_pack.py", _from_import("pipeline"))
+        _write(tmp, "tests/reference/test_run_criterion2_trace.py", _from_import("pipeline"))
+        code = ccli.main(
+            production_globs=(),
+            test_globs=("tests/**/*.py",),
+            repo_root=tmp,
+        )
+        assert code == 0
+
+
 def test_a_third_file_alongside_the_allowlisted_two_still_fails():
     """Allowlist control: the allowlist exempts by exact path, not by
     directory -- a sibling file in the same tests/reference/ directory that

@@ -101,12 +101,23 @@ _DEFAULT_TEST_GLOBS = (
 )
 _EXCLUDED_DIR_PREFIX = "tests/reference/superslm_spike/"
 
-# The named, sized allowlist of legitimate wide-package callers under tests/
-# (Sec11 S3.1c item 3): the producer and the comparator. The C++ driver
-# (tests/reference_parity_driver) has no Python import surface to scan.
+# The named, sized allowlist of legitimate wide-package callers under tests/.
+# Item 3's own three named pieces: the producer, the comparator (the C++
+# driver, tests/reference_parity_driver, has no Python import surface to
+# scan). Plus two callers this build (T-1522's producer half) adds, under the
+# SAME principle item 4 states -- Python-side tooling for the harness's own
+# operation, never the C++ engine's implementation: the one-time, hand-run
+# precompute script that renders the reference pack (not itself part of
+# criterion 2's execution path -- its own output is what the producer reads,
+# committed, at build/CI time), and the producer's own red-suite test file
+# (which builds a small hermetic model via the same vendored `pipeline`
+# module the producer itself imports, to test the producer's own
+# serialization contract without a real checkpoint).
 _DEFAULT_TEST_ALLOWLIST = (
     "tests/reference/run_criterion2_trace.py",
     "tests/reference/compare_criterion2_traces.py",
+    "tests/reference/precompute_criterion2_prompt_pack.py",
+    "tests/reference/test_run_criterion2_trace.py",
 )
 
 
