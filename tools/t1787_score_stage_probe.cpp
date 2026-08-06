@@ -726,6 +726,51 @@ int main(int argc, char** argv) {
 
 	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
 		if (is_checkpoint(step)) {
+			// K's own pre-landing-rescale accumulator at the LAST token's own position (the
+			// query attends to its own key too, causal self-attention -- this position is
+			// otherwise never captured, since the prefill capture loop above only covers
+			// positions 0..width-2). Same capture+self-check discipline as the prefill loop,
+			// applied here to the one remaining position.
+			const int64_t last_position = trace_seq.context_length;
+			KCapture last_kcap;
+			SslmForwardStatus kst =
+			    CaptureKAccumulator(trace_seq, layers[step], hidden_size, head_dim, num_kv_heads,
+			                        &last_kcap);
+			if (kst != SslmForwardStatus::Ok) {
+				std::fprintf(stderr, "FAILED at stage=k_capture_last: layer=%u status=%s\n", step,
+				             SslmForwardStatusName(kst));
+				return 1;
+			}
+			std::vector<std::vector<int8_t>> last_side_k_rot(num_kv_heads, std::vector<int8_t>(head_dim));
+			for (uint32_t h = 0; h < num_kv_heads; ++h) {
+				std::vector<int8_t> pre_rope(head_dim);
+				for (size_t d = 0; d < head_dim; ++d) {
+					const size_t i = h * head_dim + d;
+					pre_rope[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+					    last_kcap.kacc[i], last_kcap.normed_scale.m, layers[step].kv_landing_r_t_k[h],
+					    last_kcap.normed_scale.e, layers[step].kv_landing_e_t_k[h],
+					    &trace_seq.kv_saturation_count)));
+				}
+				kst = RopeApplySite(pre_rope.data(), head_dim, last_position, context_cap,
+				                     model_view.rope_tables, last_side_k_rot[h].data());
+				if (kst != SslmForwardStatus::Ok) {
+					std::fprintf(stderr, "FAILED at stage=k_side_rope_last: layer=%u kv_head=%u status=%s\n",
+					             step, h, SslmForwardStatusName(kst));
+					return 1;
+				}
+				KRow row;
+				row.layer = step;
+				row.position = last_position;
+				row.kv_head = h;
+				row.normed_m = last_kcap.normed_scale.m;
+				row.normed_e = last_kcap.normed_scale.e;
+				row.r_t = layers[step].kv_landing_r_t_k[h];
+				row.e_t = layers[step].kv_landing_e_t_k[h];
+				row.kacc.assign(last_kcap.kacc.begin() + h * head_dim,
+				                 last_kcap.kacc.begin() + (h + 1) * head_dim);
+				all_k_rows.push_back(std::move(row));
+			}
+
 			std::vector<int8_t> manual_hidden_codes(trace_hidden_codes);
 			SequenceLayerState manual_seq = trace_seq;
 			manual_seq.hidden_codes = manual_hidden_codes.data();
@@ -762,9 +807,25 @@ int main(int argc, char** argv) {
 				             step, codes_match ? 1 : 0, scale_match ? 1 : 0);
 				return 1;
 			}
+			// Self-check the last-position K capture against what production (via the
+			// ManualRunOneLayer call just proven bit-identical to production above) actually
+			// wrote for that position's k_rot -- read back via KeyRow() on the manual replay's
+			// own workspace (shared `trace_workspace`, the same buffer production writes into).
+			for (uint32_t h = 0; h < num_kv_heads; ++h) {
+				const int8_t* const actual = KeyRow(trace_workspace.data(), step, context_cap,
+				                                     num_kv_heads, head_dim, h, last_position);
+				if (std::memcmp(actual, last_side_k_rot[h].data(), head_dim) != 0) {
+					std::fprintf(stderr,
+					             "FAILED at stage=k_self_check_last: layer=%u kv_head=%u -- side "
+					             "replay diverges from production's own KV cache write\n",
+					             step, h);
+					return 1;
+				}
+			}
 			std::printf("self_check: layer=%u manual replay and production agree bit-for-bit "
-			            "(%zu rows captured, q_wide self-check passed on %zu elements)\n",
-			            step, step_rows.size(), qcap.wide.size());
+			            "(%zu rows captured, q_wide self-check passed on %zu elements, last-position "
+			            "K self-check passed on %u kv_heads)\n",
+			            step, step_rows.size(), qcap.wide.size(), num_kv_heads);
 			for (auto& row : step_rows) all_rows.push_back(std::move(row));
 			all_qcaps.push_back(std::move(qcap));
 		} else {
