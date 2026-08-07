@@ -1,0 +1,634 @@
+// t1795_residual_probe.cpp -- T-1795: dump the compiled engine's REAL residual stream
+// (the hidden state entering and leaving every one of the 28 decoder layers), plus, at the
+// established checkpoint layers {0,1,2,9,18,27}, every one of a layer's own intermediate
+// dequantized quantities (the RMSNorm outputs, the attention branch, the post-attention
+// residual, the MLP branch, and the layer's own output) -- so a follow-on analysis script
+// can grade the residual stream against an independent float32 reference and isolate each
+// sub-block's own local quantization contribution.
+//
+// This file is a copy of tools/t1778_engine_attn_probe.cpp's own per-layer manual replay
+// (branch claude/t1778-float-attn-reference@5df48fc, itself a copy of
+// tools/t1763_layer0_diagnosis_probe.cpp@10cd1e2, both read in full, neither modified) --
+// `ManualRunOneLayer` is the SAME manual replay, extended only to CAPTURE the intermediate
+// buffers it already computes (previously discarded) rather than to compute anything new.
+// Every call in this file is to the SAME public production site functions
+// (RmsNormSite/ProjectAndFunnel's own internal-linkage copy/RopeApplySite/
+// GemmInt8AccumulateRow/SoftmaxRowQ15/GemmProbQ15Accumulate/ApplyWeightScaleFold/
+// RequantChainChecked/ResidualReconcileSite/MlpActSite) T-1762-T-1789's own probes already
+// used the identical way -- no new arithmetic is introduced here.
+//
+// Self-check identical in kind and unmodified in method from T-1762/T-1763/T-1778/T-1786/
+// T-1787: at every checkpoint layer, the manual replay's own resulting hidden_codes/
+// hidden_scale is compared bit-for-bit against PRODUCTION's own RunLayerLoop(layer_budget=1)
+// call for that layer, from the same pre-layer state. Every captured intermediate upstream
+// of that comparison (normed, o_codes, attn_stream, down_codes) is validated transitively,
+// the same argument T-1778 uses for its own captured `probs`.
+//
+// For the NON-checkpoint layers (all 28, for the residual-accumulation measurement), no
+// manual replay runs at all -- PRODUCTION's own RunLayerLoop(layer_budget=1) is called
+// directly and its committed hidden_codes/hidden_scale is dequantized and dumped. This is
+// not a replica of production; it IS production, so no self-check is needed for those rows
+// beyond the redundant full-budget cross-check performed once at the end (see main()).
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <span>
+#include <string>
+#include <vector>
+
+#include "superslm/artifact.h"
+#include "superslm/checked_chain_funnel.h"
+#include "superslm/forward_sites.h"
+#include "superslm/intmath.h"
+#include "superslm/matmul.h"
+#include "superslm/model.h"
+#include "superslm/silu_lut.h"
+#include "superslm/silu_lut_canonical.h"
+#include "superslm/tokenizer.h"
+#include "sslm_marshal.h"
+
+using namespace superslm;
+using superslm_marshal::LayerBacking;
+using superslm_marshal::MarshalLayer;
+using superslm_marshal::PreflightScanWscFolds;
+using superslm_marshal::ReadCarriedScale;
+using superslm_marshal::ReadFile;
+using superslm_marshal::WidenGainToInt32;
+
+namespace {
+
+double Dequant(int8_t code, CarriedScale scale) {
+	// checked_chain_funnel.h:66 -- "value == m * 2^e", the CarriedScale's own documented
+	// meaning, unchanged here.
+	return static_cast<double>(code) * static_cast<double>(scale.m) * std::pow(2.0, static_cast<double>(scale.e));
+}
+
+void DequantRow(const std::vector<int8_t>& codes, CarriedScale scale, std::vector<double>* out) {
+	out->resize(codes.size());
+	for (size_t i = 0; i < codes.size(); ++i) (*out)[i] = Dequant(codes[i], scale);
+}
+
+SslmForwardStatus ApplyBiasReconcileRowCopy(int64_t* acc, size_t out_channels, const int64_t* bias,
+                                             int64_t in_scale_m, int64_t in_scale_e) {
+	const SslmForwardStatus gate = CheckRoundingDivideByPotExponentDomain(kBiasQFormat, in_scale_e);
+	if (gate != SslmForwardStatus::Ok) return gate;
+	const int64_t r_a = CarriedScaleReciprocal(in_scale_m);
+	bool any_out_of_domain = false;
+	for (size_t i = 0; i < out_channels; ++i) {
+		if (CheckBiasAccumulateMagnitudeDomain(acc[i], bias[i], kBiasQFormat, r_a, in_scale_e) !=
+		    SslmForwardStatus::Ok) {
+			any_out_of_domain = true;
+		}
+	}
+	if (any_out_of_domain) return SslmForwardStatus::BiasReconcileProductOutOfDomain;
+	for (size_t i = 0; i < out_channels; ++i) {
+		acc[i] += BiasReconcile(bias[i], kBiasQFormat, r_a, in_scale_e);
+	}
+	return SslmForwardStatus::Ok;
+}
+
+SslmForwardStatus ProjectAndFunnelCopy(const int8_t* in_codes, CarriedScale in_scale,
+                                        const int8_t* weight, size_t in_channels, size_t out_channels,
+                                        const int32_t* identity, const int32_t* mult,
+                                        const int32_t* shift, CarriedScale site_constant,
+                                        const int64_t* bias, int8_t* out_codes,
+                                        CarriedScale* out_scale) {
+	std::vector<int64_t> acc(out_channels);
+	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
+	for (size_t i = 0; i < out_channels; ++i) {
+		acc[i] = ApplyWeightScaleFold(acc[i], identity[i], mult[i], shift[i]);
+	}
+	if (bias != nullptr) {
+		const SslmForwardStatus bias_status =
+		    ApplyBiasReconcileRowCopy(acc.data(), out_channels, bias, in_scale.m, in_scale.e);
+		if (bias_status != SslmForwardStatus::Ok) return bias_status;
+	}
+	const CarriedScale incoming[1] = {in_scale};
+	const ChainResult result = RequantChainChecked(
+	    acc.data(), out_channels, std::span<const CarriedScale>{incoming, 1}, site_constant, out_codes,
+	    out_scale);
+	return result.status;
+}
+
+// One checkpoint layer's own full set of intermediate quantities, all dequantized to
+// float64 in the layer's own "true value" units (Dequant above) -- everything
+// ManualRunOneLayer below already computes, captured rather than discarded.
+struct LayerStageCapture {
+	uint32_t layer = 0;
+	std::vector<double> h_in;         // hidden entering the layer (seq.hidden_codes on entry)
+	std::vector<double> normed_attn;  // RMSNorm(h_in) * gain, quantized (attn_norm's own output)
+	std::vector<double> attn_branch;  // o_proj's own output (dequantized), pre-residual-add
+	std::vector<double> attn_stream;  // h_in + attn_branch, requantized (attn_residual's output)
+	std::vector<double> normed_mlp;   // RMSNorm(attn_stream) * gain, quantized (mlp_norm's own output)
+	std::vector<double> mlp_branch;   // down_proj's own output (dequantized), pre-residual-add
+	std::vector<double> h_out;        // attn_stream + mlp_branch, requantized (this layer's own output)
+};
+
+SslmForwardStatus ManualRunOneLayer(SequenceLayerState& seq, const LayerWeights& lw,
+                                     size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                     size_t intermediate_size, int64_t context_cap,
+                                     const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                     LayerStageCapture* out_capture) {
+	const size_t num_heads = hidden_size / head_dim;
+	const size_t group = num_heads / num_key_value_heads;
+	const int64_t position = seq.context_length;
+	const size_t width = static_cast<size_t>(seq.context_length) + 1;
+	const uint32_t l = seq.layer_index;
+
+	std::vector<int8_t> normed(hidden_size), q_codes(hidden_size), o_codes(hidden_size);
+	std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size), ctx_codes(hidden_size);
+	std::vector<int8_t> gate_codes(intermediate_size), up_codes(intermediate_size);
+	std::vector<int8_t> act_codes(intermediate_size), down_codes(hidden_size);
+	std::vector<int8_t> stream_next(hidden_size), attn_stream(hidden_size);
+	CarriedScale normed_scale{}, q_scale{}, ctx_scale{}, o_scale{};
+	CarriedScale mlp_normed_scale{}, gate_scale{}, up_scale{}, act_scale{}, down_scale{};
+	CarriedScale stream_scale{}, attn_stream_scale{};
+	SslmForwardStatus st;
+
+	if (out_capture != nullptr) {
+		out_capture->layer = l;
+		std::vector<int8_t> h_in_codes(seq.hidden_codes, seq.hidden_codes + hidden_size);
+		DequantRow(h_in_codes, seq.hidden_scale, &out_capture->h_in);
+	}
+
+	st = RmsNormSite(seq.hidden_codes, lw.attn_norm_gain, hidden_size, seq.hidden_scale,
+	                 lw.attn_norm_site_constant, normed.data(), &normed_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(normed, normed_scale, &out_capture->normed_attn);
+
+	st = ProjectAndFunnelCopy(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
+	                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
+	                      lw.q_bias, q_codes.data(), &q_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+
+	{
+		const size_t kv_hidden_size = num_key_value_heads * head_dim;
+		std::vector<int64_t> kacc(kv_hidden_size), vacc(kv_hidden_size);
+		GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size, kacc.data());
+		GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size, vacc.data());
+		for (size_t i = 0; i < kv_hidden_size; ++i) {
+			kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[i], lw.k_fold_mult[i],
+			                               lw.k_fold_shift[i]);
+			vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[i], lw.v_fold_mult[i],
+			                               lw.v_fold_shift[i]);
+		}
+		if (lw.k_bias != nullptr) {
+			st = ApplyBiasReconcileRowCopy(kacc.data(), kv_hidden_size, lw.k_bias, normed_scale.m,
+			                           normed_scale.e);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+		if (lw.v_bias != nullptr) {
+			st = ApplyBiasReconcileRowCopy(vacc.data(), kv_hidden_size, lw.v_bias, normed_scale.m,
+			                           normed_scale.e);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+		for (size_t h = 0; h < num_key_value_heads; ++h) {
+			int8_t* const k_row =
+			    MutableKeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, h, position);
+			int8_t* const v_row = MutableValueRow(workspace, l, context_cap, num_key_value_heads,
+			                                      head_dim, h, position);
+			for (size_t d = 0; d < head_dim; ++d) {
+				const size_t i = h * head_dim + d;
+				k_row[d] = static_cast<int8_t>(ClampRopeCode(
+				    LandingRescale(kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+				                   lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
+				v_row[d] = static_cast<int8_t>(ClampRopeCode(
+				    LandingRescale(vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
+				                   lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
+			}
+		}
+	}
+
+	for (size_t h = 0; h < num_heads; ++h) {
+		st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap, rope_tables,
+		                   q_rot.data() + h * head_dim);
+		if (st != SslmForwardStatus::Ok) return st;
+		const size_t kv_head = h / group;
+		const int8_t* const k_row_before_rotate =
+		    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+		st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
+		                   k_rot.data() + h * head_dim);
+		if (st != SslmForwardStatus::Ok) return st;
+	}
+	for (size_t h = 0; h < num_heads; ++h) {
+		const size_t kv_head = h / group;
+		int8_t* const k_row =
+		    MutableKeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+		for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+	}
+
+	std::vector<int64_t> ctx_wide(hidden_size);
+	{
+		std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
+		    khead_q_c(num_key_value_heads);
+		std::vector<bool> khead_derived(num_key_value_heads, false);
+		for (size_t h = 0; h < num_heads; ++h) {
+			std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
+			const size_t kv_head = h / group;
+
+			if (!khead_derived[kv_head]) {
+				const int64_t sm_khead_m = lw.iexp_softmax_khead_m[kv_head];
+				const int64_t sm_khead_e = lw.iexp_softmax_khead_e[kv_head];
+				const CarriedScale sm = CombineCarriedScale(q_scale, CarriedScale{sm_khead_m, sm_khead_e});
+				int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+				const IExpScaleDomain scale_domain =
+				    IExpScaleConstants(sm.m, sm.e, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30,
+				                       &derived_q_ln2, &derived_q_b, &derived_q_c);
+				if (scale_domain != IExpScaleDomain::kOk) {
+					return SslmForwardStatus::IExpScaleDerivationOutOfDomain;
+				}
+				khead_q_ln2[kv_head] = derived_q_ln2;
+				khead_q_b[kv_head] = derived_q_b;
+				khead_q_c[kv_head] = derived_q_c;
+				khead_derived[kv_head] = true;
+			}
+
+			st = CheckSoftmaxRowWidthDomain(khead_q_b[kv_head], khead_q_c[kv_head], width);
+			if (st != SslmForwardStatus::Ok) return st;
+
+			const int8_t* const k_rows_base =
+			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
+			GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
+			                      scores.data());
+			const bool well_formed = SoftmaxRowQ15(scores.data(), width, khead_q_ln2[kv_head],
+			                                       khead_q_b[kv_head], khead_q_c[kv_head], probs.data());
+			if (!well_formed) return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
+
+			const int8_t* const v_rows_base =
+			    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
+			GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim, ctx_acc.data());
+			for (size_t d = 0; d < head_dim; ++d) {
+				ctx_wide[h * head_dim + d] = ApplyWeightScaleFold(
+				    ctx_acc[d], lw.ctx_fold_identity[h], lw.ctx_fold_mult[h], lw.ctx_fold_shift[h]);
+			}
+		}
+		const ChainResult ctx_result =
+		    RequantChainChecked(ctx_wide.data(), hidden_size, std::span<const CarriedScale>{},
+		                        lw.ctx_fold_site_constant, ctx_codes.data(), &ctx_scale);
+		if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
+	}
+
+	st = ProjectAndFunnelCopy(ctx_codes.data(), ctx_scale, lw.o_weight, hidden_size, hidden_size,
+	                      lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift, lw.o_site_constant,
+	                      /*bias=*/nullptr, o_codes.data(), &o_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(o_codes, o_scale, &out_capture->attn_branch);
+
+	st = ResidualReconcileSite(o_codes.data(), o_scale, seq.hidden_codes, seq.hidden_scale, hidden_size,
+	                           lw.attn_residual_site_constant, attn_stream.data(), &attn_stream_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(attn_stream, attn_stream_scale, &out_capture->attn_stream);
+
+	st = RmsNormSite(attn_stream.data(), lw.mlp_norm_gain, hidden_size, attn_stream_scale,
+	                 lw.mlp_norm_site_constant, normed.data(), &mlp_normed_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(normed, mlp_normed_scale, &out_capture->normed_mlp);
+
+	st = ProjectAndFunnelCopy(normed.data(), mlp_normed_scale, lw.gate_weight, hidden_size,
+	                      intermediate_size, lw.gate_fold_identity, lw.gate_fold_mult,
+	                      lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr, gate_codes.data(),
+	                      &gate_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	st = ProjectAndFunnelCopy(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size, intermediate_size,
+	                      lw.up_fold_identity, lw.up_fold_mult, lw.up_fold_shift, lw.up_site_constant,
+	                      /*bias=*/nullptr, up_codes.data(), &up_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+
+	st = MlpActSite(gate_codes.data(), gate_scale, up_codes.data(), up_scale, intermediate_size,
+	                kSiluLutCanonicalTable, lw.mlp_act_site_constant, act_codes.data(), &act_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+
+	st = ProjectAndFunnelCopy(act_codes.data(), act_scale, lw.down_weight, intermediate_size, hidden_size,
+	                      lw.down_fold_identity, lw.down_fold_mult, lw.down_fold_shift,
+	                      lw.down_site_constant, /*bias=*/nullptr, down_codes.data(), &down_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(down_codes, down_scale, &out_capture->mlp_branch);
+
+	st = ResidualReconcileSite(down_codes.data(), down_scale, attn_stream.data(), attn_stream_scale,
+	                           hidden_size, lw.mlp_residual_site_constant, stream_next.data(),
+	                           &stream_scale);
+	if (st != SslmForwardStatus::Ok) return st;
+	if (out_capture != nullptr) DequantRow(stream_next, stream_scale, &out_capture->h_out);
+
+	for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = stream_next[i];
+	seq.hidden_scale = stream_scale;
+	seq.layer_index = l + 1;
+	return SslmForwardStatus::Ok;
+}
+
+void WriteVec(std::ofstream& f, const std::vector<double>& v) {
+	f << v.size();
+	for (double x : v) f << " " << x;
+	f << "\n";
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+	if (argc < 5) {
+		std::fprintf(stderr,
+		             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" <prompt_id> --dump-dir <dir>\n",
+		             argv[0]);
+		return 2;
+	}
+	const std::string model_path = argv[1];
+	const std::string tokenizer_path = argv[2];
+	const std::string prompt = argv[3];
+	const std::string prompt_id = argv[4];
+	std::string dump_dir = "out/t1795";
+	for (int i = 5; i < argc; ++i) {
+		if (std::strcmp(argv[i], "--dump-dir") == 0 && i + 1 < argc) {
+			dump_dir = argv[++i];
+		}
+	}
+
+	std::vector<uint8_t> tok_bytes;
+	if (!ReadFile(tokenizer_path.c_str(), tok_bytes)) {
+		std::fprintf(stderr, "FAILED at stage=tokenizer_file_read\n");
+		return 1;
+	}
+	SslmArtifact tok_artifact;
+	SslmError tok_open_err;
+	if (SslmArtifact::OpenFromMemory(tok_bytes.data(), tok_bytes.size(), tok_artifact, &tok_open_err) !=
+	    SslmStatus::Ok) {
+		std::fprintf(stderr, "FAILED at stage=tokenizer_artifact_open\n");
+		return 1;
+	}
+	TokenizerView tokenizer;
+	std::string tok_err;
+	if (!TokenizerView::Open(tok_artifact, tokenizer, &tok_err)) {
+		std::fprintf(stderr, "FAILED at stage=tokenizer_view_open: %s\n", tok_err.c_str());
+		return 1;
+	}
+	const std::vector<int32_t> prompt_tokens = tokenizer.Encode(prompt);
+	if (prompt_tokens.empty()) {
+		std::fprintf(stderr, "FAILED at stage=tokenizer_encode\n");
+		return 1;
+	}
+
+	std::vector<uint8_t> model_bytes;
+	if (!ReadFile(model_path.c_str(), model_bytes)) {
+		std::fprintf(stderr, "FAILED at stage=model_file_read\n");
+		return 1;
+	}
+	SslmModelView model_view;
+	std::string model_err;
+	if (SslmModel::Load(model_bytes.data(), model_bytes.size(), model_view, &model_err) !=
+	    SslmModelStatus::Ok) {
+		std::fprintf(stderr, "FAILED at stage=model_load: %s\n", model_err.c_str());
+		return 1;
+	}
+	std::printf("model loaded: hidden_size=%u layers=%u heads=%u/%u head_dim=%u context_cap=%u "
+	            "prompt_tokens=%zu (%s)\n",
+	            model_view.config.hidden_size, model_view.config.num_hidden_layers,
+	            model_view.config.num_attention_heads, model_view.config.num_key_value_heads,
+	            model_view.config.head_dim, model_view.config.context_cap, prompt_tokens.size(),
+	            prompt_id.c_str());
+
+	const uint32_t num_heads = model_view.config.num_attention_heads;
+	const uint32_t num_kv_heads = model_view.config.num_key_value_heads;
+	const uint32_t num_hidden_layers = model_view.config.num_hidden_layers;
+	const size_t hidden_size = model_view.config.hidden_size;
+	const size_t head_dim = model_view.config.head_dim;
+	const size_t intermediate_size = model_view.config.intermediate_size;
+
+	PreflightScanWscFolds(model_view);
+
+	std::vector<LayerBacking> backings(num_hidden_layers);
+	std::vector<LayerWeights> layers(num_hidden_layers);
+	for (uint32_t l = 0; l < num_hidden_layers; ++l) {
+		std::string marshal_err;
+		if (!MarshalLayer(model_view, l, num_heads, num_kv_heads, backings[l], layers[l],
+		                   &marshal_err)) {
+			std::fprintf(stderr, "FAILED at stage=layer_weights_marshal: layer=%u: %s\n", l,
+			             marshal_err.c_str());
+			return 1;
+		}
+	}
+
+	const SslmTensorView* embed_w = model_view.weights.Tensor("embed");
+	if (!embed_w) {
+		std::fprintf(stderr, "FAILED at stage=head_marshal: missing embed tensor\n");
+		return 1;
+	}
+	bool ok = true;
+	CarriedScale embed_site_constant = ReadCarriedScale(model_view.composition_constants, "embed", &ok);
+	if (!ok) {
+		std::fprintf(stderr, "FAILED at stage=head_marshal: missing embed site constant\n");
+		return 1;
+	}
+	const int8_t* embed_weights = reinterpret_cast<const int8_t*>(embed_w->data);
+
+	const int64_t context_cap = static_cast<int64_t>(model_view.config.context_cap);
+	const size_t kv_bytes = static_cast<size_t>(num_hidden_layers) * static_cast<size_t>(context_cap) *
+	                        num_kv_heads * head_dim * 2;
+
+	std::vector<uint8_t> trace_workspace(kv_bytes);
+	std::vector<int8_t> trace_hidden_codes(hidden_size);
+	SequenceLayerState trace_seq;
+	trace_seq.hidden_codes = trace_hidden_codes.data();
+
+	auto EmbedWholeToken = [&](int32_t token) -> SslmForwardStatus {
+		std::vector<int8_t> embed_codes(hidden_size);
+		CarriedScale embed_scale{};
+		const SslmForwardStatus est =
+		    EmbedEntry(token, static_cast<int32_t>(model_view.config.vocab_size), embed_weights,
+		               hidden_size, embed_site_constant, embed_codes.data(), &embed_scale);
+		if (est != SslmForwardStatus::Ok) return est;
+		for (size_t i = 0; i < hidden_size; ++i) trace_seq.hidden_codes[i] = embed_codes[i];
+		trace_seq.hidden_scale = embed_scale;
+		trace_seq.layer_index = 0;
+		return SslmForwardStatus::Ok;
+	};
+
+	for (size_t i = 0; i + 1 < prompt_tokens.size(); ++i) {
+		SslmForwardStatus st = EmbedWholeToken(prompt_tokens[i]);
+		if (st != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=prefill_embed: position=%zu status=%s\n", i,
+			             SslmForwardStatusName(st));
+			return 1;
+		}
+		st = RunLayerLoop(trace_seq, layers.data(), num_hidden_layers,
+		                   /*layer_budget=*/num_hidden_layers, hidden_size, head_dim, num_kv_heads,
+		                   intermediate_size, context_cap, model_view.rope_tables,
+		                   trace_workspace.data(), trace_workspace.size());
+		if (st != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=prefill_layers: position=%zu status=%s\n", i,
+			             SslmForwardStatusName(st));
+			return 1;
+		}
+	}
+	{
+		const SslmForwardStatus st = EmbedWholeToken(prompt_tokens.back());
+		if (st != SslmForwardStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=last_token_embed: status=%s\n",
+			             SslmForwardStatusName(st));
+			return 1;
+		}
+	}
+
+	const int64_t width_at_last_token = trace_seq.context_length + 1;
+	std::printf("last prompt token: context_length=%lld width=%lld\n",
+	            static_cast<long long>(trace_seq.context_length),
+	            static_cast<long long>(width_at_last_token));
+
+	// PHASE A: the residual stream entering the layer (embedding output = layer-0 input),
+	// then, after each of the 28 layers, its own committed output -- 29 states total,
+	// dequantized and dumped as-is, since these ARE production's own committed values,
+	// not a replica of them.
+	std::vector<std::vector<double>> residual_states;  // 29 entries
+	{
+		std::vector<int8_t> h0(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size);
+		std::vector<double> h0d;
+		DequantRow(h0, trace_seq.hidden_scale, &h0d);
+		residual_states.push_back(std::move(h0d));
+	}
+
+	const std::vector<uint32_t> checkpoint_layers = {0, 1, 2, 9, 18, 27};
+	std::vector<LayerStageCapture> stage_captures;
+
+	for (uint32_t step = 0; step < num_hidden_layers; ++step) {
+		const bool is_checkpoint =
+		    std::find(checkpoint_layers.begin(), checkpoint_layers.end(), step) !=
+		    checkpoint_layers.end();
+
+		if (is_checkpoint) {
+			std::vector<int8_t> manual_hidden_codes(trace_hidden_codes);
+			SequenceLayerState manual_seq = trace_seq;
+			manual_seq.hidden_codes = manual_hidden_codes.data();
+
+			LayerStageCapture capture;
+			const SslmForwardStatus mst =
+			    ManualRunOneLayer(manual_seq, layers[step], hidden_size, head_dim, num_kv_heads,
+			                      intermediate_size, context_cap, model_view.rope_tables,
+			                      trace_workspace.data(), &capture);
+			if (mst != SslmForwardStatus::Ok) {
+				std::fprintf(stderr, "FAILED at stage=manual_replay: layer=%u status=%s\n", step,
+				             SslmForwardStatusName(mst));
+				return 1;
+			}
+
+			const SslmForwardStatus pst =
+			    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1,
+			                 hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+			                 model_view.rope_tables, trace_workspace.data(), trace_workspace.size());
+			if (pst != SslmForwardStatus::Ok) {
+				std::fprintf(stderr, "FAILED at stage=production_step: layer=%u status=%s\n", step,
+				             SslmForwardStatusName(pst));
+				return 1;
+			}
+
+			const bool codes_match =
+			    std::memcmp(manual_seq.hidden_codes, trace_seq.hidden_codes, hidden_size) == 0;
+			const bool scale_match = manual_seq.hidden_scale.m == trace_seq.hidden_scale.m &&
+			                         manual_seq.hidden_scale.e == trace_seq.hidden_scale.e;
+			if (!codes_match || !scale_match) {
+				std::fprintf(stderr,
+				             "FAILED at stage=self_check: layer=%u codes_match=%d scale_match=%d\n",
+				             step, codes_match ? 1 : 0, scale_match ? 1 : 0);
+				return 1;
+			}
+			std::printf("self_check: layer=%u manual replay and production agree bit-for-bit\n", step);
+			stage_captures.push_back(std::move(capture));
+		} else {
+			const SslmForwardStatus pst =
+			    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1,
+			                 hidden_size, head_dim, num_kv_heads, intermediate_size, context_cap,
+			                 model_view.rope_tables, trace_workspace.data(), trace_workspace.size());
+			if (pst != SslmForwardStatus::Ok) {
+				std::fprintf(stderr, "FAILED at stage=production_step: layer=%u status=%s\n", step,
+				             SslmForwardStatusName(pst));
+				return 1;
+			}
+		}
+		std::vector<int8_t> hn(trace_seq.hidden_codes, trace_seq.hidden_codes + hidden_size);
+		std::vector<double> hnd;
+		DequantRow(hn, trace_seq.hidden_scale, &hnd);
+		residual_states.push_back(std::move(hnd));
+	}
+
+	// Redundant cross-check: re-run the WHOLE prefix from scratch with a single
+	// layer_budget=num_hidden_layers call and confirm the final committed state matches the
+	// 28x layer_budget=1 stepping above bit-for-bit -- this codebase's own tested
+	// budget-invariance guarantee (cited by T-1787 for the identical purpose), executed here
+	// rather than merely relied upon.
+	{
+		std::vector<int8_t> check_hidden_codes(hidden_size);
+		SequenceLayerState check_seq;
+		check_seq.hidden_codes = check_hidden_codes.data();
+		std::vector<uint8_t> check_workspace(kv_bytes);
+		auto EmbedWholeTokenCheck = [&](int32_t token) -> SslmForwardStatus {
+			std::vector<int8_t> embed_codes(hidden_size);
+			CarriedScale embed_scale{};
+			const SslmForwardStatus est =
+			    EmbedEntry(token, static_cast<int32_t>(model_view.config.vocab_size), embed_weights,
+			               hidden_size, embed_site_constant, embed_codes.data(), &embed_scale);
+			if (est != SslmForwardStatus::Ok) return est;
+			for (size_t i = 0; i < hidden_size; ++i) check_seq.hidden_codes[i] = embed_codes[i];
+			check_seq.hidden_scale = embed_scale;
+			check_seq.layer_index = 0;
+			return SslmForwardStatus::Ok;
+		};
+		for (size_t i = 0; i + 1 < prompt_tokens.size(); ++i) {
+			EmbedWholeTokenCheck(prompt_tokens[i]);
+			RunLayerLoop(check_seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size,
+			             head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables,
+			             check_workspace.data(), check_workspace.size());
+		}
+		EmbedWholeTokenCheck(prompt_tokens.back());
+		RunLayerLoop(check_seq, layers.data(), num_hidden_layers, num_hidden_layers, hidden_size,
+		             head_dim, num_kv_heads, intermediate_size, context_cap, model_view.rope_tables,
+		             check_workspace.data(), check_workspace.size());
+		const bool match = std::memcmp(check_seq.hidden_codes, trace_seq.hidden_codes, hidden_size) == 0 &&
+		                   check_seq.hidden_scale.m == trace_seq.hidden_scale.m &&
+		                   check_seq.hidden_scale.e == trace_seq.hidden_scale.e;
+		std::printf("budget_invariance_check (single layer_budget=%u call vs 28x layer_budget=1): %s\n",
+		            num_hidden_layers, match ? "MATCH" : "MISMATCH");
+		if (!match) {
+			std::fprintf(stderr, "FAILED at stage=budget_invariance_check\n");
+			return 1;
+		}
+	}
+
+	// Dump residual states: 29 lines, "size v0 v1 ... v(hidden_size-1)".
+	{
+		const std::string path = dump_dir + "/" + prompt_id + "_residual.txt";
+		std::ofstream f(path);
+		if (!f) {
+			std::fprintf(stderr, "FAILED at stage=dump_open: %s\n", path.c_str());
+			return 1;
+		}
+		for (const auto& v : residual_states) WriteVec(f, v);
+		std::printf("residual dump written: %s (%zu states, hidden_size=%zu)\n", path.c_str(),
+		            residual_states.size(), hidden_size);
+	}
+
+	// Dump stage captures: one block per checkpoint layer.
+	{
+		const std::string path = dump_dir + "/" + prompt_id + "_stages.txt";
+		std::ofstream f(path);
+		if (!f) {
+			std::fprintf(stderr, "FAILED at stage=dump_open: %s\n", path.c_str());
+			return 1;
+		}
+		f << stage_captures.size() << "\n";
+		for (const auto& c : stage_captures) {
+			f << "layer " << c.layer << "\n";
+			WriteVec(f, c.h_in);
+			WriteVec(f, c.normed_attn);
+			WriteVec(f, c.attn_branch);
+			WriteVec(f, c.attn_stream);
+			WriteVec(f, c.normed_mlp);
+			WriteVec(f, c.mlp_branch);
+			WriteVec(f, c.h_out);
+		}
+		std::printf("stage dump written: %s (%zu checkpoint layers)\n", path.c_str(),
+		            stage_captures.size());
+	}
+
+	return 0;
+}
