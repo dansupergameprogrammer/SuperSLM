@@ -1,0 +1,24 @@
+T-1855 M3 strike probe -- engine composite, head_dim=128, position 0 (RoPE identity)
+m_a=1181116006 e_a=-34
+
+exact reference score = -1988361469
+head max |v| = 9.98474e+06   BASE step = 78620  (r_t=3580196911 e_t=-14)
+
+arm BASE  (today: one offline pair per head)
+  per-head landing             raw=-24895         value=-1.95724e+09       rel_err=0.0156497  sat=0
+
+arm M3    (design 6.9/8.2a: one offline pair per (head, channel-group))
+  G_L    score_raw    score_value    rel_err      max group refinement
+  2      -40048       -3.14857e+09   0.583501     3.4       x  [control, per-group unscale: rel_err=0.00249206]
+  4      -73693       -5.79374e+09   1.91383      44.7      x  [control, per-group unscale: rel_err=0.00605595]
+  8      -83460       -6.56162e+09   2.30002      63.2      x  [control, per-group unscale: rel_err=0.00348538]
+  16     -97843       -7.69241e+09   2.86872      90.0      x  [control, per-group unscale: rel_err=0.00143963]
+  32     -110821      -8.71274e+09   3.38187      139.2     x  [control, per-group unscale: rel_err=0.00316389]
+  64     -118311      -9.30161e+09   3.67803      605.3     x  [control, per-group unscale: rel_err=0.000625703]
+  128    -41910       -3.29496e+09   0.657125     83659.3   x  [control, per-group unscale: rel_err=2.76502e-11]
+
+attention row (width=16 positions, same construction per position), G_L=8
+  attention L1(prob, reference): BASE=0.000000   M3=2.000000
+  argmax position: reference=9  BASE=9  M3=4
+
+BASE rel_err = 0.0156497
