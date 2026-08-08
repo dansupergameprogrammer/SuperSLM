@@ -118,6 +118,17 @@ RemedyStatus ReferencePeeledCode(int64_t wide_value, int64_t r, int s, int64_t* 
 // (P <= 7 at r_cap = 7; P = 8 exceeds the residual consumer's headroom, E13)?
 bool IsPeelParamsAdmissible(int p, int r_cap);
 
+// §5 step 4, a GEMM consumer's rank-P fix-up (site 16's down_proj, §12 composition
+// bullet): for every output channel j, acc[j] += sum over the P peel records of
+// records[p].c_star * weight[records[p].index * out_channels + j] -- weight is the
+// consumer's own weight matrix, ROW-MAJOR [in_channels x out_channels]. acc is
+// read-modify-write: it already holds the bulk accumulate on entry, and this call
+// adds the peeled channels' contribution on top of it, never replaces it. Fixed op
+// count: record_count * out_channels multiply-adds (§5's own "fixed op count"
+// framing, mirrored at the fix-up site).
+void ApplyPeelRankPFixup(int64_t* acc, size_t out_channels, const PeelRecord* records,
+                          size_t record_count, const int8_t* weight, size_t in_channels);
+
 }  // namespace superslm_t1822
 
 #endif  // SUPERSLM_T1822_ACTIVATION_SCALE_REMEDY_H

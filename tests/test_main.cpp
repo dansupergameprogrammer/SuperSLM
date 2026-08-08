@@ -20176,6 +20176,95 @@ static void TestT1822_M2_PeeledCode_TruncationCorner_RejectedViaHighWord() {
 	CHECK_MSG(c_star == -999, "T-1822: *out_c_star must remain untouched on this rejection");
 }
 
+// --- Refined-grid tie cell (audit F1c, §12 generality bullet) -------------------
+// Authored 2026-08-08 following the routing review: authorable against the
+// contract already declared, not engine-dependent -- closes casebook §5 item 6.
+
+static void TestT1822_M1_RefinedGridTieCell_AwayFromZero() {
+	// Audit F1c: "|x_i|·2^{k_g}·127·R exactly at the refined grid's half-step, both
+	// signs, asserting the away-from-zero result — golden-constant, hand-derived."
+	// Constructed exactly, independently of ComputeGroupedCode's own body:
+	// wide_value = 16, k_g = 3 -> (wide_value << k_g) = 128. At r = 1, s = 54
+	// (exponent = 62-54 = 8): prod = |128|*1*127 = 16256, and
+	// prod / 2^8 = 16256 / 256 = 63.5 EXACTLY -- the refined grid's own half-step,
+	// verified by exact integer arithmetic: 16256 = 63*256 + 128, and 128 is
+	// exactly half of 256. (Derivation: 127 is its own inverse mod 256 --
+	// 127*127 = 16129 = 63*256 + 1 -- so x = 128*127 mod 256 = 128 is the smallest
+	// positive solution to 127*x == 128 (mod 256).)
+	const int64_t wide_value = 16;
+	const int k_g = 3;
+	const int64_t r = 1;
+	const int s = 54;
+
+	const int8_t code_pos = ComputeGroupedCode(wide_value, k_g, r, s);
+	const int8_t code_neg = ComputeGroupedCode(-wide_value, k_g, r, s);
+
+	CHECK_MSG(code_pos == 64,
+	          "T-1822 §12 generality bullet (audit F1c): at the refined grid's exact "
+	          "half-step the positive-sign tie must round AWAY FROM ZERO to 64, not "
+	          "truncate to 63 -- golden constant, hand-derived from the exact tie "
+	          "16256 = 63*256 + 128");
+	CHECK_MSG(code_neg == -64,
+	          "T-1822 §12 generality bullet (audit F1c): the negative-sign tie must "
+	          "round away from zero symmetrically, to -64, not -63");
+
+	// Mutation contrast, independently computed (not read off ComputeGroupedCode's
+	// own body): a truncating (toward-zero) tie rule computes floor(prod / 2^exponent)
+	// with no rounding bias -- 63 at this exact fixture.
+	const int64_t prod = (wide_value << k_g) * r * 127;  // 128*1*127 = 16256, no overflow risk
+	const int64_t truncating_magnitude = prod >> 8;       // exponent = 8
+	CHECK_MSG(truncating_magnitude == 63,
+	          "T-1822 §12 generality bullet (audit F1c) mutation pin: the truncating "
+	          "tie rule must compute 63 at this fixture -- if this fails, the fixture "
+	          "is not actually sitting on a tie and the cell above proves nothing");
+	CHECK_MSG(code_pos != static_cast<int8_t>(truncating_magnitude),
+	          "T-1822 §12 generality bullet (audit F1c) mutation pin: the away-from-"
+	          "zero result and the truncating result must DIFFER at this fixture, or "
+	          "the cell cannot discriminate the tie rule");
+}
+
+// --- Site 16's down_proj rank-P fix-up (§5 step 4, §12 composition bullet) ------
+// Authored 2026-08-08 following the routing review: value-level and testable once
+// the fix-up's own contract is declared (t1822_activation_scale_remedy.h's new
+// ApplyPeelRankPFixup) -- closes casebook §5 item 7.
+
+static void TestT1822_Site16_DownProjRankPFixup_MatchesHandDerivedGolden() {
+	// §5 step 4 / §12 composition bullet: "site 16 -> the down_proj rank-P fix-up."
+	// Golden fixture, hand-derived independently of ApplyPeelRankPFixup's own body:
+	// in_channels=4, out_channels=3, weight ROW-MAJOR [in_channels x out_channels]:
+	//   row0: 1 2 3    row1: 4 5 6    row2: 7 8 9    row3: 10 11 12
+	// P=2 peel records: {index=1, c*=100}, {index=3, c*=-10}.
+	// Expected fix-up per output channel j (acc[j] += sum_p c*_p * weight[index_p,j]):
+	//   j=0: 100*weight[1,0] + (-10)*weight[3,0] = 100*4  + (-10)*10 = 400 - 100 = 300
+	//   j=1: 100*weight[1,1] + (-10)*weight[3,1] = 100*5  + (-10)*11 = 500 - 110 = 390
+	//   j=2: 100*weight[1,2] + (-10)*weight[3,2] = 100*6  + (-10)*12 = 600 - 120 = 480
+	// acc enters already holding the bulk accumulate (out of this cell's scope);
+	// the fix-up must ADD on top of it, never replace it.
+	const int8_t weight[12] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+	const PeelRecord records[2] = {{/*index=*/1, /*c_star=*/100}, {/*index=*/3, /*c_star=*/-10}};
+	int64_t acc[3] = {1000, 2000, 3000};
+
+	ApplyPeelRankPFixup(acc, /*out_channels=*/3, records, /*record_count=*/2, weight,
+	                     /*in_channels=*/4);
+
+	CHECK_MSG(acc[0] == 1300 && acc[1] == 2390 && acc[2] == 3480,
+	          "T-1822 §5 step 4 / §12 composition bullet (site 16 down_proj rank-P "
+	          "fix-up): acc must equal the bulk accumulate PLUS the hand-derived "
+	          "fix-up -- expected [1300, 2390, 3480] -- P*out_channels multiply-adds "
+	          "reading weight[index, j] in ROW-MAJOR [in_channels x out_channels] order");
+
+	// Mutation contrast, independently computed: a transposed weight-layout
+	// implementation (reading weight[j*in_channels + index] instead of
+	// weight[index*out_channels + j]) computes a DIFFERENT j=0 fix-up on this
+	// fixture -- the layout mistake this cell exists to catch.
+	const int64_t wrong_layout_fixup_j0 =
+	    100 * weight[0 * 4 + 1] + (-10) * weight[0 * 4 + 3];  // = 100*2 + (-10)*4 = 160
+	CHECK_MSG(wrong_layout_fixup_j0 == 160 && wrong_layout_fixup_j0 != 300,
+	          "T-1822 mutation pin: the transposed-layout fix-up (160) must differ "
+	          "from the correct row-major fix-up (300) at j=0, or this fixture does "
+	          "not discriminate the weight-indexing order");
+}
+
 // --- Contract cells: C22-kinship agreement (§12 contract bullet, D-SLM1663) -----
 
 static void TestT1822_M2_PeeledCode_MatchesIndependentReference() {
@@ -21084,6 +21173,8 @@ int main(int argc, char** argv) {
 	TestT1822_M2_PeeledCode_TruncationCorner_RejectedViaHighWord();
 	TestT1822_M2_PeeledCode_MatchesIndependentReference();
 	TestT1822_Config_PeelParamsAdmissible();
+	TestT1822_M1_RefinedGridTieCell_AwayFromZero();
+	TestT1822_Site16_DownProjRankPFixup_MatchesHandDerivedGolden();
 	TestT1822_C22KinshipAgreement_UnclampedRegion();
 	TestT1822_M1_RetainedClampNeverEngages_MutationPinned();
 	TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference();
