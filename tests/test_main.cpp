@@ -20894,6 +20894,126 @@ static void TestT1822_Config_PeelParamsAdmissibleAtN_CoupledInequality_N32768() 
 	          "P=7 unconditionally, independent of n");
 }
 
+// Standalone, independently-authored reproduction of what
+// IsPeelParamsAdmissibleAtN's truncate-then-multiply arithmetic would compute
+// if BOTH of its "WideHi(...) != 0" overflow guards were absent -- plain
+// uint64_t throughout, never calling and never called by the function under
+// test. It exists as the mutation pin for T-1842's central question: the real
+// function's guards are load-bearing only if there exists an input where
+// removing them would flip the verdict from correct-refuse to wrong-admit.
+//
+// C_max = 2^7 * 2^r_cap and C_max^2 = 2^(14 + 2*r_cap) are both pure powers of
+// two (T-1822 design §6.8, T-1841/D-SLM1923). A 64-bit register holding a
+// power of two 2^e truncates to exactly 0 whenever e >= 64 (2^e mod 2^64 = 0
+// for every integer e >= 64) and to the exact value 2^e otherwise -- this is
+// computed directly from e rather than by executing a real >=64-bit shift,
+// which is undefined behavior for a 64-bit operand and is not what any build
+// of the real guarded function does either (its own shift is carried out in
+// the file's 128-bit Wide128 facility, never truncated before the guard
+// checks it). Every step after the two truncation points (the p_term
+// multiply, the remainder-term multiply, and the final sum) is plain
+// uint64_t arithmetic, whose wraparound on overflow is defined C++ behavior,
+// matching exactly what WideLo(...) of an unguarded 128-bit product would
+// have been used for downstream had the guards not stopped it there first.
+static uint64_t UnguardedPeelParamsAdmissibleAtNTruncatedSum(int p, int r_cap, int64_t n) {
+	// C_max = 2^(7 + r_cap); C_max^2 = 2^(2 * (7 + r_cap)). Both are pure
+	// powers of two, so their low-64-bit truncation is computed directly
+	// from the exponent (2^e mod 2^64 = 2^e if e < 64, else 0) rather than
+	// by shifting a 64-bit operand by >= 64 bits, which is undefined
+	// behavior in C++ and is not what the real Wide128 arithmetic does
+	// either -- the real shift is carried out at full width before any
+	// truncation point is reached.
+	const int c_max_exp = 7 + r_cap;
+	const int c_max_sq_exp = 2 * c_max_exp;
+	const uint64_t c_max_sq_lo64 =
+	    (c_max_sq_exp < 64) ? (uint64_t{1} << c_max_sq_exp) : uint64_t{0};
+
+	const uint64_t p_term = c_max_sq_lo64 * static_cast<uint64_t>(p);  // wraps, defined
+	const uint64_t remainder_channels =
+	    static_cast<uint64_t>(n) - static_cast<uint64_t>(p);
+	const uint64_t remainder_term = remainder_channels * uint64_t{127u * 127u};
+	return p_term + remainder_term;  // wraps, defined
+}
+
+static bool UnguardedPeelParamsAdmissibleAtN(int p, int r_cap, int64_t n) {
+	const uint64_t sum = UnguardedPeelParamsAdmissibleAtNTruncatedSum(p, r_cap, n);
+	return sum <= static_cast<uint64_t>((int64_t{1} << 31) - 1);
+}
+
+static void TestT1822_Config_PeelParamsAdmissibleAtN_ArithmeticOverflowGuard_DomainExtremity() {
+	// T-1842 (Claude/Curie/t1832-...-test-design-2026-08-08.md §11): T-1840's
+	// fold-12 build constructed IsPeelParamsAdmissibleAtN's two
+	// "WideHi(...) != 0" overflow guards against a specification that named
+	// no threshold and reported the boundary as "roughly 28"; the T-1822
+	// design's thirteenth fold (§6.8, §24) independently re-derives the
+	// controlling threshold, by exact-integer arithmetic with no width
+	// limit, at r_cap = 25 -- three earlier than the build's own figure --
+	// and names the verbatim domain-extremity cell
+	// IsPeelParamsAdmissibleAtN(1, 30, 1536) == false (§12). This test
+	// realizes that cell plus the boundary sweep that discriminates the
+	// guard's own presence on both sides of the threshold: at (P=1,
+	// n=1536), the true unbounded coupled inequality already refuses
+	// starting r_cap=9 (sixteen values before either overflow guard could
+	// ever engage), so every cell below is a totality-guarantee cell over
+	// the function's full declared-int domain, not a configuration this
+	// design's own inequality would ever admit (§6.8's "Reachability"
+	// paragraph, executed).
+	//
+	// The band swept, independently re-derived in exact-integer Python
+	// (Claude/Curie/t1832-...-test-design-2026-08-08.md §11.2): the true
+	// inequality's own truncate-then-multiply arithmetic (reproduced above
+	// in plain uint64_t, independent of both IsPeelParamsAdmissibleAtN and
+	// of each other) agrees with the guarded function through r_cap=24 and
+	// diverges to a wrong "admissible" true at every r_cap in [25, 60]
+	// swept -- confirming r_cap=25 as the controlling threshold and this
+	// band as the one that discriminates the guard's presence: r_cap=24
+	// needs no guard to be correct (the unguarded arithmetic still refuses,
+	// because C_max^2 = 2^62 still fits in 64 bits there and the resulting
+	// sum is still far over 2^31-1); r_cap in {25, 26, 28, 30, 40, 56, 57,
+	// 60} all require a live guard, because the unguarded arithmetic
+	// truncates C_max^2 (or, at r_cap>=57, C_max itself) to exactly zero
+	// and would wrongly admit.
+	const int kSweepBand[] = {24, 25, 26, 28, 30, 40, 56, 57, 60};
+	constexpr int kP = 1;
+	constexpr int64_t kN = 1536;
+
+	for (int r_cap : kSweepBand) {
+		// The real, guarded function under test: the guards are load-bearing
+		// and must refuse at every r_cap in this band, per §6.8/§24's
+		// executed derivation and the design's own named cell (r_cap=30).
+		const bool guarded_admissible = IsPeelParamsAdmissibleAtN(kP, r_cap, kN);
+		CHECK_MSG(guarded_admissible == false,
+		          "T-1822 §12/§6.8/§24 (T-1841, D-SLM1923/1926): "
+		          "IsPeelParamsAdmissibleAtN(P=%d, r_cap=%d, n=%lld) must be "
+		          "REFUSED -- the guarded function wrongly admitted at this "
+		          "r_cap, meaning the built WideHi(...) overflow guard is not "
+		          "doing its job across the specified [24,60] band",
+		          kP, r_cap, static_cast<long long>(kN));
+
+		// The mutation pin: the independent unguarded simulation must
+		// disagree with the guarded function at every r_cap >= 25 (proving
+		// the guard is what makes the difference -- a deleted guard would
+		// flip the real function's output to match this "wrong" simulation)
+		// and agree with it at r_cap=24 (proving the discriminating band
+		// actually straddles the threshold rather than sitting entirely on
+		// one side of it, which would make the pin vacuous).
+		const bool unguarded_admissible =
+		    UnguardedPeelParamsAdmissibleAtN(kP, r_cap, kN);
+		const bool expected_unguarded = (r_cap >= 25);
+		CHECK_MSG(unguarded_admissible == expected_unguarded,
+		          "T-1822 §12/§6.8 mutation-pin helper: "
+		          "UnguardedPeelParamsAdmissibleAtN(P=%d, r_cap=%d, n=%lld) "
+		          "returned %d, expected %d (true iff r_cap>=25, where "
+		          "C_max^2's 64-bit truncation collapses the P-term to zero) "
+		          "-- the independent unguarded simulation must diverge from "
+		          "the guarded function at every r_cap in this band for the "
+		          "guard to be shown load-bearing rather than merely present",
+		          kP, r_cap, static_cast<long long>(kN),
+		          static_cast<int>(unguarded_admissible),
+		          static_cast<int>(expected_unguarded));
+	}
+}
+
 static void TestT1822_Config_SiteRefusal_OutOfRangeSiteId() {
 	// §12 primitive-tier domain-extremity bullet: "IsGroupingAdmissibleAtSite/
 	// IsG1AdmissibleAtSite at site_id in {0, -1, 19, 1000}: each asserts refusal
@@ -21761,6 +21881,12 @@ int main(int argc, char** argv) {
 	TestT1822_M2_Grid_FullRowMaxAbs_ResidualSiteDomainExtremeINT64MAX();
 	TestT1822_M2_SelectPeelIndices_N70000_RejectsRatherThanTruncates();
 	TestT1822_Config_PeelParamsAdmissibleAtN_CoupledInequality_N32768();
+
+	// T-1842 -- the thirteenth fold's arithmetic-overflow-guard cell (Curie,
+	// 2026-08-08; Claude/Curie/t1832-activation-scale-remedy-red-suite-test-
+	// design-2026-08-08.md §11).
+	TestT1822_Config_PeelParamsAdmissibleAtN_ArithmeticOverflowGuard_DomainExtremity();
+
 	TestT1822_Config_SiteRefusal_OutOfRangeSiteId();
 	TestT1822_Site16_DownProjRankPFixup_OutOfRangeIndexSkipped();
 
