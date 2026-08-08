@@ -200,6 +200,14 @@ def main(argv=None) -> int:
         a, b = c["eng"][t], c["flt"][t]
         return (a * b).sum(-1) / (np.linalg.norm(a, axis=-1) * np.linalg.norm(b, axis=-1))
 
+    def rel_l2_single(c, t, s):
+        e = c["eng"][t, s] - c["flt"][t, s]
+        return float(np.linalg.norm(e) / np.linalg.norm(c["flt"][t, s]))
+
+    def cos_single(c, t, s):
+        a, b = c["eng"][t, s], c["flt"][t, s]
+        return float((a * b).sum() / (np.linalg.norm(a) * np.linalg.norm(b)))
+
     rel_pref = gather(pref, rel_l2)          # (n_pref, 29)
     rel_dec = gather(dec, rel_l2)
     cos_pref = gather(pref, cosine)
@@ -293,6 +301,55 @@ def main(argv=None) -> int:
               f"top-1% error share {c_['top1pct_share_median']:.3f}")
     out["channel_structure"] = chan
 
+    print("\n=== (a2)/(a3) resolving power: is the DECODE-vs-PREFILL gap in the mechanism")
+    print("     signatures themselves resolved, or is the pooled SE above hiding prompt-level")
+    print("     correlation? (each layer/position within one prompt is not an independent")
+    print("     sample, so the pooled n above overstates precision -- paired per prompt, n=6)")
+
+    def per_prompt_geo_chan(pid_idx_fn):
+        cos_mean, incr_med, energy_med, err_dec, top1 = [], [], [], [], []
+        for pid in ids:
+            idx = pid_idx_fn(pid)
+            incr, cosd, energy = geometry(idx)
+            dr, _sr, t1 = channel_structure(idx)
+            cos_mean.append(float(cosd.mean()) if len(cosd) else float("nan"))
+            incr_med.append(float(np.median(incr)) if len(incr) else float("nan"))
+            energy_med.append(float(np.median(energy)) if len(energy) else float("nan"))
+            err_dec.append(float(np.median(dr)) if len(dr) else float("nan"))
+            top1.append(float(np.median(t1)) if len(t1) else float("nan"))
+        return (np.array(cos_mean), np.array(incr_med), np.array(energy_med), np.array(err_dec),
+                np.array(top1))
+
+    pre_idx = lambda pid: [(p, t) for p, t in pref if p == pid and t >= 1]
+    dec_idx = lambda pid: [(p, t) for p, t in dec if p == pid]
+    pre_cos, pre_incr, pre_energy, pre_errdec, pre_top1 = per_prompt_geo_chan(pre_idx)
+    dec_cos, dec_incr, dec_energy, dec_errdec, dec_top1 = per_prompt_geo_chan(dec_idx)
+
+    def paired_rp_arrays(name, pre_arr, dec_arr):
+        d = dec_arr - pre_arr
+        n = len(d)
+        mean_d, sd_d = float(d.mean()), float(d.std(ddof=1))
+        se_d = sd_d / np.sqrt(n)
+        rp95 = 1.96 * se_d
+        t_d = mean_d / se_d if se_d > 0 else float("nan")
+        resolved = bool(abs(mean_d) > rp95)
+        print(f"  {name:34s} prefill {pre_arr.mean():+.4f}  decode {dec_arr.mean():+.4f}  "
+              f"diff {mean_d:+.4f}  RP95 {rp95:.4f}  "
+              f"{'RESOLVED' if resolved else 'NOT RESOLVED'} (t={t_d:+.2f})")
+        return {"prefill_per_prompt": pre_arr.tolist(), "decode_per_prompt": dec_arr.tolist(),
+                "mean_diff": mean_d, "se_diff": se_d, "resolving_power_95": rp95, "t": t_d,
+                "resolved_at_n6": resolved}
+
+    geo_chan_rp = {
+        "cos_ek_dk_mean": paired_rp_arrays("cos(e_k,d_k) mean, all layers", pre_cos, dec_cos),
+        "increment_median": paired_rp_arrays("increment ||d_k||/||e_k|| median", pre_incr, dec_incr),
+        "energy_ratio_median": paired_rp_arrays("energy ratio median", pre_energy, dec_energy),
+        "error_decile_ratio_median": paired_rp_arrays("channel error decile ratio median",
+                                                        pre_errdec, dec_errdec),
+        "top1pct_share_median": paired_rp_arrays("top-1% error share median", pre_top1, dec_top1),
+    }
+    out["geometry_channel_resolving_power"] = geo_chan_rp
+
     print("\n=== (b) drift against index: generated vs prompt, same fit, same index range ===")
     fits = {}
     for s in (5, 15, 27, 28):
@@ -372,6 +429,76 @@ def main(argv=None) -> int:
               f"(max {c_['railed_error_share_max']:.3f})   "
               f"range deficit {c_['range_deficit_frac_mean']:.3f}")
     out["rail_census"] = cen
+
+    print("\n=== (c) resolving power: does the first GENERATED position show the first-token")
+    print("     rail catastrophe's analog, against a per-prompt paired n=6 floor? ===")
+    pos0_share = np.array([rail_census([(pid, 0)])[2].mean() if any(p == pid and t == 0 for p, t in pref)
+                            else float("nan") for pid in ids])
+    fg_share = np.array([rail_census([(pid, caps[pid]["prompt_len"])])[2].mean() for pid in ids])
+    rp_rail = paired_rp_arrays("railed error share: position0 vs first-generated", fg_share, pos0_share)
+    verdict_rail = ("the first generated position does NOT reproduce the first-token rail "
+                     "catastrophe -- it behaves like an ordinary interior position" if
+                     abs(rp_rail["mean_diff"]) > rp_rail["resolving_power_95"] and
+                     fg_share.mean() < pos0_share.mean()
+                     else "inconclusive at this resolution")
+    print(f"  -> {verdict_rail}")
+    out["rail_position0_vs_first_generated_rp"] = rp_rail
+
+    print("\n=== (d) resolving power: per-prompt paired contrast, prefill(pos>=1) vs decode, n=6 ===")
+    print("Extension over the tool as committed at a4f25d1 -- the tool reports pooled medians\n"
+          "(a1/a3) and OLS-fit standard errors (b) but no resolving power for the headline\n"
+          "prefill-vs-decode CONTRAST itself. This section adds it, matching the campaign's own\n"
+          "convention (T-1795/T-1796/T-1819/T-1820: inter-prompt spread at n=6 is the noise\n"
+          "floor) rather than inventing a new one. Paired per prompt because prefill and decode\n"
+          "are measured on the SAME six prompts, not independent samples.")
+
+    def per_prompt_metric(pid, t_indices, fn):
+        vals = [fn(caps[pid], t) for t in t_indices if t < caps[pid]["T"]]
+        return float(np.median(vals)) if vals else float("nan")
+
+    def paired_rp(name, fn, extra=""):
+        pre, dec_ = [], []
+        for pid in ids:
+            c = caps[pid]
+            pl = c["prompt_len"]
+            pre.append(per_prompt_metric(pid, range(1, pl), fn))
+            dec_.append(per_prompt_metric(pid, range(pl, c["T"]), fn))
+        pre = np.array(pre)
+        dec_ = np.array(dec_)
+        d = dec_ - pre
+        n = len(d)
+        mean_d = float(d.mean())
+        sd_d = float(d.std(ddof=1))
+        se_d = sd_d / np.sqrt(n)
+        rp95 = 1.96 * se_d
+        t_d = mean_d / se_d if se_d > 0 else float("nan")
+        resolved = bool(abs(mean_d) > rp95)
+        rec = {"prefill_per_prompt": pre.tolist(), "decode_per_prompt": dec_.tolist(),
+               "mean_diff": mean_d, "sd_diff": sd_d, "se_diff": se_d,
+               "resolving_power_95": rp95, "t": t_d, "resolved_at_n6": resolved}
+        print(f"  {name:34s} prefill median-of-medians {pre.mean():.4f}  decode median-of-medians "
+              f"{dec_.mean():.4f}  diff {mean_d:+.4f}  RP95 {rp95:.4f}  "
+              f"{'RESOLVED' if resolved else 'NOT RESOLVED'} (t={t_d:+.2f}) {extra}")
+        return rec
+
+    rp = {}
+    rp["rel_l2_state28"] = paired_rp("final-state (28) rel_l2", lambda c, t: rel_l2_single(c, t, 28))
+    rp["rel_l2_state27"] = paired_rp("state 27 rel_l2", lambda c, t: rel_l2_single(c, t, 27))
+    rp["rel_l2_state5"] = paired_rp("state 5 rel_l2", lambda c, t: rel_l2_single(c, t, 5))
+    rp["cos_state28"] = paired_rp("final-state (28) cosine", lambda c, t: cos_single(c, t, 28))
+    out["resolving_power_prefill_vs_decode"] = rp
+
+    print("\n=== (a)/(d) discrimination claim, stated against the resolving power just computed ===")
+    for key, label in (("rel_l2_state28", "final-state relative L2"),
+                        ("rel_l2_state27", "state-27 relative L2"),
+                        ("rel_l2_state5", "state-5 relative L2"),
+                        ("cos_state28", "final-state cosine")):
+        r = rp[key]
+        verdict = ("decode differs from prefill" if r["resolved_at_n6"]
+                   else "no difference detected at this resolution -- not a proof of no "
+                        "difference at any resolution")
+        print(f"  {label}: diff {r['mean_diff']:+.4f} against RP95 {r['resolving_power_95']:.4f} "
+              f"at n=6 prompts -- {verdict}")
 
     print("\n=== per-position final-state relative L2, generated positions ===")
     for pid in ids:
