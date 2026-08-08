@@ -75,6 +75,26 @@ inline constexpr int64_t kOrdinaryGroup[32] = {
 inline constexpr size_t kOrdinaryGroupN = 32;
 inline constexpr int64_t kOrdinaryGroupMaxAbs = 2000000;  // index 5
 
+// A small group calibrated to leave REAL headroom under the int8 rail across every
+// k_g in [0, 3] against a row max of 800 -- unlike kOrdinaryGroup at kCanonicalR/
+// kCanonicalS (the D'_grid=1 scale, deliberately the FINEST grid, for the C_max/
+// totality/truncation boundary fixtures above), this group's own scale is derived
+// from ITS OWN row max, matching how a real funnel would set it. Independently
+// verified (Python, exact integer arithmetic, transcribing the same composite
+// formula as §6): with (r, s) = NormalizeScale(800)/DynamicScaleReciprocal, at
+// k_g in {0,1,2,3} no channel's magnitude reaches +-127 (codes at k_g=3:
+// [114, 38, -76, 13]); at k_g=4 -- one past the k_cap=3 this group's own ratio
+// (800/90 ~ 8.9) admits -- two of the four channels legitimately overshoot and are
+// clamped to +-127 exactly (codes: [127, 76, -127, 25]). This is the fixture the
+// retained-clamp-engagement cell (§12 contract bullet, D-SLM1615) and the
+// C22-kinship-agreement cell (D-SLM1663) both need: a scale where "does the clamp
+// engage" is actually discriminating, rather than either always-true (every
+// nonzero value saturates) or always-false (nothing ever approaches the rail).
+inline constexpr int64_t kClampMarginGroup[4] = {90, 30, -60, 10};
+inline constexpr size_t kClampMarginGroupN = 4;
+inline constexpr int64_t kClampMarginGroupMaxAbs = 90;
+inline constexpr int64_t kClampMarginRowMax = 800;
+
 // An all-zero group (D'_g's own >= 1 guard fires; k_g's admissibility predicate must
 // still be well-defined at D'_g == 1).
 inline constexpr int64_t kAllZeroGroup[8] = {0, 0, 0, 0, 0, 0, 0, 0};

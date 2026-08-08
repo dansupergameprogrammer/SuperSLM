@@ -62,6 +62,16 @@ int8_t ComputeGroupedCode(int64_t wide_value, int k_g, int64_t r, int s);
 // `while ((group_max_abs << (k+1)) <= row_max_abs) ++k`, capped at k_cap.
 int ReferenceRefinementExponent(int64_t group_max_abs, int64_t row_max_abs, int k_cap);
 
+// §11's A6-independent differential reference for the RoPE-safe variant
+// (Mendeleev F1, D-SLM1881): authored without reading
+// ComputeRefinementExponentRopeSafe's own body — the largest k in [0, k_cap] with
+// 127 * (group_max_abs << (k+1)) <= 90 * row_max_abs, k = 0 always admissible.
+// §12 bullet 1's differential requirement reaches this predicate exactly as it
+// reaches the standard path's -- it is a distinct declared function, not a
+// parameterization of ComputeRefinementExponent, and a differential cell against
+// one does not discharge the other.
+int ReferenceRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_abs, int k_cap);
+
 // §11 A6 / §12 shape row: is `group_size` an admissible offline group stride for a row
 // of `row_width` channels — a power of two that evenly divides row_width?
 bool IsGroupSizeAdmissible(int64_t row_width, int64_t group_size);

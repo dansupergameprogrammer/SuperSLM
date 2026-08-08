@@ -19971,13 +19971,68 @@ static void TestT1822_M1_RopeSafeVariant_RespectsBound() {
 	// §6.2, D-SLM1816: at site 3, k > 0 is admissible only when
 	// 127*(D'_g << k) <= 90*D'. Sweep a boundary-adjacent fixture and assert the
 	// primitive never returns a k violating the bound.
+	//
+	// Mendeleev F1 (Structural, D-SLM1881): this is a SAFETY predicate (never
+	// violates the ceiling) and was the RoPE-safe path's ONLY cell -- proven
+	// vacuous by execution (a standalone stub of ComputeRefinementExponentRopeSafe
+	// that always returns 0 passes this loop on every fixture value verbatim,
+	// since 0 never violates any bound). Kept as a fixture-validity guard; the
+	// differential cell below is what actually discharges §12 bullet 1 for this
+	// primitive.
 	const int64_t row_max = 1 << 20;
 	for (int64_t group_max : {int64_t{1}, int64_t{1000}, int64_t{500000}}) {
 		int k = ComputeRefinementExponentRopeSafe(group_max, row_max, /*k_cap=*/6);
 		CHECK_MSG(k == 0 || 127 * (group_max << k) <= 90 * row_max,
 		          "T-1822 §6.2/§12 RoPE-safe bound: ComputeRefinementExponentRopeSafe must "
-		          "never return a k that violates 127*(D'_g<<k) <= 90*D' (k=0 excepted)");
+		          "never return a k that violates 127*(D'_g<<k) <= 90*D' (k=0 excepted) -- "
+		          "fixture-validity guard, kept ahead of the differential/mutation cells below");
 	}
+}
+
+static void TestT1822_M1_RefinementExponentRopeSafe_MatchesReference() {
+	// §12 bullet 1 (differential vs. independent reference), for the RoPE-safe
+	// predicate specifically (Mendeleev F1, D-SLM1881): a CORRECTNESS cell, not a
+	// safety cell -- asserts the primitive returns the MAXIMAL admissible k, not
+	// merely a k that does not violate the bound. Swept over the same fixture set
+	// as the bound-only guard above, so the two are directly comparable.
+	const int64_t row_max = 1 << 20;
+	for (int64_t group_max : {int64_t{1}, int64_t{1000}, int64_t{500000}}) {
+		int k_primitive = ComputeRefinementExponentRopeSafe(group_max, row_max, /*k_cap=*/6);
+		int k_reference = ReferenceRefinementExponentRopeSafe(group_max, row_max, /*k_cap=*/6);
+		CHECK_MSG(k_primitive == k_reference,
+		          "T-1822 §12 differential(i)/Mendeleev F1: ComputeRefinementExponentRopeSafe "
+		          "must match the independent reference exactly -- a stub that always returns "
+		          "0 passes the bound-only guard above but fails HERE whenever the reference's "
+		          "own maximal k is nonzero (group_max=1 -> k=6, group_max=1000 -> k=6)");
+	}
+}
+
+static void TestT1822_M1_RefinementExponentRopeSafe_MutationPin() {
+	// Mendeleev F1's own mutation pin, mirroring the standard path's
+	// TestT1822_M1_RefinementExponent_MutationPin: the reference's <= changed to <
+	// must go red. Fixture constructed exactly on the RoPE-safe formula's own
+	// boundary: group_max=45, row_max=127, k=0->1 -- 127*(45<<1) == 90*127 == 11430
+	// EXACTLY (verified independently, Python exact-integer arithmetic), so <=
+	// admits k=1 and < does not.
+	auto MutatedRopeSafeRef = [](int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
+		int k = 0;
+		while (k < k_cap && 127 * (group_max_abs << (k + 1)) < 90 * row_max_abs) ++k;  // mutated: < not <=
+		return k;
+	};
+	int k_correct = ReferenceRefinementExponentRopeSafe(/*group_max_abs=*/45, /*row_max_abs=*/127, /*k_cap=*/3);
+	int k_mutated = MutatedRopeSafeRef(45, 127, 3);
+	CHECK_MSG(k_correct == 1,
+	          "T-1822 Mendeleev F1 mutation pin: the correct RoPE-safe reference must "
+	          "return k=1 at this exact-boundary fixture (127*(45<<1) == 90*127 == "
+	          "11430) -- if this fails, the fixture is not actually sitting on the "
+	          "boundary and the mutation pin below proves nothing");
+	CHECK_MSG(k_mutated == 0,
+	          "T-1822 Mendeleev F1 mutation pin: the mutated (< instead of <=) "
+	          "reference must return k=0 at the same fixture");
+	CHECK_MSG(k_correct != k_mutated,
+	          "T-1822 §12 differential(i) mutation pin (Mendeleev F1): a RoPE-safe "
+	          "reference using < instead of <= must disagree with the correct "
+	          "reference at the exact-boundary fixture");
 }
 
 // --- M1: configuration-time refusal cells (§12 shape row) -----------------------
@@ -20301,15 +20356,31 @@ static void TestT1822_Config_PeelParamsAdmissible() {
 
 static void TestT1822_C22KinshipAgreement_UnclampedRegion() {
 	// D-SLM1663: "for every input where C22 does not clamp (composite <= 127), the
-	// new primitive and RequantTokenCodeWide return equal values." Sweep the ordinary
-	// (non-outlier) fixture, whose composite is expected to land well under 127.
-	for (int64_t wide_value : kOrdinaryGroup) {
-		if (wide_value == 0) continue;  // C22's magnitude 0 case adds nothing to this cell
+	// new primitive and RequantTokenCodeWide return equal values."
+	//
+	// Fixture note (found while authoring the F4 fix below, corrected here rather
+	// than left standing per StandardsDocument.md §7): this cell previously swept
+	// kOrdinaryGroup at kCanonicalR/kCanonicalS -- the D'_grid=1 (finest possible)
+	// scale, deliberately chosen for the C_max/totality/truncation BOUNDARY
+	// fixtures above. At that scale every nonzero element of kOrdinaryGroup
+	// computes a magnitude far past 127 (verified: 1000 -> magnitude 127,000; even
+	// the smallest element overflows the rail), so the `c22_value > -127 &&
+	// c22_value < 127` filter skipped every iteration and the loop body never
+	// executed -- a vacuously-true cell of exactly the shape F1 was caught in,
+	// found by re-deriving the arithmetic rather than by the stub-execution method.
+	// kClampMarginGroup at its OWN row max (800, not the D'_grid=1 scale) is
+	// independently verified to land every code well inside the unclamped region
+	// (k_g=0 codes: [14, 5, -10, 2] -- none within 10 of either rail).
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(kClampMarginRowMax);
+	const int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+	const int s = ns.s;
+	int unclamped_iterations = 0;
+	for (int64_t wide_value : kClampMarginGroup) {
 		int64_t c_star = 0;
-		RemedyStatus status =
-		    ComputePeeledCode(wide_value, kCanonicalR, kCanonicalS, &c_star);
-		int8_t c22_value = superslm::RequantTokenCodeWide(wide_value, kCanonicalR, kCanonicalS);
+		RemedyStatus status = ComputePeeledCode(wide_value, r, s, &c_star);
+		int8_t c22_value = superslm::RequantTokenCodeWide(wide_value, r, s);
 		if (c22_value > -127 && c22_value < 127) {
+			++unclamped_iterations;
 			// Unclamped C22 region: the new primitive must agree exactly.
 			CHECK_MSG(status == RemedyStatus::Ok,
 			          "T-1822 §12 contract (D-SLM1663): an unclamped C22 input must not "
@@ -20320,6 +20391,10 @@ static void TestT1822_C22KinshipAgreement_UnclampedRegion() {
 			          "the C22-agreement cell that fails if the kinship claim is false");
 		}
 	}
+	CHECK_MSG(unclamped_iterations == static_cast<int>(kClampMarginGroupN),
+	          "T-1822 §12 contract (D-SLM1663) fixture-validity guard: all four "
+	          "kClampMarginGroup channels must fall in the unclamped region at this "
+	          "scale, or the cell above is silently skipping iterations again");
 }
 
 // --- Contract cell: retained-clamp engagement, asserted zero (§12, D-SLM1615) ---
@@ -20327,24 +20402,56 @@ static void TestT1822_C22KinshipAgreement_UnclampedRegion() {
 static void TestT1822_M1_RetainedClampNeverEngages_MutationPinned() {
 	// D-SLM1615: "the belt never acts on the unpeeled population" -- C22's retained
 	// clamp inside ComputeGroupedCode must never actually clamp, over the swept
-	// fixture, because k_g's own construction keeps the shifted operand in range.
-	// Mutation-pinned by k_g + 1, which MUST drive the counter non-zero.
+	// fixture, at every ADMISSIBLE k_g (0 through k_cap=3), because k_g's own
+	// construction keeps the shifted operand in range. Mutation-pinned by k_g + 1
+	// (one past the admissible k_cap), which MUST drive the counter non-zero.
+	//
+	// Mendeleev F4 (2026-08-08): the prior version exercised only the trivial
+	// k_g=0 case (group_max == row_max forces k_g=0 for ANY k_cap). This version
+	// sweeps every admissible k_g on kClampMarginGroup (group_max=90 < row_max=800,
+	// ratio 8.9, genuinely admits k_g up to k_cap=3), so the shift itself is
+	// exercised. Also corrects a latent scale defect found while authoring this
+	// fix (StandardsDocument.md §7 -- a fix is new writing, and adjacent defects
+	// found while repairing are not out of scope): the prior kOrdinaryGroup/
+	// kCanonicalR combination clamps EVERY nonzero element regardless of k_g (the
+	// D'_grid=1 scale is far too fine for kOrdinaryGroup's magnitude range), which
+	// would have made "engagements_correct == 0" FALSE even at the correct k_g --
+	// not a defect this fix introduces, one it would have inherited unnoticed.
+	//
+	// Independently verified (Python, exact integer arithmetic) at
+	// (r, s) = NormalizeScale(800)/DynamicScaleReciprocal: k_g in {0,1,2,3} never
+	// reaches +-127 on any of the four channels; k_g=4 (the mutation, one past
+	// k_cap=3) clamps two of the four to exactly +-127.
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(kClampMarginRowMax);
+	const int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+	const int s = ns.s;
+
 	int engagements_correct = 0;
-	int engagements_mutated = 0;
-	for (int64_t wide_value : kOrdinaryGroup) {
-		int k_g = ComputeRefinementExponent(kOrdinaryGroupMaxAbs, kOrdinaryGroupMaxAbs, /*k_cap=*/3);
-		int8_t code_correct = ComputeGroupedCode(wide_value, k_g, kCanonicalR, kCanonicalS);
-		int8_t code_mutated = ComputeGroupedCode(wide_value, k_g + 1, kCanonicalR, kCanonicalS);
-		if (code_correct == 127 || code_correct == -127) ++engagements_correct;
-		if (code_mutated == 127 || code_mutated == -127) ++engagements_mutated;
+	for (int k_cap : {0, 1, 2, 3}) {
+		int k_g = ComputeRefinementExponent(kClampMarginGroupMaxAbs, kClampMarginRowMax, k_cap);
+		for (int64_t wide_value : kClampMarginGroup) {
+			int8_t code = ComputeGroupedCode(wide_value, k_g, r, s);
+			if (code == 127 || code == -127) ++engagements_correct;
+		}
 	}
 	CHECK_MSG(engagements_correct == 0,
-	          "T-1822 §12 contract bullet (D-SLM1615): the retained C22 clamp must "
-	          "engage ZERO times on the unpeeled population at the correct k_g");
+	          "T-1822 §12 contract bullet (D-SLM1615 / Mendeleev F4): the retained "
+	          "C22 clamp must engage ZERO times across every admissible k_g in "
+	          "[0,3] on kClampMarginGroup, not only at the trivial k_g=0 case");
+
+	int engagements_mutated = 0;
+	const int k_g_correct =
+	    ComputeRefinementExponent(kClampMarginGroupMaxAbs, kClampMarginRowMax, /*k_cap=*/3);
+	for (int64_t wide_value : kClampMarginGroup) {
+		int8_t code = ComputeGroupedCode(wide_value, k_g_correct + 1, r, s);
+		if (code == 127 || code == -127) ++engagements_mutated;
+	}
 	CHECK_MSG(engagements_mutated > 0,
-	          "T-1822 §12 contract bullet (D-SLM1615) mutation pin: k_g + 1 must drive "
-	          "the clamp-engagement counter NON-ZERO -- if this fails, the zero-"
-	          "engagement cell above is not discriminating anything");
+	          "T-1822 §12 contract bullet (D-SLM1615) mutation pin: k_g + 1 (one "
+	          "past the admissible k_cap=3) must drive the clamp-engagement counter "
+	          "NON-ZERO -- verified independently (2 of 4 channels overshoot at "
+	          "k_g=4) -- if this fails, the zero-engagement cell above is not "
+	          "discriminating anything");
 }
 
 // --- Composition: M1xM2 at site 16, peel-first order (§12 composition bullet, F10) ---
@@ -20353,6 +20460,12 @@ static void TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference() {
 	// Audit F10, D-SLM1639: "an equality cell computing the site's full output under
 	// the specified peel-first order against the independent reference, on a fixture
 	// where peel-then-group and group-then-peel differ."
+	//
+	// Mendeleev F2 (D-SLM1882): the prior version of this test computed only the two
+	// orders' GRIDS and asserted they differ -- a fixture-validity precondition, not
+	// the cell itself. No code-producing primitive was called, no independent
+	// reference was computed, no equality was asserted. This version does both.
+	//
 	// The ordinary-group fixture's own outlier (index 5, magnitude 2,000,000) is >>
 	// every other channel, so peeling it first changes the group's own max-abs
 	// reduction the grouping step would otherwise see -- the two orders diverge here.
@@ -20380,7 +20493,54 @@ static void TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference() {
 	CHECK_MSG(peel_first_grid != group_first_grid,
 	          "T-1822 §12 composition bullet (audit F10): peel-first and group-first "
 	          "must derive DIFFERENT grids on this fixture, or the cell cannot "
-	          "discriminate the order claim");
+	          "discriminate the order claim -- fixture-validity guard, kept ahead of "
+	          "the equality assertion below");
+
+	// The site's ACTUAL output under the specified peel-first order: derive (r, s)
+	// from the peel-first grid via the engine's own NormalizeScale/
+	// DynamicScaleReciprocal (the real composite's own inputs -- not a
+	// re-derivation of them), then compute every unpeeled channel's code via
+	// ComputeGroupedCode at k_g=0 (no further M1 sub-group refinement layered on
+	// this fixture) and the peeled channel's c* via ComputePeeledCode.
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(peel_first_grid);
+	const int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+	const int s = ns.s;
+
+	int8_t actual_codes[kOrdinaryGroupN] = {};
+	for (size_t i = 0; i < kOrdinaryGroupN; ++i) {
+		if (i == records[0].index) continue;
+		actual_codes[i] = ComputeGroupedCode(kOrdinaryGroup[i], /*k_g=*/0, r, s);
+	}
+	int64_t actual_c_star = -999;
+	RemedyStatus actual_status =
+	    ComputePeeledCode(kOrdinaryGroup[records[0].index], r, s, &actual_c_star);
+
+	// The independent reference: the real engine RequantTokenCodeWide for the
+	// unpeeled channels (the composite ComputeGroupedCode is a CALL to per
+	// D-SLM1663's kinship rule, not a re-implementation of it -- so calling it
+	// directly here is independent of ComputeGroupedCode's own body), and the
+	// already-declared ReferencePeeledCode (§12 differential(ii)'s own reference)
+	// for the peeled channel. Neither reads ComputeGroupedCode's or
+	// ComputePeeledCode's own implementation.
+	bool all_unpeeled_match = true;
+	for (size_t i = 0; i < kOrdinaryGroupN; ++i) {
+		if (i == records[0].index) continue;
+		int8_t reference_code = superslm::RequantTokenCodeWide(kOrdinaryGroup[i], r, s);
+		if (actual_codes[i] != reference_code) all_unpeeled_match = false;
+	}
+	CHECK_MSG(all_unpeeled_match,
+	          "T-1822 §12 composition bullet (audit F10 / Mendeleev F2, D-SLM1882): "
+	          "every unpeeled channel's code under the peel-first order must equal "
+	          "the independent reference (the real engine composite at the "
+	          "peel-derived grid)");
+
+	int64_t reference_c_star = -999;
+	RemedyStatus reference_status =
+	    ReferencePeeledCode(kOrdinaryGroup[records[0].index], r, s, &reference_c_star);
+	CHECK_MSG(actual_status == reference_status && actual_c_star == reference_c_star,
+	          "T-1822 §12 composition bullet (audit F10 / Mendeleev F2, D-SLM1882): "
+	          "the peeled channel's c* under the peel-first order must equal the "
+	          "independent M2 reference exactly");
 }
 
 static void TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula() {
@@ -20393,6 +20553,52 @@ static void TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula() {
 	CHECK_MSG(k_at_grid1 == 0,
 	          "T-1822 §12 composition bullet (D-SLM1667): at D'_grid=1 (the all-peeled/"
 	          "all-zero-row degenerate corner), k_g must be 0, not k_cap");
+
+	// Mendeleev F3 (BARE half, D-SLM1883): D-SLM1667's claim has TWO conjuncts --
+	// the k_g-formula value above (was covered) and "codes all zero, output
+	// unaffected" (was not exercised at all: no peel construction, no
+	// ComputeGroupedCode call, no zero-codes assertion anywhere in the prior test).
+	//
+	// Construct the degenerate fixture the claim is actually about: a group where
+	// EVERY channel is among the peeled set (P >= group size), so the unpeeled
+	// population is empty and its own max-abs reduction sits at C20's floor (1) --
+	// ComputePeelGrid(unpeeled_max_abs=1, ...) is the same D'_grid=1 corner k_at_grid1
+	// is derived over. §5 step 3's own text: "the site's output is int8 codes[n]
+	// (peeled positions hold 0)" -- a peeled channel's BULK operand is zeroed
+	// before the funnel runs (its true magnitude lives in the peel record, not the
+	// bulk row), so what "codes all zero, output unaffected" asserts is that
+	// ComputeGroupedCode(/*wide_value=*/0, k_g, r, s) == 0 for EVERY k_g this
+	// degenerate corner could produce -- "unaffected" meaning the result does not
+	// depend on which grid/k_g the corner derives, because the operand is zero
+	// either way, not because it happens to be zero at k_g=0 specifically.
+	PeelRecord all_peeled_records[kOrdinaryGroupN];
+	size_t all_peeled_count =
+	    SelectPeelIndices(kOrdinaryGroup, kOrdinaryGroupN, /*p=*/static_cast<int>(kOrdinaryGroupN),
+	                       all_peeled_records);
+	CHECK_MSG(all_peeled_count == kOrdinaryGroupN,
+	          "T-1822 Mendeleev F3 fixture-validity guard: P >= group size must peel "
+	          "every channel, or this is not the all-peeled degenerate corner");
+
+	int64_t unpeeled_max_abs_floor = 1;  // C20's guard: empty-population max floors to 1
+	int64_t all_peeled_grid = ComputePeelGrid(unpeeled_max_abs_floor, kOrdinaryGroupMaxAbs, /*r_cap=*/7);
+	CHECK_MSG(all_peeled_grid == 1,
+	          "T-1822 Mendeleev F3 fixture-validity guard: the all-peeled corner's own "
+	          "grid must be D'_grid=1, matching k_at_grid1's own fixture above, or the "
+	          "two assertions in this test are about different corners");
+
+	const superslm::NormalizedScale ns = superslm::NormalizeScale(all_peeled_grid);
+	const int64_t r = superslm::DynamicScaleReciprocal(ns.dn);
+	const int s = ns.s;
+
+	bool all_zero = true;
+	for (int k_g : {0, 1, 2, 3}) {
+		int8_t code = ComputeGroupedCode(/*wide_value=*/0, k_g, r, s);
+		if (code != 0) all_zero = false;
+	}
+	CHECK_MSG(all_zero,
+	          "T-1822 §12 composition bullet (D-SLM1667 / Mendeleev F3, D-SLM1883): "
+	          "every peeled channel's bulk code must be 0 at the all-peeled corner's "
+	          "own grid, for every k_g in [0,3] -- 'codes all zero, output unaffected'");
 }
 
 int main(int argc, char** argv) {
@@ -21156,6 +21362,8 @@ int main(int argc, char** argv) {
 	TestT1822_M1_KCapSaturation();
 	TestT1822_M1_G1RopeSafeRefusal_Site3Only();
 	TestT1822_M1_RopeSafeVariant_RespectsBound();
+	TestT1822_M1_RefinementExponentRopeSafe_MatchesReference();
+	TestT1822_M1_RefinementExponentRopeSafe_MutationPin();
 	TestT1822_Config_GroupSizeDivisibility();
 	TestT1822_Config_NormConsumerKCapBound();
 	TestT1822_Config_GroupingRefusedAtSite1();
