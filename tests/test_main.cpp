@@ -20571,16 +20571,35 @@ static void TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula() {
 	// degenerate corner could produce -- "unaffected" meaning the result does not
 	// depend on which grid/k_g the corner derives, because the operand is zero
 	// either way, not because it happens to be zero at k_g=0 specifically.
-	PeelRecord all_peeled_records[kOrdinaryGroupN];
+	//
+	// FIXTURE, corrected 2026-08-08 (T-1833 build finding, adjudicated at source and
+	// by execution against the real implementation): this cell must use
+	// kAllZeroGroup, not kOrdinaryGroup. ComputePeelGrid's own documented formula
+	// (§5 step 2 / this header) is D'_grid = max(unpeeled_max_abs,
+	// CeilDivPow2(full_row_max_abs, r_cap)) -- the SECOND term is driven by the
+	// group's own REAL full-row max regardless of how much of it gets peeled, not
+	// by whether the unpeeled population is empty. kOrdinaryGroup's real max is
+	// 2,000,000 (the outlier at index 5), so CeilDivPow2(2000000, 7) = 15625 -- the
+	// grid is NOT 1 even when every channel is peeled, and asserting it is is a
+	// fixture defect, not an implementation one (independently verified: Python,
+	// the same exact-integer formula, and direct execution against the real T-1833
+	// build at `D:\SuperSLM\.worktrees\t1833-build`@`d8454ae` -- 24,140 checks,
+	// exactly 1 failure, exactly this line, "all_peeled_grid == 1" against an
+	// executed 15625). kAllZeroGroup's own real full-row max IS 1 (C20's guard,
+	// already asserted by `kAllZeroGroupMaxAbs`), so peeling it entirely and
+	// deriving the grid genuinely lands at D'_grid=1 -- the fixture D-SLM1667's own
+	// wording names ("the all-zero-row cell's own D'_grid=1"), self-consistent with
+	// both the unpeeled-population term and the full-row-max term.
+	PeelRecord all_peeled_records[kAllZeroGroupN];
 	size_t all_peeled_count =
-	    SelectPeelIndices(kOrdinaryGroup, kOrdinaryGroupN, /*p=*/static_cast<int>(kOrdinaryGroupN),
+	    SelectPeelIndices(kAllZeroGroup, kAllZeroGroupN, /*p=*/static_cast<int>(kAllZeroGroupN),
 	                       all_peeled_records);
-	CHECK_MSG(all_peeled_count == kOrdinaryGroupN,
+	CHECK_MSG(all_peeled_count == kAllZeroGroupN,
 	          "T-1822 Mendeleev F3 fixture-validity guard: P >= group size must peel "
 	          "every channel, or this is not the all-peeled degenerate corner");
 
 	int64_t unpeeled_max_abs_floor = 1;  // C20's guard: empty-population max floors to 1
-	int64_t all_peeled_grid = ComputePeelGrid(unpeeled_max_abs_floor, kOrdinaryGroupMaxAbs, /*r_cap=*/7);
+	int64_t all_peeled_grid = ComputePeelGrid(unpeeled_max_abs_floor, kAllZeroGroupMaxAbs, /*r_cap=*/7);
 	CHECK_MSG(all_peeled_grid == 1,
 	          "T-1822 Mendeleev F3 fixture-validity guard: the all-peeled corner's own "
 	          "grid must be D'_grid=1, matching k_at_grid1's own fixture above, or the "
