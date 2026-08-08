@@ -124,10 +124,13 @@ def main(argv=None) -> int:
         defb = null_r1["B"] - gb["recall@1"]
         total_a = null_r1["A"] - base_r1["A"]
         share = defa / total_a if total_a else float("nan")
-        # paired RP of `only` against `base` is in the grades; against `null` we use the
-        # unpaired sum of the two rows' own half-widths, which is the campaign's filed
-        # convention when a paired series is not carried.
-        rp = ga["rp@1"] + grades["A"]["rows"]["null"]["rp@1"]
+        # The paired contrast against `null` is the correctly-specified resolving power for an
+        # isolation arm: the two series index the same 239 documents, in the same order, from
+        # the same batch, so the unpaired sum of the two rows' own half-widths overstates the
+        # noise. The unpaired sum is the fallback only, and is the campaign's filed convention
+        # where no paired series is carried.
+        cn = grades["A"].get("contrasts_vs_null", {}).get(only)
+        rp = cn["paired_rp"] if cn else (ga["rp@1"] + grades["A"]["rows"]["null"]["rp@1"])
         res = "yes" if abs(defa) > rp else "no"
         rows.append({"site": num, "name": s["name"], "arm": only,
                      "drift_A": da, "drift_B": db, "drift_spread": abs(da - db),
