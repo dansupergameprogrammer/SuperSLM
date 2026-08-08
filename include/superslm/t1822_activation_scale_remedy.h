@@ -128,6 +128,19 @@ RemedyStatus ReferencePeeledCode(int64_t wide_value, int64_t r, int s, int64_t* 
 // (P <= 7 at r_cap = 7; P = 8 exceeds the residual consumer's headroom, E13)?
 bool IsPeelParamsAdmissible(int p, int r_cap);
 
+// T-1834 F6 (D-SLM1896, fold 12, §12 primitive-tier domain-extremity bullet):
+// IsPeelParamsAdmissible above is a swept-range rectangle (P<=7 && r_cap<=7),
+// sound only at the pinned n=1536 this design sweeps at. §6.3c's own region is
+// the coupled, n-DEPENDENT inequality P*C_max^2 + (n-P)*127^2 <= 2^31 - 1, with
+// C_max = 2^r_cap * 2^7 (the checked peeled-code bound at that r_cap). This
+// function evaluates that inequality directly, taking n as its own operand
+// rather than assuming the pinned row width. Declared, not defined -- the F6
+// remedy is stage-A build-seat work (Claude/Curie's own red-first discipline);
+// this red suite calls it to pin the coupled-inequality claim independently of
+// the swept-range rectangle above, which the two-argument form cannot express
+// (T-1838, D-SLM1898).
+bool IsPeelParamsAdmissibleAtN(int p, int r_cap, int64_t n);
+
 // §5 step 4, a GEMM consumer's rank-P fix-up (site 16's down_proj, §12 composition
 // bullet): for every output channel j, acc[j] += sum over the P peel records of
 // records[p].c_star * weight[records[p].index * out_channels + j] -- weight is the

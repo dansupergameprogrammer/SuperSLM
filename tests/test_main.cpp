@@ -19900,19 +19900,53 @@ static void TestT1822_M1_RefinementExponent_MutationPin() {
 	          "(D'_g=4, D'=8) -- if this fails, the fixture does not discriminate the mutation");
 }
 
-static void TestT1822_M1_GroupedCode_MatchesC22OnPreShiftedOperand() {
-	// §4.1 step 3, D-SLM1663's kinship framing: ComputeGroupedCode is a CALL to C22
-	// (superslm::RequantTokenCodeWide) on wide_value << k_g, not a re-implementation.
+// T-1834 F4 / T-1838 fold 12 (D-SLM1893/1898): TestT1822_M1_GroupedCode_MatchesC22OnPreShiftedOperand
+// (formerly here) computed `RequantTokenCodeWide(wide_value << k_g, r, s)` as its OWN
+// reference -- the identical plain-int64 pre-shift ComputeGroupedCode itself performs.
+// A defect in that shift (F4: it silently wraps for a wide_value/k_g pair whose true
+// pre-shift value does not fit int64_t) is applied on BOTH sides of the assertion and
+// cancels: the cell stayed green at every fixture regardless of what the pre-shift did
+// (T-1834's own finding, verbatim). §12's primitive-tier domain-extremity bullet
+// replaces it with a golden-constant cell whose expected value is computed OFFLINE,
+// never by shifting wide_value inside the test.
+static void TestT1822_M1_GroupedCode_GoldenConstant_DomainExtremity2p62() {
+	// §12 primitive-tier domain-extremity bullet: "ComputeGroupedCode at
+	// wide_value = 2^62, k_g in {0, 1, 2}: golden-constant codes 127, -127, 0 (the
+	// sign-inversion cell F4's casebook executed) replaced by the saturating remedy's
+	// own output -- asserted 127 at every k_g >= 1 where the true pre-shift value
+	// would not fit int64_t, never the wrapped value the fractured build returned."
+	//
+	// Golden derivation (Python, exact arbitrary-precision integers, independent of
+	// this suite and of ComputeGroupedCode's own body -- StandardsDocument.md §5.4):
+	// wide_value = 2^62, canonical (r, s) = (2^32, 30), exponent = 62 - s = 32.
+	//   k_g=0: true pre-shift value = 2^62, fits int64_t exactly (INT64_MAX = 2^63-1).
+	//     C22's own composite magnitude = floor((2*2^62*127*2^32 + 2^32) / 2^33)
+	//     = 585,684,124,340,278,263,808, truncated to u64 (UShrToU64's own contract)
+	//     = 13,835,058,055,282,163,712 -- far past 127, so C22's OWN retained clamp
+	//     (magnitude > 127 -> 127) legitimately engages. Expected code: 127.
+	//   k_g=1: true pre-shift value = 2^63, does NOT fit int64_t (INT64_MAX = 2^63-1
+	//     is one less). §6.8's remedy: |wide_value| > (INT64_MAX >> k_g) triggers the
+	//     saturate-before-shift guard and returns the clamp code directly.
+	//     INT64_MAX >> 1 = 4,611,686,018,427,387,903 < 2^62 = |wide_value| -- guard
+	//     fires. wide_value > 0, so the clamp code is +127. Expected code: 127.
+	//   k_g=2: INT64_MAX >> 2 = 2,305,843,009,213,693,951 < 2^62 -- guard fires the
+	//     same way. Expected code: 127.
+	// Every one of the three golden values is 127 -- computed once, offline, never
+	// by calling ComputeGroupedCode or by shifting wide_value inside this test,
+	// which is the exact tautology this cell replaces.
+	const int64_t wide_value = int64_t{1} << 62;
 	const int64_t r = kCanonicalR;
 	const int s = kCanonicalS;
-	for (int64_t wide_value : {int64_t{1000}, int64_t{-1000}, int64_t{0}, int64_t{500000}}) {
-		for (int k_g : {0, 1, 3}) {
-			int8_t got = ComputeGroupedCode(wide_value, k_g, r, s);
-			int8_t want = superslm::RequantTokenCodeWide(wide_value << k_g, r, s);
-			CHECK_MSG(got == want,
-			          "T-1822 §4.1 step 3 kinship: ComputeGroupedCode(wide, k_g, r, s) must "
-			          "equal RequantTokenCodeWide(wide << k_g, r, s) exactly");
-		}
+	const int8_t kGoldenCode = 127;
+	for (int k_g : {0, 1, 2}) {
+		int8_t got = ComputeGroupedCode(wide_value, k_g, r, s);
+		CHECK_MSG(got == kGoldenCode,
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F4, D-SLM1893/1898): "
+		          "ComputeGroupedCode(2^62, k_g=%d, canonical r/s) must equal the "
+		          "hand-derived golden code 127, got %d -- the current build's plain-"
+		          "int64 pre-shift wraps at this magnitude (F4: -127 at k_g=1, 0 at "
+		          "k_g=2 on the fractured build) instead of saturating",
+		          k_g, static_cast<int>(got));
 	}
 }
 
@@ -19931,12 +19965,43 @@ static void TestT1822_M1_AllZeroGroup_Kg() {
 static void TestT1822_M1_RowMaxGroup_KgAlwaysZero() {
 	// §8.5's forcing argument, restated as a cell: "the group holding the row max
 	// always takes k_g = 0" -- by construction (D'_g == D' for that group, so
-	// (D'_g << 1) > D' for any k >= 1).
+	// (D'_g << 1) > D' for any k >= 1). Ordinary-magnitude case, kept as the
+	// baseline; the domain-extremity widening lives in the sibling test below
+	// (T-1834 F1, D-SLM1891/1894 -- "the cell §8.5's forcing argument now names as
+	// its own pin, widened past the small fixture it carried before this fold").
 	int64_t row_max = kOrdinaryGroupMaxAbs;  // this group's own max IS the row max here
 	int k = ComputeRefinementExponent(row_max, row_max, /*k_cap=*/6);
 	CHECK_MSG(k == 0,
 	          "T-1822 §12 dimension-extremes / §8.5: the group holding the row max must "
 	          "get k_g == 0 (k_g = 0 path)");
+}
+
+// T-1834 F1 / T-1838 fold 12 (D-SLM1891/1894, D-SLM1898): §12's boundary bullet
+// widens the row-max-group forcing argument to the two magnitudes §4.1 step 1 / §5
+// step 2 name as the mechanism's own domain corners -- "group_max_abs = row_max_abs
+// at the M1-site bound, 2^31, and beyond it at INT64_MAX ...
+// ComputeRefinementExponent(D', D', k_cap) asserted 0 at both magnitudes, for every
+// swept k_cap." The claim (group_max_abs == row_max_abs => k_g == 0) is true by
+// construction independent of magnitude -- for that group, (D' << k) > D' for any
+// k >= 1 and any D' > 0, since D' << k = D' * 2^k and 2^k > 1 -- so the golden
+// constant (0) does not vary with D'; only whether the CURRENT implementation's
+// left-shift-based predicate can compute it correctly does.
+static void TestT1822_M1_RowMaxGroup_KgAlwaysZero_DomainExtremity() {
+	const int64_t kM1SiteBound = int64_t{1} << 31;         // 2^31, the M1/site-16 C29 bound
+	const int64_t kResidualSiteExtreme = INT64_MAX;         // the two peeled-residual sites' true domain
+	const int kSweptKCaps[] = {0, 1, 2, 3, 6, 10};
+
+	for (int64_t d_prime : {kM1SiteBound, kResidualSiteExtreme}) {
+		for (int k_cap : kSweptKCaps) {
+			int k = ComputeRefinementExponent(d_prime, d_prime, k_cap);
+			CHECK_MSG(k == 0,
+			          "T-1822 §12 boundary bullet (T-1834 F1, D-SLM1891/1894): the "
+			          "row-max group must get k_g == 0 at D' = %lld, k_cap = %d "
+			          "(hand-derived golden constant 0, true by construction for any "
+			          "D' > 0) -- got %d",
+			          static_cast<long long>(d_prime), k_cap, k);
+		}
+	}
 }
 
 static void TestT1822_M1_KCapSaturation() {
@@ -20618,6 +20683,286 @@ static void TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula() {
 	          "T-1822 §12 composition bullet (D-SLM1667 / Mendeleev F3, D-SLM1883): "
 	          "every peeled channel's bulk code must be 0 at the all-peeled corner's "
 	          "own grid, for every k_g in [0,3] -- 'codes all zero, output unaffected'");
+}
+
+// --- T-1838 fold 12: primitive-tier domain-extremity cells (§12, D-SLM1898) -----
+//
+// T-1834 (Claude/Poirot/4cf56ce-t1834-stage-a-primitive-tier.md) reviewed T-1833's
+// stage-A build and found four Significant defects (F1-F4) on one fault line --
+// magnitude arithmetic done in the 128-bit facility is correct; shift and grid
+// arithmetic done in plain int64 is not -- plus three cheaper findings (F5-F8, one
+// of which, F6, is Minor and needs a signature change). The design's twelfth fold
+// (Claude/Vitruvius/t1822-activation-scale-remedy-design-2026-08-07.md §6.8, §12)
+// specifies the remedy and amends the Coverage Model with domain-extremity cells,
+// replacing two that shared their own defect with their reference
+// (TestT1822_M1_RowMaxGroup_KgAlwaysZero, TestT1822_M1_GroupedCode_
+// MatchesC22OnPreShiftedOperand -- both edited above, in place, rather than moved
+// here, since they are WIDENED/REPLACED versions of existing cells, not new ones).
+//
+// Every golden constant below is hand-derived (Python, exact arbitrary-precision
+// integers, independently of every function under test's own body --
+// StandardsDocument.md §5.4) and is quoted in each test's own comment. This base
+// commit (brunel/t1833-staged-build@4cf56ce) carries the PRE-fold-12, defective
+// implementation deliberately -- every cell below is run and its actual failing
+// value reported in Claude/Curie/t1832-activation-scale-remedy-red-suite-test-
+// design-2026-08-08.md §9, not merely asserted to fail.
+
+static void TestT1822_M1_RefinementExponent_GoldenConstants_DomainExtremity() {
+	// §12 primitive-tier domain-extremity bullet: "ComputeRefinementExponent/
+	// RopeSafe, hand-derived golden constants (not a second shift-based reference)
+	// at the casebook's own executed cells -- (2^57, 2^58, 7) -> 1,
+	// (2^58, 2^59, 6) -> 1, (D'_g = D' = 2^59, 6) -> 0,
+	// (D'_g = D' = INT64_MAX, 6) -> 0". These four are the STANDARD path's own
+	// correct values -- independently re-derived (Python, exact big-integer
+	// simulation of "the largest k in [0, k_cap] with (group_max_abs << k) <=
+	// row_max_abs", no truncation anywhere) and confirmed to match §12's text
+	// exactly.
+	struct Case {
+		int64_t g;
+		int64_t row;
+		int k_cap;
+		int golden;
+	};
+	const Case kCases[] = {
+	    {int64_t{1} << 57, int64_t{1} << 58, 7, 1},
+	    {int64_t{1} << 58, int64_t{1} << 59, 6, 1},
+	    {int64_t{1} << 59, int64_t{1} << 59, 6, 0},
+	    {INT64_MAX, INT64_MAX, 6, 0},
+	};
+	for (const Case& c : kCases) {
+		int k_primitive = ComputeRefinementExponent(c.g, c.row, c.k_cap);
+		CHECK_MSG(k_primitive == c.golden,
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F1, "
+		          "D-SLM1893/1898): ComputeRefinementExponent(g=%lld, row=%lld, "
+		          "k_cap=%d) must equal the hand-derived golden constant %d, got %d",
+		          static_cast<long long>(c.g), static_cast<long long>(c.row), c.k_cap,
+		          c.golden, k_primitive);
+		// The differential reference is checked against the SAME golden constant,
+		// independently of the primitive -- T-1834's own finding: "when the
+		// reference wraps too, the differential goes green on a defect. Widening
+		// the sweep helps F1 but will not, on its own, make this class visible."
+		// A comparison against a hand-derived constant is immune to that failure
+		// mode by construction.
+		int k_reference = ReferenceRefinementExponent(c.g, c.row, c.k_cap);
+		CHECK_MSG(k_reference == c.golden,
+		          "T-1822 §12 primitive-tier domain-extremity: "
+		          "ReferenceRefinementExponent(g=%lld, row=%lld, k_cap=%d) must ALSO "
+		          "equal the golden constant %d independently of the primitive, got "
+		          "%d -- a reference that wraps at the same magnitude is not "
+		          "independent of the defect it exists to catch",
+		          static_cast<long long>(c.g), static_cast<long long>(c.row), c.k_cap,
+		          c.golden, k_reference);
+	}
+}
+
+static void TestT1822_M1_RefinementExponentRopeSafe_GoldenConstants_DomainExtremity() {
+	// §12 groups "ComputeRefinementExponent/RopeSafe" under one golden-constant
+	// bullet at the same four fixture points. Independently re-deriving the
+	// RoPE-safe predicate (127*(group_max_abs << k) <= 90*row_max_abs, k=0 always
+	// admissible) at those exact four points, in Python's exact big-integer
+	// arithmetic, gives 0 at every point -- NOT the standard path's list (1, 1, 0,
+	// 0): the two functions have different predicates, and at these ratios
+	// (row_max_abs/group_max_abs in {1, 2}) the RoPE-safe bound is strictly
+	// tighter than the standard one at k=1 (127*(g<<1) <= 90*row reduces to
+	// 254 <= 180 at ratio 2, false; 127 <= 90 at ratio 1, false), so k=0 is
+	// correct at every point, including the two where the standard path's own
+	// golden constant is 1. Stated here as a finding rather than silently reused:
+	// a single four-value list does not describe both functions at these points,
+	// and reusing the standard list for RopeSafe would itself be an unverified,
+	// uncomputed claim per StandardsDocument.md §5.4.
+	struct Case {
+		int64_t g;
+		int64_t row;
+		int k_cap;
+		int golden;
+	};
+	const Case kCases[] = {
+	    {int64_t{1} << 57, int64_t{1} << 58, 7, 0},
+	    {int64_t{1} << 58, int64_t{1} << 59, 6, 0},
+	    {int64_t{1} << 59, int64_t{1} << 59, 6, 0},
+	    {INT64_MAX, INT64_MAX, 6, 0},
+	};
+	for (const Case& c : kCases) {
+		int k_primitive = ComputeRefinementExponentRopeSafe(c.g, c.row, c.k_cap);
+		CHECK_MSG(k_primitive == c.golden,
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F2, "
+		          "D-SLM1893/1898): ComputeRefinementExponentRopeSafe(g=%lld, "
+		          "row=%lld, k_cap=%d) must equal the independently hand-derived "
+		          "golden constant %d, got %d",
+		          static_cast<long long>(c.g), static_cast<long long>(c.row), c.k_cap,
+		          c.golden, k_primitive);
+		int k_reference = ReferenceRefinementExponentRopeSafe(c.g, c.row, c.k_cap);
+		CHECK_MSG(k_reference == c.golden,
+		          "T-1822 §12 primitive-tier domain-extremity: "
+		          "ReferenceRefinementExponentRopeSafe(g=%lld, row=%lld, k_cap=%d) "
+		          "must ALSO equal the golden constant %d independently of the "
+		          "primitive, got %d -- T-1834's F2 casebook found the first of "
+		          "these four points (2^57, 2^58, 7) where the primitive and "
+		          "reference AGREE (both return 7) while both are wrong (true "
+		          "k=0), which a primitive-vs-reference differential alone cannot "
+		          "see",
+		          static_cast<long long>(c.g), static_cast<long long>(c.row), c.k_cap,
+		          c.golden, k_reference);
+	}
+}
+
+static void TestT1822_M2_Grid_FullRowMaxAbs_ResidualSiteDomainExtremeINT64MAX() {
+	// §12 boundary bullet: "full_row_max_abs at its own extreme, INT64_MAX, at
+	// sites 11/18's domain (T-1834 F3, D-SLM1892): ComputePeelGrid(1, INT64_MAX, 7)
+	// asserted equal to the golden constant 72,057,594,037,927,936 ... the
+	// residual-site domain's own extreme, distinct from the funnel-site D' = 2^31
+	// cell (TestT1822_M2_PeeledCode_TotalityExtreme_RejectedViaLowWord), because
+	// the two sites' domains are not the same range (§5 step 2)."
+	//
+	// Golden derivation, independent of CeilDivPow2/ComputePeelGrid's own bodies:
+	// ceil(INT64_MAX / 128) = ceil(9,223,372,036,854,775,807 / 128).
+	// 128 * 72,057,594,037,927,936 = 9,223,372,036,854,775,808 = 2^63 =
+	// INT64_MAX + 1, one past INT64_MAX -- so INT64_MAX/128 sits strictly between
+	// 72,057,594,037,927,935 and 72,057,594,037,927,936, and the ceiling is the
+	// latter, exactly.
+	const int64_t kGoldenGrid = 72057594037927936LL;
+	int64_t grid = ComputePeelGrid(/*unpeeled_max_abs=*/1, /*full_row_max_abs=*/INT64_MAX,
+	                                /*r_cap=*/7);
+	CHECK_MSG(grid == kGoldenGrid,
+	          "T-1822 §12 boundary bullet (T-1834 F3, D-SLM1892/1893): "
+	          "ComputePeelGrid(1, INT64_MAX, 7) must equal the hand-derived golden "
+	          "ceiling 72057594037927936, got %lld -- the current build's "
+	          "biased-add-then-shift CeilDivPow2 overflows at this magnitude (F3's "
+	          "own executed value is -72057594037927936), and ComputePeelGrid's "
+	          "max() then discards the negative result in favor of the "
+	          "unpeeled_max_abs floor of 1 -- the coarsest grid wins where the "
+	          "finest should",
+	          static_cast<long long>(grid));
+}
+
+static void TestT1822_M2_SelectPeelIndices_N70000_RejectsRatherThanTruncates() {
+	// §12 primitive-tier domain-extremity bullet: "SelectPeelIndices at
+	// n = 70,000 (F5's casebook cell): asserts count == 0 after the fix, not the
+	// mis-recorded index = 4 the truncating build returned."
+	//
+	// n = 70,000 > UINT16_MAX (65,535); PeelRecord::index is uint16_t. F5's remedy
+	// (D-SLM1895) is an explicit reject at the function's own entry ("if (n >
+	// UINT16_MAX) return 0;" -- the house convention this file already uses
+	// everywhere else: explicit domain rejection over a silent narrowing cast).
+	// The golden expected count (0) does not depend on where the true argmax
+	// sits; what is asserted is that n itself is refused.
+	std::vector<int64_t> wide_row(70000, /*value=*/10);
+	const size_t kTrueArgmaxIndex = 65540;  // > UINT16_MAX; T-1834's own casebook fixture
+	wide_row[kTrueArgmaxIndex] = 1000000;   // unambiguous single outlier
+	PeelRecord records[1];
+	size_t count = SelectPeelIndices(wide_row.data(), wide_row.size(), /*p=*/1, records);
+	CHECK_MSG(count == 0,
+	          "T-1822 §12 primitive-tier domain-extremity (T-1834 F5, "
+	          "D-SLM1895/1898): SelectPeelIndices at n=70000 (> UINT16_MAX) must "
+	          "reject and select ZERO channels, got count=%zu -- the current "
+	          "build's unchecked static_cast<uint16_t>(best_idx) silently "
+	          "truncates the true argmax index 65540 to 4 (65540 mod 65536) "
+	          "instead of refusing the out-of-contract row width",
+	          count);
+}
+
+static void TestT1822_Config_PeelParamsAdmissibleAtN_CoupledInequality_N32768() {
+	// §12 primitive-tier domain-extremity bullet: "IsPeelParamsAdmissible(P = 7,
+	// r_cap = 7, n = 32768): asserts refusal -- the coupled inequality's own
+	// bound at that n is P <= 6 (F6's casebook figure), where the un-fixed
+	// rectangle admits P = 7 regardless of n."
+	//
+	// §6.3c's coupled inequality: P*C_max^2 + (n-P)*127^2 <= 2^31 - 1, with
+	// C_max = 2^r_cap * 2^7. Golden derivation (exact integer arithmetic,
+	// independent of IsPeelParamsAdmissible/IsPeelParamsAdmissibleAtN's own
+	// bodies), at (P=7, r_cap=7, n=32768):
+	//   C_max = 2^7 * 2^7 = 16384; C_max^2 = 268,435,456
+	//   P*C_max^2 = 7 * 268,435,456 = 1,879,048,192
+	//   (n-P)*127^2 = 32,761 * 16,129 = 528,402,169
+	//   sum = 2,407,450,361 > 2^31 - 1 = 2,147,483,647 -- REFUSED
+	// (At P=6 the same formula gives 2,139,031,034 <= 2^31-1, admissible -- the
+	// bound the casebook names, confirming P=7 is genuinely one past it.)
+	//
+	// IsPeelParamsAdmissibleAtN is declared in the header, not defined --
+	// authoring this cell is a routed-and-red LINK failure, the convention §5
+	// items 6-7 of the T-1832 casebook already established for a new contract
+	// function (ApplyPeelRankPFixup): the F6 remedy (taking n as an operand) is a
+	// signature CHANGE to IsPeelParamsAdmissible, not a body-only fix, and this
+	// suite does not modify the existing two-argument function's contract (still
+	// real and used by TestT1822_Config_PeelParamsAdmissible above) or its .cpp
+	// definition -- that is the build seat's.
+	CHECK_MSG(IsPeelParamsAdmissibleAtN(/*p=*/7, /*r_cap=*/7, /*n=*/32768) == false,
+	          "T-1822 §12 primitive-tier domain-extremity (T-1834 F6, "
+	          "D-SLM1896/1898): IsPeelParamsAdmissibleAtN(P=7, r_cap=7, n=32768) "
+	          "must be REFUSED under the coupled inequality (bound is P<=6 at this "
+	          "n) -- the swept-range rectangle IsPeelParamsAdmissible(7, 7) admits "
+	          "P=7 unconditionally, independent of n");
+}
+
+static void TestT1822_Config_SiteRefusal_OutOfRangeSiteId() {
+	// §12 primitive-tier domain-extremity bullet: "IsGroupingAdmissibleAtSite/
+	// IsG1AdmissibleAtSite at site_id in {0, -1, 19, 1000}: each asserts refusal
+	// (F7's casebook cells, all four of which returned true before the fix)."
+	// §6.6's site numbering is [1, 18]; a site_id outside that range is a
+	// configuration error the predicate whose entire job is to refuse
+	// inadmissible configurations must reject, not silently admit.
+	const int kOutOfRangeSiteIds[] = {0, -1, 19, 1000};
+	for (int site_id : kOutOfRangeSiteIds) {
+		CHECK_MSG(IsGroupingAdmissibleAtSite(site_id, /*k_cap_requested=*/6) == false,
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F7, "
+		          "D-SLM1896/1898): IsGroupingAdmissibleAtSite(site_id=%d, k_cap=6) "
+		          "must be REFUSED -- site_id is outside §6.6's [1,18] numbering; "
+		          "the current build falls through to 'return true' for any "
+		          "unnamed site_id",
+		          site_id);
+		CHECK_MSG(IsG1AdmissibleAtSite(site_id, /*group_size=*/1) == false,
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F7, "
+		          "D-SLM1896/1898): IsG1AdmissibleAtSite(site_id=%d, group_size=1) "
+		          "must be REFUSED -- site_id is outside §6.6's [1,18] numbering; "
+		          "the current build falls through to 'return site_id != 3' for "
+		          "any unnamed site_id, which evaluates true here",
+		          site_id);
+	}
+}
+
+static void TestT1822_Site16_DownProjRankPFixup_OutOfRangeIndexSkipped() {
+	// §12 primitive-tier domain-extremity bullet: "ApplyPeelRankPFixup with one
+	// record whose index >= in_channels: asserts acc unchanged at every output
+	// channel -- the read the un-fixed build performed out of bounds never
+	// happens (F8)."
+	//
+	// The weight buffer is allocated large enough to hold the out-of-range row
+	// too (physical rows > logical in_channels), so the current build's
+	// unguarded read stays inside allocated memory -- this cell targets the
+	// LOGICAL bounds violation (does the fix-up honor in_channels), not a
+	// memory-safety crash, which would make the current build's true failing
+	// behavior unobservable rather than merely wrong.
+	constexpr size_t kOutChannels = 3;
+	constexpr size_t kInChannelsLogical = 2;   // the declared, correct bound
+	constexpr size_t kInChannelsPhysical = 4;  // extra rows exist in the buffer
+	// Row 0, 1 (in-bounds): zero, so the correct in-bounds contribution is zero.
+	// Row 2 (out of bounds at kInChannelsLogical=2): a large, unambiguous
+	// sentinel, so an unguarded read cannot be mistaken for the correct
+	// (skipped) contribution.
+	const int8_t kWeight[kInChannelsPhysical * kOutChannels] = {
+	    0, 0, 0,          // row 0
+	    0, 0, 0,          // row 1
+	    100, 100, 100,    // row 2 -- OUT OF RANGE at in_channels=2; must never be read
+	    0, 0, 0,          // row 3 (unused)
+	};
+	PeelRecord records[1];
+	records[0].index = 2;     // >= kInChannelsLogical
+	records[0].c_star = 500;  // large, so any leak is unmistakable
+	int64_t acc[kOutChannels] = {1000, 2000, 3000};  // pre-populated bulk accumulate
+	ApplyPeelRankPFixup(acc, kOutChannels, records, /*record_count=*/1, kWeight,
+	                     kInChannelsLogical);
+	const int64_t kExpected[kOutChannels] = {1000, 2000, 3000};
+	for (size_t j = 0; j < kOutChannels; ++j) {
+		CHECK_MSG(acc[j] == kExpected[j],
+		          "T-1822 §12 primitive-tier domain-extremity (T-1834 F8, "
+		          "D-SLM1896/1898): acc[%zu] must remain unchanged (bulk "
+		          "accumulate only, %lld) when the sole peel record's index (2) "
+		          "is >= in_channels (2), got %lld -- the current build casts "
+		          "in_channels to void and reads weight[2*out_channels+j] "
+		          "regardless, adding c_star=500 * weight row 2's sentinel 100 = "
+		          "50,000 onto the bulk accumulate",
+		          j, static_cast<long long>(kExpected[j]), static_cast<long long>(acc[j]));
+	}
 }
 
 int main(int argc, char** argv) {
@@ -21375,9 +21720,10 @@ int main(int argc, char** argv) {
 	// Claude/Curie/t1832-activation-scale-remedy-red-suite-test-design-2026-08-08.md).
 	TestT1822_M1_RefinementExponent_MatchesNaiveReference();
 	TestT1822_M1_RefinementExponent_MutationPin();
-	TestT1822_M1_GroupedCode_MatchesC22OnPreShiftedOperand();
+	TestT1822_M1_GroupedCode_GoldenConstant_DomainExtremity2p62();
 	TestT1822_M1_AllZeroGroup_Kg();
 	TestT1822_M1_RowMaxGroup_KgAlwaysZero();
+	TestT1822_M1_RowMaxGroup_KgAlwaysZero_DomainExtremity();
 	TestT1822_M1_KCapSaturation();
 	TestT1822_M1_G1RopeSafeRefusal_Site3Only();
 	TestT1822_M1_RopeSafeVariant_RespectsBound();
@@ -21406,6 +21752,17 @@ int main(int argc, char** argv) {
 	TestT1822_M1_RetainedClampNeverEngages_MutationPinned();
 	TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference();
 	TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula();
+
+	// T-1839 -- T-1838 fold 12 domain-extremity cells (Curie, 2026-08-08;
+	// Claude/Curie/t1832-activation-scale-remedy-red-suite-test-design-2026-08-08.md,
+	// §12 primitive-tier domain-extremity bullet, D-SLM1898).
+	TestT1822_M1_RefinementExponent_GoldenConstants_DomainExtremity();
+	TestT1822_M1_RefinementExponentRopeSafe_GoldenConstants_DomainExtremity();
+	TestT1822_M2_Grid_FullRowMaxAbs_ResidualSiteDomainExtremeINT64MAX();
+	TestT1822_M2_SelectPeelIndices_N70000_RejectsRatherThanTruncates();
+	TestT1822_Config_PeelParamsAdmissibleAtN_CoupledInequality_N32768();
+	TestT1822_Config_SiteRefusal_OutOfRangeSiteId();
+	TestT1822_Site16_DownProjRankPFixup_OutOfRangeIndexSkipped();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
