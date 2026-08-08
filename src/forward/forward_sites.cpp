@@ -274,7 +274,8 @@ int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// reach ~2^126, past what a plain int64_t multiply can hold, so this now
 	// forwards to BiasReconcileWide (intmath.h), which forms the product and
 	// the C3 (ties-away-from-zero) divide in the same portable 128-bit
-	// facility RequantTokenCode/IExpEvaluate already use internally. T-1657
+	// facility the funnel's own requant-token-code path and IExpEvaluate
+	// already use internally. T-1657
 	// Poirot N-1/N-7 (confirmation pass 5156477): this function itself performs
 	// no domain check of its own -- but the composed exponent's domain IS now
 	// checked one level down, inside BiasReconcileWide (D-SLM676), because that
