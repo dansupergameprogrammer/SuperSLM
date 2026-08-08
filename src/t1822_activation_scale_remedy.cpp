@@ -56,10 +56,33 @@ inline Wide128 WideShrFull(Wide128 v, int k) {
 // WideShrFull above, needed to compose `group_max_abs << k` and `2^r_cap << r_cap`
 // at full width rather than in the plain int64 arithmetic F1-F3's casebook shows
 // wraps (T-1834, §6.8).
-inline Wide128 WideShlFull(Wide128 v, int k) {
-	if (k <= 0) return v;
-	if (k >= 128) return static_cast<Wide128>(0);
-	return v << k;
+//
+// T-1844 N1 (Poirot, 5899b8f): the two-arg form is total over its own 128-bit
+// width -- it never invokes undefined behavior -- but it is NOT total against
+// wrapping: a shift whose true result needs more than 128 bits silently drops
+// the high bits, same as any fixed-width shift. Every caller that infers
+// "did this overflow 64 bits" from testing the RESULT's high word (WideHi(...)
+// != 0) is trusting that the shift itself did not ALSO wrap the 128-bit
+// container, which is false once `k` plus v's own bit-length reaches 128 --
+// exactly the F6 defect this finding is closing. `out_truncated`, when
+// non-null, is set whenever any set bit of `v` was shifted out of the 128-bit
+// result: computed by shifting the result back down by the same `k` (via
+// WideShrFull, already total the identical way) and comparing to `v` -- if
+// shifting back does not recover the original value, bits were lost going
+// forward. This reuses the two already-verified total primitives rather than
+// re-deriving a bit-length formula, and it is correct at every boundary
+// WideShrFull/WideShlFull themselves handle specially (k <= 0, k >= 128).
+inline Wide128 WideShlFull(Wide128 v, int k, bool* out_truncated = nullptr) {
+	Wide128 result;
+	if (k <= 0) {
+		result = v;
+	} else if (k >= 128) {
+		result = static_cast<Wide128>(0);
+	} else {
+		result = v << k;
+	}
+	if (out_truncated) *out_truncated = (WideShrFull(result, k) != v);
+	return result;
 }
 // 128-bit + 128-bit addition, exact whenever the true sum fits 128 bits (every
 // call site below bounds both operands well under that before adding).
@@ -114,11 +137,27 @@ inline Wide128 WideShrFull(Wide128 v, int k) {
 
 // Full logical left shift, k in [0, 127] -- the struct-path mirror of
 // WideShrFull above (F2/F6 rewrites, §6.8).
-inline Wide128 WideShlFull(Wide128 v, int k) {
-	if (k <= 0) return v;
-	if (k >= 128) return Wide128{0, 0};
-	if (k >= 64) return Wide128{0, v.lo << (k - 64)};
-	return Wide128{v.lo << k, (v.hi << k) | (v.lo >> (64 - k))};
+//
+// T-1844 N1 (Poirot, 5899b8f): see the native-path WideShlFull's comment for
+// the truncation-report rationale -- identical here, computed by shifting the
+// result back down (WideShrFull) and comparing field-for-field, since Wide128
+// has no operator== on this path.
+inline Wide128 WideShlFull(Wide128 v, int k, bool* out_truncated = nullptr) {
+	Wide128 result;
+	if (k <= 0) {
+		result = v;
+	} else if (k >= 128) {
+		result = Wide128{0, 0};
+	} else if (k >= 64) {
+		result = Wide128{0, v.lo << (k - 64)};
+	} else {
+		result = Wide128{v.lo << k, (v.hi << k) | (v.lo >> (64 - k))};
+	}
+	if (out_truncated) {
+		const Wide128 back = WideShrFull(result, k);
+		*out_truncated = (back.lo != v.lo) || (back.hi != v.hi);
+	}
+	return result;
 }
 
 inline Wide128 WideAddWide(Wide128 a, Wide128 b) {
@@ -142,6 +181,35 @@ inline bool WideLessEqual(Wide128 a, Wide128 b) {
 // forward_sites.cpp already use).
 inline uint64_t AbsMagnitude(int64_t v) {
 	return v < 0 ? (~static_cast<uint64_t>(v) + 1u) : static_cast<uint64_t>(v);
+}
+
+// T-1844 N5 (Poirot, 5899b8f): a sign/magnitude "is lhs <= rhs" comparison,
+// where each side is carried as (negative flag, unsigned magnitude in Wide128)
+// rather than as a signed value the Wide128 facility has no representation
+// for. §6.8 specifies ComputeRefinementExponent and
+// ComputeRefinementExponentRopeSafe both "correct over the whole int64_t
+// domain ... unconditionally" -- the F1 pair gets this for free from plain
+// signed int64 comparison; the F2 pair, whose predicate needs 128-bit width,
+// cannot use a signed comparison directly because Wide128 is unsigned-only, so
+// this reconstructs the same signed ordering from magnitude + sign explicitly.
+// `lhs_overflowed` marks a magnitude that did not fit 128 bits (WideShlFull's
+// own truncation report): a true magnitude that large exceeds every magnitude
+// this file ever forms on the other side of a comparison (bounded to roughly
+// 90 * 2^63 < 2^71), so it is treated as "larger than any representable
+// magnitude" on whichever side of the sign split it falls -- never as the
+// wrapped, silently-small value the shift itself produced.
+inline bool WideLessEqualSigned(bool lhs_negative, bool lhs_overflowed, Wide128 lhs_mag,
+                                 bool rhs_negative, Wide128 rhs_mag) {
+	if (lhs_negative && rhs_negative) {
+		// Both negative: lhs <= rhs iff |lhs| >= |rhs|. An overflowed |lhs| is
+		// unrepresentably large, so it is >= any representable |rhs| by construction.
+		return lhs_overflowed || WideLessEqual(rhs_mag, lhs_mag);
+	}
+	if (lhs_negative) return true;    // negative <= any non-negative rhs, always.
+	if (rhs_negative) return false;   // non-negative lhs > any negative rhs, always.
+	// Both non-negative: lhs <= rhs iff |lhs| <= |rhs|. An overflowed |lhs| exceeds
+	// any representable |rhs|, so the predicate is false.
+	return !lhs_overflowed && WideLessEqual(lhs_mag, rhs_mag);
 }
 
 }  // namespace
@@ -177,10 +245,31 @@ int ComputeRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_abs
 	// (UB) at both the shift and the x127 well inside this design's domain.
 	// Same downward-search shape as the standard path above, independent
 	// predicate.
+	//
+	// T-1844 N5 (Poirot, 5899b8f): the magnitude is formed from AbsMagnitude
+	// (correct for every int64_t, including INT64_MIN) rather than a raw
+	// uint64_t cast (which reinterpreted a negative group_max_abs as a huge
+	// positive one), and the comparison is reconstructed as signed via
+	// WideLessEqualSigned -- matching the standard path above, which gets
+	// whole-domain correctness for free from plain signed comparison. For
+	// every caller in this design's actual domain (group_max_abs >= 1, C20's
+	// guard) AbsMagnitude(x) == x, so this is bit-identical to the prior
+	// behavior; it only changes the answer for the negative operands §6.8
+	// claims as in-domain and the prior cast silently mishandled.
+	//
+	// T-1844 N1 (Poirot, 5899b8f): WideShlFull's truncation report also closes
+	// this function's exposure to the same silent-wrap mis-admit F6 had --
+	// this is the "second caller" the casebook names as safe today only
+	// because k_cap is small.
 	for (int k = k_cap; k > 0; --k) {
-		const Wide128 lhs = WideShlFull(WideMul64(static_cast<uint64_t>(group_max_abs), 127u), k);
-		const Wide128 rhs = WideMul64(static_cast<uint64_t>(row_max_abs), 90u);
-		if (WideLessEqual(lhs, rhs)) return k;
+		bool lhs_overflowed = false;
+		const Wide128 lhs_mag =
+		    WideShlFull(WideMul64(AbsMagnitude(group_max_abs), 127u), k, &lhs_overflowed);
+		const Wide128 rhs_mag = WideMul64(AbsMagnitude(row_max_abs), 90u);
+		if (WideLessEqualSigned(group_max_abs < 0, lhs_overflowed, lhs_mag, row_max_abs < 0,
+		                         rhs_mag)) {
+			return k;
+		}
 	}
 	return 0;
 }
@@ -198,9 +287,25 @@ int8_t ComputeGroupedCode(int64_t wide_value, int k_g, int64_t r, int s) {
 	// upstream of it where the shift itself is what could wrap. Otherwise the
 	// shift is exact (no overflow reachable, by the guard) and C22 is called
 	// exactly as before.
-	const int shift = k_g > 0 ? k_g : 0;
+	//
+	// T-1844 N3 (Poirot, 5899b8f): the old `shift = k_g > 0 ? k_g : 0` clamp
+	// protected only the `limit` computation below, not the actual data-path
+	// shift (`wide_value << k_g`, which still used the raw, unclamped k_g) --
+	// so a negative k_g passed the guard (limit == INT64_MAX, everything but
+	// INT64_MIN admitted) and then hit `wide_value << k_g` with a negative
+	// shift count, undefined behavior. Re-derived independently rather than
+	// taking the casebook's suggested `k_g > 62` bound (StandardsDocument.md
+	// §7): the shift-count rule in [expr.shift] is undefined only for a count
+	// that is negative or >= the operand's width (64 for int64_t/uint64_t), so
+	// k_g = 63 is well-defined on both lines below (`INT64_MAX >> 63` is `0`,
+	// legal; a shift count of 63 on a 64-bit operand is legal) and only
+	// k_g >= 64 is undefined -- the correct domain is [0, 63], not [0, 62].
+	// Refuse outside that domain up front, per this file's own explicit-
+	// domain-rejection convention (F5, F7), rather than clamping only half the
+	// domain the way the old code did.
+	if (k_g < 0 || k_g > 63) return 0;
 	const uint64_t abs_v = AbsMagnitude(wide_value);
-	const uint64_t limit = static_cast<uint64_t>(INT64_MAX) >> shift;
+	const uint64_t limit = static_cast<uint64_t>(INT64_MAX) >> k_g;
 	if (abs_v > limit) {
 		if (wide_value > 0) return 127;
 		if (wide_value < 0) return -127;
@@ -227,12 +332,21 @@ int ReferenceRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_a
 	// ComputeRefinementExponentRopeSafe's own body. T-1834 F2 remedy (§6.8,
 	// D-SLM1893): both constant multiplies computed in Wide128, same as the
 	// primitive above, kept in this function's own upward while-loop direction.
+	//
+	// T-1844 N5/N1 (Poirot, 5899b8f): same AbsMagnitude + WideLessEqualSigned
+	// rewrite as ComputeRefinementExponentRopeSafe above, for the identical
+	// reason -- kept as an independent construction of the same predicate
+	// (this function's own contract), not a call into the primitive.
 	int k = 0;
 	while (k < k_cap) {
-		const Wide128 lhs =
-		    WideShlFull(WideMul64(static_cast<uint64_t>(group_max_abs), 127u), k + 1);
-		const Wide128 rhs = WideMul64(static_cast<uint64_t>(row_max_abs), 90u);
-		if (!WideLessEqual(lhs, rhs)) break;
+		bool lhs_overflowed = false;
+		const Wide128 lhs_mag =
+		    WideShlFull(WideMul64(AbsMagnitude(group_max_abs), 127u), k + 1, &lhs_overflowed);
+		const Wide128 rhs_mag = WideMul64(AbsMagnitude(row_max_abs), 90u);
+		if (!WideLessEqualSigned(group_max_abs < 0, lhs_overflowed, lhs_mag, row_max_abs < 0,
+		                          rhs_mag)) {
+			break;
+		}
 		++k;
 	}
 	return k;
@@ -425,12 +539,26 @@ bool IsPeelParamsAdmissibleAtN(int p, int r_cap, int64_t n) {
 
 	Wide128 p_term{};  // zero-initialized; stays zero when p == 0 regardless of C_max
 	if (p > 0) {
-		// C_max = 2^r_cap * 2^7, via a saturating wide shift rather than a
-		// plain-int64 one -- an r_cap large enough to push C_max (or C_max^2)
-		// past 64 bits refuses here instead of silently wrapping, matching
-		// F1-F4's own domain-total treatment.
-		const Wide128 c_max = WideShlFull(WideMul64(1u, 128u), r_cap);
-		if (WideHi(c_max) != 0) return false;
+		// C_max = 2^r_cap * 2^7, formed via WideShlFull.
+		//
+		// T-1844 N1 (Poirot, 5899b8f): the claim this comment used to make --
+		// "an r_cap large enough to push C_max (or C_max^2) past 64 bits
+		// refuses here instead of silently wrapping" -- was false at
+		// r_cap >= 121: WideShlFull is total against undefined behavior over
+		// its full declared width (never invokes UB, for any k), but that is
+		// NOT the same property as total against wrapping. At r_cap = 121,
+		// `2^7 << 121` needs 128 bits and does not fit; the shift silently
+		// drops the high bits, WideHi(c_max) reads zero on the WRAPPED value,
+		// and both guards below pass an overflowed C_max as if it were small.
+		// `WideShlFull`'s `out_truncated` parameter closes this at the root --
+		// it reports whenever the shift itself lost bits, not merely whenever
+		// the shifted RESULT'S high word happens to be non-zero, so this now
+		// refuses for every r_cap that overflows the shift, all the way to
+		// INT_MAX, not just up to whatever threshold a swept range happened
+		// to check.
+		bool c_max_truncated = false;
+		const Wide128 c_max = WideShlFull(WideMul64(1u, 128u), r_cap, &c_max_truncated);
+		if (c_max_truncated || WideHi(c_max) != 0) return false;
 		const Wide128 c_max_sq = WideMul64(WideLo(c_max), WideLo(c_max));
 		if (WideHi(c_max_sq) != 0) return false;
 		p_term = WideMul64(WideLo(c_max_sq), static_cast<uint64_t>(p));

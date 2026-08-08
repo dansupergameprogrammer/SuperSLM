@@ -106,7 +106,15 @@ struct PeelRecord {
 // exists to catch.
 size_t SelectPeelIndices(const int64_t* wide_row, size_t n, int p, PeelRecord* out_records);
 
-// Exact integer ceiling division by 2^r_cap: (x + 2^r_cap - 1) >> r_cap.
+// Exact integer ceiling division by 2^r_cap, valid for x >= 0 (the only domain
+// unpeeled_max_abs and full_row_max_abs occupy, C20's >= 1 guard) and r_cap in
+// [0, 63): the remainder form (x >> r_cap) + ((x & ((int64_t{1} << r_cap) - 1))
+// != 0 ? 1 : 0) -- exact for the whole non-negative int64_t domain including
+// INT64_MAX, with no addition that can overflow (T-1844 N4, Poirot 5899b8f:
+// this contract previously stated the biased-add-then-shift form,
+// (x + 2^r_cap - 1) >> r_cap, which T-1834's F3 found undefined at the top of
+// its domain; the .cpp has implemented the remainder form since that fix, and
+// this comment now states the contract the code actually delivers).
 int64_t CeilDivPow2(int64_t x, int r_cap);
 
 // §5 step 2: D'_grid = max(unpeeled_max_abs, CeilDivPow2(full_row_max_abs, r_cap)).
