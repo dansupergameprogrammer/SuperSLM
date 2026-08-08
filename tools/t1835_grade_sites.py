@@ -70,14 +70,23 @@ def main(argv=None) -> int:
     per_doc_recall1 = {}
     order = None
 
-    def grade(name, cand_vecs, cand_fps):
+    cell_arms = []
+
+    def grade(name, cand_vecs, cand_fps, is_cell_arm=False):
+        """Grade one arm. The document-order check is enforced across the CELL's own arms
+        only: a paired contrast is only defined when the two series index the same documents
+        in the same order, and the two standing reference rows are graded over T-1777's own
+        population rather than this cell's, so they carry no paired contrast and are excluded
+        from the check rather than forced through it."""
         nonlocal order
         results, n_docs = rr.compare_arms(ref_vecs, cand_vecs, domains, ref_fps, cand_fps)
         these = [r.label for r in results]
-        if order is None:
-            order = these
-        elif these != order:
-            raise SystemExit(f"{name}: document order differs from the first arm's")
+        if is_cell_arm:
+            cell_arms.append(name)
+            if order is None:
+                order = these
+            elif these != order:
+                raise SystemExit(f"{name}: document order differs from the cell's first arm")
         row = {"n": n_docs}
         for k in (1, 5, 10):
             vals = np.array([r.recall[k] for r in results])
@@ -107,34 +116,47 @@ def main(argv=None) -> int:
         labs = [str(x) for x in z["labels"]]
         vecs = {l: z["vectors"][i] for i, l in enumerate(labs)}
         fps = {l: int(z["fingerprints"][i]) for i, l in enumerate(labs)}
-        grade(name, vecs, fps)
+        grade(name, vecs, fps, is_cell_arm=True)
 
     base = args.baseline_arm
     if base not in rows:
         raise SystemExit(f"baseline arm {base!r} not present in {cell}")
 
     n_docs = rows[base]["n"]
-    contrasts = {}
-    for name in rows:
-        if name == base:
-            continue
-        d = per_doc_recall1[name] - per_doc_recall1[base]
-        mean = float(d.mean())
-        se = float(d.std(ddof=1) / np.sqrt(len(d))) if len(d) > 1 else float("nan")
-        paired_rp = 1.96 * se
-        unpaired_rp = rows[name]["rp@1"] + rows[base]["rp@1"]
-        contrasts[name] = {
-            "delta_recall1": mean,
-            "paired_rp": paired_rp,
-            "unpaired_rp": unpaired_rp,
-            "paired_ratio": abs(mean) / paired_rp if paired_rp > 0 else float("inf"),
-            "unpaired_ratio": abs(mean) / unpaired_rp if unpaired_rp > 0 else float("inf"),
-        }
+
+    def contrast_against(anchor):
+        """Every cell arm's recall@1 contrast with one anchor arm, paired per document.
+
+        Two anchors are meaningful and they answer different questions. Against `base` the
+        contrast is what REMOVING a site buys in the presence of the other seventeen; against
+        `null` it is what that site's quantization COSTS on its own. Both are computed rather
+        than one being derived from the other, because deficit(base) - deficit(arm) and the
+        paired contrast have different standard errors."""
+        c = {}
+        for name in cell_arms:
+            if name == anchor:
+                continue
+            d = per_doc_recall1[name] - per_doc_recall1[anchor]
+            mean = float(d.mean())
+            se = float(d.std(ddof=1) / np.sqrt(len(d))) if len(d) > 1 else float("nan")
+            paired_rp = 1.96 * se
+            unpaired_rp = rows[name]["rp@1"] + rows[anchor]["rp@1"]
+            c[name] = {
+                "delta_recall1": mean,
+                "paired_rp": paired_rp,
+                "unpaired_rp": unpaired_rp,
+                "paired_ratio": abs(mean) / paired_rp if paired_rp > 0 else float("inf"),
+                "unpaired_ratio": abs(mean) / unpaired_rp if unpaired_rp > 0 else float("inf"),
+            }
+        return c
+
+    contrasts = contrast_against(base)
+    contrasts_vs_null = contrast_against("null") if "null" in rows else {}
 
     print(f"=== {cell.name}: recall@1 per arm (N={n_docs}), reference = T-1777 true bf16 ===")
     for name in sorted(rows, key=lambda n: -rows[n]["recall@1"]):
         r = rows[name]
-        print(f"  {name:38s} recall@1 = {r['recall@1']:.6f}  ({r['num@1']:.4f}/{n_docs})"
+        print(f"  {name:38s} recall@1 = {r['recall@1']:.6f}  ({r['num@1']:.4f}/{r['n']})"
               f"   RP {r['rp@1']:.4f}")
 
     print(f"\n=== contrast against `{base}` on recall@1 ===")
@@ -147,7 +169,8 @@ def main(argv=None) -> int:
 
     if args.json_out:
         Path(args.json_out).write_text(
-            json.dumps({"rows": rows, "contrasts": contrasts, "baseline": base,
+            json.dumps({"rows": rows, "contrasts": contrasts,
+                        "contrasts_vs_null": contrasts_vs_null, "baseline": base,
                         "n_docs": n_docs}, indent=2), encoding="utf-8")
         print(f"\nwritten: {args.json_out}")
     return 0

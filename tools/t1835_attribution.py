@@ -191,15 +191,36 @@ def main(argv=None) -> int:
     out["additivity"]["site_energy_sum"] = summed
     out["additivity"]["base_energy"] = total_e
     out["additivity"]["ratio"] = summed / total_e
+    # The same question one scale down, using each group arm's OWN recorded site set rather
+    # than a membership list restated here: a group of k sites measured together against the
+    # sum of those k sites measured alone.
+    arms_cfg = json.loads((Path(args.cell_a) / "arms.json").read_text(encoding="utf-8"))
     for name in sorted(groups):
         g = groups[name]
         if "onlyG" not in g:
             continue
-        members = [r for r in rows if r["arm"] in [sites[n].get("only") for n in sites]]
-        # group membership is read back from arms.json by the caller; here use the recorded
-        # per-site energies for the sites named in the group's own arm configuration.
+        members = arms_cfg[g["onlyG"]]
+        member_sum = sum(per_site_e[s] for s in members if s in per_site_e)
+        whole = stat("A", g["onlyG"])["mean"] ** 2
         out["additivity"].setdefault("groups", {})[name] = {
-            "group_energy": stat("A", g["onlyG"])["mean"] ** 2}
+            "members": members, "member_energy_sum": member_sum, "group_energy": whole,
+            "ratio": member_sum / whole if whole else float("nan")}
+        print(f"  {name:20s} {len(members):2d} sites: summed {member_sum:.4f} vs measured "
+              f"together {whole:.4f}  (ratio {member_sum / whole if whole else float('nan'):.3f})")
+
+    print("\n=== does the drift metric order the arms the same way recall@1 does? ===")
+    # The drift figure is the high-resolution secondary metric and recall@1 is the binding
+    # one. A rank agreement between them over all the arms is what licenses reading a drift
+    # ordering where recall@1's own resolving power cannot separate two arms; a disagreement
+    # would mean the drift ranking is about something the oracle does not score.
+    from scipy.stats import spearmanr
+    common = [a for a in arms if a in grades["A"]["rows"] and a != "null"]
+    dv = np.array([stat("A", a)["mean"] for a in common])
+    rv = np.array([grades["A"]["rows"][a]["recall@1"] for a in common])
+    rho, pval = spearmanr(dv, rv)
+    print(f"  Spearman(drift, recall@1) over {len(common)} arms = {rho:+.4f} (p = {pval:.3g})")
+    out["drift_vs_recall_spearman"] = {"rho": float(rho), "p": float(pval),
+                                       "n_arms": len(common)}
 
     print("\n=== per-layer profile of the top isolated sites (mean rel L2 by row) ===")
     top = [r["arm"] for r in rows[:5]]
