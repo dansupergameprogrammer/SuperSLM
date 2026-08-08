@@ -19950,6 +19950,67 @@ static void TestT1822_M1_GroupedCode_GoldenConstant_DomainExtremity2p62() {
 	}
 }
 
+// --- T-1850: N3's own missing cell, named by T-1848's P2 and handed forward by the
+// fourteenth fold's §25 (D-SLM2009) ---
+
+static void TestT1822_M1_GroupedCode_KgBoundary_DomainExtremity() {
+	// T-1848 (Claude/Poirot/ade2fa4-t1848-confirmation-round2-fold12-remedy.md),
+	// P2's fix note: "Add one k_g = -1 / k_g = 64 assertion for N3." The design's
+	// own §6.8 F4 text: ComputeGroupedCode's k_g domain is [0, 63] -- re-derived
+	// there against [expr.shift] (a shift count is undefined only when negative
+	// or >= the operand's own width, 64 for int64_t) -- and refused up front at
+	// entry, per this file's explicit-domain-rejection convention (:306, `if
+	// (k_g < 0 || k_g > 63) return 0;`). This cell realizes that documented
+	// domain boundary as an executed assertion; T-1844's own N3 remedy (5899b8f)
+	// shipped it with none, which is exactly the gap T-1848's P2 named.
+	//
+	// wide_value = 100,001 -- nonzero, and deliberately ODD (bit 0 set). This
+	// choice was corrected during authoring (2026-08-08): an even fixture
+	// (100,000) was tried first and its k_g=-1 assertion passed under a real
+	// executed mutation-pin build for the wrong reason -- x86/MSVC's SHL
+	// instruction masks a negative shift count to its own low 6 bits, so
+	// `wide_value << -1` under the un-fixed guard behaves like `<< 63` on
+	// this hardware, and 100,000's lowest set bit is at position 5, so
+	// shifting it left by 63 moves every set bit out of the 64-bit width and
+	// the result is coincidentally 0 -- passing the "== 0" assertion without
+	// the guard having done anything. An odd wide_value keeps bit 0 set, so
+	// the same effective <<63 lands that bit in the sign position and the
+	// shifted value is never 0, closing the coincidence (verified by the
+	// executed mutation below, both fixtures). At a genuinely admissible
+	// k_g the guard never engages and the value flows to C22's own
+	// quantization, which for a magnitude this far from zero at the
+	// canonical scale is never 0 either (checked below at k_g=0, a
+	// fixture-validity precondition ahead of the boundary assertions).
+	const int64_t wide_value = 100001;
+	const int64_t r = kCanonicalR;
+	const int s = kCanonicalS;
+
+	const int8_t sanity = ComputeGroupedCode(wide_value, /*k_g=*/0, r, s);
+	CHECK_MSG(sanity != 0,
+	          "T-1822 fixture-validity guard: ComputeGroupedCode(100001, k_g=0, "
+	          "canonical r/s) must be nonzero at an ADMISSIBLE k_g, got 0 -- if "
+	          "this fails, the fixture cannot discriminate the boundary "
+	          "assertions below from a degenerate zero-code coincidence, got %d",
+	          static_cast<int>(sanity));
+
+	const int8_t below_domain = ComputeGroupedCode(wide_value, /*k_g=*/-1, r, s);
+	CHECK_MSG(below_domain == 0,
+	          "T-1822 §12/§6.8 F4 (T-1848 P2, D-SLM2009): "
+	          "ComputeGroupedCode(100001, k_g=-1, canonical r/s) must be "
+	          "REJECTED (return 0) -- k_g=-1 is outside the documented [0,63] "
+	          "domain -- got %d",
+	          static_cast<int>(below_domain));
+
+	const int8_t above_domain = ComputeGroupedCode(wide_value, /*k_g=*/64, r, s);
+	CHECK_MSG(above_domain == 0,
+	          "T-1822 §12/§6.8 F4 (T-1848 P2, D-SLM2009): "
+	          "ComputeGroupedCode(100001, k_g=64, canonical r/s) must be "
+	          "REJECTED (return 0) -- k_g=64 is a shift count equal to the "
+	          "64-bit operand's own width, undefined by [expr.shift] and "
+	          "outside the documented [0,63] domain -- got %d",
+	          static_cast<int>(above_domain));
+}
+
 // --- M1: degenerate / boundary cells (§12 boundary bullet, dimension-extremes bullet) ---
 
 static void TestT1822_M1_AllZeroGroup_Kg() {
@@ -20841,6 +20902,139 @@ static void TestT1822_M1_RefinementExponentRopeSafe_GoldenConstants_DomainExtrem
 	}
 }
 
+// --- T-1850: the fourteenth fold's F1/F2 domain-boundary witness (§12, T-1848 P2,
+// D-SLM2007) ---
+
+static void TestT1822_M1_RefinementExponentPair_DomainBoundaryWitness() {
+	// §6.8's fourteenth fold (T-1849, D-SLM2003/2004): group_max_abs/row_max_abs
+	// are narrowed to >= 0, derived at source -- their one producer, §4.1 step
+	// 1's D'_g = max(MaxAbsReduceWide(...), 1), can never present a negative
+	// value. Two points pin that narrowing as a checkable fact rather than an
+	// unrepeated casebook observation.
+	//
+	// Point 1 -- the narrowed domain's OWN edge (g = row = 0, k_cap = 2). Every
+	// one of the four functions (both primitives, both references) is asserted
+	// equal to k_cap ITSELF (2), not 0. Independently derived (hand, not by
+	// calling the implementation): the predicate at every k is "0 <= (0 >> k)",
+	// which holds for every k >= 0 (0 >> k is always 0, and 0 <= 0 always),
+	// so the LARGEST satisfying k in [0, k_cap] is k_cap. A downward search
+	// (the two primitives) finds this on its first iteration (k = k_cap); an
+	// upward search (the two references) never breaks, because the predicate
+	// never fails, and runs to k = k_cap. This is a domain-edge sanity witness,
+	// not a claim from the negative quadrant: it fails for any implementation
+	// whose loop bound is off by one against k_cap, or whose "always true at
+	// zero" case is special-cased wrong -- the first-drafted text for this
+	// exact cell asserted 0 here and was self-caught wrong during T-1849's own
+	// fold (§25.1, round 1.4): 0 <= (0 >> k) is true for every k, so the
+	// largest satisfying k is the CAP, not 0.
+	//
+	// Point 2 -- immediately OUTSIDE the narrowed domain, at T-1849's own
+	// executed witness (group_max_abs = -21, row_max_abs = -60, k_cap = 2),
+	// reproduced independently here rather than read from T-1848's casebook.
+	// Hand-derived (not by calling the implementation):
+	//   ComputeRefinementExponent (downward, signed >>): at k=2, is
+	//     -21 <= (-60 >> 2)? Arithmetic right shift of -60 by 2 is floor(-60/4)
+	//     = -15 (C++20 guarantees sign-extending shift). -21 <= -15 is true,
+	//     so the search returns immediately at k=2. Primitive = 2.
+	//   ComputeRefinementExponentRopeSafe (downward, signed magnitude+sign):
+	//     at k=2, both operands negative -- the predicate is
+	//     |group_max_abs|*127 >= |row_max_abs|*90 (the "both negative" branch
+	//     of the signed-magnitude comparison, WideLessEqualSigned). |−21|*127
+	//     << 2 = 21*127*4 = 10,668; |−60|*90 = 5,400. 10,668 >= 5,400 is true,
+	//     so k=2 satisfies and the search returns immediately. Primitive = 2.
+	//   ReferenceRefinementExponent (upward, signed >>): k=0; is
+	//     -21 <= (-60 >> 1)? -60 >> 1 = floor(-60/2) = -30. -21 <= -30 is
+	//     FALSE (-21 is greater than -30) -- the loop's own first-iteration
+	//     condition never holds, so it never advances past k=0. Reference = 0.
+	//   ReferenceRefinementExponentRopeSafe (upward, signed magnitude+sign):
+	//     k=0 (the loop's own first and only tested iteration, since it breaks
+	//     before incrementing); the both-negative branch of
+	//     WideLessEqualSigned is "|lhs| >= |rhs|", i.e. rhs_mag <= lhs_mag.
+	//     At k+1=1: lhs_mag = |−21|*127<<1 = 5,334; rhs_mag = |−60|*90 =
+	//     5,400. Is rhs_mag <= lhs_mag, i.e. is 5,400 <= 5,334? NO -- so
+	//     WideLessEqualSigned returns false, and `if (!false) break;`
+	//     breaks immediately, before k is ever incremented. Reference
+	//     RopeSafe = 0. (A from-scratch Python transcription of the exact
+	//     four functions, independent of this comment and of the
+	//     implementation under test, confirms all four values below --
+	//     StandardsDocument.md §5.4, exactness by execution.)
+	//
+	// This is NOT a correctness assertion at Point 2 -- §6.8 makes none in the
+	// both-negative quadrant, which is out of contract precisely because no
+	// caller this design constructs can reach it. It is the fact that makes
+	// the narrowing non-vacuous: a mutation that made the two sides agree at
+	// this point without a corresponding change to §6.8's ruling is exactly
+	// the silent re-widening §6.8's closing paragraph warns against, and this
+	// cell is what turns that silent event into a red one -- demonstrated
+	// below by reverting the N5 remedy (T-1844) in an isolated scratch copy.
+	const int k_boundary =
+	    ComputeRefinementExponent(/*group_max_abs=*/0, /*row_max_abs=*/0, /*k_cap=*/2);
+	CHECK_MSG(k_boundary == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness (T-1849, D-SLM2007): "
+	          "ComputeRefinementExponent(0, 0, k_cap=2) must equal k_cap itself "
+	          "(2), got %d -- 0 <= (0>>k) holds for every k, so the largest "
+	          "satisfying k is the cap, not 0",
+	          k_boundary);
+	const int k_boundary_rope =
+	    ComputeRefinementExponentRopeSafe(/*group_max_abs=*/0, /*row_max_abs=*/0, /*k_cap=*/2);
+	CHECK_MSG(k_boundary_rope == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ComputeRefinementExponentRopeSafe(0, 0, k_cap=2) must equal "
+	          "k_cap itself (2), got %d",
+	          k_boundary_rope);
+	const int ref_boundary =
+	    ReferenceRefinementExponent(/*group_max_abs=*/0, /*row_max_abs=*/0, /*k_cap=*/2);
+	CHECK_MSG(ref_boundary == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ReferenceRefinementExponent(0, 0, k_cap=2) must equal k_cap "
+	          "itself (2), got %d",
+	          ref_boundary);
+	const int ref_boundary_rope =
+	    ReferenceRefinementExponentRopeSafe(/*group_max_abs=*/0, /*row_max_abs=*/0, /*k_cap=*/2);
+	CHECK_MSG(ref_boundary_rope == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ReferenceRefinementExponentRopeSafe(0, 0, k_cap=2) must equal "
+	          "k_cap itself (2), got %d",
+	          ref_boundary_rope);
+
+	const int k_negative =
+	    ComputeRefinementExponent(/*group_max_abs=*/-21, /*row_max_abs=*/-60, /*k_cap=*/2);
+	CHECK_MSG(k_negative == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness (T-1849's cited "
+	          "out-of-domain witness, reproduced independently): "
+	          "ComputeRefinementExponent(-21, -60, k_cap=2) -- hand-derived "
+	          "-21 <= (-60>>2 == -15) is true at k=2 -- must equal 2, got %d",
+	          k_negative);
+	const int k_negative_rope = ComputeRefinementExponentRopeSafe(
+	    /*group_max_abs=*/-21, /*row_max_abs=*/-60, /*k_cap=*/2);
+	CHECK_MSG(k_negative_rope == 2,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ComputeRefinementExponentRopeSafe(-21, -60, k_cap=2) -- "
+	          "hand-derived |-21|*127<<2=10668 >= |-60|*90=5400 holds at k=2 "
+	          "-- must equal 2, got %d",
+	          k_negative_rope);
+	const int ref_negative =
+	    ReferenceRefinementExponent(/*group_max_abs=*/-21, /*row_max_abs=*/-60, /*k_cap=*/2);
+	CHECK_MSG(ref_negative == 0,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ReferenceRefinementExponent(-21, -60, k_cap=2) -- hand-derived "
+	          "-21 <= (-60>>1 == -30) is FALSE, the upward loop never "
+	          "advances past k=0 -- must equal 0, got %d -- this is the "
+	          "primitive/reference divergence outside the narrowed domain, "
+	          "not a correctness claim (§6.8 makes none here)",
+	          ref_negative);
+	const int ref_negative_rope = ReferenceRefinementExponentRopeSafe(
+	    /*group_max_abs=*/-21, /*row_max_abs=*/-60, /*k_cap=*/2);
+	CHECK_MSG(ref_negative_rope == 0,
+	          "T-1822 §12 F1/F2 domain-boundary witness: "
+	          "ReferenceRefinementExponentRopeSafe(-21, -60, k_cap=2) -- "
+	          "hand-traced: k=0's own first test (rhs_mag=5400 <= "
+	          "lhs_mag=5334?) is false, so the loop breaks before k is ever "
+	          "incremented -- must equal 0, got %d -- also a divergence "
+	          "outside the narrowed domain, not a correctness claim",
+	          ref_negative_rope);
+}
+
 static void TestT1822_M2_Grid_FullRowMaxAbs_ResidualSiteDomainExtremeINT64MAX() {
 	// §12 boundary bullet: "full_row_max_abs at its own extreme, INT64_MAX, at
 	// sites 11/18's domain (T-1834 F3, D-SLM1892): ComputePeelGrid(1, INT64_MAX, 7)
@@ -21008,7 +21202,26 @@ static void TestT1822_Config_PeelParamsAdmissibleAtN_ArithmeticOverflowGuard_Dom
 	// 60} all require a live guard, because the unguarded arithmetic
 	// truncates C_max^2 (or, at r_cap>=57, C_max itself) to exactly zero
 	// and would wrongly admit.
-	const int kSweepBand[] = {24, 25, 26, 28, 30, 40, 56, 57, 60};
+	//
+	// T-1850 (Claude/Curie/t1832-...-test-design-2026-08-08.md §13; T-1848 P2,
+	// D-SLM2006): this band discriminates only the C_max^2-representability
+	// threshold (r_cap=25) -- it stops sixty-one values short of the
+	// shift-width truncation threshold N1's OWN remedy actually guards
+	// against. C_max is formed by WideShlFull(128, r_cap, &c_max_truncated);
+	// 128 = 2^7, so the shift itself needs 128 bits or fewer only while
+	// 7 + r_cap < 128, i.e. r_cap <= 120. At r_cap = 121 the true product
+	// 2^128 does not fit the 128-bit container: WideShlFull silently drops
+	// the high bit and the wrapped result is exactly 0 (2^128 mod 2^128 = 0),
+	// so WideHi(c_max) reads 0 on the WRAPPED value -- the mechanism the
+	// truncation-report guard (`c_max_truncated ||`) exists to catch, and
+	// which the pre-N1 build could not catch because it tested only the
+	// shift's RESULT, never whether the shift itself lost bits. 121 and 200
+	// (one at the exact threshold, one well past it) are added to the same
+	// band the C_max^2 guard already discriminates -- no new scaffolding: both
+	// checks below (the guarded function, and the independent unguarded
+	// simulation) are already written generically over `r_cap` and need no
+	// change to cover the new values.
+	const int kSweepBand[] = {24, 25, 26, 28, 30, 40, 56, 57, 60, 121, 200};
 	constexpr int kP = 1;
 	constexpr int64_t kN = 1536;
 
@@ -21972,6 +22185,13 @@ int main(int argc, char** argv) {
 
 	TestT1822_Config_SiteRefusal_OutOfRangeSiteId();
 	TestT1822_Site16_DownProjRankPFixup_OutOfRangeIndexSkipped();
+
+	// T-1850 -- the fourteenth fold's two new §12 cells (N1 band extension,
+	// F1/F2 domain-boundary witness) plus N3's own missing cell, handed
+	// forward by the fold's §25 (Curie, 2026-08-08; Claude/Curie/t1832-
+	// activation-scale-remedy-red-suite-test-design-2026-08-08.md §13).
+	TestT1822_M1_GroupedCode_KgBoundary_DomainExtremity();
+	TestT1822_M1_RefinementExponentPair_DomainBoundaryWitness();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
