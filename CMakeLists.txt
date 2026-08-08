@@ -22,6 +22,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
 	src/decode_digest.cpp
+	src/t1822_activation_scale_remedy.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
