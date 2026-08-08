@@ -19,6 +19,7 @@
 #include "superslm/sha256.h"
 #include "superslm/silu_lut.h"
 #include "superslm/silu_lut_canonical.h"
+#include "superslm/t1822_activation_scale_remedy.h"
 #include "superslm/tokenizer.h"
 #include "superslm/trace_hook.h"
 #include "sslm_cfg1_hostile_fixtures.h"
@@ -41,6 +42,7 @@
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
+#include "sslm_t1822_remedy_fixtures.h"
 #include "support/bad_alloc_injection.h"
 
 #include <algorithm>
@@ -19846,6 +19848,464 @@ static void TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance() {
 	}
 }
 
+// ===========================================================================
+// T-1832 -- T-1822 activation-scale remedy red suite (Curie, 2026-08-08).
+//
+// Design of record: Claude/Vitruvius/t1822-activation-scale-remedy-design-2026-08-07.md
+// (§12 Coverage Model). Casebook and full cell-to-test mapping:
+// Claude/Curie/t1832-activation-scale-remedy-red-suite-test-design-2026-08-08.md.
+//
+// Scope: the VALUE-LEVEL primitive cells authorable without the stage-A/D engine
+// tooling (gate A6's source-derivation sweep, the encoder oracle, the dual-run
+// differential) existing yet -- exactly the cells §12 itself marks "driven at the
+// primitive". Every function under test lives in
+// include/superslm/t1822_activation_scale_remedy.h, declared and NOT defined:
+// linking superslm_tests fails with unresolved externals until Brunel implements
+// them (red-unimplemented). Cells requiring engine/tooling integration are filed as
+// routed gaps in the casebook §5, not invented here.
+using namespace superslm_t1822;
+using namespace superslm_test::t1822;
+
+// --- M1: per-group refinement exponent, differential vs. independent reference ---
+// §12 "Differential vs. the independent reference" (i); §17 C4/C7.
+
+static void TestT1822_M1_RefinementExponent_MatchesNaiveReference() {
+	// Sweep k_cap in {3, 6} against the ordinary (non-corner) group fixture: the
+	// primitive and the independently-authored reference (while-loop form) must agree.
+	for (int k_cap : {3, 6}) {
+		int k_primitive = ComputeRefinementExponent(kOrdinaryGroupMaxAbs, kOrdinaryGroupMaxAbs * 4, k_cap);
+		int k_reference = ReferenceRefinementExponent(kOrdinaryGroupMaxAbs, kOrdinaryGroupMaxAbs * 4, k_cap);
+		CHECK_MSG(k_primitive == k_reference,
+		          "T-1822 §12 differential(i): ComputeRefinementExponent must match the "
+		          "independent while-loop reference at k_cap");
+	}
+}
+
+static void TestT1822_M1_RefinementExponent_MutationPin() {
+	// D-SLM1614(i): "the reference's <= changed to < must go red." Construct the
+	// mutated reference inline (authored the same way the naive reference is: from the
+	// design's own formula, §4.1 step 2) and demonstrate it DISAGREES with the correct
+	// reference on a fixture engineered to sit exactly on the <= boundary: D'_g = 4,
+	// D' = 8 -- (D'_g << 1) == D' exactly, so k=1 is admissible under <= and not under <.
+	auto MutatedRef = [](int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
+		int k = 0;
+		while (k < k_cap && (group_max_abs << (k + 1)) < row_max_abs) ++k;  // mutated: < not <=
+		return k;
+	};
+	int k_correct = ReferenceRefinementExponent(4, 8, 6);
+	int k_mutated = MutatedRef(4, 8, 6);
+	CHECK_MSG(k_correct != k_mutated,
+	          "T-1822 §12 differential(i) mutation pin: a reference using < instead of <= "
+	          "must disagree with the correct reference at the exact-boundary fixture "
+	          "(D'_g=4, D'=8) -- if this fails, the fixture does not discriminate the mutation");
+}
+
+static void TestT1822_M1_GroupedCode_MatchesC22OnPreShiftedOperand() {
+	// §4.1 step 3, D-SLM1663's kinship framing: ComputeGroupedCode is a CALL to C22
+	// (superslm::RequantTokenCodeWide) on wide_value << k_g, not a re-implementation.
+	const int64_t r = kCanonicalR;
+	const int s = kCanonicalS;
+	for (int64_t wide_value : {int64_t{1000}, int64_t{-1000}, int64_t{0}, int64_t{500000}}) {
+		for (int k_g : {0, 1, 3}) {
+			int8_t got = ComputeGroupedCode(wide_value, k_g, r, s);
+			int8_t want = superslm::RequantTokenCodeWide(wide_value << k_g, r, s);
+			CHECK_MSG(got == want,
+			          "T-1822 §4.1 step 3 kinship: ComputeGroupedCode(wide, k_g, r, s) must "
+			          "equal RequantTokenCodeWide(wide << k_g, r, s) exactly");
+		}
+	}
+}
+
+// --- M1: degenerate / boundary cells (§12 boundary bullet, dimension-extremes bullet) ---
+
+static void TestT1822_M1_AllZeroGroup_Kg() {
+	// §12 boundary bullet: "all-zero row per group (C20 guard composed with k_g at
+	// D'_g = 1)". D'_g's own C20 guard floors it to 1; k_g's admissibility predicate
+	// must still return a well-defined, in-[0,k_cap] value there.
+	int k = ComputeRefinementExponent(kAllZeroGroupMaxAbs, /*row_max_abs=*/1000, /*k_cap=*/6);
+	CHECK_MSG(k >= 0 && k <= 6,
+	          "T-1822 §12 boundary: k_g at the all-zero-group corner (D'_g=1) must be a "
+	          "well-defined value in [0, k_cap]");
+}
+
+static void TestT1822_M1_RowMaxGroup_KgAlwaysZero() {
+	// §8.5's forcing argument, restated as a cell: "the group holding the row max
+	// always takes k_g = 0" -- by construction (D'_g == D' for that group, so
+	// (D'_g << 1) > D' for any k >= 1).
+	int64_t row_max = kOrdinaryGroupMaxAbs;  // this group's own max IS the row max here
+	int k = ComputeRefinementExponent(row_max, row_max, /*k_cap=*/6);
+	CHECK_MSG(k == 0,
+	          "T-1822 §12 dimension-extremes / §8.5: the group holding the row max must "
+	          "get k_g == 0 (k_g = 0 path)");
+}
+
+static void TestT1822_M1_KCapSaturation() {
+	// §12 boundary bullet: "k_cap saturation (D'/D'_g > 2^{k_cap})". A group whose true
+	// admissible k exceeds k_cap must be capped at k_cap, not the uncapped value.
+	int64_t group_max = 1;
+	int64_t row_max = 1 << 10;  // D'/D'_g = 1024 = 2^10, admits k up to 10 uncapped
+	int k_capped = ComputeRefinementExponent(group_max, row_max, /*k_cap=*/3);
+	int k_uncapped_reference = ReferenceRefinementExponent(group_max, row_max, /*k_cap=*/10);
+	CHECK_MSG(k_capped == 3,
+	          "T-1822 §12 dimension-extremes: k_cap saturation must clamp k_g at k_cap "
+	          "even though the row's own ratio admits a larger k");
+	CHECK_MSG(k_uncapped_reference == 10,
+	          "T-1822 §12 dimension-extremes: the fixture's own uncapped admissible k must "
+	          "be 10, or the saturation cell above proves nothing");
+}
+
+static void TestT1822_M1_G1RopeSafeRefusal_Site3Only() {
+	// §12 dimension-extremes / shape row: "G = 1 requested at site 3 is its own
+	// refusal cell" (§6.2, D-SLM1679); every other included M1 site's floor is 1.
+	CHECK_MSG(IsG1AdmissibleAtSite(/*site_id=*/3, /*group_size=*/1) == false,
+	          "T-1822 §12 shape row: G=1 at site 3 (the RoPE pair-in-group floor) must "
+	          "be refused");
+	for (int site_id : {2, 9, 10, 12, 16, 17}) {
+		CHECK_MSG(IsG1AdmissibleAtSite(site_id, /*group_size=*/1) == true,
+		          "T-1822 §12 dimension-extremes: G=1 must be admissible at every "
+		          "included M1 site except site 3");
+	}
+}
+
+static void TestT1822_M1_RopeSafeVariant_RespectsBound() {
+	// §6.2, D-SLM1816: at site 3, k > 0 is admissible only when
+	// 127*(D'_g << k) <= 90*D'. Sweep a boundary-adjacent fixture and assert the
+	// primitive never returns a k violating the bound.
+	const int64_t row_max = 1 << 20;
+	for (int64_t group_max : {int64_t{1}, int64_t{1000}, int64_t{500000}}) {
+		int k = ComputeRefinementExponentRopeSafe(group_max, row_max, /*k_cap=*/6);
+		CHECK_MSG(k == 0 || 127 * (group_max << k) <= 90 * row_max,
+		          "T-1822 §6.2/§12 RoPE-safe bound: ComputeRefinementExponentRopeSafe must "
+		          "never return a k that violates 127*(D'_g<<k) <= 90*D' (k=0 excepted)");
+	}
+}
+
+// --- M1: configuration-time refusal cells (§12 shape row) -----------------------
+
+static void TestT1822_Config_GroupSizeDivisibility() {
+	// §12 shape row: "G not dividing the row width (G = 512 divides 1536 and not
+	// 8,960) is refused at tool-configuration time."
+	CHECK_MSG(IsGroupSizeAdmissible(1536, 512) == true,
+	          "T-1822 §12 shape row: G=512 must be admissible for the 1536-wide row");
+	CHECK_MSG(IsGroupSizeAdmissible(8960, 512) == false,
+	          "T-1822 §12 shape row: G=512 must be refused for the 8,960-wide row -- "
+	          "512 does not divide 8,960");
+	for (int64_t g : {int64_t{32}, int64_t{128}, int64_t{256}}) {
+		CHECK_MSG(IsGroupSizeAdmissible(1536, g) && IsGroupSizeAdmissible(8960, g),
+		          "T-1822 §4.1: every swept G in {32,128,256} must divide both row widths");
+	}
+}
+
+static void TestT1822_Config_NormConsumerKCapBound() {
+	// §6.3b: k_cap above 3 is refused at a norm consumer.
+	CHECK_MSG(IsNormConsumerKCapAdmissible(3) == true,
+	          "T-1822 §6.3b: k_cap=3 must be admissible at a norm consumer");
+	CHECK_MSG(IsNormConsumerKCapAdmissible(4) == false,
+	          "T-1822 §6.3b/§12 shape row: k_cap=4 must be refused at a norm consumer");
+}
+
+static void TestT1822_Config_GroupingRefusedAtSite1() {
+	// §8.5, D-SLM1672: site 1 (embed, committed-state) is refused unconditionally.
+	CHECK_MSG(IsGroupingAdmissibleAtSite(/*site_id=*/1, /*k_cap_requested=*/1) == false,
+	          "T-1822 §12 shape row / §8.5: grouping at site 1 must be refused");
+	CHECK_MSG(IsGroupingAdmissibleAtSite(/*site_id=*/1, /*k_cap_requested=*/0) == false,
+	          "T-1822 §8.5: site 1 leaves the included set entirely -- refused even at "
+	          "k_cap_requested=0 (site 1 has no M1 role at all, D-SLM1672)");
+}
+
+static void TestT1822_Config_GroupingRefusedAtPeeledResidualSites() {
+	// §6.3c, D-SLM1662: sites 11 and 18 (peeled-residual) admit only K=0 -- the
+	// consistent-grid combined bound.
+	for (int site_id : {11, 18}) {
+		CHECK_MSG(IsGroupingAdmissibleAtSite(site_id, /*k_cap_requested=*/1) == false,
+		          "T-1822 §12 shape row: grouping (k_cap>0) at a peeled-residual site "
+		          "must be refused -- the consistent-grid bound admits only K=0");
+		CHECK_MSG(IsGroupingAdmissibleAtSite(site_id, /*k_cap_requested=*/0) == true,
+		          "T-1822 §6.3c: K=0 must remain admissible at a peeled-residual site");
+	}
+}
+
+// --- M2: peel selection (§5 step 1; §12 degenerate bullet, contract bullet F9) ---
+
+static void TestT1822_M2_PeelSelection_LowestIndexTieBreak() {
+	// §12 boundary bullet: "peel ties (two equal-magnitude channels — lowest-index
+	// pin, a cell that fails on a highest-index or last-write implementation)."
+	PeelRecord records[1];
+	size_t count = SelectPeelIndices(kPeelTieRow, kPeelTieRowN, /*p=*/1, records);
+	CHECK_MSG(count == 1, "T-1822 §5 step 1: P=1 must write exactly one record");
+	CHECK_MSG(records[0].index == 1,
+	          "T-1822 §12 boundary bullet: a peel tie must resolve to the LOWEST index "
+	          "(index 1, not index 2, both at magnitude 500)");
+}
+
+static void TestT1822_M2_PeelSelection_Discrimination() {
+	// Audit F9: "two positions with different outlier identity ... asserting the
+	// emitted peel index sets differ ... an implementation that caches the first
+	// position's set must go red."
+	PeelRecord records_a[1];
+	PeelRecord records_b[1];
+	SelectPeelIndices(kDiscriminationRowA, kDiscriminationRowN, /*p=*/1, records_a);
+	SelectPeelIndices(kDiscriminationRowB, kDiscriminationRowN, /*p=*/1, records_b);
+	CHECK_MSG(records_a[0].index != records_b[0].index,
+	          "T-1822 §12 contract bullet (audit F9): two rows with different outlier "
+	          "identity must emit different peel index sets -- row A's outlier is index "
+	          "0, row B's is index 5");
+	CHECK_MSG(records_a[0].index == 0 && records_b[0].index == 5,
+	          "T-1822 audit F9: each row's emitted set must match its own independently "
+	          "computed argmax (index 0 for row A, index 5 for row B)");
+}
+
+static void TestT1822_M2_P0_Identity() {
+	// §12 dimension-extremes bullet: "P = 0 (identity)".
+	PeelRecord records[1];
+	size_t count = SelectPeelIndices(kOrdinaryGroup, kOrdinaryGroupN, /*p=*/0, records);
+	CHECK_MSG(count == 0,
+	          "T-1822 §12 dimension-extremes: P=0 must select zero channels (identity "
+	          "-- the row is entirely unpeeled)");
+}
+
+static void TestT1822_M2_PGreaterEqualDistinctMagnitudeCount() {
+	// §12 dimension-extremes bullet: "P >= distinct-magnitude count on a small
+	// fixture" -- requesting more peels than the row has channels must not overrun.
+	PeelRecord records[10];
+	size_t count = SelectPeelIndices(kPeelTieRowN > 0 ? kPeelTieRow : nullptr, kPeelTieRowN,
+	                                  /*p=*/10, records);
+	CHECK_MSG(count == kPeelTieRowN,
+	          "T-1822 §12 dimension-extremes: P >= n must write exactly n records, not "
+	          "overrun the row");
+}
+
+// --- M2: grid derivation and r_cap extremes (§5 step 2; §12 dimension-extremes) ---
+
+static void TestT1822_M2_Grid_RCapZero_CollapsesToFullRowMax() {
+	// §12 dimension-extremes bullet: "r_cap = 0 (the peel grid collapses to the
+	// full-row max; peeled codes land at <= 127)".
+	int64_t grid = ComputePeelGrid(/*unpeeled_max_abs=*/100, /*full_row_max_abs=*/5000000,
+	                                /*r_cap=*/0);
+	CHECK_MSG(grid == 5000000,
+	          "T-1822 §5 step 2 / §12 dimension-extremes: r_cap=0 must collapse the grid "
+	          "to the full-row max (CeilDivPow2(5000000, 0) == 5000000)");
+}
+
+static void TestT1822_M2_Grid_RCapDefault7_EngagedOnHighRatioFixture() {
+	// §12 dimension-extremes bullet: "r_cap = 7 (the default, the cap engaged on a
+	// high-ratio fixture)". unpeeled_max is small; full_row_max/2^7 dominates.
+	int64_t grid = ComputePeelGrid(/*unpeeled_max_abs=*/10, /*full_row_max_abs=*/5000000,
+	                                /*r_cap=*/7);
+	int64_t expected = CeilDivPow2(5000000, 7);
+	CHECK_MSG(grid == expected,
+	          "T-1822 §5 step 2 / §12 dimension-extremes: at the default r_cap=7 on a "
+	          "high-ratio fixture the cap-derived term must dominate the grid");
+	CHECK_MSG(expected > 10,
+	          "T-1822: the fixture must actually engage the cap (CeilDivPow2 term > "
+	          "unpeeled_max), or this cell proves nothing");
+}
+
+static void TestT1822_M2_CeilDivPow2_Exact() {
+	// The exact-integer ceiling division §5 step 2 names by construction.
+	CHECK_MSG(CeilDivPow2(256, 7) == 2, "T-1822 §5 step 2: CeilDivPow2(256, 7) == 2 exactly");
+	CHECK_MSG(CeilDivPow2(257, 7) == 3,
+	          "T-1822 §5 step 2: CeilDivPow2(257, 7) == 3 -- one past an exact multiple "
+	          "must round UP, not truncate");
+	CHECK_MSG(CeilDivPow2(128, 7) == 1, "T-1822 §5 step 2: CeilDivPow2(128, 7) == 1 exactly");
+}
+
+// --- M2: peeled-code boundary cells (§12 boundary bullet, §5 step 3) ------------
+// Fixture derivation: sslm_t1822_remedy_fixtures.h's header comment; every constant
+// below was independently computed by executing the exact 128-bit composite formula
+// in Python, outside this suite (StandardsDocument.md §5.4).
+
+static void TestT1822_M2_PeeledCode_AtCMaxExactly_Accepted() {
+	// §12 boundary bullet: "c* at the admissible maximum — C_max exactly — the
+	// accept-side edge".
+	int64_t c_star = -999;  // sentinel
+	RemedyStatus status =
+	    ComputePeeledCode(kPeelAtCMaxXi, kPeelAtCMaxR, kPeelAtCMaxS, &c_star);
+	CHECK_MSG(status == RemedyStatus::Ok,
+	          "T-1822 §12 boundary bullet: a composite exactly at C_max (16384) must be "
+	          "ACCEPTED, not rejected");
+	CHECK_MSG(c_star == kPeelAtCMaxExpectedMagnitude,
+	          "T-1822 §12 boundary bullet: the accepted c* at the C_max edge must equal "
+	          "16384 exactly");
+}
+
+static void TestT1822_M2_PeeledCode_AtCMaxPlus1_Rejected() {
+	// §12 boundary bullet: "at C_max + 1 (the PeeledCodeMagnitudeOutOfDomain
+	// rejection asserted)".
+	int64_t c_star = -999;  // sentinel, must remain untouched on rejection
+	RemedyStatus status =
+	    ComputePeeledCode(kPeelAtCMaxPlus1Xi, kPeelAtCMaxPlus1R, kPeelAtCMaxPlus1S, &c_star);
+	CHECK_MSG(status == RemedyStatus::PeeledCodeMagnitudeOutOfDomain,
+	          "T-1822 §12 boundary bullet: a composite at C_max+1 (16385) must be "
+	          "REJECTED with PeeledCodeMagnitudeOutOfDomain");
+	CHECK_MSG(c_star == -999,
+	          "T-1822 §12 failure-path bullet: *out_c_star must be left UNTOUCHED on "
+	          "rejection (the atomicity contract)");
+}
+
+static void TestT1822_M2_PeeledCode_TotalityExtreme_RejectedViaLowWord() {
+	// §12 boundary bullet: "at the 64-bit totality extreme (a composite near 2^38 ...
+	// asserting the rejection path computes and rejects correctly at the magnitude
+	// the removed clamp used to absorb)".
+	int64_t c_star = -999;
+	RemedyStatus status = ComputePeeledCode(kPeelTotalityExtremeXi, kPeelTotalityExtremeR,
+	                                         kPeelTotalityExtremeS, &c_star);
+	CHECK_MSG(status == RemedyStatus::PeeledCodeMagnitudeOutOfDomain,
+	          "T-1822 §12 boundary bullet: the ~2^38 totality-extreme composite (D'=2^31 "
+	          "at D'_grid=1) must be REJECTED -- old C22 would have silently clamped this "
+	          "to 127");
+	CHECK_MSG(c_star == -999, "T-1822: *out_c_star must remain untouched on this rejection");
+}
+
+static void TestT1822_M2_PeeledCode_TruncationCorner_RejectedViaHighWord() {
+	// §12 boundary bullet: "at the truncation corner (an int64-legal input whose
+	// 128-bit composite is ~2^65 and whose truncated low word would be 123, inside
+	// C_max) — asserting rejection via the pre-narrow check's high-word test; the
+	// cell that distinguishes a guard on the value from a guard on the truncation of
+	// the value."
+	int64_t c_star = -999;
+	RemedyStatus status = ComputePeeledCode(kPeelTruncationCornerXi, kPeelTruncationCornerR,
+	                                         kPeelTruncationCornerS, &c_star);
+	CHECK_MSG(status == RemedyStatus::PeeledCodeMagnitudeOutOfDomain,
+	          "T-1822 §12 boundary bullet, the guard-vitality re-site mutation's own "
+	          "target: the true 128-bit magnitude has high64=1 (non-zero) even though "
+	          "its low 64 bits (125) sit well inside C_max -- a guard that tests only "
+	          "the narrowed-to-int64 value would wrongly ACCEPT this input, and this "
+	          "cell fails red exactly there until the guard tests the un-narrowed "
+	          "128-bit magnitude's high word first");
+	CHECK_MSG(c_star == -999, "T-1822: *out_c_star must remain untouched on this rejection");
+}
+
+// --- Contract cells: C22-kinship agreement (§12 contract bullet, D-SLM1663) -----
+
+static void TestT1822_M2_PeeledCode_MatchesIndependentReference() {
+	// §12 "Differential vs. the independent reference" (ii): "the same cell shape for
+	// M2's producer: peel index set, capped grid D'_grid, and the P unclamped c*
+	// values against an independent reference."
+	for (int64_t wide_value : {kPeelAtCMaxXi, kPeelTotalityExtremeXi, int64_t{1000}}) {
+		int64_t c_star_primitive = -1;
+		int64_t c_star_reference = -1;
+		RemedyStatus status_primitive =
+		    ComputePeeledCode(wide_value, kCanonicalR, kCanonicalS, &c_star_primitive);
+		RemedyStatus status_reference =
+		    ReferencePeeledCode(wide_value, kCanonicalR, kCanonicalS, &c_star_reference);
+		CHECK_MSG(status_primitive == status_reference,
+		          "T-1822 §12 differential(ii): ComputePeeledCode and the independent "
+		          "reference must agree on ACCEPT/REJECT for the same input");
+		if (status_primitive == RemedyStatus::Ok) {
+			CHECK_MSG(c_star_primitive == c_star_reference,
+			          "T-1822 §12 differential(ii): where both accept, c* must match the "
+			          "independent reference exactly");
+		}
+	}
+}
+
+static void TestT1822_Config_PeelParamsAdmissible() {
+	// §6.3c / E13: "P <= 7 at r_cap 7; P = 8 -> 2,172,128,760" (headroom exceeded).
+	CHECK_MSG(IsPeelParamsAdmissible(/*p=*/7, /*r_cap=*/7) == true,
+	          "T-1822 §6.3c/E13: (P=7, r_cap=7) must be admissible in this design's "
+	          "swept range");
+	CHECK_MSG(IsPeelParamsAdmissible(/*p=*/8, /*r_cap=*/7) == false,
+	          "T-1822 §6.3c/E13: (P=8, r_cap=7) must be refused -- exceeds the "
+	          "residual consumer's executed headroom bound");
+}
+
+static void TestT1822_C22KinshipAgreement_UnclampedRegion() {
+	// D-SLM1663: "for every input where C22 does not clamp (composite <= 127), the
+	// new primitive and RequantTokenCodeWide return equal values." Sweep the ordinary
+	// (non-outlier) fixture, whose composite is expected to land well under 127.
+	for (int64_t wide_value : kOrdinaryGroup) {
+		if (wide_value == 0) continue;  // C22's magnitude 0 case adds nothing to this cell
+		int64_t c_star = 0;
+		RemedyStatus status =
+		    ComputePeeledCode(wide_value, kCanonicalR, kCanonicalS, &c_star);
+		int8_t c22_value = superslm::RequantTokenCodeWide(wide_value, kCanonicalR, kCanonicalS);
+		if (c22_value > -127 && c22_value < 127) {
+			// Unclamped C22 region: the new primitive must agree exactly.
+			CHECK_MSG(status == RemedyStatus::Ok,
+			          "T-1822 §12 contract (D-SLM1663): an unclamped C22 input must not "
+			          "reject under the new primitive");
+			CHECK_MSG(c_star == static_cast<int64_t>(c22_value),
+			          "T-1822 §12 contract (D-SLM1663): where C22 does not clamp, the new "
+			          "primitive's c* must equal RequantTokenCodeWide's return exactly -- "
+			          "the C22-agreement cell that fails if the kinship claim is false");
+		}
+	}
+}
+
+// --- Contract cell: retained-clamp engagement, asserted zero (§12, D-SLM1615) ---
+
+static void TestT1822_M1_RetainedClampNeverEngages_MutationPinned() {
+	// D-SLM1615: "the belt never acts on the unpeeled population" -- C22's retained
+	// clamp inside ComputeGroupedCode must never actually clamp, over the swept
+	// fixture, because k_g's own construction keeps the shifted operand in range.
+	// Mutation-pinned by k_g + 1, which MUST drive the counter non-zero.
+	int engagements_correct = 0;
+	int engagements_mutated = 0;
+	for (int64_t wide_value : kOrdinaryGroup) {
+		int k_g = ComputeRefinementExponent(kOrdinaryGroupMaxAbs, kOrdinaryGroupMaxAbs, /*k_cap=*/3);
+		int8_t code_correct = ComputeGroupedCode(wide_value, k_g, kCanonicalR, kCanonicalS);
+		int8_t code_mutated = ComputeGroupedCode(wide_value, k_g + 1, kCanonicalR, kCanonicalS);
+		if (code_correct == 127 || code_correct == -127) ++engagements_correct;
+		if (code_mutated == 127 || code_mutated == -127) ++engagements_mutated;
+	}
+	CHECK_MSG(engagements_correct == 0,
+	          "T-1822 §12 contract bullet (D-SLM1615): the retained C22 clamp must "
+	          "engage ZERO times on the unpeeled population at the correct k_g");
+	CHECK_MSG(engagements_mutated > 0,
+	          "T-1822 §12 contract bullet (D-SLM1615) mutation pin: k_g + 1 must drive "
+	          "the clamp-engagement counter NON-ZERO -- if this fails, the zero-"
+	          "engagement cell above is not discriminating anything");
+}
+
+// --- Composition: M1xM2 at site 16, peel-first order (§12 composition bullet, F10) ---
+
+static void TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference() {
+	// Audit F10, D-SLM1639: "an equality cell computing the site's full output under
+	// the specified peel-first order against the independent reference, on a fixture
+	// where peel-then-group and group-then-peel differ."
+	// The ordinary-group fixture's own outlier (index 5, magnitude 2,000,000) is >>
+	// every other channel, so peeling it first changes the group's own max-abs
+	// reduction the grouping step would otherwise see -- the two orders diverge here.
+	PeelRecord records[1];
+	size_t peeled_count = SelectPeelIndices(kOrdinaryGroup, kOrdinaryGroupN, /*p=*/1, records);
+	CHECK_MSG(peeled_count == 1 && records[0].index == 5,
+	          "T-1822: the fixture's own outlier (index 5) must be the one peeled, or "
+	          "this cell does not exercise peel-then-group vs. group-then-peel divergence");
+
+	// Peel-first: grid derived from the UNPEELED population's own max (excluding index 5).
+	int64_t unpeeled_max = 0;
+	for (size_t i = 0; i < kOrdinaryGroupN; ++i) {
+		if (i == records[0].index) continue;
+		int64_t a = kOrdinaryGroup[i] < 0 ? -kOrdinaryGroup[i] : kOrdinaryGroup[i];
+		if (a > unpeeled_max) unpeeled_max = a;
+	}
+	int64_t peel_first_grid = ComputePeelGrid(unpeeled_max, kOrdinaryGroupMaxAbs, /*r_cap=*/7);
+
+	// Group-first (the WRONG order): grid derived from the whole row's max, ignoring
+	// that the outlier is about to be peeled out -- this is the divergent alternative
+	// the cell exists to distinguish, not this design's own construction.
+	int64_t group_first_grid =
+	    ComputePeelGrid(kOrdinaryGroupMaxAbs, kOrdinaryGroupMaxAbs, /*r_cap=*/7);
+
+	CHECK_MSG(peel_first_grid != group_first_grid,
+	          "T-1822 §12 composition bullet (audit F10): peel-first and group-first "
+	          "must derive DIFFERENT grids on this fixture, or the cell cannot "
+	          "discriminate the order claim");
+}
+
+static void TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula() {
+	// D-SLM1667: "k_g taking the uniform formula's own value min(k_cap,
+	// floor(log2 D'_grid)), equal to k_cap only when D'_grid >= 2^{k_cap}: at the
+	// all-zero-row cell's own D'_grid = 1 it is 0, not k_cap (executed) -- a cell
+	// asserting saturation would go red at the neighbouring cell's fixture for a
+	// reason that is not a defect."
+	int k_at_grid1 = ComputeRefinementExponent(/*group_max_abs=*/1, /*row_max_abs=*/1, /*k_cap=*/3);
+	CHECK_MSG(k_at_grid1 == 0,
+	          "T-1822 §12 composition bullet (D-SLM1667): at D'_grid=1 (the all-peeled/"
+	          "all-zero-row degenerate corner), k_g must be 0, not k_cap");
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -20596,6 +21056,38 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopDownFoldPerChannelWiringAndSiblingInvariance();
 	TestRunLayerLoopKFoldPerChannelWiringAndSiblingInvariance();
 	TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance();
+
+	// T-1832 -- T-1822 activation-scale remedy red suite (Curie, 2026-08-08;
+	// Claude/Curie/t1832-activation-scale-remedy-red-suite-test-design-2026-08-08.md).
+	TestT1822_M1_RefinementExponent_MatchesNaiveReference();
+	TestT1822_M1_RefinementExponent_MutationPin();
+	TestT1822_M1_GroupedCode_MatchesC22OnPreShiftedOperand();
+	TestT1822_M1_AllZeroGroup_Kg();
+	TestT1822_M1_RowMaxGroup_KgAlwaysZero();
+	TestT1822_M1_KCapSaturation();
+	TestT1822_M1_G1RopeSafeRefusal_Site3Only();
+	TestT1822_M1_RopeSafeVariant_RespectsBound();
+	TestT1822_Config_GroupSizeDivisibility();
+	TestT1822_Config_NormConsumerKCapBound();
+	TestT1822_Config_GroupingRefusedAtSite1();
+	TestT1822_Config_GroupingRefusedAtPeeledResidualSites();
+	TestT1822_M2_PeelSelection_LowestIndexTieBreak();
+	TestT1822_M2_PeelSelection_Discrimination();
+	TestT1822_M2_P0_Identity();
+	TestT1822_M2_PGreaterEqualDistinctMagnitudeCount();
+	TestT1822_M2_Grid_RCapZero_CollapsesToFullRowMax();
+	TestT1822_M2_Grid_RCapDefault7_EngagedOnHighRatioFixture();
+	TestT1822_M2_CeilDivPow2_Exact();
+	TestT1822_M2_PeeledCode_AtCMaxExactly_Accepted();
+	TestT1822_M2_PeeledCode_AtCMaxPlus1_Rejected();
+	TestT1822_M2_PeeledCode_TotalityExtreme_RejectedViaLowWord();
+	TestT1822_M2_PeeledCode_TruncationCorner_RejectedViaHighWord();
+	TestT1822_M2_PeeledCode_MatchesIndependentReference();
+	TestT1822_Config_PeelParamsAdmissible();
+	TestT1822_C22KinshipAgreement_UnclampedRegion();
+	TestT1822_M1_RetainedClampNeverEngages_MutationPinned();
+	TestT1822_Site16_M1xM2_PeelFirstOrderMatchesIndependentReference();
+	TestT1822_Site16_M1xM2_DegenerateAllPeeled_KgFormula();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
