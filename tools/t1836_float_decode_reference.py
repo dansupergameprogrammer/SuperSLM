@@ -50,7 +50,7 @@ def _resolve_default_model(p: Path) -> Path:
     return p
 
 
-def recompute_residual_stream(model, input_ids, device, max_new: int):
+def recompute_residual_stream(model, input_ids, device, max_new: int, forced=None):
     """T-1820's own `recompute_residual_stream`, continued past the prompt.
 
     The forward composition inside the position loop is unchanged. What is new is that once
@@ -77,6 +77,12 @@ def recompute_residual_stream(model, input_ids, device, max_new: int):
         for t in range(total):
             if t < prompt_len:
                 token = int(input_ids[0, t].item())
+            elif forced is not None:
+                # Teacher forcing: the continuation is a supplied id list (the ENGINE's own
+                # generation), so the float side reads the sequence the engine actually
+                # produced. The model's own argmax is still recorded at every step, so the two
+                # trajectories can be reconciled offline.
+                token = int(forced[t - prompt_len])
             else:
                 token = argmaxes[-1]
             consumed.append(token)
@@ -164,6 +170,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--model", default=str(DEFAULT_MODEL))
     parser.add_argument("--max-new", type=int, default=24)
+    parser.add_argument("--force-tokens", default=None,
+                        help="comma-separated ids to teacher-force the continuation onto (the "
+                             "engine's own generation), instead of the model's own greedy "
+                             "choice. The complement of the engine probe's own --force-tokens: "
+                             "together the two give an interior comparison along EITHER side's "
+                             "trajectory, with matched inputs on both sides in both cases.")
+    parser.add_argument("--dump-suffix", default="",
+                        help="suffix appended to the dump stem, so a forced run does not "
+                             "overwrite the free one")
     parser.add_argument("--dump", required=True, help="path to write the (T,29,H) float32 .npy")
     args = parser.parse_args(argv)
 
@@ -213,8 +228,13 @@ def main(argv: list[str] | None = None) -> int:
     input_ids = templated["input_ids"].to(device) if hasattr(templated, "to") else templated.to(device)
     prompt_len = input_ids.shape[1]
 
+    forced = None
+    if args.force_tokens:
+        forced = [int(x) for x in args.force_tokens.split(",") if x]
+        if len(forced) < args.max_new:
+            raise SystemExit(f"--force-tokens has {len(forced)} ids, --max-new is {args.max_new}")
     per_position, consumed, argmaxes = recompute_residual_stream(
-        model, input_ids, device, args.max_new)
+        model, input_ids, device, args.max_new, forced)
     n_layers = model.config.num_hidden_layers
     total = prompt_len + args.max_new
     if len(per_position) != total:
@@ -248,6 +268,13 @@ def main(argv: list[str] | None = None) -> int:
     # itself a measurement of how sharp the greedy trajectory is. Element 0 IS gated: it is
     # the same quantity `argmax_cross_check` above already asserts, and a disagreement there
     # would be a wiring defect rather than a reduction-order one.
+    if forced is not None:
+        agree_forced = 0
+        while (agree_forced < args.max_new
+               and forced[agree_forced] == argmaxes[prompt_len - 1 + agree_forced]):
+            agree_forced += 1
+        print(f"forced_vs_float_argmax: the forced continuation and the float model's own "
+              f"choice agree for the first {agree_forced}/{args.max_new} generated tokens")
     with torch.no_grad():
         gen = model.generate(input_ids=input_ids, max_new_tokens=args.max_new, do_sample=False,
                              num_beams=1, use_cache=True,
@@ -261,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         agree += 1
     print(f"generate_cross_check: the incremental walk and model.generate (batched prefill) "
           f"agree on {agree}/{len(hf_generated)} generated tokens")
-    if agree == 0:
+    if agree == 0 and forced is None:
         raise AssertionError(
             f"the manual walk's FIRST generated token differs from model.generate's: "
             f"manual={manual_generated[0]} hf={hf_generated[0]}")
@@ -270,6 +297,9 @@ def main(argv: list[str] | None = None) -> int:
         np.float32
     )
     dump_path = Path(args.dump)
+    if args.dump_suffix:
+        dump_path = dump_path.with_name(
+            dump_path.name.replace(".npy", f"{args.dump_suffix}.npy"))
     dump_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(dump_path, arr)
     np.save(dump_path.with_suffix(".tokens.npy"), np.array(consumed, dtype=np.int32))

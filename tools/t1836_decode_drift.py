@@ -148,8 +148,8 @@ def main(argv=None) -> int:
     print("=== gates ===")
     for pid in ids:
         eng = load_engine_t1836(d / f"{pid}{args.suffix}_engine.bin")
-        flt = np.load(d / f"{pid}{args.float_suffix}_float.npy").astype(np.float64)
-        ftok = np.load(d / f"{pid}{args.float_suffix}_float.tokens.npy")
+        flt = np.load(d / f"{pid}_float{args.float_suffix}.npy").astype(np.float64)
+        ftok = np.load(d / f"{pid}_float{args.float_suffix}.tokens.npy")
         T = min(eng["n"], flt.shape[0], len(ftok))
         if not np.array_equal(ftok[:T], eng["consumed"][:T]):
             first = int(np.flatnonzero(ftok[:T] != eng["consumed"][:T])[0])
