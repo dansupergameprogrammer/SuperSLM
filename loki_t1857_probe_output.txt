@@ -1,0 +1,41 @@
+T-1857 strike on M3' -- head_dim=128, position 0 (RoPE identity), engine composite
+m_a=1181116006 e_a=-34  N=300 eval rows, 300 calibration rows, per G_L
+BASE_static: one offline per-head pair, frozen (section 8.2a: no runtime reciprocal at site 4)
+M3P_static : M3' AS SPECIFIED -- k_g[g] a build-time constant array, frozen (section 6.9)
+M3P_oracle : the fold's own probe -- k_g recomputed from the row being landed
+
+=== CONTROL A -- the fold's own population geometry | channel identity: stationary (the fold's own) | offline calibration policy: MAX  ===
+G_L   BASE_static  M3P_static   (vs BASE) M3P_oracle   (vs BASE) K_h    k_g[0..] M3P clamps
+2     0.092306     0.074526     0.81     x 0.032042     0.35     x 1      0,1      0/38400
+4     0.078634     0.06558      0.83     x 0.061143     0.78     x 5      5,0,...  1/38400
+8     0.15212      0.040576     0.27     x 0.029099     0.19     x 5      5,5,...  4/38400
+16    0.1532       0.088639     0.58     x 0.032085     0.21     x 5      5,5,...  2/38400
+32    0.32652      0.11595      0.36     x 0.02997      0.09     x 5      5,5,...  0/38400
+64    0.11986      0.071516     0.60     x 0.013197     0.11     x 6      5,5,...  13/38400
+
+=== CONTROL B -- the fold's own geometry, benefit-seeking calibration | channel identity: stationary (the fold's own) | offline calibration policy: P999 ===
+G_L   BASE_static  M3P_static   (vs BASE) M3P_oracle   (vs BASE) K_h    k_g[0..] M3P clamps
+2     0.069371     0.051506     0.74     x 0.032042     0.46     x 1      0,1      35/38400
+4     0.18035      0.10571      0.59     x 0.061143     0.34     x 5      5,0,...  45/38400
+8     0.24414      0.13873      0.57     x 0.029099     0.12     x 5      5,5,...  62/38400
+16    0.73979      0.61707      0.83     x 0.032085     0.04     x 5      5,5,...  38/38400
+32    1.066        0.31064      0.29     x 0.02997      0.03     x 5      5,5,...  58/38400
+64    0.088963     0.046621     0.52     x 0.013197     0.15     x 5      5,5,...  53/38400
+
+=== STRIKE A -- wandering channels, safe calibration | channel identity: WANDERING (section 2.9) | offline calibration policy: MAX  ===
+G_L   BASE_static  M3P_static   (vs BASE) M3P_oracle   (vs BASE) K_h    k_g[0..] M3P clamps
+2     0.09473      0.09473      1.00     x 0.056143     0.59     x 0      0,0      0/38400
+4     0.064465     0.064465     1.00     x 0.021085     0.33     x 0      0,0,...  2/38400
+8     0.093028     0.093028     1.00     x 0.027962     0.30     x 0      0,0,...  2/38400
+16    0.25336      0.25336      1.00     x 0.038434     0.15     x 0      0,0,...  0/38400
+32    0.097794     0.097794     1.00     x 0.017299     0.18     x 0      0,0,...  1/38400
+64    0.29058      0.27295      0.94     x 0.031919     0.11     x 1      0,0,...  10/38400
+
+=== STRIKE B -- wandering channels, benefit-seeking calibration | channel identity: WANDERING (section 2.9) | offline calibration policy: P999 ===
+G_L   BASE_static  M3P_static   (vs BASE) M3P_oracle   (vs BASE) K_h    k_g[0..] M3P clamps
+2     0.086325     0.086325     1.00     x 0.056143     0.65     x 0      0,0      28/38400
+4     0.053211     0.053211     1.00     x 0.021085     0.40     x 0      0,0,...  44/38400
+8     0.067433     0.067433     1.00     x 0.027962     0.41     x 0      0,0,...  38/38400
+16    0.17659      0.17659      1.00     x 0.038434     0.22     x 0      0,0,...  32/38400
+32    0.1216       0.1216       1.00     x 0.017299     0.14     x 0      0,0,...  34/38400
+64    0.19744      0.19744      1.00     x 0.031919     0.16     x 0      0,0,...  35/38400
