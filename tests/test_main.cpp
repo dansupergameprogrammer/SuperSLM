@@ -20145,6 +20145,41 @@ static void TestT1822_Config_GroupingRefusedAtPeeledResidualSites() {
 	}
 }
 
+static void TestT1822_Config_GroupingAdmittedAtOrdinarySites() {
+	// T-1845/Mendeleev F2 (D-SLM1987): IsGroupingAdmissibleAtSite carried zero
+	// admit-side coverage of its own load-bearing case. Proven vacuous by
+	// execution (T-1845 §2 Probe 2): the degenerate stub
+	// `site_id != 1 && k_cap_requested == 0` -- which never admits grouping
+	// (k_cap_requested > 0) at any site, real or fictitious -- passed all ten
+	// pre-existing assertions on this function unchanged (24,191 checks, 0
+	// failures).
+	//
+	// §8.1's included set names seven M1 sites {2, 3, 9, 10, 12, 16, 17}; site 1
+	// is refused unconditionally (§8.5, D-SLM1672, covered by
+	// TestT1822_Config_GroupingRefusedAtSite1 above) and sites 11/18 admit only
+	// K=0 (§6.3c, D-SLM1662, covered by TestT1822_Config_GroupingRefusedAtPeeledResidualSites
+	// above) -- neither 1, 11, nor 18 is an M1-included site, so no admit-side
+	// assertion here conflicts with either refusal cell. Site 3 carries its own
+	// distinct G-floor/RoPE-safe treatment (§6.2, D-SLM1679, covered by
+	// TestT1822_M1_G1RopeSafeRefusal_Site3Only) and is deliberately excluded
+	// here -- this cell is scoped to the six ORDINARY, in-range M1 sites the
+	// included set actually configures with nonzero k_cap: {2, 9, 10, 12, 16, 17}.
+	// k_cap_requested=3 matches the norm-consumer bound already pinned elsewhere
+	// in the suite (TestT1822_Config_NormConsumerKCapBound admits 3, refuses 4)
+	// and is a value none of the existing refusal cells above uses at any site,
+	// so widening a refusal fixture cannot satisfy it -- it is a genuine new
+	// admit-side assertion.
+	for (int site_id : {2, 9, 10, 12, 16, 17}) {
+		CHECK_MSG(IsGroupingAdmissibleAtSite(site_id, /*k_cap_requested=*/3) == true,
+		          "T-1822 §8.1/§12 shape row (Mendeleev F2, D-SLM1987): grouping "
+		          "(k_cap_requested=3) must be ADMITTED at ordinary, in-range M1 "
+		          "site %d -- a stub that never admits grouping at any site "
+		          "(site_id != 1 && k_cap_requested == 0) is invisible to every "
+		          "other cell this function carries and must be caught here",
+		          site_id);
+	}
+}
+
 // --- M2: peel selection (§5 step 1; §12 degenerate bullet, contract bullet F9) ---
 
 static void TestT1822_M2_PeelSelection_LowestIndexTieBreak() {
@@ -21014,6 +21049,49 @@ static void TestT1822_Config_PeelParamsAdmissibleAtN_ArithmeticOverflowGuard_Dom
 	}
 }
 
+static void TestT1822_Config_PeelParamsAdmissibleAtN_AdmitSide() {
+	// T-1845/Mendeleev F1 (D-SLM1986), confirming Poirot N2 (Claude/Poirot/
+	// 5899b8f-t1834-confirmation-fold12-remedy.md): IsPeelParamsAdmissibleAtN
+	// carried zero admit-side coverage. Proven vacuous by execution (T-1845 §2
+	// Probe 1): a `return false;` stub of the whole function passed all ten
+	// pre-existing assertions unchanged (24,191 checks, 0 failures).
+	//
+	// Both fixtures are independently re-derived here (exact integer
+	// arithmetic, no width limit) from §6.3c's coupled inequality --
+	// P*C_max^2 + (n-P)*127^2 <= 2^31-1, C_max = 2^7 * 2^r_cap -- never read
+	// from IsPeelParamsAdmissibleAtN's own body.
+	//
+	// (P=7, r_cap=7, n=1536) -- §6.3c's own control point, already quoted in
+	// TestT1822_Config_PeelParamsAdmissibleAtN_CoupledInequality_N32768's
+	// comment above as "the swept-range rectangle admits P=7 unconditionally,
+	// independent of n" -- but never itself asserted at this n until this cell:
+	//   C_max = 2^7 * 2^7 = 16,384; C_max^2 = 268,435,456
+	//   P*C_max^2 = 7 * 268,435,456 = 1,879,048,192
+	//   (n-P)*127^2 = 1,529 * 16,129 = 24,661,241
+	//   sum = 1,903,709,433 <= 2^31-1 = 2,147,483,647 -- ADMITTED
+	CHECK_MSG(IsPeelParamsAdmissibleAtN(/*p=*/7, /*r_cap=*/7, /*n=*/1536) == true,
+	          "T-1822 §6.3c/§12 (Mendeleev F1, D-SLM1986): "
+	          "IsPeelParamsAdmissibleAtN(P=7, r_cap=7, n=1536) must be ADMITTED "
+	          "-- the design's own control point (independently re-derived: sum "
+	          "1,903,709,433 <= 2^31-1), asserted nowhere in the suite until "
+	          "this cell");
+
+	// (P=12, r_cap=0, n=1536) -- a low-r_cap point the two-argument rectangle
+	// IsPeelParamsAdmissible(P, r_cap) over-refuses (it has no n operand and
+	// bounds P against a fixed n-independent rectangle), but the coupled,
+	// n-aware inequality genuinely admits:
+	//   C_max = 2^7 * 2^0 = 128; C_max^2 = 16,384
+	//   P*C_max^2 = 12 * 16,384 = 196,608
+	//   (n-P)*127^2 = 1,524 * 16,129 = 24,580,596
+	//   sum = 24,777,204 <= 2^31-1 = 2,147,483,647 -- ADMITTED
+	CHECK_MSG(IsPeelParamsAdmissibleAtN(/*p=*/12, /*r_cap=*/0, /*n=*/1536) == true,
+	          "T-1822 §6.3c/§12 (Mendeleev F1, D-SLM1986): "
+	          "IsPeelParamsAdmissibleAtN(P=12, r_cap=0, n=1536) must be ADMITTED "
+	          "-- independently re-derived: sum 24,777,204 <= 2^31-1 -- a point "
+	          "the two-argument IsPeelParamsAdmissible rectangle over-refuses "
+	          "without the n operand");
+}
+
 static void TestT1822_Config_SiteRefusal_OutOfRangeSiteId() {
 	// §12 primitive-tier domain-extremity bullet: "IsGroupingAdmissibleAtSite/
 	// IsG1AdmissibleAtSite at site_id in {0, -1, 19, 1000}: each asserts refusal
@@ -21853,6 +21931,7 @@ int main(int argc, char** argv) {
 	TestT1822_Config_NormConsumerKCapBound();
 	TestT1822_Config_GroupingRefusedAtSite1();
 	TestT1822_Config_GroupingRefusedAtPeeledResidualSites();
+	TestT1822_Config_GroupingAdmittedAtOrdinarySites();
 	TestT1822_M2_PeelSelection_LowestIndexTieBreak();
 	TestT1822_M2_PeelSelection_Discrimination();
 	TestT1822_M2_P0_Identity();
@@ -21886,6 +21965,10 @@ int main(int argc, char** argv) {
 	// 2026-08-08; Claude/Curie/t1832-activation-scale-remedy-red-suite-test-
 	// design-2026-08-08.md §11).
 	TestT1822_Config_PeelParamsAdmissibleAtN_ArithmeticOverflowGuard_DomainExtremity();
+
+	// T-1847 -- Mendeleev's assertion-polarity audit F1/F2 (Curie, 2026-08-08;
+	// Claude/Mendeleev/t1845-t1822-polarity-audit-2026-08-08.md, D-SLM1986/1987).
+	TestT1822_Config_PeelParamsAdmissibleAtN_AdmitSide();
 
 	TestT1822_Config_SiteRefusal_OutOfRangeSiteId();
 	TestT1822_Site16_DownProjRankPFixup_OutOfRangeIndexSkipped();
