@@ -59,6 +59,24 @@ widening closes the coverage gap immediately, independent of whether or when
 that move happens, and keeps working unchanged after it does (the sibling
 glob entry becomes redundant with the directory glob at that point, not
 wrong).
+
+WIDENED AGAIN AT THE T-1822 STAGE-A PRIMITIVE TIER (T-1834 O3, D-SLM1897;
+Claude/Vitruvius/t1822-activation-scale-remedy-design-2026-08-07.md §6.8):
+`src/t1822_activation_scale_remedy.cpp` calls `RequantTokenCodeWide` (a
+banned leaf) directly and by design -- the primitive tier is *supposed* to
+call C22 (`ComputeGroupedCode`'s own contract). The T-1834 review found this
+file re-creating the exact dark spot the S3.2 paragraph above already closed
+once: a new translation unit calling a banned leaf, placed outside
+`src/forward/`, with a source comment asserting the ban does not reach it --
+true today, and silently wrong the moment gate A6 wires this tier's read/
+write/join sweep and no structural check is watching the file. Closed the
+same way: `src/t1822_activation_scale_remedy.cpp` is added to
+_DEFAULT_FORWARD_GLOBS (scanned) AND to _DEFAULT_ALLOWLIST (certified, since
+its one banned-leaf call is by design) -- unlike `src/forward_sites.cpp`,
+which is scanned but not exempted, because this file's call is the certified
+exception rather than composition the ban exists to catch. Also added to
+_EXPECTED_REAL_FORWARD_FILES, so the real-population equality assertion
+below stays in agreement with the widened glob.
 """
 from __future__ import annotations
 
@@ -92,23 +110,26 @@ BANNED_LEAVES = (
 # a594dd2) is a second real forward-composition source that was deliberately
 # placed OUTSIDE src/forward/ (see module docstring) -- named here explicitly so
 # it is scanned starting now, rather than left dark until a future move brings it
-# under the directory glob on its own.
+# under the directory glob on its own. `src/t1822_activation_scale_remedy.cpp`
+# (T-1834 O3, D-SLM1897) is a third such source, named here for the same reason.
 _DEFAULT_FORWARD_GLOBS = (
     "src/forward/**/*.cpp",
     "src/forward/**/*.h",
     "src/forward_sites.cpp",
+    "src/t1822_activation_scale_remedy.cpp",
 )
 
 # The real forward-composition population this module's own end-to-end test
 # (test_check_no_forward_leaf_calls.py::
 # test_main_end_to_end_against_the_real_default_glob_is_no_longer_vacuous)
 # asserts _DEFAULT_FORWARD_GLOBS resolves to EXACTLY -- a named, sized set
-# rather than a hardcoded count of one, so a third real file lands "correctly"
+# rather than a hardcoded count of one, so a fourth real file lands "correctly"
 # failing that assertion (per its own docstring) whatever N happens to be
 # today, without the assertion itself needing to change shape again.
 _EXPECTED_REAL_FORWARD_FILES = (
     "src/forward/checked_chain_funnel.cpp",
     "src/forward/forward_sites.cpp",
+    "src/t1822_activation_scale_remedy.cpp",
 )
 
 # Relative-to-repo-root paths permitted to name a banned leaf directly. Only a
@@ -121,8 +142,16 @@ _EXPECTED_REAL_FORWARD_FILES = (
 # allowlisted supplies them explicitly to scan_files (see
 # test_check_no_forward_leaf_calls.py's allowlist-control cells), rather than
 # carrying them here where they can never be consulted.
+#
+# `src/t1822_activation_scale_remedy.cpp` (T-1834 O3, D-SLM1897) is allowlisted
+# alongside the funnel's own file: its one banned-leaf call
+# (`RequantTokenCodeWide`, via `ComputeGroupedCode`) is by design -- the
+# primitive tier is supposed to call C22 -- so it is CERTIFIED here rather than
+# left to fail the scan the way `src/forward_sites.cpp` (scanned, not
+# allowlisted) is meant to.
 _DEFAULT_ALLOWLIST = (
     "src/forward/checked_chain_funnel.cpp",
+    "src/t1822_activation_scale_remedy.cpp",
 )
 
 # The funnel's own two documented entry points (Sec7.2): these are EXPECTED to

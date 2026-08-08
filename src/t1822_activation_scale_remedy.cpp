@@ -3,11 +3,16 @@
 // contract, and Claude/Vitruvius/t1822-activation-scale-remedy-design-2026-08-07.md
 // §4-§6 for the mechanisms these functions implement at the VALUE level.
 //
-// This is NOT a forward-composition translation unit (it lives outside src/forward/
-// and is not named in tests/ci/check_no_forward_leaf_calls.py's scanned globs) --
-// the primitive tier calls superslm::RequantTokenCodeWide directly by design
-// (ComputeGroupedCode's own contract: "not a re-implementation of C22 — a call to
-// it"), which the forward-leaf ban would otherwise refuse.
+// T-1834 O3 (D-SLM1897): this file is a SCANNED-AND-ALLOWLISTED leaf caller of
+// tests/ci/check_no_forward_leaf_calls.py's forward-leaf ban -- named in both
+// _DEFAULT_FORWARD_GLOBS and _DEFAULT_ALLOWLIST, rather than sitting outside
+// the scan root the way it did before this fold. The primitive tier calls
+// superslm::RequantTokenCodeWide directly by design (ComputeGroupedCode's own
+// contract: "not a re-implementation of C22 — a call to it"), which the
+// forward-leaf ban would otherwise refuse; the allowlist entry certifies that
+// call explicitly instead of the file going dark to the check by living
+// outside its glob root, the exact past scar that check's own module
+// docstring records.
 #include "superslm/t1822_activation_scale_remedy.h"
 
 #include <vector>
@@ -47,8 +52,21 @@ inline Wide128 WideShrFull(Wide128 v, int k) {
 	if (k >= 128) return static_cast<Wide128>(0);
 	return v >> k;
 }
+// Full logical left shift, k in [0, 127] -- the F2/F6 rewrites' own mirror of
+// WideShrFull above, needed to compose `group_max_abs << k` and `2^r_cap << r_cap`
+// at full width rather than in the plain int64 arithmetic F1-F3's casebook shows
+// wraps (T-1834, §6.8).
+inline Wide128 WideShlFull(Wide128 v, int k) {
+	if (k <= 0) return v;
+	if (k >= 128) return static_cast<Wide128>(0);
+	return v << k;
+}
+// 128-bit + 128-bit addition, exact whenever the true sum fits 128 bits (every
+// call site below bounds both operands well under that before adding).
+inline Wide128 WideAddWide(Wide128 a, Wide128 b) { return a + b; }
 inline uint64_t WideHi(Wide128 v) { return static_cast<uint64_t>(v >> 64); }
 inline uint64_t WideLo(Wide128 v) { return static_cast<uint64_t>(v); }
+inline bool WideLessEqual(Wide128 a, Wide128 b) { return a <= b; }
 
 #else  // MSVC and any other toolchain without a native 128-bit integer.
 
@@ -94,8 +112,27 @@ inline Wide128 WideShrFull(Wide128 v, int k) {
 	return Wide128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
 }
 
+// Full logical left shift, k in [0, 127] -- the struct-path mirror of
+// WideShrFull above (F2/F6 rewrites, §6.8).
+inline Wide128 WideShlFull(Wide128 v, int k) {
+	if (k <= 0) return v;
+	if (k >= 128) return Wide128{0, 0};
+	if (k >= 64) return Wide128{0, v.lo << (k - 64)};
+	return Wide128{v.lo << k, (v.hi << k) | (v.lo >> (64 - k))};
+}
+
+inline Wide128 WideAddWide(Wide128 a, Wide128 b) {
+	const uint64_t lo = a.lo + b.lo;
+	const uint64_t carry = (lo < a.lo) ? 1u : 0u;
+	return Wide128{lo, a.hi + b.hi + carry};
+}
+
 inline uint64_t WideHi(Wide128 v) { return v.hi; }
 inline uint64_t WideLo(Wide128 v) { return v.lo; }
+inline bool WideLessEqual(Wide128 a, Wide128 b) {
+	if (a.hi != b.hi) return a.hi < b.hi;
+	return a.lo <= b.lo;
+}
 
 #endif
 
@@ -114,23 +151,36 @@ inline uint64_t AbsMagnitude(int64_t v) {
 // ---------------------------------------------------------------------------
 
 int ComputeRefinementExponent(int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
-	// §4.1 step 2: the largest k in [0, k_cap] with (group_max_abs << k) <= row_max_abs.
-	// Constructed as a DOWNWARD search (largest-first) -- deliberately the opposite
-	// direction from ReferenceRefinementExponent's own upward while-loop below, so
-	// the two are independent constructions of the same monotonic predicate rather
-	// than one loop direction copied into two functions.
+	// §4.1 step 2, T-1834 F1 remedy (§6.8, D-SLM1893): the largest k in
+	// [0, k_cap] with (group_max_abs << k) <= row_max_abs, rewritten as
+	// group_max_abs <= (row_max_abs >> k) -- the identical predicate for every
+	// non-negative group_max_abs/row_max_abs pair (exact integer floor division
+	// by 2^k on the right instead of a left shift that can wrap on the left),
+	// with no reachable overflow anywhere in the whole int64_t domain
+	// (T-1838's exhaustive-plus-random strike, 264,000+200,000 cases, zero
+	// mismatches). Constructed as a DOWNWARD search (largest-first) --
+	// deliberately the opposite direction from ReferenceRefinementExponent's own
+	// upward while-loop below, so the two are independent constructions of the
+	// same monotonic predicate rather than one loop direction copied into two
+	// functions.
 	for (int k = k_cap; k > 0; --k) {
-		if ((group_max_abs << k) <= row_max_abs) return k;
+		if (group_max_abs <= (row_max_abs >> k)) return k;
 	}
 	return 0;
 }
 
 int ComputeRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
 	// §6.2, D-SLM1816: k = 0 is always admissible; otherwise the largest k in
-	// [0, k_cap] with 127*(group_max_abs << k) <= 90*row_max_abs. Same downward-
-	// search shape as the standard path above, independent predicate.
+	// [0, k_cap] with 127*(group_max_abs << k) <= 90*row_max_abs. T-1834 F2
+	// remedy (§6.8, D-SLM1893): both constant multiplies are computed in the
+	// file's own Wide128 facility rather than plain int64_t, which overflows
+	// (UB) at both the shift and the x127 well inside this design's domain.
+	// Same downward-search shape as the standard path above, independent
+	// predicate.
 	for (int k = k_cap; k > 0; --k) {
-		if (127 * (group_max_abs << k) <= 90 * row_max_abs) return k;
+		const Wide128 lhs = WideShlFull(WideMul64(static_cast<uint64_t>(group_max_abs), 127u), k);
+		const Wide128 rhs = WideMul64(static_cast<uint64_t>(row_max_abs), 90u);
+		if (WideLessEqual(lhs, rhs)) return k;
 	}
 	return 0;
 }
@@ -138,23 +188,53 @@ int ComputeRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_abs
 int8_t ComputeGroupedCode(int64_t wide_value, int k_g, int64_t r, int s) {
 	// §4.1 step 3, D-SLM1663's kinship framing: a CALL to C22
 	// (superslm::RequantTokenCodeWide) on the pre-shifted operand, not a
-	// re-implementation of it.
+	// re-implementation of it. T-1834 F4 remedy (§6.8, D-SLM1893): the
+	// pre-shift is applied in plain int64_t and can wrap before the call ever
+	// sees it, breaking RequantTokenCodeWide's own documented totality
+	// (intmath.h:242-247). Saturate BEFORE shifting rather than after: when
+	// |wide_value| > (INT64_MAX >> k_g) the exact pre-shift value would not fit
+	// int64_t, so the clamp code is returned directly -- 127/-127/0 by sign,
+	// mirroring C22's own overflow-into-clamp semantics at the one point
+	// upstream of it where the shift itself is what could wrap. Otherwise the
+	// shift is exact (no overflow reachable, by the guard) and C22 is called
+	// exactly as before.
+	const int shift = k_g > 0 ? k_g : 0;
+	const uint64_t abs_v = AbsMagnitude(wide_value);
+	const uint64_t limit = static_cast<uint64_t>(INT64_MAX) >> shift;
+	if (abs_v > limit) {
+		if (wide_value > 0) return 127;
+		if (wide_value < 0) return -127;
+		return 0;
+	}
 	return superslm::RequantTokenCodeWide(wide_value << k_g, r, s);
 }
 
 int ReferenceRefinementExponent(int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
 	// §11's A6-independent differential reference (D-SLM1614(i)): authored without
-	// reading ComputeRefinementExponent's own body.
+	// reading ComputeRefinementExponent's own body. T-1834 F1 remedy (§6.8,
+	// D-SLM1893): "both sides of the differential were wrong together, and a fix
+	// on only one side would make the cell fail where it should now pass" --
+	// this side takes the identical right-shift rewrite, kept in its own upward
+	// while-loop direction so the two functions remain independent constructions
+	// of the same predicate rather than one direction copied into two.
 	int k = 0;
-	while (k < k_cap && (group_max_abs << (k + 1)) <= row_max_abs) ++k;
+	while (k < k_cap && group_max_abs <= (row_max_abs >> (k + 1))) ++k;
 	return k;
 }
 
 int ReferenceRefinementExponentRopeSafe(int64_t group_max_abs, int64_t row_max_abs, int k_cap) {
 	// Mendeleev F1 (D-SLM1881): authored without reading
-	// ComputeRefinementExponentRopeSafe's own body.
+	// ComputeRefinementExponentRopeSafe's own body. T-1834 F2 remedy (§6.8,
+	// D-SLM1893): both constant multiplies computed in Wide128, same as the
+	// primitive above, kept in this function's own upward while-loop direction.
 	int k = 0;
-	while (k < k_cap && 127 * (group_max_abs << (k + 1)) <= 90 * row_max_abs) ++k;
+	while (k < k_cap) {
+		const Wide128 lhs =
+		    WideShlFull(WideMul64(static_cast<uint64_t>(group_max_abs), 127u), k + 1);
+		const Wide128 rhs = WideMul64(static_cast<uint64_t>(row_max_abs), 90u);
+		if (!WideLessEqual(lhs, rhs)) break;
+		++k;
+	}
 	return k;
 }
 
@@ -171,6 +251,11 @@ bool IsNormConsumerKCapAdmissible(int k_cap) {
 }
 
 bool IsGroupingAdmissibleAtSite(int site_id, int k_cap_requested) {
+	// T-1834 F7 (D-SLM1896): site_id outside §6.6's [1, 18] numbering is a
+	// configuration error, and the predicate whose entire job is to refuse
+	// inadmissible configurations must reject it rather than fall through to
+	// `true`.
+	if (site_id < 1 || site_id > 18) return false;
 	// §8.5, D-SLM1672: site 1 (embed, committed-state) is refused unconditionally --
 	// it has no M1 role at all, so even k_cap_requested == 0 is refused.
 	if (site_id == 1) return false;
@@ -181,6 +266,11 @@ bool IsGroupingAdmissibleAtSite(int site_id, int k_cap_requested) {
 }
 
 bool IsG1AdmissibleAtSite(int site_id, int64_t group_size) {
+	// T-1834 F7 (D-SLM1896): same out-of-range refusal as
+	// IsGroupingAdmissibleAtSite above -- site_id outside [1, 18] is refused
+	// rather than falling through to `site_id != 3` (which evaluates true for
+	// every out-of-range id).
+	if (site_id < 1 || site_id > 18) return false;
 	// §6.2, D-SLM1679: G = 1 is refused only at site 3 (the RoPE pair-in-group
 	// floor is 2); admissible everywhere else, and the G == 1 restriction has
 	// nothing to say about any other group size.
@@ -196,6 +286,14 @@ size_t SelectPeelIndices(const int64_t* wide_row, size_t n, int p, PeelRecord* o
 	// §5 step 1: the min(p, n) largest-magnitude channels, lowest-index tie-break.
 	// Re-derives the set fresh from THIS row on every call -- no static/cached
 	// state, which is what audit F9's discrimination cell exercises.
+	//
+	// T-1834 F5 (D-SLM1895): PeelRecord::index is uint16_t; a row wider than
+	// UINT16_MAX would have its true argmax index silently truncated by the
+	// narrowing cast below. Reachable by configuration (a wider intermediate),
+	// not at this design's pinned n = 1536, but this file's own house
+	// convention is explicit domain rejection over a silent narrow -- applied
+	// here at the one place it was missing.
+	if (n > static_cast<size_t>(UINT16_MAX)) return 0;
 	if (p <= 0 || n == 0) return 0;
 	const size_t count = static_cast<size_t>(p) < n ? static_cast<size_t>(p) : n;
 
@@ -224,9 +322,16 @@ size_t SelectPeelIndices(const int64_t* wide_row, size_t n, int p, PeelRecord* o
 }
 
 int64_t CeilDivPow2(int64_t x, int r_cap) {
-	// Exact integer ceiling division by 2^r_cap: (x + 2^r_cap - 1) >> r_cap.
-	const int64_t bias = (r_cap > 0) ? ((int64_t{1} << r_cap) - 1) : 0;
-	return (x + bias) >> r_cap;
+	// T-1834 F3 remedy (§6.8, D-SLM1892/1893): the biased-add-then-shift form
+	// overflows (UB) for x > INT64_MAX - bias, and does so at exactly the
+	// magnitude MaxAbsReduceWide's own deliberate saturation produces
+	// (intmath.h:202-216). Rewritten as the remainder form -- exact for the
+	// whole non-negative int64_t domain, including INT64_MAX, with no addition
+	// that can overflow: (x >> r_cap) + (1 if the low r_cap bits are nonzero
+	// else 0). Valid for x >= 0, the only domain unpeeled_max_abs and
+	// full_row_max_abs occupy (C20's >= 1 guard).
+	const int64_t bias_mask = (int64_t{1} << r_cap) - 1;
+	return (x >> r_cap) + ((x & bias_mask) != 0 ? 1 : 0);
 }
 
 int64_t ComputePeelGrid(int64_t unpeeled_max_abs, int64_t full_row_max_abs, int r_cap) {
@@ -297,8 +402,43 @@ RemedyStatus ReferencePeeledCode(int64_t wide_value, int64_t r, int s, int64_t* 
 
 bool IsPeelParamsAdmissible(int p, int r_cap) {
 	// §6.3c / E13: P <= 7 at r_cap = 7 is admissible in this design's swept range;
-	// P = 8 exceeds the residual consumer's executed headroom bound.
+	// P = 8 exceeds the residual consumer's executed headroom bound. This is the
+	// swept-range RECTANGLE, sound only at the pinned n = 1536 (T-1834 F6) --
+	// IsPeelParamsAdmissibleAtN below is the coupled, n-dependent region.
 	return p >= 0 && p <= 7 && r_cap >= 0 && r_cap <= 7;
+}
+
+bool IsPeelParamsAdmissibleAtN(int p, int r_cap, int64_t n) {
+	// T-1834 F6 remedy (§6.3c, D-SLM1896/1898): the coupled, n-DEPENDENT region
+	// -- P*C_max^2 + (n-P)*127^2 <= 2^31 - 1, with C_max = 2^r_cap * 2^7 (the
+	// checked peeled-code bound at that r_cap). IsPeelParamsAdmissible above is
+	// a rectangle that never over-admits at the pinned n = 1536 this design
+	// sweeps at, but its name promises this region and its two-argument
+	// signature cannot express n's own effect on the bound (over-refuses at low
+	// r_cap, under-refuses at n above the pin). Evaluated directly here in the
+	// file's own Wide128 facility, so a large P or r_cap cannot silently wrap
+	// the way this fold's other primitives did before their own remedy.
+	if (p < 0 || r_cap < 0 || n < static_cast<int64_t>(p)) return false;
+
+	const uint64_t remainder_channels = static_cast<uint64_t>(n) - static_cast<uint64_t>(p);
+	const Wide128 remainder_term = WideMul64(remainder_channels, uint64_t{127u * 127u});
+
+	Wide128 p_term{};  // zero-initialized; stays zero when p == 0 regardless of C_max
+	if (p > 0) {
+		// C_max = 2^r_cap * 2^7, via a saturating wide shift rather than a
+		// plain-int64 one -- an r_cap large enough to push C_max (or C_max^2)
+		// past 64 bits refuses here instead of silently wrapping, matching
+		// F1-F4's own domain-total treatment.
+		const Wide128 c_max = WideShlFull(WideMul64(1u, 128u), r_cap);
+		if (WideHi(c_max) != 0) return false;
+		const Wide128 c_max_sq = WideMul64(WideLo(c_max), WideLo(c_max));
+		if (WideHi(c_max_sq) != 0) return false;
+		p_term = WideMul64(WideLo(c_max_sq), static_cast<uint64_t>(p));
+	}
+
+	const Wide128 sum = WideAddWide(p_term, remainder_term);
+	if (WideHi(sum) != 0) return false;
+	return WideLo(sum) <= static_cast<uint64_t>((int64_t{1} << 31) - 1);
 }
 
 void ApplyPeelRankPFixup(int64_t* acc, size_t out_channels, const PeelRecord* records,
@@ -307,11 +447,18 @@ void ApplyPeelRankPFixup(int64_t* acc, size_t out_channels, const PeelRecord* re
 	// of records[p].c_star * weight[records[p].index * out_channels + j] -- weight
 	// is ROW-MAJOR [in_channels x out_channels]. acc is read-modify-write: it
 	// already holds the bulk accumulate on entry.
-	(void)in_channels;  // documents the weight matrix's own shape; not otherwise needed
+	//
+	// T-1834 F8 (D-SLM1896): in_channels is the one bound this function holds
+	// alongside the index it guards; a record whose index is >= in_channels is
+	// skipped rather than read out of the weight matrix. Given F5 can produce
+	// exactly such an index at a caller that bypasses SelectPeelIndices' own
+	// guard (a test, or a future direct PeelRecord construction), this closes
+	// the hole F5's fix would otherwise still leave open here.
 	for (size_t j = 0; j < out_channels; ++j) {
 		int64_t sum = 0;
 		for (size_t p = 0; p < record_count; ++p) {
 			const size_t idx = records[p].index;
+			if (idx >= in_channels) continue;
 			sum += records[p].c_star * static_cast<int64_t>(weight[idx * out_channels + j]);
 		}
 		acc[j] += sum;

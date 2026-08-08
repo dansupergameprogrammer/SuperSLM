@@ -134,11 +134,10 @@ bool IsPeelParamsAdmissible(int p, int r_cap);
 // the coupled, n-DEPENDENT inequality P*C_max^2 + (n-P)*127^2 <= 2^31 - 1, with
 // C_max = 2^r_cap * 2^7 (the checked peeled-code bound at that r_cap). This
 // function evaluates that inequality directly, taking n as its own operand
-// rather than assuming the pinned row width. Declared, not defined -- the F6
-// remedy is stage-A build-seat work (Claude/Curie's own red-first discipline);
-// this red suite calls it to pin the coupled-inequality claim independently of
-// the swept-range rectangle above, which the two-argument form cannot express
-// (T-1838, D-SLM1898).
+// rather than assuming the pinned row width. Defined in the .cpp (T-1840,
+// Brunel): the coupled inequality is evaluated in the file's own Wide128
+// facility so a large P or r_cap refuses rather than silently wraps, matching
+// F1-F4's own whole-int64_t-domain treatment (T-1838, D-SLM1898).
 bool IsPeelParamsAdmissibleAtN(int p, int r_cap, int64_t n);
 
 // §5 step 4, a GEMM consumer's rank-P fix-up (site 16's down_proj, §12 composition
