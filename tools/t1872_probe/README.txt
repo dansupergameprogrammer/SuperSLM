@@ -25,8 +25,10 @@ HOW TO RUN IT
 2. Open this folder.
 3. Double-click "run_probe.bat".
 4. A black window opens and prints progress. Let it run -- it can take up to
-   ~15-20 minutes worst case (usually much faster), most of that is the
-   model file loading and the ROCm runtime's first-time warm-up.
+   ~27 minutes in the worst case (every check timing out), but that is a
+   pessimistic ceiling, not a typical run -- most of the real time is the
+   model file loading from the drive and the ROCm runtime's first-time
+   warm-up, usually a few minutes total.
 5. When it's done, it says "Done" and waits for you to press a key.
 6. Look at "RESULTS.txt" in this same folder -- that's the answer, in plain
    English, no digging required.

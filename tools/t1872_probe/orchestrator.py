@@ -30,8 +30,8 @@ RESULTS_DIR = BUNDLE_ROOT / "results"
 STAGES = [
     ("stage_import", "Q1: does PyTorch import and see the device as gfx1100?", 60),
     ("stage_bf16", "Q2: does bf16 work, natively or at all?", 60),
-    ("stage_forward", "Q3: one real forward over one real prompt -- output sane?", 300),
-    ("stage_throughput", "Q4: measured throughput (s/doc), matching the design's cost table", 600),
+    ("stage_forward", "Q3: one real forward over one real prompt -- output sane?", 600),
+    ("stage_throughput", "Q4: measured throughput (s/doc), matching the design's cost table", 900),
 ]
 
 
