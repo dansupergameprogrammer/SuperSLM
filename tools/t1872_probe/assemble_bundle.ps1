@@ -130,13 +130,27 @@ $modelFiles = @(
 )
 foreach ($f in $modelFiles) {
     $src = Join-Path $ModelDir $f
-    if (Test-Path $src) {
-        Copy-Item -Path (Get-Item $src).Target -ErrorAction SilentlyContinue -Destination "$OutDir\model\$f" -Force
-        if (-not (Test-Path "$OutDir\model\$f")) {
-            Copy-Item -Path $src -Destination "$OutDir\model\$f" -Force
-        }
-    } else {
+    $dst = "$OutDir\model\$f"
+    if (-not (Test-Path $src)) {
         Write-Warning "Expected model file not found: $src"
+        continue
+    }
+    $item = Get-Item $src -Force
+    if ($item.LinkType) {
+        # HuggingFace hub-cache snapshots are symlinks into ../../blobs/<hash>, stored as a
+        # RELATIVE target. .Target resolves relative to the symlink's OWN directory, never to
+        # $PWD -- Copy-Item -Path <relative target> resolves against $PWD instead and silently
+        # copies the wrong file (or nothing) if $PWD happens to differ. Confirmed necessary by
+        # execution against this project's real hub cache, not assumed.
+        $target = $item.Target
+        if ($target -is [array]) { $target = $target[0] }
+        if (-not [System.IO.Path]::IsPathRooted($target)) {
+            $target = Join-Path (Split-Path $src -Parent) $target
+        }
+        $resolved = [System.IO.Path]::GetFullPath($target)
+        Copy-Item -Path $resolved -Destination $dst -Force
+    } else {
+        Copy-Item -Path $src -Destination $dst -Force
     }
 }
 Get-ChildItem "$OutDir\model" | ForEach-Object {
