@@ -10,9 +10,16 @@ stays responsive no matter what the child does, and `subprocess.run(timeout=...)
 kills a child that outlives its budget rather than leaving Dan staring at a
 frozen window.
 
-One entry point for Dan: run_probe.bat calls this file with the bundle's own
-portable Python. Nothing here reads or writes anything outside the bundle
-directory itself.
+One entry point for Dan: run_probe.bat (at the drive root) extracts the shipped
+archive to a temporary local-disk folder, runs THIS file from there with the
+extracted portable Python, then deletes the temporary folder on its way out --
+see run_probe.ps1 for that extract/run/cleanup sequence. Because the working
+copy this script runs from lives in a temp folder that gets deleted, results
+must NOT be written next to this script -- they are written to
+T1872_RESULTS_DIR (an environment variable run_probe.ps1 sets to the drive
+itself) so RESULTS.txt survives the cleanup. If that variable is unset (e.g.
+running this file directly during development, as this project's own build
+sessions do), results fall back to BUNDLE_ROOT so nothing breaks standalone.
 """
 import json
 import os
@@ -24,7 +31,8 @@ from pathlib import Path
 PROBE_DIR = Path(__file__).resolve().parent
 BUNDLE_ROOT = PROBE_DIR.parent
 PYTHON_EXE = BUNDLE_ROOT / "python" / "python.exe"
-RESULTS_DIR = BUNDLE_ROOT / "results"
+RESULTS_OUTPUT_ROOT = Path(os.environ.get("T1872_RESULTS_DIR", str(BUNDLE_ROOT)))
+RESULTS_DIR = RESULTS_OUTPUT_ROOT / "results"
 
 # (stage module, human question, timeout seconds)
 STAGES = [
@@ -101,14 +109,15 @@ def main() -> int:
     RESULTS_DIR.mkdir(exist_ok=True)
     log_path = RESULTS_DIR / "full_log.txt"
     results_json_path = RESULTS_DIR / "results.json"
-    results_txt_path = BUNDLE_ROOT / "RESULTS.txt"
+    results_txt_path = RESULTS_OUTPUT_ROOT / "RESULTS.txt"
 
     all_results = []
     all_logs = []
     overall_start = time.time()
 
     print("T-1872 portable feasibility probe")
-    print(f"Bundle root: {BUNDLE_ROOT}")
+    print(f"Bundle root (running from, temporary): {BUNDLE_ROOT}")
+    print(f"Results output root (persists after cleanup): {RESULTS_OUTPUT_ROOT}")
     print(f"Python: {PYTHON_EXE}")
     print(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 

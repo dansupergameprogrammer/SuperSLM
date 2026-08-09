@@ -13,7 +13,7 @@
   portable Python, and the model checkpoint are fetched/copied fresh each run
   and never enter version control.
 
-  Six steps, each idempotent (safe to re-run; skips work already done):
+  Seven steps, each idempotent (safe to re-run; skips work already done):
     1. Download the Python 3.12 embeddable distribution and bootstrap pip.
     2. Download AMD's official Windows ROCm 7.2.1 SDK wheels + the matching
        torch 2.9.1+rocm7.2.1 wheel for Python 3.12 (from repo.radeon.com,
@@ -25,15 +25,28 @@
        identical checkpoint the RTX 2080 Super harness uses) into the bundle,
        DEREFERENCING the HuggingFace hub cache's symlinks -- exFAT/FAT32 drives
        do not support symlinks, so the files must be real copies.
-    5. Copy the probe source (this directory) into the bundle and patch the
-       portable Python's python312._pth file so "import common" works from a
-       stage script -- confirmed necessary by execution: the embeddable
-       distribution's isolated path mode does not add a script's own directory
-       to sys.path, and does not honor PYTHONPATH either.
-    6. Write the top-level run_probe.bat and README.txt.
+    5. Copy the probe source (this directory's probe\ subfolder) into the
+       bundle and patch the portable Python's python312._pth file so
+       "import common" works from a stage script -- confirmed necessary by
+       execution: the embeddable distribution's isolated path mode does not
+       add a script's own directory to sys.path, and does not honor
+       PYTHONPATH either.
+    6. Sanity checks: no symlinks anywhere, no file over 4 GiB.
+    7. Pack the whole source tree (model/probe/python) into ONE plain tar
+       archive at <OutDir>-drive\T1872_Probe.tar, alongside run_probe.bat,
+       run_probe.ps1, and README.txt -- THAT staging folder, not -OutDir
+       itself, is what gets copied to the target drive. A directory tree of
+       this many small files was measured copying to a budget USB flash drive
+       at 0.04 MB/s (the controller's random-write floor); one sequential
+       archive file avoids that floor entirely. Plain tar, not gzip: measured
+       on this bundle's own components, compression bought 20-27% smaller
+       output at roughly 1/20th of plain tar's throughput -- not worth it
+       unless the drive's SEQUENTIAL write speed is also unusually slow (see
+       the comment at Step 7 below for the arithmetic).
 
 .PARAMETER OutDir
-  Where to write the assembled bundle. Must be outside any git repository.
+  Where to write the assembled SOURCE TREE (not what goes on the drive --
+  see Step 7). Must be outside any git repository.
 
 .PARAMETER ModelDir
   Local path to the already-downloaded Qwen2.5-1.5B-Instruct HF snapshot
@@ -69,14 +82,14 @@ New-Item -ItemType Directory -Force -Path "$OutDir\model" | Out-Null
 # --- Step 1: portable Python 3.12 embeddable + pip ---
 $PyDir = "$OutDir\python"
 if (-not (Test-Path "$PyDir\python.exe")) {
-    Write-Host "[1/6] Downloading Python 3.12.10 embeddable distribution..."
+    Write-Host "[1/7] Downloading Python 3.12.10 embeddable distribution..."
     $zipPath = "$OutDir\python-3.12.10-embed-amd64.zip"
     Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile $zipPath
     Expand-Archive -Path $zipPath -DestinationPath $PyDir -Force
     Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "$OutDir\get-pip.py"
     & "$PyDir\python.exe" "$OutDir\get-pip.py" --no-warn-script-location
 } else {
-    Write-Host "[1/6] Portable Python already present, skipping."
+    Write-Host "[1/7] Portable Python already present, skipping."
 }
 
 # --- Step 2: AMD ROCm 7.2.1 Windows SDK + torch wheels ---
@@ -87,7 +100,7 @@ $RocmFiles = @(
     "rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl",
     "rocm-7.2.1.tar.gz"
 )
-Write-Host "[2/6] Downloading AMD ROCm 7.2.1 Windows SDK wheels + torch 2.9.1+rocm7.2.1..."
+Write-Host "[2/7] Downloading AMD ROCm 7.2.1 Windows SDK wheels + torch 2.9.1+rocm7.2.1..."
 foreach ($f in $RocmFiles) {
     $dest = "$OutDir\wheels\$f"
     if (-not (Test-Path $dest)) {
@@ -100,7 +113,7 @@ if (-not (Test-Path $torchWheel)) {
 }
 
 # --- Step 3: install everything into the portable Python ---
-Write-Host "[3/6] Installing ROCm SDK + torch + transformers stack (offline-capable after this step)..."
+Write-Host "[3/7] Installing ROCm SDK + torch + transformers stack (offline-capable after this step)..."
 $pipExe = "$PyDir\python.exe"
 
 # setuptools/wheel/mpmath must be present BEFORE torch, so its "rocm" sdist
@@ -123,7 +136,7 @@ $pipExe = "$PyDir\python.exe"
     "transformers==4.57.1" safetensors tokenizers huggingface_hub regex pyyaml numpy
 
 # --- Step 4: model checkpoint, symlinks dereferenced ---
-Write-Host "[4/6] Copying model checkpoint (dereferencing any hub-cache symlinks)..."
+Write-Host "[4/7] Copying model checkpoint (dereferencing any hub-cache symlinks)..."
 $modelFiles = @(
     "config.json", "generation_config.json", "merges.txt", "model.safetensors",
     "tokenizer.json", "tokenizer_config.json", "vocab.json"
@@ -160,11 +173,9 @@ Get-ChildItem "$OutDir\model" | ForEach-Object {
 }
 
 # --- Step 5: probe source + _pth patch ---
-Write-Host "[5/6] Copying probe source and patching python312._pth..."
+Write-Host "[5/7] Copying probe source and patching python312._pth..."
 New-Item -ItemType Directory -Force -Path "$OutDir\probe" | Out-Null
-Copy-Item -Path "$ProbeSrc\*.py" -Destination "$OutDir\probe\" -Force
-Copy-Item -Path "$ProbeSrc\README.txt" -Destination "$OutDir\README.txt" -Force
-Copy-Item -Path "$ProbeSrc\run_probe.bat" -Destination "$OutDir\run_probe.bat" -Force
+Copy-Item -Path "$ProbeSrc\probe\*.py" -Destination "$OutDir\probe\" -Force
 
 $pthPath = "$PyDir\python312._pth"
 $pthContent = Get-Content $pthPath -Raw
@@ -186,13 +197,46 @@ $promptLines = foreach ($line in $corpusLines) {
 $promptLines -join "`n" | Set-Content -Path "$OutDir\probe\prompts.jsonl" -NoNewline -Encoding utf8
 
 # --- Step 6: sanity ---
-Write-Host "[6/6] Verifying no symlinks anywhere in the bundle, and reporting sizes..."
+Write-Host "[6/7] Verifying no symlinks anywhere in the source tree, and no file exceeds 4 GiB..."
 $anyLinks = Get-ChildItem -Recurse -Force $OutDir | Where-Object { $_.Attributes -band [System.IO.FileAttributes]::ReparsePoint }
 if ($anyLinks) {
     Write-Warning "Symlinks/reparse points found in bundle -- these will NOT survive a copy to exFAT/FAT32:"
     $anyLinks | ForEach-Object { Write-Warning "  $($_.FullName)" }
 }
+$oversize = Get-ChildItem -Recurse -Force $OutDir -File | Where-Object { $_.Length -gt 4GB }
+if ($oversize) {
+    Write-Warning "File(s) exceed 4 GiB -- would not fit on a FAT32 target, though exFAT has no such limit:"
+    $oversize | ForEach-Object { Write-Warning ("  {0} ({1:N2} GB)" -f $_.FullName, ($_.Length / 1GB)) }
+}
 
-$totalSize = (Get-ChildItem -Recurse -Force $OutDir | Measure-Object -Property Length -Sum).Sum
-Write-Host ("=== Assembly complete. Total bundle size: {0:N2} GB ===" -f ($totalSize / 1GB))
-Write-Host "Copy the entire '$OutDir' folder to the target drive, then run run_probe.bat there."
+# --- Step 7: pack into ONE archive file, not a directory tree ---
+#
+# WHY: a directory tree of ~25,000 small files copies to a budget USB flash
+# drive at the controller's RANDOM-write floor, not its sequential one --
+# measured on this exact bundle at 0.04 MB/s (would have taken ~17 hours for
+# the remaining data). A single sequential archive file copies at the drive's
+# actual rated throughput instead. Plain tar (no compression) is used rather
+# than gzip: measured on this bundle's own two largest components,
+# model.safetensors compressed at 32.4 MB/s (20.5% smaller) and torch's DLL
+# tree at 42.7 MB/s (27.0% smaller) -- against plain tar's 771.7 MB/s (disk
+# read speed, negligible tar overhead). The compression time this would cost
+# on an 8.69 GB bundle (~4-5 minutes) is not recovered by the write-time saved
+# UNLESS the drive's SEQUENTIAL write speed is below roughly 8 MB/s, which
+# would itself be unusually slow even for a "budget" drive's sequential path
+# (the failure mode measured here was specifically the RANDOM-write floor).
+Write-Host "[7/7] Packing the source tree into one archive (plain tar, no compression -- see comment above)..."
+$DriveStagingDir = "$OutDir-drive"
+New-Item -ItemType Directory -Force -Path $DriveStagingDir | Out-Null
+$ArchivePath = "$DriveStagingDir\T1872_Probe.tar"
+& tar.exe -cf $ArchivePath -C $OutDir model probe python
+if ($LASTEXITCODE -ne 0) { throw "tar archive creation failed with exit code $LASTEXITCODE" }
+
+Copy-Item -Path "$ProbeSrc\run_probe.bat" -Destination "$DriveStagingDir\run_probe.bat" -Force
+Copy-Item -Path "$ProbeSrc\run_probe.ps1" -Destination "$DriveStagingDir\run_probe.ps1" -Force
+Copy-Item -Path "$ProbeSrc\README.txt" -Destination "$DriveStagingDir\README.txt" -Force
+
+$archiveSize = (Get-Item $ArchivePath).Length
+$totalSize = (Get-ChildItem -Recurse -Force $DriveStagingDir | Measure-Object -Property Length -Sum).Sum
+Write-Host ("=== Assembly complete. Archive: {0:N2} GB. Drive-staging folder total: {1:N2} GB ===" -f `
+    ($archiveSize / 1GB), ($totalSize / 1GB))
+Write-Host "Copy the entire '$DriveStagingDir' folder (NOT '$OutDir') to the target drive, then run run_probe.bat there."

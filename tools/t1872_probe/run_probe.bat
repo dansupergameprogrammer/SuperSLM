@@ -1,14 +1,13 @@
 @echo off
 REM T-1872 portable feasibility probe -- one entry point.
-REM Double-click this file, or run it from a command prompt. It reads and
-REM writes only inside this bundle folder; it does not install anything on
-REM this machine, does not touch PATH, the registry, or any driver, and
-REM leaves nothing behind once the bundle folder is deleted.
+REM Double-click this file, or run it from a command prompt.
+REM This extracts T1872_Probe.tar to a temporary local-disk folder, runs the
+REM probe there, then deletes that temporary folder automatically -- see
+REM run_probe.ps1 for the details and the cleanup guarantee.
 setlocal
-set BUNDLE=%~dp0
-"%BUNDLE%python\python.exe" "%BUNDLE%probe\orchestrator.py"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_probe.ps1"
 echo.
 echo ============================================================
-echo Done. Results are in RESULTS.txt in this same folder.
+echo Done. Results are in RESULTS.txt in this same folder (on the drive).
 echo ============================================================
 pause
