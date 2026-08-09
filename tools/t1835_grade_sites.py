@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -141,12 +142,20 @@ def main(argv=None) -> int:
             se = float(d.std(ddof=1) / np.sqrt(len(d))) if len(d) > 1 else float("nan")
             paired_rp = 1.96 * se
             unpaired_rp = rows[name]["rp@1"] + rows[anchor]["rp@1"]
+            # A zero (or NaN) paired RP means the paired contrast has no resolving power to
+            # divide by -- whether because the arm is bit-identical to the anchor (mean and SE
+            # both exactly zero, T-1863) or for any other reason the per-document SE collapses
+            # to zero. `inf` in that slot made every such arm print RESOLVED regardless of
+            # effect size (T-1862 found 52/52 duplicate-baseline arms doing exactly this). The
+            # ratio is undefined, not infinite: report it as NaN and let the verdict below
+            # refuse to call it resolved rather than silently passing a divide-by-zero through
+            # as the strongest possible verdict.
             c[name] = {
                 "delta_recall1": mean,
                 "paired_rp": paired_rp,
                 "unpaired_rp": unpaired_rp,
-                "paired_ratio": abs(mean) / paired_rp if paired_rp > 0 else float("inf"),
-                "unpaired_ratio": abs(mean) / unpaired_rp if unpaired_rp > 0 else float("inf"),
+                "paired_ratio": abs(mean) / paired_rp if paired_rp > 0 else float("nan"),
+                "unpaired_ratio": abs(mean) / unpaired_rp if unpaired_rp > 0 else float("nan"),
             }
         return c
 
@@ -162,7 +171,16 @@ def main(argv=None) -> int:
     print(f"\n=== contrast against `{base}` on recall@1 ===")
     for name in sorted(contrasts, key=lambda n: -contrasts[n]["delta_recall1"]):
         c = contrasts[name]
-        v = "RESOLVED" if c["paired_ratio"] > 1.0 else "not resolved"
+        # A NaN paired_ratio (paired RP == 0) is refused explicitly rather than falling
+        # through to "not resolved" -- `nan > 1.0` is already False in Python, so a silent
+        # fallthrough would read identically to a real negative test and hide that no paired
+        # comparison was actually possible here (T-1863).
+        if math.isnan(c["paired_ratio"]):
+            v = "UNDEFINED (paired RP = 0)"
+        elif c["paired_ratio"] > 1.0:
+            v = "RESOLVED"
+        else:
+            v = "not resolved"
         print(f"  {name:38s} {c['delta_recall1']:+.6f}   paired RP {c['paired_rp']:.4f} "
               f"({c['paired_ratio']:.2f}x, {v})   unpaired RP {c['unpaired_rp']:.4f} "
               f"({c['unpaired_ratio']:.2f}x)")
