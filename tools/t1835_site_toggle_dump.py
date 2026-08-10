@@ -142,6 +142,24 @@ GROUPS = {
 }
 
 
+SITE4 = 4  # k_proj_landing (K's role: read by the softmax-bound dot product)
+SITE5 = 5  # v_proj_landing (V's role: read by the weighted-sum context accumulate)
+
+# T-1879's two new arms: the same single site as `only04_k_proj_landing`/
+# `only05_v_proj_landing`, but landed on the OTHER site's already-calibrated scale rather
+# than its own. `SCALE_SWAP_ARMS` names which of the two swap directions each arm requests;
+# `install_forward`/`make_attention_forward` read it and substitute the scale array fed to
+# `rt_static` at that one site -- no new derivation, the same legality class the site's own
+# construction already carries (`Claude/Vitruvius/t1877-kv-asymmetry-measurement-pricing-2026-08-09.md`
+# §4's gate A6(G)).
+ONLYK_VSCALE = "onlyK_vscale"   # site 4 (K's role), landed on V's calibrated scale
+ONLYV_KSCALE = "onlyV_kscale"   # site 5 (V's role), landed on K's calibrated scale
+SCALE_SWAP_ARMS = {
+    ONLYK_VSCALE: SITE4,
+    ONLYV_KSCALE: SITE5,
+}
+
+
 def build_arms() -> list[tuple[str, frozenset]]:
     arms: list[tuple[str, frozenset]] = [
         ("base", ALL_SITES),
@@ -155,6 +173,11 @@ def build_arms() -> list[tuple[str, frozenset]]:
         arms.append((f"offG_{g}", ALL_SITES - members))
     for g, members in GROUPS.items():
         arms.append((f"onlyG_{g}", members))
+    # T-1879: the role x scale swap arms. Same site config as the corresponding `only0N_*`
+    # arm above; the scale substitution is applied inside `make_attention_forward`, gated by
+    # `SCALE_SWAP_ARMS`, never by the site config itself.
+    arms.append((ONLYK_VSCALE, frozenset({SITE4})))
+    arms.append((ONLYV_KSCALE, frozenset({SITE5})))
     names = [a[0] for a in arms]
     assert len(names) == len(set(names)), "duplicate arm name"
     return arms
@@ -246,6 +269,15 @@ class ArmGate:
             col = [s in cfg for cfg in self.configs]
             self._m[s] = torch.tensor(col, dtype=torch.bool, device=device)
             self._any[s] = any(col)
+        # T-1879: per-batch-element scale-swap request, keyed by the site the swap applies
+        # to (4 or 5 only -- `SCALE_SWAP_ARMS`'s only values). `swap_mask(site)` is all-False
+        # whenever no arm in this run requests a swap at that site, so the ordinary
+        # `only04_k_proj_landing`/`only05_v_proj_landing` arms (and every other arm) are
+        # completely unaffected -- the swap is additive, not a change to the existing sites.
+        self._swap = {}
+        for s in (SITE4, SITE5):
+            col = [SCALE_SWAP_ARMS.get(name) == s for name in self.names]
+            self._swap[s] = torch.tensor(col, dtype=torch.bool, device=device)
 
     def on_anywhere(self, site: int) -> bool:
         return self._any[site]
@@ -255,6 +287,15 @@ class ArmGate:
         import torch
         m = self._m[site].view(-1, *([1] * (landed.dim() - 1)))
         return torch.where(m, landed, original)
+
+    def swap_mask(self, site: int):
+        return self._swap[site]
+
+    def select(self, mask, a, b):
+        """`a` where `mask` (batch axis 0), `b` elsewhere. Same broadcasting as `apply`."""
+        import torch
+        m = mask.view(-1, *([1] * (a.dim() - 1)))
+        return torch.where(m, a, b)
 
 
 # ==============================================================================
@@ -322,10 +363,21 @@ def install_forward(model, k_scales, v_scales, gate: ArmGate):
             # site 3: q_proj.requant -- dynamic, over the WHOLE 1536-wide row.
             q_landed, q_delta = rt_dynamic(q_flat)
             q_flat = gate.apply(3, q_landed, q_flat)
-            # sites 4/5: the STATIC per-head K/V landing.
+            # sites 4/5: the STATIC per-head K/V landing. T-1879 adds a per-batch-element
+            # scale swap: an arm named in `SCALE_SWAP_ARMS` at this site is landed on the
+            # OTHER site's already-calibrated scale (read straight from `k_scales`/
+            # `v_scales` -- the same arrays `read_kv_landing_scales` already produced, no new
+            # derivation) instead of its own. Every arm not named there gets `k_scale`/
+            # `v_scale` exactly as before -- `swap_mask` is all-False for them.
             if k_scale is not None:
-                k_flat = gate.apply(4, rt_static(k_flat, k_scale), k_flat)
-                v_flat = gate.apply(5, rt_static(v_flat, v_scale), v_flat)
+                k_landed_own = rt_static(k_flat, k_scale)
+                k_landed_swap = rt_static(k_flat, v_scale)
+                k_landed = gate.select(gate.swap_mask(4), k_landed_swap, k_landed_own)
+                k_flat = gate.apply(4, k_landed, k_flat)
+                v_landed_own = rt_static(v_flat, v_scale)
+                v_landed_swap = rt_static(v_flat, k_scale)
+                v_landed = gate.select(gate.swap_mask(5), v_landed_swap, v_landed_own)
+                v_flat = gate.apply(5, v_landed, v_flat)
 
             query_states = q_flat.view(hidden_shape).transpose(1, 2)
             key_states = k_flat.view(hidden_shape).transpose(1, 2)
