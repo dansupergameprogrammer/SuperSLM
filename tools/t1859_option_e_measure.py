@@ -93,7 +93,13 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 GROUP_SIZE = 32
-K_CAP = 8
+K_CAP = 8  # T-1859's own default; T-1881 makes this a CLI-swept parameter (see --k-cap) to
+           # price the buildable sidecar's stored precision, since the design (S29.4) does not
+           # pin one. K_CAP bounds the largest per-group refinement exponent k_g the admissibility
+           # predicate can choose, which is exactly what a finite-width stored sidecar field bounds
+           # in a real engine: ceil(log2(K_CAP+1)) bits per group are needed to represent every
+           # value k_g in [0, K_CAP] losslessly (K_CAP=3 -> 2 bits; K_CAP=8, M1's own uint8-field
+           # convention -> 4 bits, generously stored in a full byte; K_CAP=31 -> 5 bits).
 
 
 # ==============================================================================
@@ -235,14 +241,19 @@ def build_arms(t1835):
     return arms
 
 
-def install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=None):
+def install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=None, k_cap: int = K_CAP):
     """T-1835's `install_forward`, unchanged for every site except the attention forward, which
     gains sites 19/20 alongside the untouched 4/7. Sites 1,2,3,6,8,9,10,11,12,13,14,15,16,17,18
     are copied verbatim from `t1835_site_toggle_dump.install_forward`.
 
     `kg_stats`, if given a dict, accumulates `max_k_observed` and `n_k_at_cap` (a count of
-    groups whose chosen k_g landed exactly at K_CAP -- the signal that the cap bound and a
+    groups whose chosen k_g landed exactly at `k_cap` -- the signal that the cap bound and a
     higher cap might have refined further) across every call, for the diagnostics `main` prints.
+
+    `k_cap`, T-1881's own addition: the module-level `K_CAP` default is now an explicit
+    parameter, threaded to both `rt_grouped` calls below, so the stored-precision sweep (a
+    CLI flag, not a code edit) is the only thing that differs between a coarser, M1's-own, and
+    a finer sidecar-precision capture.
     """
     import torch
     from transformers.models.qwen2.modeling_qwen2 import apply_rotary_pos_emb, repeat_kv
@@ -253,7 +264,7 @@ def install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=None):
         if kg_stats is None:
             return
         kmax = int(k_g_tensor.max().item())
-        n_at_cap = int((k_g_tensor == K_CAP).sum().item())
+        n_at_cap = int((k_g_tensor == k_cap).sum().item())
         kg_stats["max_k_observed"] = max(kg_stats.get("max_k_observed", 0), kmax)
         kg_stats["n_k_at_cap"] = kg_stats.get("n_k_at_cap", 0) + n_at_cap
         kg_stats["n_groups"] = kg_stats.get("n_groups", 0) + k_g_tensor.numel()
@@ -309,7 +320,7 @@ def install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=None):
                 B, S, _ = k_flat.shape
                 kh = k_flat.view(B, S, n_kv_heads, head_dim)
                 k_hat19, k_g19, delta19 = rt_grouped(
-                    t1835, kh, GROUP_SIZE, K_CAP, rope_safe=True)
+                    t1835, kh, GROUP_SIZE, k_cap, rope_safe=True)
                 _record(k_g19)
                 k_hat19 = k_hat19.reshape(B, S, n_kv_heads * head_dim).to(k_flat.dtype)
                 k_flat = gate.apply(19, k_hat19, k_flat)
@@ -343,7 +354,7 @@ def install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=None):
                 else:
                     key_paired = key_states
                 key_alone, k_g20_alone, _ = rt_grouped(
-                    t1835, key_states, GROUP_SIZE, K_CAP, rope_safe=False)
+                    t1835, key_states, GROUP_SIZE, k_cap, rope_safe=False)
                 _record(k_g20_alone)
                 mask19 = gate._m[19].view(-1, 1, 1, 1)
                 key_E20 = torch.where(mask19, key_paired, key_alone)
@@ -446,7 +457,11 @@ def main(argv=None) -> int:
                                 r"\metadata.json")
     parser.add_argument("--single-arm", default=None)
     parser.add_argument("--k-g-diagnostics", action="store_true",
-                        help="log the observed k_g distribution (checks K_CAP does not bind)")
+                        help="log the observed k_g distribution (checks k_cap does not bind)")
+    parser.add_argument("--k-cap", type=int, default=K_CAP,
+                        help="T-1881: the buildable sidecar's stored precision, as the largest "
+                             "representable k_g. Swept across invocations, never inside one -- "
+                             "coarser (fewer stored bits) means a smaller value here.")
     args = parser.parse_args(argv)
 
     sys.path.insert(0, str(Path(args.t1835_tools).resolve()))
@@ -490,7 +505,7 @@ def main(argv=None) -> int:
     model.eval()
     print(f"model+tokenizer load: {time.perf_counter() - t0:.2f}s device={device} "
           f"documents={len(docs)} arms={len(arms)} dtype={model.dtype} "
-          f"GROUP_SIZE={GROUP_SIZE} K_CAP={K_CAP}", flush=True)
+          f"GROUP_SIZE={GROUP_SIZE} k_cap={args.k_cap}", flush=True)
 
     site_ids = set(t1835.ALL_SITES) | set(EXTRA_SITE_NAMES)
     gate = ExtArmGate(arms, site_ids, device)
@@ -501,7 +516,8 @@ def main(argv=None) -> int:
           f"layer0 k={k_scales[0]:.6g} v={v_scales[0]:.6g}", flush=True)
 
     kg_stats = {} if args.k_g_diagnostics else None
-    handles = install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=kg_stats)
+    handles = install_forward_e(t1835, model, k_scales, v_scales, gate, kg_stats=kg_stats,
+                                 k_cap=args.k_cap)
     print(f"forward installed: B={gate.B} hooks={len(handles)}", flush=True)
 
     out_dir = Path(args.out_dir)
@@ -569,7 +585,7 @@ def main(argv=None) -> int:
         with open(out_dir / "kg_diagnostics.json", "w", encoding="utf-8") as f:
             json.dump(kg_stats, f, indent=2)
         print(f"k_g diagnostics: max_k_observed={kg_stats.get('max_k_observed')} "
-              f"(K_CAP={K_CAP}) n_k_at_cap={kg_stats.get('n_k_at_cap', 0)} "
+              f"(k_cap={args.k_cap}) n_k_at_cap={kg_stats.get('n_k_at_cap', 0)} "
               f"of n_groups={kg_stats.get('n_groups', 0)}", flush=True)
     return 0 if n_failed == 0 else 1
 
