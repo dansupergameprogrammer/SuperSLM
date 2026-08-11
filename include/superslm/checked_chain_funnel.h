@@ -220,6 +220,30 @@ enum class SslmForwardStatus {
 	                                          // Both conditions are checked before either loop body
 	                                          // in ApplyBiasReconcileRow applies anything, so a
 	                                          // rejection for either reason leaves acc untouched.
+	// --- T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2.2/
+	// Sec12 "Option G's own coverage") ---
+	OptionGWideRopeMagnitudeOutOfDomain,      // T-1822 design Sec31.2's own wide-RoPE-pair
+	                                          // primitive (RopeApplyPairWide, forward_sites.h,
+	                                          // this fold): refuse, not wrap, whenever either
+	                                          // rotated component's ROUNDED value does not fit
+	                                          // int64_t (T-1892 Minor 1's own correction -- checked
+	                                          // on the value AFTER C3 rounding, never an unrounded
+	                                          // "true" value the primitive never materializes).
+	                                          // Mirrors the spike's own gate G2
+	                                          // (option_g_spike.h), now production-named.
+	OptionGFusedLandingExponentOutOfDomain,   // T-1822 design Sec31.2.2 (D-SLM2356/D-SLM2384/
+	                                          // D-SLM2385, the round-3 repair): `LandingRescale`'s
+	                                          // own `out_magnitude_exceeded_int64` output, checked
+	                                          // UNCONDITIONALLY at both fused K-landing call sites,
+	                                          // on EVERY element, with no skip condition on any
+	                                          // static exponent. Distinct from
+	                                          // OptionGWideRopeMagnitudeOutOfDomain above: that
+	                                          // status answers "did the ROTATION overflow int64";
+	                                          // this one answers "did the subsequent LANDING (the
+	                                          // already-shipped LandingRescale, called on the
+	                                          // rotation's own in-domain output) lose magnitude" --
+	                                          // two different arithmetic stages, two different
+	                                          // guards, per the design's own T-1898-repaired text.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

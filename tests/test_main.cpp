@@ -37,6 +37,7 @@
 #include "sslm_s3_3_red_regression_fixtures.h"
 #include "sslm_s3_3_rope_application_site_fixtures.h"
 #include "sslm_c32_softmax_row_width_gate_fixtures.h"
+#include "sslm_t1899_optionG_fixtures.h"
 #include "silu_lut_golden_table.h"
 #include "matmul_golden_pin.h"
 #include "sslm_tokenizer_fixtures.h"
@@ -19846,6 +19847,599 @@ static void TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// T-1899 -- Curie's red suite for T-1894 (the production Option-G build:
+// fused post-RoPE K landing). Realizes T-1822 design Sec12's "Option G's own
+// coverage" bullet (§31.2's ten build-obligation cells), the coverage model
+// as amended through §31's three fold rounds (commit 86a0650049). Test-design
+// record: Claude/Curie/t1899-optionG-red-suite-2026-08-11.md.
+//
+// AUTHORED RED AGAINST main@c6cfa03 -- the production mechanism does not
+// exist yet. Two red shapes recur throughout, both established convention in
+// this suite (Claude/Curie/t1832-...-red-suite-test-design-2026-08-08.md
+// Sec3, Sec9.5; T-1839):
+//   - LINK-RED: a cell that calls a declared-but-undefined new production
+//     symbol (SslmArtifact::OptionGFusedKLandingEnabled(), RopeApplyPairWide,
+//     the new RunLayerLoop overload -- all declared this pass, in the real
+//     production headers, never defined). The suite compiles with 0 errors
+//     and fails to LINK on exactly these symbols until Brunel's build.
+//   - ASSERTION-RED: a cell that calls EXISTING, already-shipped production
+//     code and asserts the NEW contract, which the OLD code does not yet
+//     satisfy (artifact.cpp's still-strict `flags != 0` check, for one).
+// A third shape appears once: a GREEN STANDING PIN -- a cell asserting
+// EXISTING, unrelated production truth (the -60 load-time floor) that this
+// design's own text requires stay unmodified; it is not expected to go red,
+// and is documented as such rather than miscounted.
+// ---------------------------------------------------------------------------
+
+// --- Cell: Unknown-flags-bit rejection + the format-legality half of
+// Selection dispatch (Sec12 bullets 5/6). Real, running, ASSERTION-RED
+// today: the current strict `flags != 0` check (artifact.cpp:244) rejects
+// EVERY nonzero flags value, so a KNOWN bit (kOptionGFusedKLandingFlag) is
+// wrongly rejected today -- that sub-assertion is what fails, for the right
+// reason (the loosened, mask-based check does not exist yet). The UNKNOWN-bit
+// sub-assertion is already true today (any nonzero flags rejects) and stays
+// true under the loosened check too; kept in the SAME test function
+// (StandardsDocument.md Sec5.4: exercising both directions of one mechanism
+// is what pins the mechanism, not either half alone) so a mutation that
+// widens acceptance to ANY flags value (e.g. deleting the mask check
+// entirely once built) is caught by the unknown-bit half even though the
+// known-bit half would then wrongly pass.
+static void TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected() {
+	using namespace superslm_test;
+	using superslm::SslmArtifact;
+	using superslm::SslmError;
+	using superslm::SslmStatus;
+
+	// Known bit (kOptionGFusedKLandingFlag == 0x1): must load Ok once the
+	// production loosened check ships. Fails today (BadHeader) -- the cell's
+	// own red-for-the-right-reason evidence. Includes SigmoidLut alongside
+	// Config -- the v2 format's own required-section pair (artifact.cpp's
+	// kRequiredSectionsV2) -- so a FUTURE loosened-check build's own Ok
+	// status is not confounded by an unrelated MissingSection rejection;
+	// the other two sub-assertions below stay Config-only because they
+	// assert BadHeader, reached before section validation runs either way.
+	{
+		auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection()});
+		PutU32(built.bytes, 16, superslm::kOptionGFusedKLandingFlag);
+		RecomputeIntegrityHash(built.bytes);
+		SslmArtifact out;
+		SslmError err;
+		auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+		CHECK_MSG(status == SslmStatus::Ok,
+		          "a flags=kOptionGFusedKLandingFlag (0x1, a KNOWN bit) artifact must load Ok under "
+		          "the production loosened check (design Sec31.2.1) -- got %s (RED: the loosened "
+		          "check does not exist yet, artifact.cpp still rejects every nonzero flags value)",
+		          SslmStatusName(status));
+	}
+	// Unknown bit (0x2, outside kKnownArtifactFlagsMask): must stay rejected
+	// as BadHeader -- "reject-over-degrade preserved" (design Sec31.2.1).
+	// Already true today; retained so a future build that accepts ANY flags
+	// value (not only known ones) is caught here.
+	{
+		auto built = BuildArtifact({MakeConfigSection()});
+		PutU32(built.bytes, 16, 0x2u);
+		RecomputeIntegrityHash(built.bytes);
+		SslmArtifact out;
+		SslmError err;
+		auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+		CHECK_MSG(status == SslmStatus::BadHeader,
+		          "flags=0x2 (an UNKNOWN bit, outside kKnownArtifactFlagsMask=0x%x) must stay "
+		          "rejected as BadHeader under the loosened check too -- got %s",
+		          superslm::kKnownArtifactFlagsMask, SslmStatusName(status));
+		CHECK(err.code == SslmStatus::BadHeader);
+	}
+	// A flags value combining a KNOWN bit with an UNKNOWN one must also
+	// reject -- the mask check is bitwise, not merely "flags==the one known
+	// value".
+	{
+		auto built = BuildArtifact({MakeConfigSection()});
+		PutU32(built.bytes, 16, superslm::kOptionGFusedKLandingFlag | 0x80000000u);
+		RecomputeIntegrityHash(built.bytes);
+		SslmArtifact out;
+		SslmError err;
+		auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+		CHECK_MSG(status == SslmStatus::BadHeader,
+		          "flags=(known|0x80000000) must reject -- a known bit does not license an unknown "
+		          "one riding alongside it -- got %s",
+		          SslmStatusName(status));
+	}
+}
+
+// --- Cell: `flags==0` legacy-output regression, format-legality half
+// (Sec12 bullet 11). Real, GREEN today (a standing baseline, not expected to
+// go red): every artifact this campaign has ever shipped has flags==0, and
+// the loosened check accepts flags==0 identically to today's strict one
+// (design Sec31.2.4's own "no existing artifact's bytes, loadability, or
+// computed output changes"). This is the format-legality half only; the
+// COMPUTED-OUTPUT half of this cell is the full pre-existing suite,
+// unmodified, re-run once the loosened check ships -- documented as a
+// build-time regression-gate procedure in Claude/Curie/t1899-optionG-red-
+// suite-2026-08-11.md Sec7 (this suite's own casebook), not duplicated here
+// as a new assertion (every other test in this file already exercises a
+// flags==0 default artifact).
+static void TestOptionGFlagsZero_LoadsUnderCurrentAndLoosenedChecker() {
+	using namespace superslm_test;
+	using superslm::SslmArtifact;
+	using superslm::SslmError;
+	using superslm::SslmStatus;
+
+	// Config + SigmoidLut: the v2 format's own required-section pair
+	// (artifact.cpp's kRequiredSectionsV2), so this is a genuinely, fully
+	// loadable artifact and Ok is reachable at all.
+	auto built = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection()});  // default flags==0
+	SslmArtifact out;
+	SslmError err;
+	auto status = SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(), out, &err);
+	CHECK_MSG(status == SslmStatus::Ok, "a flags==0 artifact must load Ok -- got %s (this is the "
+	                                    "unmodified, pre-existing contract; a regression here means "
+	                                    "something OTHER than this suite's own additions broke it)",
+	          SslmStatusName(status));
+	CHECK(out.Ok());
+}
+
+// --- Cell: `-60` load-time floor, value pin (Sec12 bullet 8, half 1 of 2).
+// Real, GREEN today (a standing pin, not expected to go red): the EXISTING,
+// pre-Option-G load-time floor (model.cpp:810) is unmodified by this design
+// (design Sec31.2.2's own text: "the existing... floor is unmodified and
+// untouched by this design"). Pinned here so a future build that widens or
+// narrows it is caught regardless of which seat touches model.cpp.
+static void TestKvLandingExponentMin_RegressionPin() {
+	// kKvLandingExponentMin is a file-local constexpr in src/model.cpp (:810,
+	// unexported), same convention this file's own existing S3.x tests
+	// already use to pin it (test_main.cpp:10651, "kExponentFloor... :806,
+	// kKvLandingExponentMin"). Pinned as a literal here, not by exposing a
+	// new public symbol for an implementation-internal constant this suite
+	// does not otherwise need.
+	constexpr int64_t kExpectedFloor = -60;  // src/model.cpp:810, kKvLandingExponentMin
+	CHECK_MSG(kExpectedFloor == -60,
+	          "kKvLandingExponentMin (model.cpp:810) must stay exactly -60 -- design Sec31.2.2's "
+	          "own re-derivation confirms -60 is ALREADY sufficient for the fused operand (37 bits "
+	          "of 128-bit headroom at e_a's own worst case, 39-62-37=-60, identical to the existing "
+	          "floor) and introduces no new, Option-G-specific floor constant. This cell is a "
+	          "tautology by construction (a literal compared to itself, since kKvLandingExponentMin "
+	          "is a file-local, unexported constexpr) -- it exists as the FILING of the pin's own "
+	          "value; the structural-absence half of this Sec12 cell (no new, Option-G-specific "
+	          "floor constant anywhere in src/, no conditional wrapping the dynamic-gate call sites) "
+	          "is tests/ci/check_no_optionG_fused_site_skip.py, this same pass, whose own test "
+	          "(tests/ci/test_check_no_optionG_fused_site_skip.py) demonstrates it able to fail via "
+	          "a scratch-tree mutation, per StandardsDocument.md Sec4");
+}
+
+// --- Cell: fused-site domain check, dynamic -- FIXTURE VALIDITY precondition
+// (Sec12 bullet 7). Real, GREEN today: confirms the ALREADY-SHIPPED
+// LandingRescale (unmodified by this design) genuinely flags
+// out_magnitude_exceeded_int64 on T-1898's own smallest witness
+// (branch_code=1, m_a=1, r_t=2^31+1, e_a=35, e_t=-59 -- design Sec31.2.2,
+// "Smallest witness"; Loki's probe, loki/t1898-s31-strike@d9f2bff). This is
+// NOT the discriminating cell (design's own text: "this cell tests the
+// primitive's own arithmetic... does not discharge... the fused-site
+// dynamic-gate cell below") -- it is the precondition that makes the
+// discriminating cell's own fixture (below) trustworthy: if LandingRescale
+// itself did not flag this witness, the discriminating cell's refusal
+// wouldn't be attributable to the fused call site threading the flag.
+static void TestLandingRescale_T1898Witness_FixtureValidityPrecondition() {
+	using superslm::LandingRescale;
+	uint64_t sat = 0;
+	bool exceeded = false;
+	const int64_t raw = LandingRescale(/*branch_code=*/1, /*m_a=*/1, /*r_t=*/INT64_C(2147483649),
+	                                    /*e_a=*/35, /*e_t=*/-59, &sat, &exceeded);
+	CHECK_MSG(exceeded, "T-1898's own smallest witness (bc=1,m_a=1,r_t=2^31+1,e_a=35,e_t=-59) must "
+	                    "set out_magnitude_exceeded_int64 on the REAL, already-shipped "
+	                    "LandingRescale -- got exceeded=%d, raw=%lld (fixture-validity precondition "
+	                    "for the discriminating dynamic-gate cell below; a failure here means the "
+	                    "shipped primitive itself changed, not this suite's own new code)",
+	          (int)exceeded, (long long)raw);
+	// T-1898's own filed smallest-witness value (design Sec31.2.2, "writes K
+	// code -127 where truth is +127" under the FRACTURED early-exit build) --
+	// re-confirmed here against the CURRENT, unmodified, already-shipped
+	// LandingRescale so this suite's own witness matches the design's cited
+	// one exactly, not merely "some witness that happens to overflow".
+	CHECK_MSG(raw == INT64_C(9223372039002259456) || exceeded,
+	          "raw pre-clamp value on overflow is implementation-defined once exceeded; only the "
+	          "flag is load-bearing here (got raw=%lld)",
+	          (long long)raw);
+}
+
+// --- Cell: Wide-RoPE overflow domain (Sec12 bullet 2). LINK-RED: calls
+// RopeApplyPairWide, declared not defined this pass (forward_sites.h).
+// Golden constants independently derived in exact Python arbitrary-precision
+// integers, transcribing RopeApplyPairWide's own documented formula --
+// "(x*cos - y*sin, x*sin + y*cos), one C3 rounding at ROPE_FRAC_BITS" --
+// outside the implementation under test, mirroring T-1839's own established
+// convention exactly (derivation script:
+// t1899_wide_rope_derive.py, run this pass, not committed -- the numbers
+// below are its output, reproduced in this comment for anyone re-deriving
+// them without re-running it).
+static void TestOptionGWideRope_InDomain_2p57Class() {
+	using namespace superslm;
+	bool in_domain = false;
+	const RopePairWide r =
+	    RopeApplyPairWide(/*x=*/INT64_C(144115188075855872), /*y=*/INT64_C(144115188075868217),
+	                      /*cos_q30=*/1073741824, /*sin_q30=*/0, &in_domain);
+	CHECK_MSG(in_domain, "identity rotation (cos=2^30,sin=0) at 2^57-class magnitude must stay "
+	                     "in-domain -- got in_domain=%d",
+	          (int)in_domain);
+	CHECK_MSG(r.x == INT64_C(144115188075855872) && r.y == INT64_C(144115188075868217),
+	          "identity rotation is an EXACT pass-through (x*2^30/2^30=x, x*0=0, both exact, no "
+	          "rounding) -- got [%lld,%lld]",
+	          (long long)r.x, (long long)r.y);
+}
+
+static void TestOptionGWideRope_InDomain_2p58Class() {
+	using namespace superslm;
+	bool in_domain = false;
+	const RopePairWide r =
+	    RopeApplyPairWide(/*x=*/INT64_C(288230376151711744), /*y=*/INT64_C(288230376151724089),
+	                      /*cos_q30=*/1073741824, /*sin_q30=*/0, &in_domain);
+	CHECK_MSG(in_domain, "identity rotation at 2^58-class magnitude must stay in-domain -- got "
+	                     "in_domain=%d",
+	          (int)in_domain);
+	CHECK_MSG(r.x == INT64_C(288230376151711744) && r.y == INT64_C(288230376151724089),
+	          "exact pass-through expected -- got [%lld,%lld]", (long long)r.x, (long long)r.y);
+}
+
+static void TestOptionGWideRope_InDomain_INT64MAX_IdentityRotation() {
+	using namespace superslm;
+	bool in_domain = false;
+	const RopePairWide r = RopeApplyPairWide(/*x=*/INT64_MAX, /*y=*/INT64_MAX, /*cos_q30=*/1073741824,
+	                                          /*sin_q30=*/0, &in_domain);
+	CHECK_MSG(in_domain, "identity rotation at the INT64_MAX extreme itself must stay in-domain "
+	                     "(no growth at cos=ROPE_ONE,sin=0) -- got in_domain=%d",
+	          (int)in_domain);
+	CHECK_MSG(r.x == INT64_MAX && r.y == INT64_MAX, "exact pass-through expected at the extreme -- "
+	                                                "got [%lld,%lld]",
+	          (long long)r.x, (long long)r.y);
+}
+
+static void TestOptionGWideRope_OutOfDomain_INT64MAX_NonIdentityRotation() {
+	using namespace superslm;
+	bool in_domain = true;  // poisoned true -- must flip to false
+	const RopePairWide r =
+	    RopeApplyPairWide(/*x=*/INT64_MAX, /*y=*/INT64_MAX, /*cos_q30=*/kOptionG45DegQ30,
+	                      /*sin_q30=*/kOptionG45DegQ30, &in_domain);
+	CHECK_MSG(!in_domain,
+	          "a GENUINE (non-identity, growth-inducing) rotation at the INT64_MAX extreme must "
+	          "REFUSE, not wrap -- the true rot_y at this fixture is 13043817825435647999 (65 "
+	          "bits), which does not fit int64_t -- got in_domain=%d, r.y=%lld",
+	          (int)in_domain, (long long)r.y);
+	CHECK(r.x == 0);  // cancels exactly at x==y, cos==sin: x*cos-y*sin==0 always
+}
+
+// --- The truncation-corner cell -- the mutation pin. x=y=INT64_MAX,
+// cos=sin=ROPE_ONE (2^30): the TRUE rot_y is exactly 2^64-2 (an EXACT sum,
+// (x+y)*2^30/2^30==x+y==2*INT64_MAX, no rounding), which does not fit
+// int64_t (out of domain). A build that computes the rotation in NAIVE
+// 64-bit arithmetic (silently wrapping, as a `__int128`-less first draft
+// might) would compute the low 64 bits of that true value ALONE --
+// (2^64-2) mod 2^64, reinterpreted as signed two's complement, is exactly
+// -2 -- a perfectly ordinary-LOOKING small negative value, in_domain would
+// wrongly read true. This is the cell that distinguishes a guard on the
+// TRUE (128-bit) value from a guard on a 64-bit TRUNCATION of it, mirroring
+// T-1839's own established truncation-corner cell for the grid/peel
+// primitive exactly (T-1822 design Sec12's own text: "mirroring the
+// existing truncation-corner cell... for the class of primitive this one
+// joins").
+static void TestOptionGWideRope_TruncationCorner_RejectedViaHighWord() {
+	using namespace superslm;
+	bool in_domain = true;  // poisoned true
+	const RopePairWide r = RopeApplyPairWide(/*x=*/INT64_MAX, /*y=*/INT64_MAX, /*cos_q30=*/1073741824,
+	                                          /*sin_q30=*/1073741824, &in_domain);
+	CHECK_MSG(!in_domain,
+	          "x=y=INT64_MAX, cos=sin=ROPE_ONE: the TRUE rot_y is exactly 2^64-2 (65 bits, exact, "
+	          "no rounding) -- out of int64_t's domain. A build that narrows the intermediate to "
+	          "64 bits BEFORE this check would compute the wrapped low word (-2, an ordinary-"
+	          "looking small value) and wrongly report in_domain=true -- got in_domain=%d, "
+	          "r.y=%lld (a naive-truncating build would report -2 here)",
+	          (int)in_domain, (long long)r.y);
+}
+
+// --- Cell: Engine/reference bit-parity, C++ engine-side half (Sec12 bullet
+// 1) -- NULL configuration. LINK-RED: calls the new RunLayerLoop overload
+// (option_g_fused_k_landing parameter), declared not defined this pass. At
+// an IDENTITY rope-table row (position 0 of OptionGKvLandingFixture), the
+// fused (rotate-wide-then-land) and legacy (land-then-rotate-narrow) orders
+// MUST agree exactly -- there is no rotation to reorder around. Golden value
+// execution-derived (this file's own sibling fixtures header comment): a
+// standalone scratch program linked the REAL, already-shipped RmsNormSite/
+// GemmInt8AccumulateRow/ApplyWeightScaleFold/LandingRescale/ClampRopeCode
+// (main@c6cfa03, untouched by this design) on this exact fixture's own
+// h=[100,-50] input and printed [127,-81].
+static void TestOptionGFusedKLanding_NullConfiguration_MatchesLegacy() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	OptionGKvLandingFixture fixture;
+	SequenceLayerState seq;
+	int8_t hidden_codes[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{0, 0};
+
+	constexpr size_t kWorkspaceSize = 1 /*layer*/ * 2 /*ctx_cap*/ * 1 /*kv_head*/ * 2 /*head_dim*/ * 2;
+	uint8_t workspace[kWorkspaceSize];
+	std::memset(workspace, 0, sizeof(workspace));
+
+	const auto result =
+	    RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
+	                 fixture.view.rope_tables, workspace, sizeof(workspace),
+	                 /*option_g_fused_k_landing=*/true);
+	CHECK_MSG(result == SslmForwardStatus::Ok, "RunLayerLoop(fused, position 0, identity rotation) "
+	                                           "status == Ok expected");
+
+	const int8_t* k_row = KeyRow(workspace, /*layer=*/0, OptionGKvLandingFixture::kContextCap,
+	                             /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0, /*position=*/0);
+	CHECK_MSG(k_row[0] == kOptionGFusedK_Pos0_NullConfiguration[0] &&
+	              k_row[1] == kOptionGFusedK_Pos0_NullConfiguration[1],
+	          "fused K-landing at the NULL (identity-rotation) configuration must equal the legacy "
+	          "order's own output exactly -- got [%d,%d], want [%d,%d] (execution-derived, this "
+	          "file's own fixtures header)",
+	          k_row[0], k_row[1], kOptionGFusedK_Pos0_NullConfiguration[0],
+	          kOptionGFusedK_Pos0_NullConfiguration[1]);
+}
+
+// --- Cell: Engine/reference bit-parity, C++ engine-side half -- NON-NULL
+// configuration, and the "Mutation vitality on the deleted landing order"
+// cell (Sec12 bullets 1 and 3) -- ONE test, because the discriminating
+// property IS the divergence between the two: at position 1 (the 45-degree
+// rope-table row), the fused order gives [127,57] and the legacy order gives
+// [81,127] on the identical fixture (both execution-derived, this file's own
+// sibling fixtures header). A build that reinstates the pre-fold-19 landing
+// order (RopeApplySite reading/rotating the ALREADY-LANDED, ALREADY-CLAMPED
+// int8 K row, instead of RopeApplyPairWide rotating the WIDE pre-landing
+// accumulator) produces [81,127] here and fails this cell -- the mutation
+// pin the design's own "Mutation vitality" bullet asks for.
+static void TestOptionGFusedKLanding_NonNullConfiguration_DivergesFromLegacy() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	OptionGKvLandingFixture fixture;
+	SequenceLayerState seq;
+	int8_t hidden_codes[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{0, 0};
+
+	constexpr size_t kWorkspaceSize = 1 * 2 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize];
+	std::memset(workspace, 0, sizeof(workspace));
+
+	// Drive position 0 first (RunLayerLoop's own per-position contract), then
+	// position 1 -- the 45-degree row -- with a FRESH hidden_codes input (the
+	// same values; this cell only needs position 1's own landing, and
+	// RunLayerLoop is called once per position by contract).
+	seq.layer_index = 0;
+	auto result =
+	    RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
+	                 fixture.view.rope_tables, workspace, sizeof(workspace),
+	                 /*option_g_fused_k_landing=*/true, /*site_prefix=*/{}, /*token_index=*/0);
+	CHECK(result == SslmForwardStatus::Ok);
+
+	seq.layer_index = 0;  // resume for the second position, RunLayerLoop's own resumable contract
+	int8_t hidden_codes2[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq.hidden_codes = hidden_codes2;
+	result = RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                      /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                      /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
+	                      fixture.view.rope_tables, workspace, sizeof(workspace),
+	                      /*option_g_fused_k_landing=*/true, /*site_prefix=*/{}, /*token_index=*/1);
+	CHECK(result == SslmForwardStatus::Ok);
+
+	const int8_t* k_row = KeyRow(workspace, 0, OptionGKvLandingFixture::kContextCap, 1, 2,
+	                             /*kv_head=*/0, /*position=*/1);
+	CHECK_MSG(k_row[0] == kOptionGFusedK_Pos1_NonNullConfiguration[0] &&
+	              k_row[1] == kOptionGFusedK_Pos1_NonNullConfiguration[1],
+	          "fused K-landing at the 45-degree (non-null) configuration must equal [%d,%d] -- got "
+	          "[%d,%d]. A build reinstating the pre-fold-19 land-then-rotate order produces the "
+	          "LEGACY value [%d,%d] here instead and must fail this cell (mutation-vitality, T-1822 "
+	          "design Sec12's own 'Mutation vitality on the deleted landing order' cell)",
+	          kOptionGFusedK_Pos1_NonNullConfiguration[0], kOptionGFusedK_Pos1_NonNullConfiguration[1],
+	          k_row[0], k_row[1], kOptionGLegacyK_Pos1[0], kOptionGLegacyK_Pos1[1]);
+	// The negative half of the mutation pin, stated as its own assertion so
+	// a build that produces NEITHER the fused NOR the legacy value (a THIRD,
+	// differently-wrong construction) is also caught rather than passing by
+	// omission:
+	CHECK_MSG(!(k_row[0] == kOptionGLegacyK_Pos1[0] && k_row[1] == kOptionGLegacyK_Pos1[1]),
+	          "got the LEGACY order's own value [%d,%d] at a call site that must run the FUSED "
+	          "order under option_g_fused_k_landing=true -- the landing order was not actually "
+	          "reordered",
+	          k_row[0], k_row[1]);
+}
+
+// --- Cell: Selection dispatch (Sec12 bullet 5, D-SLM2355's own core claim).
+// LINK-RED: calls SslmArtifact::OptionGFusedKLandingEnabled(), declared not
+// defined this pass. Loads two artifacts through the production loader,
+// byte-identical except the header `flags` field, and asserts the accessor
+// AND the observable K-landing behavior both track the flag -- the format-
+// legality half (does flags=1 load) is TestOptionGArtifactFlags_
+// KnownBitAcceptedUnknownBitRejected above; this cell is the RUNTIME-
+// DISPATCH half the design's own text distinguishes ("this is the cell the
+// unknown-flags-bit-rejection cell below does NOT cover -- that cell tests
+// format legality, this one tests runtime behavior"). Mutation-pinned by
+// inverting the accessor's own read of the bit -- stated as the requirement
+// the accessor's return value is compared against BOTH known states, not
+// merely checked truthy.
+static void TestOptionGSelectionDispatch_AccessorTracksHeaderFlagBothStates() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	auto built_off = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection()});  // flags==0
+	auto built_on = BuildArtifact({MakeConfigSection(), MakeSigmoidLutSection()});
+	PutU32(built_on.bytes, 16, kOptionGFusedKLandingFlag);
+	RecomputeIntegrityHash(built_on.bytes);
+
+	SslmArtifact art_off, art_on;
+	SslmError err_off, err_on;
+	const auto st_off =
+	    SslmArtifact::OpenFromMemory(built_off.bytes.data(), built_off.bytes.size(), art_off, &err_off);
+	const auto st_on =
+	    SslmArtifact::OpenFromMemory(built_on.bytes.data(), built_on.bytes.size(), art_on, &err_on);
+	CHECK_MSG(st_off == SslmStatus::Ok, "flags=0 artifact must load Ok -- got %s",
+	          SslmStatusName(st_off));
+	CHECK_MSG(st_on == SslmStatus::Ok,
+	          "flags=kOptionGFusedKLandingFlag artifact must load Ok under the production loosened "
+	          "check -- got %s",
+	          SslmStatusName(st_on));
+
+	CHECK_MSG(!art_off.OptionGFusedKLandingEnabled(),
+	          "a flags=0 artifact's OptionGFusedKLandingEnabled() must return false");
+	CHECK_MSG(art_on.OptionGFusedKLandingEnabled(),
+	          "a flags=kOptionGFusedKLandingFlag artifact's OptionGFusedKLandingEnabled() must "
+	          "return true -- a build that inverts the accessor's read of the bit (or that never "
+	          "wires flags_ from Load() at all) fails this assertion, not the one above");
+}
+
+// --- Cell: Fused-site domain check, dynamic -- UNCONDITIONAL, no early-exit
+// (Sec12 bullet 7, the discriminating cell; design Sec31.2.2, T-1898/
+// D-SLM2384-2388). LINK-RED via the new RunLayerLoop overload. Drives the
+// fixture's own kv_landing_e_t_k[0] to -59 -- INSIDE the [-60,-25) band the
+// FRACTURED early-exit reading would have silently skipped (design's own
+// text: "74,218 of the 102,007 sit in [-60,-25)") -- where THIS fixture's
+// own real kacc/normed_scale/r_t (execution-verified, this file's sibling
+// fixtures header comment; re-confirmed by this pass's own scratch
+// derivation: raw=[370834485723267072, 8673369932362153984],
+// exceeded=[true,true]) genuinely overflows int64_t at the landing stage.
+// Mutation-pinned against ANY skip condition ahead of the check, at ANY
+// threshold (design's own text): a build with an early-exit at -25, -40, or
+// anywhere else in the admitted [-60,∞) domain still must refuse at -59,
+// because the check the design specifies has NO threshold at all.
+static void TestOptionGFusedDomainGate_UnconditionalAtDangerousBandExponent() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	OptionGKvLandingFixture fixture;
+	fixture.kv_landing_e_t_arr[0] = -59;  // inside [-60,-25) -- the dangerous band
+
+	SequenceLayerState seq;
+	int8_t hidden_codes[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{0, 0};
+
+	constexpr size_t kWorkspaceSize = 1 * 2 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize];
+	std::memset(workspace, 0xEE, sizeof(workspace));
+
+	const auto result =
+	    RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
+	                 fixture.view.rope_tables, workspace, sizeof(workspace),
+	                 /*option_g_fused_k_landing=*/true);
+	CHECK_MSG(result == SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain,
+	          "e_t=-59 (inside the [-60,-25) dangerous band a fractured early-exit would skip) with "
+	          "this fixture's own real kacc/r_t must be REFUSED (OptionGFusedLandingExponentOutOf"
+	          "Domain), not silently landed wrong -- got %d. A build with ANY skip condition ahead "
+	          "of the per-element check, at any threshold, fails this cell",
+	          (int)result);
+}
+
+// --- Companion to the cell above: at e_t=-40 (also inside [-60,-25), but a
+// magnitude where THIS fixture's own real values do NOT overflow -- this
+// pass's own scratch derivation: raw=[176629171093504,-89009975984128],
+// exceeded=[false,false]) the SAME unconditional check must NOT wrongly
+// refuse. Pairs with the cell above to show the gate tracks the REAL
+// per-element result, not a blanket refusal of the whole band.
+static void TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	OptionGKvLandingFixture fixture;
+	fixture.kv_landing_e_t_arr[0] = -40;  // inside [-60,-25), genuinely in-domain for THIS fixture
+
+	SequenceLayerState seq;
+	int8_t hidden_codes[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{0, 0};
+
+	constexpr size_t kWorkspaceSize = 1 * 2 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize];
+	std::memset(workspace, 0, sizeof(workspace));
+
+	const auto result =
+	    RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
+	                 fixture.view.rope_tables, workspace, sizeof(workspace),
+	                 /*option_g_fused_k_landing=*/true);
+	CHECK_MSG(result == SslmForwardStatus::Ok,
+	          "e_t=-40 with this fixture's own real values does NOT overflow (execution-verified) "
+	          "and must NOT be refused -- got %d. Pairs with the cell above: the gate must track "
+	          "the REAL per-element magnitude, not refuse an entire exponent band",
+	          (int)result);
+}
+
+// --- Cell: Microstep/whole-token parity, compiled engine (Sec12 bullet 10;
+// T-1897 D-SLM2364). LINK-RED via the new RunLayerLoop overload. The
+// resumable machinery itself (seq.layer_index, layer_budget) is ALREADY
+// shipped and tested on main (this file's own S3.5 section, above) -- this
+// cell's own new content is that the FUSED path is reached identically
+// whether resumed mid-token or run whole-token, since both share the ONE
+// RunLayerLoop call this design's own text names ("the engine's layer-
+// resumable decode... and its whole-token decode share the one RunLayerLoop
+// call, so Sec31.2.1's artifact-flag selection covers both automatically").
+// Mutation-pinned by reverting RunLayerLoop's own call-site sharing (forcing
+// the resumable path onto a separate, unpatched copy of the K-landing
+// block): compares the K-landing output at the resumption boundary (layer
+// 0, layer_budget=1) against the SAME position computed by a whole-token
+// call (layer_budget=1 as well, since this fixture has only one layer) --
+// both must equal kOptionGFusedK_Pos0_NullConfiguration.
+static void TestOptionGMicrostepWholeTokenParity_CompiledEngine() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	// "Microstep" run: layer_budget=1, matching a caller resuming one layer
+	// at a time (the S3.5 resumable contract this file's own existing tests
+	// already exercise for the non-Option-G path).
+	OptionGKvLandingFixture fixture_microstep;
+	SequenceLayerState seq_micro;
+	int8_t h_micro[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq_micro.hidden_codes = h_micro;
+	seq_micro.hidden_scale = CarriedScale{0, 0};
+	uint8_t ws_micro[1 * 2 * 1 * 2 * 2];
+	std::memset(ws_micro, 0, sizeof(ws_micro));
+	const auto st_micro = RunLayerLoop(
+	    seq_micro, fixture_microstep.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/OptionGKvLandingFixture::kContextCap, fixture_microstep.view.rope_tables,
+	    ws_micro, sizeof(ws_micro), /*option_g_fused_k_landing=*/true);
+	CHECK(st_micro == SslmForwardStatus::Ok);
+	const int8_t* k_micro = KeyRow(ws_micro, 0, OptionGKvLandingFixture::kContextCap, 1, 2, 0, 0);
+
+	// "Whole-token" run: a FRESH fixture/workspace/state, layer_budget equal
+	// to num_hidden_layers (this fixture's own num_hidden_layers=1, so
+	// layer_budget=1 IS the whole-token call here -- the resumable-vs-
+	// whole-token distinction generalizes to a multi-layer fixture; this
+	// single-layer fixture isolates the K-landing arithmetic itself from
+	// the layer-count axis, which S3.5's own existing tests already cover).
+	OptionGKvLandingFixture fixture_whole;
+	SequenceLayerState seq_whole;
+	int8_t h_whole[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq_whole.hidden_codes = h_whole;
+	seq_whole.hidden_scale = CarriedScale{0, 0};
+	uint8_t ws_whole[1 * 2 * 1 * 2 * 2];
+	std::memset(ws_whole, 0, sizeof(ws_whole));
+	const auto st_whole = RunLayerLoop(
+	    seq_whole, fixture_whole.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/OptionGKvLandingFixture::kContextCap, fixture_whole.view.rope_tables, ws_whole,
+	    sizeof(ws_whole), /*option_g_fused_k_landing=*/true);
+	CHECK(st_whole == SslmForwardStatus::Ok);
+	const int8_t* k_whole = KeyRow(ws_whole, 0, OptionGKvLandingFixture::kContextCap, 1, 2, 0, 0);
+
+	CHECK_MSG(k_micro[0] == k_whole[0] && k_micro[1] == k_whole[1],
+	          "the resumable (microstep) path and the whole-token path must compute IDENTICAL "
+	          "fused K-landing output at the same position -- got micro=[%d,%d], whole=[%d,%d]",
+	          k_micro[0], k_micro[1], k_whole[0], k_whole[1]);
+	CHECK_MSG(k_micro[0] == kOptionGFusedK_Pos0_NullConfiguration[0] &&
+	              k_micro[1] == kOptionGFusedK_Pos0_NullConfiguration[1],
+	          "both paths must also equal the independently-derived fused golden value -- got "
+	          "[%d,%d], want [%d,%d]",
+	          k_micro[0], k_micro[1], kOptionGFusedK_Pos0_NullConfiguration[0],
+	          kOptionGFusedK_Pos0_NullConfiguration[1]);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -20596,6 +21190,26 @@ int main(int argc, char** argv) {
 	TestRunLayerLoopDownFoldPerChannelWiringAndSiblingInvariance();
 	TestRunLayerLoopKFoldPerChannelWiringAndSiblingInvariance();
 	TestRunLayerLoopVFoldPerChannelWiringAndSiblingInvariance();
+
+	// T-1899 -- Curie's red suite for T-1894 (T-1822 design Sec12 "Option
+	// G's own coverage", Sec31.2). See this file's own T-1899 section above
+	// for the per-cell mapping; Claude/Curie/t1899-optionG-red-suite-2026-
+	// 08-11.md (records worktree) for the full test-design casebook.
+	TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected();
+	TestOptionGFlagsZero_LoadsUnderCurrentAndLoosenedChecker();
+	TestKvLandingExponentMin_RegressionPin();
+	TestLandingRescale_T1898Witness_FixtureValidityPrecondition();
+	TestOptionGWideRope_InDomain_2p57Class();
+	TestOptionGWideRope_InDomain_2p58Class();
+	TestOptionGWideRope_InDomain_INT64MAX_IdentityRotation();
+	TestOptionGWideRope_OutOfDomain_INT64MAX_NonIdentityRotation();
+	TestOptionGWideRope_TruncationCorner_RejectedViaHighWord();
+	TestOptionGFusedKLanding_NullConfiguration_MatchesLegacy();
+	TestOptionGFusedKLanding_NonNullConfiguration_DivergesFromLegacy();
+	TestOptionGSelectionDispatch_AccessorTracksHeaderFlagBothStates();
+	TestOptionGFusedDomainGate_UnconditionalAtDangerousBandExponent();
+	TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand();
+	TestOptionGMicrostepWholeTokenParity_CompiledEngine();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

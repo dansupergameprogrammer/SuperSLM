@@ -114,6 +114,20 @@ enum class SslmStatus {
 // Human-readable name for a status, for diagnostics and test messages.
 const char* SslmStatusName(SslmStatus s) noexcept;
 
+// T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2.1, D-SLM2355):
+// the production Option-G selection mechanism is a header `flags` bit, not an
+// environment variable and not a format_version bump. Declared here (the
+// design's own exact value, not implementation logic) so the red suite can
+// reference the flag symbolically; `SslmArtifact::flags_`/
+// `OptionGFusedKLandingEnabled()` below are declared, not defined -- Brunel's
+// build (T-1894) loosens artifact.cpp's `flags != 0` check to
+// `flags & ~kKnownArtifactFlagsMask` and wires `flags_`/the accessor for
+// real. `kKnownArtifactFlagsMask` is every bit a legal artifact may set
+// (currently just the one flag); an unknown bit stays a BadHeader rejection
+// under the loosened check (design's own "reject-over-degrade preserved").
+inline constexpr uint32_t kOptionGFusedKLandingFlag = 0x1u;
+inline constexpr uint32_t kKnownArtifactFlagsMask = kOptionGFusedKLandingFlag;
+
 inline constexpr uint32_t kNoSection = 0xFFFFFFFFu;
 
 // A rejection: the code, which section tripped it (or kNoSection), and a message
@@ -178,6 +192,20 @@ public:
 	// The section of the given type, or nullptr if absent.
 	const SslmSectionView* Section(SslmSectionType type) const noexcept;
 
+	// T-1899 (Curie, red suite for T-1894 -- design Sec31.2.1/Sec31.2.5,
+	// D-SLM2355/D-SLM2363): true iff this artifact's header `flags` field sets
+	// `kOptionGFusedKLandingFlag` -- the ONE dispatch point
+	// `RunLayerLoop`'s two fused K-landing call sites read (replacing T-1891's
+	// spike-only env-var gate). Declared, not defined: `flags_` (below) is
+	// never written by this header's own unmodified `artifact.cpp` (Curie's
+	// write scope is declaration, not the loader body), so calling this
+	// accessor link-fails until Brunel's build wires both. Convention: this
+	// suite's own established declare-and-stub practice (RopeApplySite's own
+	// history, this file's sibling forward_sites.h; T-1839's own
+	// IsPeelParamsAdmissibleAtN precedent, Claude/Curie/t1832-...-red-suite-
+	// test-design-2026-08-08.md Sec9.5).
+	bool OptionGFusedKLandingEnabled() const noexcept;
+
 private:
 	// S-HARDEN-7: grants src/artifact.cpp's SslmArtifactAccess (defined only
 	// there, never declared here) access to the private members below, so
@@ -195,6 +223,14 @@ private:
 	bool ok_ = false;
 	uint32_t format_version_ = 0;
 	uint64_t file_bytes_ = 0;
+	// T-1899 (design Sec31.2.1): the raw header `flags` field. Default-
+	// initialized to 0 so every EXISTING construction path (this class's
+	// default constructor; every artifact this campaign has ever loaded,
+	// which per the current strict `flags != 0` check can only ever be 0)
+	// is unaffected by this field's addition. Never written by this
+	// unmodified header's own artifact.cpp -- Brunel's build wires the real
+	// Load()-path assignment.
+	uint32_t flags_ = 0;
 	uint8_t integrity_[kIntegrityHashBytes] = {};
 	std::vector<uint8_t> bytes_;              // owned copy of the whole file
 	std::vector<SslmSectionView> sections_;   // views into bytes_

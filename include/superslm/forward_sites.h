@@ -785,6 +785,72 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
+// T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2's production
+// Option-G build). The production RunLayerLoop overload T-1894's own build
+// adds: threads `option_g_fused_k_landing` (read by the CALLER from
+// `SslmArtifact::OptionGFusedKLandingEnabled()`, design Sec31.2.1/Sec31.2.3 --
+// "the artifact reference RunLayerLoop already threads for every other
+// constant it reads") as an explicit parameter, rather than either (a)
+// changing the EXISTING 15-parameter overload's own signature/body -- both
+// are Brunel's real implementation work, not this suite's declare-only
+// contract extension -- or (b) reaching for the disposable
+// T-1891 spike's own env-var mechanism, explicitly retired by D-SLM2351/
+// D-SLM2355. When `option_g_fused_k_landing` is true, the two K/V-landing
+// call sites rotate each head's wide pre-landing K accumulator pairwise
+// (RopeApplyPairWide, below) at this token's own position, THEN land once
+// (LandingRescale, already shipped) -- replacing the post-landing
+// RopeApplySite read/rotate and its write-back loop (the EXISTING overload's
+// own §6.2-step-3 K rotation) for K only; V and Q are unmodified by this
+// parameter (design Sec31.2.2's own construction, carried from T-1891 §2,
+// confirmed sound by T-1892). Declared, not defined -- the same declare-and-
+// stub convention this header's own RopeApplySite/MlpActSite history already
+// established (T-1839's own signature-change precedent,
+// Claude/Curie/t1832-...-red-suite-test-design-2026-08-08.md Sec9.5, applied
+// here to a NEW overload rather than an edited existing signature so the
+// EXISTING, already-shipped, already-tested 15-parameter overload is left
+// entirely untouched by this suite).
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, bool option_g_fused_k_landing,
+                                 std::string_view site_prefix = {}, size_t token_index = 0,
+                                 SslmTraceHookState* trace_hook_state = nullptr);
+
+// T-1899 (design Sec31.2's own "int64-input, __int128-intermediate sibling of
+// the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
+// overflow domain"). The rotated wide pair -- matches `RopePair`'s own shape
+// (this file, above) but at int64 INPUT width (`RopePair`'s own inputs are
+// int32; this primitive's `x`/`y` are the wide, pre-landing K accumulator
+// values `RunLayerLoop`'s K/V-landing block already carries at int64,
+// unnarrowed). Defined in forward_sites.cpp, on the same portable-128-bit
+// substitution `LandingRescale`'s own C27 composite already uses (this
+// toolchain has no native `__int128`) -- Brunel's build, not this suite's.
+struct RopePairWide {
+	int64_t x = 0;
+	int64_t y = 0;
+};
+
+// Combination and rounding are IDENTICAL to `RopeApplyPair` (this file,
+// above): `(x*cos - y*sin, x*sin + y*cos)`, ONE C3 (ties-away-from-zero)
+// rounding at ROPE_FRAC_BITS -- only the input width and the intermediate's
+// own width differ (int64/128-bit here vs. int32/int64 there).
+// `cos_q30`/`sin_q30` are the SAME Q2.30 ROP1 table entries RopeApplySite
+// already reads (|·| <= ROPE_ONE); this primitive imposes no additional
+// domain on them. The result is UNCLAMPED -- clamping to the activation
+// format is the caller's, through the EXISTING, already-shipped
+// LandingRescale+ClampRopeCode pair (design Sec31.2.2's own construction);
+// this primitive is not a second clamp. `*out_in_domain` is false (refuse,
+// not wrap) whenever either rotated component's ROUNDED value -- the value
+// this function returns, T-1892 Minor 1's own correction: checked on the
+// value AFTER C3 rounding, never some unrounded "true" value the function
+// never materializes -- does not fit int64_t
+// (`OptionGWideRopeMagnitudeOutOfDomain`, checked_chain_funnel.h, this suite).
+// Declared, not defined -- the design's own new primitive; Brunel's build.
+RopePairWide RopeApplyPairWide(int64_t x, int64_t y, int32_t cos_q30, int32_t sin_q30,
+                                bool* out_in_domain);
+
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
 // K/V store is per-(layer, head)-major, position-minor --
 // `offset(kv_head, position, d) = kv_head * context_cap * head_dim +
