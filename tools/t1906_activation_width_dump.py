@@ -151,6 +151,11 @@ MAX_EXACT_FLOAT32_BITS = 25   # T-1907 finding S3. AMAX = 2**(bits-1)-1 is exact
                                 # 2**24) and stops at bits=26 (AMAX=33554431, float32 renders
                                 # 33554432) -- verified this session with numpy.float32, matching
                                 # the casebook's own independently measured cell.
+SCALE_HEADROOM = 1.0 + 2.0 ** -20   # T-1907 finding C2. Mirrors pipeline._SCALE_HEADROOM
+                                     # exactly -- the margin _output_scale applies to its
+                                     # width-independent floor term so the requant multiplier
+                                     # stays strictly representable (< 1) rather than touching
+                                     # its own domain boundary.
 INT8_REFERENCE_AMAX = 127   # NEVER reassigned. The artifact's own calibration grid width --
                              # pipeline._output_scale derives every K/V landing scale as
                              # calibration_maxabs / 127, so a scale read from the artifact is
@@ -198,38 +203,49 @@ def rt_dynamic(x):
     return (q * delta).to(dtype), delta
 
 
-def rt_static(x, scale):
-    """The engine's K/V landing, RE-DERIVED to an AMAX-wide grid -- T-1907 finding C1 (fixed).
+def rt_static(x, scale, floor):
+    """The engine's K/V landing, RE-DERIVED to an AMAX-wide grid -- T-1907 findings C1 (fixed
+    round 1) and C2 (fixed this round).
 
-    `scale` is always the ARTIFACT's calibrated int8-grid value `S_8`, read once and passed by
-    every caller unchanged -- `pipeline._output_scale` derives it as `calibration_maxabs / 127`
-    (`D-SLM2484`). Prior to this fix, `rt_static` reconstructed on `S_8` at every width and only
-    the clip point moved with `AMAX`, so `--bits 12`/`--bits 16` produced BIT-IDENTICAL K/V
-    landings (measured: differs from `--bits 8` in 28 of 3,311,616 elements, and not at all
-    between 12 and 16) -- an axis that did not move at three of T-1809's eighteen site classes
-    (4, 5, 7) while claiming to.
+    `scale` is always the ARTIFACT's calibrated int8-grid value `S_8`
+    (`calibration_maxabs / 127`), read once and passed by every caller unchanged. `floor` is
+    `pipeline._output_scale`'s SECOND term -- `input_product * (1 + 2**-20)`, a per-site
+    constant that does NOT move with `AMAX` -- read from the SAME artifact by
+    `read_kv_landing_scales` and passed alongside `scale`.
 
-    The width axis now moves the RECONSTRUCTION QUANTUM at this site too, not only its clip
-    point: `scale_B = S_8 * 127 / AMAX` is the per-code value of the SAME calibrated range
-    (`calibration_maxabs`) spread over `AMAX` codes instead of 127 -- the same derivation
-    `pipeline._output_scale` would apply at a `B`-bit grid, without re-deriving `S_8` from the
-    calibration corpus (that corpus is not available to this harness; `S_8` already encodes it).
-    At `bits=8`, `AMAX=127` and `127/AMAX == 1.0` exactly (integer division of equal operands),
-    so `scale_B == S_8` bit-for-bit and T-1809 arm C's own reconstruction is byte-for-byte
-    unchanged -- the fidelity check re-run after this fix must still pass 40/40 (`D-SLM2481`
-    reconfirmed post-fix). At other widths the quantum genuinely shrinks with `AMAX`, exactly as
-    `rt_dynamic`'s `delta = D'/AMAX` already does, which is the property C1 found missing.
+    `_output_scale`'s real rule is `max(calibration_maxabs / AMAX, floor)`, not the first term
+    alone (`D-SLM2493`, T-1907 round 2 finding C2). Modelling only the first term, as this
+    function did through round 1, matches the engine's own derivation at `bits<=12` (the
+    calibrated term dominates at every one of the artifact's 56 K/V sites through there) and
+    diverges above it -- measured on this artifact, 1 of 56 sites at `bits=14`, 38 of 56 at
+    `bits=16`, worst ratio 5.38x, always in the direction that makes the round-1 formula's grid
+    FINER than the engine's own rule would allow. `scale_b = max(scale * INT8_REFERENCE_AMAX /
+    AMAX, floor)` reproduces the engine's actual derivation at both regimes, using inputs this
+    tool already reads (no new artifact fields).
 
-    Saturation is real at every width: the engine's own clamp to [-127, 127] at `bits=8`
-    (`dynamic_engine._forward_dynamic_vec_layers`) is the `bits=8` instance of this arm's own
-    clamp to [-AMAX, AMAX], and at wider `bits` the SAME calibrated range now spans more codes,
-    so it saturates less often AND resolves more finely -- both properties of a wider grid, not
-    only the first.
+    At `bits=8`, `scale * INT8_REFERENCE_AMAX / AMAX == scale` exactly (`127/127 == 1.0`) and
+    the calibrated term wins at all 56 sites by a minimum 47.9x margin (T-1907 round 2's own
+    execution), so `floor` never binds and `scale_b == scale` bit-for-bit -- the fidelity check
+    re-run after this fix must still pass 40/40 (`D-SLM2481`/`D-SLM2489`, reconfirmed again this
+    round). Below the crossover (`--bits` roughly 8-12 on this artifact) resolution improves with
+    width and the reconstruction is calibrated-term-bound, exactly as round 1's docstring
+    described. ABOVE the crossover, `scale_b` is PINNED AT `floor` -- resolution stops
+    improving with further width at that site, because `floor` does not move with `AMAX` at all.
+
+    Saturation (T-1907 finding S2, corrected): the clip point is `AMAX * scale_b`. Below the
+    crossover this is `AMAX * scale * 127 / AMAX == scale * 127` -- a CONSTANT, independent of
+    `AMAX` -- so round 1's docstring claim that wider `bits` "saturates less often" was false at
+    every width this harness could reach without the floor (measured: the layer-0 K clip point
+    is `321.189087517720` at `bits` 8, 12, 16 and 25, identical to the last printed digit, under
+    the round-1 formula). Once the floor binds, `AMAX * scale_b == AMAX * floor`, which DOES
+    grow with `AMAX` -- so saturation only eases in the regime where resolution has already
+    stopped improving, never in the regime where it is still improving. The two properties trade
+    off; they do not both move together at any width.
     """
     import torch
     dtype = x.dtype
     xf = x.to(torch.float32)
-    scale_b = scale * (INT8_REFERENCE_AMAX / AMAX)
+    scale_b = max(scale * (INT8_REFERENCE_AMAX / AMAX), floor)
     q = _round_half_away_from_zero(xf / scale_b).clamp(-AMAX, AMAX)
     return (q * scale_b).to(dtype)
 
@@ -319,16 +335,28 @@ def degrade_weights(model, quantize_weight_per_channel, dequantize_weight_per_ch
 # ==============================================================================
 
 def read_kv_landing_scales(metadata_path, n_layers, n_kv_heads):
-    """The engine's calibrated K/V landing scales, read from its own artifact.
+    """The engine's calibrated K/V landing scales AND their width-independent floors, read
+    from the artifact -- T-1907 finding C2 (fixed this round; the floor is new, the scale read
+    is unchanged from round 1).
 
     Asserts the per-head degeneracy rather than assuming it: `_derive_scales` derives one
     scale per K (respectively V) TENSOR and writes it to every head, so a real per-head
     calibration would break this assert loudly instead of being silently averaged away.
+
+    The floor is `pipeline._output_scale`'s second term for this site,
+    `input_product * SCALE_HEADROOM` where `input_product = input_scale * max(weight_scales)`
+    (`pipeline.projection_scale`'s own composition) -- read from `scales.requant[layer{L}.
+    {k|v}_proj.requant]`, the SAME artifact this function already opens, no new file. The
+    requant entry's own `output_scale` is asserted equal to the nonlinear per-head scale
+    already read for that layer, confirming this reads the site that actually produced
+    `k_scales`/`v_scales` rather than a lookalike (T-1907 round 2's own verification method,
+    reproduced here as a structural check rather than a one-off probe).
     """
     with open(metadata_path, encoding="utf-8") as f:
         meta = json.load(f)
     nonlinear = {e["name"]: float(e["scale"]) for e in meta["scales"]["nonlinear"]}
-    k_scales, v_scales = [], []
+    requant = {e["name"]: e for e in meta["scales"]["requant"]}
+    k_scales, v_scales, k_floors, v_floors = [], [], [], []
     for layer in range(n_layers):
         ks = [nonlinear[f"layer{layer}.k_head{h}.scale"] for h in range(n_kv_heads)]
         vs = [nonlinear[f"layer{layer}.v_head{h}.scale"] for h in range(n_kv_heads)]
@@ -338,10 +366,19 @@ def read_kv_landing_scales(metadata_path, n_layers, n_kv_heads):
         )
         k_scales.append(ks[0])
         v_scales.append(vs[0])
-    return k_scales, v_scales
+        for proj, scale_val, floors in (("k", ks[0], k_floors), ("v", vs[0], v_floors)):
+            entry = requant[f"layer{layer}.{proj}_proj.requant"]
+            assert entry["output_scale"] == scale_val, (
+                f"layer{layer}.{proj}_proj.requant output_scale "
+                f"({entry['output_scale']}) != the nonlinear per-head scale ({scale_val}) -- "
+                f"this is not the site that produced k_scales/v_scales"
+            )
+            input_product = float(entry["input_scale"]) * max(entry["weight_scales"])
+            floors.append(input_product * SCALE_HEADROOM)
+    return k_scales, v_scales, k_floors, v_floors
 
 
-def install_forward(model, k_scales, v_scales, quantize_activations: bool):
+def install_forward(model, k_scales, v_scales, k_floors, v_floors, quantize_activations: bool):
     """Install the one patched forward every arm runs.
 
     `quantize_activations` is the ONLY difference between the null and the activation arms:
@@ -387,6 +424,8 @@ def install_forward(model, k_scales, v_scales, quantize_activations: bool):
         """
         k_scale = k_scales[layer_idx] if k_scales is not None else None
         v_scale = v_scales[layer_idx] if v_scales is not None else None
+        k_floor = k_floors[layer_idx] if k_floors is not None else None
+        v_floor = v_floors[layer_idx] if v_floors is not None else None
 
         def forward(hidden_states, position_embeddings, attention_mask,
                     past_key_values=None, **kwargs):
@@ -403,8 +442,8 @@ def install_forward(model, k_scales, v_scales, quantize_activations: bool):
                 # where `folded` is the full 1536-wide accumulator row.
                 q_flat, q_delta = rt_dynamic(q_flat)
                 # sites: k_proj / v_proj -- STATIC per-head landing, the calibrated scale.
-                k_flat = rt_static(k_flat, k_scale)
-                v_flat = rt_static(v_flat, v_scale)
+                k_flat = rt_static(k_flat, k_scale, k_floor)
+                v_flat = rt_static(v_flat, v_scale, v_floor)
 
             query_states = q_flat.view(hidden_shape).transpose(1, 2)
             key_states = k_flat.view(hidden_shape).transpose(1, 2)
@@ -420,7 +459,7 @@ def install_forward(model, k_scales, v_scales, quantize_activations: bool):
                 # q_delta is (B, S, 1) over the pre-view layout; unsqueeze(1) makes it
                 # (B, 1, S, 1), which broadcasts against (B, heads, S, head_dim).
                 query_states = rt_on_grid(query_states, q_delta.unsqueeze(1))
-                key_states = rt_static(key_states, k_scale)
+                key_states = rt_static(key_states, k_scale, k_floor)
 
             if past_key_values is not None:
                 key_states, value_states = past_key_values.update(
@@ -522,23 +561,36 @@ def install_forward(model, k_scales, v_scales, quantize_activations: bool):
 
 
 # ==============================================================================
-# T-1907 finding S1 -- width provenance. A `.float.bin` file carries no arm or bit-width field
-# (its 4-word header is `n_positions, n_layers+1, hidden_size, prompt_fingerprint`, identical to
-# T-1777's own format, which `t1906_grade_arms.py` must keep reading unmodified). The provenance
-# this ticket's width axis needs lives in a directory-level sidecar instead: `manifest.json`,
-# written into `--out-dir`, read and enforced by the grader (S1/S2 fix, same commit).
+# T-1907 finding S1 (round 1) -- width provenance. A `.float.bin` file carries no arm or
+# bit-width field (its 4-word header is `n_positions, n_layers+1, hidden_size,
+# prompt_fingerprint`, identical to T-1777's own format, which `t1906_grade_arms.py` must keep
+# reading unmodified). The provenance this ticket's width axis needs lives in a directory-level
+# sidecar instead: `manifest.json`, written into `--out-dir`.
+#
+# T-1907 finding C1 (round 2) -- the manifest as filed in round 1 certified the RUN that last
+# wrote into a directory, not the FILES in it: `main()` never cleared `--out-dir`, so a
+# `--limit`/`--bits` re-run into a populated directory left a manifest describing the new run
+# sitting beside files from an old one, and the grader trusted the manifest's `bits` without
+# ever checking that its `n_ok`/label set matched what was actually on disk. Two changes close
+# it: `main()` now refuses (or clears, with `--overwrite`) a non-empty `--out-dir` before
+# capture starts, so a manifest can only ever describe the directory it is sitting in; and the
+# manifest now carries the exact label SET captured (`labels`), which the grader requires to
+# equal the set it actually graded -- strictly stronger than comparing counts, at the cost of
+# one field.
 # ==============================================================================
 
 MANIFEST_NAME = "manifest.json"
 
 
 def write_manifest(out_dir: Path, *, arm: str, bits: int, amax: int, docs_source: str,
-                    complete: bool, n_ok: int = None, n_failed: int = None) -> None:
+                    complete: bool, n_ok: int = None, n_failed: int = None,
+                    labels: list = None) -> None:
     """Write/overwrite this directory's own provenance record. Called twice per run: once
     before capture starts (`complete=False`, so an interrupted run still leaves a directory
     that HONESTLY reports it never finished, rather than no manifest at all -- a missing
     manifest and an incomplete one are different failures and the grader treats them
-    differently), and once after (`complete=True`, with final counts).
+    differently), and once after (`complete=True`, with final counts and the exact label set
+    captured, T-1907 finding C1 round 2).
     """
     import json as _json
     manifest = {
@@ -553,6 +605,8 @@ def write_manifest(out_dir: Path, *, arm: str, bits: int, amax: int, docs_source
         manifest["n_ok"] = n_ok
     if n_failed is not None:
         manifest["n_failed"] = n_failed
+    if labels is not None:
+        manifest["labels"] = labels
     with open(out_dir / MANIFEST_NAME, "w", encoding="utf-8") as f:
         _json.dump(manifest, f, indent=2)
 
@@ -571,7 +625,14 @@ def main(argv=None) -> int:
                              "Bounded to [2, 25] -- below 2, AMAX=0; above 25, AMAX is no "
                              "longer exactly representable in float32 (T-1907 finding S3).")
     parser.add_argument("--docs", required=True, help="T-1777's own docs.jsonl (read-only)")
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--out-dir", required=True,
+                         help="must be empty or not-yet-created unless --overwrite is passed "
+                              "(T-1907 finding C1, round 2) -- a capture into a populated "
+                              "directory used to MERGE with whatever was already there, leaving "
+                              "a manifest describing the new run beside files from an old one.")
+    parser.add_argument("--overwrite", action="store_true",
+                         help="clear --out-dir before capture if it already holds files, "
+                              "instead of refusing (T-1907 finding C1, round 2)")
     parser.add_argument("--model", default=None)
     parser.add_argument("--system", default=SYSTEM_PROMPT)
     parser.add_argument("--limit", type=int, default=None,
@@ -600,6 +661,28 @@ def main(argv=None) -> int:
     print(f"activation width: --bits {args.bits} -> AMAX={AMAX} "
           f"({'bit-exact reproduction of T-1809 arm C' if args.bits == 8 else 'width sweep point'})",
           flush=True)
+
+    # T-1907 finding C1 (round 2). Checked before the model load (minutes-long) rather than
+    # after, so a bad invocation fails fast: a capture used to MERGE into whatever `--out-dir`
+    # already held -- writing over labels it reproduces and leaving every other file untouched
+    # -- so a directory could carry files from more than one run while its manifest described
+    # only the last one. Refuse by default; `--overwrite` clears the directory first.
+    out_dir = Path(args.out_dir)
+    if out_dir.exists():
+        existing = [p for p in out_dir.iterdir() if p.is_file()]
+        if existing:
+            if not args.overwrite:
+                raise SystemExit(
+                    f"REFUSED: --out-dir {out_dir} already holds {len(existing)} file(s) "
+                    f"(e.g. {existing[0].name}) -- capturing into it would MERGE this run's "
+                    f"output with whatever is already there, and the manifest this run writes "
+                    f"would then describe files it did not produce (T-1907 finding C1, round "
+                    f"2). Pass --overwrite to clear the directory first, or choose a fresh "
+                    f"--out-dir.")
+            for p in existing:
+                p.unlink()
+            print(f"--overwrite: cleared {len(existing)} pre-existing file(s) from {out_dir} "
+                  f"before capture", flush=True)
 
     sys.path.insert(0, str(Path(args.t1777_tools).resolve()))
     sys.path.insert(0, str(Path(args.spike_root).resolve()))
@@ -643,25 +726,28 @@ def main(argv=None) -> int:
               f"engine's own int8 per-output-channel quantizer in "
               f"{time.perf_counter() - t_deg:.2f}s", flush=True)
 
-    k_scales = v_scales = None
+    k_scales = v_scales = k_floors = v_floors = None
     if quantize_activations:
-        k_scales, v_scales = read_kv_landing_scales(
+        k_scales, v_scales, k_floors, v_floors = read_kv_landing_scales(
             args.artifact_metadata, model.config.num_hidden_layers,
             model.config.num_key_value_heads)
         print(f"kv landing scales read from artifact: {len(k_scales)} layers, "
               f"layer0 k={k_scales[0]:.6g} v={v_scales[0]:.6g}, "
-              f"layer27 k={k_scales[-1]:.6g} v={v_scales[-1]:.6g}", flush=True)
+              f"layer27 k={k_scales[-1]:.6g} v={v_scales[-1]:.6g}, "
+              f"layer0 k_floor={k_floors[0]:.6g} v_floor={v_floors[0]:.6g} "
+              f"(T-1907 C2)", flush=True)
 
-    handles = install_forward(model, k_scales, v_scales, quantize_activations)
+    handles = install_forward(model, k_scales, v_scales, k_floors, v_floors,
+                               quantize_activations)
     print(f"forward installed: arm={args.arm} quantize_weights={quantize_weights} "
           f"quantize_activations={quantize_activations} hooks={len(handles)}", flush=True)
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)   # already refused/cleared above if populated
     write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
                     docs_source=str(Path(args.docs).resolve()), complete=False)
 
     n_ok = n_failed = 0
+    labels_ok = []
     t_start = time.perf_counter()
     for i, doc in enumerate(docs):
         label = doc["label"]
@@ -695,6 +781,7 @@ def main(argv=None) -> int:
         if device == "cuda":
             torch.cuda.empty_cache()
         n_ok += 1
+        labels_ok.append(label)
         if (i + 1) % 10 == 0 or i == 0:
             elapsed = time.perf_counter() - t_start
             print(f"  [{i+1}/{len(docs)}] label={label} n_pos={n_positions} "
@@ -707,7 +794,7 @@ def main(argv=None) -> int:
           flush=True)
     write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
                     docs_source=str(Path(args.docs).resolve()), complete=(n_failed == 0),
-                    n_ok=n_ok, n_failed=n_failed)
+                    n_ok=n_ok, n_failed=n_failed, labels=labels_ok)
     return 0 if n_failed == 0 else 1
 
 

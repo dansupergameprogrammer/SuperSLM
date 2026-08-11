@@ -17,25 +17,31 @@ side in every row, exactly as the engine baseline itself is scored.
 Nothing in T-1777's worktree is written. Every figure printed here is computed by T-1777's
 own functions on T-1777's own committed reference dumps.
 
-T-1907 findings S1 and S2 (fixed, same commit as the dump tool's C1/S3 fixes):
+T-1907 round 1 findings S1 and S2 (fixed): a `--arm NAME=DIR` directory now requires a
+`manifest.json` sidecar naming its own `bits`, and `gap()` refuses rather than differencing
+two rows measured over different populations.
 
-S1 -- a `--arm NAME=DIR` width point's `.float.bin` files carry no width field of their own
-(T-1777's own header format, kept unmodified, has none), so nothing previously stopped an
-int8 directory from being graded and reported as though it were int16. Every width-point
-directory is now required to carry `t1906_activation_width_dump.py`'s own `manifest.json`
-sidecar (written by that tool, not by this one); this grader reads it, prints the bits it
-found, and REFUSES -- exits non-zero without printing a verdict for that arm -- when the
-manifest is missing, or when the operator's own `NAME` encodes a bit width (a trailing
-`bits<N>`/`b<N>` token) that disagrees with the manifest's recorded `bits`. T-1777's own two
-fixed baseline directories (the engine int8 dump, the fp32 self-consistency dump) are exempt
--- they are T-1777's own committed artifacts, never produced by this harness, and carry their
-own provenance already checked by `compare_arms`'s fingerprint guard.
+T-1907 round 2 findings (this commit):
 
-S2 -- `gap()` differenced two rows' `recall@k` without ever comparing their `n`, so a
-width-point directory short of the full corpus (a `--limit` run, or documents lost to the
-dump tool's own per-document failure path) was silently differenced against the fixed
-239-document baseline rows and printed a resolution verdict anyway. `gap()` now refuses --
-prints REFUSED, computes nothing -- whenever the two rows' populations differ.
+C1 -- the round-1 manifest certified the RUN that last wrote into a directory, not the FILES
+sitting in it: nothing cleared `--out-dir` before capture, so a `--limit`/`--bits` re-run into
+a populated directory left a manifest describing the new run beside files an old run left
+behind, and this grader trusted the manifest's `bits` without checking that its recorded
+population matched what was actually graded. Two closes, both required now: the dump tool
+refuses (or clears, with `--overwrite`) a populated `--out-dir` before capture, so a manifest
+can only ever describe the directory it sits in; and this grader requires the manifest's
+`labels` (the exact set the dump tool captured) to equal the label set `compare_arms` actually
+graded, and its `n_ok` to equal the graded `n_docs` -- refusing before printing a verdict for
+that arm if either disagrees. Label-SET equality is strictly stronger than an `n_ok`/`n_docs`
+count match (two different 40-document subsets would pass a count check and fail this one).
+
+S1 -- the name-vs-manifest guard matched `bits<N>` only, while this docstring (round 1) and
+the build record claimed `b<N>` was also covered. `_BITS_IN_NAME` now matches `bits`, `bit`,
+or a bare `b` prefix, anchored at a LEADING word boundary only (a trailing one broke the
+`bits16_rerun`/`b16_final` cases the casebook itself lists, since `_` counts as a word
+character and leaves no boundary between a digit and a following underscore -- caught by
+executing the casebook's own 12-name test set before trusting the fix). `int16`, `16bit`, and
+`width16` still do not match; `b8`, `bits16_rerun`, `b16_final`, `B16` all now do.
 """
 from __future__ import annotations
 
@@ -47,12 +53,15 @@ from pathlib import Path
 
 import numpy as np
 
-_BITS_IN_NAME = re.compile(r"bits?(\d+)", re.IGNORECASE)
+_BITS_IN_NAME = re.compile(r"\b(?:bits?|b)(\d+)", re.IGNORECASE)
 
 
-def _read_manifest_or_refuse(name: str, d: Path) -> int:
-    """T-1907 S1. Returns the manifest's `bits`, or raises SystemExit (refuses) if the
-    directory carries no manifest, or if `name` encodes a bit width that disagrees with it.
+def _read_manifest_or_refuse(name: str, d: Path) -> tuple:
+    """T-1907 S1 (round 1, name/bits check) and C1 (round 2, population check deferred to the
+    caller since it needs the graded results). Returns `(bits, expected_n_ok, expected_labels)`,
+    or raises SystemExit (refuses) if the directory carries no manifest, the manifest is
+    missing the fields round 2 requires, or `name` encodes a bit width that disagrees with the
+    manifest's recorded `bits`.
     """
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
@@ -75,11 +84,20 @@ def _read_manifest_or_refuse(name: str, d: Path) -> int:
                 f"REFUSED: --arm {name}={d} -- the name claims bits={claimed} but "
                 f"{manifest_path} records bits={bits} (T-1907 finding S1). Two widths were "
                 f"about to be compared as though they were the same arm.")
+    n_ok = manifest.get("n_ok")
+    labels = manifest.get("labels")
+    if n_ok is None or labels is None:
+        raise SystemExit(
+            f"REFUSED: --arm {name}={d} -- {manifest_path} carries no 'n_ok'/'labels' field "
+            f"(T-1907 finding C1, round 2). This grader cannot confirm the graded population "
+            f"matches what this directory's capture actually produced; either the run never "
+            f"completed (manifest still reads complete=false) or it predates the C1 fix. "
+            f"Regenerate the directory.")
     if manifest.get("complete") is False:
         print(f"  [{name}] WARNING: manifest.json records complete=False -- this capture "
-              f"had per-document failures; n_ok={manifest.get('n_ok')} "
-              f"n_failed={manifest.get('n_failed')}", flush=True)
-    return bits
+              f"had per-document failures; n_ok={n_ok} n_failed={manifest.get('n_failed')}",
+              flush=True)
+    return bits, n_ok, set(labels)
 
 
 def main(argv=None) -> int:
@@ -109,19 +127,35 @@ def main(argv=None) -> int:
     ref_vecs, ref_fps = rr.load_pooled_vectors(labels, out / "t1777_full_float_bf16", "float")
 
     arms = {
-        "engine int8 (canonical baseline)": (out / "t1777_full_int8", "int8", None),
-        "reference self-consistency: true fp32": (out / "t1777_full_float_fp32", "float", None),
+        "engine int8 (canonical baseline)": (out / "t1777_full_int8", "int8", None, None, None),
+        "reference self-consistency: true fp32": (
+            out / "t1777_full_float_fp32", "float", None, None, None),
     }
     for spec in args.arm:
         name, _, d = spec.partition("=")
         d = Path(d)
-        bits = _read_manifest_or_refuse(name, d)   # T-1907 S1 -- refuses on failure, else here
-        arms[f"T-1906 {name} (bits={bits})"] = (d, "float", bits)
+        # T-1907 S1 (name/bits) refuses inside this call; C1's population check needs the
+        # graded results and happens below, per-row, before that row is printed.
+        bits, expected_n_ok, expected_labels = _read_manifest_or_refuse(name, d)
+        arms[f"T-1906 {name} (bits={bits})"] = (d, "float", bits, expected_n_ok, expected_labels)
 
     rows = {}
-    for name, (d, kind, bits) in arms.items():
+    for name, (d, kind, bits, expected_n_ok, expected_labels) in arms.items():
         cand_vecs, cand_fps = rr.load_pooled_vectors(labels, d, kind)
         results, n_docs = rr.compare_arms(ref_vecs, cand_vecs, domains, ref_fps, cand_fps)
+
+        if expected_labels is not None:   # T-1907 finding C1, round 2 -- width-point arms only
+            graded_labels = {r.label for r in results}
+            if n_docs != expected_n_ok or graded_labels != expected_labels:
+                raise SystemExit(
+                    f"REFUSED: --arm {name}={d} -- graded N={n_docs} over "
+                    f"{len(graded_labels)} labels, but manifest.json records n_ok="
+                    f"{expected_n_ok} over {len(expected_labels)} labels (T-1907 finding C1, "
+                    f"round 2). The directory's contents do not match what its own manifest "
+                    f"certifies -- symmetric difference: "
+                    f"{len(graded_labels ^ expected_labels)} label(s). This is exactly the "
+                    f"stale-directory scenario the manifest exists to catch; regenerate it.")
+
         row = {"n": n_docs}
         for k in (1, 5, 10):
             vals = np.array([r.recall[k] for r in results])
