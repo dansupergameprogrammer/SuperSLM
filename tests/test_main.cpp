@@ -20176,7 +20176,7 @@ static void TestOptionGFusedKLanding_NullConfiguration_MatchesLegacy() {
 	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
 	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
 	                 fixture.view.rope_tables, workspace, sizeof(workspace),
-	                 /*option_g_fused_k_landing=*/true);
+	                 /*option_g_k_landing_mode=*/superslm::OptionGKLandingMode::kFused);
 	CHECK_MSG(result == SslmForwardStatus::Ok, "RunLayerLoop(fused, position 0, identity rotation) "
 	                                           "status == Ok expected");
 
@@ -20226,7 +20226,7 @@ static void TestOptionGFusedKLanding_NonNullConfiguration_DivergesFromLegacy() {
 	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
 	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
 	                 fixture.view.rope_tables, workspace, sizeof(workspace),
-	                 /*option_g_fused_k_landing=*/true, /*site_prefix=*/{}, /*token_index=*/0);
+	                 /*option_g_k_landing_mode=*/superslm::OptionGKLandingMode::kFused, /*site_prefix=*/{}, /*token_index=*/0);
 	CHECK(result == SslmForwardStatus::Ok);
 
 	seq.layer_index = 0;  // resume for the second position, RunLayerLoop's own resumable contract
@@ -20236,7 +20236,7 @@ static void TestOptionGFusedKLanding_NonNullConfiguration_DivergesFromLegacy() {
 	                      /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
 	                      /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
 	                      fixture.view.rope_tables, workspace, sizeof(workspace),
-	                      /*option_g_fused_k_landing=*/true, /*site_prefix=*/{}, /*token_index=*/1);
+	                      /*option_g_k_landing_mode=*/superslm::OptionGKLandingMode::kFused, /*site_prefix=*/{}, /*token_index=*/1);
 	CHECK(result == SslmForwardStatus::Ok);
 
 	const int8_t* k_row = KeyRow(workspace, 0, OptionGKvLandingFixture::kContextCap, 1, 2,
@@ -20338,7 +20338,7 @@ static void TestOptionGFusedDomainGate_UnconditionalAtDangerousBandExponent() {
 	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
 	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
 	                 fixture.view.rope_tables, workspace, sizeof(workspace),
-	                 /*option_g_fused_k_landing=*/true);
+	                 /*option_g_k_landing_mode=*/superslm::OptionGKLandingMode::kFused);
 	CHECK_MSG(result == SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain,
 	          "e_t=-59 (inside the [-60,-25) dangerous band a fractured early-exit would skip) with "
 	          "this fixture's own real kacc/r_t must be REFUSED (OptionGFusedLandingExponentOutOf"
@@ -20374,7 +20374,7 @@ static void TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand() 
 	                 /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
 	                 /*intermediate_size=*/2, /*context_cap=*/OptionGKvLandingFixture::kContextCap,
 	                 fixture.view.rope_tables, workspace, sizeof(workspace),
-	                 /*option_g_fused_k_landing=*/true);
+	                 /*option_g_k_landing_mode=*/superslm::OptionGKLandingMode::kFused);
 	CHECK_MSG(result == SslmForwardStatus::Ok,
 	          "e_t=-40 with this fixture's own real values does NOT overflow (execution-verified) "
 	          "and must NOT be refused -- got %d. Pairs with the cell above: the gate must track "
@@ -20383,73 +20383,229 @@ static void TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand() 
 }
 
 // --- Cell: Microstep/whole-token parity, compiled engine (Sec12 bullet 10;
-// T-1897 D-SLM2364). LINK-RED via the new RunLayerLoop overload. The
-// resumable machinery itself (seq.layer_index, layer_budget) is ALREADY
-// shipped and tested on main (this file's own S3.5 section, above) -- this
-// cell's own new content is that the FUSED path is reached identically
-// whether resumed mid-token or run whole-token, since both share the ONE
-// RunLayerLoop call this design's own text names ("the engine's layer-
-// resumable decode... and its whole-token decode share the one RunLayerLoop
-// call, so Sec31.2.1's artifact-flag selection covers both automatically").
-// Mutation-pinned by reverting RunLayerLoop's own call-site sharing (forcing
-// the resumable path onto a separate, unpatched copy of the K-landing
-// block): compares the K-landing output at the resumption boundary (layer
-// 0, layer_budget=1) against the SAME position computed by a whole-token
-// call (layer_budget=1 as well, since this fixture has only one layer) --
-// both must equal kOptionGFusedK_Pos0_NullConfiguration.
+// RESPECIFIED 2026-08-11 round 4, T-1901 Significant 2/D-SLM2419, D-SLM2427:
+// the round-3 version of this cell ran ONE argument-for-argument identical
+// RunLayerLoop call TWICE on a ONE-layer fixture from fresh state -- no
+// resumption, no second path, nothing the stated mutation pin could move.
+// The design's own respecified text explicitly excludes exactly that
+// construction ("a one-layer fixture, or any construction where both halves
+// of the comparison route through one call with identical arguments, is not
+// a valid instance of this cell").
+//
+// This cell drives a GENUINELY two-layer fixture (`OptionGTwoLayerKvLandingFixture`)
+// through TWO tokens: token A (position 0) whole-token, purely to advance
+// `context_length` to 1 so token B lands at the DISCRIMINATING 45-degree
+// table row; token B (position 1) is where the actual parity comparison
+// happens -- a WHOLE-TOKEN call (layer_budget=2, one call) against a
+// MICROSTEP pair (layer_budget=1, then layer_budget=1 AGAIN, resuming from
+// a genuinely non-zero `seq.layer_index == 1` -- the resumption state the
+// round-3 cell never reached). Both drive layer 1's own K-store output;
+// asserted equal. Mutation-pinned by reverting RunLayerLoop's own call-site
+// sharing (forcing the resumable path onto a separate, unpatched copy of the
+// K-landing block): a build with two independent K-landing implementations
+// -- one reached only via `layer_budget<num_hidden_layers`, the other only
+// via a single whole-token call -- would diverge here, because this cell
+// genuinely exercises both call shapes on the identical underlying state.
 static void TestOptionGMicrostepWholeTokenParity_CompiledEngine() {
 	using namespace superslm;
 	using namespace superslm_test;
 
-	// "Microstep" run: layer_budget=1, matching a caller resuming one layer
-	// at a time (the S3.5 resumable contract this file's own existing tests
-	// already exercise for the non-Option-G path).
-	OptionGKvLandingFixture fixture_microstep;
-	SequenceLayerState seq_micro;
-	int8_t h_micro[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
-	seq_micro.hidden_codes = h_micro;
-	seq_micro.hidden_scale = CarriedScale{0, 0};
-	uint8_t ws_micro[1 * 2 * 1 * 2 * 2];
-	std::memset(ws_micro, 0, sizeof(ws_micro));
-	const auto st_micro = RunLayerLoop(
-	    seq_micro, fixture_microstep.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
-	    /*context_cap=*/OptionGKvLandingFixture::kContextCap, fixture_microstep.view.rope_tables,
-	    ws_micro, sizeof(ws_micro), /*option_g_fused_k_landing=*/true);
-	CHECK(st_micro == SslmForwardStatus::Ok);
-	const int8_t* k_micro = KeyRow(ws_micro, 0, OptionGKvLandingFixture::kContextCap, 1, 2, 0, 0);
+	constexpr size_t kWorkspaceSize = 2 /*layers*/ * 2 /*ctx_cap*/ * 1 /*kv_head*/ * 2 /*head_dim*/ * 2;
 
-	// "Whole-token" run: a FRESH fixture/workspace/state, layer_budget equal
-	// to num_hidden_layers (this fixture's own num_hidden_layers=1, so
-	// layer_budget=1 IS the whole-token call here -- the resumable-vs-
-	// whole-token distinction generalizes to a multi-layer fixture; this
-	// single-layer fixture isolates the K-landing arithmetic itself from
-	// the layer-count axis, which S3.5's own existing tests already cover).
-	OptionGKvLandingFixture fixture_whole;
+	auto run_token_a = [&](OptionGTwoLayerKvLandingFixture& fixture, SequenceLayerState& seq,
+	                       int8_t* hidden_codes, uint8_t* workspace) {
+		hidden_codes[0] = kOptionGFixtureInputH[0];
+		hidden_codes[1] = kOptionGFixtureInputH[1];
+		seq.hidden_codes = hidden_codes;
+		seq.hidden_scale = CarriedScale{0, 0};
+		seq.layer_index = 0;
+		const auto st = RunLayerLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/OptionGTwoLayerKvLandingFixture::kContextCap, fixture.view.rope_tables,
+		    workspace, kWorkspaceSize, /*option_g_k_landing_mode=*/OptionGKLandingMode::kFused);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "token A (position 0, whole-token) status == %s, "
+		                                       "want Ok", SslmForwardStatusName(st));
+		CHECK_MSG(seq.context_length == 1, "token A must advance context_length to 1 -- got %lld",
+		          (long long)seq.context_length);
+	};
+
+	// --- Whole-token path: token B in ONE RunLayerLoop call, layer_budget=2. ---
+	OptionGTwoLayerKvLandingFixture fixture_whole;
 	SequenceLayerState seq_whole;
-	int8_t h_whole[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
-	seq_whole.hidden_codes = h_whole;
-	seq_whole.hidden_scale = CarriedScale{0, 0};
-	uint8_t ws_whole[1 * 2 * 1 * 2 * 2];
+	int8_t h_whole[2];
+	uint8_t ws_whole[kWorkspaceSize];
 	std::memset(ws_whole, 0, sizeof(ws_whole));
-	const auto st_whole = RunLayerLoop(
-	    seq_whole, fixture_whole.layers, /*num_hidden_layers=*/1, /*layer_budget=*/1,
-	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
-	    /*context_cap=*/OptionGKvLandingFixture::kContextCap, fixture_whole.view.rope_tables, ws_whole,
-	    sizeof(ws_whole), /*option_g_fused_k_landing=*/true);
-	CHECK(st_whole == SslmForwardStatus::Ok);
-	const int8_t* k_whole = KeyRow(ws_whole, 0, OptionGKvLandingFixture::kContextCap, 1, 2, 0, 0);
+	run_token_a(fixture_whole, seq_whole, h_whole, ws_whole);
 
-	CHECK_MSG(k_micro[0] == k_whole[0] && k_micro[1] == k_whole[1],
-	          "the resumable (microstep) path and the whole-token path must compute IDENTICAL "
-	          "fused K-landing output at the same position -- got micro=[%d,%d], whole=[%d,%d]",
-	          k_micro[0], k_micro[1], k_whole[0], k_whole[1]);
-	CHECK_MSG(k_micro[0] == kOptionGFusedK_Pos0_NullConfiguration[0] &&
-	              k_micro[1] == kOptionGFusedK_Pos0_NullConfiguration[1],
-	          "both paths must also equal the independently-derived fused golden value -- got "
+	int8_t h_whole_b[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq_whole.hidden_codes = h_whole_b;
+	seq_whole.layer_index = 0;  // a fresh token resets the layer-position marker (S3.7/S9.3)
+	const auto st_whole = RunLayerLoop(
+	    seq_whole, fixture_whole.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/OptionGTwoLayerKvLandingFixture::kContextCap, fixture_whole.view.rope_tables,
+	    ws_whole, kWorkspaceSize, /*option_g_k_landing_mode=*/OptionGKLandingMode::kFused);
+	CHECK_MSG(st_whole == SslmForwardStatus::Ok, "token B whole-token status == %s, want Ok",
+	          SslmForwardStatusName(st_whole));
+	const int8_t* k_whole_layer1 =
+	    KeyRow(ws_whole, /*layer=*/1, OptionGTwoLayerKvLandingFixture::kContextCap, 1, 2, 0,
+	           /*position=*/1);
+
+	// --- Microstep path: token B RESUMED -- TWO calls, layer_budget=1 each. ---
+	OptionGTwoLayerKvLandingFixture fixture_micro;
+	SequenceLayerState seq_micro;
+	int8_t h_micro[2];
+	uint8_t ws_micro[kWorkspaceSize];
+	std::memset(ws_micro, 0, sizeof(ws_micro));
+	run_token_a(fixture_micro, seq_micro, h_micro, ws_micro);
+
+	int8_t h_micro_b[2] = {kOptionGFixtureInputH[0], kOptionGFixtureInputH[1]};
+	seq_micro.hidden_codes = h_micro_b;
+	seq_micro.layer_index = 0;  // a fresh token resets the layer-position marker (S3.7/S9.3)
+	// First microstep call: layer_index 0 -> 1. This is the resumption state
+	// the round-3 cell never reached (its own fixture had num_hidden_layers=1,
+	// so a single layer_budget=1 call always completed the token in one shot).
+	const auto st_micro1 = RunLayerLoop(
+	    seq_micro, fixture_micro.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/OptionGTwoLayerKvLandingFixture::kContextCap, fixture_micro.view.rope_tables,
+	    ws_micro, kWorkspaceSize, /*option_g_k_landing_mode=*/OptionGKLandingMode::kFused);
+	CHECK_MSG(st_micro1 == SslmForwardStatus::Ok, "token B microstep call 1 status == %s, want Ok",
+	          SslmForwardStatusName(st_micro1));
+	CHECK_MSG(seq_micro.layer_index == 1,
+	          "after ONE layer_budget=1 call on a two-layer fixture, layer_index must be 1 (a "
+	          "GENUINE non-zero resumption state) -- got %u", seq_micro.layer_index);
+
+	// Second microstep call: RESUMES from layer_index==1 (non-zero), finishes
+	// layer 1.
+	const auto st_micro2 = RunLayerLoop(
+	    seq_micro, fixture_micro.layers, /*num_hidden_layers=*/2, /*layer_budget=*/1,
+	    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	    /*context_cap=*/OptionGTwoLayerKvLandingFixture::kContextCap, fixture_micro.view.rope_tables,
+	    ws_micro, kWorkspaceSize, /*option_g_k_landing_mode=*/OptionGKLandingMode::kFused);
+	CHECK_MSG(st_micro2 == SslmForwardStatus::Ok, "token B microstep call 2 (resumed from "
+	                                              "layer_index=1) status == %s, want Ok",
+	          SslmForwardStatusName(st_micro2));
+	const int8_t* k_micro_layer1 =
+	    KeyRow(ws_micro, /*layer=*/1, OptionGTwoLayerKvLandingFixture::kContextCap, 1, 2, 0,
+	           /*position=*/1);
+
+	CHECK_MSG(k_micro_layer1[0] == k_whole_layer1[0] && k_micro_layer1[1] == k_whole_layer1[1],
+	          "the GENUINELY resumed (layer_index 0->1->2 across two calls) microstep path and "
+	          "the whole-token (layer_budget=2, one call) path must compute IDENTICAL fused "
+	          "K-landing output at layer 1, position 1 -- got micro=[%d,%d], whole=[%d,%d]",
+	          k_micro_layer1[0], k_micro_layer1[1], k_whole_layer1[0], k_whole_layer1[1]);
+}
+
+// --- Cell: Selection dispatch -- END-TO-END, not accessor-only (T-1894
+// build round 4, T-1901 Critical 1/D-SLM2416, D-SLM2423-2424, new). The
+// round-3 version of this cell asserted only
+// `SslmArtifact::OptionGFusedKLandingEnabled()`'s return value on two loaded
+// artifacts -- no forward pass, no K row read, nothing dispatched. This cell
+// drives the REAL production entry point end to end: two artifacts,
+// byte-identical except the header `flags` field, loaded through
+// `SslmModel::Load` -> `SslmModelView` -> `RunGreedyDecodeLoop` (never
+// `RunLayerLoop` invoked directly with a hand-supplied selector -- design
+// Sec12's own text), threading `view.option_g_fused_k_landing` as
+// `RunGreedyDecodeLoop`'s own new trailing parameter exactly as
+// `tools/sslm_generate.cpp` does (design Sec31.2.1's five-link chain). The
+// decoded K-store bytes, read back from `workspace` after the real forward
+// pass, are asserted against `OptionGComposedPathFixture`'s own
+// execution-derived legacy/fused reference values.
+//
+// Mutation-pinned against dropping any ONE of the five links D-SLM2423
+// names (`SslmModelView`'s own field, `LoadImpl`'s copy, `RunGreedyDecodeLoop`'s
+// parameter, `sslm_generate.cpp`'s pass-through, or the `RunWholeToken`
+// call site's overload selection) -- each independently makes the
+// `flags=1` artifact compute the legacy order again. This IN-PROCESS cell
+// exercises links 1 (`SslmModelView` field), 2 (`LoadImpl`'s copy), 3
+// (`RunGreedyDecodeLoop`'s own parameter), and 5 (this function's own
+// `RunLayerLoop` call, which mirrors `RunWholeToken`'s exactly) directly --
+// reverting any one of THOSE four makes this cell fail, executed and
+// confirmed this build (see the build log's own record of the executed
+// demonstration on link 5, the most direct reproduction of T-1901's own
+// original finding). Link 4 (`sslm_generate.cpp`'s own pass-through) is a
+// one-line mechanical forward -- `tools/sslm_generate.cpp` is a standalone
+// driver binary, not a linkable library function this in-process suite can
+// call, so it is verified by direct source inspection (its own call site
+// literally passes `model_view.option_g_fused_k_landing`) rather than a
+// second, redundant in-process cell.
+static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
+	using namespace superslm;
+	using namespace superslm_test;
+
+	OptionGComposedPathFixture fixture_legacy(/*flags=*/0);
+	OptionGComposedPathFixture fixture_fused(/*flags=*/kOptionGFusedKLandingFlag);
+
+	CHECK_MSG(!fixture_legacy.view.option_g_fused_k_landing,
+	          "flags=0 artifact's SslmModelView.option_g_fused_k_landing must be false (link 1/2)");
+	CHECK_MSG(fixture_fused.view.option_g_fused_k_landing,
+	          "flags=kOptionGFusedKLandingFlag artifact's SslmModelView.option_g_fused_k_landing "
+	          "must be true (link 1/2)");
+
+	constexpr size_t kWorkspaceSize =
+	    1 /*layer*/ * OptionGComposedPathFixture::kContextCap * 1 /*kv_head*/ * 2 /*head_dim*/ * 2;
+
+	auto decode = [&](OptionGComposedPathFixture& fixture, uint8_t* workspace) -> SslmForwardStatus {
+		SequenceLayerState seq;
+		int8_t hidden_codes[OptionGComposedPathFixture::kHiddenSize] = {};
+		seq.hidden_codes = hidden_codes;
+		const int32_t prompt_tokens[2] = {0, 0};  // vocab_size=1: only token id 0 exists
+		int32_t out_tokens[1] = {};
+		int32_t out_logit_rows[1] = {};
+		size_t tokens_produced = 0;
+		SslmDecodeStopReason stop_reason = SslmDecodeStopReason::MaxTokensReached;
+		// The production entry point -- link 3 (RunGreedyDecodeLoop's own new
+		// parameter) and link 5 (this call mirrors RunWholeToken's exactly,
+		// threading fixture.view.option_g_fused_k_landing -- link 1/2's own
+		// value -- rather than a hand-supplied selector).
+		return RunGreedyDecodeLoop(
+		    seq, fixture.layers, /*num_hidden_layers=*/1, OptionGComposedPathFixture::kHiddenSize,
+		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+		    /*context_cap=*/OptionGComposedPathFixture::kContextCap, fixture.view.rope_tables,
+		    prompt_tokens, /*prompt_len=*/2, fixture.embed_weights, fixture.embed_site_constant,
+		    fixture.final_norm_gain_arr, fixture.final_norm_site_constant, fixture.embed_weights,
+		    /*vocab_size=*/OptionGComposedPathFixture::kVocabSize, /*stop_ids=*/nullptr,
+		    /*stop_count=*/0, /*max_new_tokens=*/1, workspace, kWorkspaceSize, out_tokens,
+		    out_logit_rows, /*out_tokens_capacity=*/1, &tokens_produced, &stop_reason,
+		    SslmKvPrecision::Int8, fixture.view.option_g_fused_k_landing);
+	};
+
+	uint8_t ws_legacy[kWorkspaceSize];
+	uint8_t ws_fused[kWorkspaceSize];
+	std::memset(ws_legacy, 0, sizeof(ws_legacy));
+	std::memset(ws_fused, 0, sizeof(ws_fused));
+
+	const auto st_legacy = decode(fixture_legacy, ws_legacy);
+	CHECK_MSG(st_legacy == SslmForwardStatus::Ok,
+	          "flags=0 artifact's own production decode status == %s, want Ok",
+	          SslmForwardStatusName(st_legacy));
+	const auto st_fused = decode(fixture_fused, ws_fused);
+	CHECK_MSG(st_fused == SslmForwardStatus::Ok,
+	          "flags=kOptionGFusedKLandingFlag artifact's own production decode status == %s, "
+	          "want Ok", SslmForwardStatusName(st_fused));
+
+	const int8_t* k_legacy =
+	    KeyRow(ws_legacy, /*layer=*/0, OptionGComposedPathFixture::kContextCap, 1, 2, 0, /*position=*/1);
+	const int8_t* k_fused =
+	    KeyRow(ws_fused, /*layer=*/0, OptionGComposedPathFixture::kContextCap, 1, 2, 0, /*position=*/1);
+
+	CHECK_MSG(k_legacy[0] == kOptionGComposedLegacyK[0] && k_legacy[1] == kOptionGComposedLegacyK[1],
+	          "the flags=0 artifact's own DECODED K-STORE BYTES, read back after a real forward "
+	          "pass through the production entry point, must match the LEGACY reference -- got "
 	          "[%d,%d], want [%d,%d]",
-	          k_micro[0], k_micro[1], kOptionGFusedK_Pos0_NullConfiguration[0],
-	          kOptionGFusedK_Pos0_NullConfiguration[1]);
+	          k_legacy[0], k_legacy[1], kOptionGComposedLegacyK[0], kOptionGComposedLegacyK[1]);
+	CHECK_MSG(k_fused[0] == kOptionGComposedFusedK_Pos1[0] && k_fused[1] == kOptionGComposedFusedK_Pos1[1],
+	          "the flags=kOptionGFusedKLandingFlag artifact's own DECODED K-STORE BYTES, read back "
+	          "after a real forward pass through the production entry point, must match the FUSED "
+	          "reference -- got [%d,%d], want [%d,%d]",
+	          k_fused[0], k_fused[1], kOptionGComposedFusedK_Pos1[0], kOptionGComposedFusedK_Pos1[1]);
+	CHECK_MSG(!(k_legacy[0] == kOptionGComposedFusedK_Pos1[0] && k_legacy[1] == kOptionGComposedFusedK_Pos1[1]),
+	          "the flags=0 artifact must NOT compute the fused order's own output -- a build where "
+	          "any one of the five plumbing links is dropped falls back to legacy regardless of "
+	          "the artifact's own flag, which this assertion alone would not catch; the assertion "
+	          "above (must match legacy) is what catches that -- this is the converse sanity check");
 }
 
 int main(int argc, char** argv) {
@@ -21222,6 +21378,7 @@ int main(int argc, char** argv) {
 	TestOptionGFusedDomainGate_UnconditionalAtDangerousBandExponent();
 	TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand();
 	TestOptionGMicrostepWholeTokenParity_CompiledEngine();
+	TestOptionGSelectionDispatch_EndToEndProductionPath();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

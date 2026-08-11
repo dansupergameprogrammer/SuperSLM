@@ -21,6 +21,14 @@ INTEGRITY_HASH_OFFSET = 32
 INTEGRITY_HASH_BYTES = 32
 MAGIC = b"SSLM"
 
+# T-1894 (T-1822 design Sec31.2.1, round 4/D-SLM2423): the header `flags`
+# field's own first reserved bit -- byte-for-byte mirror of
+# `superslm::kOptionGFusedKLandingFlag` (include/superslm/artifact.h).
+# Selects Option-G fused post-RoPE K landing; every other bit stays reserved
+# (the C++ loader rejects any unknown bit, `artifact.cpp`'s
+# `kKnownArtifactFlagsMask`).
+OPTION_G_FUSED_K_LANDING_FLAG = 0x1
+
 
 class SectionType:
     CONFIG = 0
@@ -88,9 +96,15 @@ def _align_up(v, a):
     return v if a == 0 else (v + (a - 1)) // a * a
 
 
-def build_artifact(sections):
+def build_artifact(sections, flags=0):
     """Serialize `sections` into `.sslm` bytes. Sections are placed in table order,
-    each aligned to its own alignment, immediately after the section table."""
+    each aligned to its own alignment, immediately after the section table.
+
+    T-1894 (design Sec31.2.1, round 4/D-SLM2423): `flags` defaults to 0,
+    preserving every existing caller's own output byte-for-byte. Pass
+    `OPTION_G_FUSED_K_LANDING_FLAG` to produce an artifact whose header asks
+    for Option-G's fused K-landing order (the same field
+    `SslmArtifact::OptionGFusedKLandingEnabled()` reads at load time)."""
     if len(sections) > MAX_SECTIONS:
         raise ValueError(f"{len(sections)} sections > MAX_SECTIONS {MAX_SECTIONS}")
 
@@ -115,7 +129,7 @@ def build_artifact(sections):
     struct.pack_into("<I", buf, 4, ARTIFACT_FORMAT_VERSION)
     struct.pack_into("<I", buf, 8, HEADER_BYTES)
     struct.pack_into("<I", buf, 12, len(sections))
-    struct.pack_into("<I", buf, 16, 0)   # flags
+    struct.pack_into("<I", buf, 16, flags)   # flags
     struct.pack_into("<I", buf, 20, 0)   # reserved0
     struct.pack_into("<Q", buf, 24, file_bytes)
     # integrity hash [32:64] left zero for now
@@ -137,8 +151,8 @@ def build_artifact(sections):
     return bytes(buf), digest.hex()
 
 
-def write_artifact(path, sections):
-    data, fingerprint = build_artifact(sections)
+def write_artifact(path, sections, flags=0):
+    data, fingerprint = build_artifact(sections, flags=flags)
     with open(path, "wb") as f:
         f.write(data)
     return fingerprint

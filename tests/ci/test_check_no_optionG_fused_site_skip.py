@@ -1,22 +1,39 @@
 """T-1899 (Curie) -- Curie's own red suite for
 check_no_optionG_fused_site_skip.py (T-1822 design Sec12's "-60 load floor"
-cell, structural-absence half).
+cell, structural-absence half). Mechanism 2 RE-ANCHORED and its own vitality
+suite REWRITTEN 2026-08-11 round 4 (T-1901 Critical 2/D-SLM2417, D-SLM2425).
 
-Mirrors tests/ci/test_check_no_forward_leaf_calls.py's own convention
-exactly: every mechanism cell below is driven against CONSTRUCTED SCRATCH
-files under `tempfile.TemporaryDirectory()`, never against the real `src/`
-tree edited in place -- StandardsDocument.md Sec4's population-validation
-requirement (a check shown able to FAIL on an injected fault, not merely
-shown to pass on unchanged input). The one cell that DOES read the real tree
-(`test_real_tree_is_currently_clean`) is kept separate for the same reason
-that module's own docstring gives: it is the WIRING cell (does the real glob,
-unmodified, currently report clean), not a mechanism cell, and a real,
-unmodified tree passing alone could never demonstrate the checker catches
-anything.
+Mechanism 1 (retired-symbol absence) still mirrors
+tests/ci/test_check_no_forward_leaf_calls.py's own convention: driven against
+CONSTRUCTED SCRATCH files under `tempfile.TemporaryDirectory()`.
+
+Mechanism 2 (no conditional ahead of the dynamic gate) is now driven against
+REAL-FILE mutations -- a COPY of the actual, real
+`src/forward/forward_sites.cpp`, never a synthetic fixture. T-1901's own
+finding (Critical 2): the prior version of this test suite validated the
+checker's mechanism 2 against a scratch fixture carrying a marker line,
+`(void) out_magnitude_exceeded_int64;`, that appears NOWHERE in real code --
+"a population of one chosen by the rule's author", the exact failure
+StandardsDocument.md Sec4 names ("a check shown able to fail on an injected
+fault... says nothing about whether the rule set covers the defects that
+actually exist"). Executed against copies of the real file, the checker's
+PRIOR anchor (the literal string `out_magnitude_exceeded_int64`, six-line
+backward look-back) reported CLEAN on both an injected exponent-conditioned
+skip and an outright deletion of the refusal, because that literal occurs at
+the real call site only inside a comment. This suite now reproduces both of
+T-1901's own executed mutations against a real-file copy and requires both to
+report RED, per StandardsDocument.md Sec4's own population-validation
+requirement -- and confirms the real, unmutated tree still reports CLEAN, so
+the re-anchored checker is not simply oversensitive.
+
+Mechanism 1's own scratch-fixture tests are unaffected by this round's
+re-anchor (mechanism 1's own anchor -- the retired symbol's literal name --
+was never the defect T-1901 found) and are kept as they were.
 """
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 
@@ -24,6 +41,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, os.pardir, os.pardir))
+_REAL_FORWARD_SITES_CPP = os.path.join(_REPO_ROOT, "src", "forward", "forward_sites.cpp")
 
 import check_no_optionG_fused_site_skip as chk  # noqa: E402
 
@@ -36,7 +54,40 @@ def _write(tmpdir: str, rel_path: str, content: str) -> str:
     return abs_path
 
 
-# --- Mechanism 1: retired symbol absence ------------------------------------
+def _copy_real_forward_sites(tmp: str) -> str:
+    """A COPY of the real, unmutated `forward_sites.cpp` under a scratch
+    directory -- the real `src/` tree is never edited in place. The copy is
+    then mutated by each test below, independently."""
+    dest = os.path.join(tmp, "forward_sites.cpp")
+    shutil.copyfile(_REAL_FORWARD_SITES_CPP, dest)
+    return dest
+
+
+def _replace_once(path: str, old: str, new: str) -> None:
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    count = text.count(old)
+    assert count == 1, (
+        f"expected exactly one occurrence of the real refusal block in {path}, found {count} "
+        f"-- the real file's own shape may have moved; this fixture needs updating, not the "
+        f"checker"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.replace(old, new, 1))
+
+
+# The real, unmutated refusal block this suite mutates -- transcribed from
+# `src/forward/forward_sites.cpp`'s own fused K-landing loop. If a future
+# edit changes this block's own text, `_replace_once`'s count assertion
+# fails loudly (not silently vacuous) rather than mutating nothing.
+_REAL_REFUSAL_BLOCK = (
+    "\t\t\t\t\t\tif (exceeded0 || exceeded1) {\n"
+    "\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+    "\t\t\t\t\t\t}"
+)
+
+
+# --- Mechanism 1: retired symbol absence (unaffected by the round-4 re-anchor) ---
 
 
 def test_a_file_declaring_the_retired_symbol_is_caught():
@@ -72,71 +123,106 @@ def test_a_substring_match_is_not_falsely_flagged():
         assert chk.find_retired_symbol_uses(path) == []
 
 
-# --- Mechanism 2: no conditional ahead of the dynamic gate -------------------
+# --- Mechanism 2, RE-ANCHORED: real-file vitality (T-1901 Critical 2) -------
 
 
-def test_a_resurrected_early_exit_ahead_of_the_dynamic_gate_is_caught():
-    """Reproduces the EXACT shape of T-1898's own fracture (design
-    Sec31.2.2): an `if` testing `kv_landing_e_t_k[h]` against a static
-    threshold, guarding the code that reads out_magnitude_exceeded_int64."""
+def test_real_file_copy_unmutated_reports_clean():
+    """The baseline: a COPY of the real file, unmutated, must report clean --
+    confirms the re-anchored checker is not oversensitive before the
+    mutation tests below rely on a clean baseline to contrast against."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _copy_real_forward_sites(tmp)
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        missing_hits = chk.find_missing_anchors([path])
+        assert skip_hits == [], f"unmutated real file must report no skip hits: {skip_hits}"
+        assert missing_hits == [], (
+            f"unmutated real file must carry both refusal statements: {missing_hits}"
+        )
+
+
+def test_real_file_copy_with_injected_exponent_skip_is_caught():
+    """T-1901's own first executed mutation, reproduced exactly: an `if
+    (lw.kv_landing_e_t_k[h] < -40)` wrapped around the real refusal block --
+    "any conditional wrapping the dynamic-gate call sites" (design's own
+    text). The PRIOR checker (comment-anchored, six-line backward window)
+    reported this clean; the re-anchored one must not."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _copy_real_forward_sites(tmp)
+        mutated = (
+            "\t\t\t\t\t\tif (lw.kv_landing_e_t_k[h] < -40) {\n"
+            "\t\t\t\t\t\t\tif (exceeded0 || exceeded1) {\n"
+            "\t\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+            "\t\t\t\t\t\t\t}\n"
+            "\t\t\t\t\t\t}"
+        )
+        _replace_once(path, _REAL_REFUSAL_BLOCK, mutated)
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        assert len(skip_hits) >= 1, (
+            "an exponent-conditioned skip wrapping the real refusal block must be caught"
+        )
+
+
+def test_real_file_copy_with_refusal_deleted_outright_is_caught():
+    """T-1901's own second executed mutation, reproduced exactly: the
+    refusal replaced with a bare discard, `(void)exceeded0; (void)exceeded1;`
+    -- the shape "no skip condition found" alone cannot catch, since deleting
+    the refusal trivially satisfies it. Caught here by the PRESENCE
+    assertion (`find_missing_anchors`), not the wrapping one."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _copy_real_forward_sites(tmp)
+        _replace_once(path, _REAL_REFUSAL_BLOCK, "\t\t\t\t\t\t(void)exceeded0; (void)exceeded1;")
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        missing_hits = chk.find_missing_anchors([path])
+        assert skip_hits == [], (
+            "no skip-shaped conditional exists after outright deletion -- the wrapping check "
+            "alone is expected to stay silent here"
+        )
+        assert any(h.token == "OptionGFusedLandingExponentOutOfDomain" for h in missing_hits), (
+            f"deleting the refusal outright must be caught by the presence assertion -- got "
+            f"{missing_hits}"
+        )
+
+
+def test_an_unrelated_enclosing_block_is_not_flagged():
+    """A real enclosing ancestor of the refusal (the `for` loop over pairs,
+    the `if (option_g_fused_k_landing)` branch, the K/V-landing block's own
+    bare `{`, the outer `while`, the function signature) must not be
+    mistaken for an exponent-shaped conditional -- confirms the re-anchored
+    checker walks the REAL enclosing-block stack without producing false
+    positives on the real file's own genuine nesting."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _copy_real_forward_sites(tmp)
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        assert skip_hits == [], (
+            f"the real file's own genuine nesting (for/if(option_g_fused_k_landing)/while/"
+            f"function) must not be flagged -- got {skip_hits}"
+        )
+
+
+def test_a_conditional_in_a_comment_or_string_is_not_flagged():
+    """The exponent-shaped-and-if-shaped text this suite's own header
+    comments and diagnostic strings contain (e.g. "e_t", "-59", "ExponentMin"
+    appear throughout this file's own prose) must never be mistaken for a
+    real wrapping conditional -- comments and string contents are stripped
+    before matching."""
     with tempfile.TemporaryDirectory() as tmp:
         path = _write(
             tmp,
             "src/forward/forward_sites.cpp",
             "\n".join([
-                "for (size_t h = 0; h < num_key_value_heads; ++h) {",
-                "    if (lw.kv_landing_e_t_k[h] < kOptionGFusedKvLandingExponentMin) {",
-                "        const int64_t raw0 = LandingRescale(rotated.x, m, r_t, e_a, e_t,",
-                "            &seq.kv_saturation_count, &exceeded);",
-                "        if (exceeded) return OptionGFusedLandingExponentOutOfDomain;",
-                "        (void)out_magnitude_exceeded_int64;",
-                "    }",
+                "// if (e_t < -40) -- this text describes the fractured early-exit, not code",
+                'const char* msg = "if (kv_landing_e_t_k[h] < -40) return ExponentMin";',
+                "if (exceeded0 || exceeded1) {",
+                "    return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;",
                 "}",
                 "",
             ]),
         )
-        hits = chk.find_dynamic_gate_skip_conditions(path)
-        assert len(hits) >= 1, "the resurrected early-exit must be caught"
-
-
-def test_the_unconditional_construction_reports_no_skip_hit():
-    """The DESIGN's own repaired construction: out_magnitude_exceeded_int64
-    is checked with no exponent-shaped conditional anywhere in its own
-    look-back window."""
-    with tempfile.TemporaryDirectory() as tmp:
-        path = _write(
-            tmp,
-            "src/forward/forward_sites.cpp",
-            "\n".join([
-                "for (size_t h = 0; h < num_key_value_heads; ++h) {",
-                "    bool exceeded = false;",
-                "    const int64_t raw0 = LandingRescale(rotated.x, m, r_t, e_a, e_t,",
-                "        &seq.kv_saturation_count, &exceeded);",
-                "    if (exceeded) return OptionGFusedLandingExponentOutOfDomain;",
-                "    (void)out_magnitude_exceeded_int64;",
-                "}",
-                "",
-            ]),
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        assert skip_hits == [], (
+            f"a comment and a string literal describing the fractured shape must not be read "
+            f"as real wrapping code -- got {skip_hits}"
         )
-        hits = chk.find_dynamic_gate_skip_conditions(path)
-        assert hits == [], (
-            f"an ordinary `if (exceeded)` refusal test, with no exponent-shaped condition "
-            f"gating whether the check RUNS AT ALL, must not be flagged -- got {hits}"
-        )
-
-
-def test_an_unrelated_conditional_far_from_the_gate_is_not_flagged():
-    """A conditional outside the look-back window must not produce a false
-    positive -- the window is deliberately small (Sec12's own text: 'on
-    every element, with no condition ... ahead of the check', a LOCAL
-    property, not a whole-function one)."""
-    with tempfile.TemporaryDirectory() as tmp:
-        lines = ["if (e_t < -60) return SomeUnrelatedStatus;"]
-        lines += [f"// filler line {i}" for i in range(20)]
-        lines += ["(void)out_magnitude_exceeded_int64;"]
-        path = _write(tmp, "src/forward/forward_sites.cpp", "\n".join(lines) + "\n")
-        hits = chk.find_dynamic_gate_skip_conditions(path)
-        assert hits == [], f"a conditional 21 lines above the gate mention is out of window: {hits}"
 
 
 # --- Population coverage: the default population reaches both src/ and include/ ---
@@ -148,7 +234,7 @@ def test_default_population_covers_a_file_under_src_and_under_include():
                "constexpr int64_t kOptionGFusedKvLandingExponentMin = -25;\n")
         _write(tmp, "include/superslm/forward_sites.h",
                "constexpr int64_t kOptionGFusedKvLandingExponentMin = -25;\n")
-        retired_hits, _ = chk.check(tmp)
+        retired_hits, _skip_hits, _missing_hits = chk.check(tmp)
         matched_dirs = {os.path.relpath(h.path, tmp).split(os.sep)[0] for h in retired_hits}
         assert matched_dirs == {"src", "include"}, (
             f"the default population must scan BOTH src/ and include/ -- got hits from "
@@ -160,14 +246,15 @@ def test_default_population_covers_a_file_under_src_and_under_include():
 
 
 def test_real_tree_is_currently_clean():
-    """The real src/+include/ tree, unmodified by this session's build (only
-    by this session's own header DECLARATIONS -- forward_sites.h/artifact.h/
-    checked_chain_funnel.h -- none of which names the retired symbol or adds
-    a conditional ahead of a dynamic-gate mention, since no dynamic-gate CALL
-    SITE exists in production code yet at all). Kept separate from the
-    mechanism cells above per this module's own docstring: a clean real tree
-    passing alone proves nothing about whether the checker can catch a
-    fault; the scratch cells above are what prove that."""
-    retired_hits, skip_hits = chk.check(_REPO_ROOT)
+    """The real src/+include/ tree, unmodified by this session, reports
+    clean under the re-anchored mechanism -- the two fused K-landing call
+    sites this build created (`src/forward/forward_sites.cpp`) carry the
+    unconditional refusal the design specifies, with no wrapping conditional
+    and no missing anchor. Kept separate from the mechanism cells above per
+    this module's own docstring: a clean real tree passing alone proves
+    nothing about whether the checker can catch a fault; the real-file
+    mutation cells above are what prove that."""
+    retired_hits, skip_hits, missing_hits = chk.check(_REPO_ROOT)
     assert retired_hits == [], f"retired symbol found in the real tree: {retired_hits}"
     assert skip_hits == [], f"skip-shaped conditional found in the real tree: {skip_hits}"
+    assert missing_hits == [], f"a required refusal statement is missing from the real tree: {missing_hits}"

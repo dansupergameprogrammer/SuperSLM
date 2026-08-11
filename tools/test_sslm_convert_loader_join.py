@@ -61,20 +61,26 @@ _VERIFIER = _find_verifier()
 pytestmark = pytest.mark.skipif(_VERIFIER is None, reason="sslm_verify not built -- see module docstring")
 
 
-def _independent_parse_header_and_sections(data):
+def _independent_parse_header_and_sections(data, expected_flags=0):
     """Transcribed directly from docs/sslm_format.md "Byte layout" -- a
     64-byte header then `section_count` x 40-byte descriptors. Returns
     (format_version, {section_type, ...}) or raises AssertionError on any
     structural deviation (this test's own artifacts are always well-formed;
     a raise here means the writer under test regressed the byte layout
     itself, not a hostile-input case -- that population is the C++ suite's).
+
+    T-1894 (design Sec31.2.1, round 4/D-SLM2423): `expected_flags` defaults
+    to 0 (every pre-existing caller's own artifact), overridable so a
+    flags=1 (Option-G) artifact can be independently parsed by this same
+    function rather than a duplicated one -- see
+    `test_option_g_flag_artifact_both_independent_oracles_accept_it`, below.
     """
     assert len(data) >= 64, "file shorter than the 64-byte header"
     magic = data[0:4]
     assert magic == b"SSLM", f"bad magic {magic!r}"
     format_version, header_bytes, section_count, flags, reserved0 = struct.unpack_from("<IIIII", data, 4)
     assert header_bytes == 64
-    assert flags == 0
+    assert flags == expected_flags, f"flags: got {flags}, want {expected_flags}"
     assert reserved0 == 0
     (file_bytes,) = struct.unpack_from("<Q", data, 24)
     assert file_bytes == len(data)
@@ -109,6 +115,26 @@ def _build_valid_v2_artifact_bytes():
         F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()),
     ]
     data, fingerprint = F.build_artifact(sections)
+    return data, fingerprint
+
+
+def _build_valid_v2_option_g_artifact_bytes():
+    """T-1894 (design Sec31.2.1, round 4/D-SLM2423): the same minimal v2
+    artifact as `_build_valid_v2_artifact_bytes`, with the header's
+    Option-G flag bit set -- `sslm_format.write_artifact`'s own new `flags`
+    parameter (the equivalent of `convert_model.py --option-g-fused-k-landing`
+    for a hand-built test artifact, per the design's own text: "an equivalent
+    direct byte-patch of the same field")."""
+    cfg_bytes = W.write_cfg1(
+        hidden_size=8, num_hidden_layers=1, num_attention_heads=2, num_key_value_heads=1,
+        head_dim=4, intermediate_size=8, vocab_size=4, context_cap=4, tie_word_embeddings=False,
+        kv_precision=W.KV_PRECISION_INT8, kv_block_size=16, unicode_major=15, unicode_minor=1,
+        unicode_patch=0, rope_theta=10000.0, rms_norm_eps=1e-6)
+    sections = [
+        F.Section(F.SectionType.CONFIG, cfg_bytes),
+        F.Section(F.SectionType.SIGMOID_LUT, W.write_sil1()),
+    ]
+    data, fingerprint = F.build_artifact(sections, flags=F.OPTION_G_FUSED_K_LANDING_FLAG)
     return data, fingerprint
 
 
@@ -150,6 +176,30 @@ def test_valid_artifact_both_independent_oracles_agree_it_is_well_formed(tmp_pat
 
     # (d) both verdicts agree.
     assert cpp_verdict_ok, f"C++ verifier rejected a Python-schema-valid artifact: {manifest}"
+    assert python_verdict_ok == cpp_verdict_ok
+
+
+def test_option_g_flag_artifact_both_independent_oracles_accept_it(tmp_path):
+    """T-1894 (design Sec31.2.1, round 4/D-SLM2423): the writer/loader join
+    cell's own flags=1 counterpart, named as a test-suite obligation by the
+    design's own text ("tools/test_sslm_convert_loader_join.py:77's
+    hard-coded flags == 0 assertion is a test-suite obligation... not a
+    design question"). A flags=1 artifact (the known Option-G bit alone) must
+    be accepted by BOTH independent oracles, exactly like a flags=0 one --
+    the loosened check (`artifact.cpp`'s `flags & ~kKnownArtifactFlagsMask`)
+    is a strict superset of the prior `flags == 0` acceptance, never a
+    narrower one."""
+    data, _fp = _build_valid_v2_option_g_artifact_bytes()
+
+    format_version, types = _independent_parse_header_and_sections(
+        data, expected_flags=F.OPTION_G_FUSED_K_LANDING_FLAG)
+    assert format_version == 2
+    python_verdict_ok = _independent_required_sections_ok(format_version, types)
+    assert python_verdict_ok, f"Python schema check: types {types} missing required {_REQUIRED_SECTIONS_BY_VERSION[2]}"
+
+    returncode, manifest = _run_verifier(tmp_path, data)
+    cpp_verdict_ok = (manifest.get("status") != "REJECTED") and returncode == 0
+    assert cpp_verdict_ok, f"C++ verifier rejected a Python-schema-valid flags=1 artifact: {manifest}"
     assert python_verdict_ok == cpp_verdict_ok
 
 

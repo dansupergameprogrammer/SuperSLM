@@ -293,6 +293,12 @@ int main(int argc, char** argv) {
 	size_t out_tokens_produced = 0;
 	SslmDecodeStopReason stop_reason = SslmDecodeStopReason::MaxTokensReached;
 
+	// T-1894 (design Sec31.2.1, round 4/D-SLM2423, link 4 of 5): passes
+	// `model_view.option_g_fused_k_landing` -- the header `flags` bit
+	// SslmModel::Load already read into this view (link 1/2) -- as
+	// RunGreedyDecodeLoop's own new trailing parameter, mirroring exactly how
+	// this call already passes `model_view.config.kv_precision` as its
+	// previous last argument.
 	const SslmForwardStatus decode_status = RunGreedyDecodeLoop(
 	    seq, layers.data(), num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
 	    model_view.config.intermediate_size, context_cap, model_view.rope_tables, prompt_tokens.data(),
@@ -300,7 +306,7 @@ int main(int argc, char** argv) {
 	    final_norm_site_constant, head_weights, static_cast<int32_t>(model_view.config.vocab_size),
 	    stop_ids.empty() ? nullptr : stop_ids.data(), stop_ids.size(), max_new_tokens, workspace.data(), workspace.size(),
 	    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &out_tokens_produced, &stop_reason,
-	    model_view.config.kv_precision);
+	    model_view.config.kv_precision, model_view.option_g_fused_k_landing);
 
 	if (decode_status != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=decode: status=%s\n",

@@ -408,6 +408,17 @@ struct SslmModelView {
 	TokenizerView tokenizer;
 	bool has_tokenizer = false;
 
+	// T-1894 (T-1822 design Sec31.2.1, round 4/D-SLM2423): the Option-G
+	// selection bit, a property of the artifact HEADER (not a section, so no
+	// `has_*` flag -- present, meaningfully, on every valid artifact, unlike
+	// a section which may be legitimately absent). Set by `LoadImpl`
+	// immediately after `SslmArtifact::OpenFromMemory` succeeds, from
+	// `backing_.OptionGFusedKLandingEnabled()`. A consumer already holding a
+	// `SslmModelView` (`tools/sslm_generate.cpp`, this build) reads this
+	// field directly rather than reaching into the private `backing_` only
+	// `SslmModelAccess` may touch.
+	bool option_g_fused_k_landing = false;
+
 	// The numeric-record trace hook's own state (D-SLM353): owned here, per
 	// model handle, instead of a process-wide static -- the corrected reading
 	// of SuperSLM_S3a_WalkingSkeleton_Plan.md §3's Layer-1-wide no-global-state
@@ -483,6 +494,7 @@ private:
 		has_calibration_band = other.has_calibration_band;
 		tokenizer = std::move(other.tokenizer);
 		has_tokenizer = other.has_tokenizer;
+		option_g_fused_k_landing = other.option_g_fused_k_landing;
 		trace_hook = other.trace_hook;
 		backing_ = std::move(other.backing_);
 
@@ -505,6 +517,7 @@ private:
 		other.has_kv_landing_reciprocals = false;
 		other.has_calibration_band = false;
 		other.has_tokenizer = false;
+		other.option_g_fused_k_landing = false;
 		other.trace_hook = SslmTraceHookState{};
 	}
 

@@ -1096,6 +1096,15 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 		return SslmModelStatus::ArtifactRejected;
 	}
 
+	// T-1894 (design Sec31.2.1, round 4/D-SLM2423): the header `flags` bit is
+	// a property of the artifact itself, set once here, before the
+	// per-section loop -- it is not a section and has no `has_*` flag. On any
+	// LATER rejection in this function, `out` is reset to `SslmModelView{}`
+	// by every existing return path below, which restores this field to its
+	// own default (`false`) exactly like every other member already is -- no
+	// special-casing added.
+	out.option_g_fused_k_landing = out.backing_.OptionGFusedKLandingEnabled();
+
 	for (const SslmSectionView& section : out.backing_.Sections()) {
 		SslmModelStatus s = SslmModelStatus::Ok;
 		switch (section.type) {

@@ -225,6 +225,17 @@ def main():
     ap.add_argument("--skip-verify", action="store_true",
                     help="skip invoking the independent C++ verifier (debugging only -- "
                          "the artifact's 'must load Ok' contract is NOT discharged without it)")
+    # T-1894 (T-1822 design Sec31.2.1, round 4/D-SLM2423): opt-in, defaulting
+    # to today's flags=0 output for every existing invocation. Sets the
+    # header bit `SslmArtifact::OptionGFusedKLandingEnabled()` reads at load
+    # time -- this converter makes no OTHER change for the switch (Arm D's
+    # own per-head calibration, Sec31.3/Sec31.4, is separate and unbuilt);
+    # the artifact still carries the legacy-scale per-head K/V landing
+    # constants, now interpreted under the fused (rotate-then-land) order.
+    ap.add_argument("--option-g-fused-k-landing", action="store_true",
+                    help="set the artifact header's Option-G flag bit, selecting the fused "
+                         "post-RoPE K-landing order at load time (default: legacy order, "
+                         "flags=0)")
     args = ap.parse_args()
 
     artifact_cache, _pipeline = _load_spike()
@@ -241,7 +252,8 @@ def main():
 
     # Phase 2: serialize (explicit little-endian dtypes throughout sslm_model_writer.py).
     sections, fold_approximation_error = build_sections(model)
-    fp = F.write_artifact(args.out, sections)
+    flags = F.OPTION_G_FUSED_K_LANDING_FLAG if args.option_g_fused_k_landing else 0
+    fp = F.write_artifact(args.out, sections, flags=flags)
     print(f"wrote {args.out}")
     print(f"fingerprint {fp}")
     print(f"sections {len(sections)}: " + ", ".join(str(s.type) for s in sections))

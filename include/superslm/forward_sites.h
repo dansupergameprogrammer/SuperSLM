@@ -785,9 +785,27 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
+// T-1894 (design Sec31.2.1, round 4/D-SLM2426): the fused K-landing
+// selector's own type. `const char* -> bool` is a standard boolean
+// conversion and outranks `const char* -> std::string_view`'s user-defined
+// conversion, so a caller passing a string literal at this overload's
+// selector position (13, ahead of `site_prefix`) used to silently resolve to
+// THIS overload -- enabling the fused path and discarding the label --
+// rather than the pre-existing overload's own `string_view site_prefix`
+// (T-1901 Significant 1). A scoped enum has no implicit conversion from
+// `const char*`, `bool`, or `int`: a string literal at that position now
+// finds no viable conversion here and correctly resolves to the 15-parameter
+// overload instead, and a caller reaching for a bare `true`/`false` gets a
+// hard compile error at both overloads rather than a silent semantic
+// accident. Scoped to this ONE overload-resolution position --
+// `RunGreedyDecodeLoop`'s own new parameter and `SslmModelView::
+// option_g_fused_k_landing` (both above/model.h) stay `bool`, since neither
+// is an overload-resolution site.
+enum class OptionGKLandingMode : uint8_t { kLegacy = 0, kFused = 1 };
+
 // T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2's production
 // Option-G build). The production RunLayerLoop overload T-1894's own build
-// adds: threads `option_g_fused_k_landing` (read by the CALLER from
+// adds: threads `option_g_k_landing_mode` (read by the CALLER from
 // `SslmArtifact::OptionGFusedKLandingEnabled()`, design Sec31.2.1/Sec31.2.3 --
 // "the artifact reference RunLayerLoop already threads for every other
 // constant it reads") as an explicit parameter, rather than either (a)
@@ -795,26 +813,29 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // are Brunel's real implementation work, not this suite's declare-only
 // contract extension -- or (b) reaching for the disposable
 // T-1891 spike's own env-var mechanism, explicitly retired by D-SLM2351/
-// D-SLM2355. When `option_g_fused_k_landing` is true, the two K/V-landing
-// call sites rotate each head's wide pre-landing K accumulator pairwise
-// (RopeApplyPairWide, below) at this token's own position, THEN land once
-// (LandingRescale, already shipped) -- replacing the post-landing
-// RopeApplySite read/rotate and its write-back loop (the EXISTING overload's
-// own §6.2-step-3 K rotation) for K only; V and Q are unmodified by this
-// parameter (design Sec31.2.2's own construction, carried from T-1891 §2,
-// confirmed sound by T-1892). Declared, not defined -- the same declare-and-
-// stub convention this header's own RopeApplySite/MlpActSite history already
-// established (T-1839's own signature-change precedent,
-// Claude/Curie/t1832-...-red-suite-test-design-2026-08-08.md Sec9.5, applied
-// here to a NEW overload rather than an edited existing signature so the
-// EXISTING, already-shipped, already-tested 15-parameter overload is left
-// entirely untouched by this suite).
+// D-SLM2355. When `option_g_k_landing_mode == OptionGKLandingMode::kFused`,
+// the two K/V-landing call sites rotate each head's wide pre-landing K
+// accumulator pairwise (RopeApplyPairWide, below) at this token's own
+// position, THEN land once (LandingRescale, already shipped) -- replacing
+// the post-landing RopeApplySite read/rotate and its write-back loop (the
+// EXISTING overload's own §6.2-step-3 K rotation) for K only; V and Q are
+// unmodified by this parameter (design Sec31.2.2's own construction, carried
+// from T-1891 §2, confirmed sound by T-1892). Declared, not defined -- the
+// same declare-and-stub convention this header's own RopeApplySite/
+// MlpActSite history already established (T-1839's own signature-change
+// precedent, Claude/Curie/t1832-...-red-suite-test-design-2026-08-08.md
+// Sec9.5, applied here to a NEW overload rather than an edited existing
+// signature so the EXISTING, already-shipped, already-tested 15-parameter
+// overload is left entirely untouched by this suite). The parameter's own
+// TYPE changed from `bool` to `OptionGKLandingMode` in T-1894's own build
+// round 4 (T-1901 Significant 1/D-SLM2418, D-SLM2426) -- see that enum's own
+// comment, above.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
-                                 size_t workspace_size, bool option_g_fused_k_landing,
+                                 size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
                                  std::string_view site_prefix = {}, size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
@@ -1020,6 +1041,16 @@ enum class SslmDecodeStopReason {
 // hostile-input rejection) rejected here with `KvPrecisionUnsupported`;
 // `SslmKvPrecision::Int8` (the default) is unaffected and proceeds exactly
 // as before this parameter existed.
+// T-1894 (design Sec31.2.1, round 4/D-SLM2423, link 3 of 5): trailing
+// defaulted parameter, following `kv_precision`'s own exact precedent --
+// every existing call site compiles unchanged until it opts in. The caller
+// (`tools/sslm_generate.cpp`, link 4) passes `model_view.option_g_fused_k_landing`
+// (link 1/2), the same way it already passes `model_view.config.kv_precision`
+// as this signature's own previous last argument. Threaded through to the
+// `RunWholeToken` lambda's own `RunLayerLoop` call inside this function's
+// definition (link 5, `forward_sites.cpp`), which selects the 16-parameter
+// overload's `OptionGKLandingMode` explicitly rather than the default
+// `kLegacy` the twelve-argument call used to resolve to.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
     size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size,
@@ -1032,7 +1063,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
     uint8_t* workspace, size_t workspace_size,
     int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
     size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason,
-    SslmKvPrecision kv_precision = SslmKvPrecision::Int8);
+    SslmKvPrecision kv_precision = SslmKvPrecision::Int8,
+    bool option_g_fused_k_landing = false);
 
 }  // namespace superslm
 

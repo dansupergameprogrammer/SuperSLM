@@ -213,6 +213,121 @@ struct OptionGKvLandingFixture {
 	}
 };
 
+// T-1894 build round 4 (T-1901 Significant 2/D-SLM2419, D-SLM2427): a
+// GENUINELY two-layer sibling of `OptionGKvLandingFixture`, for the
+// compiled-engine microstep/whole-token parity cell -- design Sec12's own
+// respecified text explicitly excludes a one-layer/call-twice construction
+// ("a one-layer fixture, or any construction where both halves of the
+// comparison route through one call with identical arguments, is not a
+// valid instance of this cell"). Both layers carry IDENTICAL per-layer
+// weights/scales to `OptionGKvLandingFixture`'s own single layer -- this
+// fixture's own test does not need a pre-derived golden K value at layer 1
+// (the residual stream carries layer 0's own output into layer 1's input,
+// so layer 1's kacc is NOT the same value layer 0's own golden constants
+// describe): the cell's own claim is that a GENUINELY resumed multi-call
+// path (layer_index advancing 0->1->2 across two separate RunLayerLoop
+// calls) computes the IDENTICAL K-store output a single whole-token call
+// (layer_budget=2) does -- a self-consistency claim, not a value-match one.
+struct OptionGTwoLayerKvLandingFixture {
+	static constexpr int32_t kContextCap = 2;
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[2];
+
+	int64_t kv_landing_r_t_arr[1];
+	int64_t kv_landing_e_t_arr[1] = {0};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int32_t identity_fold_arr[2] = {1, 1};
+	int32_t zero_fold_arr[2] = {0, 0};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[1] = {-86};
+
+	OptionGTwoLayerKvLandingFixture(OptionGTwoLayerKvLandingFixture const&) = delete;
+	OptionGTwoLayerKvLandingFixture& operator=(OptionGTwoLayerKvLandingFixture const&) = delete;
+	OptionGTwoLayerKvLandingFixture(OptionGTwoLayerKvLandingFixture&&) = delete;
+	OptionGTwoLayerKvLandingFixture& operator=(OptionGTwoLayerKvLandingFixture&&) = delete;
+
+	OptionGTwoLayerKvLandingFixture() {
+		using superslm::CarriedScale;
+
+		OptionGTwoLayerKvLandingFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 2;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = OptionGTwoLayerKvLandingFixture::kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(superslm::SslmSectionType::Config,
+		                                    superslm::SslmDtype::Raw, BuildCfg1(spec));
+
+		const int64_t cos_flat[2] = {INT64_C(1073741824), static_cast<int64_t>(kOptionG45DegQ30)};
+		const int64_t sin_flat[2] = {INT64_C(0), static_cast<int64_t>(kOptionG45DegQ30)};
+		FixtureSection rope = MakeOptionGRop1SectionMultiRow(
+		    /*context_cap=*/OptionGTwoLayerKvLandingFixture::kContextCap, /*pairs=*/1, cos_flat, sin_flat);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		if (status != superslm::SslmModelStatus::Ok) {
+			std::fprintf(stderr, "OptionGTwoLayerKvLandingFixture's own minimal artifact failed to "
+			                     "load: %s (%s)\n",
+			             superslm::SslmModelStatusName(status), err.c_str());
+			std::abort();
+		}
+
+		const CarriedScale canonical{INT64_C(1073741824), -30};
+		f.kv_landing_r_t_arr[0] = superslm::DynamicScaleReciprocal(canonical.m);
+
+		for (int l = 0; l < 2; ++l) {
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain;
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.identity2x2;
+			lw.k_weight = f.identity2x2;
+			lw.v_weight = f.identity2x2;
+			lw.o_weight = f.identity2x2;
+			lw.q_fold_identity = f.identity_fold_arr; lw.q_fold_mult = f.zero_fold_arr; lw.q_fold_shift = f.zero_fold_arr;
+			lw.k_fold_identity = f.identity_fold_arr; lw.k_fold_mult = f.zero_fold_arr; lw.k_fold_shift = f.zero_fold_arr;
+			lw.v_fold_identity = f.identity_fold_arr; lw.v_fold_mult = f.zero_fold_arr; lw.v_fold_shift = f.zero_fold_arr;
+			lw.o_fold_identity = f.identity_fold_arr; lw.o_fold_mult = f.zero_fold_arr; lw.o_fold_shift = f.zero_fold_arr;
+			lw.gate_fold_identity = f.identity_fold_arr; lw.gate_fold_mult = f.zero_fold_arr; lw.gate_fold_shift = f.zero_fold_arr;
+			lw.up_fold_identity = f.identity_fold_arr; lw.up_fold_mult = f.zero_fold_arr; lw.up_fold_shift = f.zero_fold_arr;
+			lw.down_fold_identity = f.identity_fold_arr; lw.down_fold_mult = f.zero_fold_arr; lw.down_fold_shift = f.zero_fold_arr;
+			lw.q_site_constant = canonical;
+			lw.o_site_constant = canonical;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+			lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+			lw.mlp_norm_gain = f.norm_gain;
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.identity2x2;
+			lw.up_weight = f.identity2x2;
+			lw.down_weight = f.identity2x2;
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), -96};
+			lw.down_site_constant = canonical;
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+};
+
 // --- Golden constants, execution-derived (see this file's own header
 // comment) for OptionGKvLandingFixture's own hidden_codes=[100,-50] input at
 // each position. Every intermediate is exactly reproducible: RmsNormSite on
@@ -251,6 +366,192 @@ inline constexpr int8_t kOptionGFusedK_Pos0_NullConfiguration[2] = {127, -81};
 // fixture the "Mutation vitality on the deleted landing order" cell and the
 // non-null half of "Engine/reference bit-parity" both drive.
 inline constexpr int8_t kOptionGFusedK_Pos1_NonNullConfiguration[2] = {127, 57};
+
+// --- T-1894 build round 4 (T-1901 Critical 1/D-SLM2416, D-SLM2423-2424): ---
+// --- the Selection-dispatch END-TO-END fixture, and the shared fixture ----
+// --- the Python composed-path bit-parity cell mirrors (D-SLM2420, D-SLM2428) --
+//
+// A single-layer, single-(kv-)head, vocab_size=1 model driven through the
+// REAL production entry point (SslmModel::Load -> SslmModelView ->
+// RunGreedyDecodeLoop), never RunLayerLoop invoked directly with a
+// hand-supplied selector -- design Sec12's own "Selection dispatch" cell
+// text. `flags` is a constructor parameter, byte-patched into the header
+// after BuildArtifact (matching this file's own established
+// PutU32(...)/RecomputeIntegrityHash convention), so both a flags=0 and a
+// flags=kOptionGFusedKLandingFlag instance of this SAME fixture shape can be
+// built and compared.
+//
+// GOLDEN-CONSTANT DERIVATION (StandardsDocument.md Sec5.4). Every
+// composition constant below was obtained by EXECUTING the real Python
+// reference's own OFFLINE derivation functions
+// (`pipeline._derive_scales`/`_derive_composition_constants`, unmodified by
+// this design) against this fixture's own weight/scale inputs (uniform
+// per-channel weight scale 1/127, identity 2x2 projections, a constant
+// per-site calibration floor standing in for a real corpus pass -- see
+// `tests/ci/test_t1899_dynamic_engine_python_reference.py`'s own
+// `_minimal_two_head_model` docstring for why), EXCEPT the K/V landing
+// reciprocal/exponent, overridden to a finer pair
+// (`r_t=DynamicScaleReciprocal(2^30)`, `e_t=-30`, matching `e_a`) after the
+// auto-derivation: the auto-derived pair landed both orders at
+// magnitude-~2 int8 codes, too coarse to resolve an 8-unit difference in a
+// ~135-magnitude rotated accumulator (both orders rounded to the identical
+// small integer -- a real, executed false-negative this session found and
+// corrected, not a hypothetical one).
+//
+// Then CROSS-CHECKED by executing `intmath.residual_reconcile` (the
+// reference's own K-landing composite, bit-equal to the compiled
+// `LandingRescale` by this codebase's own standing claim) and
+// `rope.rope_apply_pair` (bit-equal to `RopeApplyPair`) at the derived
+// `(m_a, r_t, e_a, e_t)`: landing kacc=[127,-64] unrotated ->
+// [127,-82] (both orders agree here -- position 0's own identity rotation);
+// the 45-degree FUSED rotation of the SAME kacc -> [135,45] (identical
+// rotation this file's own `kOptionGFusedK_Pos1_NonNullConfiguration`
+// derivation already used, since kacc and the 45-degree table entry are
+// unchanged) -> landed [127,58]; the LEGACY order narrow-rotates the
+// ALREADY-LANDED [127,-82] at the same 45-degree entry -> [127,32]
+// (unclamped [148,32], clamped). Neither figure was re-derived through the
+// C++ side independently this pass: this fixture's own
+// `TestOptionGSelectionDispatch_EndToEndProductionPath` cell (test_main.cpp)
+// is what proves the compiled engine reproduces [127,32]/[127,58] too,
+// which IS the cross-language claim -- there is no separate, independent
+// third derivation to cross-check against, matching every other golden
+// constant in this file's own convention (the compiled primitive IS the
+// oracle; the Python side is the second, independent implementation).
+struct OptionGComposedPathFixture {
+	static constexpr int32_t kContextCap = 2;
+	static constexpr int32_t kVocabSize = 1;
+	static constexpr size_t kHiddenSize = 2;
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[1];
+
+	int8_t embed_weights[2] = {127, -64};        // vocab_size=1, hidden_size=2
+	superslm::CarriedScale embed_site_constant{INT64_C(1090717716), INT64_C(-44)};
+	int32_t final_norm_gain_arr[2] = {16384, 16384};
+	superslm::CarriedScale final_norm_site_constant{INT64_C(1090717716), INT64_C(-60)};
+
+	int64_t kv_landing_r_t_arr[1] = {INT64_C(4294967296)};
+	int64_t kv_landing_e_t_arr[1] = {INT64_C(-30)};
+	int32_t ctx_fold_identity_arr[1] = {1};
+	int32_t ctx_fold_mult_arr[1] = {0};
+	int32_t ctx_fold_shift_arr[1] = {0};
+	int32_t norm_gain[2] = {16384, 16384};
+	int8_t identity2x2[4] = {1, 0, 0, 1};
+	int32_t identity_fold_arr[2] = {1, 1};
+	int32_t zero_fold_arr[2] = {0, 0};
+	int64_t iexp_softmax_khead_m_arr[1] = {INT64_C(1195669488)};
+	int64_t iexp_softmax_khead_e_arr[1] = {INT64_C(-31)};
+
+	OptionGComposedPathFixture(OptionGComposedPathFixture const&) = delete;
+	OptionGComposedPathFixture& operator=(OptionGComposedPathFixture const&) = delete;
+	OptionGComposedPathFixture(OptionGComposedPathFixture&&) = delete;
+	OptionGComposedPathFixture& operator=(OptionGComposedPathFixture&&) = delete;
+
+	// `flags`: 0 for the legacy artifact, `superslm::kOptionGFusedKLandingFlag`
+	// for the Option-G one -- the ONE byte this fixture's two instances
+	// differ by, matching design Sec12's own "byte-identical except the
+	// header flags field" text.
+	explicit OptionGComposedPathFixture(uint32_t flags) {
+		using superslm::CarriedScale;
+		OptionGComposedPathFixture& f = *this;
+
+		Cfg1Spec spec{};
+		spec.hidden_size = 2;
+		spec.num_hidden_layers = 1;
+		spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1;
+		spec.head_dim = 2;
+		spec.intermediate_size = 2;
+		spec.context_cap = OptionGComposedPathFixture::kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(superslm::SslmSectionType::Config,
+		                                    superslm::SslmDtype::Raw, BuildCfg1(spec));
+
+		const int64_t cos_flat[2] = {INT64_C(1073741824), static_cast<int64_t>(kOptionG45DegQ30)};
+		const int64_t sin_flat[2] = {INT64_C(0), static_cast<int64_t>(kOptionG45DegQ30)};
+		FixtureSection rope = MakeOptionGRop1SectionMultiRow(
+		    /*context_cap=*/OptionGComposedPathFixture::kContextCap, /*pairs=*/1, cos_flat, sin_flat);
+
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		PutU32(built.bytes, 16, flags);
+		RecomputeIntegrityHash(built.bytes);
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		if (status != superslm::SslmModelStatus::Ok) {
+			std::fprintf(stderr,
+			             "OptionGComposedPathFixture's own minimal artifact (flags=%u) failed to "
+			             "load: %s (%s)\n",
+			             flags, superslm::SslmModelStatusName(status), err.c_str());
+			std::abort();
+		}
+
+		// The offline composition constants (StandardsDocument.md Sec5.4 --
+		// executed derivation, this file's own header comment).
+		const CarriedScale c_attn_norm{INT64_C(1090717716), INT64_C(-60)};
+		const CarriedScale c_proj{INT64_C(1090717716), INT64_C(-44)};
+		const CarriedScale c_ctx{INT64_C(1704246432), INT64_C(-53)};
+		const CarriedScale c_mlp_act{INT64_C(1082196484), INT64_C(-52)};
+		const CarriedScale c_residual{INT64_C(1082196484), INT64_C(-37)};
+
+		superslm::LayerWeights& lw = f.layers[0];
+		lw.attn_norm_gain = f.norm_gain;
+		lw.attn_norm_site_constant = c_attn_norm;
+		lw.q_weight = f.identity2x2;
+		lw.k_weight = f.identity2x2;
+		lw.v_weight = f.identity2x2;
+		lw.o_weight = f.identity2x2;
+		lw.q_fold_identity = f.identity_fold_arr; lw.q_fold_mult = f.zero_fold_arr; lw.q_fold_shift = f.zero_fold_arr;
+		lw.k_fold_identity = f.identity_fold_arr; lw.k_fold_mult = f.zero_fold_arr; lw.k_fold_shift = f.zero_fold_arr;
+		lw.v_fold_identity = f.identity_fold_arr; lw.v_fold_mult = f.zero_fold_arr; lw.v_fold_shift = f.zero_fold_arr;
+		lw.o_fold_identity = f.identity_fold_arr; lw.o_fold_mult = f.zero_fold_arr; lw.o_fold_shift = f.zero_fold_arr;
+		lw.gate_fold_identity = f.identity_fold_arr; lw.gate_fold_mult = f.zero_fold_arr; lw.gate_fold_shift = f.zero_fold_arr;
+		lw.up_fold_identity = f.identity_fold_arr; lw.up_fold_mult = f.zero_fold_arr; lw.up_fold_shift = f.zero_fold_arr;
+		lw.down_fold_identity = f.identity_fold_arr; lw.down_fold_mult = f.zero_fold_arr; lw.down_fold_shift = f.zero_fold_arr;
+		lw.q_site_constant = c_proj;
+		lw.o_site_constant = c_proj;
+		lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+		lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+		lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+		lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+		lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+		lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+		lw.ctx_fold_site_constant = c_ctx;
+		lw.attn_residual_site_constant = c_residual;
+		lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+		lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+		lw.mlp_norm_gain = f.norm_gain;
+		lw.mlp_norm_site_constant = c_attn_norm;
+		lw.gate_weight = f.identity2x2;
+		lw.up_weight = f.identity2x2;
+		lw.down_weight = f.identity2x2;
+		lw.gate_site_constant = c_proj;
+		lw.up_site_constant = c_proj;
+		lw.mlp_act_site_constant = c_mlp_act;
+		lw.down_site_constant = c_proj;
+		lw.mlp_residual_site_constant = c_residual;
+	}
+};
+
+// Golden K-store values for `OptionGComposedPathFixture` at position 1 (the
+// 45-degree table row), execution-derived (this struct's own header
+// comment): `kOptionGComposedLegacyK` is the LEGACY order's own FINAL stored
+// value -- landed unrotated, THEN narrow-rotated via `RopeApplySite` and
+// written back (the real production write-back this fixture's own decode
+// exercises), NOT the transient unrotated-landing value ([127,-82]) that
+// exists only before the write-back overwrites it.
+// `kOptionGComposedFusedK_Pos1` is the FUSED order's own value: the wide
+// kacc rotated first, landed once. Identical to each other at position 0
+// (identity rotation, not asserted by name here -- both orders compute
+// [127,-82] there, confirmed by `TestOptionGSelectionDispatch_EndToEndProductionPath`'s
+// own flags=0/flags=1 comparison at position 1 only, per the design's own
+// "at null AND non-null configuration" text being carried by the
+// mutation-vitality cell's own null-configuration assertion elsewhere in
+// this file).
+inline constexpr int8_t kOptionGComposedLegacyK[2] = {127, 32};
+inline constexpr int8_t kOptionGComposedFusedK_Pos1[2] = {127, 58};
 
 }  // namespace superslm_test
 

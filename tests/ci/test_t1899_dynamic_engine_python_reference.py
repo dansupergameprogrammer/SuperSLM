@@ -162,78 +162,136 @@ def _minimal_two_head_model(pipeline, *, num_hidden_layers=1, option_g_fused_k_l
     )
 
 
+def _composed_path_cross_language_model(pipeline, *, option_g_fused_k_landing):
+    """The Python-side TWIN of `tests/sslm_t1899_optionG_fixtures.h`'s own
+    `OptionGComposedPathFixture` (T-1894 build round 4, T-1901 Significant
+    3/D-SLM2420, D-SLM2428) -- hidden_size=2, head_dim=2, one layer, one
+    (kv-)head, identity 2x2 q/k/v/o/gate/up/down projections, embed weight
+    [127,-64] for token 0 (vocab_size=1), gain=[16384,16384], rope table row
+    0 identity / row 1 the 45-degree entry. Every composition constant is
+    IDENTICAL to the C++ fixture's own (transcribed from this same
+    derivation, executed once, both sides read the same numbers) -- see
+    `tests/sslm_t1899_optionG_fixtures.h`'s own header comment for the full
+    derivation trail, including why the K/V landing reciprocal/exponent is
+    overridden to a finer pair after `_derive_composition_constants`'s own
+    auto-derivation (the auto-derived one was too coarse to discriminate
+    fused from legacy at this kacc magnitude -- found by execution).
+    """
+    cfg = pipeline.ModelConfig(
+        hidden_size=2, num_hidden_layers=1, num_attention_heads=1, num_key_value_heads=1,
+        head_dim=2, intermediate_size=2, vocab_size=1, rope_theta=10000.0, rms_norm_eps=1e-6,
+        tie_word_embeddings=True, context_cap=2,
+    )
+    identity2x2 = np.array([[1, 0], [0, 1]], dtype=np.int8)
+    weights = {
+        "embed": np.array([[127, -64]], dtype=np.int8),
+        "layer0.attn_norm.gain": np.array([16384, 16384], dtype=np.int32),
+        "layer0.q_proj": identity2x2,
+        "layer0.k_proj": identity2x2,
+        "layer0.v_proj": identity2x2,
+        "layer0.o_proj": identity2x2,
+        "layer0.mlp_norm.gain": np.array([16384, 16384], dtype=np.int32),
+        "layer0.gate_proj": identity2x2,
+        "layer0.up_proj": identity2x2,
+        "layer0.down_proj": identity2x2,
+        "final_norm.gain": np.array([16384, 16384], dtype=np.int32),
+    }
+    weight_scales = {name: (1.0 / 127.0,) * (w.shape[0] if w.ndim == 2 else 1)
+                     for name, w in weights.items()}
+
+    class _ConstMaxima(dict):
+        def get(self, key, default=0.0):
+            return 100.0
+
+    scales, residual_scales, biases = pipeline._derive_scales(cfg, _ConstMaxima(), weight_scales, {})
+    composition_constants, kv_landing_scales, kv_landing_reciprocals = (
+        pipeline._derive_composition_constants(cfg, weight_scales, scales))
+    # Finer landing scale -- see this function's own docstring.
+    r_t_fine = pipeline.intmath.dynamic_scale_reciprocal(1073741824)
+    kv_landing_reciprocals = dict(kv_landing_reciprocals)
+    kv_landing_reciprocals["layer0.k_head0"] = (1073741824, -30, r_t_fine)
+    kv_landing_reciprocals["layer0.v_head0"] = (1073741824, -30, r_t_fine)
+
+    model = pipeline.QuantizedModel(
+        config=cfg, scales=scales, weights=weights, weight_scales=weight_scales,
+        residual_scales=residual_scales,
+        rope_tables=(np.zeros((2, 1), dtype=np.int64), np.zeros((2, 1), dtype=np.int64)),
+        biases=biases, float_source=lambda name: None,
+        calibration=pipeline.CalibrationRecord(corpus_sha256="test-only", tokenization="test", classes=()),
+        gemm_weights={}, tokenize_prompt=lambda *_a, **_k: [],
+        composition_constants=composition_constants,
+        kv_landing_scales=kv_landing_scales,
+        kv_landing_reciprocals=kv_landing_reciprocals,
+        dynamic_biases={},
+        option_g_fused_k_landing=option_g_fused_k_landing,
+    )
+    cos_flat = np.array([[1073741824], [759250125]], dtype=np.int64)  # row0 identity, row1 45deg
+    sin_flat = np.array([[0], [759250125]], dtype=np.int64)
+    return pipeline.with_rope_tables(model, (cos_flat, sin_flat))
+
+
 def test_option_g_fused_k_landing_matches_dynamic_engine_reference():
     """Sec12 "Engine/reference bit-parity" -- Python-reference half.
+    RESPECIFIED 2026-08-11 round 4 (T-1901 Significant 3/D-SLM2420,
+    D-SLM2428): the round-3 version of this cell composed
+    `_rotate_wide_pair_row` and `landing_rescale_vec` directly in the test
+    body, so reverting the real ordering inside `_forward_dynamic_vec_layers`
+    -- the design's own required half of the mutation pin -- left it green
+    (T-1901's own finding, confirmed by this session's own reproduction, see
+    this file's own build log).
 
-    Drives `dynamic_engine`'s own real K-landing composite -- the module's
-    exported `landing_rescale_vec` (A-8 Sec17.2's own "unit surface") and its
-    `_rotate_wide_pair_row` (the reference-side mirror of the engine's
-    `RopeApplyPairWide`) -- on the IDENTICAL intermediate values the compiled
-    engine's own fixture derivation used (`tests/sslm_t1899_optionG_fixtures.h`'s
-    own header comment: `kacc=[127,-64]`, `normed_scale={m=1358184448,e=0}`,
-    `kv_landing_r_t_k[0]=DynamicScaleReciprocal(2^30)=4294967296`,
-    `kv_landing_e_t_k[0]=0`, the 45-degree table row `cos=sin=759250125`), and
-    asserts the result equals the compiled engine's own golden value
-    (`test_main.cpp`'s `TestOptionGFusedKLanding_NonNullConfiguration_
-    DivergesFromLegacy`, `kOptionGFusedK_Pos1_NonNullConfiguration=[127,57]`).
+    This cell instead builds `_composed_path_cross_language_model`
+    (the Python twin of `tests/sslm_t1899_optionG_fixtures.h`'s own
+    `OptionGComposedPathFixture`) and drives it through
+    `dynamic_engine.forward_dynamic_vec` -- `dynamic_engine`'s own composed
+    path, never a hand-assembled call to the two kernels -- asserting the
+    resulting `k_proj.requant` trace codes equal the compiled engine's own
+    golden values (`tests/sslm_t1899_optionG_fixtures.h`'s
+    `kOptionGComposedFusedK_Pos1=[127,58]`, execution-derived and
+    cross-checked by `TestOptionGSelectionDispatch_EndToEndProductionPath`,
+    test_main.cpp).
 
-    Driven at the vec-kernel level rather than through the full
-    `forward_dynamic_vec` entry point: reproducing this exact fixture through
-    a real embed lookup and the full attn_norm/GEMM/fold chain would require
-    engineering an entire model whose derived intermediate values coincide
-    with the compiled fixture's own hand-chosen ones -- this way drives the
-    SAME production functions `forward_dynamic_vec`'s own K-landing block
-    calls (`_rotate_wide_pair_row`, `landing_rescale_vec`) on the identical
-    inputs, which is what "the reference's own construction matches the
-    engine's construction" actually asks.
-
-    Mutation-pinned two ways, matching the design's own "a cell that only
-    moves when both change together is not a parity cell": (1) the NULL
-    (identity-rotation) configuration must equal the NON-null configuration's
-    own un-rotated landing exactly (both orders coincide at identity, by
-    construction); (2) the non-null, fused result must NOT equal the
-    un-rotated landing of the SAME `kacc` -- if `_rotate_wide_pair_row` were a
-    no-op (the reference-side twin of the engine's own "flag exists, does
-    nothing" defect class), this cell would still read as a pass on (1) alone
-    but fail (2).
+    Mutation-pinned by construction: the assertions below read the K-landing
+    codes from the TRACE `forward_dynamic_vec` itself produces while running
+    `_forward_dynamic_vec_layers`'s own real `if fused_k_landing: seg =
+    _rotate_wide_pair_row(...)` branch (`dynamic_engine.py`) -- a revert of
+    that ordering changes what value lands in the trace, which this cell
+    reads directly, not a value this test's own body independently computed.
+    Verified by execution this session (not merely reasoned): reverting the
+    rotate-before-land order to land-before-rotate inside
+    `_forward_dynamic_vec_layers` on a scratch copy makes the fused-model
+    trace read [127,-82] (the un-rotated landing) instead of [127,58] at
+    token_index=1, failing this cell's own assertion -- see the build log's
+    own record of this executed demonstration.
     """
     dynamic_engine = _import_dynamic_engine()
+    pipeline = _import_pipeline()
 
-    kacc = [127, -64]
-    m_a, e_a = 1358184448, 0
-    r_t, e_t = 4294967296, 0
-    cos_45 = sin_45 = 759250125
-    cos_identity, sin_identity = 1073741824, 0
+    model = _composed_path_cross_language_model(pipeline, option_g_fused_k_landing=True)
+    trace = []
+    dynamic_engine.forward_dynamic_vec(model, [0, 0], trace=trace)
 
-    def landed(seg):
-        return [max(-127, min(127, v)) for v in
-                dynamic_engine.landing_rescale_vec(seg, m_a, r_t, e_a, e_t)]
+    k_trace = {r["token_index"]: r["codes"] for r in trace if r["site"] == "layer0.k_proj.requant"}
 
-    # Null configuration (identity rotation): fused == un-rotated landing.
-    null_rotated = dynamic_engine._rotate_wide_pair_row(kacc, [cos_identity], [sin_identity])
-    null_landed = landed(null_rotated)
-    unrotated_landed = landed(kacc)
-    assert null_landed == unrotated_landed == [127, -81], (
-        f"identity-rotation landing must equal the un-rotated landing exactly "
-        f"-- got null={null_landed}, unrotated={unrotated_landed}"
+    assert k_trace.get(0) == (127, -82), (
+        f"the NULL (identity-rotation, token_index=0) configuration must land kacc=[127,-64] "
+        f"unrotated -- got {k_trace.get(0)}, want (127, -82)"
     )
-
-    # Non-null (45-degree) configuration: the cross-language parity value.
-    non_null_rotated = dynamic_engine._rotate_wide_pair_row(kacc, [cos_45], [sin_45])
-    non_null_landed = landed(non_null_rotated)
-    assert non_null_landed == [127, 57], (
-        f"the Python reference's own fused K-landing at the 45-degree "
-        f"configuration must equal the compiled engine's own golden value "
-        f"[127, 57] (test_main.cpp's kOptionGFusedK_Pos1_NonNullConfiguration) "
-        f"-- got {non_null_landed}"
+    assert k_trace.get(1) == (127, 58), (
+        f"the fused K-landing at the 45-degree (token_index=1) configuration, computed through "
+        f"dynamic_engine's own composed path (_forward_dynamic_vec_layers), must equal the "
+        f"compiled engine's own golden value (127, 58) -- got {k_trace.get(1)}"
     )
-    # Mutation pin: must genuinely differ from the un-rotated landing of the
-    # SAME kacc, or _rotate_wide_pair_row could be a no-op and this cell would
-    # not catch it.
-    assert non_null_landed != unrotated_landed, (
-        "the 45-degree fused result must differ from the un-rotated landing "
-        "of the identical kacc -- a build where the reference's own rotation "
-        "silently does nothing would still pass here otherwise"
+    # Mutation pin: the non-null, fused result must differ from the null
+    # configuration's own landing -- if the composed path's own rotation
+    # were a no-op (or if the ordering reverted to land-then-rotate, which
+    # for THIS kacc/rope-table pair reduces to the un-rotated value at every
+    # position), this assertion is what catches it.
+    assert k_trace.get(1) != k_trace.get(0), (
+        "the 45-degree fused result must differ from the null-configuration landing of the "
+        "identical kacc -- a build where the composed path's own rotation silently does "
+        "nothing (or reverts to land-then-rotate) would still pass the two assertions above "
+        "only by coincidence; this is the discriminating check"
     )
 
 

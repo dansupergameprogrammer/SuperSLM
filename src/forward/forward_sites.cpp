@@ -1825,21 +1825,26 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 // T-1894 (design Sec31.2, T-1899's own contract extension, forward_sites.h):
 // the production Option-G entry point. A caller reads
 // `artifact.OptionGFusedKLandingEnabled()` (design Sec31.2.1) and threads the
-// result here as `option_g_fused_k_landing` -- this function does not read
+// result here as `option_g_k_landing_mode` -- this function does not read
 // the artifact itself, matching the pattern `RunLayerLoop` already uses for
 // every other artifact-derived constant (threaded in by the caller, never
-// re-read from the artifact inside the loop).
+// re-read from the artifact inside the loop). The selector's own type
+// (`OptionGKLandingMode`, not `bool`) is T-1894's own build round 4 repair
+// (T-1901 Significant 1/D-SLM2418, D-SLM2426, forward_sites.h) -- converted
+// to the shared implementation's own `bool` parameter here, at the one place
+// the conversion needs to happen.
 SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
-                                 size_t workspace_size, bool option_g_fused_k_landing,
+                                 size_t workspace_size, OptionGKLandingMode option_g_k_landing_mode,
                                  std::string_view site_prefix, size_t token_index,
                                  SslmTraceHookState* trace_hook_state) {
+	const bool fused = (option_g_k_landing_mode == OptionGKLandingMode::kFused);
 	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
 	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
-	                        workspace, workspace_size, option_g_fused_k_landing, site_prefix,
+	                        workspace, workspace_size, fused, site_prefix,
 	                        token_index, trace_hook_state);
 }
 
@@ -1925,7 +1930,8 @@ SslmForwardStatus RunGreedyDecodeLoop(
     const int32_t* stop_ids, size_t stop_count, size_t max_new_tokens, uint8_t* workspace,
     size_t workspace_size, int32_t* out_tokens, int32_t* out_logit_rows,
     size_t out_tokens_capacity, size_t* out_tokens_produced,
-    SslmDecodeStopReason* out_stop_reason, SslmKvPrecision kv_precision) {
+    SslmDecodeStopReason* out_stop_reason, SslmKvPrecision kv_precision,
+    bool option_g_fused_k_landing) {
 	// S3.7 (§14.4): checked FIRST, before `seq`, `workspace`, or any output
 	// parameter is touched, and before any token is embedded -- an artifact
 	// carrying `kv_precision = Int16` loads today (CFG1's own domain check
@@ -1992,9 +1998,18 @@ SslmForwardStatus RunGreedyDecodeLoop(
 		for (size_t i = 0; i < hidden_size; ++i) seq.hidden_codes[i] = embed_codes[i];
 		seq.hidden_scale = embed_scale;
 		seq.layer_index = 0;
+		// T-1894 (design Sec31.2.1, round 4/D-SLM2423, link 5 of 5): the
+		// 16-parameter overload, called explicitly with the caller's own
+		// `option_g_fused_k_landing` (link 3's new parameter, itself sourced
+		// from `SslmModelView::option_g_fused_k_landing` at link 4,
+		// `tools/sslm_generate.cpp`) -- not the twelve-argument call that used
+		// to resolve to the 15-parameter overload's own default-`kLegacy`
+		// behavior regardless of what the loaded artifact's header asked for.
 		return RunLayerLoop(seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers,
 		                     hidden_size, head_dim, num_key_value_heads, intermediate_size,
-		                     context_cap, rope_tables, workspace, workspace_size);
+		                     context_cap, rope_tables, workspace, workspace_size,
+		                     option_g_fused_k_landing ? OptionGKLandingMode::kFused
+		                                              : OptionGKLandingMode::kLegacy);
 	};
 
 	// Prefill: every prompt token except the last (the last is folded into
