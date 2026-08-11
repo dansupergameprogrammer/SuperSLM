@@ -184,9 +184,21 @@ static void TestRejectsHeaderBytesMismatch() {
 	CHECK(err.section_index == kNoSection);
 }
 
-static void TestRejectsNonzeroFlags() {
+// T-1894 (design Sec31.2.1, D-SLM2355): renamed from TestRejectsNonzeroFlags
+// and its own fixture value changed from 1 to 0x2 -- flags=1 is
+// kOptionGFusedKLandingFlag, a KNOWN bit the production loosened check
+// (artifact.cpp) now legitimately accepts (reject-over-degrade is preserved
+// for UNKNOWN bits, not for every nonzero value); this test's own assertion
+// (BadHeader) is unchanged, but the input that must trigger it had to move to
+// a value that is still genuinely illegal under the ratified design. The
+// known-bit case this test used to cover is now T-1899's own
+// TestOptionGArtifactFlags_KnownBitAcceptedUnknownBitRejected (this file,
+// below), which asserts the opposite (Ok, not BadHeader) for flags=1 -- the
+// two tests together pin both directions of the mechanism this rename makes
+// room for.
+static void TestRejectsUnknownFlagsBit() {
 	auto built = BuildArtifact({MakeConfigSection()});
-	PutU32(built.bytes, 16, 1);  // flags, offset 16, reserved == 0
+	PutU32(built.bytes, 16, 0x2u);  // flags, offset 16 -- outside kKnownArtifactFlagsMask
 	RecomputeIntegrityHash(built.bytes);
 
 	SslmArtifact out;
@@ -20477,7 +20489,7 @@ int main(int argc, char** argv) {
 	TestRejectsBadMagic();
 	TestRejectsUnsupportedVersion();
 	TestRejectsHeaderBytesMismatch();
-	TestRejectsNonzeroFlags();
+	TestRejectsUnknownFlagsBit();
 	TestRejectsNonzeroReserved0();
 	TestRejectsTruncatedHeader();
 

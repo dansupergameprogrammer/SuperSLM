@@ -56,7 +56,7 @@ All integers little-endian. Offsets are absolute from the start of the file.
 |      4 | `u32`      | `format_version`   | `== 2`                                      |
 |      8 | `u32`      | `header_bytes`     | `== 64`                                     |
 |     12 | `u32`      | `section_count`    | `<= 4096`                                   |
-|     16 | `u32`      | `flags`            | `== 0` (reserved)                           |
+|     16 | `u32`      | `flags`            | `& ~0x1 == 0` (bit 0: Option-G fused K-landing; every other bit reserved) |
 |     20 | `u32`      | `reserved0`        | `== 0`                                      |
 |     24 | `u64`      | `file_bytes`       | `== actual file size`                       |
 |     32 | `u8[32]`   | `integrity_sha256` | SHA-256 of the file, these 32 bytes zeroed  |
@@ -369,3 +369,17 @@ the LUT (D-SLM68) the forward has no i-exp-sigmoid fallback, so `SIL1` is a requ
 the bump follows the "new required section" rule. v1 and v2 artifacts are therefore mutually
 incompatible by the version check: a v2 loader rejects a v1 artifact (missing the required table),
 and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a silent degrade.
+
+**The `flags` field is a reserved-bit mechanism for optional, backward-compatible
+additions — distinct from `format_version`.** A version bump is for a field-layout
+change, a new required section, or an integrity-hash change; `flags` is for a
+capability that is optional (an old loader keeps working, unmodified, on an artifact
+that does not set the bit) and requires no new section or field. Bit 0
+(`kOptionGFusedKLandingFlag = 0x1`) selects Option-G fused post-RoPE K landing
+(T-1894, T-1822 design §31.2.1): the loader accepts `flags` values that set only
+known bits and rejects (`BadHeader`) any unknown bit, so a future artifact carrying a
+capability an older loader does not recognize is refused rather than silently
+mis-loaded. Every artifact produced before this bit existed has `flags == 0`, which
+every loader — before and after this bit's own introduction — accepts identically;
+introducing a new flag bit changes no existing artifact's bytes, loadability, or
+computed output.

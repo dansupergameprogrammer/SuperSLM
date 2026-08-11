@@ -241,9 +241,18 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 	const uint32_t section_count = RdU32(data + 12);
 	const uint32_t flags = RdU32(data + 16);
 	const uint32_t reserved0 = RdU32(data + 20);
-	if (flags != 0) {
+	// T-1894 (T-1822 design Sec31.2.1, D-SLM2355): loosened from `flags != 0`
+	// to a mask check against every KNOWN flag bit -- reject-over-degrade is
+	// preserved (an unknown bit still rejects as BadHeader; only a bit this
+	// codebase actually defines a meaning for is admitted), while a known bit
+	// (kOptionGFusedKLandingFlag) no longer does. Every artifact shipped
+	// before this fold has flags==0, the only value the prior strict check
+	// ever let through, so this change is a strict superset acceptance --
+	// no existing artifact's loadability changes.
+	if ((flags & ~kKnownArtifactFlagsMask) != 0) {
 		return Reject(err, SslmStatus::BadHeader, kNoSection,
-		              "flags must be 0, got " + std::to_string(flags));
+		              "flags has unknown bit(s) set: " + std::to_string(flags) +
+		                  " & ~" + std::to_string(kKnownArtifactFlagsMask));
 	}
 	if (reserved0 != 0) {
 		return Reject(err, SslmStatus::BadHeader, kNoSection,
@@ -398,6 +407,13 @@ SslmStatus SslmArtifactAccess::OpenFromMemoryImpl(const uint8_t* data, size_t si
 	out.bytes_.assign(data, data + size);
 	out.format_version_ = version;
 	out.file_bytes_ = file_bytes;
+	// T-1894 (design Sec31.2.1): the raw header flags field, now genuinely
+	// wired -- every construction path before this fold left flags_ at its
+	// default-initialized 0, which is the only value the prior strict check
+	// ever admitted, so this assignment changes no existing artifact's
+	// observed OptionGFusedKLandingEnabled() (always false, as it always
+	// implicitly was).
+	out.flags_ = flags;
 	std::memcpy(out.integrity_, data + kIntegrityHashOffset, kIntegrityHashBytes);
 	out.sections_.reserve(placed.size());
 	for (const Placed& p : placed) {
@@ -473,6 +489,15 @@ const SslmSectionView* SslmArtifact::Section(SslmSectionType type) const noexcep
 		if (s.type == type) return &s;
 	}
 	return nullptr;
+}
+
+// T-1894 (design Sec31.2.1/Sec31.2.3, D-SLM2355): the ONE dispatch point
+// RunLayerLoop's two fused K-landing call sites and dynamic_engine.py's own
+// artifact-metadata read both key off -- a property of the loaded artifact
+// (this header bit), never an environment variable and never a caller-
+// supplied default.
+bool SslmArtifact::OptionGFusedKLandingEnabled() const noexcept {
+	return (flags_ & kOptionGFusedKLandingFlag) != 0;
 }
 
 } // namespace superslm

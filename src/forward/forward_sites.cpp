@@ -130,6 +130,194 @@ inline U128 U128Shr(U128 v, int k) {
 	return U128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
 }
 
+// a >= b, unsigned 128-bit compare.
+inline bool U128Ge(U128 a, U128 b) {
+	if (a.hi != b.hi) return a.hi > b.hi;
+	return a.lo >= b.lo;
+}
+
+// a - b; caller ensures a >= b (every call site below checks with U128Ge first).
+inline U128 U128Sub(U128 a, U128 b) {
+	const uint64_t lo = a.lo - b.lo;
+	const uint64_t borrow = (a.lo < b.lo) ? 1u : 0u;
+	return U128{lo, a.hi - b.hi - borrow};
+}
+
+// --- RopeApplyPairWide's own signed-magnitude 128-bit facility (T-1894, design
+// Sec31.2's "int64-in, __int128-intermediate sibling of RopeApplyPair") ---------
+//
+// `RopeApplyPair` (intmath.cpp) combines its int32 inputs at int64 width. A
+// rotation over int64 inputs (the wide, pre-landing K accumulator Option G's
+// fused K-landing block rotates before it is narrowed) needs one width wider
+// still, on this toolchain built the same portable way LandingRescale's own
+// C27 composite above builds its wide intermediate: an unsigned U128
+// magnitude carried alongside an explicit sign, rather than two's-complement
+// bits. Unlike LandingRescale's single product, this composite sums TWO
+// independently-signed products (`x*cos - y*sin`, `x*sin + y*cos`), so the
+// magnitude-then-sign convention generalizes from a negate to a signed add.
+struct SU128 {
+	U128 mag{0, 0};
+	bool negative = false;
+};
+
+// |a|*|b| with sign = sign(a) xor sign(b) -- exact, total for every int64_t a
+// and every int32_t b (negated at int64 width first, so INT32_MIN's own
+// negation, +2^31, is well inside int64_t's range -- never signed-overflow
+// UB the way negating it at int32 width would be). Magnitude bound: |a| <=
+// 2^63 (INT64_MIN), |b| <= 2^30 (ROPE_ONE -- RopeApplySite's own comment,
+// above: "every element already cleared ValidateRopeTablesDomain's |v| <=
+// 2^30 bound at load time"), so the product is <= 2^93, far inside
+// U128Mul64's exact 128-bit range.
+inline SU128 SU128FromProductI64I32(int64_t a, int32_t b) {
+	const bool a_neg = a < 0;
+	const int64_t b64 = static_cast<int64_t>(b);
+	const bool b_neg = b64 < 0;
+	const uint64_t abs_a = a_neg ? (~static_cast<uint64_t>(a) + 1u) : static_cast<uint64_t>(a);
+	const uint64_t abs_b = b_neg ? static_cast<uint64_t>(-b64) : static_cast<uint64_t>(b64);
+	return SU128{U128Mul64(abs_a, abs_b), a_neg != b_neg};
+}
+
+// a + b, signed-magnitude addition: same sign adds magnitudes (each operand
+// here is <= 2^93, so the sum is <= 2^94, comfortably below U128Add's own
+// carry-safe range); opposite sign subtracts the smaller magnitude from the
+// larger, sign following the larger operand -- the standard rule.
+inline SU128 SU128Add(SU128 a, SU128 b) {
+	if (a.negative == b.negative) return SU128{U128Add(a.mag, b.mag), a.negative};
+	if (U128Ge(a.mag, b.mag)) return SU128{U128Sub(a.mag, b.mag), a.negative};
+	return SU128{U128Sub(b.mag, a.mag), b.negative};
+}
+
+inline SU128 SU128Negate(SU128 v) {
+	if (v.mag.lo == 0 && v.mag.hi == 0) return v;  // zero has no sign to flip
+	return SU128{v.mag, !v.negative};
+}
+
+// C3's tie-away-from-zero rounding (RoundingDivideByPOTImpl<T>, intmath.cpp;
+// LandingRescale's own k>=0 branch, above, restates the identical rule at
+// 128-bit width: "round_half_away_from_zero(magnitude / 2^k) ==
+// floor((2*magnitude + 2^k) / 2^(k+1))"), applied here to a signed-magnitude
+// operand: rounding the MAGNITUDE half-up (add half the divisor, floor-
+// shift) and keeping the sign is the identical away-from-zero tie rule for a
+// signed value, generalized only in width. `exponent` is ROPE_FRAC_BITS (30)
+// at this primitive's only call site; TOTAL for any magnitude this file ever
+// forms (<= ~2^94, far below the 128-bit ceiling `U128Shr`/`U128Add` remain
+// exact under).
+inline SU128 SU128RoundAwayFromZero(SU128 v, int exponent) {
+	// floor((2*magnitude + 2^exponent) / 2^(exponent+1)) -- LandingRescale's
+	// own k>=0 branch's exact form, reused verbatim rather than re-derived,
+	// so the two sites share one arithmetic identity for the identical tie
+	// rule.
+	const U128 doubled = U128Add(v.mag, v.mag);
+	const U128 numerator = U128Add(doubled, U128OneShl(exponent));
+	const U128 quotient = U128Shr(numerator, exponent + 1);
+	return SU128{quotient, v.negative};
+}
+
+// Narrows a rounded signed-magnitude value to int64_t; false (leaving *out
+// untouched) whenever the true value does not fit -- T-1892 Minor 1's own
+// correction: checked on the ROUNDED value this function receives, never an
+// unrounded "true" value RopeApplyPairWide never materializes. The negative
+// side's own ceiling is one past the positive side's (INT64_MIN's magnitude
+// is 2^63, INT64_MAX's is 2^63-1); T-1382's negate-in-uint64_t-then-cast-back
+// precedent (LandingRescale, above) applies identically for the one value
+// (magnitude exactly 2^63) only the negative side can reach.
+inline bool SU128TryNarrowToI64(SU128 v, int64_t* out) {
+	constexpr uint64_t kAbsMinI64 = uint64_t{1} << 63;  // |INT64_MIN|
+	constexpr uint64_t kAbsMaxI64 = static_cast<uint64_t>(INT64_MAX);
+	if (v.mag.hi != 0) return false;
+	if (!v.negative) {
+		if (v.mag.lo > kAbsMaxI64) return false;
+		*out = static_cast<int64_t>(v.mag.lo);
+		return true;
+	}
+	if (v.mag.lo > kAbsMinI64) return false;
+	*out = static_cast<int64_t>(0u - v.mag.lo);
+	return true;
+}
+
+// --- T-1894 (design Sec31.2's fused K-landing construction): resolves the
+// (position, head_dim) RoPE table row ONCE per token per layer for the fused
+// K-landing block, below -- every kv_head rotates against the SAME row.
+// Deliberately a SEPARATE, minimal helper rather than a refactor of
+// RopeApplySite's own inline steps 1-3 immediately below: RopeApplySite is
+// already shipped and independently exercised by this file's own pre-
+// existing suite, and this design's construction adds a new mechanism, not a
+// change to the existing one -- refactoring a heavily-tested shared function
+// for a caller that does not need its wider (row-write) contract is exactly
+// the shared-callee risk avoided by enumerating a function's callers before
+// touching it. The four checks below are the identical order and identical
+// status codes RopeApplySite's own steps 1-3 perform (this codebase's own
+// D-SLM81 doctrine against re-derived predicates: SAME logic, not
+// independently re-decided, only duplicated in miniature for a caller this
+// function's own header declares no obligation to share with).
+struct OptionGRopeTableRow {
+	const SslmTensorView* cos = nullptr;
+	const SslmTensorView* sin = nullptr;
+	size_t pairs = 0;
+	uint64_t row_offset = 0;
+};
+
+SslmForwardStatus ResolveOptionGRopeTableRow(int64_t position, int64_t context_cap,
+                                              size_t head_dim,
+                                              const SslmTensorManifest& rope_tables,
+                                              OptionGRopeTableRow* out) {
+	const SslmForwardStatus cap_status = CheckPositionOverCap(position, context_cap);
+	if (cap_status != SslmForwardStatus::Ok) {
+		return cap_status;
+	}
+	const SslmTensorView* cos = rope_tables.Tensor("cos");
+	const SslmTensorView* sin = rope_tables.Tensor("sin");
+	if (cos == nullptr || sin == nullptr) {
+		return SslmForwardStatus::RopeTableTensorMissing;
+	}
+	const size_t pairs = head_dim / 2;
+	if (pairs == 0 || pairs > cos->elem_count || pairs > sin->elem_count) {
+		return SslmForwardStatus::RopeTableExtentExceeded;
+	}
+	const uint64_t upos = static_cast<uint64_t>(position);
+	const uint64_t cos_rows = cos->elem_count / static_cast<uint64_t>(pairs);
+	const uint64_t sin_rows = sin->elem_count / static_cast<uint64_t>(pairs);
+	if (upos >= cos_rows || upos >= sin_rows) {
+		return SslmForwardStatus::RopeTableExtentExceeded;
+	}
+	out->cos = cos;
+	out->sin = sin;
+	out->pairs = pairs;
+	out->row_offset = upos * static_cast<uint64_t>(pairs);
+	return SslmForwardStatus::Ok;
+}
+
+}  // namespace
+
+// T-1894 (design Sec31.2, D-SLM2356/D-SLM2384/D-SLM2385): declared in
+// forward_sites.h (T-1899's own contract extension); defined here in terms of
+// the SU128 facility above. Same combination and ONE C3 rounding
+// `RopeApplyPair` (intmath.cpp) uses, at wide (int64 input, 128-bit
+// intermediate) width. Unclamped -- clamping to the activation format is the
+// caller's, through the existing, already-shipped LandingRescale+
+// ClampRopeCode pair; this primitive only rotates and reports domain.
+RopePairWide RopeApplyPairWide(int64_t x, int64_t y, int32_t cos_q30, int32_t sin_q30,
+                                bool* out_in_domain) {
+	const SU128 xr_true =
+	    SU128Add(SU128FromProductI64I32(x, cos_q30), SU128Negate(SU128FromProductI64I32(y, sin_q30)));
+	const SU128 yr_true =
+	    SU128Add(SU128FromProductI64I32(x, sin_q30), SU128FromProductI64I32(y, cos_q30));
+
+	const SU128 xr_rounded = SU128RoundAwayFromZero(xr_true, ROPE_FRAC_BITS);
+	const SU128 yr_rounded = SU128RoundAwayFromZero(yr_true, ROPE_FRAC_BITS);
+
+	RopePairWide result;
+	int64_t xi = 0, yi = 0;
+	const bool x_fits = SU128TryNarrowToI64(xr_rounded, &xi);
+	const bool y_fits = SU128TryNarrowToI64(yr_rounded, &yi);
+	result.x = xi;
+	result.y = yi;
+	if (out_in_domain != nullptr) *out_in_domain = x_fits && y_fits;
+	return result;
+}
+
+namespace {
+
 // --- LandingRescale's composed-exponent arithmetic, made overflow-safe as a class (T-1596) ---
 //
 // `k = 62 - (e_a - e_t)` is two chained signed subtractions, and neither
@@ -925,12 +1113,22 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 	    ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
 }
 
-SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+// T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
+// share (defined below, after this function closes). `option_g_fused_k_landing`
+// is this function's own new parameter -- the ONE addition; every other line
+// of the pre-existing S3.5-S3.8a construction is unchanged. Not exposed
+// through the header: both public overloads forward here, so this codebase's
+// own single-K-landing-site property (T-1892 G4's own finding, design
+// Sec31.2.3: "RunLayerLoop is the tree's single K-landing site") stays true
+// of the IMPLEMENTATION, not merely of two independently-written copies that
+// happen to agree today.
+static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWeights* layers,
                                  uint32_t num_hidden_layers, uint32_t layer_budget,
                                  size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
                                  size_t intermediate_size, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
-                                 size_t workspace_size, std::string_view site_prefix,
+                                 size_t workspace_size, bool option_g_fused_k_landing,
+                                 std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state) {
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
@@ -1243,22 +1441,90 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 				    vacc.data(), kv_hidden_size, lw.v_bias, normed_scale.m, normed_scale.e);
 				if (bias_status != SslmForwardStatus::Ok) return bias_status;
 			}
+
+			// T-1894 (design Sec31.2, D-SLM2355/D-SLM2356): when Option G is on,
+			// resolve the (position, head_dim) RoPE table row ONCE for the whole
+			// K/V landing block -- every kv_head below rotates against the SAME
+			// row. When the flag is off, no table read happens here at all --
+			// this whole block is behind the flag, so a flags==0 artifact's
+			// landing arithmetic is byte-identical to the pre-existing,
+			// unmodified code path (D-SLM2358).
+			OptionGRopeTableRow option_g_table;
+			if (option_g_fused_k_landing) {
+				const SslmForwardStatus resolve_status =
+				    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables,
+				                                &option_g_table);
+				if (resolve_status != SslmForwardStatus::Ok) return resolve_status;
+			}
+
 			for (size_t h = 0; h < num_key_value_heads; ++h) {
 				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
 				                                    num_key_value_heads, head_dim, h, position);
 				int8_t* const v_row = MutableValueRow(workspace, l, context_cap,
 				                                      num_key_value_heads, head_dim, h, position);
+				if (option_g_fused_k_landing) {
+					// T-1894 (design Sec31.2's own construction, carried from
+					// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
+					// pre-landing K accumulator pairwise at this token's own
+					// position, THEN land ONCE -- K carries one int8-narrowing
+					// boundary instead of two. V and Q are unaffected by this
+					// branch.
+					for (size_t p = 0; p < option_g_table.pairs; ++p) {
+						const size_t i0 = h * head_dim + 2 * p;
+						const size_t i1 = i0 + 1;
+						const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+						    option_g_table.cos->data, option_g_table.row_offset + p));
+						const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+						    option_g_table.sin->data, option_g_table.row_offset + p));
+						bool rot_in_domain = false;
+						const RopePairWide rotated =
+						    RopeApplyPairWide(kacc[i0], kacc[i1], cos_q30, sin_q30, &rot_in_domain);
+						// Refuse, not wrap: a rotation can raise a pair's
+						// magnitude by up to sqrt(2), and at this domain's own
+						// extreme the rotated-and-rounded result can exceed
+						// int64_t.
+						if (!rot_in_domain) {
+							return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+						}
+						// T-1894 (design Sec31.2.2, the T-1898 round-3 repair,
+						// D-SLM2384/D-SLM2385/D-SLM2388): `LandingRescale`'s own
+						// `out_magnitude_exceeded_int64` output, checked
+						// UNCONDITIONALLY, on EVERY element, with NO condition
+						// on `kv_landing_e_t_k[h]` or any other static value --
+						// no early-exit of any kind. Correctness rests only on
+						// this per-element, already-computed result; the
+						// pre-existing, pre-Option-G load-time floor
+						// (`kKvLandingExponentMin = -60`, model.cpp) is
+						// unmodified and untouched by this branch.
+						bool exceeded0 = false, exceeded1 = false;
+						const int64_t raw0 = LandingRescale(
+						    rotated.x, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count, &exceeded0);
+						const int64_t raw1 = LandingRescale(
+						    rotated.y, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count, &exceeded1);
+						if (exceeded0 || exceeded1) {
+							return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;
+						}
+						k_row[2 * p] = static_cast<int8_t>(ClampRopeCode(raw0));
+						k_row[2 * p + 1] = static_cast<int8_t>(ClampRopeCode(raw1));
+					}
+				} else {
+					for (size_t d = 0; d < head_dim; ++d) {
+						const size_t i = h * head_dim + d;
+						// §8.1's clamp is this call site's own (LandingRescale's
+						// header states the clamp is the caller's); reuses
+						// ClampRopeCode for the pinned [-127, 127] code range it
+						// already implements. T-518's saturation counter (§8.2) is
+						// wired into seq's own per-sequence accumulator, the one
+						// call in this tree that composes the landing.
+						k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+						    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
+					}
+				}
 				for (size_t d = 0; d < head_dim; ++d) {
 					const size_t i = h * head_dim + d;
-					// §8.1's clamp is this call site's own (LandingRescale's
-					// header states the clamp is the caller's); reuses
-					// ClampRopeCode for the pinned [-127, 127] code range it
-					// already implements. T-518's saturation counter (§8.2) is
-					// wired into seq's own per-sequence accumulator, the one
-					// call in this tree that composes the landing.
-					k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-					    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-					    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
 					v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 					    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
 					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
@@ -1271,10 +1537,17 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// `position` -- never a flat `hidden_size` offset, which under the
 		// real per-head layout would read/write the wrong head once
 		// `context_cap > 1`.
+		//
+		// T-1894 (design Sec31.2's own construction): when Option G is on, K
+		// is ALREADY rotated at landing time (the K/V landing block above) --
+		// this loop's own K-rotation half, and the write-back loop below it,
+		// run ONLY when the flag is off. Q's own call is unconditional either
+		// way -- Option G does not touch Q.
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 			                   rope_tables, q_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
+			if (option_g_fused_k_landing) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
 			// `kv_head = head // group`). This loop's own bound stays `num_heads`
@@ -1294,15 +1567,21 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// (the whole per-token K region WAS exactly `hidden_size` contiguous
 		// bytes at position 0); under the real layout it would overwrite
 		// EVERY committed position's row with this token's own rotation.
-		for (size_t h = 0; h < num_heads; ++h) {
-			// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
-			// same KV row is written once per query head sharing it (redundant
-			// but sound, design record §6.2: every read above happens before
-			// any write here, so no partially-rotated store is ever observed).
-			const size_t kv_head = h / group;
-			int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
-			                                    head_dim, kv_head, position);
-			for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+		// T-1894: skipped entirely under Option G -- K's own store already
+		// carries the fused, rotated-then-landed value from the landing block
+		// above, and this loop's own read-then-rotate source (`k_rot`) was
+		// never populated for K on this flag's path (the `continue` above).
+		if (!option_g_fused_k_landing) {
+			for (size_t h = 0; h < num_heads; ++h) {
+				// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
+				// same KV row is written once per query head sharing it (redundant
+				// but sound, design record §6.2: every read above happens before
+				// any write here, so no partially-rotated store is ever observed).
+				const size_t kv_head = h / group;
+				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
+				                                    head_dim, kv_head, position);
+				for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+			}
 		}
 
 		// Attention proper (§6.2 step 5). No named site for this composition
@@ -1522,6 +1801,46 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	}
 
 	return SslmForwardStatus::Ok;
+}
+
+// The pre-existing, already-shipped 15-parameter overload (forward_sites.h,
+// unmodified by this design). Forwards to the shared implementation with
+// `option_g_fused_k_landing=false` -- every existing caller of this overload
+// (this file's own pre-existing S3.5-S3.8a suite included) runs the
+// unmodified legacy K-landing order, byte-identical to before this fold
+// (D-SLM2358).
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, std::string_view site_prefix,
+                                 size_t token_index, SslmTraceHookState* trace_hook_state) {
+	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
+	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
+	                        workspace, workspace_size, /*option_g_fused_k_landing=*/false,
+	                        site_prefix, token_index, trace_hook_state);
+}
+
+// T-1894 (design Sec31.2, T-1899's own contract extension, forward_sites.h):
+// the production Option-G entry point. A caller reads
+// `artifact.OptionGFusedKLandingEnabled()` (design Sec31.2.1) and threads the
+// result here as `option_g_fused_k_landing` -- this function does not read
+// the artifact itself, matching the pattern `RunLayerLoop` already uses for
+// every other artifact-derived constant (threaded in by the caller, never
+// re-read from the artifact inside the loop).
+SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* layers,
+                                 uint32_t num_hidden_layers, uint32_t layer_budget,
+                                 size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+                                 size_t intermediate_size, int64_t context_cap,
+                                 const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                 size_t workspace_size, bool option_g_fused_k_landing,
+                                 std::string_view site_prefix, size_t token_index,
+                                 SslmTraceHookState* trace_hook_state) {
+	return RunLayerLoopImpl(seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim,
+	                        num_key_value_heads, intermediate_size, context_cap, rope_tables,
+	                        workspace, workspace_size, option_g_fused_k_landing, site_prefix,
+	                        token_index, trace_hook_state);
 }
 
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built
