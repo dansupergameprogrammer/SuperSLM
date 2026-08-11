@@ -72,6 +72,26 @@ Test-design record: Claude/Curie/t1899-optionG-red-suite-2026-08-11.md
 Re-anchor record: Claude/Poirot/407981b-t1900-optionG-build.md Sec6;
 Claude/Vitruvius/t1822-activation-scale-remedy-design-2026-08-07.md Sec12
 "-60 load-time floor", mechanism (2), round 4 text.
+
+T-1900 FIX ROUND 3 HARDENING (Claude/Poirot/73841be-t1900-optionG-build-
+confirmation.md): assertion (ii)'s WRAPPING check (above) only inspected the
+`if` header's OWN line text for an exponent shape -- a header that HOISTS the
+exponent test into a named local variable one statement earlier evaded it:
+
+    const bool gate_active = lw.kv_landing_e_t_k[h] < -40;
+    if (gate_active && (exceeded0 || exceeded1)) { return ...; }
+
+`if (gate_active && ...)`'s own line names only `gate_active`, never the
+exponent-shaped expression, so the header-only check stayed silent.
+`find_dynamic_gate_skip_conditions` now ALSO treats an `if`-shaped header as
+exponent-shaped when a local variable it references was itself assigned, in
+the SAME enclosing scope (the anchor-adjacent `if`'s own sibling statements,
+scanned from that scope's own opening line down to the `if`), from an
+exponent-shaped right-hand side -- `_enclosing_block_has_exponent_shaped_local`,
+below. Re-run against the full vitality set this round (build log): the
+pre-existing injected-`if` skip and outright-deletion mutations still report
+red, the NEW hoisted-local mutation now ALSO reports red (previously clean),
+and the real, unmutated tree stays clean.
 """
 from __future__ import annotations
 
@@ -106,6 +126,11 @@ _IF_SHAPED = re.compile(r"^\s*(?:}\s*)?else\s+if\b|^\s*if\s*\(|^\s*if\b")
 _EXPONENT_SHAPED = re.compile(
     r"\be_t\b|\bkv_landing_e_t\b|ExponentMin|(?<![\w.])-(?:1[01]\d|12[0-7]|[1-9]?\d)(?![\w.])"
 )
+# T-1900 fix round 3 (reviewer-named hardening): a local variable declaration
+# or plain assignment -- `name = rhs;` or `TYPE name = rhs;` -- captured as
+# (name, rhs). Deliberately excludes `==` (the lookahead) so an equality
+# comparison inside an unrelated `if` is never mistaken for an assignment.
+_LOCAL_ASSIGNMENT = re.compile(r"\b([A-Za-z_]\w*)\s*=(?!=)\s*(.+?);?\s*$")
 
 
 @dataclass(frozen=True)
@@ -245,10 +270,40 @@ def _enclosing_stacks(cleaned_text: str) -> Dict[int, List[Tuple[int, str]]]:
     return stacks
 
 
+def _enclosing_block_has_exponent_shaped_local(
+    stacks: Dict[int, List[Tuple[int, str]]],
+    cleaned_lines: List[str],
+    header_line_no: int,
+    header_cleaned: str,
+) -> bool:
+    """T-1900 fix round 3 (reviewer-named hardening, see this module's own
+    header comment): true when an `if`-shaped header at `header_line_no`
+    names a local variable, in ITS OWN condition text, that was assigned --
+    as a sibling statement in the SAME enclosing scope, anywhere from that
+    scope's own opening line up to (not including) the `if` itself -- from an
+    exponent-shaped right-hand side. Scoped to the SAME enclosing block the
+    `if` itself sits in (never a wider or narrower one), matching this
+    module's existing "walk the real enclosing-block stack, not a fixed
+    window" discipline."""
+    outer_stack = stacks.get(header_line_no, [])
+    scope_start = outer_stack[-1][0] + 1 if outer_stack else 1
+    for ln in range(scope_start, header_line_no):
+        m = _LOCAL_ASSIGNMENT.search(cleaned_lines[ln - 1])
+        if not m:
+            continue
+        name, rhs = m.group(1), m.group(2)
+        if _EXPONENT_SHAPED.search(rhs) and re.search(r"\b" + re.escape(name) + r"\b", header_cleaned):
+            return True
+    return False
+
+
 def find_dynamic_gate_skip_conditions(path: str) -> List[SkipConditionHit]:
     """Mechanism 2, assertion (ii): every PRIMARY or SECONDARY anchor
     occurrence in `path`, checked against its own real enclosing-block stack
-    -- not a fixed backward window -- for an exponent-shaped `if` ancestor."""
+    -- not a fixed backward window -- for an exponent-shaped `if` ancestor,
+    either directly (the header's own line text) or through a hoisted local
+    the header references (`_enclosing_block_has_exponent_shaped_local`,
+    T-1900 fix round 3)."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         raw = f.read()
     cleaned = _strip_comments_and_strings(raw)
@@ -265,7 +320,11 @@ def find_dynamic_gate_skip_conditions(path: str) -> List[SkipConditionHit]:
             continue
         # Innermost first: reversed() over the stack (built outermost-first).
         for header_line_no, header_cleaned in reversed(stacks.get(line_no, [])):
-            if _IF_SHAPED.search(header_cleaned) and _EXPONENT_SHAPED.search(header_cleaned):
+            if not _IF_SHAPED.search(header_cleaned):
+                continue
+            if _EXPONENT_SHAPED.search(header_cleaned) or _enclosing_block_has_exponent_shaped_local(
+                stacks, cleaned_lines, header_line_no, header_cleaned
+            ):
                 hits.append(SkipConditionHit(
                     path=path,
                     if_line_no=header_line_no,

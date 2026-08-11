@@ -260,9 +260,17 @@ def test_option_g_fused_k_landing_matches_dynamic_engine_reference():
     Verified by execution this session (not merely reasoned): reverting the
     rotate-before-land order to land-before-rotate inside
     `_forward_dynamic_vec_layers` on a scratch copy makes the fused-model
-    trace read [127,-82] (the un-rotated landing) instead of [127,58] at
-    token_index=1, failing this cell's own assertion -- see the build log's
-    own record of this executed demonstration.
+    trace read [127,32] (LandingRescale on the unrotated kacc=[127,-64],
+    THEN _rotate_wide_pair_row on the already-landed, already-clamped narrow
+    row -- the LEGACY order, matching `tests/sslm_t1899_optionG_fixtures.h`'s
+    own `kOptionGLegacyK_Pos1`) instead of [127,58] at token_index=1, failing
+    this cell's own assertion -- see the build log's own record of this
+    executed demonstration. T-1900 fix round 3 (T-1901 confirmation pass):
+    this docstring previously stated [127,-82] for the reverted mutation --
+    that is instead the NULL-configuration value (token_index=0, identity
+    rotation, unaffected by ordering since rotating-then-landing and
+    landing-then-rotating agree exactly when the rotation is the identity) --
+    corrected here to the value actually executed above.
     """
     dynamic_engine = _import_dynamic_engine()
     pipeline = _import_pipeline()

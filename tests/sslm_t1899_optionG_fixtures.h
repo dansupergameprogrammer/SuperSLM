@@ -342,9 +342,16 @@ inline constexpr int8_t kOptionGFixtureInputH[2] = {100, -50};
 // LEGACY order (land at kacc, clamp, THEN RopeApplySite rotates the clamped
 // int8 row): LandingRescale(127,...)=161->clamp 127; LandingRescale(-64,...)
 // =-81->clamp -81 (in [-127,127], unclamped). At position 1 (45-degree
-// table), RopeApplyPair(127,-81,cos=759250125,sin=759250125) -> [81,127]
-// (post its own ClampRopeCode; both components already in range).
-inline constexpr int8_t kOptionGLegacyK_Pos1[2] = {81, 127};
+// table), RopeApplyPair(127,-81,cos=759250125,sin=759250125) rounds (C3,
+// ties away from zero) to raw=[147,33] -- NOT already in range on the first
+// component -- then ClampRopeCode clamps 147 -> 127 (33 is already in
+// [-127,127], unclamped): [127,33]. T-1900 fix round 3 (T-1901 "Still open
+// 1"/D-SLM2410): the value below was previously {81,127} -- an unproducible
+// transposition of the true components that also skipped the clamp this
+// derivation shows IS needed on the first component -- executed and
+// confirmed correct by a standalone probe against the real, compiled
+// RopeApplyPair/ClampRopeCode primitives (build log, this round).
+inline constexpr int8_t kOptionGLegacyK_Pos1[2] = {127, 33};
 
 // FUSED order at position 0 (IDENTITY rotation -- the "null configuration"
 // cell): rotated == kacc exactly (no rounding at cos=2^30,sin=0), so fused
@@ -361,7 +368,8 @@ inline constexpr int8_t kOptionGFusedK_Pos0_NullConfiguration[2] = {127, -81};
 // round_c3(127*759250125 + (-64)*759250125, 30) = round_c3(63*759250125, 30)
 // = 45. Then land ONCE: LandingRescale(135,...)=171->clamp 127;
 // LandingRescale(45,...)=57->clamp 57 (in range, unclamped) -- DIVERGES from
-// kOptionGLegacyK_Pos1's own second component (57 != 127), execution-
+// kOptionGLegacyK_Pos1's own second component (57 != 33, corrected T-1900
+// fix round 3 -- see that constant's own comment, above), execution-
 // confirmed (this file's own header comment). This is the discriminating
 // fixture the "Mutation vitality on the deleted landing order" cell and the
 // non-null half of "Engine/reference bit-parity" both drive.

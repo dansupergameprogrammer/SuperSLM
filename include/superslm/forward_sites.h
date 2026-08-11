@@ -1039,18 +1039,45 @@ enum class SslmDecodeStopReason {
 // before any token is embedded -- `SslmKvPrecision::Int16` is a defined,
 // load-legal CFG1 value (§14.4 is a declared quality narrowing, not a
 // hostile-input rejection) rejected here with `KvPrecisionUnsupported`;
-// `SslmKvPrecision::Int8` (the default) is unaffected and proceeds exactly
-// as before this parameter existed.
+// `SslmKvPrecision::Int8` is unaffected and proceeds exactly as before this
+// parameter existed. T-1900 fix round 3: this parameter's own `= Int8`
+// default is gone -- not because anything was found wrong with defaulting
+// IT, but because C++ forbids a defaulted parameter from preceding a
+// required one, and `option_g_fused_k_landing` (below) is made required by
+// this same round. Every real call site already passes `kv_precision`
+// explicitly (`tools/sslm_generate.cpp`, `tools/sslm_layer_trace.cpp`,
+// `tests/test_main.cpp`'s `TestOptionGSelectionDispatch_EndToEndProductionPath`)
+// except the two `tests/test_main.cpp` sites this round also makes explicit
+// (`DecodeLoopCallFixture::Run`, `TestRunGreedyDecodeLoopRejectsInt16Kv
+// PrecisionBeforeAnythingElse`'s positive control) -- this is a mechanical
+// consequence, not a second independent decision.
 // T-1894 (design Sec31.2.1, round 4/D-SLM2423, link 3 of 5): trailing
-// defaulted parameter, following `kv_precision`'s own exact precedent --
-// every existing call site compiles unchanged until it opts in. The caller
-// (`tools/sslm_generate.cpp`, link 4) passes `model_view.option_g_fused_k_landing`
-// (link 1/2), the same way it already passes `model_view.config.kv_precision`
-// as this signature's own previous last argument. Threaded through to the
-// `RunWholeToken` lambda's own `RunLayerLoop` call inside this function's
-// definition (link 5, `forward_sites.cpp`), which selects the 16-parameter
-// overload's `OptionGKLandingMode` explicitly rather than the default
-// `kLegacy` the twelve-argument call used to resolve to.
+// REQUIRED parameter -- no default. The round-4 build (T-1901 fix round 1)
+// gave this a defaulted `= false`, following `kv_precision`'s own precedent
+// so every existing call site would compile unchanged; the round-2
+// confirmation (T-1901 New 1) found that precedent wrong for THIS parameter:
+// a default here is silently-wrong-by-default rather than silently-inert,
+// because a caller that omits it does not get legacy-forever (harmless) --
+// it gets whatever `sslm_layer_trace.cpp` actually got, a SECOND consumer of
+// this function that kept compiling, kept passing its own self-check (its
+// production leg and its manual-replay leg both silently ran legacy
+// together, so bit-for-bit agreement proved nothing about which mode either
+// leg was in), and shipped a flags=1 trace indistinguishable from a flags=0
+// one. StandardsDocument S4: where a rule can be made structural, make it
+// structural -- removing the default turns "the next omitted caller" into a
+// compile error instead of a second silent-agreement instrument, which a
+// reviewer-named CI assertion over call sites (the alternative considered)
+// would not: a text-scan checker is exactly the class of structural-absence
+// check this same build round already had to hunt a blind spot out of
+// (`check_no_optionG_fused_site_skip.py`, this ticket), where the compiler's
+// own overload resolution has none. The caller (`tools/sslm_generate.cpp`,
+// link 4, and now `tools/sslm_layer_trace.cpp`'s own production leg) passes
+// `model_view.option_g_fused_k_landing` (link 1/2) explicitly, the same way
+// it already passes `model_view.config.kv_precision` as this signature's own
+// previous last argument. Threaded through to the `RunWholeToken` lambda's
+// own `RunLayerLoop` call inside this function's definition (link 5,
+// `forward_sites.cpp`), which selects the 16-parameter overload's
+// `OptionGKLandingMode` explicitly.
 SslmForwardStatus RunGreedyDecodeLoop(
     SequenceLayerState& seq, const LayerWeights* layers, uint32_t num_hidden_layers,
     size_t hidden_size, size_t head_dim, size_t num_key_value_heads, size_t intermediate_size,
@@ -1063,8 +1090,7 @@ SslmForwardStatus RunGreedyDecodeLoop(
     uint8_t* workspace, size_t workspace_size,
     int32_t* out_tokens, int32_t* out_logit_rows, size_t out_tokens_capacity,
     size_t* out_tokens_produced, SslmDecodeStopReason* out_stop_reason,
-    SslmKvPrecision kv_precision = SslmKvPrecision::Int8,
-    bool option_g_fused_k_landing = false);
+    SslmKvPrecision kv_precision, bool option_g_fused_k_landing);
 
 }  // namespace superslm
 

@@ -18177,6 +18177,11 @@ struct DecodeLoopCallFixture {
 	superslm::SslmForwardStatus Run(const std::vector<int32_t>& prompt_tokens,
 	                                  const std::vector<int32_t>& stop_ids,
 	                                  size_t max_new_tokens) {
+		// T-1900 fix round 3: `kv_precision`/`option_g_fused_k_landing` are both
+		// required parameters now (forward_sites.h) -- this fixture's own `Run`
+		// exercises neither S3.7 nor Option-G, so both are passed at their old
+		// default values explicitly (Int8, legacy) rather than relying on a
+		// default that no longer exists.
 		return superslm::RunGreedyDecodeLoop(
 		    seq, model.layers_fixture.layers, /*num_hidden_layers=*/2, DecodeLoopFixture::kHiddenSize,
 		    /*head_dim=*/2, /*num_key_value_heads=*/1, /*intermediate_size=*/2,
@@ -18186,7 +18191,7 @@ struct DecodeLoopCallFixture {
 		    model.final_norm_site_constant, model.head_weights, DecodeLoopFixture::kVocabSize,
 		    stop_ids.data(), stop_ids.size(), max_new_tokens, workspace, sizeof(workspace),
 		    out_tokens.data(), out_logit_rows.data(), out_tokens.size(), &tokens_produced,
-		    &stop_reason);
+		    &stop_reason, superslm::SslmKvPrecision::Int8, /*option_g_fused_k_landing=*/false);
 	}
 
 	void CheckEverythingUntouched(const char* what) const {
@@ -18230,7 +18235,7 @@ static void TestRunGreedyDecodeLoopRejectsInt16KvPrecisionBeforeAnythingElse() {
 	    f.model.final_norm_site_constant, f.model.head_weights, DecodeLoopFixture::kVocabSize,
 	    stop_ids.data(), stop_ids.size(), /*max_new_tokens=*/1, tiny_workspace, sizeof(tiny_workspace),
 	    f.out_tokens.data(), f.out_logit_rows.data(), f.out_tokens.size(), &f.tokens_produced,
-	    &f.stop_reason, SslmKvPrecision::Int16);
+	    &f.stop_reason, SslmKvPrecision::Int16, /*option_g_fused_k_landing=*/false);
 	CHECK_MSG(result == SslmForwardStatus::KvPrecisionUnsupported,
 	          "RunGreedyDecodeLoop(kv_precision=Int16, workspace=1 byte) status == %s, want "
 	          "KvPrecisionUnsupported (checked before the workspace is sized -- a 1-byte workspace "
@@ -20196,12 +20201,17 @@ static void TestOptionGFusedKLanding_NullConfiguration_MatchesLegacy() {
 // cell (Sec12 bullets 1 and 3) -- ONE test, because the discriminating
 // property IS the divergence between the two: at position 1 (the 45-degree
 // rope-table row), the fused order gives [127,57] and the legacy order gives
-// [81,127] on the identical fixture (both execution-derived, this file's own
-// sibling fixtures header). A build that reinstates the pre-fold-19 landing
-// order (RopeApplySite reading/rotating the ALREADY-LANDED, ALREADY-CLAMPED
-// int8 K row, instead of RopeApplyPairWide rotating the WIDE pre-landing
-// accumulator) produces [81,127] here and fails this cell -- the mutation
-// pin the design's own "Mutation vitality" bullet asks for.
+// [127,33] on the identical fixture (both execution-derived, this file's own
+// sibling fixtures header -- T-1900 fix round 3/T-1901 "Still open 1"
+// corrected the legacy value from an unproducible {81,127} to the real,
+// executed {127,33}). A build that reinstates the pre-fold-19 landing order
+// (RopeApplySite reading/rotating the ALREADY-LANDED, ALREADY-CLAMPED int8 K
+// row, instead of RopeApplyPairWide rotating the WIDE pre-landing
+// accumulator) produces [127,33] here and fails this cell -- the mutation
+// pin the design's own "Mutation vitality" bullet asks for, demonstrated
+// live this round (build log, this round: the negative-half CHECK_MSG below
+// fires red against a real kFused->kLegacy mutation of this test, then green
+// again once reverted).
 static void TestOptionGFusedKLanding_NonNullConfiguration_DivergesFromLegacy() {
 	using namespace superslm;
 	using namespace superslm_test;

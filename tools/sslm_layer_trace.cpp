@@ -223,6 +223,25 @@ int main(int argc, char** argv) {
 	                        num_kv_heads * model_view.config.head_dim * 2;
 	const size_t vocab_size_z = static_cast<size_t>(model_view.config.vocab_size);
 
+	// T-1900 fix round 3 (T-1901 New 1): both legs below must move TOGETHER
+	// with the loaded artifact's own Option-G selection, or this tool's own
+	// bit-for-bit self-check (Step 4, below) proves nothing about which
+	// K-landing mode either leg actually ran in -- exactly the defect the
+	// confirmation pass found (this file's production leg and its four
+	// manual-replay RunLayerLoop calls all silently ran legacy on a flags=1
+	// artifact while sslm_generate ran fused, because both legs moved
+	// together on the SAME stale default). `option_g_mode` is derived ONCE,
+	// from the same `SslmModelView::option_g_fused_k_landing` link 1/2
+	// already reads off the artifact header, and threaded explicitly into
+	// the production RunGreedyDecodeLoop call and every RunLayerLoop replay
+	// call below -- never left to a default (forward_sites.h no longer
+	// offers one for RunGreedyDecodeLoop's own selector, precisely so this
+	// omission is a compile error rather than a second silent-agreement
+	// instrument).
+	const bool option_g_fused_k_landing = model_view.option_g_fused_k_landing;
+	const OptionGKLandingMode option_g_mode =
+	    option_g_fused_k_landing ? OptionGKLandingMode::kFused : OptionGKLandingMode::kLegacy;
+
 	// --- Step 2 (design S4.1 step 2): the PRODUCTION path, unmodified. ------
 	std::vector<uint8_t> prod_workspace(kv_bytes);
 	std::vector<int8_t> prod_hidden_codes(hidden_size);
@@ -242,7 +261,7 @@ int main(int argc, char** argv) {
 	    static_cast<int32_t>(model_view.config.vocab_size), /*stop_ids=*/nullptr, /*stop_count=*/0,
 	    /*max_new_tokens=*/1, prod_workspace.data(), prod_workspace.size(), prod_out_token.data(),
 	    prod_out_logit_row.data(), prod_out_token.size(), &prod_tokens_produced, &prod_stop_reason,
-	    model_view.config.kv_precision);
+	    model_view.config.kv_precision, option_g_fused_k_landing);
 	if (prod_status != SslmForwardStatus::Ok) {
 		std::fprintf(stderr, "FAILED at stage=production_decode: status=%s\n",
 		             SslmForwardStatusName(prod_status));
@@ -292,7 +311,8 @@ int main(int argc, char** argv) {
 		st = RunLayerLoop(trace_seq, layers.data(), num_hidden_layers,
 		                   /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim,
 		                   num_kv_heads, model_view.config.intermediate_size, context_cap,
-		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size());
+		                   model_view.rope_tables, trace_workspace.data(), trace_workspace.size(),
+		                   option_g_mode);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(st));
@@ -319,7 +339,7 @@ int main(int argc, char** argv) {
 		    RunLayerLoop(trace_seq, layers.data(), num_hidden_layers, /*layer_budget=*/1, hidden_size,
 		                 model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size,
 		                 context_cap, model_view.rope_tables, trace_workspace.data(),
-		                 trace_workspace.size());
+		                 trace_workspace.size(), option_g_mode);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=trace_layer_step: layer=%u status=%s\n", step,
 			             SslmForwardStatusName(st));
@@ -379,7 +399,7 @@ int main(int argc, char** argv) {
 		    oracle_prefill_seq, layers.data(), num_hidden_layers,
 		    /*layer_budget=*/num_hidden_layers, hidden_size, model_view.config.head_dim, num_kv_heads,
 		    model_view.config.intermediate_size, context_cap, model_view.rope_tables,
-		    oracle_workspace.data(), oracle_workspace.size());
+		    oracle_workspace.data(), oracle_workspace.size(), option_g_mode);
 		if (lst != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=oracle_prefill_layers: position=%zu status=%s\n", i,
 			             SslmForwardStatusName(lst));
@@ -437,7 +457,7 @@ int main(int argc, char** argv) {
 		const SslmForwardStatus st = RunLayerLoop(
 		    oracle_row_seq, layers.data(), num_hidden_layers, /*layer_budget=*/i, hidden_size,
 		    model_view.config.head_dim, num_kv_heads, model_view.config.intermediate_size, context_cap,
-		    model_view.rope_tables, oracle_workspace.data(), oracle_workspace.size());
+		    model_view.rope_tables, oracle_workspace.data(), oracle_workspace.size(), option_g_mode);
 		if (st != SslmForwardStatus::Ok) {
 			std::fprintf(stderr, "FAILED at stage=oracle_row_layers: row=%u status=%s\n", i,
 			             SslmForwardStatusName(st));

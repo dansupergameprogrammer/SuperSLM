@@ -183,6 +183,34 @@ def test_real_file_copy_with_refusal_deleted_outright_is_caught():
         )
 
 
+def test_real_file_copy_with_hoisted_local_exponent_skip_is_caught():
+    """T-1900 fix round 3 (reviewer-named hardening): the exponent test
+    hoisted into a named local one statement before the `if`, rather than
+    written directly in the `if` header --
+
+        const bool gate_active = lw.kv_landing_e_t_k[h] < -40;
+        if (gate_active && (exceeded0 || exceeded1)) { return ...; }
+
+    -- reported CLEAN before this round (the header-only check saw only
+    `gate_active`, never the exponent-shaped expression that fed it). Must
+    now report red, on the SAME real-file-copy discipline the other mutation
+    cells in this suite already use."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _copy_real_forward_sites(tmp)
+        mutated = (
+            "\t\t\t\t\t\tconst bool gate_active = lw.kv_landing_e_t_k[h] < -40;\n"
+            "\t\t\t\t\t\tif (gate_active && (exceeded0 || exceeded1)) {\n"
+            "\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+            "\t\t\t\t\t\t}"
+        )
+        _replace_once(path, _REAL_REFUSAL_BLOCK, mutated)
+        skip_hits = chk.find_dynamic_gate_skip_conditions(path)
+        assert len(skip_hits) >= 1, (
+            "an exponent test hoisted into a named local feeding the if's own condition must be "
+            "caught, not only an exponent-shaped if header written inline"
+        )
+
+
 def test_an_unrelated_enclosing_block_is_not_flagged():
     """A real enclosing ancestor of the refusal (the `for` loop over pairs,
     the `if (option_g_fused_k_landing)` branch, the K/V-landing block's own
