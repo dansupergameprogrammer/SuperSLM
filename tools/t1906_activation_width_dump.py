@@ -146,6 +146,17 @@ AMAX = (1 << (DEFAULT_BITS - 1)) - 1   # 127 at the default -- T-1809's INT8_MAX
                                         # process (T-1809's own constraint, unchanged here), so a
                                         # module global read by the closures below is safe and is
                                         # the smallest diff against the reused file.
+MAX_EXACT_FLOAT32_BITS = 25   # T-1907 finding S3. AMAX = 2**(bits-1)-1 is exactly representable
+                                # in float32 (24-bit mantissa) through bits=25 (AMAX=16777215 <
+                                # 2**24) and stops at bits=26 (AMAX=33554431, float32 renders
+                                # 33554432) -- verified this session with numpy.float32, matching
+                                # the casebook's own independently measured cell.
+INT8_REFERENCE_AMAX = 127   # NEVER reassigned. The artifact's own calibration grid width --
+                             # pipeline._output_scale derives every K/V landing scale as
+                             # calibration_maxabs / 127, so a scale read from the artifact is
+                             # always an int8-grid value regardless of --bits. rt_static (T-1907
+                             # finding C1) rescales that value to the CURRENT AMAX by the ratio
+                             # INT8_REFERENCE_AMAX / AMAX; at bits=8 the ratio is exactly 1.0.
 PROB_FRAC_BITS = 15      # pipeline.PROB_FRAC_BITS -- NOT part of the width axis, see docstring
 SIGMOID_FRAC_BITS = 15   # pipeline.SIGMOID_FRAC_BITS -- NOT part of the width axis, see docstring
 
@@ -188,21 +199,39 @@ def rt_dynamic(x):
 
 
 def rt_static(x, scale):
-    """The engine's K/V landing: a fixed float-domain scale, symmetric AMAX-wide, saturating.
+    """The engine's K/V landing, RE-DERIVED to an AMAX-wide grid -- T-1907 finding C1 (fixed).
 
-    `scale` is the calibrated per-code value `S`, read from the artifact -- the SAME scale at
-    every width, because it is derived from the calibration corpus independent of the code
-    width (`pipeline._derive_scales`); only the number of codes on either side of zero changes
-    with AMAX. Saturation is real here and is not a modelling choice at the default width --
-    the engine clamps to [-127, 127] at this site (`dynamic_engine._forward_dynamic_vec_layers`)
-    -- and at other widths this arm's own saturation point moves with AMAX, which is the
-    width sweep's own point: a wider code range saturates less often at the SAME scale.
+    `scale` is always the ARTIFACT's calibrated int8-grid value `S_8`, read once and passed by
+    every caller unchanged -- `pipeline._output_scale` derives it as `calibration_maxabs / 127`
+    (`D-SLM2484`). Prior to this fix, `rt_static` reconstructed on `S_8` at every width and only
+    the clip point moved with `AMAX`, so `--bits 12`/`--bits 16` produced BIT-IDENTICAL K/V
+    landings (measured: differs from `--bits 8` in 28 of 3,311,616 elements, and not at all
+    between 12 and 16) -- an axis that did not move at three of T-1809's eighteen site classes
+    (4, 5, 7) while claiming to.
+
+    The width axis now moves the RECONSTRUCTION QUANTUM at this site too, not only its clip
+    point: `scale_B = S_8 * 127 / AMAX` is the per-code value of the SAME calibrated range
+    (`calibration_maxabs`) spread over `AMAX` codes instead of 127 -- the same derivation
+    `pipeline._output_scale` would apply at a `B`-bit grid, without re-deriving `S_8` from the
+    calibration corpus (that corpus is not available to this harness; `S_8` already encodes it).
+    At `bits=8`, `AMAX=127` and `127/AMAX == 1.0` exactly (integer division of equal operands),
+    so `scale_B == S_8` bit-for-bit and T-1809 arm C's own reconstruction is byte-for-byte
+    unchanged -- the fidelity check re-run after this fix must still pass 40/40 (`D-SLM2481`
+    reconfirmed post-fix). At other widths the quantum genuinely shrinks with `AMAX`, exactly as
+    `rt_dynamic`'s `delta = D'/AMAX` already does, which is the property C1 found missing.
+
+    Saturation is real at every width: the engine's own clamp to [-127, 127] at `bits=8`
+    (`dynamic_engine._forward_dynamic_vec_layers`) is the `bits=8` instance of this arm's own
+    clamp to [-AMAX, AMAX], and at wider `bits` the SAME calibrated range now spans more codes,
+    so it saturates less often AND resolves more finely -- both properties of a wider grid, not
+    only the first.
     """
     import torch
     dtype = x.dtype
     xf = x.to(torch.float32)
-    q = _round_half_away_from_zero(xf / scale).clamp(-AMAX, AMAX)
-    return (q * scale).to(dtype)
+    scale_b = scale * (INT8_REFERENCE_AMAX / AMAX)
+    q = _round_half_away_from_zero(xf / scale_b).clamp(-AMAX, AMAX)
+    return (q * scale_b).to(dtype)
 
 
 def rt_on_grid(x, delta):
@@ -493,6 +522,40 @@ def install_forward(model, k_scales, v_scales, quantize_activations: bool):
 
 
 # ==============================================================================
+# T-1907 finding S1 -- width provenance. A `.float.bin` file carries no arm or bit-width field
+# (its 4-word header is `n_positions, n_layers+1, hidden_size, prompt_fingerprint`, identical to
+# T-1777's own format, which `t1906_grade_arms.py` must keep reading unmodified). The provenance
+# this ticket's width axis needs lives in a directory-level sidecar instead: `manifest.json`,
+# written into `--out-dir`, read and enforced by the grader (S1/S2 fix, same commit).
+# ==============================================================================
+
+MANIFEST_NAME = "manifest.json"
+
+
+def write_manifest(out_dir: Path, *, arm: str, bits: int, amax: int, docs_source: str,
+                    complete: bool, n_ok: int = None, n_failed: int = None) -> None:
+    """Write/overwrite this directory's own provenance record. Called twice per run: once
+    before capture starts (`complete=False`, so an interrupted run still leaves a directory
+    that HONESTLY reports it never finished, rather than no manifest at all -- a missing
+    manifest and an incomplete one are different failures and the grader treats them
+    differently), and once after (`complete=True`, with final counts).
+    """
+    import json as _json
+    manifest = {
+        "tool": "t1906_activation_width_dump.py",
+        "arm": arm,
+        "bits": bits,
+        "amax": amax,
+        "docs_source": docs_source,
+        "complete": complete,
+    }
+    if n_ok is not None:
+        manifest["n_ok"] = n_ok
+    if n_failed is not None:
+        manifest["n_failed"] = n_failed
+    with open(out_dir / MANIFEST_NAME, "w", encoding="utf-8") as f:
+        _json.dump(manifest, f, indent=2)
+
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
@@ -504,7 +567,9 @@ def main(argv=None) -> int:
                         help="symmetric integer width at the dynamic/static activation "
                              "sites (T-1809's site classes 1-7/9-14/16-18); AMAX = "
                              "2**(bits-1)-1. Default 8 reproduces T-1809 arm C bit-exact. "
-                             "Does NOT affect the Q15 softmax/sigmoid sites (classes 8/15).")
+                             "Does NOT affect the Q15 softmax/sigmoid sites (classes 8/15). "
+                             "Bounded to [2, 25] -- below 2, AMAX=0; above 25, AMAX is no "
+                             "longer exactly representable in float32 (T-1907 finding S3).")
     parser.add_argument("--docs", required=True, help="T-1777's own docs.jsonl (read-only)")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--model", default=None)
@@ -522,6 +587,14 @@ def main(argv=None) -> int:
     if args.bits < 2:
         raise SystemExit(f"--bits must be >= 2 (got {args.bits}); a 1-bit symmetric signed "
                           f"range has AMAX=0 and every landing collapses to zero")
+    if args.bits > MAX_EXACT_FLOAT32_BITS:
+        raise SystemExit(
+            f"--bits must be <= {MAX_EXACT_FLOAT32_BITS} (got {args.bits}); AMAX = "
+            f"2**(bits-1)-1 stops being exactly representable in float32 at bits="
+            f"{MAX_EXACT_FLOAT32_BITS + 1} (float32 has a 24-bit mantissa; AMAX first exceeds "
+            f"2**24 there), and every round-trip in this harness computes in float32 "
+            f"(T-1907 finding S3) -- confirmed by execution: bits=26 gives AMAX=33554431, "
+            f"which float32 renders as 33554432")
     global AMAX
     AMAX = (1 << (args.bits - 1)) - 1
     print(f"activation width: --bits {args.bits} -> AMAX={AMAX} "
@@ -585,6 +658,8 @@ def main(argv=None) -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
+                    docs_source=str(Path(args.docs).resolve()), complete=False)
 
     n_ok = n_failed = 0
     t_start = time.perf_counter()
@@ -630,6 +705,9 @@ def main(argv=None) -> int:
     print(f"batch_done: arm={args.arm} bits={args.bits} {n_ok} ok, {n_failed} failed "
           f"(of {len(docs)}), capture_total={total:.1f}s avg={total/max(1,len(docs)):.2f}s/doc",
           flush=True)
+    write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
+                    docs_source=str(Path(args.docs).resolve()), complete=(n_failed == 0),
+                    n_ok=n_ok, n_failed=n_failed)
     return 0 if n_failed == 0 else 1
 
 

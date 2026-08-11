@@ -16,15 +16,70 @@ side in every row, exactly as the engine baseline itself is scored.
 
 Nothing in T-1777's worktree is written. Every figure printed here is computed by T-1777's
 own functions on T-1777's own committed reference dumps.
+
+T-1907 findings S1 and S2 (fixed, same commit as the dump tool's C1/S3 fixes):
+
+S1 -- a `--arm NAME=DIR` width point's `.float.bin` files carry no width field of their own
+(T-1777's own header format, kept unmodified, has none), so nothing previously stopped an
+int8 directory from being graded and reported as though it were int16. Every width-point
+directory is now required to carry `t1906_activation_width_dump.py`'s own `manifest.json`
+sidecar (written by that tool, not by this one); this grader reads it, prints the bits it
+found, and REFUSES -- exits non-zero without printing a verdict for that arm -- when the
+manifest is missing, or when the operator's own `NAME` encodes a bit width (a trailing
+`bits<N>`/`b<N>` token) that disagrees with the manifest's recorded `bits`. T-1777's own two
+fixed baseline directories (the engine int8 dump, the fp32 self-consistency dump) are exempt
+-- they are T-1777's own committed artifacts, never produced by this harness, and carry their
+own provenance already checked by `compare_arms`'s fingerprint guard.
+
+S2 -- `gap()` differenced two rows' `recall@k` without ever comparing their `n`, so a
+width-point directory short of the full corpus (a `--limit` run, or documents lost to the
+dump tool's own per-document failure path) was silently differenced against the fixed
+239-document baseline rows and printed a resolution verdict anyway. `gap()` now refuses --
+prints REFUSED, computes nothing -- whenever the two rows' populations differ.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
 import numpy as np
+
+_BITS_IN_NAME = re.compile(r"bits?(\d+)", re.IGNORECASE)
+
+
+def _read_manifest_or_refuse(name: str, d: Path) -> int:
+    """T-1907 S1. Returns the manifest's `bits`, or raises SystemExit (refuses) if the
+    directory carries no manifest, or if `name` encodes a bit width that disagrees with it.
+    """
+    manifest_path = d / "manifest.json"
+    if not manifest_path.exists():
+        raise SystemExit(
+            f"REFUSED: --arm {name}={d} carries no manifest.json -- this grader cannot "
+            f"confirm what activation width this directory was captured at, and grading it "
+            f"would silently compare an unknown width against the named width points "
+            f"(T-1907 finding S1). Regenerate it with t1906_activation_width_dump.py, which "
+            f"writes manifest.json for every run.")
+    with open(manifest_path, encoding="utf-8") as f:
+        manifest = json.load(f)
+    bits = manifest.get("bits")
+    if bits is None:
+        raise SystemExit(f"REFUSED: {manifest_path} carries no 'bits' field.")
+    m = _BITS_IN_NAME.search(name)
+    if m is not None:
+        claimed = int(m.group(1))
+        if claimed != bits:
+            raise SystemExit(
+                f"REFUSED: --arm {name}={d} -- the name claims bits={claimed} but "
+                f"{manifest_path} records bits={bits} (T-1907 finding S1). Two widths were "
+                f"about to be compared as though they were the same arm.")
+    if manifest.get("complete") is False:
+        print(f"  [{name}] WARNING: manifest.json records complete=False -- this capture "
+              f"had per-document failures; n_ok={manifest.get('n_ok')} "
+              f"n_failed={manifest.get('n_failed')}", flush=True)
+    return bits
 
 
 def main(argv=None) -> int:
@@ -54,15 +109,17 @@ def main(argv=None) -> int:
     ref_vecs, ref_fps = rr.load_pooled_vectors(labels, out / "t1777_full_float_bf16", "float")
 
     arms = {
-        "engine int8 (canonical baseline)": (out / "t1777_full_int8", "int8"),
-        "reference self-consistency: true fp32": (out / "t1777_full_float_fp32", "float"),
+        "engine int8 (canonical baseline)": (out / "t1777_full_int8", "int8", None),
+        "reference self-consistency: true fp32": (out / "t1777_full_float_fp32", "float", None),
     }
     for spec in args.arm:
         name, _, d = spec.partition("=")
-        arms[f"T-1906 {name}"] = (Path(d), "float")
+        d = Path(d)
+        bits = _read_manifest_or_refuse(name, d)   # T-1907 S1 -- refuses on failure, else here
+        arms[f"T-1906 {name} (bits={bits})"] = (d, "float", bits)
 
     rows = {}
-    for name, (d, kind) in arms.items():
+    for name, (d, kind, bits) in arms.items():
         cand_vecs, cand_fps = rr.load_pooled_vectors(labels, d, kind)
         results, n_docs = rr.compare_arms(ref_vecs, cand_vecs, domains, ref_fps, cand_fps)
         row = {"n": n_docs}
@@ -94,16 +151,31 @@ def main(argv=None) -> int:
         print(f"  spearman mean = {row['spearman_mean']:.4f}  min = {row['spearman_min']:.4f}")
 
     def gap(a, b, k):
-        """A - B with the two rows' resolving powers summed, per StandardsDocument 5.4."""
+        """A - B with the two rows' resolving powers summed, per StandardsDocument 5.4.
+
+        T-1907 finding S2 (fixed): refuses -- returns (None, None, None) -- rather than
+        computing a difference when the two rows were graded over different populations.
+        `StandardsDocument.md` 5.4 requires a comparison be over the same population before
+        it is evidence of anything; per 4, the check refuses rather than warns.
+        """
+        if rows[a]["n"] != rows[b]["n"]:
+            return None, None, None
         d = rows[a][f"recall@{k}"] - rows[b][f"recall@{k}"]
         rp = rows[a][f"rp@{k}"] + rows[b][f"rp@{k}"]
         return d, rp, (abs(d) / rp if rp > 0 else float("nan"))
 
     print("\n=== pairwise gaps on recall@1 (the binding metric, D-SLM1455) ===")
     names = list(rows)
+    any_refused = False
     for i, a in enumerate(names):
         for b in names[i + 1:]:
             d, rp, ratio = gap(a, b, 1)
+            if d is None:
+                any_refused = True
+                print(f"  {a}\n    minus {b}\n    = REFUSED -- population mismatch "
+                      f"(N={rows[a]['n']} vs N={rows[b]['n']}), not the same quantity "
+                      f"(T-1907 finding S2)")
+                continue
             verdict = ("RESOLVED %.2fx past combined resolving power" % ratio) if ratio > 1.0 \
                 else "NOT DISTINGUISHABLE at this N"
             print(f"  {a}\n    minus {b}\n    = {d:+.6f}  combined RP {rp:.4f}  -> {verdict}")
@@ -112,7 +184,7 @@ def main(argv=None) -> int:
         with open(args.json_out, "w", encoding="utf-8") as f:
             json.dump(rows, f, indent=2)
         print(f"\nwritten: {args.json_out}")
-    return 0
+    return 1 if any_refused else 0
 
 
 if __name__ == "__main__":
