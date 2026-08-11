@@ -326,7 +326,8 @@ def degrade_weights(model, quantize_weight_per_channel, dequantize_weight_per_ch
         with torch.no_grad():
             module.weight.copy_(deq_t)
         n_touched += 1
-    assert n_touched == 196, f"expected 196 projection tensors, touched {n_touched}"
+    if n_touched != 196:   # T-1907 finding M1, round 3 -- explicit raise, not a bare assert
+        raise AssertionError(f"expected 196 projection tensors, touched {n_touched}")
     return n_touched
 
 
@@ -360,22 +361,79 @@ def read_kv_landing_scales(metadata_path, n_layers, n_kv_heads):
     for layer in range(n_layers):
         ks = [nonlinear[f"layer{layer}.k_head{h}.scale"] for h in range(n_kv_heads)]
         vs = [nonlinear[f"layer{layer}.v_head{h}.scale"] for h in range(n_kv_heads)]
-        assert len(set(ks)) == 1 and len(set(vs)) == 1, (
-            f"layer{layer}: this artifact carries per-HEAD K/V scales "
-            f"(k={ks}, v={vs}); this script's per-tensor read is no longer valid"
-        )
+        # T-1907 finding M1, round 3 -- explicit raises, not bare asserts (`python -O` elides
+        # a bare `assert`; the file's own `endpoint_self_check_last_position` uses this exact
+        # pattern for exactly this reason). A silently-elided degeneracy check would average
+        # away a real per-head calibration; a silently-elided site-identity check below would
+        # feed rt_static a floor from the wrong site with no signal at all.
+        if len(set(ks)) != 1 or len(set(vs)) != 1:
+            raise AssertionError(
+                f"layer{layer}: this artifact carries per-HEAD K/V scales "
+                f"(k={ks}, v={vs}); this script's per-tensor read is no longer valid"
+            )
         k_scales.append(ks[0])
         v_scales.append(vs[0])
         for proj, scale_val, floors in (("k", ks[0], k_floors), ("v", vs[0], v_floors)):
             entry = requant[f"layer{layer}.{proj}_proj.requant"]
-            assert entry["output_scale"] == scale_val, (
-                f"layer{layer}.{proj}_proj.requant output_scale "
-                f"({entry['output_scale']}) != the nonlinear per-head scale ({scale_val}) -- "
-                f"this is not the site that produced k_scales/v_scales"
-            )
+            if entry["output_scale"] != scale_val:
+                raise AssertionError(
+                    f"layer{layer}.{proj}_proj.requant output_scale "
+                    f"({entry['output_scale']}) != the nonlinear per-head scale "
+                    f"({scale_val}) -- this is not the site that produced k_scales/v_scales"
+                )
             input_product = float(entry["input_scale"]) * max(entry["weight_scales"])
             floors.append(input_product * SCALE_HEADROOM)
     return k_scales, v_scales, k_floors, v_floors
+
+
+def compute_kv_effective_bits(k_scales, v_scales, k_floors, v_floors, amax):
+    """T-1907 finding S1, round 3. C2 modelled the engine's width-independent floor, which
+    means K/V resolution stops improving once that floor binds -- `scale_b -> floor` as `AMAX`
+    grows, so the realised grid converges to a per-site CEILING no `--bits` above the crossover
+    can move. Nothing before this function reported that ceiling; the row label just read
+    `bits=16` regardless of what was actually realised at the 56 K/V sites.
+
+    Per site: `calibrated = scale * INT8_REFERENCE_AMAX / amax` is what `--bits` alone would
+    buy (T-1907 round 1's formula); `scale_b = max(calibrated, floor)` is what C2 (round 2)
+    actually reconstructs on. The REALISED code range at that quantum, translated back through
+    the same relationship `AMAX` has to `scale` (`calibrated_range / scale_b`), is
+    `amax_eff = scale * INT8_REFERENCE_AMAX / scale_b` -- the number of int8-style codes this
+    site actually achieves, which is `<= amax` and equals it only where the floor does not
+    bind. Converting a code count back to a bit width uses the same relationship `--bits`
+    itself uses in reverse (`amax = 2**(bits-1) - 1` => `bits = log2(amax + 1) + 1`).
+
+    Returns a dict with the aggregate stats (`min`/`median`/`mean`/`max` effective bits,
+    `n_capped`, `n_sites`) and the full per-site list, so the manifest and the grader's row can
+    both report a `--bits N` capture's actually-realised K/V resolution rather than the width
+    number alone.
+    """
+    import math
+    import statistics
+
+    per_site = []
+    n_capped = 0
+    for scales, floors, kind in ((k_scales, k_floors, "k"), (v_scales, v_floors, "v")):
+        for layer, (scale, floor) in enumerate(zip(scales, floors)):
+            calibrated = scale * INT8_REFERENCE_AMAX / amax
+            scale_b = max(calibrated, floor)
+            capped = floor > calibrated
+            amax_eff = scale * INT8_REFERENCE_AMAX / scale_b
+            eff_bits = math.log2(amax_eff + 1) + 1
+            per_site.append({"layer": layer, "kind": kind, "effective_bits": eff_bits,
+                              "capped": capped})
+            if capped:
+                n_capped += 1
+    values = [s["effective_bits"] for s in per_site]
+    return {
+        "amax": amax,
+        "n_sites": len(per_site),
+        "n_capped": n_capped,
+        "min": min(values),
+        "median": statistics.median(values),
+        "mean": statistics.fmean(values),
+        "max": max(values),
+        "per_site": per_site,
+    }
 
 
 def install_forward(model, k_scales, v_scales, k_floors, v_floors, quantize_activations: bool):
@@ -584,13 +642,15 @@ MANIFEST_NAME = "manifest.json"
 
 def write_manifest(out_dir: Path, *, arm: str, bits: int, amax: int, docs_source: str,
                     complete: bool, n_ok: int = None, n_failed: int = None,
-                    labels: list = None) -> None:
-    """Write/overwrite this directory's own provenance record. Called twice per run: once
-    before capture starts (`complete=False`, so an interrupted run still leaves a directory
-    that HONESTLY reports it never finished, rather than no manifest at all -- a missing
-    manifest and an incomplete one are different failures and the grader treats them
-    differently), and once after (`complete=True`, with final counts and the exact label set
-    captured, T-1907 finding C1 round 2).
+                    labels: list = None, kv_effective_bits: dict = None) -> None:
+    """Write/overwrite this directory's own provenance record. Called up to three times per
+    run: once before capture starts (`complete=False`, so an interrupted run still leaves a
+    directory that HONESTLY reports it never finished, rather than no manifest at all -- a
+    missing manifest and an incomplete one are different failures and the grader treats them
+    differently); once right after `kv_effective_bits` is known, for an arm that quantizes
+    activations, so the ceiling C2 found is recorded even if capture itself is interrupted
+    (T-1907 finding S1, round 3); and once after capture completes (`complete=True`, with final
+    counts, the exact label set captured, and `kv_effective_bits` again).
     """
     import json as _json
     manifest = {
@@ -607,6 +667,8 @@ def write_manifest(out_dir: Path, *, arm: str, bits: int, amax: int, docs_source
         manifest["n_failed"] = n_failed
     if labels is not None:
         manifest["labels"] = labels
+    if kv_effective_bits is not None:
+        manifest["kv_effective_bits"] = kv_effective_bits
     with open(out_dir / MANIFEST_NAME, "w", encoding="utf-8") as f:
         _json.dump(manifest, f, indent=2)
 
@@ -632,7 +694,12 @@ def main(argv=None) -> int:
                               "a manifest describing the new run beside files from an old one.")
     parser.add_argument("--overwrite", action="store_true",
                          help="clear --out-dir before capture if it already holds files, "
-                              "instead of refusing (T-1907 finding C1, round 2)")
+                              "instead of refusing. ONLY clears 'manifest.json' and "
+                              "'*.float.bin' in a directory whose own manifest.json names "
+                              "this tool -- anything else refuses with no override (T-1907 "
+                              "finding S2, round 3). The clear itself happens only after "
+                              "--docs, --t1777-tools/--spike-root and --artifact-metadata "
+                              "have all validated, so a run that cannot start cannot delete.")
     parser.add_argument("--model", default=None)
     parser.add_argument("--system", default=SYSTEM_PROMPT)
     parser.add_argument("--limit", type=int, default=None,
@@ -662,27 +729,66 @@ def main(argv=None) -> int:
           f"({'bit-exact reproduction of T-1809 arm C' if args.bits == 8 else 'width sweep point'})",
           flush=True)
 
-    # T-1907 finding C1 (round 2). Checked before the model load (minutes-long) rather than
-    # after, so a bad invocation fails fast: a capture used to MERGE into whatever `--out-dir`
-    # already held -- writing over labels it reproduces and leaving every other file untouched
-    # -- so a directory could carry files from more than one run while its manifest described
-    # only the last one. Refuse by default; `--overwrite` clears the directory first.
+    # T-1907 finding C1 (round 2) / S2 (round 3). A capture used to MERGE into whatever
+    # `--out-dir` already held; round 2 closed that by refusing (or clearing, with
+    # `--overwrite`) up front. Round 3's own finding: the round-2 clear ran BEFORE any other
+    # validation -- before --docs opened, before --t1777-tools/--spike-root imported, before
+    # --artifact-metadata read -- so an invocation that could not possibly proceed still
+    # destroyed the directory on its way to failing, on an operator-supplied path, with the
+    # refusal message naming --overwrite as its own first suggestion. `out/` is gitignored in
+    # every worktree this campaign uses, so anything destroyed here is unrecoverable.
+    #
+    # This block now only VALIDATES -- it decides whether a clear is permitted and safe, and
+    # what `pending_clear`/`existing` describe, but does not touch the filesystem. The actual
+    # unlink happens far below, after --docs, the tools import, and --artifact-metadata have
+    # all validated (search "T-1907 finding S2" below).
     out_dir = Path(args.out_dir)
-    if out_dir.exists():
-        existing = [p for p in out_dir.iterdir() if p.is_file()]
-        if existing:
-            if not args.overwrite:
-                raise SystemExit(
-                    f"REFUSED: --out-dir {out_dir} already holds {len(existing)} file(s) "
-                    f"(e.g. {existing[0].name}) -- capturing into it would MERGE this run's "
-                    f"output with whatever is already there, and the manifest this run writes "
-                    f"would then describe files it did not produce (T-1907 finding C1, round "
-                    f"2). Pass --overwrite to clear the directory first, or choose a fresh "
-                    f"--out-dir.")
-            for p in existing:
-                p.unlink()
-            print(f"--overwrite: cleared {len(existing)} pre-existing file(s) from {out_dir} "
-                  f"before capture", flush=True)
+    existing = [p for p in out_dir.iterdir() if p.is_file()] if out_dir.exists() else []
+    pending_clear = False
+    if existing:
+        if not args.overwrite:
+            raise SystemExit(
+                f"REFUSED: --out-dir {out_dir} already holds {len(existing)} file(s) "
+                f"(e.g. {existing[0].name}) -- capturing into it would MERGE this run's "
+                f"output with whatever is already there, and the manifest this run writes "
+                f"would then describe files it did not produce (T-1907 finding C1, round "
+                f"2). Pass --overwrite to clear the directory first, or choose a fresh "
+                f"--out-dir.")
+        # T-1907 finding S2 (round 3). --overwrite may ONLY clear a directory this tool can
+        # prove it wrote: every file must be `manifest.json` or match `*.float.bin`, and that
+        # manifest.json must itself name this tool. Anything else refuses with NO override --
+        # unlike the populated-directory case above, there is no flag that authorizes deleting
+        # a directory this tool did not produce.
+        unexpected = [p for p in existing
+                      if p.name != MANIFEST_NAME and not p.name.endswith(".float.bin")]
+        if unexpected:
+            raise SystemExit(
+                f"REFUSED: --out-dir {out_dir} holds {len(unexpected)} file(s) --overwrite "
+                f"cannot clear (e.g. {unexpected[0].name}) -- only 'manifest.json' and "
+                f"'*.float.bin' are ever deleted by this tool, and this directory holds "
+                f"something else (T-1907 finding S2). --overwrite has no override for this; "
+                f"choose a different --out-dir, or clear the directory yourself.")
+        manifest_path = out_dir / MANIFEST_NAME
+        if not manifest_path.exists():
+            raise SystemExit(
+                f"REFUSED: --out-dir {out_dir} holds {len(existing)} file(s) but no "
+                f"manifest.json -- --overwrite only clears a directory this tool can prove it "
+                f"wrote, and a directory with no manifest carries no such proof (T-1907 "
+                f"finding S2). Choose a different --out-dir, or clear it yourself.")
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                existing_manifest = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            raise SystemExit(
+                f"REFUSED: --out-dir {out_dir}'s manifest.json could not be read ({e}) -- "
+                f"--overwrite will not clear a directory whose own manifest it cannot parse "
+                f"(T-1907 finding S2).")
+        if existing_manifest.get("tool") != "t1906_activation_width_dump.py":
+            raise SystemExit(
+                f"REFUSED: --out-dir {out_dir}'s manifest.json names tool="
+                f"{existing_manifest.get('tool')!r}, not this tool -- --overwrite will not "
+                f"clear a directory it cannot prove it produced (T-1907 finding S2).")
+        pending_clear = True   # deferred until docs/tools/artifact-metadata all validate
 
     sys.path.insert(0, str(Path(args.t1777_tools).resolve()))
     sys.path.insert(0, str(Path(args.spike_root).resolve()))
@@ -696,6 +802,32 @@ def main(argv=None) -> int:
                 docs.append(json.loads(line))
     if args.limit is not None:
         docs = docs[: args.limit]
+
+    quantize_weights = args.arm in ("B", "D")
+    quantize_activations = args.arm in ("C", "D")
+
+    if quantize_activations:
+        # T-1907 finding S2 (round 3). A preflight existence+parseability check, run before
+        # anything destructive and before the (multi-second) model load. `read_kv_landing_scales`
+        # re-reads this same file later, once `model.config` is available for the per-layer
+        # loop bounds; this is deliberately NOT that full read -- only "does the path resolve
+        # to valid JSON", which is everything that can be known before the model exists.
+        with open(args.artifact_metadata, encoding="utf-8") as f:
+            json.load(f)
+
+    # T-1907 finding S2 (round 3). Only now -- after --docs, the tools import, and
+    # --artifact-metadata (when relevant) have all validated -- is it safe to destroy
+    # anything. This is the last point before the model load; nothing above this line writes
+    # or deletes a file.
+    if pending_clear:
+        for p in existing:
+            p.unlink()
+        print(f"--overwrite: cleared {len(existing)} pre-existing file(s) from {out_dir} "
+              f"before capture (validated docs/tools/artifact-metadata first, T-1907 finding "
+              f"S2)", flush=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
+                    docs_source=str(Path(args.docs).resolve()), complete=False)
 
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -714,9 +846,6 @@ def main(argv=None) -> int:
           f"{time.perf_counter() - t0:.2f}s device={device} "
           f"documents={len(docs)} resolved_model_dtype={model.dtype}", flush=True)
 
-    quantize_weights = args.arm in ("B", "D")
-    quantize_activations = args.arm in ("C", "D")
-
     if quantize_weights:
         from superslm_spike.pipeline import (  # noqa: E402
             quantize_weight_per_channel, dequantize_weight_per_channel)
@@ -726,7 +855,7 @@ def main(argv=None) -> int:
               f"engine's own int8 per-output-channel quantizer in "
               f"{time.perf_counter() - t_deg:.2f}s", flush=True)
 
-    k_scales = v_scales = k_floors = v_floors = None
+    k_scales = v_scales = k_floors = v_floors = kv_effective_bits = None
     if quantize_activations:
         k_scales, v_scales, k_floors, v_floors = read_kv_landing_scales(
             args.artifact_metadata, model.config.num_hidden_layers,
@@ -737,15 +866,30 @@ def main(argv=None) -> int:
               f"layer0 k_floor={k_floors[0]:.6g} v_floor={v_floors[0]:.6g} "
               f"(T-1907 C2)", flush=True)
 
+        # T-1907 finding S1, round 3. The floor C2 models does not move with `--bits`, so K/V
+        # resolution stops improving once it binds -- this is the realised ceiling, computed
+        # from values already in hand, and printed/manifested so a `bits=N` row carries what it
+        # actually achieved rather than only the width number.
+        kv_effective_bits = compute_kv_effective_bits(k_scales, v_scales, k_floors, v_floors,
+                                                        AMAX)
+        print(f"kv effective bits at --bits {args.bits}: "
+              f"min={kv_effective_bits['min']:.3f} "
+              f"median={kv_effective_bits['median']:.3f} "
+              f"mean={kv_effective_bits['mean']:.3f} "
+              f"max={kv_effective_bits['max']:.3f} "
+              f"capped={kv_effective_bits['n_capped']}/{kv_effective_bits['n_sites']} "
+              f"(T-1907 S1)", flush=True)
+        write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
+                        docs_source=str(Path(args.docs).resolve()), complete=False,
+                        kv_effective_bits=kv_effective_bits)
+
     handles = install_forward(model, k_scales, v_scales, k_floors, v_floors,
                                quantize_activations)
     print(f"forward installed: arm={args.arm} quantize_weights={quantize_weights} "
           f"quantize_activations={quantize_activations} hooks={len(handles)}", flush=True)
 
-    out_dir.mkdir(parents=True, exist_ok=True)   # already refused/cleared above if populated
-    write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
-                    docs_source=str(Path(args.docs).resolve()), complete=False)
-
+    # out_dir was already prepared (cleared/created, starting manifest written) above, before
+    # the model load -- see "T-1907 finding S2" there.
     n_ok = n_failed = 0
     labels_ok = []
     t_start = time.perf_counter()
@@ -794,7 +938,8 @@ def main(argv=None) -> int:
           flush=True)
     write_manifest(out_dir, arm=args.arm, bits=args.bits, amax=AMAX,
                     docs_source=str(Path(args.docs).resolve()), complete=(n_failed == 0),
-                    n_ok=n_ok, n_failed=n_failed, labels=labels_ok)
+                    n_ok=n_ok, n_failed=n_failed, labels=labels_ok,
+                    kv_effective_bits=kv_effective_bits)
     return 0 if n_failed == 0 else 1
 
 

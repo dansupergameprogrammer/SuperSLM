@@ -21,27 +21,43 @@ T-1907 round 1 findings S1 and S2 (fixed): a `--arm NAME=DIR` directory now requ
 `manifest.json` sidecar naming its own `bits`, and `gap()` refuses rather than differencing
 two rows measured over different populations.
 
-T-1907 round 2 findings (this commit):
+T-1907 round 2 findings, this file's share (fixed):
 
 C1 -- the round-1 manifest certified the RUN that last wrote into a directory, not the FILES
 sitting in it: nothing cleared `--out-dir` before capture, so a `--limit`/`--bits` re-run into
 a populated directory left a manifest describing the new run beside files an old run left
 behind, and this grader trusted the manifest's `bits` without checking that its recorded
-population matched what was actually graded. Two closes, both required now: the dump tool
-refuses (or clears, with `--overwrite`) a populated `--out-dir` before capture, so a manifest
-can only ever describe the directory it sits in; and this grader requires the manifest's
-`labels` (the exact set the dump tool captured) to equal the label set `compare_arms` actually
-graded, and its `n_ok` to equal the graded `n_docs` -- refusing before printing a verdict for
-that arm if either disagrees. Label-SET equality is strictly stronger than an `n_ok`/`n_docs`
-count match (two different 40-document subsets would pass a count check and fail this one).
+population matched what was actually graded. Two closes, both required: the dump tool refuses
+(or clears, with `--overwrite`) a populated `--out-dir` before capture, so a manifest can only
+ever describe the directory it sits in (the dump tool's own concern); and this grader requires
+the manifest's `labels` (the exact set the dump tool captured) to equal the label set
+`compare_arms` actually graded, and its `n_ok` to equal the graded `n_docs` -- refusing before
+printing a verdict for that arm if either disagrees. Label-SET equality is strictly stronger
+than an `n_ok`/`n_docs` count match (two different 40-document subsets would pass a count
+check and fail this one).
 
-S1 -- the name-vs-manifest guard matched `bits<N>` only, while this docstring (round 1) and
-the build record claimed `b<N>` was also covered. `_BITS_IN_NAME` now matches `bits`, `bit`,
-or a bare `b` prefix, anchored at a LEADING word boundary only (a trailing one broke the
-`bits16_rerun`/`b16_final` cases the casebook itself lists, since `_` counts as a word
-character and leaves no boundary between a digit and a following underscore -- caught by
-executing the casebook's own 12-name test set before trusting the fix). `int16`, `16bit`, and
-`width16` still do not match; `b8`, `bits16_rerun`, `b16_final`, `B16` all now do.
+S1 -- the name-vs-manifest guard matched `bits<N>` only, while round 1's own docstring and the
+build record claimed `b<N>` was also covered. `_BITS_IN_NAME` was widened to match `bits`,
+`bit`, or a bare `b` prefix, with a LEADING boundary only (a trailing `\b` broke the
+`bits16_rerun`/`b16_final` cases the round-2 casebook itself lists, since `_` counts as a word
+character and leaves no boundary between a digit and a following underscore).
+
+T-1907 round 3 finding S3, this file's share (fixed):
+
+The round-2 fix reasoned about `_` as a word character on the TRAILING side and never checked
+the identical fact on the LEADING side: `\b` also finds no boundary between a leading `_` and
+the token that follows it, so `arm_b8` and `run1_bits16` -- names that unambiguously encode a
+width -- matched nothing, and `--arm run1_bits16=<a bits=8 directory>` graded and exited 0
+with no refusal. This is the THIRD consecutive round this one guard's coverage was documented
+broader than it executed (round 1: docstring claimed `b<N>`, the pattern didn't cover it;
+round 2: the pattern claimed both boundaries were handled, the trailing one wasn't; round 3:
+this). `StandardsDocument.md` SS4 is explicit about what a rule that has failed twice needs,
+and it is not a fourth pattern edit defended by a fourth docstring: `_BITS_IN_NAME`'s leading
+anchor is now a negative lookbehind for any alphanumeric character (`(?<![a-zA-Z0-9])`,
+matching before `_`/`-`/`.`/string-start, refusing to match after a letter or digit) instead
+of `\b`, and the guard's coverage is pinned by `test_t1906_bits_in_name.py` -- a table-driven
+test over the full accumulated name set from all three rounds (28 names) that fails the build
+the moment the pattern narrows again, rather than a docstring re-asserted each round.
 """
 from __future__ import annotations
 
@@ -53,15 +69,21 @@ from pathlib import Path
 
 import numpy as np
 
-_BITS_IN_NAME = re.compile(r"\b(?:bits?|b)(\d+)", re.IGNORECASE)
+_BITS_IN_NAME = re.compile(r"(?<![a-zA-Z0-9])(?:bits?|b)(\d+)", re.IGNORECASE)
 
 
 def _read_manifest_or_refuse(name: str, d: Path) -> tuple:
-    """T-1907 S1 (round 1, name/bits check) and C1 (round 2, population check deferred to the
-    caller since it needs the graded results). Returns `(bits, expected_n_ok, expected_labels)`,
-    or raises SystemExit (refuses) if the directory carries no manifest, the manifest is
-    missing the fields round 2 requires, or `name` encodes a bit width that disagrees with the
-    manifest's recorded `bits`.
+    """T-1907 S1 (round 1, name/bits check), C1 (round 2, population check deferred to the
+    caller since it needs the graded results), and S1 (round 3, effective-bits pass-through).
+    Returns `(bits, expected_n_ok, expected_labels, kv_effective_bits)`, or raises SystemExit
+    (refuses) if the directory carries no manifest, the manifest is missing the fields round 2
+    requires, or `name` encodes a bit width that disagrees with the manifest's recorded `bits`.
+
+    `kv_effective_bits` is the summary dict `compute_kv_effective_bits` wrote (`min`/`median`/
+    `mean`/`max` effective bits, `n_capped`, `n_sites`), or `None` for an arm whose manifest
+    predates T-1907 round 3 or whose capture did not quantize activations. Read here rather
+    than recomputed: the dump tool is the one place `metadata.json`'s scales are read, and
+    duplicating that read here would risk the two drifting under a future artifact change.
     """
     manifest_path = d / "manifest.json"
     if not manifest_path.exists():
@@ -97,7 +119,8 @@ def _read_manifest_or_refuse(name: str, d: Path) -> tuple:
         print(f"  [{name}] WARNING: manifest.json records complete=False -- this capture "
               f"had per-document failures; n_ok={n_ok} n_failed={manifest.get('n_failed')}",
               flush=True)
-    return bits, n_ok, set(labels)
+    kv_effective_bits = manifest.get("kv_effective_bits")
+    return bits, n_ok, set(labels), kv_effective_bits
 
 
 def main(argv=None) -> int:
@@ -127,20 +150,22 @@ def main(argv=None) -> int:
     ref_vecs, ref_fps = rr.load_pooled_vectors(labels, out / "t1777_full_float_bf16", "float")
 
     arms = {
-        "engine int8 (canonical baseline)": (out / "t1777_full_int8", "int8", None, None, None),
+        "engine int8 (canonical baseline)": (
+            out / "t1777_full_int8", "int8", None, None, None, None),
         "reference self-consistency: true fp32": (
-            out / "t1777_full_float_fp32", "float", None, None, None),
+            out / "t1777_full_float_fp32", "float", None, None, None, None),
     }
     for spec in args.arm:
         name, _, d = spec.partition("=")
         d = Path(d)
         # T-1907 S1 (name/bits) refuses inside this call; C1's population check needs the
         # graded results and happens below, per-row, before that row is printed.
-        bits, expected_n_ok, expected_labels = _read_manifest_or_refuse(name, d)
-        arms[f"T-1906 {name} (bits={bits})"] = (d, "float", bits, expected_n_ok, expected_labels)
+        bits, expected_n_ok, expected_labels, kv_eff = _read_manifest_or_refuse(name, d)
+        arms[f"T-1906 {name} (bits={bits})"] = (
+            d, "float", bits, expected_n_ok, expected_labels, kv_eff)
 
     rows = {}
-    for name, (d, kind, bits, expected_n_ok, expected_labels) in arms.items():
+    for name, (d, kind, bits, expected_n_ok, expected_labels, kv_eff) in arms.items():
         cand_vecs, cand_fps = rr.load_pooled_vectors(labels, d, kind)
         results, n_docs = rr.compare_arms(ref_vecs, cand_vecs, domains, ref_fps, cand_fps)
 
@@ -183,6 +208,15 @@ def main(argv=None) -> int:
         print(f"  top1-within-top5 = {w5:.6f} ({row['within_top5_n']}/{n_docs})   "
               f"resolving power {row['within_top5_rp']:.4f}")
         print(f"  spearman mean = {row['spearman_mean']:.4f}  min = {row['spearman_min']:.4f}")
+        if kv_eff is not None:
+            # T-1907 finding S1, round 3. The row label reads `bits=N`; this is what the K/V
+            # sites actually realised at that N, which is <= N once the engine's own
+            # width-independent floor binds (T-1907 finding C2, round 2). Printed beside the
+            # row it belongs to rather than left in the manifest alone.
+            print(f"  kv effective bits (realised, not the label): "
+                  f"min={kv_eff['min']:.3f} median={kv_eff['median']:.3f} "
+                  f"mean={kv_eff['mean']:.3f} max={kv_eff['max']:.3f} "
+                  f"capped={kv_eff['n_capped']}/{kv_eff['n_sites']}")
 
     def gap(a, b, k):
         """A - B with the two rows' resolving powers summed, per StandardsDocument 5.4.
