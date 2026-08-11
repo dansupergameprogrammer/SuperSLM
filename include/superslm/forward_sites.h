@@ -298,10 +298,19 @@ int64_t ClampRopeCode(int64_t raw);
 // Claude/Curie/fa3189a-s3.3-rope-site-and-c32-softmax-remediation-test-
 // design-2026-07-28.md's remediation suite (the null-tensor and
 // extent-exceeded cells for Critical 1 and Critical 2).
+// T-1891 spike: `out_saturation_count`, defaulted `nullptr`, matching
+// `LandingRescale`'s own established convention (this header, above) rather than
+// inventing a new one. When non-null, incremented once per rotated component
+// (`out_row[2i]`/`out_row[2i+1]`) whose PRE-`ClampRopeCode` magnitude exceeds 127 --
+// i.e. once per element `ClampRopeCode` actually saturates, the same granularity
+// `LandingRescale`'s own counter uses. `nullptr` (every call site before this spike,
+// and this spike's own Q-rotation call) leaves this function's behaviour and output
+// byte-for-byte unchanged -- gate G1 is what confirms this addition changed nothing
+// observable when unused.
 SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim,
                                  int64_t position, int64_t context_cap,
                                  const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row);
+                                 int8_t* out_row, uint64_t* out_saturation_count = nullptr);
 
 // C34's SwiGLU activation site (§5.4, §6.3 step 11; T-1345). The declaration
 // and a stub were landed first by the test-design pass that authored this

@@ -20,10 +20,12 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <cstdlib>
 #include <string>
 #include <vector>
 
 #include "superslm/intmath.h"
+#include "superslm/option_g_spike.h"  // T-1891 spike -- disposable, never merges (see that header)
 #include "superslm/silu_lut.h"  // SiluSigmoidQ15 (C34's LUT construction, MlpActSite step 2)
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (RunLayerLoop's MlpActSite call)
 #include "superslm/matmul.h"  // GemmInt8AccumulateRow / GemmProbQ15Accumulate (RunLayerLoop)
@@ -130,6 +132,119 @@ inline U128 U128Shr(U128 v, int k) {
 	return U128{(v.lo >> k) | (v.hi << (64 - k)), v.hi >> k};
 }
 
+// --- T-1891 spike: RopeApplyPairWide's own signed-magnitude facility ---------------
+//
+// Option G (T-1822 §29.4/§30, D-SLM2305) rotates the WIDE, pre-landing int64 K
+// accumulator pairwise, before `LandingRescale` narrows it. `RopeApplyPair`
+// (intmath.cpp) combines its int32 inputs at int64 width; a rotation over int64
+// inputs needs one width wider still (the same step LandingRescale's own C27
+// composite already took, this file's own U128 facility above, comment at this
+// file's top). This is a SIGNED composite (an int64 pair rotated by signed Q2.30
+// table entries), so unlike LandingRescale's single product this needs a signed
+// ADD of two signed-magnitude U128 products -- `U128Ge`/`U128Sub` below, and the
+// magnitude-then-sign convention `LandingRescale` (§8.1) already establishes in
+// this file ("work in magnitude on both... apply C3's away-from-zero tie rule,
+// then reapply the combined sign"), generalized from one product to a sum of two.
+inline bool U128Ge(U128 a, U128 b) {
+	if (a.hi != b.hi) return a.hi > b.hi;
+	return a.lo >= b.lo;
+}
+
+// a - b, caller ensures a >= b (U128Ge checked at every call site below -- there is
+// no caller of this function in this file that does not check first).
+inline U128 U128Sub(U128 a, U128 b) {
+	const uint64_t lo = a.lo - b.lo;
+	const uint64_t borrow = (a.lo < b.lo) ? 1u : 0u;
+	return U128{lo, a.hi - b.hi - borrow};
+}
+
+// A signed value carried as (unsigned magnitude, negative flag) -- the same
+// representation LandingRescale computes inline for its own one product; named
+// here because RopeApplyPairWide composes FOUR products into TWO signed sums
+// rather than narrowing one product directly.
+struct SignedU128 {
+	U128 mag{0, 0};
+	bool negative = false;
+};
+
+// |a|*|b| with sign = sign(a) xor sign(b) -- exact int64*int32 product. Magnitude
+// bound: |a| <= 2^63 (INT64_MIN), |b| <= 2^30 (ROPE_ONE, this file's own
+// RopeApplySite comment: "every element already cleared ValidateRopeTablesDomain's
+// |v| <= 2^30 bound at load time"), so the product magnitude is <= 2^93 -- far
+// inside U128Mul64's exact 128-bit range, with no risk of the 128-bit ceiling this
+// file's own LandingRescale comment names for ITS (different, larger) composite.
+inline SignedU128 SignedMul64x32(int64_t a, int32_t b) {
+	const bool a_neg = a < 0;
+	const bool b_neg = b < 0;
+	const uint64_t ua = a_neg ? (~static_cast<uint64_t>(a) + 1u) : static_cast<uint64_t>(a);
+	const uint64_t ub = b_neg ? (~static_cast<uint64_t>(b) + 1u) : static_cast<uint64_t>(b);
+	return SignedU128{U128Mul64(ua, ub), a_neg != b_neg};
+}
+
+// a + b in signed-magnitude form. Same-sign: magnitudes add (each operand here is
+// <= 2^93, so the sum is <= 2^94, comfortably below U128Add's own carry-safe
+// range). Opposite-sign: the smaller magnitude is subtracted from the larger
+// (U128Ge decides which, U128Sub performs it), sign following the larger operand
+// -- the standard signed-magnitude addition rule, and the one LandingRescale's own
+// single-product path never needed because it only ever negated one value, never
+// summed two independently-signed ones.
+inline SignedU128 SignedAdd128(SignedU128 a, SignedU128 b) {
+	if (a.negative == b.negative) {
+		return SignedU128{U128Add(a.mag, b.mag), a.negative};
+	}
+	if (U128Ge(a.mag, b.mag)) {
+		return SignedU128{U128Sub(a.mag, b.mag), a.negative};
+	}
+	return SignedU128{U128Sub(b.mag, a.mag), b.negative};
+}
+
+inline SignedU128 SignedNegate128(SignedU128 v) {
+	if (v.mag.lo == 0 && v.mag.hi == 0) return v;  // zero has no sign to flip
+	return SignedU128{v.mag, !v.negative};
+}
+
+// Rounds a signed-magnitude 128-bit value right by `k` bits, C3's tie-away-from-
+// zero rule (the SAME rule `RoundingDivideByPOTImpl<int64_t>` applies at int64
+// width, restated here at 128-bit width in magnitude form -- mirroring
+// LandingRescale's own k>=0 branch EXACTLY: "round_half_away_from_zero(magnitude /
+// 2^k) == floor((2*magnitude + 2^k) / 2^(k+1))", magnitude-then-sign). TOTAL: never
+// undefined behavior for any `v`/`k` in [0, 63] this file's only caller
+// (RopeApplyPairWide) ever forms. Reports whether the rounded result fits int64_t
+// through `*out_fits` -- T-1891 gate G2's own refuse-not-wrap requirement, since a
+// rotation can raise a pair's magnitude by up to sqrt(2) and this composite's
+// pre-round magnitude (<= ~2^94, per SignedMul64x32's own bound doubled by the add)
+// divided by 2^ROPE_FRAC_BITS (2^30) can exceed int64_t's range at the domain's own
+// extreme -- unlike RopeApplyPair's narrow, int8-bounded-input sibling, which never
+// reaches this corner. The negative side's magnitude ceiling is one past the
+// positive side's (INT64_MIN's magnitude is 2^63, INT64_MAX's is 2^63-1), handled
+// explicitly here rather than left to an off-by-one in the caller.
+inline int64_t RoundShiftAwayFromZeroToI64(SignedU128 v, int k, bool* out_fits) {
+	const U128 doubled = U128Add(v.mag, v.mag);
+	const U128 rounded = U128Add(doubled, U128OneShl(k));
+	const U128 quotient = U128Shr(rounded, k + 1);
+	constexpr uint64_t kInt64MaxU = static_cast<uint64_t>(INT64_MAX);
+	const uint64_t ceiling = v.negative ? (kInt64MaxU + 1u) : kInt64MaxU;
+	const bool fits = (quotient.hi == 0) && (quotient.lo <= ceiling);
+	if (out_fits != nullptr) *out_fits = fits;
+	// Bit-pattern narrowing (meaningful only when `fits`, per this function's own
+	// contract -- the caller checks `*out_fits` before trusting the return value,
+	// matching LandingRescale's own "correct whenever the true result fits int64"
+	// caller-ensures convention). T-1382's INT64_MIN precedent (LandingRescale,
+	// this file, above) applies identically: negating in uint64_t and casting back
+	// is well-defined and produces the exact wrapping negation for the one value
+	// (magnitude 2^63) this signed range's negative side reaches that the
+	// positive side cannot.
+	const int64_t magnitude_i64 = static_cast<int64_t>(quotient.lo);
+	return v.negative ? static_cast<int64_t>(0u - static_cast<uint64_t>(magnitude_i64))
+	                   : magnitude_i64;
+}
+
+// `RopePairWide`/`RopeApplyPairWide` themselves are declared in option_g_spike.h and
+// defined at namespace scope below (after this anonymous namespace closes) rather
+// than here, so a separate spike tool (T-1891 gate G2's independent-reference
+// comparison) can link against and call the REAL primitive directly -- comparing a
+// copy of it would not be an independent check of anything.
+
 // --- LandingRescale's composed-exponent arithmetic, made overflow-safe as a class (T-1596) ---
 //
 // `k = 62 - (e_a - e_t)` is two chained signed subtractions, and neither
@@ -206,7 +321,92 @@ inline int64_t ComposedExponent(int64_t e_a, int64_t e_t) {
 	return k;
 }
 
+// --- T-1891 spike: per-(layer, kv_head) K-landing saturation instrument ------------
+//
+// File-local storage behind the accessor functions option_g_spike.h declares (never
+// raw externs across the header boundary). Sized by `OptionGResetSaturationCounters`
+// before a run; `OptionGRecordSaturation{Old,Fused}` below are this TU's own
+// increment path, called from the K/V landing block in `RunLayerLoop`. Gate G5 reads
+// both arrays after a run over the same document set and reports the per-(layer,
+// kv_head) delta, per T-1891's own brief ("report the DELTA between paths, not just
+// the fused count").
+std::vector<uint64_t> g_option_g_sat_old;
+std::vector<uint64_t> g_option_g_sat_fused;
+uint32_t g_option_g_num_kv_heads = 0;
+
+inline size_t OptionGSatIndex(uint32_t layer, uint32_t kv_head) {
+	return static_cast<size_t>(layer) * static_cast<size_t>(g_option_g_num_kv_heads) +
+	       static_cast<size_t>(kv_head);
+}
+
+inline void OptionGRecordSaturationOld(uint32_t layer, uint32_t kv_head) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	if (idx < g_option_g_sat_old.size()) g_option_g_sat_old[idx] += 1;
+}
+
+inline void OptionGRecordSaturationFused(uint32_t layer, uint32_t kv_head) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	if (idx < g_option_g_sat_fused.size()) g_option_g_sat_fused[idx] += 1;
+}
+
 }  // namespace
+
+// T-1891 spike: option_g_spike.h's own declaration; defined here (not `static`,
+// not anonymous-namespace) so a separate spike tool can link against and call the
+// REAL primitive (T-1891 gate G2's own requirement -- comparing a copy would not
+// be an independent check of anything). Implemented in terms of the SignedU128
+// facility above (anonymous namespace, this file), visible here by ordinary
+// same-translation-unit lookup.
+RopePairWide RopeApplyPairWide(int64_t x, int64_t y, int32_t cos_q30, int32_t sin_q30,
+                                bool* out_in_domain) {
+	const SignedU128 x_cos = SignedMul64x32(x, cos_q30);
+	const SignedU128 y_sin = SignedMul64x32(y, sin_q30);
+	const SignedU128 x_sin = SignedMul64x32(x, sin_q30);
+	const SignedU128 y_cos = SignedMul64x32(y, cos_q30);
+	const SignedU128 xr_wide = SignedAdd128(x_cos, SignedNegate128(y_sin));
+	const SignedU128 yr_wide = SignedAdd128(x_sin, y_cos);
+	bool xr_fits = false;
+	bool yr_fits = false;
+	const int64_t xr = RoundShiftAwayFromZeroToI64(xr_wide, ROPE_FRAC_BITS, &xr_fits);
+	const int64_t yr = RoundShiftAwayFromZeroToI64(yr_wide, ROPE_FRAC_BITS, &yr_fits);
+	if (out_in_domain != nullptr) *out_in_domain = xr_fits && yr_fits;
+	return RopePairWide{xr, yr};
+}
+
+// T-1891 spike: option_g_spike.h's own external accessor functions. Declared
+// (non-static, namespace-scope superslm::) so a spike tool linking against this
+// translation unit can call them; the storage they read/write stays file-local
+// (the anonymous namespace above) exactly as every other piece of mutable state
+// this file owns does.
+bool OptionGFusedKLandingEnabled() {
+	// Cached in a function-local static: this spike's driver and test processes
+	// run the forward pass single-threaded (no concurrent RunLayerLoop calls
+	// racing this initializer), matching the single-threaded convention every
+	// other per-process cache in this tree already assumes (e.g. this file's own
+	// `kNormFracBits`-adjacent constants, evaluated once at translation-unit
+	// load rather than guarded per-call).
+	static const bool enabled = [] {
+		const char* v = std::getenv("SSLM_OPTION_G_FUSED_K_LANDING");
+		return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+	}();
+	return enabled;
+}
+
+void OptionGResetSaturationCounters(uint32_t num_layers, uint32_t num_kv_heads) {
+	g_option_g_num_kv_heads = num_kv_heads;
+	g_option_g_sat_old.assign(static_cast<size_t>(num_layers) * num_kv_heads, 0);
+	g_option_g_sat_fused.assign(static_cast<size_t>(num_layers) * num_kv_heads, 0);
+}
+
+uint64_t OptionGSaturationCountOld(uint32_t layer, uint32_t kv_head) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	return idx < g_option_g_sat_old.size() ? g_option_g_sat_old[idx] : 0;
+}
+
+uint64_t OptionGSaturationCountFused(uint32_t layer, uint32_t kv_head) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	return idx < g_option_g_sat_fused.size() ? g_option_g_sat_fused[idx] : 0;
+}
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
 	// C31 (§5.1): the greatest integer q with q*b <= a, for b > 0 (caller-
@@ -448,13 +648,30 @@ int64_t ClampRopeCode(int64_t raw) {
 	return raw;
 }
 
-SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
-                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
-                                 int8_t* out_row) {
+namespace {
+
+// T-1891 spike: `RopeApplySite`'s own steps 1-3 (forward_sites.h's 5-step contract),
+// factored out UNCHANGED -- same order, same status codes, same early-return-on-
+// rejection behaviour -- so Option G's fused K-landing path (RunLayerLoop's K/V
+// landing block) can resolve one (position, head_dim) table row ONCE per token per
+// layer and reuse it for every kv_head's rotation, rather than duplicating this
+// predicate (this codebase's own D-SLM81 doctrine against re-derived predicates,
+// already cited by the comment this extraction preserves below). `RopeApplySite`
+// itself is refactored to call this and is otherwise behaviour-identical -- T-1891
+// gate G1 (byte-identical flag-off reproduction against unmodified main@c6cfa03)
+// is the check that this extraction changed nothing observable.
+struct RopeTableRow {
+	const SslmTensorView* cos = nullptr;
+	const SslmTensorView* sin = nullptr;
+	size_t pairs = 0;
+	uint64_t row_offset = 0;
+};
+
+SslmForwardStatus ResolveRopeTableRow(int64_t position, int64_t context_cap, size_t head_dim,
+                                       const SslmTensorManifest& rope_tables, RopeTableRow* out) {
 	// §6.2 step 3 / §11 S3.3's own gate line (D-SLM376): CheckPositionOverCap
 	// is the site's documented FIRST ACT, and no ROP1 tensor is read before
-	// it returns. On rejection, `out_row` stays exactly as the caller left
-	// it and neither "cos" nor "sin" is touched -- "never a table read".
+	// it returns.
 	const SslmForwardStatus cap_status = CheckPositionOverCap(position, context_cap);
 	if (cap_status != SslmForwardStatus::Ok) {
 		return cap_status;
@@ -525,7 +742,29 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	if (upos >= cos_rows || upos >= sin_rows) {
 		return SslmForwardStatus::RopeTableExtentExceeded;
 	}
-	const uint64_t row_offset = upos * static_cast<uint64_t>(pairs);
+	out->cos = cos;
+	out->sin = sin;
+	out->pairs = pairs;
+	out->row_offset = upos * static_cast<uint64_t>(pairs);
+	return SslmForwardStatus::Ok;
+}
+
+}  // namespace
+
+SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t position,
+                                 int64_t context_cap, const SslmTensorManifest& rope_tables,
+                                 int8_t* out_row, uint64_t* out_saturation_count) {
+	// On rejection, `out_row` stays exactly as the caller left it and neither
+	// "cos" nor "sin" is touched -- "never a table read" -- unchanged by this
+	// extraction: `ResolveRopeTableRow` returns before touching `out_row` on
+	// every one of its own rejection paths, identically to the inline steps
+	// 1-3 it replaces.
+	RopeTableRow table;
+	const SslmForwardStatus resolve_status =
+	    ResolveRopeTableRow(position, context_cap, head_dim, rope_tables, &table);
+	if (resolve_status != SslmForwardStatus::Ok) {
+		return resolve_status;
+	}
 
 	// forward_sites.h's own 5-step contract, steps 4 and 5, merged into one
 	// loop: step 4 reads each pair's "cos"/"sin" row entry inline
@@ -535,12 +774,22 @@ SslmForwardStatus RopeApplySite(const int8_t* row, size_t head_dim, int64_t posi
 	// interleaved even/odd pairing, matching the reference's own
 	// _rotate_rows, not a first-half/second-half split -- then ClampRopeCode
 	// on each component, written to out_row[2i]/out_row[2i+1].
-	for (size_t i = 0; i < pairs; ++i) {
+	for (size_t i = 0; i < table.pairs; ++i) {
 		const int32_t x = static_cast<int32_t>(row[2 * i]);
 		const int32_t y = static_cast<int32_t>(row[2 * i + 1]);
-		const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(cos->data, row_offset + i));
-		const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(sin->data, row_offset + i));
+		const int32_t cos_q30 =
+		    static_cast<int32_t>(ReadRopeTableEntryI64(table.cos->data, table.row_offset + i));
+		const int32_t sin_q30 =
+		    static_cast<int32_t>(ReadRopeTableEntryI64(table.sin->data, table.row_offset + i));
 		const RopePair rotated = RopeApplyPair(x, y, cos_q30, sin_q30);
+		// T-1891 spike: T-518's own saturation convention (LandingRescale, this
+		// file), applied here per rotated component -- counted BEFORE
+		// ClampRopeCode narrows it, the same "does the clamp actually fire"
+		// test LandingRescale's own counter uses.
+		if (out_saturation_count != nullptr) {
+			if (rotated.x < -127 || rotated.x > 127) *out_saturation_count += 1;
+			if (rotated.y < -127 || rotated.y > 127) *out_saturation_count += 1;
+		}
 		out_row[2 * i] = static_cast<int8_t>(ClampRopeCode(rotated.x));
 		out_row[2 * i + 1] = static_cast<int8_t>(ClampRopeCode(rotated.y));
 	}
@@ -1206,6 +1455,24 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// through the S3.7 accessor -- one row per head, at THIS token's own
 		// `position`, never a whole-hidden_size flat write (§9.4's real
 		// per-(layer, head)-major, position-minor layout).
+		// T-1891 spike (T-1822 §29.4/§30, D-SLM2305): the ONE flag both the K/V
+		// landing block and the Q/K rotation blocks below read. Hoisted here
+		// (outer scope, not inside the landing block's own `{...}`) because both
+		// blocks below need its value, and it must be the SAME value for both --
+		// re-reading the env var separately in each block risks the classic
+		// TOCTOU-shaped inconsistency if it ever changed mid-call, which the
+		// cached-static in `OptionGFusedKLandingEnabled` already forecloses, but
+		// reading it once here states that invariant structurally rather than by
+		// relying on the cache alone. `old_k_sat_recorded` dedupes gate G5's
+		// old-path saturation count against the SAME per-query-head redundancy
+		// the "redundant but sound" comment below already documents: K's old-path
+		// rotation is bit-identical across every query head sharing one kv_head,
+		// so counting it once per query head would inflate the old-path count by
+		// a factor of `group` relative to the fused path's own once-per-kv_head
+		// count -- not the delta gate G5 asks for.
+		const bool option_g_fused = OptionGFusedKLandingEnabled();
+		std::vector<bool> old_k_sat_recorded(num_key_value_heads, false);
+
 		{
 			// T-1654 (S3.8a): the K/V landing write's loop bound narrows from
 			// `num_heads` to `num_key_value_heads` -- this is a resize, not a
@@ -1243,22 +1510,87 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 				    vacc.data(), kv_hidden_size, lw.v_bias, normed_scale.m, normed_scale.e);
 				if (bias_status != SslmForwardStatus::Ok) return bias_status;
 			}
+
+			// T-1891/D-SLM2305: when Option G is on, resolve the (position,
+			// head_dim) RoPE table row ONCE for the whole K/V landing block --
+			// every kv_head below rotates against the SAME row, and this is the
+			// SAME resolution RopeApplySite itself performs (ResolveRopeTableRow,
+			// shared, no duplicated predicate). When Option G is off, no table
+			// read happens here at all -- byte-identical to main@c6cfa03 (gate
+			// G1), because this whole block is behind the flag.
+			RopeTableRow option_g_table;
+			if (option_g_fused) {
+				const SslmForwardStatus resolve_status =
+				    ResolveRopeTableRow(position, context_cap, head_dim, rope_tables, &option_g_table);
+				if (resolve_status != SslmForwardStatus::Ok) return resolve_status;
+			}
+
 			for (size_t h = 0; h < num_key_value_heads; ++h) {
 				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
 				                                    num_key_value_heads, head_dim, h, position);
 				int8_t* const v_row = MutableValueRow(workspace, l, context_cap,
 				                                      num_key_value_heads, head_dim, h, position);
+				if (option_g_fused) {
+					// T-1891/D-SLM2305: rotate the WIDE pre-landing K accumulator
+					// pairwise at this token's position, THEN land once -- K
+					// carries one int8 boundary instead of two (§29.4's
+					// construction: "then one LandingRescale per head on the
+					// existing static per-head K landing constants... one
+					// ClampRopeCode, one int8 write"). V is untouched by this
+					// branch; Q is untouched by this whole flag (its own
+					// RopeApplySite call, below, is unconditional).
+					for (size_t p = 0; p < option_g_table.pairs; ++p) {
+						const size_t i0 = h * head_dim + 2 * p;
+						const size_t i1 = i0 + 1;
+						const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+						    option_g_table.cos->data, option_g_table.row_offset + p));
+						const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+						    option_g_table.sin->data, option_g_table.row_offset + p));
+						bool in_domain = false;
+						const RopePairWide rotated = RopeApplyPairWide(
+						    kacc[i0], kacc[i1], cos_q30, sin_q30, &in_domain);
+						// T-1891 gate G2: refuse, not wrap. A rotation can raise
+						// a pair's magnitude by up to sqrt(2); at this domain's
+						// own extreme the rotated-and-rounded result can exceed
+						// int64_t, and that condition is reported rather than
+						// silently narrowed.
+						if (!in_domain) {
+							return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+						}
+						const int64_t raw0 = LandingRescale(
+						    rotated.x, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count);
+						const int64_t raw1 = LandingRescale(
+						    rotated.y, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count);
+						// T-1891 gate G5: the fused-path instrument, per (layer,
+						// kv_head) -- counted BEFORE ClampRopeCode narrows,
+						// T-518's own "does the clamp actually fire" convention.
+						if (raw0 < -127 || raw0 > 127) {
+							OptionGRecordSaturationFused(l, static_cast<uint32_t>(h));
+						}
+						if (raw1 < -127 || raw1 > 127) {
+							OptionGRecordSaturationFused(l, static_cast<uint32_t>(h));
+						}
+						k_row[2 * p] = static_cast<int8_t>(ClampRopeCode(raw0));
+						k_row[2 * p + 1] = static_cast<int8_t>(ClampRopeCode(raw1));
+					}
+				} else {
+					for (size_t d = 0; d < head_dim; ++d) {
+						const size_t i = h * head_dim + d;
+						// §8.1's clamp is this call site's own (LandingRescale's
+						// header states the clamp is the caller's); reuses
+						// ClampRopeCode for the pinned [-127, 127] code range it
+						// already implements. T-518's saturation counter (§8.2) is
+						// wired into seq's own per-sequence accumulator, the one
+						// call in this tree that composes the landing.
+						k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+						    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
+					}
+				}
 				for (size_t d = 0; d < head_dim; ++d) {
 					const size_t i = h * head_dim + d;
-					// §8.1's clamp is this call site's own (LandingRescale's
-					// header states the clamp is the caller's); reuses
-					// ClampRopeCode for the pinned [-127, 127] code range it
-					// already implements. T-518's saturation counter (§8.2) is
-					// wired into seq's own per-sequence accumulator, the one
-					// call in this tree that composes the landing.
-					k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-					    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-					    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
 					v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
 					    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
 					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
@@ -1271,10 +1603,18 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// `position` -- never a flat `hidden_size` offset, which under the
 		// real per-head layout would read/write the wrong head once
 		// `context_cap > 1`.
+		//
+		// T-1891/D-SLM2305: when Option G is on, K is ALREADY rotated at landing
+		// time (above) -- this loop's K branch, and the write-back loop below it,
+		// run ONLY when the flag is off, matching §29.4's construction exactly
+		// ("the post-landing RopeApplySite read/rotate for K... and its write-back
+		// loop... are deleted"). Q's own call is unconditional either way --
+		// Option G "does not touch" it.
 		for (size_t h = 0; h < num_heads; ++h) {
 			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 			                   rope_tables, q_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
+			if (option_g_fused) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
 			// `kv_head = head // group`). This loop's own bound stays `num_heads`
@@ -1283,9 +1623,30 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+			// T-1891 gate G5: the old-path instrument, deduped to once per
+			// kv_head (comment on `old_k_sat_recorded`'s declaration, above).
+			// `local_k_sat` is a fresh LOCAL counter, NEVER `&seq.kv_saturation_count`
+			// -- the production per-sequence counter is not a valid target here:
+			// this codebase's own shipped behaviour never fed the post-rotation K
+			// clamp into it (only the K/V landing's own LandingRescale calls do,
+			// unchanged above), so aliasing it here would change
+			// `seq.kv_saturation_count`'s OWN observable value on the flag-off
+			// path relative to unmodified main -- exactly what gate G1 (byte-
+			// identical flag-off reproduction) exists to catch. `nullptr` on
+			// every call after the first for a given kv_head is RopeApplySite's
+			// own pre-T-1891 default and leaves those calls' behaviour and
+			// output unchanged either way.
+			uint64_t local_k_sat = 0;
+			uint64_t* const sat_out = old_k_sat_recorded[kv_head] ? nullptr : &local_k_sat;
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
-			                   k_rot.data() + h * head_dim);
+			                   k_rot.data() + h * head_dim, sat_out);
 			if (st != SslmForwardStatus::Ok) return st;
+			if (sat_out != nullptr) {
+				old_k_sat_recorded[kv_head] = true;
+				for (uint64_t n = 0; n < local_k_sat; ++n) {
+					OptionGRecordSaturationOld(l, static_cast<uint32_t>(kv_head));
+				}
+			}
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
 		// head's row is written back individually, through `MutableKeyRow` at
@@ -1294,15 +1655,17 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 		// (the whole per-token K region WAS exactly `hidden_size` contiguous
 		// bytes at position 0); under the real layout it would overwrite
 		// EVERY committed position's row with this token's own rotation.
-		for (size_t h = 0; h < num_heads; ++h) {
-			// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
-			// same KV row is written once per query head sharing it (redundant
-			// but sound, design record §6.2: every read above happens before
-			// any write here, so no partially-rotated store is ever observed).
-			const size_t kv_head = h / group;
-			int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
-			                                    head_dim, kv_head, position);
-			for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+		if (!option_g_fused) {
+			for (size_t h = 0; h < num_heads; ++h) {
+				// T-1654 (S3.8a): `h / group`, matching the read loop above -- the
+				// same KV row is written once per query head sharing it (redundant
+				// but sound, design record §6.2: every read above happens before
+				// any write here, so no partially-rotated store is ever observed).
+				const size_t kv_head = h / group;
+				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap, num_key_value_heads,
+				                                    head_dim, kv_head, position);
+				for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+			}
 		}
 
 		// Attention proper (§6.2 step 5). No named site for this composition

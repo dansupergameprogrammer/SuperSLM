@@ -89,6 +89,37 @@ bool DumpLogitRows(const char* path, const int32_t* rows, size_t rows_produced,
 	return static_cast<bool>(f);
 }
 
+// T-1891 gate G3 (T-1822 §29.4/§30, D-SLM2305) -- writes the RAW K/V store bytes
+// this decode actually produced, plus enough geometry for an external reader to
+// index it. DISPOSABLE (this driver copy lives only in
+// D:\SuperSLM\.worktrees\t1891-optionG-spike, branch brunel/t1891-optionG-spike,
+// never merged). Format: five little-endian uint64 header fields
+// (num_hidden_layers, context_cap, num_kv_heads, head_dim, committed_length) then
+// the workspace's raw bytes verbatim -- §9.4's own documented layout
+// (`forward_sites.h`: per-(layer, head)-major, position-minor, K half then V half
+// per layer) is NOT reinterpreted here; the reader on the other side (this
+// spike's own `tools/t1891_optiong_gate3_check.py`) indexes it directly against
+// that same documented formula, so there is exactly one place the layout is
+// stated, not two copies that could drift.
+bool DumpKvStore(const char* path, const uint8_t* workspace, size_t workspace_size,
+                  uint32_t num_layers, int64_t context_cap, uint32_t num_kv_heads,
+                  uint32_t head_dim, int64_t committed_length) {
+	std::ofstream f(path, std::ios::binary | std::ios::trunc);
+	if (!f) return false;
+	const uint64_t nl = num_layers;
+	const uint64_t cc = static_cast<uint64_t>(context_cap);
+	const uint64_t nkv = num_kv_heads;
+	const uint64_t hd = head_dim;
+	const uint64_t committed = static_cast<uint64_t>(committed_length);
+	f.write(reinterpret_cast<const char*>(&nl), sizeof(nl));
+	f.write(reinterpret_cast<const char*>(&cc), sizeof(cc));
+	f.write(reinterpret_cast<const char*>(&nkv), sizeof(nkv));
+	f.write(reinterpret_cast<const char*>(&hd), sizeof(hd));
+	f.write(reinterpret_cast<const char*>(&committed), sizeof(committed));
+	f.write(reinterpret_cast<const char*>(workspace), static_cast<std::streamsize>(workspace_size));
+	return static_cast<bool>(f);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -106,9 +137,12 @@ int main(int argc, char** argv) {
 	// (<|im_end|>) and 151643 (<|endoftext|>); a different model family uses different ids.
 	std::vector<int32_t> stop_ids;
 	std::string dump_logits_path;
+	std::string dump_kv_path;  // T-1891 gate G3
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump-logits") == 0 && i + 1 < argc) {
 			dump_logits_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--dump-kv") == 0 && i + 1 < argc) {
+			dump_kv_path = argv[++i];
 		} else if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
 			const std::string val = argv[++i];
 			try {
@@ -322,6 +356,18 @@ int main(int argc, char** argv) {
 		}
 		std::printf("logit_rows_dumped: %zu rows x %u vocab -> %s\n", out_tokens_produced,
 		            model_view.config.vocab_size, dump_logits_path.c_str());
+	}
+
+	if (!dump_kv_path.empty()) {
+		if (!DumpKvStore(dump_kv_path.c_str(), workspace.data(), workspace.size(), num_hidden_layers,
+		                  context_cap, num_kv_heads, model_view.config.head_dim, seq.context_length)) {
+			std::fprintf(stderr, "FAILED at stage=dump_kv: could not write \"%s\"\n",
+			             dump_kv_path.c_str());
+			return 1;
+		}
+		std::printf("kv_store_dumped: %u layers x %u kv_heads x %lld committed positions -> %s\n",
+		            num_hidden_layers, num_kv_heads, static_cast<long long>(seq.context_length),
+		            dump_kv_path.c_str());
 	}
 
 	const auto t_end = std::chrono::steady_clock::now();

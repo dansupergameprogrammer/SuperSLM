@@ -220,6 +220,18 @@ enum class SslmForwardStatus {
 	                                          // Both conditions are checked before either loop body
 	                                          // in ApplyBiasReconcileRow applies anything, so a
 	                                          // rejection for either reason leaves acc untouched.
+	// --- T-1891 spike (T-1822 §29.4/§30, D-SLM2305) -- DISPOSABLE, branch
+	// brunel/t1891-optionG-spike only, never merged ---
+	OptionGWideRopeMagnitudeOutOfDomain,      // Option G's fused pre-landing K rotation
+	                                          // (RopeApplyPairWide, forward_sites.cpp): the true
+	                                          // rotated magnitude of at least one component does
+	                                          // not fit int64_t -- refuse, not wrap (T-1891 gate
+	                                          // G2). Distinct from every clamp/saturation signal
+	                                          // above: those report a value landing OUTSIDE
+	                                          // [-127,127] post-rounding; this reports the
+	                                          // pre-rounding wide composite itself exceeding
+	                                          // int64_t's representable range, which no existing
+	                                          // status names.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

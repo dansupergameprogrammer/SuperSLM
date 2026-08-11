@@ -56,6 +56,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 		case SslmForwardStatus::InvalidHiddenCodes: return "InvalidHiddenCodes";
 		case SslmForwardStatus::IExpScaleDerivationOutOfDomain: return "IExpScaleDerivationOutOfDomain";
 		case SslmForwardStatus::BiasReconcileProductOutOfDomain: return "BiasReconcileProductOutOfDomain";
+		case SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain:
+			return "OptionGWideRopeMagnitudeOutOfDomain";
 	}
 	return "?";
 }
