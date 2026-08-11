@@ -167,6 +167,19 @@ def build_model() -> pipeline.QuantizedModel:
             (f"{prefix}.down_proj", identity, HIDDEN_SIZE),
         ):
             codes[name] = mat
+            # `floats[name]` is left at `mat` (not `mat * _UNIT_INT8_SCALE`), matching
+            # this fixture's ORIGINAL, load-bearing convention: the whole calibration
+            # chain (`_derive_scales`'s `add_rescale`/`add_requant`) is tuned to THIS
+            # ratio between `codes` and `floats` across seven projections and two
+            # layers, and multiplying every projection's floats by 1/127 uniformly was
+            # tried and found to blow up an UNRELATED ratio (`mlp_residual.branch`'s
+            # `quantize_multiplier` needs a shift outside [0,31]) rather than fixing
+            # K's own saturation -- confirmed by execution, not assumed. K/V's own
+            # landing scale is corrected directly, below (`_fix_kv_landing_for_g3`),
+            # which is the narrower, load-bearing fix for T-1892 finding C1: the K/V
+            # landing constants are re-derived FROM THE ACTUAL FUSED ROTATED MAGNITUDE
+            # this fixture produces, not from this calibration chain's own (fragile,
+            # indirect) maxima estimate.
             floats[name] = np.asarray(mat, dtype=np.float64)
             weight_scales[name] = unit * width
 
@@ -185,6 +198,34 @@ def build_model() -> pipeline.QuantizedModel:
         CFG, maxima, weight_scales, {})
     composition_constants, kv_landing_scales, kv_landing_reciprocals = (
         pipeline._derive_composition_constants(CFG, weight_scales, scales))  # noqa: SLF001
+
+    # T-1892 C1 fix: the calibration-derived K landing exponent (`e_t`) puts the
+    # LANDED value 4-5 orders of magnitude past the +/-127 rail for this fixture's
+    # actual fused-rotated magnitudes (measured by execution: x_int ~ 16-160,
+    # landed ~ 1.4e6 at the ORIGINAL e_t) -- confirmed as a scale mismatch between
+    # this hand-built fixture's calibration chain and its own actual integer
+    # magnitudes, not a defect in the landing formula itself (the SAME formula,
+    # unmodified, is what both the engine and this reference call).
+    #
+    # `e_t` is a free, independently-adjustable exponent: `LandingRescale`
+    # (forward_sites.cpp) and `residual_reconcile` (intmath.py) take `r_t` and
+    # `e_t` directly and never read `m_t` (the target's own canonical mantissa,
+    # `kv_landing_scales`) at all -- `m_t`/`e_t`/`r_t` are computed together by
+    # `_derive_composition_constants` but only `e_t` shapes LandingRescale's own
+    # composed divisor (`ComposedExponent(e_a, e_t) = 62-(e_a-e_t)`), so shifting
+    # it alone (leaving `r_t` -- the OFFLINE Newton reciprocal of `m_t` -- and
+    # `m_t` itself untouched) changes nothing about what `m_t`/`kv_landing_scales`
+    # claims elsewhere. `K_LANDING_EXPONENT_SHIFT` was found by measuring this
+    # fixture's own actual rotated magnitude (this file's own diagnostic run) and
+    # choosing the smallest shift that moves the compared K population off the
+    # clamp rail -- V is UNCHANGED (not part of G3's compared population, and V's
+    # own landing is not part of Option G's construction).
+    K_LANDING_EXPONENT_SHIFT = 17
+    for layer in range(NUM_LAYERS):
+        for head in range(NUM_KV_HEADS):
+            key = f"layer{layer}.k_head{head}"
+            m_t, e_t, r_t = kv_landing_reciprocals[key]
+            kv_landing_reciprocals[key] = (m_t, e_t + K_LANDING_EXPONENT_SHIFT, r_t)
 
     rope_tables = pipeline._as_rope_tables((  # noqa: SLF001
         [COS_Q30[p:p + 1] for p in range(CONTEXT_CAP)],
@@ -233,10 +274,108 @@ def dump_cpp_constants(model: pipeline.QuantizedModel) -> None:
     print("=== END TRANSCRIPTION SOURCE ===", file=sys.stderr)
 
 
+def inject_relative_error(relative_error: float):
+    """T-1892 Critical 1's own vitality requirement, made a permanent part of G3
+    (alongside G4's order-mutation): wraps `dynamic_engine._rotate_wide_pair_row`
+    (module-level monkeypatch, not an edit to the vendored file) so every rotated
+    pair this reference computes is scaled by `(1 + relative_error)` before landing
+    -- a small, uniform relative error in the fused rotation itself, the exact
+    defect class G3's own bit-exact population must be able to see (a hand-rolled
+    128-bit facility's realistic failure is a small magnitude or rounding error,
+    not a sign flip or an order-of-magnitude miss -- casebook
+    `Claude/Poirot/96d2b11-t1891-optiong-spike.md` §5). Returns the ORIGINAL
+    function so the caller can restore it; the patch is undone in a `finally`
+    block by every caller here, never left installed.
+    """
+    original = dynamic_engine._rotate_wide_pair_row  # noqa: SLF001
+
+    def mutated(seg, cos_row, sin_row):
+        rotated = original(seg, cos_row, sin_row)
+        return [
+            v if v == 0 else int(round(v * (1.0 + relative_error)))
+            for v in rotated
+        ]
+
+    dynamic_engine._rotate_wide_pair_row = mutated  # noqa: SLF001
+    return original
+
+
+def run_documents(model: pipeline.QuantizedModel) -> list[dict]:
+    """One parity run over `DOCUMENTS`, returning the same per-document record shape
+    `main()` dumps to JSON -- factored out so the injection check (below) can call it
+    twice (clean, then mutated) without duplicating the loop."""
+    all_docs = []
+    for doc in DOCUMENTS:
+        tokens = tokenize(doc)
+        trace: list[dict] = []
+        dynamic_engine.forward_dynamic_vec(
+            model, tokens, cache=None, trace=trace, option_g_fused_k_landing=True)
+        k_records = [r for r in trace if r.get("site", "").endswith(".k_proj.requant")]
+        all_docs.append({
+            "doc": doc,
+            "tokens": tokens,
+            "k_records": [
+                {"site": r["site"], "token_index": int(r["token_index"]), "head": int(r["head"]),
+                 "codes": [int(c) for c in r["codes"]]}
+                for r in k_records
+            ],
+        })
+    return all_docs
+
+
+def run_injection_vitality_check(model: pipeline.QuantizedModel, relative_error: float,
+                                  out_path: Path) -> list[dict]:
+    """Runs `run_documents` with `_rotate_wide_pair_row` mutated by
+    `relative_error`, dumps the mutated K-landing records to `out_path` (a SEPARATE
+    file from the clean reference -- the clean reference stays the one G3/G4
+    compare against), and returns the mutated records. The patch is always removed,
+    even on an exception."""
+    original = inject_relative_error(relative_error)
+    try:
+        docs = run_documents(model)
+    finally:
+        dynamic_engine._rotate_wide_pair_row = original  # noqa: SLF001
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        json.dump({"documents": docs}, f)
+    return docs
+
+
 def main() -> int:
     out_path = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO_ROOT / "out" / "t1891_gate3_reference.json"
     model = build_model()
     dump_cpp_constants(model)
+
+    # T-1892 C1's own vitality requirement: inject a small relative error into the
+    # fused rotation and confirm the comparator that reports 304/304 agreement
+    # against the CLEAN reference reports disagreement against a MUTATED one, run
+    # over the SAME six documents and the SAME landing constants -- everything
+    # held fixed except the one thing under test. Both +/-10% (T-1892's own named
+    # figure, which the ORIGINAL rail-degenerate population passed 0/608 changed)
+    # and a much smaller +/-1% are checked, so this is not merely re-proving the
+    # figure the review already measured on the broken fixture.
+    injection_path_10 = out_path.parent / "t1891_gate3_reference_injected_10pct.json"
+    injection_path_1 = out_path.parent / "t1891_gate3_reference_injected_1pct.json"
+    injected_10 = run_injection_vitality_check(model, 0.10, injection_path_10)
+    injected_1 = run_injection_vitality_check(model, 0.01, injection_path_1)
+    clean_for_diff = run_documents(model)
+    for label, injected in (("+10%", injected_10), ("+1%", injected_1)):
+        changed = sum(
+            1
+            for d_clean, d_inj in zip(clean_for_diff, injected)
+            for r_clean, r_inj in zip(d_clean["k_records"], d_inj["k_records"])
+            for c_clean, c_inj in zip(r_clean["codes"], r_inj["codes"])
+            if c_clean != c_inj
+        )
+        total = sum(len(d["k_records"]) * 2 for d in clean_for_diff)
+        print(f"G3 injection vitality ({label} relative error in the fused rotation): "
+              f"{changed}/{total} compared values changed", file=sys.stderr)
+        if changed == 0:
+            print(f"FAIL: G3's population is still blind to a {label} rotation error "
+                  f"after the C1 fixture fix -- vitality NOT established", file=sys.stderr)
+            return 1
+    print("PASS: G3's population resolves both +/-10% and +/-1% relative errors in the "
+          "fused rotation (nonzero compared-value changes at both)", file=sys.stderr)
 
     all_docs = []
     for doc in DOCUMENTS:
@@ -263,6 +402,19 @@ def main() -> int:
         json.dump({"documents": all_docs}, f)
     print(f"wrote reference K-landing records for {len(DOCUMENTS)} documents to {out_path}",
           file=sys.stderr)
+
+    # T-1892 C1: report the compared population's own distribution -- this is the
+    # cell the review's own fix condition names ("the compared population carries
+    # values strictly inside +/-127"), checked here rather than left to the
+    # comparator alone to discover.
+    all_codes = [c for d in all_docs for r in d["k_records"] for c in r["codes"]]
+    at_rail = sum(1 for c in all_codes if c in (127, -127))
+    zero = sum(1 for c in all_codes if c == 0)
+    interior_nonzero = len(all_codes) - at_rail - zero
+    distinct = sorted(set(all_codes))
+    print(f"G3 population: {len(all_codes)} values, {at_rail} at rail (+/-127), "
+          f"{zero} exactly zero, {interior_nonzero} strictly interior and nonzero, "
+          f"{len(distinct)} distinct values", file=sys.stderr)
     return 0
 
 

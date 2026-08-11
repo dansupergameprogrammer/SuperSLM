@@ -9,9 +9,12 @@ own output). For each row, recomputes the expected rotated pair independently --
 Python's native `int` (arbitrary precision, exact) and this repo's own scalar
 `rope.rope_apply_pair`/`intmath.rounding_divide_by_pot` (already-pinned reference
 primitives, sharing no code with the C++ engine's SignedU128 facility this probes) --
-and separately derives whether the TRUE (unrounded-magnitude) rotated result fits
-int64_t, by direct comparison against INT64_MIN/INT64_MAX rather than by re-deriving
-the engine's own fits-check. Reports PASS/FAIL per row and a summary.
+and separately derives whether the ROUNDED rotated result (`rope.rope_apply_pair`
+performs C3's rounding internally, exactly, in Python's arbitrary-precision int --
+T-1892 Minor 1: this is the value AFTER rounding, not some unrounded "true" value
+neither side ever materializes) fits int64_t, by direct comparison against
+INT64_MIN/INT64_MAX rather than by re-deriving the engine's own fits-check. Reports
+PASS/FAIL per row and a summary.
 
 This is gate G2's own "independent code, not the same expression twice"
 (StandardsDocument §5.4): the C++ primitive's 128-bit intermediate is a hand-rolled
@@ -41,7 +44,9 @@ INT64_MAX = 2**63 - 1
 def expected(x: int, y: int, cos_q30: int, sin_q30: int) -> tuple[int, int, bool]:
     """The independent reference: exact Python-int rotation via the repo's own
     already-pinned scalar `rope.rope_apply_pair` (arbitrary precision -- no width
-    limit of its own), then a direct int64 range check on the TRUE result."""
+    limit of its own; rounds internally, so `rx`/`ry` are the ROUNDED values, exact
+    because Python's int has no width limit to round away from), then a direct
+    int64 range check on that rounded result."""
     rx, ry = rope.rope_apply_pair(x, y, cos_q30, sin_q30)
     fits = (INT64_MIN <= rx <= INT64_MAX) and (INT64_MIN <= ry <= INT64_MAX)
     return rx, ry, fits

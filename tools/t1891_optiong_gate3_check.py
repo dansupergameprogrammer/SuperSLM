@@ -4,8 +4,10 @@
 DISPOSABLE. Branch brunel/t1891-optionG-spike only, never merged.
 
 Reads the engine's dumped K/V store (`tools/t1891_optiong_gate3_probe.cpp`'s binary
-format: num_docs, num_layers, num_kv_heads, head_dim, then per document [doc_len,
-raw workspace bytes]) and the reference's dumped K-landing trace records
+format: num_docs, num_layers, num_kv_heads, head_dim, context_cap, then per document
+[doc_len, raw workspace bytes] -- T-1892 Observation 2: `context_cap` is read from
+the dump header, not hardcoded here, so this script cannot silently drift from the
+probe's own geometry) and the reference's dumped K-landing trace records
 (`tools/t1891_optiong_gate3_reference.py`'s JSON), and compares them element-wise:
 for every (document, layer, token position < doc_len, kv_head, d), the engine's K
 store byte at that address must equal the reference's `k_proj.requant` trace record's
@@ -26,8 +28,6 @@ import struct
 import sys
 from pathlib import Path
 
-CONTEXT_CAP = 16  # t1891_optiong_gate3_probe.cpp's own kContextCap
-
 
 def read_kv_dump(path: Path):
     with open(path, "rb") as f:
@@ -44,21 +44,22 @@ def read_kv_dump(path: Path):
     num_layers = u64()
     num_kv_heads = u64()
     head_dim = u64()
+    context_cap = u64()
     docs = []
     for _ in range(num_docs):
         doc_len = u64()
-        kv_bytes = num_layers * CONTEXT_CAP * num_kv_heads * head_dim * 2
+        kv_bytes = num_layers * context_cap * num_kv_heads * head_dim * 2
         blob = data[off:off + kv_bytes]
         off += kv_bytes
         docs.append((doc_len, blob))
-    return num_layers, num_kv_heads, head_dim, docs
+    return num_layers, num_kv_heads, head_dim, context_cap, docs
 
 
-def engine_k(blob: bytes, num_kv_heads: int, head_dim: int, layer: int, kv_head: int,
-             position: int) -> list[int]:
-    layer_stride = CONTEXT_CAP * num_kv_heads * head_dim * 2
+def engine_k(blob: bytes, num_kv_heads: int, head_dim: int, context_cap: int, layer: int,
+             kv_head: int, position: int) -> list[int]:
+    layer_stride = context_cap * num_kv_heads * head_dim * 2
     k_half_base = layer * layer_stride
-    offset = k_half_base + kv_head * CONTEXT_CAP * head_dim + position * head_dim
+    offset = k_half_base + kv_head * context_cap * head_dim + position * head_dim
     raw = blob[offset:offset + head_dim]
     return [b - 256 if b > 127 else b for b in raw]  # int8 sign-extend
 
@@ -71,7 +72,7 @@ def main(argv: list[str]) -> int:
     kv_path = Path(argv[1])
     ref_path = Path(argv[2])
 
-    num_layers, num_kv_heads, head_dim, docs = read_kv_dump(kv_path)
+    num_layers, num_kv_heads, head_dim, context_cap, docs = read_kv_dump(kv_path)
     with open(ref_path) as f:
         reference = json.load(f)["documents"]
 
@@ -99,7 +100,8 @@ def main(argv: list[str]) -> int:
                             f"doc={doc_idx} layer={layer} pos={position} head={kv_head}: "
                             f"no reference record")
                         continue
-                    actual = engine_k(blob, num_kv_heads, head_dim, layer, kv_head, position)
+                    actual = engine_k(blob, num_kv_heads, head_dim, context_cap, layer, kv_head,
+                                       position)
                     total_cells += 1
                     if actual != expected:
                         mismatches.append(

@@ -39,6 +39,34 @@ namespace {
 // wide-row divide both shift by 2*NORM_FRAC_BITS).
 constexpr int kNormFracBits = 16;
 
+// T-1892 Significant 1 (`Claude/Poirot/96d2b11-t1891-optiong-spike.md` §7): the
+// re-derived floor on `kv_landing_e_t_k` FOR THE FUSED SITE ONLY. `model.cpp`'s
+// `kKvLandingExponentMin = -60` is derived assuming `LandingRescale`'s
+// `branch_code` is the SHIPPED path's ~2^27 projection accumulator (composite
+// magnitude ~2^90-2^91, 128-91=37 bits of headroom below the 128-bit U128 ceiling,
+// floor at e_a's own worst case 39: `39 - 62 - 37 = -60`). Option G's fused K
+// landing hands LandingRescale `RopeApplyPairWide`'s output instead, whose only
+// guard is "does the ROUNDED rotated value fit int64_t" (up to ~2^63, not ~2^27;
+// T-1892 Minor 1's own correction -- the guard is on the value after C3 rounding,
+// not on some unrounded "true" value the primitive never materializes).
+// Re-deriving the SAME formula for that operand: composite magnitude
+// `<= 2^63 * kCompositionScaleMaxAbsM(~2^31) * kKvLandingReciprocalMax(2^32)
+// < 2^126` (2 bits of 128-bit headroom, not 37), so the floor at e_a's own
+// worst case (39, same derivation, model.cpp:788-798) is `39 - 62 - 2 = -25`.
+// An artifact-legal e_t in [-60, -25) clears the LOAD-TIME gate (still checked
+// against the shipped path's own -60) but is NOT SAFE at the fused site --
+// `LandingRescale`'s own shift-back-and-compare DETECTS the loss
+// (magnitude_exceeds_int64) but this call site passes no
+// `out_magnitude_exceeded_int64`, so the loss would otherwise be silent. Checked
+// explicitly at the fused K-landing call site (RunLayerLoop, this file) rather
+// than left to the load-time gate this construction invalidates for its own
+// operand. Not reachable on any artifact this campaign runs (Qwen2.5-1.5B's
+// accumulators are ~2^27, and the fused rotation raises that by at most sqrt(2)
+// -- half a bit, comfortably inside the ORIGINAL 37-bit headroom); the check
+// exists so the domain question is actually closed rather than presented as
+// closed, per this finding's own text.
+constexpr int64_t kOptionGFusedKvLandingExponentMin = -25;
+
 // Little-endian byte-assembly read of one int64 element from a ROP1 tensor's
 // stored bytes — the same discipline the loader itself uses for this exact
 // section (src/model.cpp's RdI64/ValidateRopeTablesDomain) and for every
@@ -325,28 +353,80 @@ inline int64_t ComposedExponent(int64_t e_a, int64_t e_t) {
 //
 // File-local storage behind the accessor functions option_g_spike.h declares (never
 // raw externs across the header boundary). Sized by `OptionGResetSaturationCounters`
-// before a run; `OptionGRecordSaturation{Old,Fused}` below are this TU's own
-// increment path, called from the K/V landing block in `RunLayerLoop`. Gate G5 reads
-// both arrays after a run over the same document set and reports the per-(layer,
-// kv_head) delta, per T-1891's own brief ("report the DELTA between paths, not just
-// the fused count").
+// before a run; `OptionGRecordSaturation{Old,Fused,OldSite7}` below are this TU's own
+// increment path, called from the K/V landing block and the Q/K rotation loop in
+// `RunLayerLoop`. Gate G5 reads all three arrays after a run over the same document
+// set and reports the per-(layer, kv_head) delta.
+//
+// T-1892 Critical 2 (`Claude/Poirot/96d2b11-t1891-optiong-spike.md` §6): the shipped
+// K path clamps TWICE -- once at the K/V landing (`ClampRopeCode(LandingRescale(...))`,
+// site 4) and once after the post-landing rotation (`RopeApplySite`, site 7). The
+// fused path clamps ONCE, at the landing. The first cut of this instrument counted
+// the OLD path's site-7 clamp against the FUSED path's landing clamp -- two different
+// clamps, not a like-for-like comparison. Corrected: `g_option_g_sat_old` is now the
+// OLD path's own LANDING clamp (the same site the fused column counts, before versus
+// after the rotation moves in front of it) -- the actual baseline. `g_option_g_sat_
+// old_site7` is a THIRD, separately-reported column: the old path's post-rotation
+// clamp, "the boundary Option G deletes" but not the like-for-like baseline.
 std::vector<uint64_t> g_option_g_sat_old;
 std::vector<uint64_t> g_option_g_sat_fused;
+std::vector<uint64_t> g_option_g_sat_old_site7;
 uint32_t g_option_g_num_kv_heads = 0;
+// T-1892 Minor 3 (§8): an unreset instrument used to report all-zeros silently
+// (`OptionGSatIndex`'s `if (idx < size)` guard degrades a wiring error into a
+// believable "0" rather than refusing). Tracked explicitly so the accessors can
+// fail loudly instead -- see `OptionGRequireCountersReady`, below.
+bool g_option_g_counters_ready = false;
 
 inline size_t OptionGSatIndex(uint32_t layer, uint32_t kv_head) {
 	return static_cast<size_t>(layer) * static_cast<size_t>(g_option_g_num_kv_heads) +
 	       static_cast<size_t>(kv_head);
 }
 
-inline void OptionGRecordSaturationOld(uint32_t layer, uint32_t kv_head) {
-	const size_t idx = OptionGSatIndex(layer, kv_head);
-	if (idx < g_option_g_sat_old.size()) g_option_g_sat_old[idx] += 1;
+// T-1892 Minor 3's own fix, correctly scoped (found and corrected during THIS
+// build: an earlier draft called this from the RECORD functions below too, which
+// made `OptionGRecordSaturationOld` -- reached from the K/V landing block's
+// flag-off branch on EVERY test in this tree that saturates a K/V element,
+// whether or not anything ever calls `OptionGResetSaturationCounters` for that
+// process -- abort the entire test suite. The finding is about a CONSUMER
+// reading a report from an unwired instrument and getting a misleading "0"; it
+// is not about the engine's own per-element recording, which must stay a safe
+// no-op when unwired, exactly like every other piece of dead code a disabled
+// instrument leaves behind. `OptionGRequireCountersReady` is therefore called
+// ONLY from the READ accessors (`OptionGSaturationCount{Old,Fused,OldSite7}`,
+// below) -- the functions gate G5's own reporting code calls, never RunLayerLoop
+// itself.
+inline void OptionGRequireCountersReady(const char* caller) {
+	if (g_option_g_counters_ready) return;
+	std::fprintf(stderr,
+	             "T-1891 spike: %s called before OptionGResetSaturationCounters -- the "
+	             "saturation instrument is unwired for this process. Refusing rather "
+	             "than reporting a silent, believable zero (T-1892 Minor 3).\n",
+	             caller);
+	std::abort();
 }
 
-inline void OptionGRecordSaturationFused(uint32_t layer, uint32_t kv_head) {
+// T-1892 Minor 4 (§8): `count` defaults to 1 (every per-element call site is
+// unchanged, `OptionGRecordSaturationOld(l, h)`), and a caller transferring a batch
+// count (the Q/K rotation loop's own dedup transfer, below) passes it directly
+// instead of looping `count` individual increments -- an O(1) addition where the
+// prior version was an O(n) loop. Safe no-op when unwired (`idx < size` is false
+// when the vectors are empty, `g_option_g_num_kv_heads == 0`'s own default) --
+// see the comment above `OptionGRequireCountersReady` for why these three do NOT
+// call it.
+inline void OptionGRecordSaturationOld(uint32_t layer, uint32_t kv_head, uint64_t count = 1) {
 	const size_t idx = OptionGSatIndex(layer, kv_head);
-	if (idx < g_option_g_sat_fused.size()) g_option_g_sat_fused[idx] += 1;
+	if (idx < g_option_g_sat_old.size()) g_option_g_sat_old[idx] += count;
+}
+
+inline void OptionGRecordSaturationFused(uint32_t layer, uint32_t kv_head, uint64_t count = 1) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	if (idx < g_option_g_sat_fused.size()) g_option_g_sat_fused[idx] += count;
+}
+
+inline void OptionGRecordSaturationOldSite7(uint32_t layer, uint32_t kv_head, uint64_t count = 1) {
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	if (idx < g_option_g_sat_old_site7.size()) g_option_g_sat_old_site7[idx] += count;
 }
 
 }  // namespace
@@ -396,16 +476,26 @@ void OptionGResetSaturationCounters(uint32_t num_layers, uint32_t num_kv_heads) 
 	g_option_g_num_kv_heads = num_kv_heads;
 	g_option_g_sat_old.assign(static_cast<size_t>(num_layers) * num_kv_heads, 0);
 	g_option_g_sat_fused.assign(static_cast<size_t>(num_layers) * num_kv_heads, 0);
+	g_option_g_sat_old_site7.assign(static_cast<size_t>(num_layers) * num_kv_heads, 0);
+	g_option_g_counters_ready = true;
 }
 
 uint64_t OptionGSaturationCountOld(uint32_t layer, uint32_t kv_head) {
+	OptionGRequireCountersReady("OptionGSaturationCountOld");
 	const size_t idx = OptionGSatIndex(layer, kv_head);
 	return idx < g_option_g_sat_old.size() ? g_option_g_sat_old[idx] : 0;
 }
 
 uint64_t OptionGSaturationCountFused(uint32_t layer, uint32_t kv_head) {
+	OptionGRequireCountersReady("OptionGSaturationCountFused");
 	const size_t idx = OptionGSatIndex(layer, kv_head);
 	return idx < g_option_g_sat_fused.size() ? g_option_g_sat_fused[idx] : 0;
+}
+
+uint64_t OptionGSaturationCountOldSite7(uint32_t layer, uint32_t kv_head) {
+	OptionGRequireCountersReady("OptionGSaturationCountOldSite7");
+	const size_t idx = OptionGSatIndex(layer, kv_head);
+	return idx < g_option_g_sat_old_site7.size() ? g_option_g_sat_old_site7[idx] : 0;
 }
 
 int64_t FloorDivI64(int64_t a, int64_t b) {
@@ -1523,6 +1613,17 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 				const SslmForwardStatus resolve_status =
 				    ResolveRopeTableRow(position, context_cap, head_dim, rope_tables, &option_g_table);
 				if (resolve_status != SslmForwardStatus::Ok) return resolve_status;
+				// T-1892 Significant 1: the fused site's own re-derived floor
+				// (kOptionGFusedKvLandingExponentMin, above) -- checked here, once
+				// per layer per token, over every kv_head this call will land,
+				// BEFORE any rotation or landing runs, so a violation leaves
+				// `workspace`/`seq` untouched exactly like every other guard in
+				// this block.
+				for (size_t h = 0; h < num_key_value_heads; ++h) {
+					if (lw.kv_landing_e_t_k[h] < kOptionGFusedKvLandingExponentMin) {
+						return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;
+					}
+				}
 			}
 
 			for (size_t h = 0; h < num_key_value_heads; ++h) {
@@ -1584,9 +1685,20 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 						// already implements. T-518's saturation counter (§8.2) is
 						// wired into seq's own per-sequence accumulator, the one
 						// call in this tree that composes the landing.
-						k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+						const int64_t raw_k = LandingRescale(
 						    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
+						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count);
+						// T-1892 Critical 2: the SHIPPED path's OWN landing clamp
+						// (site 4) -- the like-for-like baseline for gate G5's
+						// old-vs-fused delta, the SAME clamp the fused branch above
+						// counts, at the SAME site, before the rotation moves in
+						// front of it. Counted before ClampRopeCode narrows,
+						// matching T-518's own "does the clamp actually fire"
+						// convention (identical to the fused branch's own check).
+						if (raw_k < -127 || raw_k > 127) {
+							OptionGRecordSaturationOld(l, static_cast<uint32_t>(h));
+						}
+						k_row[d] = static_cast<int8_t>(ClampRopeCode(raw_k));
 					}
 				}
 				for (size_t d = 0; d < head_dim; ++d) {
@@ -1623,8 +1735,14 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			const size_t kv_head = h / group;
 			const int8_t* const k_row_before_rotate =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
-			// T-1891 gate G5: the old-path instrument, deduped to once per
-			// kv_head (comment on `old_k_sat_recorded`'s declaration, above).
+			// T-1892 Critical 2: this is the SITE-7 (post-rotation) clamp -- the
+			// SECOND boundary Option G deletes, reported as its own column
+			// (`OptionGRecordSaturationOldSite7`), NOT the old-vs-fused baseline
+			// (that is the landing-clamp counter wired above, in the K/V landing
+			// block's own `else` branch). Deduped to once per kv_head (comment on
+			// `old_k_sat_recorded`'s declaration, above) so the per-query-head
+			// redundant K rotation ("redundant but sound", the read loop's own
+			// comment) does not multi-count one kv_head's saturation.
 			// `local_k_sat` is a fresh LOCAL counter, NEVER `&seq.kv_saturation_count`
 			// -- the production per-sequence counter is not a valid target here:
 			// this codebase's own shipped behaviour never fed the post-rotation K
@@ -1643,8 +1761,9 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 			if (st != SslmForwardStatus::Ok) return st;
 			if (sat_out != nullptr) {
 				old_k_sat_recorded[kv_head] = true;
-				for (uint64_t n = 0; n < local_k_sat; ++n) {
-					OptionGRecordSaturationOld(l, static_cast<uint32_t>(kv_head));
+				// T-1892 Minor 4: one addition, not an O(n) transfer loop.
+				if (local_k_sat > 0) {
+					OptionGRecordSaturationOldSite7(l, static_cast<uint32_t>(kv_head), local_k_sat);
 				}
 			}
 		}

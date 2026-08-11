@@ -37,8 +37,10 @@ struct RopePairWide {
 // is the caller's") -- the K-landing call site clamps through the EXISTING
 // LandingRescale+ClampRopeCode pair, unchanged, per D-SLM2305's construction;
 // this primitive is not a second clamp. `*out_in_domain` is false (refuse, not
-// wrap) whenever either rotated component's true value does not fit int64_t --
-// T-1891 gate G2 exercises this directly.
+// wrap) whenever either rotated component's ROUNDED value (the value this
+// function returns -- T-1892 Minor 1: the check is computed on the value AFTER
+// C3's rounding, not on some unrounded "true" value the function never
+// materializes) does not fit int64_t -- T-1891 gate G2 exercises this directly.
 RopePairWide RopeApplyPairWide(int64_t x, int64_t y, int32_t cos_q30, int32_t sin_q30,
                                 bool* out_in_domain);
 
@@ -54,16 +56,34 @@ bool OptionGFusedKLandingEnabled();
 // Per-(layer, kv_head) K-landing ClampRopeCode saturation counts (T-1891 gate G5),
 // separate from `SequenceLayerState::kv_saturation_count` (the shipped, per-sequence,
 // K-and-V-shared production counter, which this spike does not modify). Reset before a
-// run, then read after: `OptionGSaturationCountOld` accumulates whenever the shipped
-// (flag-off) path's post-landing RopeApplySite clamp saturates a K element;
-// `OptionGSaturationCountFused` accumulates whenever the fused (flag-on) path's single
-// pre-landing-rotated LandingRescale/ClampRopeCode clamp saturates one. Both counters
-// exist unconditionally (not gated behind the runtime flag above) so a single process
-// that runs both paths in sequence (as gate G5's own tool does) accumulates each path's
-// own count independently, in the same run, without a rebuild.
+// run (mandatory -- every accessor below aborts with a diagnostic if queried first,
+// T-1892 Minor 3: an unreset instrument must refuse, not silently report a believable
+// zero), then read after.
+//
+// T-1892 Critical 2: the shipped K path clamps TWICE -- once at the K/V landing
+// (site 4, `ClampRopeCode(LandingRescale(...))`) and once after the post-landing
+// rotation (site 7, `RopeApplySite`). The fused path clamps ONCE, at the landing.
+// THREE counters, not two, because the like-for-like comparison and the
+// boundary-being-deleted are different questions:
+//   - `OptionGSaturationCountOld`      -- the SHIPPED path's own LANDING clamp (site
+//                                         4). The like-for-like baseline: the SAME
+//                                         clamp `Fused` counts, before the rotation
+//                                         moves in front of it.
+//   - `OptionGSaturationCountFused`    -- the FUSED path's single landing clamp
+//                                         (site 4, post-rotation-then-land).
+//   - `OptionGSaturationCountOldSite7` -- the SHIPPED path's post-rotation clamp
+//                                         (site 7) -- the SECOND boundary Option G
+//                                         deletes. Not the baseline for the
+//                                         old-vs-fused delta; reported separately so
+//                                         it is not silently conflated with it again.
+// All three exist unconditionally (not gated behind the runtime flag above) so a
+// single process that runs both paths in sequence (as gate G5's own tool does)
+// accumulates each path's own counts independently, in the same run, without a
+// rebuild.
 void OptionGResetSaturationCounters(uint32_t num_layers, uint32_t num_kv_heads);
 uint64_t OptionGSaturationCountOld(uint32_t layer, uint32_t kv_head);
 uint64_t OptionGSaturationCountFused(uint32_t layer, uint32_t kv_head);
+uint64_t OptionGSaturationCountOldSite7(uint32_t layer, uint32_t kv_head);
 
 }  // namespace superslm
 

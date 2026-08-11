@@ -198,8 +198,19 @@ int main(int argc, char** argv) {
 		int64_t k_r_t[kNumKvHeads], k_e_t[kNumKvHeads], v_r_t[kNumKvHeads], v_e_t[kNumKvHeads];
 		int64_t iexp_m[kNumKvHeads], iexp_e[kNumKvHeads];
 	};
+	// T-1892 finding C1 fix: `k_e_t` shifted from the calibration-derived -37 to -20
+	// (kv_landing_reciprocals' `e_t` is a free exponent LandingRescale reads directly
+	// and never re-derives from `m_t`/`r_t` -- see
+	// t1891_optiong_gate3_reference.py's own comment on `K_LANDING_EXPONENT_SHIFT`).
+	// The calibration-derived value put the landed K code 4-5 orders of magnitude
+	// past +/-127 for this fixture's own actual fused-rotated magnitudes; shift=17
+	// (measured by execution, reference script's own population report) moves the
+	// compared population to 1/608 at the rail, 74/608 exactly zero, 533/608
+	// strictly interior and nonzero, 159 distinct values. `v_e_t` is UNCHANGED (V is
+	// not part of G3's compared population and is not touched by Option G).
 	Layer1891Scales L[kNumLayers] = {
-	    // layer 0 -- transcribed from t1891_optiong_gate3_reference.py at gain=256
+	    // layer 0 -- transcribed from t1891_optiong_gate3_reference.py at gain=256,
+	    // K_LANDING_EXPONENT_SHIFT=17
 	    {
 	        CarriedScale{1082196484, -45}, CarriedScale{1082196484, -45},
 	        CarriedScale{1090717716, -44}, CarriedScale{1090717716, -44},
@@ -207,10 +218,11 @@ int main(int argc, char** argv) {
 	        CarriedScale{1090717716, -44},
 	        CarriedScale{1990802028, -67}, CarriedScale{1082196484, -52},
 	        CarriedScale{1082196484, -37}, CarriedScale{1082196484, -37},
-	        {3682832993LL, 3682832993LL}, {-37, -37}, {2353120427LL, 2353120427LL}, {-38, -38},
+	        {3682832993LL, 3682832993LL}, {-20, -20}, {2353120427LL, 2353120427LL}, {-38, -38},
 	        {1784838611LL, 1784838611LL}, {-45, -45},
 	    },
-	    // layer 1 -- transcribed from t1891_optiong_gate3_reference.py at gain=256
+	    // layer 1 -- transcribed from t1891_optiong_gate3_reference.py at gain=256,
+	    // K_LANDING_EXPONENT_SHIFT=17
 	    {
 	        CarriedScale{1082196484, -45}, CarriedScale{1082196484, -45},
 	        CarriedScale{1090717716, -44}, CarriedScale{1090717716, -44},
@@ -218,7 +230,7 @@ int main(int argc, char** argv) {
 	        CarriedScale{1090717716, -44},
 	        CarriedScale{1990802290, -67}, CarriedScale{1082196484, -52},
 	        CarriedScale{1082196484, -37}, CarriedScale{1082196484, -37},
-	        {3682849240LL, 3682849240LL}, {-37, -37}, {2353120118LL, 2353120118LL}, {-38, -38},
+	        {3682849240LL, 3682849240LL}, {-20, -20}, {2353120118LL, 2353120118LL}, {-38, -38},
 	        {1784830738LL, 1784830738LL}, {-45, -45},
 	    },
 	};
@@ -269,9 +281,9 @@ int main(int argc, char** argv) {
 	}
 
 	// --- Documents: real English text, byte-tokenized into the small vocab ---------
-	// `c % 32` (Tokenize(), above) -- lengths (13, 14, 14) plus the one extra
-	// generated position each document's decode produces (comment above the
-	// RunGreedyDecodeLoop call) stay within this fixture's context_cap (16).
+	// `c % 32` (Tokenize(), above) -- lengths (13, 14, 14) stay within this
+	// fixture's context_cap (16). T-1892 Minor 2: `max_new_tokens=1` does NOT land
+	// a generated position -- see the comment above the RunGreedyDecodeLoop call.
 	const std::vector<std::string> documents = {
 	    "the quick fox",
 	    "a gray cat sat",
@@ -294,10 +306,17 @@ int main(int argc, char** argv) {
 	}
 	const uint64_t num_docs = documents.size();
 	out.write(reinterpret_cast<const char*>(&num_docs), sizeof(num_docs));
+	// T-1892 Observation 2: `context_cap` is now part of the dump header (was
+	// previously a hardcoded duplicate of `kContextCap` in the checker,
+	// `tools/t1891_optiong_gate3_check.py` -- a silent-misread risk if this
+	// probe's own geometry ever changed without the checker being updated
+	// alongside it).
 	const uint64_t nl = kNumLayers, nkv = kNumKvHeads, hd = kHeadDim;
+	const uint64_t cc = static_cast<uint64_t>(kContextCap);
 	out.write(reinterpret_cast<const char*>(&nl), sizeof(nl));
 	out.write(reinterpret_cast<const char*>(&nkv), sizeof(nkv));
 	out.write(reinterpret_cast<const char*>(&hd), sizeof(hd));
+	out.write(reinterpret_cast<const char*>(&cc), sizeof(cc));
 
 	for (const std::string& doc : documents) {
 		const std::vector<int32_t> tokens = Tokenize(doc);
@@ -317,10 +336,21 @@ int main(int argc, char** argv) {
 		// sentinel stop id is itself rejected by the SAME TokenIdOutOfRange check
 		// EmbedEntry enforces on prompt/generated tokens (found by execution --
 		// the first version of this probe used a -1 sentinel and failed exactly
-		// this way). `max_new_tokens=1` still lands every prompt position during
-		// prefill and produces exactly one extra generated position past the
-		// prompt (ignored by the comparator, ordinary decode behaviour, not a
-		// defect this probe works around).
+		// this way).
+		//
+		// T-1892 Minor 2 (`Claude/Poirot/96d2b11-t1891-optiong-spike.md` §8): this
+		// call lands EVERY prompt position (the whole point of `max_new_tokens=1`
+		// is exercised at prefill, not at generation) and lands ZERO generated
+		// positions past the prompt, not "exactly one" as a prior version of this
+		// comment claimed. Confirmed by execution: the K store row at
+		// `position == doc_len` is `[0, 0]` across every document, both layers,
+		// both kv heads, in this probe's own fused dump -- the generated token's
+		// own forward is never run (argmax over the LAST prompt position's logits
+		// produces `out_tokens[0]`, and nothing calls RunLayerLoop again for it).
+		// The comparator (`t1891_optiong_gate3_check.py`) only ever compares
+		// positions `< doc_len`, so this was never a comparison-correctness bug --
+		// it was an overstatement of the covered range in this comment and in the
+		// casebook's own §9 (corrected there).
 		const auto status = RunGreedyDecodeLoop(
 		    seq, layers, kNumLayers, kHiddenSize, kHeadDim, kNumKvHeads, kIntermediateSize,
 		    kContextCap, view.rope_tables, tokens.data(), tokens.size(), g_embed,
@@ -351,12 +381,19 @@ int main(int argc, char** argv) {
 	// state, over the whole document set above. Machine-parseable (one "GATE5" line
 	// per (layer, kv_head)) so a small driver script can run this binary twice (flag
 	// off, flag on) and combine both runs' lines into the old-vs-fused delta table.
+	// T-1892 Critical 2: THREE columns, not two -- `old` is now the shipped path's
+	// OWN landing clamp (the like-for-like baseline against `fused`, both counted at
+	// the SAME site); `old_site7` is the shipped path's separate post-rotation
+	// clamp, reported but not conflated with the baseline.
 	for (uint32_t l = 0; l < kNumLayers; ++l) {
 		for (uint32_t h = 0; h < kNumKvHeads; ++h) {
-			std::fprintf(stdout, "GATE5 flag=%d layer=%u kv_head=%u old=%llu fused=%llu\n",
+			std::fprintf(stdout,
+			             "GATE5 flag=%d layer=%u kv_head=%u old_landing=%llu fused_landing=%llu "
+			             "old_site7=%llu\n",
 			             OptionGFusedKLandingEnabled() ? 1 : 0, l, h,
 			             static_cast<unsigned long long>(OptionGSaturationCountOld(l, h)),
-			             static_cast<unsigned long long>(OptionGSaturationCountFused(l, h)));
+			             static_cast<unsigned long long>(OptionGSaturationCountFused(l, h)),
+			             static_cast<unsigned long long>(OptionGSaturationCountOldSite7(l, h)));
 		}
 	}
 	return 0;

@@ -232,6 +232,24 @@ enum class SslmForwardStatus {
 	                                          // pre-rounding wide composite itself exceeding
 	                                          // int64_t's representable range, which no existing
 	                                          // status names.
+	// --- T-1892 Significant 1 (`Claude/Poirot/96d2b11-t1891-optiong-spike.md` §7) ---
+	OptionGFusedLandingExponentOutOfDomain,   // Option G's fused K landing hands
+	                                          // LandingRescale a branch_code bounded only by
+	                                          // int64_t (RopeApplyPairWide's output), where
+	                                          // model.cpp's load-time floor kKvLandingExponentMin
+	                                          // (-60) was derived for the SHIPPED path's ~2^27
+	                                          // projection-accumulator branch_code (composite
+	                                          // ~2^91, 37 bits of 128-bit headroom). Under the
+	                                          // fused operand the composite reaches ~2^126 (2 bits
+	                                          // headroom), and the SAME derivation's floor is -25,
+	                                          // not -60 -- an artifact-legal e_t in [-60, -25) is
+	                                          // load-legal but loses bits at THIS site. Checked at
+	                                          // the fused K-landing call site itself (RunLayerLoop,
+	                                          // forward_sites.cpp), refusing rather than reaching
+	                                          // LandingRescale's own detected-but-not-refused loss
+	                                          // path (magnitude_exceeds_int64, silently discarded
+	                                          // by this call site, which passes no
+	                                          // out_magnitude_exceeded_int64).
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,
