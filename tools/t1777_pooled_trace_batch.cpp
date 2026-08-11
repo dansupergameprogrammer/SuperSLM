@@ -50,6 +50,7 @@
 #include "superslm/artifact.h"
 #include "superslm/forward_sites.h"
 #include "superslm/model.h"
+#include "superslm/option_g_spike.h"  // T-1891 capture leg 1 -- G5 like-for-like landing-clamp report
 #include "superslm/tokenizer.h"
 #include "sslm_marshal.h"
 
@@ -447,6 +448,12 @@ int main(int argc, char** argv) {
 	std::printf("model loaded once: hidden_size=%zu layers=%u documents=%zu\n", hidden_size, num_hidden_layers,
 	            docs.size());
 
+	// T-1891 capture leg 1 (D-SLM2336's own reporting condition): reset ONCE before
+	// any document so the landing-clamp counters accumulate over the whole
+	// 239-document corpus, this process's own flag state (OptionGFusedKLandingEnabled's
+	// cached env-var read). Read after the loop, below.
+	OptionGResetSaturationCounters(num_hidden_layers, num_kv_heads);
+
 	size_t n_ok = 0, n_failed = 0;
 	for (const Doc& d : docs) {
 		const bool ok_doc =
@@ -460,5 +467,19 @@ int main(int argc, char** argv) {
 		}
 	}
 	std::printf("batch_done: %zu ok, %zu failed (of %zu)\n", n_ok, n_failed, docs.size());
+
+	// T-1891 capture leg 1: per-(layer, kv_head) like-for-like landing-clamp counts,
+	// this run's own flag state (matching t1891_optiong_gate3_probe.cpp's own GATE5
+	// line format exactly, so the same combining script works on both).
+	for (uint32_t l = 0; l < num_hidden_layers; ++l) {
+		for (uint32_t h = 0; h < num_kv_heads; ++h) {
+			std::printf(
+			    "GATE5 flag=%d layer=%u kv_head=%u old_landing=%llu fused_landing=%llu old_site7=%llu\n",
+			    OptionGFusedKLandingEnabled() ? 1 : 0, l, h,
+			    static_cast<unsigned long long>(OptionGSaturationCountOld(l, h)),
+			    static_cast<unsigned long long>(OptionGSaturationCountFused(l, h)),
+			    static_cast<unsigned long long>(OptionGSaturationCountOldSite7(l, h)));
+		}
+	}
 	return (n_failed == 0) ? 0 : 1;
 }
