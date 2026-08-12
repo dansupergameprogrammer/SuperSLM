@@ -1183,6 +1183,40 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
                                  size_t workspace_size, bool option_g_fused_k_landing,
                                  std::string_view site_prefix,
                                  size_t token_index, SslmTraceHookState* trace_hook_state) {
+	// T-1959 micro-round (Poirot 285a8e1 confirmation review, Significant
+	// (new)/D-SLM2741): both T-1954 toggles read ONCE here, at the top of
+	// this call, into locals used throughout the function -- not per head,
+	// not per pair. T-1956's own fix round removed the toggles'
+	// process-lifetime caching (a real defect: a same-process two-leg
+	// contrast could see a stale value) by reading `std::getenv` fresh at
+	// every call site instead, but several of those call sites sit inside
+	// the per-head/per-pair loop -- counted at source for this model's own
+	// geometry (28 layers, 12 heads, 64 pairs/head): 795 `getenv` calls per
+	// layer on the fused leg (22,260/token) against 13/layer on the legacy
+	// leg (364/token), a ~61x asymmetric handicap on the leg under
+	// measurement, all of it pure overhead, invisible as a correctness bug
+	// and certain to surface as "the construction is slower" the first time
+	// anyone times the two legs.
+	//
+	// Hoisting to once per RunLayerLoopImpl call preserves S2's own
+	// structural property exactly: `RunGreedyDecodeLoop` invokes this
+	// function at least once per token (every whole-token forward, and
+	// every micro-step of a resumed one), so a harness that changes the
+	// environment BETWEEN calls -- the shape any real two-leg contrast
+	// takes, whether two processes or two sequential decode calls in one
+	// process -- still gets the change honoured at the very next call. What
+	// hoisting removes is re-reading the SAME, unchanged value 795 times
+	// within a single call that never itself mutates the environment (this
+	// file's own single-threaded convention, stated where the toggle
+	// functions are defined, already excludes that). It also closes a
+	// second-order coupling T-1958 named: with the toggle read at several
+	// independent points across one forward pass, nothing previously
+	// guaranteed they agreed if the environment somehow changed mid-pass;
+	// a single read per call makes every use within this call provably the
+	// same value by construction, not by assumption.
+	const bool option_g_fused_q_landing = OptionGFusedQLandingEnabled();
+	const bool option_g_fused_q_landing_calibrate = OptionGFusedQLandingCalibrateEnabled();
+
 	// §9.3's first decided contract, checked BEFORE anything is read or
 	// written: a budget of 0 consumes a call, advances nothing, and would
 	// return "pending" -- a host-visible livelock. `seq` is left bit-identical,
@@ -1459,7 +1493,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// Option G already removed K's. Legacy path (toggle off) is
 		// UNCHANGED below, byte-identical by construction: this whole branch
 		// is new code reached only when the env var is set.
-		if (OptionGFusedQLandingEnabled()) {
+		if (option_g_fused_q_landing) {
 			// T-1954 calibration mode only: run the REAL legacy projection
 			// too, purely to obtain an artifact-legitimate `q_scale` for
 			// THIS token to use downstream (the attention/softmax domain
@@ -1472,7 +1506,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// -- were tried this session and both produced a real domain
 			// refusal, executed, before this fix).
 			CarriedScale q_scale_legacy_calibration_only{};
-			if (OptionGFusedQLandingCalibrateEnabled()) {
+			if (option_g_fused_q_landing_calibrate) {
 				std::vector<int8_t> q_codes_calibration_only(hidden_size);
 				st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size,
 				                      hidden_size, lw.q_fold_identity, lw.q_fold_mult,
@@ -1569,7 +1603,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// this branch's only remaining job is the peak
 					// observation, which is independent of what `q_rot`
 					// carries.
-					if (OptionGFusedQLandingCalibrateEnabled()) {
+					if (option_g_fused_q_landing_calibrate) {
 						if (l < g_option_g_q_calibration.size()) {
 							OptionGFusedQCalibrationSample& sample = g_option_g_q_calibration[l];
 							const int64_t peak =
@@ -1632,7 +1666,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				// this emission never changes byte-identity when no hook is
 				// installed (the ordinary case, including every gate this
 				// build's own log reports).
-				if (!OptionGFusedQLandingCalibrateEnabled() && trace_hook_state != nullptr &&
+				if (!option_g_fused_q_landing_calibrate && trace_hook_state != nullptr &&
 				    SslmTraceHookInstalled(*trace_hook_state)) {
 					// `site_name` is a named local, not a temporary bound
 					// directly into the record: `SslmKvLandingTraceRecord::site`
@@ -1672,7 +1706,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// above for this exact token (`q_scale_legacy_calibration_only`),
 			// so downstream attention runs on the identical class of value
 			// toggle-off's own already-proven-in-domain path produces.
-			q_scale = OptionGFusedQLandingCalibrateEnabled() ? q_scale_legacy_calibration_only
+			q_scale = option_g_fused_q_landing_calibrate ? q_scale_legacy_calibration_only
 			              : CarriedScale{lw.q_landing_m_out, lw.q_landing_e_out};
 		} else {
 			st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
@@ -1837,7 +1871,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// `continue` below already establishes, applied to Q's own
 		// independent toggle.
 		for (size_t h = 0; h < num_heads; ++h) {
-			if (!OptionGFusedQLandingEnabled()) {
+			if (!option_g_fused_q_landing) {
 				st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 				                   rope_tables, q_rot.data() + h * head_dim);
 				if (st != SslmForwardStatus::Ok) return st;
