@@ -52,6 +52,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/model.h"  // SslmTensorManifest (RopeApplySite's rope_tables parameter)
@@ -611,6 +612,38 @@ struct LayerWeights {
 	CarriedScale q_site_constant;
 	CarriedScale o_site_constant;
 
+	// T-1954 (Brunel spike, disposable, never merges -- T-1822 design Sec32
+	// "Fused Q"). Per-layer scalars (not per-head, matching Q's own existing
+	// per-layer granularity -- Sec32.1/32.2), mirroring kv_landing_r_t_k/
+	// kv_landing_e_t_k's own naming below but read as VALUES, not pointers,
+	// since K/V's own fields are per-head arrays and Q's are not.
+	// `q_landing_e_t`/`q_landing_r_t` are the fused landing's own ratio pair
+	// (KvLandingReciprocals' own (e_t, R_t) words, reused unchanged --
+	// Sec32.2's own "no new section type" decision) -- the two values
+	// `LandingRescale` actually consumes for the shift/round arithmetic,
+	// mirroring K's own kv_landing_e_t_k/kv_landing_r_t_k exactly.
+	// `q_landing_m_out`/`q_landing_e_out` are the fused landing's own
+	// ABSOLUTE canonical target scale (KvLandingScales' own (m, e) words,
+	// which stay "pending consumer" for K -- model.cpp's own comment, S3
+	// finding this build's own record cites) -- for Q this word becomes a
+	// LIVE consumer: Q's downstream attention math (CombineCarriedScale
+	// against iexp_softmax_khead) needs a `q_scale` CarriedScale the same
+	// shape RequantChainChecked would have produced on the legacy path, and
+	// this pair supplies it when the legacy dynamic requant is bypassed.
+	// Sec32.2's own text names only three fields (`q_landing_m_t`/`_e_t`/
+	// `_r_t`); this build adds a fourth (`q_landing_e_out`) because the
+	// absolute target scale and the landing composite's own ratio exponent
+	// are two different quantities in K's own already-shipped schema (see
+	// this branch's own build log for the full derivation, transplanted
+	// directly from `_derive_composition_constants`'s own K/V formula,
+	// tests/reference/superslm_spike/pipeline.py) -- collapsing them into
+	// one field would silently assume an identity the design never states
+	// and the converter's own K precedent contradicts.
+	int64_t q_landing_m_out = 0;
+	int64_t q_landing_e_out = 0;
+	int64_t q_landing_e_t = 0;
+	int64_t q_landing_r_t = 0;
+
 	// C28's dynamic-arm bias, one array per q/k/v projection this layer's
 	// ProjectAndFunnel/K-V-landing calls consume (§6.2 step 2, T-1656, D-SLM622).
 	// nullptr means this projection carries no BIA1 entry at this layer -- the
@@ -871,6 +904,30 @@ struct RopePairWide {
 // Declared, not defined -- the design's own new primitive; Brunel's build.
 RopePairWide RopeApplyPairWide(int64_t x, int64_t y, int32_t cos_q30, int32_t sin_q30,
                                 bool* out_in_domain);
+
+// T-1954 (Brunel spike, disposable, never merges -- T-1822 design Sec32
+// "Fused Q"). Calibration-only scaffolding: the shipped artifact carries no
+// Q landing constants yet (Sec32.2's own new artifact keys are unbuilt), so
+// this spike's own "end to end on the real artifact" self-check needs a way
+// to observe Q's post-RoPE peak (Sec32.2's own decided calibration policy)
+// BEFORE any q_landing_r_t/e_t exist to land through. When
+// `SSLM_OPTION_G_FUSED_Q_LANDING_CALIBRATE` is set (a SECOND, separate env
+// var from the construction's own toggle), the fused-Q branch in
+// RunLayerLoopImpl records the observed rotated-wide-pair peak per layer
+// (and the (m_a, e_a) in force when it was set) instead of landing through
+// LandingRescale at all -- LandingRescale is never called in this mode, so
+// it needs no valid q_landing_r_t/e_t to run safely. `OptionGFusedQCalibrationReset`
+// sizes the per-layer buffer before a run; `OptionGFusedQCalibrationDump`
+// reads it back after. Never reachable from the toggle-off (legacy) path or
+// from the toggle-on-but-not-calibrating (real self-check) path -- both
+// leave this buffer untouched.
+struct OptionGFusedQCalibrationSample {
+	int64_t peak_abs_branch_code = 0;  // max(|rotated.x|, |rotated.y|) observed this layer
+	int64_t m_a_at_peak = 0;           // normed_scale.m at the token/position that set it
+	int64_t e_a_at_peak = 0;           // normed_scale.e at the same token/position
+};
+void OptionGFusedQCalibrationReset(uint32_t num_hidden_layers);
+std::vector<OptionGFusedQCalibrationSample> OptionGFusedQCalibrationDump();
 
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
 // K/V store is per-(layer, head)-major, position-minor --

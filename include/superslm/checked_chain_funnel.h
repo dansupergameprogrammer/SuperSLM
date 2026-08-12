@@ -244,6 +244,18 @@ enum class SslmForwardStatus {
 	                                          // rotation's own in-domain output) lose magnitude" --
 	                                          // two different arithmetic stages, two different
 	                                          // guards, per the design's own T-1898-repaired text.
+	// --- T-1954 (Brunel spike, disposable, never merges -- T-1822 design
+	// Sec32 "Fused Q") ---
+	OptionGFusedQLandingExponentOutOfDomain,  // T-1822 design Sec32.3: the fused-Q landing's
+	                                          // own per-element `LandingRescale` magnitude
+	                                          // check, checked UNCONDITIONALLY on every
+	                                          // element with no skip condition -- Sec32.3's
+	                                          // own naming convention, mirroring
+	                                          // OptionGFusedLandingExponentOutOfDomain above but
+	                                          // for Q's own fused landing call site, never
+	                                          // reused (K and Q refuse through distinct
+	                                          // enumerators so a capture can attribute which
+	                                          // site refused).
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

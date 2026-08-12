@@ -60,6 +60,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 			return "OptionGWideRopeMagnitudeOutOfDomain";
 		case SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain:
 			return "OptionGFusedLandingExponentOutOfDomain";
+		case SslmForwardStatus::OptionGFusedQLandingExponentOutOfDomain:
+			return "OptionGFusedQLandingExponentOutOfDomain";
 	}
 	return "?";
 }

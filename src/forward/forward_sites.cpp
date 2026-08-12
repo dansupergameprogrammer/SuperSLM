@@ -20,6 +20,8 @@
 // suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
 #include "superslm/forward_sites.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -1113,6 +1115,51 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 	    ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
 }
 
+// T-1954 (Brunel spike, disposable, never merges -- T-1822 design Sec32
+// "Fused Q"). Mirrors the T-1891 spike's own `OptionGFusedKLandingEnabled()`
+// exactly (`brunel/t1891-optionG-spike@d45927f`, never merged) -- a runtime
+// env-var toggle is spike-tier acceptable per this ticket's own brief; the
+// artifact-header-flag-bit selection dispatch Sec32.4 specifies is
+// production scope, not built here. Cached in a function-local static: this
+// spike's own probes and the full test suite run single-threaded (no
+// concurrent RunLayerLoop calls racing this initializer), the identical
+// single-threaded convention T-1891's own precedent already assumed.
+static bool OptionGFusedQLandingEnabled() {
+	static const bool enabled = [] {
+		const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
+		return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+	}();
+	return enabled;
+}
+
+// T-1954 (Brunel spike, disposable, never merges): the calibration
+// companion, a SECOND, independent env var -- see forward_sites.h's own
+// comment on OptionGFusedQCalibrationSample for what this mode does and why
+// it exists. Cached the same way, same single-threaded assumption.
+static bool OptionGFusedQLandingCalibrateEnabled() {
+	static const bool enabled = [] {
+		const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING_CALIBRATE");
+		return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+	}();
+	return enabled;
+}
+
+// T-1954: the calibration buffer itself, one entry per layer -- a plain
+// process-global (matching this file's own single-threaded convention,
+// stated above), never touched unless OptionGFusedQLandingCalibrateEnabled()
+// is true.
+namespace {
+std::vector<OptionGFusedQCalibrationSample> g_option_g_q_calibration;
+}  // namespace
+
+void OptionGFusedQCalibrationReset(uint32_t num_hidden_layers) {
+	g_option_g_q_calibration.assign(num_hidden_layers, OptionGFusedQCalibrationSample{});
+}
+
+std::vector<OptionGFusedQCalibrationSample> OptionGFusedQCalibrationDump() {
+	return g_option_g_q_calibration;
+}
+
 // T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
 // share (defined below, after this function closes). `option_g_fused_k_landing`
 // is this function's own new parameter -- the ONE addition; every other line
@@ -1392,12 +1439,158 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                 LayerSite(site_prefix, l, "attn_norm"), token_index, trace_hook_state);
 		if (st != SslmForwardStatus::Ok) return st;
 
-		st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
-		                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
-		                      lw.q_bias, q_codes.data(), &q_scale,
-		                      LayerSite(site_prefix, l, "q_proj.requant"),
-		                      token_index, trace_hook_state);
-		if (st != SslmForwardStatus::Ok) return st;
+		// T-1954 (Brunel spike, disposable, never merges -- T-1822 design
+		// Sec32 "Fused Q"): when the spike's own runtime toggle is on, Q
+		// bypasses ProjectAndFunnel's own internal int8 landing entirely --
+		// the wide accumulator is computed inline (the SAME three steps
+		// ProjectAndFunnel performs for Q internally: GemmInt8AccumulateRow,
+		// the WSC1 fold, the optional bias reconciliation -- Sec32.2's own
+		// "zero modification required to point RopeApplyPairWide at Q's own
+		// accumulator instead of K's"), then rotated wide via the SAME,
+		// unmodified RopeApplyPairWide K's own fused landing already uses,
+		// then landed ONCE via LandingRescale -- removing Q's own second
+		// int8 boundary (Sec32.1's verified-at-source claim) the same way
+		// Option G already removed K's. Legacy path (toggle off) is
+		// UNCHANGED below, byte-identical by construction: this whole branch
+		// is new code reached only when the env var is set.
+		if (OptionGFusedQLandingEnabled()) {
+			// T-1954 calibration mode only: run the REAL legacy projection
+			// too, purely to obtain an artifact-legitimate `q_scale` for
+			// THIS token to use downstream (the attention/softmax domain
+			// checks are calibrated against what this call actually
+			// produces on real tokens -- toggle-off's own gate already
+			// proves this). `q_scale_legacy_calibration_only`'s own codes
+			// are discarded; this call's ONLY purpose is a real, in-domain
+			// CarriedScale, cheaper and more honest than guessing one (two
+			// guesses -- a fixed placeholder, then `q_site_constant` itself
+			// -- were tried this session and both produced a real domain
+			// refusal, executed, before this fix).
+			CarriedScale q_scale_legacy_calibration_only{};
+			if (OptionGFusedQLandingCalibrateEnabled()) {
+				std::vector<int8_t> q_codes_calibration_only(hidden_size);
+				st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size,
+				                      hidden_size, lw.q_fold_identity, lw.q_fold_mult,
+				                      lw.q_fold_shift, lw.q_site_constant, lw.q_bias,
+				                      q_codes_calibration_only.data(), &q_scale_legacy_calibration_only,
+				                      LayerSite(site_prefix, l, "q_proj.requant"), token_index,
+				                      trace_hook_state);
+				if (st != SslmForwardStatus::Ok) return st;
+			}
+			std::vector<int64_t> qacc(hidden_size);
+			GemmInt8AccumulateRow(normed.data(), lw.q_weight, hidden_size, hidden_size,
+			                      qacc.data());
+			for (size_t i = 0; i < hidden_size; ++i) {
+				qacc[i] = ApplyWeightScaleFold(qacc[i], lw.q_fold_identity[i], lw.q_fold_mult[i],
+				                               lw.q_fold_shift[i]);
+			}
+			if (lw.q_bias != nullptr) {
+				const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
+				    qacc.data(), hidden_size, lw.q_bias, normed_scale.m, normed_scale.e);
+				if (bias_status != SslmForwardStatus::Ok) return bias_status;
+			}
+			// Sec32.2: Q's own RoPE table row, resolved independently of K's
+			// own resolution below -- Q's fused toggle is a second,
+			// independent flag (Sec32.4), so this must not assume K's own
+			// table row was resolved (K's own flag can be off while Q's is
+			// on).
+			OptionGRopeTableRow q_table;
+			const SslmForwardStatus q_table_status =
+			    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables, &q_table);
+			if (q_table_status != SslmForwardStatus::Ok) return q_table_status;
+			for (size_t h = 0; h < num_heads; ++h) {
+				for (size_t p = 0; p < q_table.pairs; ++p) {
+					const size_t i0 = h * head_dim + 2 * p;
+					const size_t i1 = i0 + 1;
+					const int32_t cos_q30 = static_cast<int32_t>(
+					    ReadRopeTableEntryI64(q_table.cos->data, q_table.row_offset + p));
+					const int32_t sin_q30 = static_cast<int32_t>(
+					    ReadRopeTableEntryI64(q_table.sin->data, q_table.row_offset + p));
+					bool rot_in_domain = false;
+					const RopePairWide rotated =
+					    RopeApplyPairWide(qacc[i0], qacc[i1], cos_q30, sin_q30, &rot_in_domain);
+					if (!rot_in_domain) {
+						return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+					}
+					// T-1954: calibration mode records the observed rotated
+					// magnitude and its governing (m_a, e_a), then skips
+					// landing entirely -- q_landing_r_t/e_t are genuinely
+					// unset (0) in this mode (the shipped artifact carries no
+					// Q landing constants yet), so LandingRescale is never
+					// called on them. See forward_sites.h's own comment.
+					if (OptionGFusedQLandingCalibrateEnabled()) {
+						if (l < g_option_g_q_calibration.size()) {
+							OptionGFusedQCalibrationSample& sample = g_option_g_q_calibration[l];
+							const int64_t peak =
+							    std::max(rotated.x < 0 ? -rotated.x : rotated.x,
+							             rotated.y < 0 ? -rotated.y : rotated.y);
+							if (peak > sample.peak_abs_branch_code) {
+								sample.peak_abs_branch_code = peak;
+								sample.m_a_at_peak = normed_scale.m;
+								sample.e_a_at_peak = normed_scale.e;
+							}
+						}
+						// A literal 0 here makes every element of this
+						// head's own Q row identical, which makes the QK
+						// score row downstream fully degenerate (every score
+						// equal) and was observed (this session, executed)
+						// to make SoftmaxRowQ15 itself refuse
+						// (SoftmaxKernelRefusedAfterGateAccepted) on real
+						// K/V data, halting the decode after layer 0 and
+						// never reaching layers 1-27. A coarse, fixed
+						// right-shift (never LandingRescale, never a real
+						// landing constant -- this mode has none to use) is
+						// a NON-degenerate placeholder that lets every layer
+						// run to completion so the calibration set covers
+						// the whole model; the exact int8 value calibration
+						// mode writes here is never read back by anything
+						// (only `sample.peak_abs_branch_code`, computed from
+						// `rotated` directly above, before this write, is).
+						q_rot[i0] = static_cast<int8_t>(ClampRopeCode(rotated.x >> 20));
+						q_rot[i1] = static_cast<int8_t>(ClampRopeCode(rotated.y >> 20));
+						continue;
+					}
+					// Sec32.3: the per-element domain gate is unconditional
+					// and authoritative from the FIRST specification of this
+					// construction -- no early-exit clause of any kind,
+					// learning Sec31.2.2's own fracture-and-repair history
+					// rather than repeating it (T-1898/D-SLM2384).
+					bool exceeded0 = false, exceeded1 = false;
+					const int64_t raw0 =
+					    LandingRescale(rotated.x, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
+					                   lw.q_landing_e_t, /*out_saturation_count=*/nullptr, &exceeded0);
+					const int64_t raw1 =
+					    LandingRescale(rotated.y, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
+					                   lw.q_landing_e_t, /*out_saturation_count=*/nullptr, &exceeded1);
+					if (exceeded0 || exceeded1) {
+						return SslmForwardStatus::OptionGFusedQLandingExponentOutOfDomain;
+					}
+					q_rot[i0] = static_cast<int8_t>(ClampRopeCode(raw0));
+					q_rot[i1] = static_cast<int8_t>(ClampRopeCode(raw1));
+				}
+			}
+			// Sec32.2/Sec32.7's own build-time resolution (this branch's own
+			// build log carries the full derivation): downstream attention
+			// (CombineCarriedScale against iexp_softmax_khead) needs a
+			// `q_scale` CarriedScale the same shape the legacy dynamic
+			// requant chain would have produced -- the fused landing's own
+			// ABSOLUTE canonical target scale supplies it, mirroring
+			// KvLandingScales' own (m, e) words (pending-consumer for K,
+			// live for Q). In calibration mode `q_landing_m_out`/`_e_out` are
+			// also genuinely unset (0), which is not a valid canonical
+			// CarriedScale -- substitute the REAL legacy `q_scale` computed
+			// above for this exact token (`q_scale_legacy_calibration_only`),
+			// so downstream attention runs on the identical class of value
+			// toggle-off's own already-proven-in-domain path produces.
+			q_scale = OptionGFusedQLandingCalibrateEnabled() ? q_scale_legacy_calibration_only
+			              : CarriedScale{lw.q_landing_m_out, lw.q_landing_e_out};
+		} else {
+			st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
+			                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
+			                      lw.q_bias, q_codes.data(), &q_scale,
+			                      LayerSite(site_prefix, l, "q_proj.requant"),
+			                      token_index, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
 
 		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
 		// through LandingRescale (§8.1), writing straight into the K/V store,
@@ -1541,12 +1734,23 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// T-1894 (design Sec31.2's own construction): when Option G is on, K
 		// is ALREADY rotated at landing time (the K/V landing block above) --
 		// this loop's own K-rotation half, and the write-back loop below it,
-		// run ONLY when the flag is off. Q's own call is unconditional either
-		// way -- Option G does not touch Q.
+		// run ONLY when the flag is off. Q's own call was unconditional
+		// either way under Option G alone -- Option G (K only) does not
+		// touch Q.
+		//
+		// T-1954 (Brunel spike, disposable, never merges -- T-1822 design
+		// Sec32): corrected for fused Q. When Sec32's own toggle is on, `q_rot`
+		// already carries Q's fused, rotated-then-landed value (the branch
+		// above), so this call is SKIPPED for Q too -- the identical
+		// "already landed and rotated, do not do it again" shape K's own
+		// `continue` below already establishes, applied to Q's own
+		// independent toggle.
 		for (size_t h = 0; h < num_heads; ++h) {
-			st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
-			                   rope_tables, q_rot.data() + h * head_dim);
-			if (st != SslmForwardStatus::Ok) return st;
+			if (!OptionGFusedQLandingEnabled()) {
+				st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
+				                   rope_tables, q_rot.data() + h * head_dim);
+				if (st != SslmForwardStatus::Ok) return st;
+			}
 			if (option_g_fused_k_landing) continue;
 			// T-1654 (S3.8a): the accessor index is `h / group`, not `h` -- the
 			// reference's own grouping (`dynamic_engine.py:410`,
