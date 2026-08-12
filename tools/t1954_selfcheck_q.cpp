@@ -140,6 +140,7 @@ int main(int argc, char** argv) {
 
 	std::vector<LayerBacking> backings(num_hidden_layers);
 	std::vector<LayerWeights> layers(num_hidden_layers);
+	uint32_t layers_injected = 0;  // T-1956 fix round (M1) -- see the increment site below.
 	for (uint32_t l = 0; l < num_hidden_layers; ++l) {
 		std::string marshal_err;
 		if (!MarshalLayer(model_view, l, num_heads, num_kv_heads, backings[l], layers[l],
@@ -166,9 +167,18 @@ int main(int argc, char** argv) {
 		layers[l].q_landing_e_out = it->second.e_out;
 		layers[l].q_landing_e_t = it->second.e_t;
 		layers[l].q_landing_r_t = it->second.r_t;
+		++layers_injected;  // T-1956 fix round (M1): count what was actually
+		                    // WRITTEN, not `derived.size()` -- an
+		                    // over-populated constants file (more entries
+		                    // than layers) would print a numerator exceeding
+		                    // the layer count while every entry beyond
+		                    // `num_hidden_layers` is silently never looked
+		                    // up. This loop's own hard-fail on a MISSING
+		                    // entry already made an under-count unreachable;
+		                    // this closes the over-count side too.
 	}
-	std::printf("q_landing constants injected for %u/%u layers\n",
-	            static_cast<uint32_t>(derived.size()), num_hidden_layers);
+	std::printf("q_landing constants injected for %u/%u layers\n", layers_injected,
+	            num_hidden_layers);
 
 	const SslmTensorView* embed_w = model_view.weights.Tensor("embed");
 	const SslmTensorView* final_gain_w = model_view.weights.Tensor("final_norm.gain");
@@ -233,6 +243,17 @@ int main(int argc, char** argv) {
 	for (size_t i = 0; i < out_tokens_produced; ++i) std::printf(" %d", out_tokens[i]);
 	std::printf("\n");
 	std::printf("stop_reason: %d\n", static_cast<int>(stop_reason));
+	// T-1956 fix round (Significant 1/D-SLM2727 verification): reads back
+	// the SAME per-sequence counter the fix now wires Q's own landing
+	// through (`&seq.kv_saturation_count`, matching K's sibling call) --
+	// direct evidence the counter is live, not merely that the code
+	// compiles. A nonzero count on this run's own coarse, spike-tier
+	// constants is expected and not itself a defect (§9's own disclaimer);
+	// the point is that it is OBSERVABLE at all, which it was not before
+	// this fix (`nullptr` was passed).
+	std::printf("kv_saturation_count (K/V + Q landing clamps this decode, host-facing "
+	            "SslmDecodeStepStatus::saturation_count equivalent): %llu\n",
+	            static_cast<unsigned long long>(seq.kv_saturation_count));
 	std::printf("SELFCHECK: fused-Q path completed end to end on the real artifact, status=Ok\n");
 	return 0;
 }

@@ -1116,32 +1116,38 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 }
 
 // T-1954 (Brunel spike, disposable, never merges -- T-1822 design Sec32
-// "Fused Q"). Mirrors the T-1891 spike's own `OptionGFusedKLandingEnabled()`
-// exactly (`brunel/t1891-optionG-spike@d45927f`, never merged) -- a runtime
+// "Fused Q"). Originally mirrored the T-1891 spike's own
+// `OptionGFusedKLandingEnabled()` (`brunel/t1891-optionG-spike@d45927f`,
+// never merged), including its function-local-static caching -- a runtime
 // env-var toggle is spike-tier acceptable per this ticket's own brief; the
 // artifact-header-flag-bit selection dispatch Sec32.4 specifies is
-// production scope, not built here. Cached in a function-local static: this
-// spike's own probes and the full test suite run single-threaded (no
-// concurrent RunLayerLoop calls racing this initializer), the identical
-// single-threaded convention T-1891's own precedent already assumed.
+// production scope, not built here.
+//
+// T-1956 fix round (Poirot 251d432 review, Significant 2/D-SLM2728): the
+// caching is REMOVED. T-1891's own precedent cached because ITS OWN
+// harness never needed the toggle to change mid-process; this construction's
+// own grading rule (Sec32.5) needs a two-leg (K-only vs K+fused-Q) contrast,
+// and a cached toggle silently makes the second leg of a single-process
+// harness inherit the first leg's own value -- returning a perfect null
+// indistinguishable from the genuine finding "fused Q has no effect", the
+// single most expensive wrong answer available on this instrument. Removing
+// the cache removes the class of bug (StandardsDocument.md Sec4: prefer a
+// structure that cannot be skipped over a documented constraint that can) --
+// `std::getenv` is re-read on every call, at negligible per-call cost
+// relative to this branch's own GEMM/rotation work.
 static bool OptionGFusedQLandingEnabled() {
-	static const bool enabled = [] {
-		const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
-		return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
-	}();
-	return enabled;
+	const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
+	return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
 }
 
 // T-1954 (Brunel spike, disposable, never merges): the calibration
 // companion, a SECOND, independent env var -- see forward_sites.h's own
 // comment on OptionGFusedQCalibrationSample for what this mode does and why
-// it exists. Cached the same way, same single-threaded assumption.
+// it exists. T-1956 fix round: re-evaluated per call, same reason as its
+// sibling immediately above.
 static bool OptionGFusedQLandingCalibrateEnabled() {
-	static const bool enabled = [] {
-		const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING_CALIBRATE");
-		return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
-	}();
-	return enabled;
+	const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING_CALIBRATE");
+	return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
 }
 
 // T-1954: the calibration buffer itself, one entry per layer -- a plain
@@ -1475,6 +1481,27 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				                      LayerSite(site_prefix, l, "q_proj.requant"), token_index,
 				                      trace_hook_state);
 				if (st != SslmForwardStatus::Ok) return st;
+				// T-1956 fix round (Poirot 251d432 review, Critical 1/D-SLM2726):
+				// populate `q_rot` from the REAL legacy rotation of the codes
+				// just computed above, not a placeholder -- `q_rot` IS read
+				// back (the QK score GEMM below, then attention, then the
+				// residual stream, then every later layer's own input), so a
+				// placeholder here corrupts the rest of THIS token's forward
+				// pass and every later layer's calibration. This makes the
+				// calibration forward pass byte-identical, from this point
+				// on, to the toggle-off path Gate A already proves matches
+				// `main` -- the per-pair loop below still observes
+				// `qacc`'s own rotated peak for calibration purposes (that
+				// observation is independent of what `q_rot` carries), it
+				// simply no longer writes anything into `q_rot` itself
+				// (its own calibration branch, below, now only records and
+				// continues).
+				for (size_t h = 0; h < num_heads; ++h) {
+					st = RopeApplySite(q_codes_calibration_only.data() + h * head_dim, head_dim,
+					                   position, context_cap, rope_tables,
+					                   q_rot.data() + h * head_dim);
+					if (st != SslmForwardStatus::Ok) return st;
+				}
 			}
 			std::vector<int64_t> qacc(hidden_size);
 			GemmInt8AccumulateRow(normed.data(), lw.q_weight, hidden_size, hidden_size,
@@ -1497,6 +1524,16 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			const SslmForwardStatus q_table_status =
 			    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables, &q_table);
 			if (q_table_status != SslmForwardStatus::Ok) return q_table_status;
+			// T-1956 fix round (Poirot 251d432 review, Significant 3/D-SLM2729):
+			// this head-sized buffer accumulates the rotated wide pair this
+			// head's own landing actually consumes, so a trace record can be
+			// emitted for the fused site once the head's own pairs are done
+			// -- mirroring `SslmKvLandingTraceRecord`'s own "the head's
+			// folded segment" field, at the pipeline position analogous to
+			// K/V's landing (post-rotation for the fused construction, the
+			// wide row LandingRescale actually reads). Unused (never filled,
+			// never read) in calibration mode.
+			std::vector<int64_t> q_rotated_wide_head(head_dim);
 			for (size_t h = 0; h < num_heads; ++h) {
 				for (size_t p = 0; p < q_table.pairs; ++p) {
 					const size_t i0 = h * head_dim + 2 * p;
@@ -1517,6 +1554,21 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// unset (0) in this mode (the shipped artifact carries no
 					// Q landing constants yet), so LandingRescale is never
 					// called on them. See forward_sites.h's own comment.
+					//
+					// T-1956 fix round (Critical 1/D-SLM2726): this branch no
+					// longer writes anything into `q_rot` -- `q_rot` IS read
+					// back (the QK score GEMM, then attention, then the
+					// residual stream, then every later layer's own input),
+					// so a placeholder written here corrupted the rest of
+					// the forward pass and every subsequent layer's own
+					// calibration (verified at the observed magnitudes, all
+					// 28 peaks below 2^20, a `>> 20` placeholder reduced Q to
+					// a one-bit sign mask). `q_rot` is now populated ONCE,
+					// per head, from the real legacy rotation, immediately
+					// after `q_codes_calibration_only` is computed above --
+					// this branch's only remaining job is the peak
+					// observation, which is independent of what `q_rot`
+					// carries.
 					if (OptionGFusedQLandingCalibrateEnabled()) {
 						if (l < g_option_g_q_calibration.size()) {
 							OptionGFusedQCalibrationSample& sample = g_option_g_q_calibration[l];
@@ -1529,24 +1581,6 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 								sample.e_a_at_peak = normed_scale.e;
 							}
 						}
-						// A literal 0 here makes every element of this
-						// head's own Q row identical, which makes the QK
-						// score row downstream fully degenerate (every score
-						// equal) and was observed (this session, executed)
-						// to make SoftmaxRowQ15 itself refuse
-						// (SoftmaxKernelRefusedAfterGateAccepted) on real
-						// K/V data, halting the decode after layer 0 and
-						// never reaching layers 1-27. A coarse, fixed
-						// right-shift (never LandingRescale, never a real
-						// landing constant -- this mode has none to use) is
-						// a NON-degenerate placeholder that lets every layer
-						// run to completion so the calibration set covers
-						// the whole model; the exact int8 value calibration
-						// mode writes here is never read back by anything
-						// (only `sample.peak_abs_branch_code`, computed from
-						// `rotated` directly above, before this write, is).
-						q_rot[i0] = static_cast<int8_t>(ClampRopeCode(rotated.x >> 20));
-						q_rot[i1] = static_cast<int8_t>(ClampRopeCode(rotated.y >> 20));
 						continue;
 					}
 					// Sec32.3: the per-element domain gate is unconditional
@@ -1554,18 +1588,75 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 					// construction -- no early-exit clause of any kind,
 					// learning Sec31.2.2's own fracture-and-repair history
 					// rather than repeating it (T-1898/D-SLM2384).
+					//
+					// T-1956 fix round (Significant 1/D-SLM2727): the real
+					// saturation counter is now passed (matching K's own
+					// sibling call, `:kv_saturation_count` below) -- the
+					// domain gate above checks ONLY
+					// `out_magnitude_exceeded_int64` (the true 128-bit
+					// magnitude not fitting int64); the separate +/-127
+					// clamp condition is deliberately never OR'd into it
+					// (LandingRescale's own header) and is carried ONLY
+					// through this counter. Passing `nullptr` here made a
+					// mis-scaled landing constant's own clamping invisible
+					// to the one host-facing signal that would report it.
 					bool exceeded0 = false, exceeded1 = false;
-					const int64_t raw0 =
-					    LandingRescale(rotated.x, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
-					                   lw.q_landing_e_t, /*out_saturation_count=*/nullptr, &exceeded0);
-					const int64_t raw1 =
-					    LandingRescale(rotated.y, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
-					                   lw.q_landing_e_t, /*out_saturation_count=*/nullptr, &exceeded1);
+					const int64_t raw0 = LandingRescale(
+					    rotated.x, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
+					    lw.q_landing_e_t, &seq.kv_saturation_count, &exceeded0);
+					const int64_t raw1 = LandingRescale(
+					    rotated.y, normed_scale.m, lw.q_landing_r_t, normed_scale.e,
+					    lw.q_landing_e_t, &seq.kv_saturation_count, &exceeded1);
 					if (exceeded0 || exceeded1) {
 						return SslmForwardStatus::OptionGFusedQLandingExponentOutOfDomain;
 					}
+					q_rotated_wide_head[2 * p] = rotated.x;
+					q_rotated_wide_head[2 * p + 1] = rotated.y;
 					q_rot[i0] = static_cast<int8_t>(ClampRopeCode(raw0));
 					q_rot[i1] = static_cast<int8_t>(ClampRopeCode(raw1));
+				}
+				// T-1956 fix round (Significant 3/D-SLM2729): emit one
+				// K/V-landing-shaped trace record per head, at the SAME site
+				// name the legacy path traces (`q_proj.requant`) so a
+				// name-pairing capture harness finds a record under this
+				// name on BOTH legs -- closing the more dangerous of the two
+				// hypothesized harness behaviours the review named (a
+				// name-based harness silently dropping Q from the fused
+				// leg's population). `SslmEmitKvLandingTrace`/
+				// `SslmKvLandingTraceRecord` are pre-existing, declared
+				// machinery (trace_hook.h) with no production call site
+				// before this one -- reused, not invented. Guarded by
+				// `SslmTraceHookInstalled` first, matching
+				// `RequantChainChecked`'s own "no hook installed means no
+				// extra computation, no sink touched" contract exactly, so
+				// this emission never changes byte-identity when no hook is
+				// installed (the ordinary case, including every gate this
+				// build's own log reports).
+				if (!OptionGFusedQLandingCalibrateEnabled() && trace_hook_state != nullptr &&
+				    SslmTraceHookInstalled(*trace_hook_state)) {
+					// `site_name` is a named local, not a temporary bound
+					// directly into the record: `SslmKvLandingTraceRecord::site`
+					// is a `string_view`, and the record is built across
+					// several statements before `SslmEmitKvLandingTrace` runs
+					// -- a temporary `std::string`'s lifetime ends at the
+					// semicolon of the statement that creates it, which would
+					// leave `trace_record.site` dangling by the time of the
+					// emit call below. `site_name` stays alive for this
+					// whole block.
+					const std::string site_name = LayerSite(site_prefix, l, "q_proj.requant");
+					SslmKvLandingTraceRecord trace_record;
+					trace_record.site = site_name;
+					trace_record.token_index = token_index;
+					trace_record.head = static_cast<uint32_t>(h);
+					trace_record.x_int =
+					    std::span<const int64_t>(q_rotated_wide_head.data(), head_dim);
+					trace_record.m_in = normed_scale.m;
+					trace_record.e_in = normed_scale.e;
+					trace_record.codes =
+					    std::span<const int8_t>(q_rot.data() + h * head_dim, head_dim);
+					trace_record.m_out = lw.q_landing_m_out;
+					trace_record.e_out = lw.q_landing_e_out;
+					SslmEmitKvLandingTrace(*trace_hook_state, trace_record);
 				}
 			}
 			// Sec32.2/Sec32.7's own build-time resolution (this branch's own
