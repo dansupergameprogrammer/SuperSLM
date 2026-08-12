@@ -56,10 +56,32 @@ BYTE_ENCODER = bytes_to_unicode()
 BYTE_DECODER = {c: b for b, c in BYTE_ENCODER.items()}
 
 
+def derive_model_name(ckpt_dir):
+    """Best-effort model label for the CONFIG blob, from the checkpoint path alone --
+    it is the only identifying signal available. `tokenizer_class`/`model_type` in
+    tokenizer_config.json/config.json are generic across the whole Qwen2 family and do
+    not distinguish 1.5B from 3B, or base from instruct.
+
+    Two checkpoint-path shapes occur in this project: the HF hub cache's content-hash
+    snapshot dirs (`models--<org>--<repo>/snapshots/<rev>`, where the leaf name is a
+    hash and the repo name -- the useful part -- sits two levels up), and flat exported
+    directories whose own leaf name is already descriptive (e.g. a merged-LoRA output).
+    Detect the first shape by its `models--` cache-key convention; fall back to the
+    checkpoint directory's own leaf name for everything else.
+    """
+    p = Path(ckpt_dir).resolve()
+    grandparent = p.parent.parent.name if p.parent.name == "snapshots" else None
+    if grandparent and grandparent.startswith("models--") and grandparent.count("--") >= 2:
+        repo = grandparent.split("--", 2)[2]
+        return repo.lower()
+    return p.name.lower()
+
+
 # --- The tokenizer tables extracted from an HF checkpoint -----------------------
 class TokenizerTables:
     def __init__(self, ckpt_dir):
         self.ckpt = ckpt_dir
+        self.model_name = derive_model_name(ckpt_dir)
         tj = json.loads((Path(ckpt_dir) / "tokenizer.json").read_text(encoding="utf-8"))
         cfg = json.loads((Path(ckpt_dir) / "tokenizer_config.json").read_text(encoding="utf-8"))
         model = tj["model"]
@@ -247,7 +269,7 @@ class TokenizerTables:
         return bytes(b)
 
     def emit_artifact(self, out_path):
-        config = {"model": "qwen2.5-1.5b-instruct", "tokenizer": "byte-bpe",
+        config = {"model": self.model_name, "tokenizer": "byte-bpe",
                   "unicode_version": self.u.version, "pretok": "qwen-gpt-v1"}
         sections = [
             F.Section(F.SectionType.CONFIG, json.dumps(config, sort_keys=True).encode("utf-8")),
