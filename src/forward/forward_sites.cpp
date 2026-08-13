@@ -1135,9 +1135,35 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
 // structure that cannot be skipped over a documented constraint that can) --
 // `std::getenv` is re-read on every call, at negligible per-call cost
 // relative to this branch's own GEMM/rotation work.
-static bool OptionGFusedQLandingEnabled() {
+// T-1966 (Brunel micro-round, disposable, never merges -- D-SLM2787/D-SLM2788):
+// the single env var now selects THREE states, not two, so the three-way
+// comparison D-SLM2788's own kill-sequence names can build and run against
+// one binary. Legacy and the ORIGINAL static-fused construction (T-1954
+// Sec32, calibrated, TARGET_CODE=40) are UNCHANGED -- every existing tool
+// (t1954_selfcheck_q, t1954_calibrate_q, t1954_trace_probe, both t1960
+// drivers) sets this var to "1" and keeps getting exactly the construction
+// it always got. The new THIRD state, "dynamic", selects D-SLM2788's own
+// clean single-variable construction (Sec15.5, this file's own build log):
+// wide Q projection -> wide RoPE over the complete row -> ONE
+// RequantChainChecked call -> q_rot + per-token dynamic q_scale, changing
+// ONLY the intermediate int8 boundary the static-fused path's own second
+// variable (per-token-dynamic -> static-per-layer scale) confounded it
+// with (D-SLM2787's own outside-review finding, verified at source).
+enum class OptionGFusedQMode { kLegacy, kStaticFused, kDynamicFused };
+
+static OptionGFusedQMode OptionGFusedQModeFromEnv() {
 	const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
-	return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+	if (v == nullptr || v[0] == '\0' || (v[0] == '0' && v[1] == '\0')) {
+		return OptionGFusedQMode::kLegacy;
+	}
+	if (std::string_view(v) == "dynamic") {
+		return OptionGFusedQMode::kDynamicFused;
+	}
+	// Any other truthy value -- "1", matching OptionGFusedQLandingEnabled's
+	// own original contract exactly (StandardsDocument.md Sec6.6's own
+	// backward-compatibility discipline: an existing state's own trigger
+	// condition is not narrowed by an unrelated addition).
+	return OptionGFusedQMode::kStaticFused;
 }
 
 // T-1954 (Brunel spike, disposable, never merges): the calibration
@@ -1164,6 +1190,31 @@ void OptionGFusedQCalibrationReset(uint32_t num_hidden_layers) {
 
 std::vector<OptionGFusedQCalibrationSample> OptionGFusedQCalibrationDump() {
 	return g_option_g_q_calibration;
+}
+
+// T-1966 (Brunel micro-round, disposable, never merges): the anchor-capture
+// toggle, a THIRD, independent env var -- see forward_sites.h's own comment
+// on OptionGDynamicQAnchorSample for what this mode does and why it exists.
+// Read fresh per call (matching T-1959's own D-SLM2748 discipline for the
+// other two toggles), though this one is not itself in the hot per-head/
+// per-pair loop -- the dynamic-fused construction calls RequantChainChecked
+// exactly ONCE per layer per token, so even an uncached read here costs
+// nothing comparable to what motivated hoisting the other two.
+static bool OptionGDynamicQAnchorCaptureEnabled() {
+	const char* v = std::getenv("SSLM_OPTION_G_FUSED_Q_ANCHOR_CAPTURE");
+	return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+}
+
+namespace {
+std::vector<OptionGDynamicQAnchorSample> g_option_g_dynamic_q_anchor;
+}  // namespace
+
+void OptionGDynamicQAnchorReset(uint32_t num_hidden_layers) {
+	g_option_g_dynamic_q_anchor.assign(num_hidden_layers, OptionGDynamicQAnchorSample{});
+}
+
+std::vector<OptionGDynamicQAnchorSample> OptionGDynamicQAnchorDump() {
+	return g_option_g_dynamic_q_anchor;
 }
 
 // T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
@@ -1214,7 +1265,10 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 	// guaranteed they agreed if the environment somehow changed mid-pass;
 	// a single read per call makes every use within this call provably the
 	// same value by construction, not by assumption.
-	const bool option_g_fused_q_landing = OptionGFusedQLandingEnabled();
+	// T-1966 micro-round: the tristate mode read replaces the boolean read
+	// this comment block's own text still describes -- same hoist-once
+	// discipline, same reason, now over three states instead of two.
+	const OptionGFusedQMode option_g_fused_q_mode = OptionGFusedQModeFromEnv();
 	const bool option_g_fused_q_landing_calibrate = OptionGFusedQLandingCalibrateEnabled();
 
 	// §9.3's first decided contract, checked BEFORE anything is read or
@@ -1480,20 +1534,26 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// T-1954 (Brunel spike, disposable, never merges -- T-1822 design
-		// Sec32 "Fused Q"): when the spike's own runtime toggle is on, Q
-		// bypasses ProjectAndFunnel's own internal int8 landing entirely --
-		// the wide accumulator is computed inline (the SAME three steps
-		// ProjectAndFunnel performs for Q internally: GemmInt8AccumulateRow,
-		// the WSC1 fold, the optional bias reconciliation -- Sec32.2's own
-		// "zero modification required to point RopeApplyPairWide at Q's own
-		// accumulator instead of K's"), then rotated wide via the SAME,
-		// unmodified RopeApplyPairWide K's own fused landing already uses,
-		// then landed ONCE via LandingRescale -- removing Q's own second
-		// int8 boundary (Sec32.1's verified-at-source claim) the same way
-		// Option G already removed K's. Legacy path (toggle off) is
-		// UNCHANGED below, byte-identical by construction: this whole branch
-		// is new code reached only when the env var is set.
-		if (option_g_fused_q_landing) {
+		// Sec32 "Fused Q"): when the spike's own runtime toggle selects the
+		// STATIC-fused construction, Q bypasses ProjectAndFunnel's own
+		// internal int8 landing entirely -- the wide accumulator is computed
+		// inline (the SAME three steps ProjectAndFunnel performs for Q
+		// internally: GemmInt8AccumulateRow, the WSC1 fold, the optional
+		// bias reconciliation -- Sec32.2's own "zero modification required to
+		// point RopeApplyPairWide at Q's own accumulator instead of K's"),
+		// then rotated wide via the SAME, unmodified RopeApplyPairWide K's
+		// own fused landing already uses, then landed ONCE via
+		// LandingRescale against a STATIC, per-layer, calibrated constant --
+		// removing Q's own second int8 boundary (Sec32.1's verified-at-source
+		// claim) the same way Option G already removed K's, but ALSO
+		// replacing Q's existing per-token dynamic scale with a static one
+		// (D-SLM2787's own verified-at-source confound finding: two
+		// variables change, not one). Legacy path (toggle off) is UNCHANGED
+		// below, byte-identical by construction. T-1966 adds a THIRD state,
+		// `kDynamicFused` (below this branch), D-SLM2788's own
+		// single-variable construction that keeps Q's dynamic scaling policy
+		// and removes only the boundary.
+		if (option_g_fused_q_mode == OptionGFusedQMode::kStaticFused) {
 			// T-1954 calibration mode only: run the REAL legacy projection
 			// too, purely to obtain an artifact-legitimate `q_scale` for
 			// THIS token to use downstream (the attention/softmax domain
@@ -1708,6 +1768,112 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// toggle-off's own already-proven-in-domain path produces.
 			q_scale = option_g_fused_q_landing_calibrate ? q_scale_legacy_calibration_only
 			              : CarriedScale{lw.q_landing_m_out, lw.q_landing_e_out};
+		} else if (option_g_fused_q_mode == OptionGFusedQMode::kDynamicFused) {
+			// T-1966 (Brunel micro-round, disposable, never merges --
+			// D-SLM2787/D-SLM2788): the clean single-variable construction
+			// the outside review proposed and this session's own build log
+			// (Sec18) verifies at source. Wide Q projection -> wide RoPE over
+			// the COMPLETE row -> ONE RequantChainChecked call -> q_rot +
+			// per-token DYNAMIC q_scale. Unlike the static-fused branch
+			// above, this construction changes ONLY the boundary (two int8
+			// narrowings collapsed to one), never touching Q's own existing
+			// per-token dynamic scaling policy: no calibration corpus, no
+			// `q_landing_m_out`/`_e_out`/`_e_t`/`_r_t` (those fields stay 0,
+			// unread on this path), no `TARGET_CODE`, the SAME
+			// `q_site_constant` the legacy path already passes as
+			// `RequantChainChecked`'s own `site_constant` argument, and the
+			// SAME chain-trace record TYPE and SITE NAME the legacy leg
+			// already emits -- closing the harness-pairing hazard S3/T-1958
+			// named for the static-fused path's own different record shape
+			// (a name-pairing capture harness now finds the IDENTICAL
+			// record type on legacy and dynamic-fused, differing only in
+			// the wide row's own content).
+			std::vector<int64_t> qacc(hidden_size);
+			GemmInt8AccumulateRow(normed.data(), lw.q_weight, hidden_size, hidden_size, qacc.data());
+			for (size_t i = 0; i < hidden_size; ++i) {
+				qacc[i] = ApplyWeightScaleFold(qacc[i], lw.q_fold_identity[i], lw.q_fold_mult[i],
+				                               lw.q_fold_shift[i]);
+			}
+			if (lw.q_bias != nullptr) {
+				const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
+				    qacc.data(), hidden_size, lw.q_bias, normed_scale.m, normed_scale.e);
+				if (bias_status != SslmForwardStatus::Ok) return bias_status;
+			}
+			OptionGRopeTableRow q_table;
+			const SslmForwardStatus q_table_status =
+			    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables, &q_table);
+			if (q_table_status != SslmForwardStatus::Ok) return q_table_status;
+			// Rotate the WHOLE row, wide, in place -- every head, every pair
+			// -- before any narrowing happens anywhere. This is the
+			// "complete row" D-SLM2788 names: RequantChainChecked below sees
+			// the fully-rotated wide accumulator, exactly the shape it
+			// already sees for every OTHER projection (a wide row it
+			// narrows dynamically), never a partially-rotated one.
+			for (size_t h = 0; h < num_heads; ++h) {
+				for (size_t p = 0; p < q_table.pairs; ++p) {
+					const size_t i0 = h * head_dim + 2 * p;
+					const size_t i1 = i0 + 1;
+					const int32_t cos_q30 = static_cast<int32_t>(
+					    ReadRopeTableEntryI64(q_table.cos->data, q_table.row_offset + p));
+					const int32_t sin_q30 = static_cast<int32_t>(
+					    ReadRopeTableEntryI64(q_table.sin->data, q_table.row_offset + p));
+					bool rot_in_domain = false;
+					const RopePairWide rotated =
+					    RopeApplyPairWide(qacc[i0], qacc[i1], cos_q30, sin_q30, &rot_in_domain);
+					if (!rot_in_domain) {
+						return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+					}
+					qacc[i0] = rotated.x;
+					qacc[i1] = rotated.y;
+				}
+			}
+			// ONE RequantChainChecked call, on the fully-rotated wide row --
+			// the IDENTICAL call the legacy path makes inside
+			// ProjectAndFunnel (same `incoming` span `{normed_scale}`; same
+			// `site_constant`, `lw.q_site_constant`; same site name,
+			// "q_proj.requant"). Verified at source before this construction
+			// was written (this file's own build log, Sec18): every step of
+			// RequantChainChecked's own body (MaxAbsReduceWide,
+			// NormalizeScale, DynamicScaleReciprocal, RequantTokenCodeWide)
+			// operates purely on `wide_row`'s own int64 values and `n` --
+			// nothing in its body inspects what produced those values, so
+			// calling it on `qacc` post-rotation is structurally identical
+			// to the pre-rotation call the legacy path already makes. The
+			// domain check (`d_prime > 2^31`) is the SAME gate the legacy
+			// call already clears on this exact accumulator pre-rotation;
+			// RoPE rotation preserves magnitude within a factor of sqrt(2)
+			// (the identical bound K's own Option G construction already
+			// reasoned through for its own accumulator).
+			// T-1966: `qacc` is `RequantChainChecked`'s own input, about to be
+			// consumed by that call -- captured HERE, before the call, when
+			// anchor-capture mode is on, so the probe tool comparing
+			// reconstruction fidelity reads the exact wide row the certified
+			// call actually narrowed, not a value recomputed independently
+			// (which could itself diverge from what the real construction
+			// did). Guarded so this copy (hidden_size int64s, real but small)
+			// never happens in the ordinary case.
+			const bool anchor_capture = OptionGDynamicQAnchorCaptureEnabled();
+			if (anchor_capture && l < g_option_g_dynamic_q_anchor.size()) {
+				g_option_g_dynamic_q_anchor[l].wide_rotated.assign(qacc.begin(), qacc.end());
+				g_option_g_dynamic_q_anchor[l].normed_scale_m = normed_scale.m;
+				g_option_g_dynamic_q_anchor[l].normed_scale_e = normed_scale.e;
+				g_option_g_dynamic_q_anchor[l].site_constant_m = lw.q_site_constant.m;
+				g_option_g_dynamic_q_anchor[l].site_constant_e = lw.q_site_constant.e;
+			}
+			const CarriedScale dynamic_incoming[1] = {normed_scale};
+			const ChainResult dynamic_result = RequantChainChecked(
+			    qacc.data(), hidden_size, std::span<const CarriedScale>{dynamic_incoming, 1},
+			    lw.q_site_constant, q_rot.data(), &q_scale,
+			    LayerSite(site_prefix, l, "q_proj.requant"), token_index, trace_hook_state);
+			if (dynamic_result.status != SslmForwardStatus::Ok) return dynamic_result.status;
+			// Captured AFTER the call succeeds: the codes and scale the
+			// certified call actually produced, matched against the SAME
+			// wide row captured above.
+			if (anchor_capture && l < g_option_g_dynamic_q_anchor.size()) {
+				g_option_g_dynamic_q_anchor[l].codes.assign(q_rot.begin(), q_rot.begin() + hidden_size);
+				g_option_g_dynamic_q_anchor[l].q_scale_m = q_scale.m;
+				g_option_g_dynamic_q_anchor[l].q_scale_e = q_scale.e;
+			}
 		} else {
 			st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
 			                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
@@ -1864,14 +2030,16 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// touch Q.
 		//
 		// T-1954 (Brunel spike, disposable, never merges -- T-1822 design
-		// Sec32): corrected for fused Q. When Sec32's own toggle is on, `q_rot`
-		// already carries Q's fused, rotated-then-landed value (the branch
-		// above), so this call is SKIPPED for Q too -- the identical
-		// "already landed and rotated, do not do it again" shape K's own
-		// `continue` below already establishes, applied to Q's own
-		// independent toggle.
+		// Sec32): corrected for fused Q. When Sec32's own toggle selects
+		// EITHER fused mode, `q_rot` already carries Q's own fused,
+		// rotated-then-landed value (the static-fused branch's own explicit
+		// per-pair write, or the dynamic-fused branch's own
+		// RequantChainChecked `out_codes` write) -- this call is SKIPPED for
+		// Q in both cases, the identical "already landed and rotated, do not
+		// do it again" shape K's own `continue` below already establishes,
+		// applied to Q's own independent, now-tristate toggle.
 		for (size_t h = 0; h < num_heads; ++h) {
-			if (!option_g_fused_q_landing) {
+			if (option_g_fused_q_mode == OptionGFusedQMode::kLegacy) {
 				st = RopeApplySite(q_codes.data() + h * head_dim, head_dim, position, context_cap,
 				                   rope_tables, q_rot.data() + h * head_dim);
 				if (st != SslmForwardStatus::Ok) return st;
@@ -1888,6 +2056,35 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap, rope_tables,
 			                   k_rot.data() + h * head_dim);
 			if (st != SslmForwardStatus::Ok) return st;
+		}
+		// T-1966 (Brunel micro-round, disposable, never merges --
+		// D-SLM2788's own three-way comparison harness): q_rot is now
+		// guaranteed fully populated for WHICHEVER of the three Q
+		// constructions ran this token -- legacy's own RopeApplySite call
+		// just above, or the static-fused/dynamic-fused branches' own
+		// writes earlier in this function. q_scale likewise holds the
+		// correct dequantization scale for whichever arm ran (legacy's own
+		// dynamic per-token scale from ProjectAndFunnel; static-fused's own
+		// static per-layer scale; dynamic-fused's own dynamic per-token
+		// scale from RequantChainChecked). ONE capture site, arm-agnostic,
+		// so the harness's three per-arm probe runs (legacy / static-fused
+		// / dynamic-fused, one process each, matching this file's own
+		// single-toggle-per-process convention) all write the SAME shape of
+		// dump, comparable directly by the Python-side comparator without
+		// any per-arm special-casing. wide_rotated stays empty here -- only
+		// the dynamic-fused branch's own earlier capture (above) populates
+		// it, since only that construction computes the wide, pre-narrowing
+		// target the comparator uses as its own canonical reference for all
+		// three arms (the target is arm-independent: the same qacc, rotated
+		// the same way, regardless of which arm lands it).
+		if (OptionGDynamicQAnchorCaptureEnabled() && l < g_option_g_dynamic_q_anchor.size()) {
+			g_option_g_dynamic_q_anchor[l].codes.assign(q_rot.begin(), q_rot.begin() + hidden_size);
+			g_option_g_dynamic_q_anchor[l].q_scale_m = q_scale.m;
+			g_option_g_dynamic_q_anchor[l].q_scale_e = q_scale.e;
+			g_option_g_dynamic_q_anchor[l].normed_scale_m = normed_scale.m;
+			g_option_g_dynamic_q_anchor[l].normed_scale_e = normed_scale.e;
+			g_option_g_dynamic_q_anchor[l].site_constant_m = lw.q_site_constant.m;
+			g_option_g_dynamic_q_anchor[l].site_constant_e = lw.q_site_constant.e;
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
 		// head's row is written back individually, through `MutableKeyRow` at
@@ -1911,6 +2108,22 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				                                    head_dim, kv_head, position);
 				for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
 			}
+		}
+		// T-1966 (D-SLM2788's own QK-score-error metric): kv_head 0's own
+		// REAL, already-landed K row, read here -- AFTER the write-back loop
+		// above completes (or, under Option G's own K construction, after
+		// the earlier K/V-landing block already landed it rotated) -- so
+		// this always reads the SAME final K bytes the attention step
+		// immediately below actually scores against, regardless of which K
+		// arm (legacy or Option-G-fused, a toggle this ticket does not
+		// touch) produced them. Capturing any earlier (e.g. at the Q
+		// capture site above) would read legacy K's own STALE,
+		// pre-write-back value for this position.
+		if (OptionGDynamicQAnchorCaptureEnabled() && l < g_option_g_dynamic_q_anchor.size()) {
+			const int8_t* const k_row0 =
+			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, /*kv_head=*/0,
+			           position);
+			g_option_g_dynamic_q_anchor[l].k_row_head0.assign(k_row0, k_row0 + head_dim);
 		}
 
 		// Attention proper (§6.2 step 5). No named site for this composition

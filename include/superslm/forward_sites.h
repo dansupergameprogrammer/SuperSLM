@@ -929,6 +929,43 @@ struct OptionGFusedQCalibrationSample {
 void OptionGFusedQCalibrationReset(uint32_t num_hidden_layers);
 std::vector<OptionGFusedQCalibrationSample> OptionGFusedQCalibrationDump();
 
+// T-1966 (Brunel micro-round, disposable, never merges -- D-SLM2788's own
+// construction anchor requirement). When `SSLM_OPTION_G_FUSED_Q_ANCHOR_CAPTURE`
+// is set (a THIRD, independent env var), the dynamic-fused branch
+// (`RunLayerLoopImpl`) captures, per layer, the FULL wide rotated Q row
+// (every element, every head -- the exact `int64_t` array
+// `RequantChainChecked` is handed) alongside the codes and dynamic scale
+// that call actually produced, and the `normed_scale`/`q_site_constant`
+// values in force. This is the raw material for the reconstruction-error
+// check the ticket's own gate requires: does `codes[i]` at `q_scale`,
+// dequantized, reproduce `wide_rotated[i]` at its own governing scale
+// (`normed_scale` folded with `site_constant`) to within one quantization
+// step -- computed by a probe tool, not by this capture itself, which only
+// records what the real construction actually computed. Reused, not
+// duplicated: capturing inside the real call site means the comparison is
+// against what the CERTIFIED code path actually produced, never a
+// reimplementation that could itself diverge. Overwritten each call (last
+// decode call's own values); `OptionGDynamicQAnchorReset` sizes the
+// per-layer buffer, `OptionGDynamicQAnchorDump` reads it back.
+struct OptionGDynamicQAnchorSample {
+	std::vector<int64_t> wide_rotated;  // hidden_size elements, RequantChainChecked's own input
+	std::vector<int8_t> codes;          // hidden_size elements, RequantChainChecked's own out_codes
+	int64_t q_scale_m = 0, q_scale_e = 0;          // RequantChainChecked's own *out_scale
+	int64_t normed_scale_m = 0, normed_scale_e = 0;  // this token's own dynamic activation scale
+	int64_t site_constant_m = 0, site_constant_e = 0;  // lw.q_site_constant, this layer's own
+	// T-1966 (D-SLM2788's own QK-score-error metric): kv_head 0's own real,
+	// already-landed K row at this token's own position, head_dim
+	// elements -- whichever K construction is loaded (K's own arm is a
+	// SEPARATE, untouched toggle; this capture reads whatever the real
+	// engine actually landed, never a synthetic reference). Read directly
+	// from the K/V store via the same accessor the attention step itself
+	// uses, so a QK-score comparison uses the identical K bytes the real
+	// forward pass would score against.
+	std::vector<int8_t> k_row_head0;
+};
+void OptionGDynamicQAnchorReset(uint32_t num_hidden_layers);
+std::vector<OptionGDynamicQAnchorSample> OptionGDynamicQAnchorDump();
+
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
 // K/V store is per-(layer, head)-major, position-minor --
 // `offset(kv_head, position, d) = kv_head * context_cap * head_dim +
