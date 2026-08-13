@@ -45,37 +45,76 @@ computed, per StandardsDocument.md Sec4/Sec5.4) ===
     `pooled_rms_error_steps` (Q reconstruction) and `pooled_qk_rel_error`
     (QK-score), each per treatment (legacy, static-fused, dynamic-fused).
   - Comparison: dynamic-fused vs legacy (D-SLM2788's own kill-sequence).
-    static-fused is reported ALONGSIDE as context, not held to the same
-    RESOLVED/UNRESOLVED verdict machinery (it was never the candidate this
-    kill sequence tests -- D-SLM2788 named dynamic-fused as the
-    single-variable construction).
-  - Dispersion: across the 40 POSITIONS, not per-layer -- n=1 layer this
-    round (layer 0 only), so a per-LAYER std is undefined by construction;
-    `position_std` (the standard deviation of the 40 per-position RMS/
-    QK-error values) is the dispersion term instead, stated here explicitly
-    so no reader mistakes it for T-1968's own per-layer figure.
-  - Resolving power: `z_crit * (position_std / sqrt(40))`, `z_crit = 1.96`
-    (two-sided 95%, this campaign's own established convention). A pooled
-    delta smaller in magnitude than the combined (dynamic + legacy)
-    resolving power is reported UNRESOLVED, not as a direction. Applied
-    identically to both deciding quantities.
+    static-fused is reported ALONGSIDE as UNANCHORED-CONTEXT, never held to
+    the RESOLVED/UNRESOLVED verdict machinery -- `tools/t1970_offline_kill.cpp`
+    runs exactly TWO engine legs (legacy, dynamic); there is no static
+    engine anchor, so static's own offline composition is never checked
+    against the engine path it claims to model (T-1971 fix round, Poirot
+    62c5f15 confirmation, Significant 1/D-SLM2823 -- the prior version of
+    this rule stated the "context only" intent but the code ran static
+    through the verdict machinery anyway and printed the word RESOLVED;
+    fixed here, not merely re-stated).
+  - Dispersion: PAIRED per-position delta (T-1971 fix round, D-SLM2824 --
+    the prior form summed two INDEPENDENT standard errors over data that is
+    perfectly PAIRED, all three treatments applied to the SAME 40 captured
+    rows; the correct statistic is the per-position delta's own mean and
+    standard error). `n=1` layer this round (layer 0 only), so a per-LAYER
+    std was never available or used; `position_std` (of the 40 per-position
+    PAIRED DELTAS) is the dispersion term, reported alongside the exact
+    two-sided sign test (how many of the 40 positions favour dynamic-fused,
+    and the p-value of that count under a fair-coin null) -- the sign test
+    is what distinguishes a real, consistent effect from a pooled delta
+    carried by magnitude at a few positions.
+  - Resolving power: `z_crit * (paired_se)`, `paired_se = stdev(deltas) /
+    sqrt(40)`, `z_crit = 1.96` (two-sided 95%). A paired mean delta smaller
+    in magnitude than this resolving power is reported UNRESOLVED, not as a
+    direction. Applied identically to both deciding quantities.
+  - THE CONJUNCTION (D-SLM2787/D-SLM2788's own predeclared step-3
+    criterion): reduce reconstructed-Q error AND QK-score error. Composed
+    explicitly from the two verdicts, never left for a reader to infer
+    (T-1971 fix round, Significant 3/D-SLM2825 -- the prior version reported
+    both halves accurately but never stated the conjunction's own status,
+    which reads as a banked positive with a footnote): MET only if both
+    resolve better; FAILED if either resolves worse; otherwise NOT MET and
+    INCOMPLETE (not a kill, not a pass) -- the current, real state, since
+    Q-reconstruction resolves better and QK-score returns no directional
+    evidence.
   - THE CELL THIS MEASURES, STATED HONESTLY (Sec5.4): this measures the
     boundary-removal mechanism (two int8 narrowings collapsed to one) at
     LAYER 0's OWN activation distribution only, over 40 real, arm-independent,
     genuinely-rotated positions. Two dispositions, decided BEFORE the
     numbers exist:
-      * A KILL (dynamic-fused resolved WORSE than legacy) generalizes. The
-        boundary's own cost is a per-row arithmetic fact (an extra
-        quantization step's own rounding error, or its absence) that does
-        not depend on which layer computed the row -- if the construction
-        cannot show a reduction on 40 real rotated rows at layer 0, it has
-        no mechanism to rely on at any other layer either.
-      * A POSITIVE (dynamic-fused resolved BETTER, or UNRESOLVED) does NOT
-        generalize to layers >= 1 without the deeper per-layer-isolated
-        capture this round did not build (each layer's own test replayed
-        against a reference input independent of any real run's own
-        upstream attention). T-1691's own teacher-forced parity pattern is
-        the named instrument for that capture, if it is ever needed.
+      * A KILL (dynamic-fused resolved WORSE than legacy on either
+        quantity) generalizes. The boundary's own cost is a per-row
+        arithmetic fact (an extra quantization step's own rounding error,
+        or its absence) that does not depend on which layer computed the
+        row -- if the construction cannot show a reduction on 40 real
+        rotated rows at layer 0, it has no mechanism to rely on at any
+        other layer either.
+      * A POSITIVE (dynamic-fused resolved BETTER, or UNRESOLVED, on both)
+        does NOT generalize to layers >= 1 without the deeper
+        per-layer-isolated capture this round did not build (each layer's
+        own test replayed against a reference input independent of any
+        real run's own upstream attention). T-1691's own teacher-forced
+        parity pattern is the named instrument for that capture, if it is
+        ever needed. NOTE (Poirot 62c5f15 confirmation §11/O1): "a kill
+        generalizes" is a decision heuristic, not a derived property -- the
+        boundary's arithmetic is layer-independent, but how much it COSTS
+        depends on the row's own distribution (how much the intermediate
+        clamp truncates), which is not proven layer-independent. A null at
+        one layer is strong evidence against a large general effect, not
+        proof of none.
+
+=== SINGLE-BOUNDARY FLOOR OBSERVATION (T-1971 add, Poirot 62c5f15
+confirmation §11/O3, D-SLM2827) ===
+
+  Independent mechanistic corroboration the record did not previously
+  carry: the RMS of a single correctly-rounding int8 quantizer's own
+  uniform rounding error has the theoretical floor `1/sqrt(12) = 0.288675`;
+  a construction carrying TWO independent such boundaries has floor
+  `sqrt(2)/sqrt(12) = 0.408248` (uncorrelated errors add in quadrature).
+  Neither constant is fit to this round's own data. Reported alongside the
+  kill rule, not as a substitute for it.
 
 === VITALITY SET (this round's own, plus carried-forward form) ===
 
@@ -90,6 +129,28 @@ computed, per StandardsDocument.md Sec4/Sec5.4) ===
      synthetic control.
   3. A deliberate, large perturbation of the dynamic-fused treatment's own
      codes moves the deciding quantity by an unmistakable amount.
+
+=== T-1971 (Poirot 62c5f15-t1968-c1-final-form-confirmation.md,
+D-SLM2820-2827): what changed and why ===
+
+Three reporting-tier fixes, none changing a deciding number (re-verified:
+the RMS headline SURVIVES the paired form and strengthens; nothing here
+re-ran any engine capture):
+  S1/D-SLM2823 -- static demoted from a false RESOLVED/UNRESOLVED verdict
+    to explicit UNANCHORED-CONTEXT (no engine leg exists for it).
+  S2/D-SLM2824 -- resolving power switched from summed-independent-SE to
+    the paired per-position form; the QK "same direction, underpowered"
+    language corrected to "no directional evidence" (21/40 positions favour
+    dynamic, sign test p=0.875 -- a coin flip, not a trend).
+  S3/D-SLM2825 -- the composed conjunction sentence added: NOT MET,
+    INCOMPLETE (one conjunct resolved, the other returned no directional
+    evidence).
+Plus two adds the review named as belonging in the record: the
+single-boundary floor observation above, and (process, for the NEXT run
+only, not retroactive to this one) committing a kill rule's own text in a
+commit that precedes the run's own result commit, so git -- not just the
+docstring's own internal consistency -- corroborates that the rule was
+predeclared.
 """
 import json
 import math
@@ -252,26 +313,83 @@ def compare(pool):
             "per_position_rms": per_position_rms,
             "rms_position_std": rms_position_std,
             "pooled_qk_rel_error": pooled_qk_rel_error,
+            "per_position_qk": per_position_qk,
             "qk_positions": len(per_position_qk),
             "qk_position_std": qk_position_std,
         }
     return results
 
 
-def resolving_power(std, n, z_crit=Z_CRIT_95):
+def sign_test_p(k, n):
+    """Exact two-sided binomial sign test against p=0.5: sums the PMF of
+    every outcome at least as extreme as the observed `k` successes out of
+    `n` trials. T-1971 fix round (Poirot 62c5f15 confirmation, Significant
+    2/D-SLM2824): the ORIGINAL form here summed two INDEPENDENT standard
+    errors over data that is perfectly PAIRED (all three treatments applied
+    to the SAME 40 captured rows) -- unpaired-over-paired-data is the
+    defect the reviewer's own re-execution caught. This function and
+    `paired_analysis` below replace it."""
     if n < 2:
         return None
-    return z_crit * (std / math.sqrt(n))
+
+    def pmf(x):
+        return math.comb(n, x) / (2 ** n)
+
+    p_obs = pmf(k)
+    return sum(pmf(x) for x in range(n + 1) if pmf(x) <= p_obs + 1e-15)
 
 
-def verdict(name, delta, rp_a, rp_b):
-    combined_rp = (rp_a or 0.0) + (rp_b or 0.0) if rp_a is not None and rp_b is not None else None
-    if combined_rp is None or combined_rp == 0.0:
-        return "RESOLVING POWER UNDEFINED (fewer than 2 positions on one side)"
-    if abs(delta) < combined_rp:
-        return f"UNRESOLVED (|delta|={abs(delta):.6f} < resolving_power={combined_rp:.6f})"
-    direction = "WORSE than" if delta > 0 else "BETTER than"
-    return f"RESOLVED: {name} is {direction} legacy (delta={delta:+.6f}, resolving_power={combined_rp:.6f})"
+def paired_analysis(candidate_values, reference_values, z_crit=Z_CRIT_95):
+    """T-1971 fix round (D-SLM2824): the CORRECT statistic for two
+    treatments applied to the same `n` rows -- the per-position paired
+    delta (candidate - reference), its own mean and standard error, the
+    resolving power from THAT dispersion (never two independent SEs
+    summed), and the sign test (how many positions favour the candidate,
+    i.e. a LOWER value -- these are error metrics, lower is better) with
+    its exact two-sided p-value. Returns None if fewer than 2 paired
+    positions exist (dispersion undefined)."""
+    n = min(len(candidate_values), len(reference_values))
+    if n < 2:
+        return None
+    deltas = [c - r for c, r in zip(candidate_values, reference_values)]
+    mean_delta = statistics.mean(deltas)
+    se = statistics.stdev(deltas) / math.sqrt(n)  # sample stdev (ddof=1), the paired-SE convention
+    rp = z_crit * se
+    favor = sum(1 for c, r in zip(candidate_values, reference_values) if c < r)
+    p_value = sign_test_p(favor, n)
+    return {"mean_delta": mean_delta, "se": se, "rp": rp, "favor": favor, "n": n, "p_value": p_value}
+
+
+def paired_verdict(name, quantity, analysis):
+    """Returns (verdict_kind, text) where verdict_kind is one of
+    "RESOLVED_BETTER"/"RESOLVED_WORSE"/"UNRESOLVED"/"UNDEFINED" -- read by
+    the conjunction logic in `print_report`, never re-derived from the
+    printed string."""
+    if analysis is None:
+        return "UNDEFINED", "RESOLVING POWER UNDEFINED (fewer than 2 paired positions)"
+    delta, rp = analysis["mean_delta"], analysis["rp"]
+    sign_note = f"{analysis['favor']}/{analysis['n']} positions favour {name}, sign test p={analysis['p_value']:.3g}"
+    if rp == 0.0 or abs(delta) < rp:
+        return "UNRESOLVED", (f"UNRESOLVED (|paired mean delta|={abs(delta):.6f} < paired "
+                               f"resolving_power={rp:.6f}; {sign_note})")
+    if delta > 0:
+        return "RESOLVED_WORSE", (f"RESOLVED: {name} is WORSE than legacy on {quantity} "
+                                   f"(paired mean delta={delta:+.6f}, paired resolving_power={rp:.6f}; "
+                                   f"{sign_note})")
+    return "RESOLVED_BETTER", (f"RESOLVED: {name} is BETTER than legacy on {quantity} "
+                                f"(paired mean delta={delta:+.6f}, paired resolving_power={rp:.6f}; "
+                                f"{sign_note})")
+
+
+# T-1971 fix round (Poirot 62c5f15 confirmation §11/O3, D-SLM2827): the
+# theoretical RMS floor of a single uniformly-distributed rounding error is
+# 1/sqrt(12) (a correctly-rounding int8 quantizer's own noise floor); a
+# construction carrying TWO independent such boundaries has floor
+# sqrt(2)/sqrt(12) (uncorrelated errors add in quadrature). Independent
+# mechanistic corroboration, computed from constants alone -- not fit to
+# the data.
+ONE_BOUNDARY_FLOOR = 1.0 / math.sqrt(12.0)
+TWO_BOUNDARY_FLOOR = math.sqrt(2.0) / math.sqrt(12.0)
 
 
 def print_report(results):
@@ -285,25 +403,76 @@ def print_report(results):
               f"{r['rms_position_std']:17.6f} | {r['qk_positions']:12d} | "
               f"{r['pooled_qk_rel_error']:20.6f} | {r['qk_position_std']:16.6f}")
 
+    # --- Static: UNANCHORED-CONTEXT, per T-1971 fix round (D-SLM2823) ---
+    # `tools/t1970_offline_kill.cpp` runs exactly TWO engine legs (legacy,
+    # dynamic) -- there is no static engine anchor. Static's own offline
+    # composition is therefore never checked against an engine path it
+    # claims to model, and it is reported for context only: no verdict
+    # word (RESOLVED/UNRESOLVED), no kill-rule machinery.
     print()
-    print(f"=== Amended predeclared kill rule, dispersion across 40 POSITIONS (n_layers=1, layer 0 "
-          f"only), z_crit={Z_CRIT_95} (two-sided 95%) ===")
-    for name in ("static", "dynamic"):
-        rms_rp = resolving_power(results[name]["rms_position_std"], results[name]["positions"])
-        rms_rp_ref = resolving_power(results["legacy"]["rms_position_std"], results["legacy"]["positions"])
-        delta_rms = results[name]["pooled_rms_error_steps"] - results["legacy"]["pooled_rms_error_steps"]
-        print(f"{name} vs legacy, pooled_rms_error_steps: {verdict(name, delta_rms, rms_rp, rms_rp_ref)}")
+    print("=== static-fused: UNANCHORED-CONTEXT (no engine leg for this treatment; not held to the "
+          "RESOLVED/UNRESOLVED kill machinery) ===")
+    print(f"pooled_rms_error_steps={results['static']['pooled_rms_error_steps']:.6f} "
+          f"(vs legacy {results['legacy']['pooled_rms_error_steps']:.6f}, raw delta "
+          f"{results['static']['pooled_rms_error_steps'] - results['legacy']['pooled_rms_error_steps']:+.6f}); "
+          f"pooled_qk_rel_error={results['static']['pooled_qk_rel_error']:.6f} "
+          f"(vs legacy {results['legacy']['pooled_qk_rel_error']:.6f}, raw delta "
+          f"{results['static']['pooled_qk_rel_error'] - results['legacy']['pooled_qk_rel_error']:+.6f})")
 
-        qk_rp = resolving_power(results[name]["qk_position_std"], results[name]["qk_positions"])
-        qk_rp_ref = resolving_power(results["legacy"]["qk_position_std"], results["legacy"]["qk_positions"])
-        delta_qk = results[name]["pooled_qk_rel_error"] - results["legacy"]["pooled_qk_rel_error"]
-        print(f"{name} vs legacy, pooled_qk_rel_error: {verdict(name, delta_qk, qk_rp, qk_rp_ref)}")
+    print()
+    print(f"=== Amended predeclared kill rule (T-1971 fix, D-SLM2824): PAIRED per-position delta, "
+          f"dispersion across 40 POSITIONS (n_layers=1, layer 0 only), z_crit={Z_CRIT_95} "
+          f"(two-sided 95%) ===")
+    rms_analysis = paired_analysis(results["dynamic"]["per_position_rms"], results["legacy"]["per_position_rms"])
+    rms_kind, rms_text = paired_verdict("dynamic", "pooled_rms_error_steps", rms_analysis)
+    print(f"dynamic vs legacy, pooled_rms_error_steps: {rms_text}")
+
+    qk_analysis = paired_analysis(results["dynamic"]["per_position_qk"], results["legacy"]["per_position_qk"])
+    qk_kind, qk_text = paired_verdict("dynamic", "pooled_qk_rel_error", qk_analysis)
+    print(f"dynamic vs legacy, pooled_qk_rel_error: {qk_text}")
+
+    # --- T-1971 fix round (D-SLM2825): the composed conjunction sentence.
+    # The predeclared step-3 criterion (D-SLM2787/D-SLM2788) is an AND: BOTH
+    # quantities must resolve better. Read from the verdict KIND (never
+    # re-derived from printed text), so this composition cannot drift from
+    # what was actually computed.
+    print()
+    if rms_kind == "RESOLVED_WORSE" or qk_kind == "RESOLVED_WORSE":
+        print("=== Predeclared step-3 conjunction (reduce Q-reconstruction error AND QK-score error): "
+              "NOT MET -- FAILED (at least one quantity resolved WORSE than legacy) ===")
+    elif rms_kind == "RESOLVED_BETTER" and qk_kind == "RESOLVED_BETTER":
+        print("=== Predeclared step-3 conjunction (reduce Q-reconstruction error AND QK-score error): "
+              "MET -- both quantities resolved better than legacy ===")
+    else:
+        print("=== Predeclared step-3 conjunction (reduce Q-reconstruction error AND QK-score error): "
+              "NOT MET -- one conjunct resolved, the other returned no directional evidence; the test "
+              "is INCOMPLETE, not passed and not failed. ===")
+
+    # --- T-1971 fix round (D-SLM2827/O3): the single-boundary floor
+    # observation, independent mechanistic corroboration the record did not
+    # previously carry.
+    print()
+    dyn_rms = results["dynamic"]["pooled_rms_error_steps"]
+    leg_rms = results["legacy"]["pooled_rms_error_steps"]
+    dyn_floor_pct = (ONE_BOUNDARY_FLOOR - dyn_rms) / ONE_BOUNDARY_FLOOR * 100.0
+    print(f"=== Single-boundary floor observation (mechanistic corroboration, not a statistical test) ===")
+    print(f"theoretical one-boundary RMS floor 1/sqrt(12) = {ONE_BOUNDARY_FLOOR:.6f}; "
+          f"theoretical two-boundary floor sqrt(2)/sqrt(12) = {TWO_BOUNDARY_FLOOR:.6f}")
+    print(f"dynamic pooled_rms_error_steps = {dyn_rms:.6f} -- {dyn_floor_pct:.2f}% below the "
+          f"one-boundary floor (consistent with exactly ONE int8 boundary, which this construction "
+          f"carries)")
+    print(f"legacy pooled_rms_error_steps  = {leg_rms:.6f} -- between the one-boundary "
+          f"({ONE_BOUNDARY_FLOOR:.4f}) and two-boundary ({TWO_BOUNDARY_FLOOR:.4f}) floors, consistent "
+          f"with two partially correlated quantizations")
+
     print()
     print("NOTE: this measures the boundary-removal mechanism at LAYER 0's own activation "
           "distribution, over 40 real, arm-independent, genuinely-rotated positions. A KILL "
-          "generalizes (the boundary's own cost is per-row arithmetic, layer-independent); a "
-          "POSITIVE does NOT generalize to layers >= 1 without the deeper per-layer-isolated "
-          "capture this round did not build (T-1691's teacher-forced parity pattern, if ever needed).")
+          "generalizes (the boundary's own cost is per-row arithmetic, layer-independent) -- this is "
+          "a decision heuristic, not a derived property (Poirot 62c5f15 confirmation §11/O1): a null "
+          "at one layer is strong evidence against a large general effect, not proof of none. A "
+          "POSITIVE does NOT generalize to layers >= 1 without the deeper per-layer-isolated capture "
+          "this round did not build (T-1691's teacher-forced parity pattern, if ever needed).")
 
 
 # --- Vitality 2/3 ------------------------------------------------------------
