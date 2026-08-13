@@ -1047,6 +1047,16 @@ struct OptionGOfflineKillSample {
 	int64_t site_constant_m = 0, site_constant_e = 0;
 	int32_t arm_mode = -1;   // engine-sourced, T-1968/D-SLM2796's own pattern: never a caller's claim
 	int64_t position = -1;
+	// T-1970/T-1968-C1-final-form (coordinator's own re-scoped remedy): kv_head
+	// 0's own REAL, already-landed K row at this (layer, position) -- for the
+	// QK-score-error deciding quantity the amended kill rule restores. K/V
+	// never funnel through Q's own toggle (a separate, untouched construction),
+	// and at LAYER 0 specifically K's own input is the raw token embedding
+	// (never touched by any layer's attention) -- so layer 0's own K row is
+	// arm-independent for the SAME reason the wide Q row is, making it valid
+	// to read from the legacy buffer alone. Only ever populated in the legacy
+	// buffer (mirrors `qacc_pre_rotation`'s own scope).
+	std::vector<int8_t> k_row_head0;
 	bool captured = false;
 };
 

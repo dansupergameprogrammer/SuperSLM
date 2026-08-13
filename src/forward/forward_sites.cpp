@@ -2432,6 +2432,29 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			           position);
 			g_option_g_dynamic_q_anchor[l].k_row_head0.assign(k_row0, k_row0 + head_dim);
 		}
+		// T-1970/T-1968-C1-final-form: kv_head 0's own real K row, per
+		// (layer, position), into the LEGACY offline-kill buffer only -- see
+		// forward_sites.h's own comment on this field for why layer 0's own
+		// K is arm-independent regardless of which buffer supplies it. Read
+		// from the SAME (layer, position) coordinate the QK-score metric's
+		// own real-at-that-cell K byte requirement demands (this site is
+		// AFTER the write-back loop above, same ordering discipline the
+		// pre-existing T-1966 capture already established).
+		if (OptionGOfflineKillCaptureEnabled()) {
+			const uint32_t max_positions = OptionGOfflineKillMaxPositions();
+			if (position >= 0 && static_cast<uint32_t>(position) < max_positions) {
+				const size_t idx =
+				    static_cast<size_t>(l) * max_positions + static_cast<size_t>(position);
+				if (idx < g_option_g_offline_kill_legacy.size() &&
+				    g_option_g_offline_kill_legacy[idx].k_row_head0.empty()) {
+					const int8_t* const k_row0_offline = KeyRow(workspace, l, context_cap,
+					                                            num_key_value_heads, head_dim,
+					                                            /*kv_head=*/0, position);
+					g_option_g_offline_kill_legacy[idx].k_row_head0.assign(k_row0_offline,
+					                                                       k_row0_offline + head_dim);
+				}
+			}
+		}
 
 		// Attention proper (§6.2 step 5). No named site for this composition
 		// exists anywhere in this tree; this is where it is first composed.

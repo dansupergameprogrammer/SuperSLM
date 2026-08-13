@@ -303,6 +303,14 @@ int main(int argc, char** argv) {
 	size_t dynamic_anchor_checked = 0, dynamic_anchor_matched = 0;
 	size_t legacy_anchor_total_mismatches = 0, dynamic_anchor_total_mismatches = 0;
 	size_t skipped_uncaptured = 0;
+	// T-1970/T-1968-C1-final-form (coordinator's own re-scoped remedy): the
+	// DECIDING POOL is layer 0, positions 1..40 -- the intersection of
+	// arm-independent (layer 0: embedding-fed input, no upstream Q
+	// influence) and genuinely rotated (position >= 1: non-identity RoPE).
+	// Tracked separately from the global 1148-cell grid, whose own
+	// out-of-pool mismatches are now an EXPECTED, explained fact (§24.3),
+	// not a refusing condition -- the pool's own 100% is.
+	size_t pool_cells = 0, pool_legacy_matched = 0, pool_dynamic_matched = 0, pool_non_identity = 0;
 
 	std::ofstream out(out_path);
 	if (!out) {
@@ -362,6 +370,14 @@ int main(int argc, char** argv) {
 					dynamic_anchor_total_mismatches += result.dynamic_anchor_mismatches;
 				}
 			}
+			// Deciding-pool admissibility tally: layer 0, positions 1..40 --
+			// see this function's own comment above `pool_cells`.
+			if (l == 0 && p >= 1 && p <= 40) {
+				++pool_cells;
+				if (result.legacy_anchor_match) ++pool_legacy_matched;
+				if (result.dynamic_anchor_match) ++pool_dynamic_matched;
+				if (!result.is_identity_rotation) ++pool_non_identity;
+			}
 
 			if (!first_cell) out << ",\n";
 			first_cell = false;
@@ -395,37 +411,69 @@ int main(int argc, char** argv) {
 				out << static_cast<int>(result.dynamic_codes[i]);
 			}
 			out << "], \"dynamic_scale_m\": " << result.dynamic_scale.m
-			    << ", \"dynamic_scale_e\": " << result.dynamic_scale.e << "}";
+			    << ", \"dynamic_scale_e\": " << result.dynamic_scale.e << ", \"k_row_head0\": [";
+			for (size_t i = 0; i < leg.k_row_head0.size(); ++i) {
+				if (i) out << ",";
+				out << static_cast<int>(leg.k_row_head0[i]);
+			}
+			out << "]}";
 		}
 	}
 	out << "\n  ]\n}\n";
 	out.close();
 
-	std::printf("\n=== Anchor counts (executed, bit-exact) ===\n");
+	std::printf("\n=== Anchor counts, GLOBAL grid (executed, bit-exact; the coordinator's own T-1970 "
+	            "enumeration, re-confirmed) ===\n");
 	std::printf("cells with both engine runs captured: %zu (skipped, uncaptured: %zu)\n", total_cells,
 	            skipped_uncaptured);
 	std::printf("legacy anchor: %zu/%zu cells bit-exact vs engine q_codes (total element mismatches "
 	            "across failing cells: %zu)\n",
 	            legacy_anchor_matched, legacy_anchor_checked, legacy_anchor_total_mismatches);
 	std::printf("dynamic anchor: %zu/%zu cells bit-exact vs engine q_rot (total element mismatches "
-	            "across failing cells: %zu)\n",
+	            "across failing cells: %zu) -- EXPECTED to be well short of 100%%: only {layer 0, any "
+	            "position} union {any layer, position 0} is arm-independent (D-SLM2809/2810); this is "
+	            "no longer this tool's own refusing condition, the DECIDING POOL below is.\n",
 	            dynamic_anchor_matched, dynamic_anchor_checked, dynamic_anchor_total_mismatches);
 
-	if (legacy_anchor_checked == 0 || legacy_anchor_matched != legacy_anchor_checked) {
+	std::printf("\n=== Deciding-pool admissibility, layer 0 positions 1..40 (T-1968-C1-final-form) "
+	            "===\n");
+	std::printf("pool cells: %zu (expected 40)\n", pool_cells);
+	std::printf("pool legacy anchor bit-exact: %zu/%zu\n", pool_legacy_matched, pool_cells);
+	std::printf("pool dynamic anchor bit-exact: %zu/%zu\n", pool_dynamic_matched, pool_cells);
+	std::printf("pool non-identity rotation: %zu/%zu\n", pool_non_identity, pool_cells);
+
+	if (pool_cells != 40) {
 		std::fprintf(stderr,
-		             "FAILED: legacy anchor did not reach 100%% bit-exact (%zu/%zu) -- the offline "
-		             "reimplementation cannot be trusted; refusing (this is the C1 class again)\n",
-		             legacy_anchor_matched, legacy_anchor_checked);
+		             "FAILED: deciding pool has %zu cells, expected exactly 40 (layer 0, positions "
+		             "1..40) -- refusing\n",
+		             pool_cells);
 		return 1;
 	}
-	if (dynamic_anchor_checked == 0 || dynamic_anchor_matched != dynamic_anchor_checked) {
+	if (pool_legacy_matched != pool_cells) {
 		std::fprintf(stderr,
-		             "FAILED: dynamic anchor did not reach 100%% bit-exact (%zu/%zu) -- the offline "
-		             "reimplementation cannot be trusted; refusing (this is the C1 class again)\n",
-		             dynamic_anchor_matched, dynamic_anchor_checked);
+		             "FAILED: deciding pool's own legacy anchor is not 100%% bit-exact (%zu/%zu) -- "
+		             "the offline reimplementation cannot be trusted on this pool; refusing (this is "
+		             "the C1 class again)\n",
+		             pool_legacy_matched, pool_cells);
 		return 1;
 	}
-	std::printf("\nBOTH anchors 100%% bit-exact -- wrote %zu cells to \"%s\"\n", total_cells,
-	            out_path.c_str());
+	if (pool_dynamic_matched != pool_cells) {
+		std::fprintf(stderr,
+		             "FAILED: deciding pool's own dynamic anchor is not 100%% bit-exact (%zu/%zu) -- "
+		             "the offline reimplementation cannot be trusted on this pool; refusing (this is "
+		             "the C1 class again)\n",
+		             pool_dynamic_matched, pool_cells);
+		return 1;
+	}
+	if (pool_non_identity != pool_cells) {
+		std::fprintf(stderr,
+		             "FAILED: deciding pool contains %zu/%zu cells with non-identity rotation, "
+		             "expected all 40 -- refusing (a position-0-shaped cell has leaked into the pool)\n",
+		             pool_non_identity, pool_cells);
+		return 1;
+	}
+	std::printf("\nDECIDING POOL ADMISSIBLE: 40/40 cells pass both anchor gates AND non-identity "
+	            "rotation -- wrote %zu total cells (full grid) to \"%s\"\n",
+	            total_cells, out_path.c_str());
 	return 0;
 }
