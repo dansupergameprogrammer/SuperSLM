@@ -1852,13 +1852,27 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			// (which could itself diverge from what the real construction
 			// did). Guarded so this copy (hidden_size int64s, real but small)
 			// never happens in the ordinary case.
+			// T-1968 fix round (Critical 1/D-SLM2795): capture restricted to
+			// `position == 0` -- see this struct's own comment
+			// (forward_sites.h, OptionGDynamicQAnchorSample) for why this is
+			// the one position provably arm-independent by construction.
+			// `!g_option_g_dynamic_q_anchor[l].captured` additionally makes
+			// this write-once: even if capture mode somehow re-entered this
+			// layer at position 0 twice in one process (it does not, in
+			// this tool's own single-decode-per-process usage), the first
+			// write wins rather than the last.
 			const bool anchor_capture = OptionGDynamicQAnchorCaptureEnabled();
-			if (anchor_capture && l < g_option_g_dynamic_q_anchor.size()) {
+			const bool anchor_capture_here = anchor_capture && position == 0 &&
+			                                  l < g_option_g_dynamic_q_anchor.size() &&
+			                                  !g_option_g_dynamic_q_anchor[l].captured;
+			if (anchor_capture_here) {
 				g_option_g_dynamic_q_anchor[l].wide_rotated.assign(qacc.begin(), qacc.end());
 				g_option_g_dynamic_q_anchor[l].normed_scale_m = normed_scale.m;
 				g_option_g_dynamic_q_anchor[l].normed_scale_e = normed_scale.e;
 				g_option_g_dynamic_q_anchor[l].site_constant_m = lw.q_site_constant.m;
 				g_option_g_dynamic_q_anchor[l].site_constant_e = lw.q_site_constant.e;
+				g_option_g_dynamic_q_anchor[l].arm_mode =
+				    static_cast<int32_t>(option_g_fused_q_mode);
 			}
 			const CarriedScale dynamic_incoming[1] = {normed_scale};
 			const ChainResult dynamic_result = RequantChainChecked(
@@ -1868,11 +1882,15 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			if (dynamic_result.status != SslmForwardStatus::Ok) return dynamic_result.status;
 			// Captured AFTER the call succeeds: the codes and scale the
 			// certified call actually produced, matched against the SAME
-			// wide row captured above.
-			if (anchor_capture && l < g_option_g_dynamic_q_anchor.size()) {
+			// wide row captured above. `captured` is set here, at the LAST
+			// write of this layer's own position-0 record, so a concurrent
+			// read (there is none in this tool's own usage) never observes
+			// a partially-written sample.
+			if (anchor_capture_here) {
 				g_option_g_dynamic_q_anchor[l].codes.assign(q_rot.begin(), q_rot.begin() + hidden_size);
 				g_option_g_dynamic_q_anchor[l].q_scale_m = q_scale.m;
 				g_option_g_dynamic_q_anchor[l].q_scale_e = q_scale.e;
+				g_option_g_dynamic_q_anchor[l].captured = true;
 			}
 		} else {
 			st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
@@ -2073,11 +2091,21 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// dump, comparable directly by the Python-side comparator without
 		// any per-arm special-casing. wide_rotated stays empty here -- only
 		// the dynamic-fused branch's own earlier capture (above) populates
-		// it, since only that construction computes the wide, pre-narrowing
-		// target the comparator uses as its own canonical reference for all
-		// three arms (the target is arm-independent: the same qacc, rotated
-		// the same way, regardless of which arm lands it).
-		if (OptionGDynamicQAnchorCaptureEnabled() && l < g_option_g_dynamic_q_anchor.size()) {
+		// it.
+		//
+		// T-1968 fix round (Critical 1/D-SLM2795): restricted to
+		// `position == 0` and write-once via `!captured`, for the SAME
+		// reason as the dynamic-fused branch's own capture above -- see
+		// `OptionGDynamicQAnchorSample`'s own comment (forward_sites.h).
+		// For the dynamic-fused arm, `captured` is already `true` by the
+		// time control reaches here (set at the branch's own second write,
+		// above), so this site correctly no-ops for that arm rather than
+		// redundantly overwriting identical values; for legacy and
+		// static-fused, THIS is their only capture point, and `arm_mode`
+		// is the SAME engine-sourced readback the dynamic branch's own
+		// capture writes.
+		if (OptionGDynamicQAnchorCaptureEnabled() && position == 0 &&
+		    l < g_option_g_dynamic_q_anchor.size() && !g_option_g_dynamic_q_anchor[l].captured) {
 			g_option_g_dynamic_q_anchor[l].codes.assign(q_rot.begin(), q_rot.begin() + hidden_size);
 			g_option_g_dynamic_q_anchor[l].q_scale_m = q_scale.m;
 			g_option_g_dynamic_q_anchor[l].q_scale_e = q_scale.e;
@@ -2085,6 +2113,8 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			g_option_g_dynamic_q_anchor[l].normed_scale_e = normed_scale.e;
 			g_option_g_dynamic_q_anchor[l].site_constant_m = lw.q_site_constant.m;
 			g_option_g_dynamic_q_anchor[l].site_constant_e = lw.q_site_constant.e;
+			g_option_g_dynamic_q_anchor[l].arm_mode = static_cast<int32_t>(option_g_fused_q_mode);
+			g_option_g_dynamic_q_anchor[l].captured = true;
 		}
 		// S3.7 (§11 S3.7 "The mechanism", the RoPE write-back correction): each
 		// head's row is written back individually, through `MutableKeyRow` at
@@ -2119,7 +2149,17 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// touch) produced them. Capturing any earlier (e.g. at the Q
 		// capture site above) would read legacy K's own STALE,
 		// pre-write-back value for this position.
-		if (OptionGDynamicQAnchorCaptureEnabled() && l < g_option_g_dynamic_q_anchor.size()) {
+		//
+		// T-1968 fix round (Critical 1/D-SLM2795): restricted to
+		// `position == 0`, matching the Q-side capture's own restriction --
+		// K and Q must be read from the SAME (layer, position) for the
+		// QK-score metric to compare the right pair. `k_row_head0` has no
+		// own write-once guard (it is not read to decide whether Q's own
+		// capture happened), but is written only when `position == 0`, so
+		// it can never hold a later position's own K row once the Q side
+		// has already latched position 0.
+		if (OptionGDynamicQAnchorCaptureEnabled() && position == 0 &&
+		    l < g_option_g_dynamic_q_anchor.size()) {
 			const int8_t* const k_row0 =
 			    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, /*kv_head=*/0,
 			           position);

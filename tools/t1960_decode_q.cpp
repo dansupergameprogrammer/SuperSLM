@@ -243,8 +243,23 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
+	// T-1968 fix round (Poirot c131eab review, Significant 2/D-SLM2798):
+	// SSLM_OPTION_G_FUSED_Q_LANDING became tristate at T-1966 (unset/"0" =
+	// legacy, "1" = static-fused, "dynamic" = dynamic-fused), but this
+	// driver's own readback still parsed it as a boolean -- printing
+	// "read-back: 1" for BOTH fused constructions, indistinguishable in a
+	// capture log even though the engine ran two different constructions.
+	// Fixed to the tristate parse `tools/t1966_arm_capture.cpp:85-92`
+	// already gets right (the model the review names): the arm NAME is
+	// printed, plus the raw env string, so a log records what was actually
+	// set, not just this driver's own interpretation of it.
 	const char* q_toggle_env = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
-	const bool q_toggle_on = q_toggle_env && q_toggle_env[0] != '\0' && q_toggle_env[0] != '0';
+	const std::string q_toggle_arm_name =
+	    (q_toggle_env == nullptr || q_toggle_env[0] == '\0' ||
+	     (q_toggle_env[0] == '0' && q_toggle_env[1] == '\0'))
+	        ? "legacy"
+	    : (std::string(q_toggle_env) == "dynamic") ? "dynamic-fused"
+	                                                : "static-fused";
 	std::printf("prompt_tokens (%zu):", prompt_tokens.size());
 	for (int32_t t : prompt_tokens) std::printf(" %d", t);
 	std::printf("\n");
@@ -253,7 +268,8 @@ int main(int argc, char** argv) {
 	std::printf("\n");
 	std::printf("stop_reason: %d\n", static_cast<int>(stop_reason));
 	std::printf("q_landing_injected: %u/%u\n", layers_injected, num_hidden_layers);
-	std::printf("SSLM_OPTION_G_FUSED_Q_LANDING(read-back): %d\n", q_toggle_on ? 1 : 0);
+	std::printf("SSLM_OPTION_G_FUSED_Q_LANDING(read-back): %s (raw=\"%s\")\n",
+	            q_toggle_arm_name.c_str(), q_toggle_env ? q_toggle_env : "(unset)");
 	std::printf("kv_saturation_count: %llu\n",
 	            static_cast<unsigned long long>(seq.kv_saturation_count));
 	return 0;

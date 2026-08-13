@@ -944,9 +944,44 @@ std::vector<OptionGFusedQCalibrationSample> OptionGFusedQCalibrationDump();
 // records what the real construction actually computed. Reused, not
 // duplicated: capturing inside the real call site means the comparison is
 // against what the CERTIFIED code path actually produced, never a
-// reimplementation that could itself diverge. Overwritten each call (last
-// decode call's own values); `OptionGDynamicQAnchorReset` sizes the
-// per-layer buffer, `OptionGDynamicQAnchorDump` reads it back.
+// reimplementation that could itself diverge.
+//
+// T-1968 fix round (Poirot c131eab review, Critical 1/D-SLM2795):
+// PREVIOUSLY overwritten on every call (the LAST decode step's own
+// values) -- this was the defect. The three arms' own greedy decodes
+// diverge after the prompt (different generated tokens), so "the last
+// step" is a DIFFERENT token, and therefore a DIFFERENT, arm-dependent
+// residual stream, for each arm; grading all three against one arm's own
+// last-step capture measured trajectory divergence, not quantization
+// error. FIXED: capture is now guarded to `position == 0` ONLY, and never
+// overwritten afterward (`RunLayerLoopImpl` skips the write once already
+// populated at position 0, for every subsequent position of the same
+// decode). At `position == 0` this is provably arm-independent: the
+// attention softmax has exactly one element (`width == context_length +
+// 1 == 1`), so it is 1.0 regardless of what Q's own value was -- Q cannot
+// influence the attention OUTPUT at this position, and since nothing
+// downstream of attention (the MLP half, the residual write) reads Q
+// either, EVERY layer's own residual stream at position 0 is identical
+// across all three arms, by induction from layer 0 (whose own input is
+// the prompt's first token embedding, arm-independent by construction,
+// EmbedEntry never depending on Q's own arm). This is verified BY
+// EXECUTION, not assumed: `tools/t1966_compare_arms.py`'s own
+// `assert_arm_identity_at_position0` reads `normed_scale`/`k_row_head0`
+// directly from the three captured dumps and REFUSES (raises, non-zero
+// exit) if they are not bit-identical at every layer, before any score is
+// computed from them -- a Python-side check over the C++ side's own real
+// captured data, not a second, independent computation.
+//
+// T-1968 fix round (Critical 2/D-SLM2796): `arm_mode` is a TRUE
+// engine-sourced readback -- set from `option_g_fused_q_mode`, the SAME
+// local `RunLayerLoopImpl` itself computed via `OptionGFusedQModeFromEnv()`
+// for THIS call, captured at the SAME point every other field is. A
+// calling tool's own claim about which arm it asked for is not evidence
+// that the engine agreed; this field is the engine's own answer, and the
+// harness reads it instead of trusting a caller-supplied label.
+//
+// `OptionGDynamicQAnchorReset` sizes the per-layer buffer,
+// `OptionGDynamicQAnchorDump` reads it back.
 struct OptionGDynamicQAnchorSample {
 	std::vector<int64_t> wide_rotated;  // hidden_size elements, RequantChainChecked's own input
 	std::vector<int8_t> codes;          // hidden_size elements, RequantChainChecked's own out_codes
@@ -962,6 +997,13 @@ struct OptionGDynamicQAnchorSample {
 	// uses, so a QK-score comparison uses the identical K bytes the real
 	// forward pass would score against.
 	std::vector<int8_t> k_row_head0;
+	// T-1968: the engine's own readback of which Q construction ran this
+	// call -- see the struct's own comment above. 0=legacy, 1=static-fused,
+	// 2=dynamic-fused, -1=never written (this layer/position was never
+	// reached with capture enabled).
+	int32_t arm_mode = -1;
+	bool captured = false;  // true once position==0's own write has landed; guards against a
+	                        // later position silently overwriting it.
 };
 void OptionGDynamicQAnchorReset(uint32_t num_hidden_layers);
 std::vector<OptionGDynamicQAnchorSample> OptionGDynamicQAnchorDump();

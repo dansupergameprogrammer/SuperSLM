@@ -494,13 +494,23 @@ int main(int argc, char** argv) {
 	const size_t kv_bytes = static_cast<size_t>(num_hidden_layers) * static_cast<size_t>(context_cap) *
 	                        num_kv_heads * model_view.config.head_dim * 2;
 
+	// T-1968 fix round (Poirot c131eab review, Significant 2/D-SLM2798):
+	// same tristate-readback fix as t1960_decode_q.cpp -- see that file's
+	// own comment at this exact edit for the full rationale.
 	const char* q_toggle_env = std::getenv("SSLM_OPTION_G_FUSED_Q_LANDING");
-	const bool q_toggle_on = q_toggle_env && q_toggle_env[0] != '\0' && q_toggle_env[0] != '0';
+	const std::string q_toggle_arm_name =
+	    (q_toggle_env == nullptr || q_toggle_env[0] == '\0' ||
+	     (q_toggle_env[0] == '0' && q_toggle_env[1] == '\0'))
+	        ? "legacy"
+	    : (std::string(q_toggle_env) == "dynamic") ? "dynamic-fused"
+	                                                : "static-fused";
 	std::printf(
-	    "model loaded once: %s option_g_fused_k_landing=%d SSLM_OPTION_G_FUSED_Q_LANDING(read-back)=%d "
+	    "model loaded once: %s option_g_fused_k_landing=%d "
+	    "SSLM_OPTION_G_FUSED_Q_LANDING(read-back)=%s (raw=\"%s\") "
 	    "q_landing_injected=%u/%u hidden_size=%zu layers=%u documents=%zu\n",
-	    model_path.c_str(), model_view.option_g_fused_k_landing ? 1 : 0, q_toggle_on ? 1 : 0, layers_injected,
-	    num_hidden_layers, hidden_size, num_hidden_layers, docs.size());
+	    model_path.c_str(), model_view.option_g_fused_k_landing ? 1 : 0, q_toggle_arm_name.c_str(),
+	    q_toggle_env ? q_toggle_env : "(unset)", layers_injected, num_hidden_layers, hidden_size,
+	    num_hidden_layers, docs.size());
 
 	size_t n_ok = 0, n_failed = 0, domain_gate_hits_k = 0, domain_gate_hits_q = 0;
 	for (const Doc& d : docs) {

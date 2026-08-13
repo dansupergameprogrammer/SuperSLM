@@ -236,13 +236,76 @@ int main(int argc, char** argv) {
 
 	const std::vector<OptionGDynamicQAnchorSample> samples = OptionGDynamicQAnchorDump();
 
+	// T-1968 fix round (Critical 2/D-SLM2796): the JSON's own "arm" identity
+	// is no longer the calling process's own claim (`arm_name`, derived from
+	// the env var THIS process set) -- it is read back from the ENGINE's own
+	// `arm_mode` field, captured inside `RunLayerLoopImpl` itself at
+	// position 0 for every layer. Refuses (does not write a dump at all) if
+	// any captured layer disagrees with the engine's own layer-0 answer, or
+	// if the engine's own answer disagrees with what this process asked for
+	// -- a real mismatch here means the toggle did not take effect the way
+	// the caller believes, which is exactly the class of defect the
+	// reviewer's own relabelling attack exploited when arm identity was a
+	// caller-supplied string nothing checked against the engine.
+	int32_t engine_arm_mode = -2;  // -2: "no captured layer found" (distinct from -1, "never written")
+	bool engine_arm_mode_consistent = true;
+	for (const OptionGDynamicQAnchorSample& s : samples) {
+		if (!s.captured) continue;
+		if (engine_arm_mode == -2) {
+			engine_arm_mode = s.arm_mode;
+		} else if (s.arm_mode != engine_arm_mode) {
+			engine_arm_mode_consistent = false;
+		}
+	}
+	if (!engine_arm_mode_consistent) {
+		std::fprintf(stderr, "FAILED: engine's own arm_mode disagrees across captured layers -- "
+		                     "refusing to write a dump with an inconsistent arm identity\n");
+		return 1;
+	}
+	if (engine_arm_mode == -2) {
+		std::fprintf(stderr, "FAILED: no layer was captured at position 0 -- anchor capture did "
+		                     "not run (env var not set, or position 0 was never reached)\n");
+		return 1;
+	}
+	const char* const kArmModeNames[3] = {"legacy", "static-fused", "dynamic-fused"};
+	if (engine_arm_mode < 0 || engine_arm_mode > 2) {
+		std::fprintf(stderr, "FAILED: engine's own arm_mode=%d is out of the known [0,2] range\n",
+		             engine_arm_mode);
+		return 1;
+	}
+	const std::string engine_arm_name = kArmModeNames[engine_arm_mode];
+	if (engine_arm_name != arm_name) {
+		std::fprintf(stderr,
+		             "FAILED: this process asked for arm=\"%s\" (SSLM_OPTION_G_FUSED_Q_LANDING=\"%s\") "
+		             "but the ENGINE's own readback reports arm=\"%s\" -- refusing to write a "
+		             "mislabelled dump\n",
+		             arm_name.c_str(), arm_env ? arm_env : "(unset)", engine_arm_name.c_str());
+		return 1;
+	}
+	std::printf("engine's own arm readback (arm_mode, captured at position 0, consistent across "
+	            "%zu layers): %s\n",
+	            samples.size(), engine_arm_name.c_str());
+
 	std::ofstream out(out_path);
 	if (!out) {
 		std::fprintf(stderr, "FAILED: could not open \"%s\" for writing\n", out_path.c_str());
 		return 1;
 	}
-	out << "{\n  \"arm\": \"" << arm_name << "\",\n  \"hidden_size\": " << hidden_size
-	    << ",\n  \"num_hidden_layers\": " << num_hidden_layers << ",\n  \"layers\": [\n";
+	// "arm" is the engine's own readback, not the caller's claim (both are
+	// identical here, since the check above just refused otherwise -- but
+	// what is WRITTEN is the verified value). "decode_tokens" is the
+	// reviewer's own named remedy for Critical 2: the ACTUAL output of the
+	// real 16-token decode this process just ran, so a vitality check can
+	// compare the dump's own recorded tokens against a pinned baseline,
+	// rather than a hardcoded literal compared to itself.
+	out << "{\n  \"arm\": \"" << engine_arm_name << "\",\n  \"arm_mode\": " << engine_arm_mode
+	    << ",\n  \"hidden_size\": " << hidden_size
+	    << ",\n  \"num_hidden_layers\": " << num_hidden_layers << ",\n  \"decode_tokens\": [";
+	for (size_t i = 0; i < out_tokens_produced; ++i) {
+		if (i) out << ",";
+		out << out_tokens[i];
+	}
+	out << "],\n  \"layers\": [\n";
 	for (uint32_t l = 0; l < samples.size(); ++l) {
 		const OptionGDynamicQAnchorSample& s = samples[l];
 		out << "    {\"layer\": " << l << ", \"codes\": [";
@@ -268,6 +331,7 @@ int main(int argc, char** argv) {
 	}
 	out << "  ]\n}\n";
 	out.close();
-	std::printf("wrote %zu layer records to \"%s\"\n", samples.size(), out_path.c_str());
+	std::printf("wrote %zu layer records to \"%s\" (position 0 only, per T-1968's own C1 fix)\n",
+	            samples.size(), out_path.c_str());
 	return 0;
 }
