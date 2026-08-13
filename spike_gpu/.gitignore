@@ -1,0 +1,7 @@
+# Disposable build artifacts -- the source is the durable record (matches
+# Claude/Laplace/gpu-determinism/.gitignore's own convention).
+*.exe
+*.obj
+*.pdb
+*.cso
+*.ilk
