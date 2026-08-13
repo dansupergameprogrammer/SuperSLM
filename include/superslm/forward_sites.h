@@ -1008,6 +1008,111 @@ struct OptionGDynamicQAnchorSample {
 void OptionGDynamicQAnchorReset(uint32_t num_hidden_layers);
 std::vector<OptionGDynamicQAnchorSample> OptionGDynamicQAnchorDump();
 
+// T-1970 fix round (Brunel, disposable, never merges -- the coordinator's
+// own C1-v2 critique of T-1968's position-0 restriction above: RoPE's
+// rotation angle at position 0 is the IDENTITY rotation, cos=1/sin=0, for
+// EVERY pair simultaneously -- so at that one captured position legacy
+// (quantize -> rotate-identity -> clamp) and dynamic-fused
+// (rotate-identity -> quantize) are THE SAME FUNCTION. T-1968's own C1 fix
+// bought arm-independence at the price of a deciding comparison that
+// cannot differ BY CONSTRUCTION, not by measurement -- its own reported
+// legacy==dynamic-fused equality (delta exactly 0.0) is proof of this, not
+// an unplanned confirmation. Remedy (the "same-row, three-treatment
+// offline design"): the wide, pre-rotation Q accumulator is IDENTICAL
+// across all three arms by construction -- the GEMM/fold/bias steps that
+// produce it never inspect `option_g_fused_q_mode` -- so it is captured
+// ONCE, per (layer, position), from a SINGLE NAMED engine run (the legacy
+// arm's own prefill over a real multi-token prompt), together with that
+// SAME run's own REAL landed q_codes (for a bit-exact anchor). A SECOND,
+// independent run (dynamic-fused arm, same prompt) supplies its own REAL
+// landed q_rot for the second anchor. Both buffers below are populated
+// independently (never overwriting each other -- there is no "captured
+// once, whichever arm gets there first" write-once race here, unlike
+// `OptionGDynamicQAnchorSample` above, because the two arms populate two
+// SEPARATE buffers by design, merged only by the offline tool that reads
+// both dumps back).
+struct OptionGOfflineKillSample {
+	std::vector<int64_t> qacc_pre_rotation;  // hidden_size, wide, BEFORE any rotation of any kind --
+	                                          // only ever populated by a legacy-arm run (the one
+	                                          // named capture source); left empty by a dynamic-fused
+	                                          // run, which has no need of it.
+	std::vector<int8_t> engine_codes;        // hidden_size, THIS run's own REAL landed output:
+	                                          // legacy run -> ProjectAndFunnel's pre-rotation
+	                                          // q_codes; dynamic-fused run -> RequantChainChecked's
+	                                          // post-rotation q_rot. static-fused never populates
+	                                          // this buffer at all -- no anchor is named for it
+	                                          // (T-1954/T-1959's own gates already cover it).
+	int64_t q_scale_m = 0, q_scale_e = 0;
+	int64_t normed_scale_m = 0, normed_scale_e = 0;
+	int64_t site_constant_m = 0, site_constant_e = 0;
+	int32_t arm_mode = -1;   // engine-sourced, T-1968/D-SLM2796's own pattern: never a caller's claim
+	int64_t position = -1;
+	bool captured = false;
+};
+
+// Sizes BOTH the legacy and dynamic-fused buffers to
+// `num_hidden_layers * max_positions` flat slots (index
+// `layer * max_positions + position`), independently reset -- resetting
+// once before EITHER run covers both, since they are separate memory. A
+// position >= `max_positions` is simply never captured (the caller sizes
+// `max_positions` to at least the prompt's own token count).
+void OptionGOfflineKillReset(uint32_t num_hidden_layers, uint32_t max_positions);
+std::vector<OptionGOfflineKillSample> OptionGOfflineKillDumpLegacy();
+std::vector<OptionGOfflineKillSample> OptionGOfflineKillDumpDynamic();
+uint32_t OptionGOfflineKillMaxPositions();
+// True when `SSLM_OPTION_G_OFFLINE_KILL_CAPTURE` is set -- a FOURTH,
+// independent env var from T-1966's own `SSLM_OPTION_G_FUSED_Q_ANCHOR_CAPTURE`
+// (that one still gates `OptionGDynamicQAnchorSample` above, untouched by
+// this round). Off by default; zero extra work in the ordinary case,
+// matching every prior round's own toggle-off byte-identity discipline.
+bool OptionGOfflineKillCaptureEnabled();
+
+// The offline three-treatment application itself: takes the ARM-INDEPENDENT
+// wide pre-rotation row captured above and reapplies all three landing
+// constructions to it, EXCLUSIVELY through this file's own already-shipped,
+// certified primitives (RequantChainChecked, RopeApplySite, RopeApplyPairWide,
+// LandingRescale, ClampRopeCode) composed in three different orders -- never
+// a reimplementation of their arithmetic, so a divergence between this
+// function's own output and the real engine's output can only mean the
+// COMPOSITION differs, not that some independently-authored formula has its
+// own bug. `engine_q_codes_pre_rotation`/`engine_q_rot_dynamic` are the
+// anchor targets (pass nullptr to skip either check, e.g. when the caller
+// has not captured that run for this position). `is_identity_rotation` is
+// verified from the REAL resolved RoPE table for `position` -- every pair's
+// own (cos_q30, sin_q30) checked against the identity value (2^30, 0) --
+// never assumed from `position == 0` as a bare label.
+struct OptionGOfflineTreatmentResult {
+	std::vector<int64_t> target_wide_rotated;  // hidden_size, the exact wide post-RoPE row, NEVER
+	                                            // narrowed -- the arm-independent grading target.
+	std::vector<int8_t> legacy_codes;          // treatment 1's own final output: quantize -> rotate
+	                                            // -> clamp
+	CarriedScale legacy_scale{};
+	bool legacy_anchor_match = false;          // offline pre-rotation quantize vs the engine's own
+	                                            // real q_codes, bit-exact, when an anchor was supplied
+	size_t legacy_anchor_mismatches = 0;
+	bool legacy_anchor_checked = false;
+	std::vector<int8_t> static_codes;          // treatment 2's own final output: wide rotate ->
+	                                            // static landing -> clamp
+	CarriedScale static_scale{};
+	std::vector<int8_t> dynamic_codes;         // treatment 3's own final output: wide rotate ->
+	                                            // RequantChainChecked
+	CarriedScale dynamic_scale{};
+	bool dynamic_anchor_match = false;         // offline dynamic-fused vs the engine's own real
+	                                            // q_rot, bit-exact, when an anchor was supplied
+	size_t dynamic_anchor_mismatches = 0;
+	bool dynamic_anchor_checked = false;
+	bool is_identity_rotation = false;
+	SslmForwardStatus status = SslmForwardStatus::Ok;
+};
+
+OptionGOfflineTreatmentResult OptionGApplyOfflineThreeTreatments(
+    const int64_t* qacc_pre_rotation, size_t hidden_size, size_t head_dim, size_t num_heads,
+    int64_t position, int64_t context_cap, const SslmTensorManifest& rope_tables,
+    CarriedScale normed_scale, CarriedScale site_constant, int64_t q_landing_m_out,
+    int64_t q_landing_e_out, int64_t q_landing_e_t, int64_t q_landing_r_t,
+    const int8_t* engine_q_codes_pre_rotation, const int8_t* engine_q_rot_dynamic,
+    std::string_view site, size_t token_index, SslmTraceHookState* trace_hook_state);
+
 // S3.7 (§9.4, §11 S3.7 "The K/V store's real layout, and the accessor"): the
 // K/V store is per-(layer, head)-major, position-minor --
 // `offset(kv_head, position, d) = kv_head * context_cap * head_dim +

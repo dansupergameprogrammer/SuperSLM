@@ -1217,6 +1217,187 @@ std::vector<OptionGDynamicQAnchorSample> OptionGDynamicQAnchorDump() {
 	return g_option_g_dynamic_q_anchor;
 }
 
+// T-1970 fix round: a FOURTH, independent env var -- see forward_sites.h's
+// own comment on OptionGOfflineKillSample for what this mode does and why
+// T-1968's own position-0-only capture needed replacing. Read fresh per
+// call, matching every other toggle in this file.
+bool OptionGOfflineKillCaptureEnabled() {
+	const char* v = std::getenv("SSLM_OPTION_G_OFFLINE_KILL_CAPTURE");
+	return v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0');
+}
+
+namespace {
+std::vector<OptionGOfflineKillSample> g_option_g_offline_kill_legacy;
+std::vector<OptionGOfflineKillSample> g_option_g_offline_kill_dynamic;
+uint32_t g_option_g_offline_kill_max_positions = 0;
+}  // namespace
+
+void OptionGOfflineKillReset(uint32_t num_hidden_layers, uint32_t max_positions) {
+	const size_t total = static_cast<size_t>(num_hidden_layers) * static_cast<size_t>(max_positions);
+	g_option_g_offline_kill_legacy.assign(total, OptionGOfflineKillSample{});
+	g_option_g_offline_kill_dynamic.assign(total, OptionGOfflineKillSample{});
+	g_option_g_offline_kill_max_positions = max_positions;
+}
+
+std::vector<OptionGOfflineKillSample> OptionGOfflineKillDumpLegacy() {
+	return g_option_g_offline_kill_legacy;
+}
+
+std::vector<OptionGOfflineKillSample> OptionGOfflineKillDumpDynamic() {
+	return g_option_g_offline_kill_dynamic;
+}
+
+uint32_t OptionGOfflineKillMaxPositions() { return g_option_g_offline_kill_max_positions; }
+
+// T-1970 fix round: the offline three-treatment application. Composes
+// ONLY already-shipped, certified primitives -- RequantChainChecked (twice,
+// pre- and post-rotation), RopeApplySite (narrow, per head), RopeApplyPairWide
+// (wide, per pair, shared by the target/static/dynamic computations so the
+// rotation itself is computed once), LandingRescale+ClampRopeCode (the
+// static treatment's own landing). See forward_sites.h's own comment on
+// this function for why a divergence here can only be a COMPOSITION defect,
+// never a reimplemented-arithmetic one.
+OptionGOfflineTreatmentResult OptionGApplyOfflineThreeTreatments(
+    const int64_t* qacc_pre_rotation, size_t hidden_size, size_t head_dim, size_t num_heads,
+    int64_t position, int64_t context_cap, const SslmTensorManifest& rope_tables,
+    CarriedScale normed_scale, CarriedScale site_constant, int64_t q_landing_m_out,
+    int64_t q_landing_e_out, int64_t q_landing_e_t, int64_t q_landing_r_t,
+    const int8_t* engine_q_codes_pre_rotation, const int8_t* engine_q_rot_dynamic,
+    std::string_view site, size_t token_index, SslmTraceHookState* trace_hook_state) {
+	OptionGOfflineTreatmentResult result;
+
+	// --- Treatment 1, step A: legacy's own per-token dynamic quantize,
+	// offline -- the SAME certified call ProjectAndFunnel makes internally,
+	// on the SAME wide row, incoming, and site_constant. When the caller
+	// supplied a legacy-arm run's own real q_codes, this step's own output
+	// is the anchor: if this call cannot reproduce that real output
+	// bit-exact, the offline reimplementation is unsound (the C1 class
+	// again) and every treatment built on it downstream is not to be
+	// trusted regardless of what it later reports.
+	std::vector<int8_t> legacy_pre_rotation(hidden_size);
+	CarriedScale legacy_pre_scale{};
+	const CarriedScale legacy_incoming[1] = {normed_scale};
+	const ChainResult legacy_chain = RequantChainChecked(
+	    qacc_pre_rotation, hidden_size, std::span<const CarriedScale>{legacy_incoming, 1},
+	    site_constant, legacy_pre_rotation.data(), &legacy_pre_scale, site, token_index,
+	    trace_hook_state);
+	if (legacy_chain.status != SslmForwardStatus::Ok) {
+		result.status = legacy_chain.status;
+		return result;
+	}
+	if (engine_q_codes_pre_rotation != nullptr) {
+		result.legacy_anchor_checked = true;
+		size_t mismatches = 0;
+		for (size_t i = 0; i < hidden_size; ++i) {
+			if (legacy_pre_rotation[i] != engine_q_codes_pre_rotation[i]) ++mismatches;
+		}
+		result.legacy_anchor_mismatches = mismatches;
+		result.legacy_anchor_match = (mismatches == 0);
+	}
+
+	// --- Treatment 1, step B: rotate the quantized NARROW codes, per head,
+	// through the SAME certified RopeApplySite the legacy path already
+	// calls (S3.3's own real, green construction).
+	result.legacy_codes.assign(hidden_size, 0);
+	for (size_t h = 0; h < num_heads; ++h) {
+		const SslmForwardStatus st =
+		    RopeApplySite(legacy_pre_rotation.data() + h * head_dim, head_dim, position, context_cap,
+		                  rope_tables, result.legacy_codes.data() + h * head_dim);
+		if (st != SslmForwardStatus::Ok) {
+			result.status = st;
+			return result;
+		}
+	}
+	result.legacy_scale = legacy_pre_scale;  // rotation does not change the governing scale
+
+	// --- Resolve this position's own RoPE table row ONCE, reused below by
+	// the target/static/dynamic computations (all three consume the SAME
+	// wide-rotated value per pair).
+	OptionGRopeTableRow table;
+	const SslmForwardStatus table_status =
+	    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables, &table);
+	if (table_status != SslmForwardStatus::Ok) {
+		result.status = table_status;
+		return result;
+	}
+
+	result.target_wide_rotated.assign(hidden_size, 0);
+	result.static_codes.assign(hidden_size, 0);
+	std::vector<int64_t> wide_rotated_row(hidden_size, 0);
+	bool identity_rotation = true;
+	uint64_t static_saturation = 0;
+	for (size_t h = 0; h < num_heads; ++h) {
+		for (size_t p = 0; p < table.pairs; ++p) {
+			const size_t i0 = h * head_dim + 2 * p;
+			const size_t i1 = i0 + 1;
+			const int32_t cos_q30 = static_cast<int32_t>(
+			    ReadRopeTableEntryI64(table.cos->data, table.row_offset + p));
+			const int32_t sin_q30 = static_cast<int32_t>(
+			    ReadRopeTableEntryI64(table.sin->data, table.row_offset + p));
+			if (cos_q30 != (static_cast<int32_t>(1) << 30) || sin_q30 != 0) {
+				identity_rotation = false;
+			}
+			bool rot_in_domain = false;
+			const RopePairWide rotated = RopeApplyPairWide(qacc_pre_rotation[i0], qacc_pre_rotation[i1],
+			                                                cos_q30, sin_q30, &rot_in_domain);
+			if (!rot_in_domain) {
+				result.status = SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+				return result;
+			}
+			wide_rotated_row[i0] = rotated.x;
+			wide_rotated_row[i1] = rotated.y;
+			result.target_wide_rotated[i0] = rotated.x;
+			result.target_wide_rotated[i1] = rotated.y;
+
+			// Treatment 2: static-fused landing -- wide rotate (just above,
+			// shared) -> LandingRescale against the STATIC derived constants
+			// -> ClampRopeCode, the identical two-call composition the real
+			// static-fused branch uses.
+			bool exceeded0 = false, exceeded1 = false;
+			const int64_t raw0 = LandingRescale(rotated.x, normed_scale.m, q_landing_r_t,
+			                                     normed_scale.e, q_landing_e_t, &static_saturation,
+			                                     &exceeded0);
+			const int64_t raw1 = LandingRescale(rotated.y, normed_scale.m, q_landing_r_t,
+			                                     normed_scale.e, q_landing_e_t, &static_saturation,
+			                                     &exceeded1);
+			if (exceeded0 || exceeded1) {
+				result.status = SslmForwardStatus::OptionGFusedQLandingExponentOutOfDomain;
+				return result;
+			}
+			result.static_codes[i0] = static_cast<int8_t>(ClampRopeCode(raw0));
+			result.static_codes[i1] = static_cast<int8_t>(ClampRopeCode(raw1));
+		}
+	}
+	result.static_scale = CarriedScale{q_landing_m_out, q_landing_e_out};
+	result.is_identity_rotation = identity_rotation;
+
+	// Treatment 3: dynamic-fused -- wide rotate (already done above, shared)
+	// -> ONE RequantChainChecked call, the identical single call the real
+	// dynamic-fused branch makes.
+	result.dynamic_codes.assign(hidden_size, 0);
+	CarriedScale dynamic_scale{};
+	const CarriedScale dynamic_incoming[1] = {normed_scale};
+	const ChainResult dynamic_chain = RequantChainChecked(
+	    wide_rotated_row.data(), hidden_size, std::span<const CarriedScale>{dynamic_incoming, 1},
+	    site_constant, result.dynamic_codes.data(), &dynamic_scale, site, token_index,
+	    trace_hook_state);
+	if (dynamic_chain.status != SslmForwardStatus::Ok) {
+		result.status = dynamic_chain.status;
+		return result;
+	}
+	result.dynamic_scale = dynamic_scale;
+	if (engine_q_rot_dynamic != nullptr) {
+		result.dynamic_anchor_checked = true;
+		size_t mismatches = 0;
+		for (size_t i = 0; i < hidden_size; ++i) {
+			if (result.dynamic_codes[i] != engine_q_rot_dynamic[i]) ++mismatches;
+		}
+		result.dynamic_anchor_mismatches = mismatches;
+		result.dynamic_anchor_match = (mismatches == 0);
+	}
+	return result;
+}
+
 // T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
 // share (defined below, after this function closes). `option_g_fused_k_landing`
 // is this function's own new parameter -- the ONE addition; every other line
@@ -1892,6 +2073,37 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				g_option_g_dynamic_q_anchor[l].q_scale_e = q_scale.e;
 				g_option_g_dynamic_q_anchor[l].captured = true;
 			}
+			// T-1970 fix round (coordinator's C1-v2 remedy): the SECOND of
+			// this construction's two named engine anchors -- this run's own
+			// REAL post-rotation q_rot, captured per (layer, position), into
+			// the INDEPENDENT dynamic-fused buffer (never the legacy buffer
+			// above, so a legacy run and a dynamic-fused run can each
+			// populate their own slice of the SAME (layer, position) grid
+			// without overwriting each other -- they are merged only by the
+			// offline tool that reads both dumps back). Guarded by a FOURTH,
+			// independent env var; zero cost when off.
+			if (OptionGOfflineKillCaptureEnabled()) {
+				const uint32_t max_positions = OptionGOfflineKillMaxPositions();
+				if (position >= 0 && static_cast<uint32_t>(position) < max_positions) {
+					const size_t idx =
+					    static_cast<size_t>(l) * max_positions + static_cast<size_t>(position);
+					if (idx < g_option_g_offline_kill_dynamic.size() &&
+					    !g_option_g_offline_kill_dynamic[idx].captured) {
+						g_option_g_offline_kill_dynamic[idx].engine_codes.assign(
+						    q_rot.begin(), q_rot.begin() + hidden_size);
+						g_option_g_offline_kill_dynamic[idx].q_scale_m = q_scale.m;
+						g_option_g_offline_kill_dynamic[idx].q_scale_e = q_scale.e;
+						g_option_g_offline_kill_dynamic[idx].normed_scale_m = normed_scale.m;
+						g_option_g_offline_kill_dynamic[idx].normed_scale_e = normed_scale.e;
+						g_option_g_offline_kill_dynamic[idx].site_constant_m = lw.q_site_constant.m;
+						g_option_g_offline_kill_dynamic[idx].site_constant_e = lw.q_site_constant.e;
+						g_option_g_offline_kill_dynamic[idx].arm_mode =
+						    static_cast<int32_t>(option_g_fused_q_mode);
+						g_option_g_offline_kill_dynamic[idx].position = position;
+						g_option_g_offline_kill_dynamic[idx].captured = true;
+					}
+				}
+			}
 		} else {
 			st = ProjectAndFunnel(normed.data(), normed_scale, lw.q_weight, hidden_size, hidden_size,
 			                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
@@ -1899,6 +2111,61 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 			                      LayerSite(site_prefix, l, "q_proj.requant"),
 			                      token_index, trace_hook_state);
 			if (st != SslmForwardStatus::Ok) return st;
+			// T-1970 fix round (coordinator's C1-v2 remedy): the FIRST of the
+			// two named engine anchors -- a diagnostic-only wide accumulator,
+			// computed IN PARALLEL to ProjectAndFunnel's own internal one (the
+			// SAME three steps: GemmInt8AccumulateRow, the WSC1 fold, the
+			// optional bias reconciliation), captured per (layer, position)
+			// together with `q_codes` (ProjectAndFunnel's own REAL,
+			// load-bearing output -- this is "the engine's actual legacy
+			// q_codes" the offline tool anchors against, never a value this
+			// diagnostic branch invented). Never touches `q_codes`/`q_scale`
+			// above -- purely a side channel, guarded so it costs nothing
+			// when the env var is off (the ordinary case, including every
+			// existing gate this build's own log already reports).
+			if (OptionGOfflineKillCaptureEnabled()) {
+				const uint32_t max_positions = OptionGOfflineKillMaxPositions();
+				if (position >= 0 && static_cast<uint32_t>(position) < max_positions) {
+					const size_t idx =
+					    static_cast<size_t>(l) * max_positions + static_cast<size_t>(position);
+					if (idx < g_option_g_offline_kill_legacy.size() &&
+					    !g_option_g_offline_kill_legacy[idx].captured) {
+						std::vector<int64_t> qacc_diag(hidden_size);
+						GemmInt8AccumulateRow(normed.data(), lw.q_weight, hidden_size, hidden_size,
+						                      qacc_diag.data());
+						for (size_t i = 0; i < hidden_size; ++i) {
+							qacc_diag[i] = ApplyWeightScaleFold(qacc_diag[i], lw.q_fold_identity[i],
+							                                    lw.q_fold_mult[i], lw.q_fold_shift[i]);
+						}
+						bool diag_ok = true;
+						if (lw.q_bias != nullptr) {
+							// Diagnostic-only: a domain rejection here must never
+							// fail the REAL forward pass (this branch's own
+							// `st`/`return st` above already governs that) -- it
+							// only means this slot is skipped, exactly like a
+							// position never reached with capture enabled.
+							diag_ok = (ApplyBiasReconcileRow(qacc_diag.data(), hidden_size, lw.q_bias,
+							                                 normed_scale.m, normed_scale.e) ==
+							           SslmForwardStatus::Ok);
+						}
+						if (diag_ok) {
+						g_option_g_offline_kill_legacy[idx].qacc_pre_rotation = std::move(qacc_diag);
+						g_option_g_offline_kill_legacy[idx].engine_codes.assign(
+						    q_codes.begin(), q_codes.begin() + hidden_size);
+						g_option_g_offline_kill_legacy[idx].q_scale_m = q_scale.m;
+						g_option_g_offline_kill_legacy[idx].q_scale_e = q_scale.e;
+						g_option_g_offline_kill_legacy[idx].normed_scale_m = normed_scale.m;
+						g_option_g_offline_kill_legacy[idx].normed_scale_e = normed_scale.e;
+						g_option_g_offline_kill_legacy[idx].site_constant_m = lw.q_site_constant.m;
+						g_option_g_offline_kill_legacy[idx].site_constant_e = lw.q_site_constant.e;
+						g_option_g_offline_kill_legacy[idx].arm_mode =
+						    static_cast<int32_t>(option_g_fused_q_mode);
+						g_option_g_offline_kill_legacy[idx].position = position;
+						g_option_g_offline_kill_legacy[idx].captured = true;
+						}
+					}
+				}
+			}
 		}
 
 		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
