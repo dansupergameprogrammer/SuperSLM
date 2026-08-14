@@ -167,4 +167,52 @@ bool SFitsI64(S128 v)
 
 int64_t SLow64(S128 v) { return (int64_t)v.lo; }
 
+// --- T-2032 additions: forward_sites.cpp's OWN unsigned-magnitude U128 family
+// (LandingRescale's own facility, forward_sites.cpp:70-144) -- distinct from
+// intmath.cpp's U128 above (same struct SHAPE, reused here, but a different
+// operation set: general U128+U128 add, general left/right shift by an
+// arbitrary k, keeping the FULL 128-bit result rather than narrowing to u64).
+// Named with a "Wide" suffix to keep every call site unambiguous about which
+// family's own contract it is invoking.
+
+// General U128 + U128 (forward_sites.cpp U128Add).
+U128 UAddWide(U128 a, U128 b)
+{
+    uint64_t lo = a.lo + b.lo;
+    uint64_t carry = (lo < a.lo) ? 1ULL : 0ULL;
+    U128 r;
+    r.lo = lo;
+    r.hi = a.hi + b.hi + carry;
+    return r;
+}
+
+// Logical left shift by k in [0,127]; k outside that range saturates to 0
+// (forward_sites.cpp U128Shl).
+U128 UShlWide(U128 v, int k)
+{
+    if (k <= 0) return v;
+    if (k >= 128) { U128 z; z.lo = 0ULL; z.hi = 0ULL; return z; }
+    if (k >= 64) { U128 r; r.lo = 0ULL; r.hi = v.lo << (uint)(k - 64); return r; }
+    U128 r;
+    r.lo = v.lo << (uint)k;
+    r.hi = (v.hi << (uint)k) | (v.lo >> (uint)(64 - k));
+    return r;
+}
+
+U128 UOneShlWide(int k) { U128 one; one.lo = 1ULL; one.hi = 0ULL; return UShlWide(one, k); }
+
+// Logical right shift by k in [0,127], keeping the FULL 128-bit result
+// (forward_sites.cpp U128Shr -- distinct from UShrToU64 above, which narrows
+// to u64 and assumes the result fits).
+U128 UShrWideFull(U128 v, int k)
+{
+    if (k <= 0) return v;
+    if (k >= 128) { U128 z; z.lo = 0ULL; z.hi = 0ULL; return z; }
+    if (k >= 64) { U128 r; r.lo = v.hi >> (uint)(k - 64); r.hi = 0ULL; return r; }
+    U128 r;
+    r.lo = (v.lo >> (uint)k) | (v.hi << (uint)(64 - k));
+    r.hi = v.hi >> (uint)k;
+    return r;
+}
+
 #endif  // SSLM_WIDE128_HLSLI

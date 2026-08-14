@@ -175,6 +175,50 @@ struct Device {
 		return o.ResourceBindingTier;
 	}
 
+	// T-2032 (Sec5.6/Sec11 B4 well-scoped next checkpoint): the composed
+	// pipeline's own root signature -- one 6-value 32-bit-constants block
+	// (b0: layer_index, hidden_size, head_dim, num_kv_heads, context_cap,
+	// position), three root SRVs (t0 LayerWeights, t1 Layout, t2 RopeInfo),
+	// three root UAVs (u0 SeqState, u1 LayerScratch, u2 KvCache). Shared by
+	// every shader this checkpoint's composed dispatch issues (attn_norm_site,
+	// q_proj_site, kv_proj_site, rope_guard_site, site_placeholder) -- a
+	// dispatch that does not use one of these bindings simply never reads it;
+	// D3D12 does not require a PSO to consume every root parameter its shared
+	// signature declares.
+	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
+		D3D12_ROOT_PARAMETER ps[7]{};
+		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		ps[0].Constants.Num32BitValues = 6;
+		ps[0].Constants.ShaderRegister = 0;  // b0
+		ps[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		ps[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[1].Descriptor.ShaderRegister = 0;  // t0 LayerWeights
+		ps[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[2].Descriptor.ShaderRegister = 1;  // t1 Layout
+		ps[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[3].Descriptor.ShaderRegister = 2;  // t2 RopeInfo
+		ps[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[4].Descriptor.ShaderRegister = 0;  // u0 SeqState
+		ps[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[5].Descriptor.ShaderRegister = 1;  // u1 LayerScratch
+		ps[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[6].Descriptor.ShaderRegister = 2;  // u2 KvCache
+
+		D3D12_ROOT_SIGNATURE_DESC rs{};
+		rs.NumParameters = 7;
+		rs.pParameters = ps;
+		ComPtr<ID3DBlob> blob, err;
+		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
+		if (FAILED(hr)) {
+			if (err) std::fprintf(stderr, "%s\n", (char*)err->GetBufferPointer());
+			throw std::runtime_error("composed-pipeline root signature serialization failed");
+		}
+		ComPtr<ID3D12RootSignature> r;
+		SSLM_GPU_HR(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+		                                      IID_PPV_ARGS(&r)));
+		return r;
+	}
+
 	ComPtr<ID3D12RootSignature> MakeRootSig1SrvUav() {
 		D3D12_ROOT_PARAMETER ps[2]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
@@ -298,6 +342,36 @@ inline CachedPipeline& GetOrBuildPipeline(const std::string& name) {
 	Device& dev = GetDevice();
 	CachedPipeline cp;
 	cp.root_sig = dev.MakeRootSig1SrvUav();
+	auto cso = ReadFile(ShaderPath(name));
+	cp.pso = dev.MakePSO(cp.root_sig.Get(), cso);
+	auto [inserted, ok] = cache.emplace(name, std::move(cp));
+	(void)ok;
+	return inserted->second;
+}
+
+// T-2032: the composed pipeline's own PSO cache, keyed by shader base name --
+// every shader sharing MakeRootSigComposed()'s signature above (attn_norm_site,
+// q_proj_site, kv_proj_site, rope_guard_site, site_placeholder). A distinct
+// cache from GetOrBuildPipeline's B1-shaped one-SRV-one-UAV pool above, since
+// the two families use different root signatures.
+inline CachedPipeline& GetOrBuildComposedPipeline(const std::string& name) {
+	static std::map<std::string, CachedPipeline> cache;
+	// ONE shared root-signature object across every composed-pipeline PSO --
+	// not a fresh MakeRootSigComposed() per shader. D3D12's command list binds
+	// root parameters against whatever root signature was last set via
+	// SetComputeRootSignature independent of which PSO SetPipelineState later
+	// selects; this design's own host orchestration sets the root signature
+	// ONCE and swaps only the PSO across a layer's dispatches (Sec5.4's
+	// per-site dispatch shape), so every PSO here MUST share the identical
+	// root-signature object the command list has bound, not merely a
+	// structurally-identical distinct one.
+	static ComPtr<ID3D12RootSignature> s_shared_root_sig;
+	auto it = cache.find(name);
+	if (it != cache.end()) return it->second;
+	Device& dev = GetDevice();
+	if (!s_shared_root_sig) s_shared_root_sig = dev.MakeRootSigComposed();
+	CachedPipeline cp;
+	cp.root_sig = s_shared_root_sig;
 	auto cso = ReadFile(ShaderPath(name));
 	cp.pso = dev.MakePSO(cp.root_sig.Get(), cso);
 	auto [inserted, ok] = cache.emplace(name, std::move(cp));

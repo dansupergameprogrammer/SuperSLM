@@ -23,6 +23,7 @@
 // it.
 #include "superslm/gpu_port.h"
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -247,9 +248,116 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 }
 
 // ===========================================================================
-// B4/B7/B11 (Sec5.6/Sec11): the composed, device-resident, multi-layer
-// forward. STUB pending B3/B4/B5/B6/B7/B11 -- the largest remaining unit.
+// B4/B7/B11 (Sec5.6/Sec11), T-2032 checkpoint: the composed, device-resident,
+// multi-layer forward. Real GPU dispatches for sites 1-4 (attn_norm, q_proj,
+// kv_proj fused, RoPE's own guard) per Claude/Brunel/t2025-gpu-serial-build-
+// 2026-08-13.md Sec11.2's "well-scoped next checkpoint"; sites 5-16 plus the
+// per-layer commit dispatch are the shared, sticky-word-respecting
+// site_placeholder.hlsl (13 dispatches/layer of one shared .cso -- Sec11.2's
+// own text names "12" for sites 5-16 alone; the commit dispatch is the 13th
+// use of the identical shader here, since its own required behavior at this
+// checkpoint is the same shape, see this ticket's own build-log section).
 // ===========================================================================
+
+namespace {
+
+uint32_t Align8U32(uint32_t x) { return (x + 7u) & ~7u; }
+
+// The composed pipeline's own per-layer LayerWeights byte layout -- computed
+// ONCE per call from (hidden_size, kv_hidden_size, num_kv_heads) and uploaded
+// as the "Layout" SRV every real site shader reads offsets from (never
+// re-derived shader-side), so the host packer and the shader reader can never
+// drift out of sync with each other. Index order matches every *_site.hlsl's
+// own `Layout.Load<uint>(N * 4)` calls exactly; see each shader's own header
+// comment for which indices it reads.
+struct GpuLayerLayout {
+	uint32_t off[25]{};
+	uint32_t stride = 0;
+};
+
+GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
+                                   uint32_t num_kv_heads) {
+	GpuLayerLayout L;
+	uint32_t cur = 0;
+	L.off[0] = cur; cur += Align8U32(hidden_size * 4);              // attn_norm_gain
+	L.off[1] = cur; cur += 16;                                      // attn_norm_site_constant
+	L.off[2] = cur; cur += Align8U32(hidden_size * hidden_size);    // q_weight (int8)
+	L.off[3] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_identity
+	L.off[4] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_mult
+	L.off[5] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_shift
+	L.off[6] = cur; cur += 16;                                      // q_site_constant
+	L.off[7] = cur; cur += 8;                                       // q_bias_present
+	L.off[8] = cur; cur += Align8U32(hidden_size * 8);              // q_bias
+	L.off[9] = cur; cur += Align8U32(kv_hidden_size * hidden_size); // k_weight (int8)
+	L.off[10] = cur; cur += Align8U32(kv_hidden_size * hidden_size);// v_weight (int8)
+	L.off[11] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_identity
+	L.off[12] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_mult
+	L.off[13] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_shift
+	L.off[14] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_identity
+	L.off[15] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_mult
+	L.off[16] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_shift
+	L.off[17] = cur; cur += 8;                                      // k_bias_present
+	L.off[18] = cur; cur += Align8U32(kv_hidden_size * 8);          // k_bias
+	L.off[19] = cur; cur += 8;                                      // v_bias_present
+	L.off[20] = cur; cur += Align8U32(kv_hidden_size * 8);          // v_bias
+	L.off[21] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_k
+	L.off[22] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_k
+	L.off[23] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_v
+	L.off[24] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_v
+	L.stride = cur;
+	return L;
+}
+
+void PutBytesAt(std::vector<uint8_t>& buf, size_t off, const void* data, size_t n) {
+	std::memcpy(buf.data() + off, data, n);
+}
+void PutI32At(std::vector<uint8_t>& buf, size_t off, int32_t v) { PutBytesAt(buf, off, &v, 4); }
+void PutI64At(std::vector<uint8_t>& buf, size_t off, int64_t v) { PutBytesAt(buf, off, &v, 8); }
+
+// T-2032's own local status-tag encoding (site_common.hlsli's kTag* family),
+// mapped to the real superslm::SslmForwardStatus by name -- the same
+// switch-mapped convention check_rdp_exponent.hlsl/requant_chain_checked.hlsl
+// already established for B2.
+superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {
+	using S = superslm::SslmForwardStatus;
+	switch (tag) {
+		case 0: return S::Ok;
+		case 1: return S::CarriedScaleMantissaOutOfDomain;
+		case 2: return S::ChainInputOutOfDomain;
+		case 3: return S::RoundingDivideByPotExponentOutOfDomain;
+		case 4: return S::BiasReconcileProductOutOfDomain;
+		case 5: return S::RopeTableTensorMissing;
+		case 6: return S::RopeTableExtentExceeded;
+		case 7: return S::PositionOverCap;
+		default: return S::KvPrecisionUnsupported;  // 8 = NotYetImplemented, and any unmapped tag
+	}
+}
+
+// `keep_alive` collects the temporary upload-heap resource: the GPU's own
+// CopyResource command is only RECORDED here, not executed, and a ComPtr that
+// goes out of scope at this function's own return destroys the upload buffer
+// before the command list is ever submitted -- the caller must hold it alive
+// through ExecuteCommandLists + the fence wait, exactly like lw_buf/layout_buf/
+// rope_buf already are by staying in the caller's own local scope.
+Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
+    harness::Device& dev, const std::vector<uint8_t>& init,
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keep_alive) {
+	auto buf = dev.MakeBuffer(init.size(), D3D12_HEAP_TYPE_DEFAULT,
+	                           D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_DEST);
+	auto upload = dev.Upload(init.data(), init.size());
+	dev.list->CopyResource(buf.Get(), upload.Get());
+	keep_alive.push_back(upload);
+	D3D12_RESOURCE_BARRIER b{};
+	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	b.Transition.pResource = buf.Get();
+	b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+	b.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	dev.list->ResourceBarrier(1, &b);
+	return buf;
+}
+
+}  // namespace
 
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
@@ -259,56 +367,244 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size) {
-	(void)seq;
-	(void)layers;
-	(void)num_hidden_layers;
-	(void)layer_budget;
-	(void)hidden_size;
-	(void)head_dim;
-	(void)num_key_value_heads;
-	(void)intermediate_size;
-	(void)context_cap;
-	(void)rope_tables;
-	(void)workspace;
-	(void)workspace_size;
-	// STUB (B3/B4/B5/B6/B7/B11 not yet built): `seq` is left untouched (no
-	// GPU-side composition exists yet), and the returned status is one no
-	// fixture in this suite expects (every real fixture's CPU oracle status is
-	// Ok or one of the funnel/guard rejections; KvPrecisionUnsupported is
-	// never a RunLayerLoop outcome this design's build target reaches) -- an
-	// observable mismatch against every T-2019 B4/B6/B7/B8/B11 cell, not an
-	// accidental pass.
-	return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	(void)intermediate_size;  // not consumed by this checkpoint's own real sites (1-4)
+	harness::Device& dev = harness::GetDevice();
+	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+
+	const uint32_t H = static_cast<uint32_t>(hidden_size);
+	const uint32_t HD = static_cast<uint32_t>(head_dim);
+	const uint32_t NH = static_cast<uint32_t>(num_key_value_heads);
+	const uint32_t KV = NH * HD;
+	const uint32_t N = num_hidden_layers;
+	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH);
+
+	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
+	// own scoped subset: only what sites 1-4 read). ---
+	std::vector<uint8_t> lw_bytes(static_cast<size_t>(layout.stride) * N, 0);
+	for (uint32_t l = 0; l < N; ++l) {
+		const superslm::LayerWeights& lw = layers[l];
+		const size_t base = static_cast<size_t>(l) * layout.stride;
+		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[0] + i * 4, lw.attn_norm_gain[i]);
+		PutI64At(lw_bytes, base + layout.off[1] + 0, lw.attn_norm_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[1] + 8, lw.attn_norm_site_constant.e);
+		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[3] + i * 4, lw.q_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[4] + i * 4, lw.q_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[5] + i * 4, lw.q_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[6] + 0, lw.q_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[6] + 8, lw.q_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[7], lw.q_bias != nullptr ? 1 : 0);
+		if (lw.q_bias != nullptr) {
+			for (uint32_t i = 0; i < H; ++i) PutI64At(lw_bytes, base + layout.off[8] + i * 8, lw.q_bias[i]);
+		}
+		for (uint32_t i = 0; i < KV * H; ++i) {
+			lw_bytes[base + layout.off[9] + i] = static_cast<uint8_t>(lw.k_weight[i]);
+			lw_bytes[base + layout.off[10] + i] = static_cast<uint8_t>(lw.v_weight[i]);
+		}
+		for (uint32_t i = 0; i < KV; ++i) {
+			PutI32At(lw_bytes, base + layout.off[11] + i * 4, lw.k_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[12] + i * 4, lw.k_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[13] + i * 4, lw.k_fold_shift[i]);
+			PutI32At(lw_bytes, base + layout.off[14] + i * 4, lw.v_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[15] + i * 4, lw.v_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[16] + i * 4, lw.v_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[17], lw.k_bias != nullptr ? 1 : 0);
+		if (lw.k_bias != nullptr) {
+			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[18] + i * 8, lw.k_bias[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[19], lw.v_bias != nullptr ? 1 : 0);
+		if (lw.v_bias != nullptr) {
+			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[20] + i * 8, lw.v_bias[i]);
+		}
+		for (uint32_t i = 0; i < NH; ++i) {
+			PutI64At(lw_bytes, base + layout.off[21] + i * 8, lw.kv_landing_r_t_k[i]);
+			PutI64At(lw_bytes, base + layout.off[22] + i * 8, lw.kv_landing_e_t_k[i]);
+			PutI64At(lw_bytes, base + layout.off[23] + i * 8, lw.kv_landing_r_t_v[i]);
+			PutI64At(lw_bytes, base + layout.off[24] + i * 8, lw.kv_landing_e_t_v[i]);
+		}
+	}
+
+	std::vector<uint8_t> layout_bytes(26 * 4, 0);
+	for (int i = 0; i < 25; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
+	PutI32At(layout_bytes, 25 * 4, static_cast<int32_t>(layout.stride));
+
+	// --- RopeGuardInfo: resolved HOST-SIDE, once, from the SAME
+	// SslmTensorManifest::Tensor("cos")/Tensor("sin") lookup RopeApplySite
+	// itself performs on CPU (rope_tables is model-wide, shared across every
+	// layer, Sec5.6). ---
+	const superslm::SslmTensorView* cos_t = rope_tables.Tensor("cos");
+	const superslm::SslmTensorView* sin_t = rope_tables.Tensor("sin");
+	std::vector<uint8_t> rope_info_bytes(24, 0);
+	PutI32At(rope_info_bytes, 0, cos_t != nullptr ? 1 : 0);
+	PutI32At(rope_info_bytes, 4, sin_t != nullptr ? 1 : 0);
+	{
+		uint64_t cec = cos_t != nullptr ? cos_t->elem_count : 0;
+		uint64_t sec = sin_t != nullptr ? sin_t->elem_count : 0;
+		PutBytesAt(rope_info_bytes, 8, &cec, 8);
+		PutBytesAt(rope_info_bytes, 16, &sec, 8);
+	}
+
+	// --- SeqState (96 bytes: hidden_codes[8] i32, hidden_scale.m/e i64,
+	// layer_index u32, kv_sat_lo/hi u32, context_length i64, sticky_status i64
+	// -- see site_common.hlsli's own byte-offset comments). ---
+	std::vector<uint8_t> seq_bytes(96, 0);
+	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
+	PutI64At(seq_bytes, 32, seq.hidden_scale.m);
+	PutI64At(seq_bytes, 40, seq.hidden_scale.e);
+	PutI32At(seq_bytes, 48, static_cast<int32_t>(seq.layer_index));
+	PutI32At(seq_bytes, 56, static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, 60, static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI64At(seq_bytes, 64, seq.context_length);
+	PutI64At(seq_bytes, 72, 0);  // sticky_status = kTagOk
+
+	std::vector<uint8_t> scratch_bytes(64, 0);
+	std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+
+	// --- Build/upload every buffer this call needs, in ONE command list
+	// (upload-and-transition, then the composed dispatch chain, then the
+	// readback copies -- one submit, one fence wait). ---
+	SSLM_GPU_HR(dev.alloc->Reset());
+	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+
+	auto lw_buf = dev.Upload(lw_bytes.data(), lw_bytes.size());
+	auto layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
+	auto rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+	auto seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
+	auto scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
+	auto kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
+
+	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
+	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
+	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
+	auto& rope_guard_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& placeholder_pipe = harness::GetOrBuildComposedPipeline("site_placeholder");
+
+	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
+
+	D3D12_RESOURCE_BARRIER global_uav_barrier{};
+	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	global_uav_barrier.UAV.pResource = nullptr;  // Sec18.3 fold, D-SLM3002: every barrier this design issues is global
+
+	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
+	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
+
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index) {
+		uint32_t consts[6] = {layer_index, H, HD, NH, context_cap_u32, position_u32};
+		dev.list->SetComputeRoot32BitConstants(0, 6, consts, 0);
+		dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(4, seq_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(5, scratch_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(6, kv_uav->GetGPUVirtualAddress());
+		dev.list->SetPipelineState(pso);
+		dev.list->Dispatch(1, 1, 1);
+		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+
+	const uint32_t layers_to_record = std::min(layer_budget, N);  // Sec5.8: never past the token boundary
+	for (uint32_t l = 0; l < layers_to_record; ++l) {
+		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(rope_guard_pipe.pso.Get(), l);
+		for (int s = 0; s < 13; ++s) {  // sites 5-16 (12) + the per-layer commit dispatch (1)
+			bind_and_dispatch(placeholder_pipe.pso.Get(), l);
+		}
+	}
+
+	// --- Readback: SeqState + the KV cache twin, into `seq`/`workspace`. ---
+	auto seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                                    D3D12_RESOURCE_STATE_COPY_DEST);
+	auto kv_readback = dev.MakeBuffer(kv_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                                   D3D12_RESOURCE_STATE_COPY_DEST);
+	D3D12_RESOURCE_BARRIER pre_copy[2]{};
+	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	pre_copy[0].Transition.pResource = seq_uav.Get();
+	pre_copy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	pre_copy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+	pre_copy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	pre_copy[1] = pre_copy[0];
+	pre_copy[1].Transition.pResource = kv_uav.Get();
+	dev.list->ResourceBarrier(2, pre_copy);
+	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
+	dev.list->CopyResource(kv_readback.Get(), kv_uav.Get());
+	SSLM_GPU_HR(dev.list->Close());
+	ID3D12CommandList* lists[] = {dev.list.Get()};
+	dev.queue->ExecuteCommandLists(1, lists);
+	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+	if (dev.fence->GetCompletedValue() < dev.fence_val) {
+		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+		WaitForSingleObject(dev.fence_event, INFINITE);
+	}
+
+	std::vector<uint8_t> seq_out(seq_bytes.size());
+	{
+		void* p = nullptr;
+		D3D12_RANGE range{0, seq_out.size()};
+		SSLM_GPU_HR(seq_readback->Map(0, &range, &p));
+		std::memcpy(seq_out.data(), p, seq_out.size());
+		D3D12_RANGE none{0, 0};
+		seq_readback->Unmap(0, &none);
+	}
+	{
+		void* p = nullptr;
+		D3D12_RANGE range{0, kv_bytes.size()};
+		SSLM_GPU_HR(kv_readback->Map(0, &range, &p));
+		std::memcpy(workspace, p, kv_bytes.size());
+		D3D12_RANGE none{0, 0};
+		kv_readback->Unmap(0, &none);
+	}
+
+	for (uint32_t i = 0; i < H; ++i) {
+		int32_t v = 0;
+		std::memcpy(&v, seq_out.data() + i * 4, 4);
+		seq.hidden_codes[i] = static_cast<int8_t>(v);
+	}
+	int64_t hs_m, hs_e, lidx32, sat_lo32, sat_hi32, ctxlen, sticky_tag;
+	std::memcpy(&hs_m, seq_out.data() + 32, 8);
+	std::memcpy(&hs_e, seq_out.data() + 40, 8);
+	uint32_t lidx_u, lo_u, hi_u;
+	std::memcpy(&lidx_u, seq_out.data() + 48, 4);
+	std::memcpy(&lo_u, seq_out.data() + 56, 4);
+	std::memcpy(&hi_u, seq_out.data() + 60, 4);
+	std::memcpy(&ctxlen, seq_out.data() + 64, 8);
+	std::memcpy(&sticky_tag, seq_out.data() + 72, 8);
+	(void)lidx32; (void)sat_lo32; (void)sat_hi32;
+	seq.hidden_scale.m = hs_m;
+	seq.hidden_scale.e = hs_e;
+	seq.layer_index = lidx_u;
+	seq.kv_saturation_count = (static_cast<uint64_t>(hi_u) << 32) | static_cast<uint64_t>(lo_u);
+	seq.context_length = ctxlen;
+
+	return DecodeStickyTag(sticky_tag);
 }
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
-	(void)workspace;
-	(void)layer;
-	(void)context_cap;
-	(void)num_kv_heads;
-	(void)head_dim;
-	(void)kv_head;
-	(void)position;
-	// STUB (B4/B6/B7 not yet built): a static zeroed row -- safe to dereference
-	// (every B11 fixture reads exactly 2 bytes at this suite's own fixed
-	// head_dim=2), and all-zero fails every "K present" assertion honestly
-	// (the design's own real K rows are never all-zero once landed).
-	static const int8_t kZeroRow[64] = {};
-	return kZeroRow;
+	// T-2032: the KV cache twin's own addressing, bit-exact against
+	// superslm::KeyRow (forward_sites.cpp's S3.7 accessor block) -- real once
+	// RunLayerLoopGpu (above) has written it; site_common.hlsli's
+	// KvHalfOffsetGpu/KvRowOffsetWithinHalfGpu are the SAME formula, ported.
+	const size_t half_off = static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_kv_heads *
+	                             head_dim * 2u;
+	const size_t row_off =
+	    kv_head * static_cast<size_t>(context_cap) * head_dim + static_cast<size_t>(position) * head_dim;
+	return reinterpret_cast<const int8_t*>(workspace) + half_off + row_off;
 }
 
 const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                            size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
-	(void)workspace;
-	(void)layer;
-	(void)context_cap;
-	(void)num_kv_heads;
-	(void)head_dim;
-	(void)kv_head;
-	(void)position;
-	static const int8_t kZeroRow[64] = {};
-	return kZeroRow;  // STUB (B4/B6/B7 not yet built) -- see KeyRowGpu's own note.
+	const size_t half_off = static_cast<size_t>(layer) * static_cast<size_t>(context_cap) * num_kv_heads *
+	                             head_dim * 2u;
+	const size_t k_store_size = static_cast<size_t>(context_cap) * num_kv_heads * head_dim;
+	const size_t row_off =
+	    kv_head * static_cast<size_t>(context_cap) * head_dim + static_cast<size_t>(position) * head_dim;
+	return reinterpret_cast<const int8_t*>(workspace) + half_off + k_store_size + row_off;
 }
 
 // ===========================================================================
