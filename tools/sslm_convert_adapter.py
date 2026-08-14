@@ -41,6 +41,7 @@ B0b exists — this module's public surface is the derivation, not the section w
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional, Tuple
 
 # Domain constants, mirrored from the design (Sec4, D-SLM2915/D-SLM2943) and from
@@ -222,3 +223,58 @@ def derive_u_fold_triples(adapter_alpha: List[float], t_value: float,
     required = [a / t_value for a in adapter_alpha]
     triples = [derive_amplifying_triple(rho) for rho in required]
     return triples, required
+
+
+# =================================================================================================
+# B7 — Rejection/fallback wiring (design Sec7/Sec11 B7, D-SLM3095, T-2022 fold of Dan's ruling
+# D-SLM3066 item 4). Offline, depends on B3/B6. Ported from the proven dispatcher shape
+# `t2018_offline_red.cpp`'s own `Dispatch`/`DispatchResult` already establishes (T-2027 Sec18.4) —
+# the real converter CLI's own branch-selection logic, per this design's own text ("the CLI emits
+# a merge+quantize artifact, with a diagnostic naming which check failed").
+# =================================================================================================
+
+class RejectionBranch(Enum):
+    """Design Sec7's own named diagnostic taxonomy — checked in this priority order (a row that
+    cannot even be represented is a harder failure than a fidelity or saturation measurement,
+    matching Sec7's own reject-over-degrade discipline: fail on the most fundamental violation
+    first)."""
+
+    NONE = 0
+    DOMAIN_REJECTION_TRIP = 1
+    RUNTIME_VS_BAKED_MARGIN_EXCEEDED = 2  # renamed from "composed parity miss", D-SLM3047
+    SATURATION_RATE_ELEVATION = 3
+
+
+class ArtifactOutcome(Enum):
+    """Design Sec7 (D-SLM3095): the amended, EXPLICIT-ONLY fallback contract — a validation
+    failure emits NO artifact by default; producing a merge+quantize artifact instead requires
+    the caller's own explicit opt-in (`--fallback=merge`), never an automatic substitution."""
+
+    RUNTIME_ADDITIVE = 0
+    NO_ARTIFACT_EMITTED = 1
+    MERGE_QUANTIZE_EMITTED = 2
+
+
+def dispatch_conversion_outcome(domain_trip: bool, margin_exceeded: bool, saturation_elevated: bool,
+                                 fallback_flag_present: bool) -> Tuple[RejectionBranch, ArtifactOutcome]:
+    """The real converter CLI's own branch-selection logic (design Sec7): given the three
+    validation verdicts B3/B6 already compute, names which named diagnostic branch (if any) fired,
+    and — per the amended, explicit-only fallback (D-SLM3095) — whether an artifact is emitted at
+    all. A clean input (no branch fires) always emits the runtime-additive artifact, regardless of
+    the flag; a failing input emits nothing unless `fallback_flag_present`, in which case it emits
+    a merge+quantize artifact instead — never a partial or degraded runtime-additive one.
+    """
+    if domain_trip:
+        branch = RejectionBranch.DOMAIN_REJECTION_TRIP
+    elif margin_exceeded:
+        branch = RejectionBranch.RUNTIME_VS_BAKED_MARGIN_EXCEEDED
+    elif saturation_elevated:
+        branch = RejectionBranch.SATURATION_RATE_ELEVATION
+    else:
+        branch = RejectionBranch.NONE
+
+    if branch == RejectionBranch.NONE:
+        return branch, ArtifactOutcome.RUNTIME_ADDITIVE
+    if fallback_flag_present:
+        return branch, ArtifactOutcome.MERGE_QUANTIZE_EMITTED
+    return branch, ArtifactOutcome.NO_ARTIFACT_EMITTED
