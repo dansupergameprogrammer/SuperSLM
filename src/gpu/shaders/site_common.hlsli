@@ -27,6 +27,11 @@ static const int64_t kTagRopeTableTensorMissing = 5;
 static const int64_t kTagRopeTableExtentExceeded = 6;
 static const int64_t kTagPositionOverCap = 7;
 static const int64_t kTagNotYetImplemented = 8;
+static const int64_t kTagSoftmaxRowWidthOutOfDomain = 9;
+static const int64_t kTagIExpScaleDerivationOutOfDomain = 10;
+static const int64_t kTagSoftmaxKernelRefusedAfterGateAccepted = 11;
+static const int64_t kTagResidualReconciliationMagnitudeOutOfDomain = 12;
+static const int64_t kTagSiluCompositionScaleOutOfDomain = 13;
 
 // forward_sites.cpp FloorDivI64.
 int64_t FloorDivI64Gpu(int64_t a, int64_t b)
@@ -85,6 +90,18 @@ int64_t ApplyWeightScaleFoldGpu(int64_t acc, int identity, int mult, int shift)
 // proven descriptor_table_readback.hlsl::LoadSignedByte exactly (Sec5.2's
 // corrected shift-left-then-arithmetic-right-shift sign extension).
 int LoadSignedByteGpu(ByteAddressBuffer buf, uint byteOff)
+{
+    uint w = buf.Load((byteOff / 4u) * 4u);
+    uint shift = (byteOff % 4u) * 8u;
+    uint b = (w >> shift) & 0xFFu;
+    return int(b << 24) >> 24;
+}
+
+// Overload for a UAV source (the KV cache, read back through the same
+// sign-extend idiom as the read-only SRV overload above -- HLSL resolves by
+// buffer type, not by const-ness, so a genuinely separate overload is needed
+// rather than an implicit conversion).
+int LoadSignedByteGpu(RWByteAddressBuffer buf, uint byteOff)
 {
     uint w = buf.Load((byteOff / 4u) * 4u);
     uint shift = (byteOff % 4u) * 8u;

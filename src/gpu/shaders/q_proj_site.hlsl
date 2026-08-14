@@ -29,7 +29,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (sticky != kTagOk) return;
 
     int hidden_size = (int)g_hidden_size;
-    uint layer_base = g_layer_index * Layout.Load<uint>(25 * 4);
+    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
     int normed_codes[kMaxSiteN];
     [unroll]
@@ -104,8 +104,15 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (status_tag != kTagOk)
     {
         SeqState.Store<int64_t>(72, status_tag);
+        return;
     }
-    // q_proj's own codes/scale are not consumed by any site this checkpoint
-    // builds (attention is a placeholder, Sec11.2's own "well-scoped next
-    // checkpoint" scope) -- nothing to write on success.
+    // T-2035: q_codes/q_scale feed RoPE (site 4) and, through RoPE's own
+    // rotated output, attention -- LayerScratch offsets 48 (q_codes[8] i32)
+    // and 80 (q_scale, 16 bytes).
+    for (int i6 = 0; i6 < hidden_size; ++i6)
+    {
+        LayerScratch.Store<int>(48 + i6 * 4, (int)out_codes[i6]);
+    }
+    LayerScratch.Store<int64_t>(80, out_scale_m);
+    LayerScratch.Store<int64_t>(88, out_scale_e);
 }

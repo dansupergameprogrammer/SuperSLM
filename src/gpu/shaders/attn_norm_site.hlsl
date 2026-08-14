@@ -39,7 +39,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (sticky != kTagOk) return;  // a prior dispatch already rejected -- no arithmetic, no writes
 
     int hidden_size = (int)g_hidden_size;
-    uint layer_base = g_layer_index * Layout.Load<uint>(25 * 4);  // Layout[25] = kLayerStride
+    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);  // Layout[56] = kLayerStride
 
     int64_t h[kMaxSiteN];
     [unroll]

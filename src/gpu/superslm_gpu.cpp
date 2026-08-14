@@ -22,6 +22,7 @@
 // way -- CHECK_MSG must be able to catch it, not be accidentally satisfied by
 // it.
 #include "superslm/gpu_port.h"
+#include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
 #include <cstring>
@@ -248,15 +249,12 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 }
 
 // ===========================================================================
-// B4/B7/B11 (Sec5.6/Sec11), T-2032 checkpoint: the composed, device-resident,
-// multi-layer forward. Real GPU dispatches for sites 1-4 (attn_norm, q_proj,
-// kv_proj fused, RoPE's own guard) per Claude/Brunel/t2025-gpu-serial-build-
-// 2026-08-13.md Sec11.2's "well-scoped next checkpoint"; sites 5-16 plus the
-// per-layer commit dispatch are the shared, sticky-word-respecting
-// site_placeholder.hlsl (13 dispatches/layer of one shared .cso -- Sec11.2's
-// own text names "12" for sites 5-16 alone; the commit dispatch is the 13th
-// use of the identical shader here, since its own required behavior at this
-// checkpoint is the same shape, see this ticket's own build-log section).
+// B4/B7/B11 (Sec5.6/Sec11): the composed, device-resident, multi-layer
+// forward, real GPU dispatches throughout. T-2032 built sites 1-4 (attn_norm,
+// q_proj, kv_proj fused, RoPE's own guard); T-2035 completes RoPE's own
+// rotation and builds sites 5-16 plus the real per-layer commit dispatch --
+// the full 14-dispatch-per-layer composition (Claude/Vitruvius/t1986-...-
+// 2026-08-13.md Sec4's own site order; forward_sites.cpp:1390-1800).
 // ===========================================================================
 
 namespace {
@@ -270,13 +268,18 @@ uint32_t Align8U32(uint32_t x) { return (x + 7u) & ~7u; }
 // drift out of sync with each other. Index order matches every *_site.hlsl's
 // own `Layout.Load<uint>(N * 4)` calls exactly; see each shader's own header
 // comment for which indices it reads.
+// T-2035 (final composed checkpoint): extended to carry every LayerWeights
+// field sites 5-16 read. Index 0-24 unchanged from T-2032 (attn_norm/q_proj/
+// kv_proj); 25-55 new (o_proj, ctx_fold, attn_residual, mlp_norm, gate/up/
+// down_proj, mlp_act, mlp_residual, iexp_softmax_khead); 56 is the stride.
 struct GpuLayerLayout {
-	uint32_t off[25]{};
+	uint32_t off[56]{};
 	uint32_t stride = 0;
 };
 
 GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
-                                   uint32_t num_kv_heads) {
+                                   uint32_t num_kv_heads, uint32_t num_attention_heads,
+                                   uint32_t intermediate_size) {
 	GpuLayerLayout L;
 	uint32_t cur = 0;
 	L.off[0] = cur; cur += Align8U32(hidden_size * 4);              // attn_norm_gain
@@ -304,6 +307,37 @@ GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
 	L.off[22] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_k
 	L.off[23] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_v
 	L.off[24] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_v
+	L.off[25] = cur; cur += Align8U32(hidden_size * hidden_size);   // o_weight (int8)
+	L.off[26] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_identity
+	L.off[27] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_mult
+	L.off[28] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_shift
+	L.off[29] = cur; cur += 16;                                     // o_site_constant
+	L.off[30] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_identity
+	L.off[31] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_mult
+	L.off[32] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_shift
+	L.off[33] = cur; cur += 16;                                     // ctx_fold_site_constant
+	L.off[34] = cur; cur += 16;                                     // attn_residual_site_constant
+	L.off[35] = cur; cur += Align8U32(hidden_size * 4);             // mlp_norm_gain
+	L.off[36] = cur; cur += 16;                                     // mlp_norm_site_constant
+	L.off[37] = cur; cur += Align8U32(intermediate_size * hidden_size);  // gate_weight (int8)
+	L.off[38] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_identity
+	L.off[39] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_mult
+	L.off[40] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_shift
+	L.off[41] = cur; cur += 16;                                     // gate_site_constant
+	L.off[42] = cur; cur += Align8U32(intermediate_size * hidden_size);  // up_weight (int8)
+	L.off[43] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_identity
+	L.off[44] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_mult
+	L.off[45] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_shift
+	L.off[46] = cur; cur += 16;                                     // up_site_constant
+	L.off[47] = cur; cur += 16;                                     // mlp_act_site_constant
+	L.off[48] = cur; cur += Align8U32(hidden_size * intermediate_size);  // down_weight (int8)
+	L.off[49] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_identity
+	L.off[50] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_mult
+	L.off[51] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_shift
+	L.off[52] = cur; cur += 16;                                     // down_site_constant
+	L.off[53] = cur; cur += 16;                                     // mlp_residual_site_constant
+	L.off[54] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_m
+	L.off[55] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_e
 	L.stride = cur;
 	return L;
 }
@@ -329,6 +363,11 @@ superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {
 		case 5: return S::RopeTableTensorMissing;
 		case 6: return S::RopeTableExtentExceeded;
 		case 7: return S::PositionOverCap;
+		case 9: return S::SoftmaxRowWidthOutOfDomain;
+		case 10: return S::IExpScaleDerivationOutOfDomain;
+		case 11: return S::SoftmaxKernelRefusedAfterGateAccepted;
+		case 12: return S::ResidualReconciliationMagnitudeOutOfDomain;
+		case 13: return S::SiluCompositionScaleOutOfDomain;
 		default: return S::KvPrecisionUnsupported;  // 8 = NotYetImplemented, and any unmapped tag
 	}
 }
@@ -367,7 +406,6 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size) {
-	(void)intermediate_size;  // not consumed by this checkpoint's own real sites (1-4)
 	harness::Device& dev = harness::GetDevice();
 	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
 
@@ -376,7 +414,15 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	const uint32_t NH = static_cast<uint32_t>(num_key_value_heads);
 	const uint32_t KV = NH * HD;
 	const uint32_t N = num_hidden_layers;
-	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH);
+	// This design's build target carries no GQA-group config field distinct
+	// from what hidden_size/head_dim/num_key_value_heads already fix -- every
+	// fixture in this suite is MHA-degenerate (num_attention_heads ==
+	// num_key_value_heads == 1), and hidden_size == num_attention_heads *
+	// head_dim (the CFG1 geometry join, model.h) gives num_attention_heads
+	// directly: hidden_size / head_dim.
+	const uint32_t NQH = (HD > 0) ? (H / HD) : 0;
+	const uint32_t I = static_cast<uint32_t>(intermediate_size);
+	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH, NQH, I);
 
 	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
 	// own scoped subset: only what sites 1-4 read). ---
@@ -425,11 +471,66 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 			PutI64At(lw_bytes, base + layout.off[23] + i * 8, lw.kv_landing_r_t_v[i]);
 			PutI64At(lw_bytes, base + layout.off[24] + i * 8, lw.kv_landing_e_t_v[i]);
 		}
+		// T-2035: sites 5-16's own read-resource list.
+		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[25] + i] = static_cast<uint8_t>(lw.o_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[26] + i * 4, lw.o_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[27] + i * 4, lw.o_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[28] + i * 4, lw.o_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[29] + 0, lw.o_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[29] + 8, lw.o_site_constant.e);
+		for (uint32_t i = 0; i < NQH; ++i) {
+			PutI32At(lw_bytes, base + layout.off[30] + i * 4, lw.ctx_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[31] + i * 4, lw.ctx_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[32] + i * 4, lw.ctx_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[33] + 0, lw.ctx_fold_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[33] + 8, lw.ctx_fold_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[34] + 0, lw.attn_residual_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[34] + 8, lw.attn_residual_site_constant.e);
+		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[35] + i * 4, lw.mlp_norm_gain[i]);
+		PutI64At(lw_bytes, base + layout.off[36] + 0, lw.mlp_norm_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[36] + 8, lw.mlp_norm_site_constant.e);
+		for (uint32_t i = 0; i < I * H; ++i) {
+			lw_bytes[base + layout.off[37] + i] = static_cast<uint8_t>(lw.gate_weight[i]);
+			lw_bytes[base + layout.off[42] + i] = static_cast<uint8_t>(lw.up_weight[i]);
+		}
+		for (uint32_t i = 0; i < I; ++i) {
+			PutI32At(lw_bytes, base + layout.off[38] + i * 4, lw.gate_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[39] + i * 4, lw.gate_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[40] + i * 4, lw.gate_fold_shift[i]);
+			PutI32At(lw_bytes, base + layout.off[43] + i * 4, lw.up_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[44] + i * 4, lw.up_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[45] + i * 4, lw.up_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[41] + 0, lw.gate_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[41] + 8, lw.gate_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[46] + 0, lw.up_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[46] + 8, lw.up_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[47] + 0, lw.mlp_act_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[47] + 8, lw.mlp_act_site_constant.e);
+		for (uint32_t i = 0; i < H * I; ++i) lw_bytes[base + layout.off[48] + i] = static_cast<uint8_t>(lw.down_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[49] + i * 4, lw.down_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[50] + i * 4, lw.down_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[51] + i * 4, lw.down_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[52] + 0, lw.down_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[52] + 8, lw.down_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[53] + 0, lw.mlp_residual_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[53] + 8, lw.mlp_residual_site_constant.e);
+		for (uint32_t i = 0; i < NH; ++i) {
+			PutI64At(lw_bytes, base + layout.off[54] + i * 8,
+			         lw.iexp_softmax_khead_m != nullptr ? lw.iexp_softmax_khead_m[i] : 0);
+			PutI64At(lw_bytes, base + layout.off[55] + i * 8,
+			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
+		}
 	}
 
-	std::vector<uint8_t> layout_bytes(26 * 4, 0);
-	for (int i = 0; i < 25; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
-	PutI32At(layout_bytes, 25 * 4, static_cast<int32_t>(layout.stride));
+	std::vector<uint8_t> layout_bytes(57 * 4, 0);
+	for (int i = 0; i < 56; ++i) PutI32At(layout_bytes, static_cast<size_t>(i) * 4, static_cast<int32_t>(layout.off[i]));
+	PutI32At(layout_bytes, 56 * 4, static_cast<int32_t>(layout.stride));
 
 	// --- RopeGuardInfo: resolved HOST-SIDE, once, from the SAME
 	// SslmTensorManifest::Tensor("cos")/Tensor("sin") lookup RopeApplySite
@@ -460,8 +561,40 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	PutI64At(seq_bytes, 64, seq.context_length);
 	PutI64At(seq_bytes, 72, 0);  // sticky_status = kTagOk
 
-	std::vector<uint8_t> scratch_bytes(64, 0);
+	// T-2035: LayerScratch's own extended layout (site_common2.hlsli's shaders'
+	// own byte-offset comments carry the same table): normed[0/32] (attn_norm,
+	// reused by mlp_norm), q_codes[48]/q_scale[80], q_rot[96], ctx_wide[128]
+	// (i64x8), ctx_codes[192]/ctx_scale[224], o_codes[240]/o_scale[272],
+	// attn_stream[288]/attn_stream_scale[320], gate_codes[336]/gate_scale[368],
+	// up_codes[384]/up_scale[416], act_codes[432]/act_scale[464],
+	// down_codes[480]/down_scale[512], stream_next[528]/stream_scale[560].
+	std::vector<uint8_t> scratch_bytes(640, 0);
 	std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+
+	// ModelConstants (t3): kIExpLn2Q/kIExpBQ/kIExpCaQ, the i-exp derivation's
+	// own compile-time constants (intmath.h) -- read directly from the
+	// already-compiled C++ values rather than recomputed in HLSL, so no
+	// floating-point truncation can drift between the two languages.
+	std::vector<uint8_t> model_const_bytes(24, 0);
+	PutI64At(model_const_bytes, 0, superslm::kIExpLn2Q);
+	PutI64At(model_const_bytes, 8, superslm::kIExpBQ);
+	PutI64At(model_const_bytes, 16, superslm::kIExpCaQ);
+
+	// SiluLut (t4): the SIL1 canonical table (kSiluLutN+1 = 1025 int32 nodes),
+	// the same compiled constant every CPU call site uses (forward_sites.cpp's
+	// own MlpActSite call passes kSiluLutCanonicalTable directly).
+	std::vector<uint8_t> silu_lut_bytes(sizeof(superslm::kSiluLutCanonicalTable));
+	std::memcpy(silu_lut_bytes.data(), superslm::kSiluLutCanonicalTable, silu_lut_bytes.size());
+
+	// RoPE's own real rotation data (t5/t6) -- the ROP1 "cos"/"sin" tensors'
+	// raw bytes, uploaded once per call (rope_tables is model-wide, Sec5.6).
+	// A 1-byte dummy when absent (RopeInfo's own presence flag is what a real
+	// site checks before ever reading these; sized nonzero only so the buffer
+	// resource itself is legal to create).
+	std::vector<uint8_t> cos_table_bytes(cos_t != nullptr ? cos_t->elem_count * 8 : 8, 0);
+	if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
+	std::vector<uint8_t> sin_table_bytes(sin_t != nullptr ? sin_t->elem_count * 8 : 8, 0);
+	if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
 
 	// --- Build/upload every buffer this call needs, in ONE command list
 	// (upload-and-transition, then the composed dispatch chain, then the
@@ -472,6 +605,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto lw_buf = dev.Upload(lw_bytes.data(), lw_bytes.size());
 	auto layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
 	auto rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
+	auto model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
+	auto silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
+	auto cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
+	auto sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
 	auto seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 	auto scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
@@ -480,8 +617,17 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
 	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
-	auto& rope_guard_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
-	auto& placeholder_pipe = harness::GetOrBuildComposedPipeline("site_placeholder");
+	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& attention_pipe = harness::GetOrBuildComposedPipeline("attention_site");
+	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
+	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
+	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
+	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
+	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
+	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
+	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
+	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
+	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
 
@@ -491,30 +637,49 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 
 	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
 	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
+	// Sec9.4: this token attends to every already-committed position plus its
+	// own just-landed K/V -- constant across every layer of this token for the
+	// identical reason `position` is (context_length only advances at the
+	// token's own last layer's commit).
+	const uint32_t width_u32 = static_cast<uint32_t>(seq.context_length) + 1u;
 
 	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index) {
-		uint32_t consts[6] = {layer_index, H, HD, NH, context_cap_u32, position_u32};
-		dev.list->SetComputeRoot32BitConstants(0, 6, consts, 0);
+		uint32_t consts[10] = {layer_index, H, HD, NH, context_cap_u32, position_u32, NQH, width_u32, I, N};
+		dev.list->SetComputeRoot32BitConstants(0, 10, consts, 0);
 		dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
 		dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
 		dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(4, seq_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(5, scratch_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(6, kv_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(8, seq_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(9, scratch_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(10, kv_uav->GetGPUVirtualAddress());
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(1, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
 
+	// T-2035: the full 16-site + commit composition, real dispatches throughout
+	// (Claude/Vitruvius/t1986-...-2026-08-13.md Sec4's own order; forward_sites.
+	// cpp:1390-1800).
 	const uint32_t layers_to_record = std::min(layer_budget, N);  // Sec5.8: never past the token boundary
 	for (uint32_t l = 0; l < layers_to_record; ++l) {
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(rope_guard_pipe.pso.Get(), l);
-		for (int s = 0; s < 13; ++s) {  // sites 5-16 (12) + the per-layer commit dispatch (1)
-			bind_and_dispatch(placeholder_pipe.pso.Get(), l);
-		}
+		bind_and_dispatch(rope_pipe.pso.Get(), l);
+		bind_and_dispatch(attention_pipe.pso.Get(), l);
+		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
+		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(commit_pipe.pso.Get(), l);
 	}
 
 	// --- Readback: SeqState + the KV cache twin, into `seq`/`workspace`. ---

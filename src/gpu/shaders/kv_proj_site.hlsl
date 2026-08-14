@@ -41,7 +41,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     int head_dim = (int)g_head_dim;
     int num_kv_heads = (int)g_num_kv_heads;
     int kv_hidden_size = num_kv_heads * head_dim;
-    uint layer_base = g_layer_index * Layout.Load<uint>(25 * 4);
+    uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
     int normed_codes[kMaxSiteN];
     [unroll]
@@ -162,14 +162,16 @@ void main(uint3 dtid : SV_DispatchThreadID)
         for (int d = 0; d < head_dim; ++d)
         {
             int i = h * head_dim + d;
-            bool k_clamp;
-            int64_t k_raw = LandingRescaleGpu(kacc[i], normed_scale_m, r_t_k, normed_scale_e, e_t_k, k_clamp);
+            bool k_clamp, k_mag_exceeded;
+            int64_t k_raw = LandingRescaleGpu(kacc[i], normed_scale_m, r_t_k, normed_scale_e, e_t_k, k_clamp,
+                                               k_mag_exceeded);
             if (k_clamp) total_clamps += 1;
             int64_t k_val = ClampRopeCodeGpu(k_raw);
             StoreSignedByteGpu(KvCache, kv_half_off + row_off + (uint)d, (int)k_val);
 
-            bool v_clamp;
-            int64_t v_raw = LandingRescaleGpu(vacc[i], normed_scale_m, r_t_v, normed_scale_e, e_t_v, v_clamp);
+            bool v_clamp, v_mag_exceeded;
+            int64_t v_raw = LandingRescaleGpu(vacc[i], normed_scale_m, r_t_v, normed_scale_e, e_t_v, v_clamp,
+                                               v_mag_exceeded);
             if (v_clamp) total_clamps += 1;
             int64_t v_val = ClampRopeCodeGpu(v_raw);
             StoreSignedByteGpu(KvCache, v_half_off + row_off + (uint)d, (int)v_val);

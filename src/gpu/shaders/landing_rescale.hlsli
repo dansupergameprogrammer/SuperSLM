@@ -39,13 +39,25 @@ int64_t ComposedExponentGpu(int64_t e_a, int64_t e_t)
 
 // forward_sites.cpp LandingRescale, bit-exact: rounds/shifts
 // branch_code*m_a*r_t by 2^k (k = ComposedExponent(e_a, e_t)), magnitude-then-
-// sign, and reports (via out params) whether the caller's own
-// clamp(-127,127) would have clamped this raw value (the T-518 saturation
-// signal). This checkpoint's own build does not need
-// out_magnitude_exceeded_int64 (Option-G-only, unreachable at this design's
-// build target, D-SLM2994) -- omitted here rather than plumbed unused.
+// sign, and reports TWO DISTINCT out flags, exactly as forward_sites.h's own
+// contract requires (forward_sites.h:170-236) -- conflating them was this
+// checkpoint's own first-round divergence (T-2035, confirmed by execution:
+// every unperturbed layer's own attn_residual/mlp_residual call falsely
+// rejected, because the single flag this file originally computed included
+// the K/V-landing-only ">127" clamp test, which ResidualReconcileSite's own
+// header explicitly warns is NOT this site's contract -- "composes no clamp
+// at all... that test would false-positive on every ordinary large-but-
+// correct result"):
+//   out_would_clamp            -- magnitude_exceeds_clamp OR raw outside
+//                                 [-127,127] (T-518's saturation signal,
+//                                 kv_proj's own clamp-range caller).
+//   out_magnitude_exceeded_i64 -- magnitude_exceeds_int64 (T-1377/D-SLM457,
+//                                 the narrower "does the true 128-bit
+//                                 magnitude fit int64" signal;
+//                                 ResidualReconcileSite's own caller, which
+//                                 composes no clamp of its own).
 int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t e_a, int64_t e_t,
-                          out bool out_would_clamp)
+                          out bool out_would_clamp, out bool out_magnitude_exceeded_i64)
 {
     bool branch_negative = branch_code < 0;
     bool m_a_negative = m_a < 0;
@@ -58,6 +70,8 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
     int64_t k = ComposedExponentGpu(e_a, e_t);
     int64_t raw;
     bool magnitude_exceeds_clamp = false;
+    bool magnitude_exceeds_int64 = false;
+    const uint64_t kInt64MaxU = 0x7FFFFFFFFFFFFFFFULL;
 
     if (k >= 0)
     {
@@ -65,6 +79,7 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
         U128 rounded = UAddWide(doubled, UOneShlWide((int)k));
         U128 quotient = UShrWideFull(rounded, (int)k + 1);
         magnitude_exceeds_clamp = (quotient.hi != 0ULL) || (quotient.lo > 127ULL);
+        magnitude_exceeds_int64 = (quotient.hi != 0ULL) || (quotient.lo > kInt64MaxU);
         raw = (int64_t)quotient.lo;
     }
     else
@@ -73,6 +88,7 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
         if (shift >= 128)
         {
             magnitude_exceeds_clamp = (mag.lo != 0ULL || mag.hi != 0ULL);
+            magnitude_exceeds_int64 = magnitude_exceeds_clamp;
             raw = 0;
         }
         else
@@ -81,6 +97,7 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
             U128 verify = UShrWideFull(shifted, shift);
             bool shift_lost_bits = (verify.lo != mag.lo) || (verify.hi != mag.hi);
             magnitude_exceeds_clamp = shift_lost_bits || (shifted.hi != 0ULL) || (shifted.lo > 127ULL);
+            magnitude_exceeds_int64 = shift_lost_bits || (shifted.hi != 0ULL) || (shifted.lo > kInt64MaxU);
             raw = (int64_t)shifted.lo;
         }
     }
@@ -88,6 +105,7 @@ int64_t LandingRescaleGpu(int64_t branch_code, int64_t m_a, int64_t r_t, int64_t
     if (negative) raw = (int64_t)(0ULL - (uint64_t)raw);
 
     out_would_clamp = magnitude_exceeds_clamp || raw < -127 || raw > 127;
+    out_magnitude_exceeded_i64 = magnitude_exceeds_int64;
     return raw;
 }
 
