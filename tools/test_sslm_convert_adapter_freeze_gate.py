@@ -310,6 +310,25 @@ def test_a_budget_stop_is_never_reported_as_a_pass():
     assert result["stop_reason"] != "resolved"
 
 
+def test_zero_dispersion_population_is_unresolved_not_infinitely_resolved():
+    """StandardsDocument.md Sec5.4: a population with zero dispersion returns exactly zero under
+    any function, which establishes determinism and nothing about discrimination. The gate must
+    score it UNRESOLVED rather than treating a zero SE as perfect resolution."""
+    flat = np.full(50, 1.25)
+    tier = A.freeze_tier_verdict(flat, flat, band_sd=0.20, band_p95=0.10,
+                                 n_resamples=100, seed=32)
+    assert tier["margin"] == 0.0
+    assert tier["verdict"] == A.FREEZE_UNRESOLVED
+
+
+def test_gate_refuses_to_run_on_an_empty_pair_set():
+    """An adapter with no adapted pairs has no conversion health to compare; returning PASS would
+    be a gate that cannot fire."""
+    with pytest.raises(ValueError, match="no pairs to gate"):
+        A.run_freeze_health_gate(lambda n, p: ([], []), [],
+                                 projection_type_of=lambda n: "q_proj")
+
+
 def test_history_records_every_step_for_the_operator_facing_log():
     collect_pair, _calls = _collector()
     result = A.run_freeze_health_gate(

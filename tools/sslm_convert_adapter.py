@@ -1047,6 +1047,12 @@ def freeze_tier_verdict(candidate, reference, *, band_sd: float, band_p95: float
         rel = freeze_ratio_relative_se(candidate, reference, stat_fn,
                                        n_resamples=n_resamples, seed=seed)
         band = bands[stat_name]
+        # A ratio relative SE of exactly 0 (a zero-dispersion population, where the bootstrap
+        # returns 0 under ANY statistic) or of infinity (a zero point estimate, where no relative
+        # uncertainty is defined) scores margin 0 and therefore UNRESOLVED -- never "infinitely
+        # resolved". `StandardsDocument.md` §5.4: a population with zero dispersion establishes
+        # that the instrument is deterministic and nothing about whether it can discriminate, so
+        # the conservative direction is the only honest one here.
         margin = (band / rel) if rel > 0.0 and not math.isinf(rel) else 0.0
         c_point, r_point = stat_fn(candidate), stat_fn(reference)
         per_stat[stat_name] = {
@@ -1121,6 +1127,11 @@ def run_freeze_health_gate(collect_pair, pair_names, *, projection_type_of,
     outcome here."""
     if time_fn is None:
         time_fn = time.time
+    pair_names = list(pair_names)
+    if not pair_names:
+        raise ValueError("run_freeze_health_gate: pair_names is empty -- no pairs to gate. An "
+                         "adapter with no adapted pairs has no conversion health to compare, and "
+                         "returning PASS for one would be a gate that cannot fire")
     history = []
     spent = 0.0
     current_pilot_n = int(pilot_n)
