@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..events import CorpusEntry
-from .backend import MockJudgeBackend
+from .backend import JudgeABackend, MockJudgeBackend
 from .stats import WilsonInterval, wilson_interval
 
 FIELDS = ("info_present", "attitude_present")
@@ -78,6 +78,18 @@ def _collect_reactions(entries: list[CorpusEntry]) -> list[tuple[str, int, "obje
     return out
 
 
+def _collect_reactions_with_entry(entries: list[CorpusEntry]) -> list[tuple[str, int, "object", CorpusEntry]]:
+    """Same as `_collect_reactions`, plus the owning `CorpusEntry` -- needed only by the real-backend
+    path (`answer_info`/`answer_attitude`) to supply the actual `required_info` item text and
+    `intended_attitude`, which the mock's ground-truth-cheat path (`_with_truth`) never needed."""
+
+    out = []
+    for e in entries:
+        for i, vr in enumerate(e.validation_reactions):
+            out.append((e.event.id, i, vr, e))
+    return out
+
+
 def check_corpus_sizing(entries: list[CorpusEntry]) -> None:
     """Plan Sec.8 P2's own sizing gate on the validation set, checked before any grading runs."""
 
@@ -93,32 +105,84 @@ def check_corpus_sizing(entries: list[CorpusEntry]) -> None:
             )
 
 
-def run_one_iteration(entries: list[CorpusEntry], backend: MockJudgeBackend, iteration: int) -> IterationResult:
-    reactions = _collect_reactions(entries)
+def run_one_iteration(entries: list[CorpusEntry], backend: JudgeABackend, iteration: int) -> IterationResult:
+    """Grades every validation reaction and builds the ledger. Dispatches on which interface the
+    backend implements:
+
+    - `MockJudgeBackend` (has `answer_info_with_truth`): the existing ground-truth-cheat path,
+      unchanged -- proves the precision/recall/CI/escalation machinery independent of any real
+      model call.
+    - a real `JudgeABackend` (`OllamaJudgeBackend`, `HostedApiJudgeBackend`): calls the abstract
+      `answer_info`/`answer_attitude` interface with the reaction's actual text and the owning
+      entry's `required_info`/`intended_attitude`, per the interface those methods were already
+      specified with (T-2011 finding: the interface existed but nothing before this build ever
+      called it with real content -- `answer_info_with_truth`/`answer_attitude_with_truth` are
+      mock-only test doubles that were never meant to stand in for a real judge call).
+    """
+
+    is_mock = hasattr(backend, "answer_info_with_truth")
     ledger: list[LedgerRow] = []
-    for event_id, idx, vr in reactions:
-        pred_info = backend.answer_info_with_truth(vr.info_present)
-        ledger.append(
-            LedgerRow(
-                event_id=event_id,
-                reaction_index=idx,
-                field="info_present",
-                ground_truth=vr.info_present,
-                predicted=pred_info,
-                correct=pred_info == vr.info_present,
+
+    if is_mock:
+        reactions = _collect_reactions(entries)
+        for event_id, idx, vr in reactions:
+            pred_info = backend.answer_info_with_truth(vr.info_present)
+            ledger.append(
+                LedgerRow(
+                    event_id=event_id,
+                    reaction_index=idx,
+                    field="info_present",
+                    ground_truth=vr.info_present,
+                    predicted=pred_info,
+                    correct=pred_info == vr.info_present,
+                )
             )
-        )
-        pred_attitude = backend.answer_attitude_with_truth(vr.attitude_present)
-        ledger.append(
-            LedgerRow(
-                event_id=event_id,
-                reaction_index=idx,
-                field="attitude_present",
-                ground_truth=vr.attitude_present,
-                predicted=pred_attitude,
-                correct=pred_attitude == vr.attitude_present,
+            pred_attitude = backend.answer_attitude_with_truth(vr.attitude_present)
+            ledger.append(
+                LedgerRow(
+                    event_id=event_id,
+                    reaction_index=idx,
+                    field="attitude_present",
+                    ground_truth=vr.attitude_present,
+                    predicted=pred_attitude,
+                    correct=pred_attitude == vr.attitude_present,
+                )
             )
-        )
+    else:
+        reactions_with_entry = _collect_reactions_with_entry(entries)
+        for event_id, idx, vr, entry in reactions_with_entry:
+            if vr.info_target_index < 0:
+                raise ValueError(
+                    f"{event_id}[{idx}]: info_target_index={vr.info_target_index} names no single "
+                    f"required_info item to ask the real judge about -- this corpus's validation "
+                    f"reactions are constructed to always target index 0 (validation_reactions.py); "
+                    f"a -1 ('off-topic w.r.t. every item') reaction is a schema case this real-backend "
+                    f"path does not have an unambiguous question for and does not guess at."
+                )
+            info_item = entry.required_info[vr.info_target_index]
+            pred_info = backend.answer_info(vr.text, info_item)
+            ledger.append(
+                LedgerRow(
+                    event_id=event_id,
+                    reaction_index=idx,
+                    field="info_present",
+                    ground_truth=vr.info_present,
+                    predicted=pred_info,
+                    correct=pred_info == vr.info_present,
+                )
+            )
+            pred_attitude = backend.answer_attitude(vr.text, entry.intended_attitude)
+            ledger.append(
+                LedgerRow(
+                    event_id=event_id,
+                    reaction_index=idx,
+                    field="attitude_present",
+                    ground_truth=vr.attitude_present,
+                    predicted=pred_attitude,
+                    correct=pred_attitude == vr.attitude_present,
+                )
+            )
+        reactions = reactions_with_entry
 
     field_results: dict[str, FieldResult] = {}
     for f in FIELDS:
@@ -144,11 +208,12 @@ def run_one_iteration(entries: list[CorpusEntry], backend: MockJudgeBackend, ite
 
 
 def run_validation(entries: list[CorpusEntry], backend_factory) -> ValidationOutcome:
-    """`backend_factory(iteration: int) -> MockJudgeBackend` builds the judge config to try for a
-    given iteration (1-indexed). Iterates up to MAX_ITERATIONS times; stops at the first iteration
-    where every field passes. If none pass, returns verdict "ESCALATE" naming the best
-    (highest-minimum-lower-CI-bound) iteration's numbers as the measured ceiling -- plan Sec.8 P2 /
-    Risk #12: escalate to Dan with the measured ceiling rather than lowering the bar silently."""
+    """`backend_factory(iteration: int) -> JudgeABackend` builds the judge (mock or real) to try for
+    a given iteration (1-indexed) -- e.g. a fresh `OllamaJudgeBackend` with a reworded prompt on a
+    retry. Iterates up to MAX_ITERATIONS times; stops at the first iteration where every field
+    passes. If none pass, returns verdict "ESCALATE" naming the best (highest-minimum-lower-CI-bound)
+    iteration's numbers as the measured ceiling -- plan Sec.8 P2 / Risk #12: escalate to Dan with the
+    measured ceiling rather than lowering the bar silently."""
 
     check_corpus_sizing(entries)
 
