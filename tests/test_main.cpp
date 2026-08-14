@@ -21019,7 +21019,27 @@ SslmForwardStatus RunResumedToRejection(NLayerFixture<N>& fixture, uint32_t reje
                                           const superslm::SslmTensorManifest* rope_tables_override,
                                           SequenceLayerState& seq, std::vector<uint8_t>& ws,
                                           std::vector<std::pair<bool, bool>>& out_kv_present) {
-	int8_t codes[2] = {5, -5};
+	// FIXED 2026-08-14 (T-2034, D-SLM3132): `codes` was a local array whose
+	// storage duration ended at this function's own return, while
+	// `seq.hidden_codes` (the caller's `cpu_seq.hidden_codes`, since `seq`
+	// is taken by reference) kept pointing at it -- every caller read a
+	// dangling pointer after the call, confirmed by execution (Brunel
+	// build log Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec12.3)
+	// to read back {0,0} instead of {5,-5} depending on build shape. Fixed
+	// with function-`static` storage (the build log's own sanctioned
+	// shape, "a caller-owned or function-static/member codes buffer whose
+	// lifetime outlives the call") -- this suite calls RunResumedToRejection
+	// strictly sequentially, one call's own `cpu_seq` fully consumed
+	// (CHECK_MSG'd, compared against the GPU side) before the next call in
+	// the same loop overwrites this storage, so no two calls' results are
+	// ever live at once; `gpu_seq`'s own `hidden_codes` is unaffected --
+	// every call site already owns its `gpu_codes` array as a proper local
+	// in its OWN frame, never returned from a callee. Re-initialized
+	// (not just declared) on every call, since a `static` array's own
+	// initializer runs once, not per-call.
+	static int8_t codes[2];
+	codes[0] = 5;
+	codes[1] = -5;
 	seq = SequenceLayerState{};
 	seq.hidden_codes = codes;
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
