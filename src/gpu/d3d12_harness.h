@@ -193,8 +193,26 @@ struct Device {
 	// issues -- a dispatch that does not use one of these bindings simply
 	// never reads it; D3D12 does not require a PSO to consume every root
 	// parameter its shared signature declares.
+	// T-2049 (N4, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
+	// the single source of truth for how many resource bindings (SRV+UAV,
+	// excluding the root-constants block) the composed pipeline's own root
+	// signature carries -- 8 SRVs + 4 UAVs today. `kGpuResidencyAllocationCallCount`
+	// (superslm_gpu.cpp) reads THIS constant rather than repeating the number,
+	// so B12's own injection sweep width cannot silently drift from what the
+	// root signature actually binds: the confirmation review found the prior
+	// `12` presented as "§5.1's own real read+write resource-table count" when
+	// it was actually this file's own current substrate, counted by hand and
+	// duplicated into a second file -- a value that could disagree with this
+	// one the moment either changed. §5.1's own RATIFIED architecture (one SRV
+	// descriptor table + one UAV descriptor table, D-SLM3001/D-SLM2929) is a
+	// DIFFERENT, smaller binding count than this one; this constant is
+	// honestly the CURRENT substrate's own count, not a §5.1 count, and is
+	// named as such everywhere it is used -- it must be re-derived, not
+	// reused, when S2's own binding-architecture migration lands.
+	static constexpr UINT kComposedResourceBindingCount = 12;  // 8 SRV + 4 UAV
+
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
-		D3D12_ROOT_PARAMETER ps[13]{};
+		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		ps[0].Constants.Num32BitValues = 10;  // 10th: num_hidden_layers (commit_site.hlsl only)
 		ps[0].Constants.ShaderRegister = 0;  // b0
@@ -225,7 +243,7 @@ struct Device {
 		ps[12].Descriptor.ShaderRegister = 3;  // u3 WorkScratch
 
 		D3D12_ROOT_SIGNATURE_DESC rs{};
-		rs.NumParameters = 13;
+		rs.NumParameters = 1 + kComposedResourceBindingCount;
 		rs.pParameters = ps;
 		ComPtr<ID3DBlob> blob, err;
 		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);

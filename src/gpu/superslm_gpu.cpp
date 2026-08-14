@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <stdexcept>
 #include <vector>
@@ -518,16 +519,68 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size) {
-	// T-2045 (C2, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): the
-	// same three host-side guards forward_sites.cpp's own RunLayerLoopImpl
-	// checks before touching `seq`, `workspace`, or issuing any device work
-	// (forward_sites.cpp:1137/1147/1316) -- checked in the SAME order, before
-	// the device-availability check even, since none of them needs a device
-	// to answer and CPU checks them before anything else too.
+	// T-2049 (N1, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
+	// CPU parity, corrected. T-2045's own comment here claimed parity with
+	// "the same three host-side guards" RunLayerLoopImpl checks -- CPU checks
+	// EIGHT there, not three, and the confirmation review reproduced two of
+	// the five missing ones as real defects on real hardware: guard 8 absent
+	// let kv_proj/rope_guard land K/V bytes into another layer's row before
+	// the sticky word ever latched (the exact cross-layer-restore corruption
+	// CPU's own guard 8 comment names, `Poirot 0d64462 review, Critical 1`,
+	// re-created on this leg); guard 5 absent let an 8x-undersized workspace
+	// return Ok while writing 28 bytes past the caller's own KvCache UAV (a
+	// root descriptor, which D3D12 does not bounds-check). All eight now run
+	// here, in CPU's own source order (forward_sites.cpp:1137-1354), before
+	// `harness::GetDevice()` is even called -- none of them needs a device to
+	// answer, and CPU's own "seq/workspace left untouched on rejection"
+	// contract is satisfied by construction: a return here issues no upload,
+	// no dispatch, no readback, so nothing GPU-side is ever touched.
+	//
+	// 1/2 (forward_sites.cpp:1137/1147).
 	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;
 	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;
+	// 3/4 (forward_sites.cpp:1161-1175): the CFG1 geometry join, checked on
+	// THIS call's own caller-supplied hidden_size/head_dim/num_key_value_heads
+	// exactly as CPU checks it -- never assumed sound because some other
+	// caller (the loader's own ValidateConfigGeometryJoin) already checked a
+	// artifact-sourced instance of the same triple.
+	const size_t guard_num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
+	if (guard_num_heads == 0 || guard_num_heads * head_dim != hidden_size) {
+		return superslm::SslmForwardStatus::HeadDimGeometryMismatch;
+	}
+	if (num_key_value_heads == 0 || num_key_value_heads > guard_num_heads ||
+	    guard_num_heads % num_key_value_heads != 0) {
+		return superslm::SslmForwardStatus::KvHeadGeometryMismatch;
+	}
+	// 5 (forward_sites.cpp:1196-1218): the overflow-guarded KV-size product,
+	// bit-exact against CPU's own factor-by-factor `SIZE_MAX / factor` idiom
+	// (the third factor is num_key_value_heads, not guard_num_heads --
+	// T-1654/S3.8a's own correction, matching KeyRow/ValueRow's real
+	// addressing) -- an overflowing product returns CPU's own
+	// InvalidContextCap, never silently wrapping into a workspace_size
+	// comparison that could pass on a wrapped-small value.
+	{
+		size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
+		const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads, head_dim, 2u};
+		for (size_t factor : kv_factors) {
+			if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
+				return superslm::SslmForwardStatus::InvalidContextCap;
+			}
+			kv_bytes_needed *= factor;
+		}
+		if (workspace == nullptr) return superslm::SslmForwardStatus::WorkspaceTooSmall;
+		if (workspace_size < kv_bytes_needed) return superslm::SslmForwardStatus::WorkspaceTooSmall;
+	}
+	// 6 (forward_sites.cpp:1316).
 	if (seq.layer_index >= num_hidden_layers) {
 		return superslm::SslmForwardStatus::SequenceAlreadyComplete;
+	}
+	// 7/8 (forward_sites.cpp:1351-1354): the two `seq.context_length` domain
+	// guards -- guard 8 is the one the confirmation review's own probe
+	// reproduced landing K/V bytes past the addressed row before rejecting.
+	if (seq.context_length < 0) return superslm::SslmForwardStatus::PositionOverCap;
+	if (seq.context_length >= context_cap) {
+		return superslm::SslmForwardStatus::KvCapacityExhausted;
 	}
 
 	harness::Device& dev = harness::GetDevice();
@@ -575,6 +628,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// identical bytes every call and skips the ~1.31 GiB PCIe transfer on
 	// every call after the first.
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_buf;
+	// T-2049 (N3): the upload-heap temporary behind a fresh DEFAULT-heap copy
+	// (below) -- must stay alive through ExecuteCommandLists + the fence wait,
+	// declared here (outer scope) rather than inside the upload's own `if`
+	// block for exactly that reason.
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
 
 	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
 	// own scoped subset: only what sites 1-4 read). Always runs (S3 above). ---
@@ -752,21 +810,36 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// per-primitive header comments state this for each cooperative
 	// primitive) -- no cross-dispatch or cross-call persistence is needed or
 	// assumed.
-	// T-2045 (C1): a fourth region, ROPE_STAGE, immediately after ATTN_SCORES --
-	// 256 * head_dim int32 slots (one full head_dim-sized staging row per
-	// thread), so RoPE's own K write-back can stage every owned head's
-	// pre-rotation row before any thread writes back (Claude/Poirot/
-	// 82cfca7-gpu-serial-port-build-review.md C1; the design's own D-SLM2993
-	// staged shape, rope_guard_site.hlsl's own header comment).
+	// T-2049 (N6, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
+	// ATTN_SCORES retired -- C3 (T-2045) moved the score/probs row to
+	// LayerScratch's own persistent `scores` field (ScratchLayout index 25);
+	// no shader has read or written this WorkScratch region since, so it is
+	// no longer allocated (was 64 MiB at `context_cap = 32768`, pure waste).
+	//
+	// T-2049 (N2): ROPE_STAGE resized from 256 (thread-indexed) to
+	// `num_attention_heads` (HEAD-indexed) `head_dim`-sized int32 slots --
+	// the confirmation review reproduced the thread-indexed version silently
+	// corrupting K rows once a single thread owns more than one head
+	// (`num_attention_heads > 256`, unreachable at either of this design's
+	// real tiers but a real bug in the shape). Indexing by `h` instead of
+	// `t` (`rope_guard_site.hlsl`'s own updated `my_stage` computation) means
+	// every head's own staged row is independent of which thread processes
+	// it, at any head count -- the class of defect is removed, not capped.
 	const uint32_t max_width = std::max(H, I);
 	const uint64_t work_wide_a_off = 0;
 	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
-	const uint64_t work_attn_scores_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
-	const uint64_t work_rope_stage_off =
-	    work_attn_scores_off + 256ull * static_cast<uint64_t>(context_cap) * 8u;
-	const uint64_t work_total = work_rope_stage_off + 256ull * static_cast<uint64_t>(HD) * 4u;
+	const uint64_t work_rope_stage_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
+	const uint64_t work_total = work_rope_stage_off + static_cast<uint64_t>(NQH) * static_cast<uint64_t>(HD) * 4u;
 
-	std::vector<uint8_t> scratch_layout_bytes(26 * 4, 0);
+	// T-2049 (N6): index 24 (formerly `work_attn_scores_off`) is retired --
+	// left unwritten (reads back 0, never consulted by any shader) rather
+	// than renumbering every index after it, which would touch every site
+	// shader's own hardcoded `ScratchLayout.Load<uint>(N*4)` call for no
+	// behavioural change. Index 26 is new: `work_rope_stage_off`, host-
+	// computed and shader-read (matching this table's own stated discipline,
+	// d3d12_harness.h:186-190) rather than re-derived in HLSL from index 24
+	// the way `rope_guard_site.hlsl` used to.
+	std::vector<uint8_t> scratch_layout_bytes(27 * 4, 0);
 	{
 		auto put = [&](int idx, uint32_t v) { PutI32At(scratch_layout_bytes, static_cast<size_t>(idx) * 4, static_cast<int32_t>(v)); };
 		put(0, scratch_layout.normed); put(1, scratch_layout.normed_scale);
@@ -783,8 +856,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		put(21, scratch_layout.total);
 		put(22, static_cast<uint32_t>(work_wide_a_off));
 		put(23, static_cast<uint32_t>(work_wide_b_off));
-		put(24, static_cast<uint32_t>(work_attn_scores_off));
+		// index 24 retired (N6) -- ATTN_SCORES no longer allocated
 		put(25, scratch_layout.scores);  // T-2045 (C3): persistent cross-dispatch scores/probs region
+		put(26, static_cast<uint32_t>(work_rope_stage_off));  // T-2049 (N6): WorkScratch ROPE_STAGE
 	}
 
 	// ModelConstants (t3): kIExpLn2Q/kIExpBQ/kIExpCaQ, the i-exp derivation's
@@ -818,11 +892,28 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
-	// T-2045 (S3): upload LayerWeights only on a residency-cache miss (a real
-	// content difference from the last upload); a hit reuses `lw_buf`
-	// (already assigned from `g_resident_weights` above).
+	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
+	// on a residency-cache miss, the packed row is copied into a genuine
+	// DEFAULT-heap (VRAM-resident) buffer -- not cached as an UPLOAD-heap
+	// resource, which the confirmation review correctly named as never
+	// reaching §5.3's own "resident" property regardless of whether the
+	// per-call copy into it was skipped (T-2045's own S3 cached the upload
+	// heap itself, so every dispatch still read the weights across PCIe on
+	// every call, hit or miss). A hit reuses the cached DEFAULT-heap `lw_buf`
+	// directly -- no copy, no transition, no PCIe traffic at all.
 	if (!weights_resident) {
-		lw_buf = dev.Upload(lw_bytes.data(), lw_bytes.size());
+		lw_upload_keep_alive = dev.Upload(lw_bytes.data(), lw_bytes.size());
+		auto lw_default = dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
+		                                  D3D12_RESOURCE_STATE_COPY_DEST);
+		dev.list->CopyResource(lw_default.Get(), lw_upload_keep_alive.Get());
+		D3D12_RESOURCE_BARRIER lw_barrier{};
+		lw_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		lw_barrier.Transition.pResource = lw_default.Get();
+		lw_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		lw_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+		lw_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		dev.list->ResourceBarrier(1, &lw_barrier);
+		lw_buf = lw_default;
 		g_resident_weights.lw_buf = lw_buf;
 		g_resident_weights.bytes = std::move(lw_bytes);
 		g_resident_weights.valid = true;
@@ -1406,18 +1497,36 @@ bool MapModelGpuResidencyTierCheck() {
 }
 
 // ===========================================================================
-// B12 (Sec11 B12): deterministic allocation-failure injection. T-2045 (S1,
-// Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): `N` is now Sec5.1's
-// own real read+write resource-table count, the same 12 resources the
-// composed pipeline's own root signature binds every dispatch
-// (d3d12_harness.h's MakeRootSigComposed) -- 8 read SRVs (LayerWeights,
-// Layout, RopeInfo, ModelConstants, SiluLut, RopeCosTable, RopeSinTable,
-// ScratchLayout) plus 4 write UAVs (SeqState, LayerScratch, KvCache,
-// WorkScratch). `TestT2019_B12_InjectedFailureAtEveryAllocationIndex`'s own
-// `for (k=0;k<N;++k)` sweep now runs 12 real iterations, one per resource.
+// B12 (Sec11 B12): deterministic allocation-failure injection. T-2049 (N4,
+// Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md, correcting
+// T-2045's own S1): `N` is honestly the composed pipeline's CURRENT binding
+// count -- the confirmation review found T-2045's own "§5.1's own real
+// read+write resource-table count" claim wrong: what was counted is
+// `MakeRootSigComposed`'s 8 SRVs + 4 UAVs, the root-descriptor substrate
+// §5.1 explicitly rejects, not §5.1's own ratified architecture (one SRV
+// descriptor table + one UAV descriptor table, D-SLM3001/D-SLM2929) or B12's
+// own named-allocand enumeration (the weight-buffer SRVs, the per-layer
+// CarriedScale CBV, the descriptor heap, the per-dispatch status word, the
+// sequence-level sticky word, the residual-stream buffer and its per-layer
+// scratch, the K/V cache, the split-word saturation accumulator) -- a
+// different list whose items do not map one-to-one onto what this build
+// actually allocates (the descriptor heap and the per-dispatch status words
+// do not exist yet; several of the 12 below are not named in that list).
+// Deriving a specific integer from that prose without inventing an
+// interpretation nobody has ratified would be the same "presented as read
+// off the design when it is read off something else" failure this finding
+// exists to close, just with a different wrong source. What IS derivable
+// exactly, mechanically, and re-derivable automatically if it ever changes:
+// `harness::kComposedResourceBindingCount` (d3d12_harness.h), the single
+// constant `MakeRootSigComposed` itself is built from. `N` below reads that
+// constant directly rather than repeating its value -- not a runtime
+// comparison of two independently-maintained numbers (which could still
+// drift), but the SAME symbol, so drift is structurally impossible rather
+// than merely caught. This value must be re-derived, not reused, the moment
+// S2's own migration to §5.1's literal descriptor-table architecture lands.
 // ===========================================================================
 
-extern const uint32_t kGpuResidencyAllocationCallCount = 12;
+extern const uint32_t kGpuResidencyAllocationCallCount = harness::Device::kComposedResourceBindingCount;
 
 namespace {
 bool g_low_budget_mock_armed = false;

@@ -111,12 +111,20 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint q_codes_off = ScratchLayout.Load<uint>(2 * 4);
     uint q_rot_off = ScratchLayout.Load<uint>(4 * 4);
 
-    // C1: ROPE_STAGE -- immediately after ATTN_SCORES in WorkScratch, one
-    // head_dim-sized (int32-per-element) slice per thread. Formula matched
-    // exactly against superslm_gpu.cpp's own `work_rope_stage_off`.
-    uint attn_scores_base_all = ScratchLayout.Load<uint>(24 * 4);
-    uint rope_stage_base = attn_scores_base_all + 256u * g_context_cap * 8u;
-    uint my_stage = rope_stage_base + t * (uint)g_head_dim * 4u;
+    // T-2049 (N2/N6, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
+    // ROPE_STAGE -- host-computed and read directly from ScratchLayout index
+    // 26 (`work_rope_stage_off`), never re-derived in HLSL (N6 -- the prior
+    // shape recomputed it from a retired ATTN_SCORES offset, a two-place
+    // invariant held only by comment). One head_dim-sized (int32-per-element)
+    // slice per HEAD, not per thread (N2): the confirmation review reproduced
+    // the prior per-thread indexing silently corrupting a K row once a single
+    // thread owns more than one head (`num_attention_heads > 256`) -- every
+    // owned head after the first overwrote the one shared slice, so only the
+    // LAST owned head's bytes survived to phase 2. Indexing by the head `h`
+    // itself removes the dependency on thread ownership entirely: every
+    // head's own slice is independent of which thread stages/commits it, at
+    // any head count.
+    uint rope_stage_base = ScratchLayout.Load<uint>(26 * 4);
 
     // Q: read this head's codes from scratch, rotate, write the rotated
     // result to q_rot -- never committed to persistent state (Sec4: Q's own
@@ -139,18 +147,19 @@ void main(uint3 gtid : SV_GroupThreadID)
     }
 
     // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
-    // (pre-rotation) row into this thread's own ROPE_STAGE slice. No thread
-    // writes to KvCache anywhere in this phase.
+    // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
+    // thread writes to KvCache anywhere in this phase.
     for (uint h1 = t; h1 < g_num_attention_heads; h1 += 256u)
     {
         uint kv_head1 = h1 / max(group, 1u);
         uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
+        uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
         for (uint p1 = 0; p1 < pairs; ++p1)
         {
             int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
             int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
-            WorkScratch.Store<int>(my_stage + 2u * p1 * 4u, kx);
-            WorkScratch.Store<int>(my_stage + (2u * p1 + 1u) * 4u, ky);
+            WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
+            WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
         }
     }
 
@@ -172,10 +181,11 @@ void main(uint3 gtid : SV_GroupThreadID)
     {
         uint kv_head2 = h2 / max(group, 1u);
         uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);
+        uint stage2 = rope_stage_base + h2 * (uint)g_head_dim * 4u;
         for (uint p2 = 0; p2 < pairs; ++p2)
         {
-            int kx = WorkScratch.Load<int>(my_stage + 2u * p2 * 4u);
-            int ky = WorkScratch.Load<int>(my_stage + (2u * p2 + 1u) * 4u);
+            int kx = WorkScratch.Load<int>(stage2 + 2u * p2 * 4u);
+            int ky = WorkScratch.Load<int>(stage2 + (2u * p2 + 1u) * 4u);
             int cos_q30b = (int)RopeCosTable.Load<int64_t>((row_offset + p2) * 8u);
             int sin_q30b = (int)RopeSinTable.Load<int64_t>((row_offset + p2) * 8u);
             int64_t rkx, rky;
