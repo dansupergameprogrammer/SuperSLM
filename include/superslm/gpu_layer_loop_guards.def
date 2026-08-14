@@ -1,0 +1,58 @@
+// X-macro guard list for superslm_gpu::RunLayerLoopGpu's own host-side guard
+// ladder (src/gpu/superslm_gpu.cpp), CPU parity against
+// superslm::RunLayerLoopImpl (src/forward/forward_sites.cpp:1130-1360).
+//
+// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md, M1):
+// three independent reads of forward_sites.cpp's own guard range -- the prior
+// review's own table, the build seat's own build log, the test author's own
+// casebook -- each hand-counted eight guards and each missed the ninth
+// (`seq.hidden_codes == nullptr`, forward_sites.cpp:1298), the one guard in
+// the function preceded by a 55-line field-by-field struct comment rather
+// than a guard-shaped one. `StandardsDocument.md` §4's own rule: a rule that
+// has failed three times has not failed because someone was careless: this
+// file is the structural fix that closes the class rather than the count.
+//
+// This is the single, compile-checked enumeration of "how many guards, in
+// what order, to what status" the GPU leg's own ladder must implement --
+// matching `sequence_layer_state_fields.def`'s own established convention in
+// this tree. `GpuLayerLoopGuard::kCount` (superslm_gpu.cpp) is generated from
+// this list, so a guard added to CPU's own ladder without a matching row here
+// is a COUNT a test can assert against, not a fact resting on a future
+// reader's own eye. This file does not restructure CPU's own ladder (out of
+// this ticket's own scope, and forward_sites.cpp's own guard shapes are
+// heterogeneous enough -- scalar bounds, an overflow-guarded product loop, a
+// pointer-nullity check -- that unifying them into one generated predicate
+// form is a separate, larger design question) -- it is the metadata table a
+// test walks to build one fixture per row and assert CPU and GPU agree,
+// status for status, in this exact order.
+//
+// Adding a tenth CPU guard: add one SSLM_GPU_LAYER_LOOP_GUARD row below, in
+// CPU's own source position, AND add the matching `return` in
+// RunLayerLoopGpu's own guard ladder (superslm_gpu.cpp) -- the pin round's
+// own table-walk cell is what turns a missed row into a red cell rather than
+// a silent gap.
+//
+// SSLM_GPU_LAYER_LOOP_GUARD(enum_name, status_name, cpp_citation)
+
+#ifndef SSLM_GPU_LAYER_LOOP_GUARD
+#error "define SSLM_GPU_LAYER_LOOP_GUARD(enum_name, status_name, cpp_citation) before including this file"
+#endif
+
+SSLM_GPU_LAYER_LOOP_GUARD(LayerBudgetZero, InvalidLayerBudget, "forward_sites.cpp:1137")
+SSLM_GPU_LAYER_LOOP_GUARD(ContextCapNonPositive, InvalidContextCap, "forward_sites.cpp:1147")
+SSLM_GPU_LAYER_LOOP_GUARD(HeadDimGeometryMismatch, HeadDimGeometryMismatch, "forward_sites.cpp:1161-1164")
+SSLM_GPU_LAYER_LOOP_GUARD(KvHeadGeometryMismatch, KvHeadGeometryMismatch, "forward_sites.cpp:1172-1175")
+// Guard 5 is one CPU check with two distinct rejecting outcomes: an
+// overflow anywhere in the factor-by-factor KV-size product returns
+// InvalidContextCap; a null or undersized workspace (checked only once the
+// product itself is known not to have overflowed) returns WorkspaceTooSmall.
+// Table entries stay one row per source guard, matching the reconfirmation
+// review's own 9-row enumeration exactly, so `kCount` counts what a CPU
+// reader counts, not what a naive per-`return`-statement scan would.
+SSLM_GPU_LAYER_LOOP_GUARD(WorkspaceSizeOrOverflow, WorkspaceTooSmall, "forward_sites.cpp:1196-1218 (InvalidContextCap on overflow, WorkspaceTooSmall on null/undersized)")
+SSLM_GPU_LAYER_LOOP_GUARD(HiddenCodesNull, InvalidHiddenCodes, "forward_sites.cpp:1298")
+SSLM_GPU_LAYER_LOOP_GUARD(SequenceAlreadyComplete, SequenceAlreadyComplete, "forward_sites.cpp:1316")
+SSLM_GPU_LAYER_LOOP_GUARD(PositionOverCap, PositionOverCap, "forward_sites.cpp:1351")
+SSLM_GPU_LAYER_LOOP_GUARD(KvCapacityExhausted, KvCapacityExhausted, "forward_sites.cpp:1352-1354")
+
+#undef SSLM_GPU_LAYER_LOOP_GUARD
