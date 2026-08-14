@@ -315,19 +315,62 @@ bool g_last_weight_upload_was_skipped = false;
 // measured as a SWAP, not a widening: with one arm point, the weight
 // DEFAULT-heap allocation -- T-2062's own S1 remedy's own site -- became
 // permanently unreachable by any test. Fixed here by taking the
-// index-parameterized shape after all: `ArmWeightAllocationFailureInjection`
+// index-parameterized shape after all: `ArmO11AllocationFailureInjection`
 // now takes a `site` selector
-// (`kWeightAllocInjectionSiteWeightDefaultHeap`/`kWeightAllocInjectionSite
+// (`kO11AllocInjectionSiteWeightDefaultHeap`/`kO11AllocInjectionSite
 // WorkScratchUav`, `gpu_port.h`), and BOTH call sites below carry the check
 // -- either remedy can be pinned, independently, by arming the site it
 // lives at. The original paragraph's own "targets ONE named site... takes
 // no index" reasoning is exactly what produced the swap this correction
 // closes.
+//
+// CORRECTED 2026-08-14 (T-2084, Claude/Poirot/
+// 42ecf79-gpu-serial-port-round9-review.md, S2; D-SLM3247): the correction
+// above claimed the original text was "left standing below, not rewritten"
+// -- it was DELETED, not left standing, taking with it the tree's only
+// explanation of why the call site inside `RunLayerLoopGpu` carries no
+// `#ifdef` at all. Restored below, verbatim, exactly as `gpu_port.h`'s own
+// sibling correction (`:284`, the T-2076 note) already does this correctly
+// on the same day: original text standing, correction beside it, not one
+// replacing the other.
+//
+// T-2071 note (original text, superseded above by T-2080's own S1/S2, kept
+// standing for the design rationale it carries -- not a claim about the
+// CURRENT arm scope, which is now two sites, not one; see the correction
+// above for that). Quoted verbatim, so it keeps the T-2071-era symbol names
+// (`MaybeThrowInjectedWeightAllocFault`, `SUPERSLM_O11_WEIGHT_ALLOC_
+// INJECTION`) that T-2084's own M2 rename swept everywhere else in this
+// file -- a quote of history is accurate only if it still says what history
+// actually said; see the M2 entry in the T-2084 build-log section for the
+// live-code names these map to today:
+//
+// T-2071 (O11's own instrument, retiring the long-named gap: "no way to
+// force `CreateCommittedResource` to fail from the suite" -- Claude/Poirot/
+// db73b22-.../a3d44e7-.../b543abe-gpu-serial-port-ship-*-review.md, every
+// round since T-2055's own P3): deterministic failure injection scoped to
+// the weight DEFAULT-heap allocation specifically -- the single site S1
+// (T-2062) fixed and T-2063's own pin cell
+// (`TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_
+// SkippedFalse`, `tests/test_main.cpp`) exercises. Mirrors
+// `src/bad_alloc_wrap.h`'s own established discipline exactly, not B12's
+// index-parameterized `ArmAllocationFailureInjection(uint32_t)` (this
+// instrument targets ONE named site, not an enumerable sequence, so it
+// takes no index): the CALL SITE inside `RunLayerLoopGpu` below is never
+// `#ifdef`-guarded -- `MaybeThrowInjectedWeightAllocFault()` is always
+// callable and is a no-op that costs nothing once inlined and optimized
+// away when `SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` is undefined ("zero
+// overhead unarmed"); only the flag, the throw body, and the public
+// Arm/Clear functions below are compiled at all when the macro is defined
+// (`build.bat`, beside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`) -- exactly
+// `gpu_port.h`'s own `#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` guard
+// around these two declarations, which is what makes this definition link
+// against them rather than reproducing T-2063's own deliberate LINK-RED
+// proof.
 namespace {
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-bool g_weight_alloc_injection_armed = false;
-uint32_t g_weight_alloc_injection_site = 0;
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+#ifdef SUPERSLM_O11_ALLOC_INJECTION
+bool g_o11_alloc_injection_armed = false;
+uint32_t g_o11_alloc_injection_site = 0;
+#endif  // SUPERSLM_O11_ALLOC_INJECTION
 
 // Always defined, always callable -- see the header comment above for why
 // the call site never needs its own `#ifdef`. Internal linkage (this
@@ -340,19 +383,27 @@ uint32_t g_weight_alloc_injection_site = 0;
 // constants, passed by each call site naming itself. Fires only when the
 // ARMED site matches the site currently executing, so arming one site
 // never fires at the other.
-inline void MaybeThrowInjectedWeightAllocFault(uint32_t this_site) {
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-	if (g_weight_alloc_injection_armed && g_weight_alloc_injection_site == this_site) {
+inline void MaybeThrowInjectedO11AllocFault(uint32_t this_site) {
+	// M3 (T-2084, Claude/Poirot/42ecf79-gpu-serial-port-round9-review.md;
+	// D-SLM3247): `this_site` is read only inside the macro-gated block below,
+	// so every macro-undefined compile -- including the default C5-harness
+	// build, which never defines SUPERSLM_O11_ALLOC_INJECTION -- leaves the
+	// parameter unreferenced (C4100). Standard idiom: mark it used
+	// unconditionally, outside the `#ifdef`, rather than gating the parameter
+	// name itself and disturbing the signature between compiles.
+	(void)this_site;
+#ifdef SUPERSLM_O11_ALLOC_INJECTION
+	if (g_o11_alloc_injection_armed && g_o11_alloc_injection_site == this_site) {
 		// Single-shot: fires exactly once per `Arm` call, matching the pin
 		// cell's own "call 4 (no injection) recovers cleanly" expectation --
 		// a re-armed-forever flag would make every subsequent call in the
 		// same process fail too, which is not what "the next matching
 		// allocation" means.
-		g_weight_alloc_injection_armed = false;
+		g_o11_alloc_injection_armed = false;
 		throw std::runtime_error("T2080 O11: injected allocation failure at site " +
 		                          std::to_string(this_site));
 	}
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+#endif  // SUPERSLM_O11_ALLOC_INJECTION
 }
 }  // namespace
 
@@ -576,18 +627,25 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 }  // namespace
 
 // T-2071: external linkage, deliberately OUTSIDE the anonymous namespace
-// above (unlike `g_weight_alloc_injection_armed`/`MaybeThrowInjectedWeight
+// above (unlike `g_o11_alloc_injection_armed`/`MaybeThrowInjectedWeight
 // AllocFault`, which stay internal-linkage on purpose) -- these two must be
-// callable as `superslm_gpu::ArmWeightAllocationFailureInjection()` from
+// callable as `superslm_gpu::ArmO11AllocationFailureInjection(site)` from
 // `tests/test_main.cpp`, a different translation unit, matching
 // `gpu_port.h`'s own gated declarations exactly.
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-void ArmWeightAllocationFailureInjection(uint32_t site) {
-	g_weight_alloc_injection_armed = true;
-	g_weight_alloc_injection_site = site;
+//
+// CORRECTED 2026-08-14 (T-2084, Claude/Poirot/
+// 42ecf79-gpu-serial-port-round9-review.md, M1; D-SLM3247): the call form
+// above was the zero-argument one -- true when this comment was written
+// (T-2071), false since T-2080 gave `ArmO11AllocationFailureInjection`
+// its own `site` parameter three lines below. Corrected to the real call
+// shape rather than left describing a signature that no longer compiles.
+#ifdef SUPERSLM_O11_ALLOC_INJECTION
+void ArmO11AllocationFailureInjection(uint32_t site) {
+	g_o11_alloc_injection_armed = true;
+	g_o11_alloc_injection_site = site;
 }
-void ClearWeightAllocationInjection() { g_weight_alloc_injection_armed = false; }
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+void ClearO11AllocationInjection() { g_o11_alloc_injection_armed = false; }
+#endif  // SUPERSLM_O11_ALLOC_INJECTION
 
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
@@ -1163,11 +1221,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// point to `work_scratch_uav` below, which made this allocation
 		// permanently unreachable by any test (this review's own S1
 		// finding). Site-parameterized now: arming THIS site (`gpu_port.h`'s
-		// `kWeightAllocInjectionSiteWeightDefaultHeap`) exercises T-2062's
+		// `kO11AllocInjectionSiteWeightDefaultHeap`) exercises T-2062's
 		// own S1 remedy specifically (the throw here reaches the SAME outer
 		// catch as every other allocation in the window); arming
 		// `work_scratch_uav`'s own site below is unaffected.
-		MaybeThrowInjectedWeightAllocFault(kWeightAllocInjectionSiteWeightDefaultHeap);
+		MaybeThrowInjectedO11AllocFault(kO11AllocInjectionSiteWeightDefaultHeap);
 		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
 		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
 		                    D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1203,10 +1261,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// CORRECTED 2026-08-14 (T-2075, S1; D-SLM3228; site-parameterized by
 	// T-2080, S1, D-SLM3241 -- this instrument now checks TWO named sites,
 	// this one and the weight DEFAULT-heap allocation above, not one):
-	// O11's own instrument (`MaybeThrowInjectedWeightAllocFault`) also arms
+	// O11's own instrument (`MaybeThrowInjectedO11AllocFault`) also arms
 	// HERE. This allocation runs UNCONDITIONALLY, on both the cache-hit and
 	// cache-miss legs (it is outside the `if (!weights_resident)` block
-	// entirely) -- so arming THIS site (`kWeightAllocInjectionSiteWork
+	// entirely) -- so arming THIS site (`kO11AllocInjectionSiteWork
 	// ScratchUav`) reaches the injected throw on a GENUINE cache hit,
 	// without forcing any residency-decision change to make it reachable.
 	// That is what makes `TestT2063_S1Mb_WorkScratchUavAllocationThrow_...`'s
@@ -1215,7 +1273,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// cache invalidation) are the ONLY thing that can make that cell's M-b
 	// assertions pass, because nothing upstream of this call has already
 	// done their job.
-	MaybeThrowInjectedWeightAllocFault(kWeightAllocInjectionSiteWorkScratchUav);
+	MaybeThrowInjectedO11AllocFault(kO11AllocInjectionSiteWorkScratchUav);
 	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

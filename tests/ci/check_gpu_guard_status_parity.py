@@ -528,34 +528,42 @@ class ProseCitation:
 # rejections, the catch's own ternary, the sticky-tag terminal call, and the
 # observable's own four write sites -- nineteen citations, all fifteen
 # rejecting-return-path members plus the four write sites S2/M2 both name.
+#
+# CORRECTED 2026-08-14 (T-2084, Claude/Poirot/42ecf79-gpu-serial-port-round9-
+# review.md; D-SLM3247): every citation below shifted when S2's restoration
+# (superslm_gpu.cpp) reinserted the 19 lines T-2080's own correction had
+# actually deleted -- re-derived at source, one grep per anchor, not by
+# assuming a uniform per-line delta (the shift is NOT uniform: 51 lines
+# ahead of `DecodeStickyTag`, 58 lines ahead of the write sites below it,
+# because T-2084's own M1/M2/M3 fixes add lines of their own between them).
 GPU_PORT_H_LWUWS_CITATIONS = (
-    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 654, "InvalidLayerBudget"),
-    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 655, "InvalidContextCap"),
-    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 664, "HeadDimGeometryMismatch"),
-    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 668, "KvHeadGeometryMismatch"),
-    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 683, "InvalidContextCap"),
-    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 687, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 688, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 698, "InvalidHiddenCodes"),
-    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 701, "SequenceAlreadyComplete"),
-    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 707, "PositionOverCap"),
-    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 709, "KvCapacityExhausted"),
-    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 716, "dev.available"),
-    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 728, "KvPrecisionUnsupported"),
-    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1410, "device_removed_reason"),
-    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1461, "DecodeStickyTag"),
+    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 712, "InvalidLayerBudget"),
+    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 713, "InvalidContextCap"),
+    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 722, "HeadDimGeometryMismatch"),
+    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 726, "KvHeadGeometryMismatch"),
+    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 741, "InvalidContextCap"),
+    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 745, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 746, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 756, "InvalidHiddenCodes"),
+    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 759, "SequenceAlreadyComplete"),
+    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 765, "PositionOverCap"),
+    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 767, "KvCapacityExhausted"),
+    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 774, "dev.available"),
+    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 786, "KvPrecisionUnsupported"),
+    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1468, "device_removed_reason"),
+    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1519, "DecodeStickyTag"),
     ProseCitation("write site 1 (static init)", "src/gpu/superslm_gpu.cpp", 299, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 614, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 903, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1400, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 672, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 961, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1458, "g_last_weight_upload_was_skipped"),
     # T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M2):
     # the paragraph's own `DecodeStickyTag` citation is a RANGE
-    # (`superslm_gpu.cpp:532-550`), which `ProseCitation`'s single-`line`
+    # (`superslm_gpu.cpp:583-601`), which `ProseCitation`'s single-`line`
     # shape cannot represent as one entry -- covered here as its own two
     # endpoints, the review's own named cheap fix, rather than widening
     # `ProseCitation` itself for a population of one range.
-    ProseCitation("DecodeStickyTag range start", "src/gpu/superslm_gpu.cpp", 532, "DecodeStickyTag"),
-    ProseCitation("DecodeStickyTag range end", "src/gpu/superslm_gpu.cpp", 550, "}"),
+    ProseCitation("DecodeStickyTag range start", "src/gpu/superslm_gpu.cpp", 583, "DecodeStickyTag"),
+    ProseCitation("DecodeStickyTag range end", "src/gpu/superslm_gpu.cpp", 601, "}"),
 )
 
 # T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M1): the
