@@ -68,7 +68,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq, i
 		return superslm::SslmForwardStatus::HeadDimGeometryMismatch;  // HeadDimGeometryMismatch
 	}
 	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 3, "x");
-	return superslm::SslmForwardStatus::Ok;
+	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	// the real function ends via `return DecodeStickyTag(sticky_tag);` --
+	// not a literal `return SslmForwardStatus::X;` -- so this fixture ends
+	// the same unmatched way, never contributing a spurious status.
+	return DecodeStickyTag(sticky_tag);
 }
 }  // namespace superslm_gpu
 """
@@ -417,6 +421,129 @@ def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_r
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
         assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
+
+
+# --- Mutation E (T-2069, S3): the symmetric twin of mutation D, aimed at the
+# GPU side -- a new-status guard placed PAST GPU_GUARD_REGION_END_MARKER
+# (the old static_assert cut), the review's own falsifying mutation, run
+# both directions per the coordinator's own instruction: after the marker
+# must redden; before the marker (already caught pre-fix) must stay
+# reddening too, proving the fix changes nothing about the case that
+# already worked.
+
+def test_mutation_e_new_status_guard_placed_after_the_gpu_marker_reddens():
+    # GPU-only edit, exactly mirroring the real-file mutation: CPU and the
+    # .def are untouched, so a genuinely new GPU-side status appearing
+    # anywhere in RunLayerLoopGpu's own body -- ladder or not -- must now
+    # surface as a real disagreement. Placed after the fixture's own
+    # static_assert line (the GPU marker), inside the device-capability
+    # region the real file already carries a rejection in.
+    gpu = _GPU_FIXTURE.replace(
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;",
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;\n"
+        "\tif (x == 99) return superslm::SslmForwardStatus::KvCapacityExhausted;  // new, past the GPU marker",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures, "a new-status GPU guard placed after the old marker must now be caught (S3)"
+        assert any("disagree" in f for f in failures)
+        assert any("KvCapacityExhausted" in f for f in failures)
+
+
+def test_mutation_e_control_new_status_guard_placed_before_the_gpu_marker_reddens_both_before_and_after_the_fix():
+    # The review's own control run: the IDENTICAL guard placed BEFORE the
+    # marker (inside the ladder proper) was already caught by the
+    # pre-T-2069 marker-truncated extraction, and must stay caught after
+    # the fix too -- proving the fix is additive (closes the gap below the
+    # marker) rather than a behavior change to the case that already
+    # worked. This is the one-line difference (before vs. after the
+    # marker) the review's own report names as "the only difference
+    # between the two runs."
+    gpu = _GPU_FIXTURE.replace(
+        "if (x == 2) {",
+        'if (x == 3) return superslm::SslmForwardStatus::KvCapacityExhausted;  // new, before the GPU marker\n'
+        '\tif (x == 2) {',
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures, "the identical guard placed before the marker must redden, same as before this fix"
+        assert any("disagree" in f for f in failures)
+        assert any("KvCapacityExhausted" in f for f in failures)
+
+
+def test_mutation_e_variant_reused_status_after_gpu_marker_stays_green_the_widened_residual():
+    # The widened honest residual, GPU side: a status added past the GPU
+    # marker that reuses one already in the derived set (including the one
+    # subtracted GPU_BELOW_LADDER_STATUSES name) is indistinguishable from
+    # "no rejection was added at all."
+    gpu = _GPU_FIXTURE.replace(
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;",
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;\n"
+        "\tif (x == 99) return superslm::SslmForwardStatus::InvalidLayerBudget;  // reused, past the GPU marker",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures == [], "reusing an existing status past the GPU marker is the (widened) documented residual"
+
+
+def test_mutation_e_variant_reused_below_ladder_status_after_gpu_marker_stays_green():
+    # Reusing the ONE subtracted GPU_BELOW_LADDER_STATUSES name itself
+    # (KvPrecisionUnsupported, already returned once by the fixture's own
+    # `!dev.available` line) must also stay green -- the widened residual
+    # explicitly includes the subtracted names, not only the guard names.
+    gpu = _GPU_FIXTURE.replace(
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;",
+        "if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;\n"
+        "\tif (x == 99) return superslm::SslmForwardStatus::KvPrecisionUnsupported;  // reused below-ladder status",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures == [], "reusing the subtracted below-ladder status itself is also the documented residual"
+
+
+# --- gpu_ladder_status_set: direct mechanism cells (T-2069, S3) ---
+
+def test_gpu_ladder_status_set_subtracts_the_named_below_ladder_status():
+    s = chk.gpu_ladder_status_set(_GPU_FIXTURE)
+    assert s == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
+
+
+def test_gpu_ladder_status_set_default_matches_marker_truncated_extraction_on_the_unmutated_fixture():
+    old_way = chk.extract_status_set(
+        chk.extract_region(_GPU_FIXTURE, chk.GPU_FUNC_SIGNATURE, chk.GPU_GUARD_REGION_END_MARKER, label="fixture")
+    )
+    new_way = chk.gpu_ladder_status_set(_GPU_FIXTURE)
+    assert new_way == old_way == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
+
+
+def test_real_tree_gpu_full_body_raw_set_before_subtraction_matches_the_review_own_enumeration():
+    # The review's own S3 finding enumerated, at source, the one status
+    # legitimately returned below the GPU marker (KvPrecisionUnsupported,
+    # twice, both device-capability rejections). Confirmed against the real
+    # file: the RAW (pre-subtraction) set over the whole function body is
+    # exactly the named nine guards plus that one.
+    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+        gpu_text = f.read()
+    body = chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    raw = chk.extract_status_set(body)
+    assert raw - chk.GPU_BELOW_LADDER_STATUSES == {
+        "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
+        "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
+        "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
+    }
+    assert raw & chk.GPU_BELOW_LADDER_STATUSES == chk.GPU_BELOW_LADDER_STATUSES, (
+        "the one named below-ladder status must actually appear at source -- an unused name in the "
+        "subtraction set would silently widen the residual for nothing"
+    )
+    # O19 (same casebook): GpuAllocationFailed/GpuDeviceRemoved are returned
+    # through a ternary, not a literal `return SslmForwardStatus::X;` -- they
+    # must NOT appear in the raw regex-derived set at all, on the real file.
+    assert "GpuAllocationFailed" not in raw
+    assert "GpuDeviceRemoved" not in raw
 
 
 # --- End-to-end against the real tree: not vacuous, and green today. ---

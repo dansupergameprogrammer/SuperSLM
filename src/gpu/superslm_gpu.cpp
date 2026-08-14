@@ -297,6 +297,59 @@ ResidentWeights g_resident_weights;
 // it returns.
 bool g_last_weight_upload_was_skipped = false;
 
+// T-2071 (O11's own instrument, retiring the long-named gap: "no way to
+// force `CreateCommittedResource` to fail from the suite" -- Claude/Poirot/
+// db73b22-.../a3d44e7-.../b543abe-gpu-serial-port-ship-*-review.md, every
+// round since T-2055's own P3): deterministic failure injection scoped to
+// the weight DEFAULT-heap allocation specifically -- the single site S1
+// (T-2062) fixed and T-2063's own pin cell
+// (`TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_
+// SkippedFalse`, `tests/test_main.cpp`) exercises. Mirrors
+// `src/bad_alloc_wrap.h`'s own established discipline exactly, not B12's
+// index-parameterized `ArmAllocationFailureInjection(uint32_t)` (this
+// instrument targets ONE named site, not an enumerable sequence, so it
+// takes no index): the CALL SITE inside `RunLayerLoopGpu` below is never
+// `#ifdef`-guarded -- `MaybeThrowInjectedWeightAllocFault()` is always
+// callable and is a no-op that costs nothing once inlined and optimized
+// away when `SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` is undefined ("zero
+// overhead unarmed"); only the flag, the throw body, and the public
+// Arm/Clear functions below are compiled at all when the macro is defined
+// (`build.bat`, beside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`) -- exactly
+// `gpu_port.h`'s own `#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` guard
+// around these two declarations, which is what makes this definition link
+// against them rather than reproducing T-2063's own deliberate LINK-RED
+// proof.
+namespace {
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+bool g_weight_alloc_injection_armed = false;
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+
+// Always defined, always callable -- see the header comment above for why
+// the call site never needs its own `#ifdef`. Internal linkage (this
+// anonymous namespace): only ever called from within this TU
+// (`RunLayerLoopGpu`, below), so it need not -- and, to avoid an unused
+// external symbol in the unarmed default build, should not -- be visible
+// outside it.
+inline void MaybeThrowInjectedWeightAllocFault() {
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+	if (g_weight_alloc_injection_armed) {
+		// Single-shot: fires exactly once per `Arm` call, matching the pin
+		// cell's own "call 4 (no injection) recovers cleanly" expectation --
+		// a re-armed-forever flag would make every subsequent call in the
+		// same process fail too, which is not what "the next matching
+		// allocation" means.
+		g_weight_alloc_injection_armed = false;
+		throw std::runtime_error("T2071 O11: injected weight-allocation failure");
+	}
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+}
+}  // namespace
+
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+void ArmWeightAllocationFailureInjection() { g_weight_alloc_injection_armed = true; }
+void ClearWeightAllocationInjection() { g_weight_alloc_injection_armed = false; }
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+
 // The composed pipeline's own per-layer LayerWeights byte layout -- computed
 // ONCE per call from (hidden_size, kv_hidden_size, num_kv_heads) and uploaded
 // as the "Layout" SRV every real site shader reads offsets from (never
@@ -1065,6 +1118,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// probe (call 7: `status=KvPrecisionUnsupported`, against call 5's
 		// `status=GpuAllocationFailed` at `work_scratch_uav`, same outer
 		// catch, same call shape).
+		// T-2071 (O11's own instrument): always callable, zero overhead
+		// unarmed -- see this function's own header comment near
+		// `g_weight_alloc_injection_armed` for why this call site carries no
+		// `#ifdef`. Placed immediately before the real allocation it stands
+		// in for, so an armed injection reaches the SAME outer catch (opened
+		// above) a real `CreateCommittedResource` failure would.
+		MaybeThrowInjectedWeightAllocFault();
 		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
 		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
 		                    D3D12_RESOURCE_STATE_COPY_DEST);

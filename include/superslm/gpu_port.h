@@ -174,6 +174,32 @@ enum class GpuLayerLoopGuard : int {
 // invalidated the cache it describes. Now set `false` at the catch site too,
 // beside the cache invalidation -- every one of the now-TWELVE rejecting
 // paths reads `false`.
+//
+// CORRECTED 2026-08-14 (T-2069, Claude/Poirot/
+// b543abe-gpu-serial-port-ship-reverdict-review.md, M1): "twelve" above is
+// also wrong -- the correction above counted the function's rejecting
+// RETURNS (its guard ladder), not its rejecting return PATHS, and never
+// re-derived the number from the function itself. Enumerated fresh, at
+// source, every rejecting `return superslm::SslmForwardStatus::` (or
+// return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
+// ladder (`superslm_gpu.cpp:581, 582, 591, 595, 610, 614, 615, 625, 628,
+// 634, 636` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
+// of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
+// sites); two device-capability rejections below the ladder (`:643`
+// `!dev.available`, `:655` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
+// check, both `KvPrecisionUnsupported`); and the recording-window catch
+// itself (`:1276`, one return statement, a ternary choosing between
+// `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve.
+// `g_last_weight_upload_was_skipped`'s own three write sites
+// (`superslm_gpu.cpp:298` static init, `:541` function entry, `:811` the
+// residency decision, `:1266` the catch) still cover all fourteen
+// correctly -- `:811` is the only conditional write and it sits below both
+// `:643` and `:655`, so those two paths read the entry-set `false`
+// unchanged; this correction is to the COUNT, not to the code, which was
+// already right. The `!dev.available`/Tier-3 half of this claim is derived
+// by inspection of the three write sites, not executed -- forcing either
+// condition is outside what this project's own test harness can do on real
+// hardware.
 bool LastWeightUploadWasSkipped();
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

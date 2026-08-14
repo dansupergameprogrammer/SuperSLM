@@ -29,11 +29,15 @@ that legitimately live below the entry guards, plus `Ok`, subtracted back
 out; corrected 2026-08-14, T-2062, S2, from an earlier cut that stopped at
 the first occurrence of `const int64_t position = seq.context_length;`,
 a text marker a guard placed below it could silently exit past), (b)
-`RunLayerLoopGpu`'s own guard ladder in `superslm_gpu.cpp` (from the
-function's opening brace to its own `static_assert(static_cast<int>(
-superslm_gpu::GpuLayerLoopGuard::kCount)` line), and (c) the `status_name`
-column of every `SSLM_GPU_LAYER_LOOP_GUARD` row in `gpu_layer_loop_guards.def`
--- and asserts all three SETS are equal.
+`RunLayerLoopGpu`'s own FULL body in `superslm_gpu.cpp` (the symmetric twin
+of (a) -- `extract_function_body`/`gpu_ladder_status_set` below -- with the
+one device-capability rejection status that legitimately lives below the
+nine-guard ladder subtracted back out; corrected 2026-08-14, T-2069, S3,
+from an earlier cut that stopped at the ladder's own `static_assert`
+line, the identical class of defect as (a)'s own T-2062 correction, found
+one review later by aiming the SAME falsifying mutation at this side
+instead), and (c) the `status_name` column of every `SSLM_GPU_LAYER_LOOP_GUARD`
+row in `gpu_layer_loop_guards.def` -- and asserts all three SETS are equal.
 Verified at source, today: all three are the same nine members
 (`InvalidLayerBudget`, `InvalidContextCap`, `HeadDimGeometryMismatch`,
 `KvHeadGeometryMismatch`, `WorkspaceTooSmall`, `InvalidHiddenCodes`,
@@ -81,30 +85,66 @@ UNLESS it happens to reuse one of the six subtracted names (folded into the
 honest residual below, widened rather than left the same size the fix that
 found the gap left it).
 
-HONEST RESIDUAL, stated here rather than left to a sixth review to
-rediscover the shape of (the failure this finding is about is the
+CORRECTED 2026-08-14 (T-2069, Claude/Poirot/b543abe-gpu-serial-port-ship-
+reverdict-review.md, S3; superseding whichever prior record called the
+paragraph above's own fix "class-closing" without qualification -- left as
+written above, not rewritten, per this tree's own append-only discipline):
+"class-closing" was true of the CPU side and false of the module as a
+whole. Part (b) above -- `RunLayerLoopGpu`'s own guard ladder -- carried the
+IDENTICAL defect, marker-truncated at its own `static_assert` line, for one
+more round: falsified by execution, a new-status GPU-only guard placed past
+that marker stayed green (`OK`, exit 0) while the identical guard placed
+before it reddened -- the marker, not the guard's own domain, decided the
+outcome, exactly the shape S2 was about. **Not a contrived placement**:
+`RunLayerLoopGpu` already returns a rejecting status twice below its own
+marker (`superslm_gpu.cpp:643, 655`, both device-capability rejections,
+`KvPrecisionUnsupported`), and T-2059 added two new enumerators
+(`GpuAllocationFailed`/`GpuDeviceRemoved`) for exactly that region three
+commits before this fix -- a third device-capability rejection carrying a
+new status is the natural next addition, and the marker-truncated check
+could not see it. **Fixed, the symmetric twin of the CPU-side remedy**:
+`gpu_ladder_status_set` (below) replaces the marker cut with the same real,
+brace-matched full-body extraction `cpu_guard_status_set` already uses,
+subtracting `GPU_BELOW_LADDER_STATUSES` (one member today,
+`KvPrecisionUnsupported`) back out. Verified at source: unchanged on the
+unmutated tree. Verified by execution, both directions, against the real
+files: the falsifying mutation now reddens; the same guard placed above the
+old marker (already caught before this fix, and still caught after it)
+confirms the fix changes nothing about the case that already worked. Both
+directions are now permanent cells in this module's own test file
+(`test_mutation_e_*`, mirroring `test_mutation_d_*`'s own CPU-side pair).
+
+HONEST RESIDUAL, stated here for BOTH sides rather than left to a seventh
+review to rediscover the shape of (the failure this finding is about is the
 overclaim, not the apparatus, and restating that overclaim about THIS check
-would be the same mistake with a sixth author): **a tenth CPU guard that
-returns a status ALREADY in the derived nine-member set -- including any of
-the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names, now that they are
-subtracted rather than out of scan range entirely -- would not change the
-set, and this check would stay green.** The set-equality comparison this
-module performs cannot distinguish "CPU's guard range has exactly these
-nine returns" from "CPU's guard range has these nine returns, plus a tenth
-that happens to reuse one of them" -- reusing an existing `SslmForwardStatus`
-across two logically distinct guards, or across a guard and an unrelated
-per-site arithmetic check, is legal C++ and produces no observable
-difference to this check. What this check DOES close, exactly as
-`RunLayerLoopGpu`'s own comment claims for the `static_assert` it replaces
-in that role: a guard whose status is new to the derived set but missing
-from the `.def` (the review's own mutation A, run with a status outside the
-nine, e.g. `RopeTableTensorMissing`) now fails the build here, wherever in
-`RunLayerLoopImpl`'s own body it lands -- before or after the old marker.
-This module's own test file (`test_check_gpu_guard_status_parity.py`)
-reproduces every case named above -- reddens on a new-status tenth guard
-anywhere in the function, stays green on a same-status one anywhere in the
-function -- specifically so the residual above is a measured property of
-this check, not a claim about it.
+would be the same mistake with a seventh author): **a tenth CPU guard, or a
+new GPU-side rejection, that returns a status ALREADY in the derived set --
+including any of the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names or the
+one `GPU_BELOW_LADDER_STATUSES` name, now that both are subtracted rather
+than out of scan range entirely -- would not change the set, and this check
+would stay green.** The set-equality comparison this module performs cannot
+distinguish "this function's own real body has exactly these returns" from
+"...plus one more that happens to reuse an existing name" -- reusing an
+existing `SslmForwardStatus` across two logically distinct rejections, on
+either side, is legal C++ and produces no observable difference to this
+check. **Also on both sides**: a status returned through anything other than
+a literal `return SslmForwardStatus::X;` (a local variable, a ternary --
+`GpuAllocationFailed`/`GpuDeviceRemoved`, T-2059, are returned through
+exactly such a ternary at `superslm_gpu.cpp:1276-1277` today) is invisible
+to `_STATUS_RETURN_RE` and therefore to this whole module, independent of
+which side it is on (recorded, not fixed -- every guard in the tree today
+uses the literal form, so the likelihood is low). What this check DOES
+close, exactly as `RunLayerLoopGpu`'s own comment claims for the
+`static_assert` it replaces in that role: a guard or rejection whose status
+is new to the derived set but missing from the `.def` (the review's own
+mutation A, run with a status outside the nine, e.g. `RopeTableTensorMissing`)
+now fails the build here, wherever in EITHER function's own body it lands --
+guard region or arithmetic region, ladder or device-capability check, before
+or after either old marker. This module's own test file (`test_check_gpu_
+guard_status_parity.py`) reproduces every case named above on both sides --
+reddens on a new-status rejection anywhere in either function, stays green
+on a same-status one anywhere in either function -- specifically so the
+residual above is a measured property of this check, not a claim about it.
 
 Modelled on this tree's own established CI-source-check convention
 (`tests/ci/check_no_forward_leaf_calls.py`, `tests/ci/check_checked_chain_
@@ -164,7 +204,34 @@ CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
     "Ok",
 })
 GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpu("
+# T-2069 (Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md,
+# S3): retained as a citation of the real, named point in `superslm_gpu.cpp`
+# where the nine-guard ladder ends and the two device-capability rejections
+# begin -- no longer used as an EXTRACTION boundary (see
+# `gpu_ladder_status_set` below, which scans the function's own real closing
+# brace instead, exactly as `cpu_guard_status_set` already does for the CPU
+# side -- S3 is the symmetric twin of S2, one file over).
 GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount)"
+# The distinct `SslmForwardStatus` values `RunLayerLoopGpu` legitimately
+# returns BELOW `GPU_GUARD_REGION_END_MARKER` -- both device-capability
+# rejections (`!dev.available` at `superslm_gpu.cpp:643`; the sub-Tier-3
+# `MapModelGpuResidencyTierCheck` check at `:654-656`) return the SAME
+# status, so this is a one-member set today. Named at source, not derived
+# (T-2069, S3's own remedy, symmetric with `CPU_BELOW_GUARD_ARITHMETIC_
+# STATUSES` above): a name added below the ladder that is NOT
+# `KvPrecisionUnsupported` surfaces as a real set disagreement, exactly like
+# a guard would. `GpuAllocationFailed`/`GpuDeviceRemoved` (T-2059) are NOT on
+# this list and do not need to be: both are returned through a ternary
+# (`superslm_gpu.cpp:1276-1277`), a shape `_STATUS_RETURN_RE` below does not
+# match at all (O19, the same casebook) -- neither appears in the raw
+# extracted set in the first place, so there is nothing to subtract for
+# them. Recorded here rather than silently relied on: a future guard
+# returned through a ternary, a local variable, or any shape other than a
+# literal `return SslmForwardStatus::X;` is invisible to this WHOLE module,
+# on both sides, independent of this constant.
+GPU_BELOW_LADDER_STATUSES = frozenset({
+    "KvPrecisionUnsupported",
+})
 
 _STATUS_RETURN_RE = re.compile(r"return\s+(?:superslm::)?SslmForwardStatus::([A-Za-z_][A-Za-z0-9_]*)")
 _DEF_ROW_RE = re.compile(
@@ -317,7 +384,31 @@ def cpu_guard_status_set(
 
 
 def gpu_ladder_region_text(text: str) -> str:
+    """Retained for the test file's own generic `extract_region` coverage
+    (O21's own observation about `cpu_guard_region_text` applies here too --
+    this function is no longer used by `run_all_checks`, only by tests that
+    exercise `extract_region` itself as a generic utility)."""
     return extract_region(text, GPU_FUNC_SIGNATURE, GPU_GUARD_REGION_END_MARKER, label="superslm_gpu.cpp")
+
+
+def gpu_ladder_status_set(
+    gpu_text: str,
+    below_ladder_statuses: frozenset[str] = GPU_BELOW_LADDER_STATUSES,
+) -> set[str]:
+    """The GPU ladder's own comparable status set (T-2069, S3 -- the
+    symmetric twin of `cpu_guard_status_set`/S2): every distinct
+    `SslmForwardStatus` `RunLayerLoopGpu` returns ANYWHERE in its own real
+    body (`extract_function_body`, real brace boundaries -- not the marker
+    `gpu_ladder_region_text` used to truncate at), with
+    `below_ladder_statuses` subtracted back out. A name that is new to the
+    function and not on that named, source-derived list surfaces in the
+    returned set regardless of where in the function it appears -- the
+    property the marker-truncated extraction did not have, falsified by the
+    reviewing seat's own executed mutation (a new-status guard placed past
+    the old marker stayed green; the identical guard placed before it
+    reddened)."""
+    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    return extract_status_set(body) - below_ladder_statuses
 
 
 class DefRow:
@@ -401,7 +492,7 @@ def run_all_checks(
         def_text = f.read()
 
     cpu_set = cpu_guard_status_set(cpu_text)
-    gpu_set = extract_status_set(gpu_ladder_region_text(gpu_text))
+    gpu_set = gpu_ladder_status_set(gpu_text)
     def_rows = parse_def_rows(def_text)
     def_set = def_status_set(def_rows)
 
@@ -413,7 +504,18 @@ def run_all_checks(
             f"    GPU (RunLayerLoopGpu ladder):         {sorted(gpu_set)}\n"
             f"    .def (gpu_layer_loop_guards.def):     {sorted(def_set)}\n"
             f"    CPU - GPU: {sorted(cpu_set - gpu_set)}   GPU - CPU: {sorted(gpu_set - cpu_set)}\n"
-            f"    CPU - .def: {sorted(cpu_set - def_set)}   .def - CPU: {sorted(def_set - cpu_set)}"
+            f"    CPU - .def: {sorted(cpu_set - def_set)}   .def - CPU: {sorted(def_set - cpu_set)}\n"
+            # T-2069 (M3): the check's own most likely red is a LEGITIMATE new
+            # per-site arithmetic rejection in RunLayerLoopImpl, which reads
+            # exactly like guard-count drift above -- named here so the fix
+            # is not "invent a .def guard row for something that is not a
+            # guard." A status that legitimately lives below the guards/ladder
+            # belongs in CPU_BELOW_GUARD_ARITHMETIC_STATUSES or
+            # GPU_BELOW_LADDER_STATUSES (tests/ci/check_gpu_guard_status_
+            # parity.py), not in gpu_layer_loop_guards.def.
+            "    (if the new name above is a legitimate per-site arithmetic/device-capability\n"
+            "     rejection, not a guard: add it to CPU_BELOW_GUARD_ARITHMETIC_STATUSES or\n"
+            "     GPU_BELOW_LADDER_STATUSES in this module, not to gpu_layer_loop_guards.def)"
         )
     for row in def_rows:
         failure = check_citation(row, repo_root)
