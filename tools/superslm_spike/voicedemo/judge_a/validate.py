@@ -238,7 +238,12 @@ def run_validation(entries: list[CorpusEntry], backend_factory) -> ValidationOut
         f"Judge A did not clear precision>=0.85 and recall>=0.85 (lower CI bound) on both fields "
         f"after {len(iterations)} iterations. Measured ceiling (iteration {best.iteration}, "
         f"model {best.model_id}): {ceiling_desc}. Escalating to Dan per plan Sec.8 P2 / Risk #12 -- "
-        f"options are narrowing the judge's task further (one field per call) or adding a second "
-        f"cross-check judge for disagreement arbitration."
+        f"note (T-2061): this harness already issues one bounded call per field (info_present and "
+        f"attitude_present are separate calls, canonical design Sec.5's own baseline, not a later "
+        f"narrowing) and that configuration is what produced this ceiling, so the "
+        f"'narrow to one field per call' option is already exhausted, not untried. The remaining "
+        f"option per Risk #12 is a second cross-check judge for disagreement arbitration -- or a "
+        f"different single-field mechanism Dan specifies, if the intent behind 'narrow further' was "
+        f"something other than the already-built info/attitude split."
     )
     return ValidationOutcome(verdict="ESCALATE", iterations=tuple(iterations), best_iteration=best, escalation_message=message)

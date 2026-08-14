@@ -1,0 +1,1922 @@
+[
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "botched_request-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "brag_result-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "scope_creep-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "underage_or_bad_id-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "supply_shortage-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "walk_in_rush-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "haggle_price-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": true,
+    "correct": false
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "aftercare_worry-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "referral_praise-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-00",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-01",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 0,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 0,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 1,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 1,
+    "field": "attitude_present",
+    "ground_truth": true,
+    "predicted": false,
+    "correct": false
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 2,
+    "field": "info_present",
+    "ground_truth": true,
+    "predicted": true,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 2,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 3,
+    "field": "info_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  },
+  {
+    "event_id": "custom_design_pitch-train-02",
+    "reaction_index": 3,
+    "field": "attitude_present",
+    "ground_truth": false,
+    "predicted": false,
+    "correct": true
+  }
+]
