@@ -286,3 +286,74 @@ def test_derive_u_fold_triples_matches_per_rank_gate():
         assert rho == pytest.approx(a / t_value)  # u-fold's own rho_u = alpha[k] / T (design Sec4 extension)
         rel_err = abs(A.realized_ratio(triple) - rho) / rho if rho != 0 else 0.0
         assert rel_err <= A.DERIVATION_REL_BOUND, f"rank alpha={a}: derived triple's realized ratio diverges from rho={rho} by {rel_err:.3e}"
+
+
+# =================================================================================================
+# T-2042 -- PIN LIST item 7 (T-2041 fix round, Minor 4 remedy, `Claude/Brunel/
+# t2021-slora-serial-build-2026-08-13.md` "PIN LIST", checkpoint 4f5aabd): `derive_amplifying_
+# triple` guards non-finite `rho` (`math.isfinite`, before `round()`, which otherwise raises
+# `OverflowError` on +/-inf and `ValueError` on NaN); `derive_delta_fold_triples`/
+# `derive_u_fold_triples` guard zero/non-finite `s_value`/`t_value` (before the division that
+# otherwise raises `ZeroDivisionError`) -- all three now return `None`/all-`None`-tuples
+# (`AmplifyingScaleRatioOutOfDomain`) instead of an uncaught exception. Before this pin, the
+# 22/22 green count was UNCHANGED by Minor 4's own addition -- nothing in either test file called
+# any of the three functions with a non-finite or zero input, so the new guard branches were
+# entirely unexercised. Each cell below is proven, by mutation on a scratch copy (never this file's
+# own tree), to RAISE the pre-fix exception when its own guard clause is deleted -- red before the
+# guard existed, green now.
+# =================================================================================================
+
+
+@pytest.mark.parametrize("bad_rho", [float("nan"), float("inf"), float("-inf")])
+def test_derive_amplifying_triple_rejects_non_finite_rho_instead_of_raising(bad_rho):
+    # Pre-guard behavior (T-2041 Minor 4's own stated finding): round(nan) raises ValueError;
+    # round(+/-inf) raises OverflowError -- both from the `round(m * 2147483648.0)` line this
+    # guard sits ahead of. Guarded, this must instead return None (AmplifyingScaleRatioOutOfDomain,
+    # design Sec6 item 2's own explicit-infeasibility signal), the SAME disposition any other
+    # out-of-domain ratio (e.g. rho <= 0.0) already receives -- never a distinct code path.
+    assert A.derive_amplifying_triple(bad_rho) is None
+
+
+@pytest.mark.parametrize("bad_s", [0.0, float("nan"), float("inf"), float("-inf")])
+def test_derive_delta_fold_triples_rejects_zero_or_non_finite_s_value_instead_of_raising(bad_s):
+    beta = [1.0, 2.0, 0.5]
+    triples, required = A.derive_delta_fold_triples(bad_s, beta, t_value=3.0)
+    assert triples == [None] * len(beta), (
+        f"s_value={bad_s!r} must produce an all-None triple list (AmplifyingScaleRatioOutOfDomain "
+        f"for every channel), not a raised ZeroDivisionError from `t_value * b / s_value`"
+    )
+    assert len(required) == len(beta)
+    assert all(math.isnan(r) for r in required), (
+        f"s_value={bad_s!r}: the reported required-ratio list must be all-NaN (unresolvable, not "
+        f"a computed value), matching the design's own 'no triple, no ratio' disposition"
+    )
+
+
+@pytest.mark.parametrize("bad_t", [0.0, float("nan"), float("inf"), float("-inf")])
+def test_derive_u_fold_triples_rejects_zero_or_non_finite_t_value_instead_of_raising(bad_t):
+    alpha = [1.0, 0.25, 4.0]
+    triples, required = A.derive_u_fold_triples(alpha, bad_t)
+    assert triples == [None] * len(alpha), (
+        f"t_value={bad_t!r} must produce an all-None triple list, not a raised "
+        f"ZeroDivisionError from `a / t_value`"
+    )
+    assert len(required) == len(alpha)
+    assert all(math.isnan(r) for r in required), (
+        f"t_value={bad_t!r}: the reported required-ratio list must be all-NaN"
+    )
+
+
+def test_derive_delta_fold_triples_finite_s_value_still_derives_normally():
+    # A negative control (StandardsDocument.md Sec5.4's two-sided calibration): an ORDINARY,
+    # finite, nonzero s_value must still derive real triples exactly as before this pin's guard
+    # existed -- confirming the guard fires ONLY on the non-finite/zero s_value cases above, not
+    # on every input generally (a guard that clamps everything to None would also "pass" the
+    # cells above vacuously).
+    triples, required = A.derive_delta_fold_triples(s_value=2.0, adapter_beta=[2.0, 1.0], t_value=1.0)
+    assert required[0] == pytest.approx(1.0)  # rho = t*beta/s = 1*2/2 = 1.0, the exact-pass-through case
+    assert triples[0] is not None and triples[0].identity == 1, (
+        "rho=1.0 must derive the exact identity pass-through triple, confirming the guard did "
+        "not degrade the ordinary, already-covered derivation path"
+    )
+    assert required[1] == pytest.approx(0.5)  # rho = 1*1/2 = 0.5, an ordinary attenuating ratio
+    assert triples[1] is not None and triples[1].identity == 0

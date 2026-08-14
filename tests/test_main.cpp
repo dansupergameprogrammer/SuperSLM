@@ -21659,6 +21659,241 @@ static void TestB9StructuralMidForwardSwapUnattemptableLayersPointerConstForWhol
 	          "delta', not a claim without a difference");
 }
 
+// =============================================================================================
+// T-2042 -- PIN LIST item 3 (T-2041 fix round, Significant 10 remedy, `Claude/Brunel/
+// t2021-slora-serial-build-2026-08-13.md` "PIN LIST", checkpoint ec06b76): `AddAmplifyingLoraDelta`'s
+// gated no-op now checks all FOUR projection fields (a_weight, b_weight, delta_fold_entry,
+// u_fold_entry), not just `a_weight` -- forward_sites.cpp:1047-1048. This pin proves each of the
+// four fields is INDEPENDENTLY load-bearing: null it alone, with the other three populated, and
+// the gate must still no-op (byte-identical to base-only) -- distinct from the existing all-four-
+// null (B1b) and all-four-populated (B1a/B1c) cases, neither of which can discriminate a gate that
+// checks only ONE field (e.g. `a_weight == nullptr` alone, the pre-fix form): a one-of-four-null
+// construction takes the "adapter bound" branch under a one-field check just as readily as it does
+// under the four-field check, so only THIS construction can tell them apart.
+// =============================================================================================
+
+static void TestB1aGateChecksAllFourProjectionFieldsIndependently() {
+	using namespace t2029_b1_fixtures;
+	using superslm::LayerAdapter;
+	using superslm::LayerAdapterProjection;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture base_fixture;
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t base_ws[kWorkspaceSize] = {};
+	const RunResult golden = RunOneToken(base_fixture, /*layer0_adapter=*/nullptr, base_ws,
+	                                      sizeof(base_ws));
+	CHECK_MSG(golden.status == SslmForwardStatus::Ok, "base-only golden run must succeed: got %s",
+	          SslmForwardStatusName(golden.status));
+
+	// Four cases, one per field, each null while the OTHER THREE are populated (real, nonzero
+	// A/B/fold entries -- kAdapterA/kAdapterBReal/the pass-through fold entries this namespace's
+	// own 4-arg WireAdaptedProjection overload already wires). A gate checking only `a_weight`
+	// would take the "compute the delta" branch on cases (b), (c), (d) below and dereference the
+	// null field -- this pin is what turns that into a defined no-op instead of a crash/UB.
+	const char* field_names[4] = {"a_weight", "b_weight", "delta_fold_entry", "u_fold_entry"};
+	for (int missing = 0; missing < 4; ++missing) {
+		TwoLayerFixture fixture;
+		LayerAdapter adapter;
+		adapter.rank = 1;
+		WireAdaptedProjection(adapter.q, kAdapterBReal, &kDeltaFoldEntry, &kUFoldEntry);
+		LayerAdapterProjection& proj = adapter.q;
+		switch (missing) {
+			case 0: proj.a_weight = nullptr; break;
+			case 1: proj.b_weight = nullptr; break;
+			case 2: proj.delta_fold_entry = nullptr; break;
+			case 3: proj.u_fold_entry = nullptr; break;
+		}
+		uint8_t ws[kWorkspaceSize] = {};
+		const RunResult r = RunOneToken(fixture, &adapter, ws, sizeof(ws));
+		CHECK_MSG(r.status == SslmForwardStatus::Ok,
+		          "one-of-four-null (%s) run must succeed: got %s", field_names[missing],
+		          SslmForwardStatusName(r.status));
+		CHECK_MSG(r.hidden_codes[0] == golden.hidden_codes[0] &&
+		              r.hidden_codes[1] == golden.hidden_codes[1],
+		          "one-of-four-null (%s), with the other three fields real and nonzero, must gate "
+		          "as a complete no-op -- reproduce the exact base-only golden: got [%d,%d], want "
+		          "[%d,%d]. A gate checking fewer than all four fields would take the compute "
+		          "branch here and diverge (or crash on the null field)",
+		          field_names[missing], r.hidden_codes[0], r.hidden_codes[1], golden.hidden_codes[0],
+		          golden.hidden_codes[1]);
+		CHECK_MSG(r.hidden_scale.m == golden.hidden_scale.m && r.hidden_scale.e == golden.hidden_scale.e,
+		          "one-of-four-null (%s) hidden_scale must also match the golden exactly",
+		          field_names[missing]);
+	}
+}
+
+// =============================================================================================
+// T-2042 -- PIN LIST item 4, THE REVIEW'S HEADLINE GAP (Significant 3/D-SLM3146; T-2041 fix
+// round's own Checkpoint 2 production-side hook, `WireAdaptedProjection`'s 4-arg overload). The
+// review's own executed mutation (M1, `Claude/Poirot/c81e48c-slora-serial-build-review.md`,
+// D-SLM3146): replacing `ApplyAmplifyingWeightScaleFold`'s entire body with `return acc` left the
+// engine suite at 24157 checks / 0 failures, because EVERY existing engine cell wires
+// `delta_fold_identity=1`/`u_fold_identity=1` (pass-through), and the primitive short-circuits on
+// `identity != 0` BEFORE reading `mult` or `exponent` -- the amplifying branch (`exponent < 0`,
+// the whole reason this design exists, T-1990's own fracture) was reachable through NO engine-
+// level test. This cell wires a NON-IDENTITY, NEGATIVE-EXPONENT delta-fold triple through the
+// real, composed `AddAmplifyingLoraDelta` call (v_proj's K-landing block, via `RunLayerLoop`) and
+// asserts a hand-computed composed value at the OBSERVABLE cache-row level -- proven below (after
+// the cell) to FAIL under M1's own exact mutation, closing D-SLM3146.
+//
+// CONSTRUCTION: v_proj's own base weight is set to ALL-ZERO (not TwoLayerFixture's own default
+// identity2x2), so the base accumulator is EXACTLY 0 for both channels -- the composed accumulator
+// then equals the delta-fold's own output exactly, with no base-side arithmetic to also hand-
+// verify. u-fold stays PASS-THROUGH (identity=1, `kUFoldEntry`); only the delta-fold triple is
+// non-identity (`identity=0, mult=round(0.6*2^31)=1288490189, exponent=-16` -- the amplifying,
+// negative-exponent branch M1 deletes). Two independent oracles compute the PREDICTED landed
+// value, using REAL production primitives for every stage NOT under test (matching this suite's
+// own established B5 precedent of calling `LandingRescale` directly as an independent oracle):
+//   (1) delta_wide[i], computed by THIS cell's own scratch reimplementation of
+//       `ApplyAmplifyingWeightScaleFold` (independent of the production function -- comparing the
+//       production engine's output against a copy of itself would prove nothing about M1, which
+//       mutates that exact function) -- Python-verified off this test's own construction, quoted
+//       in the comments below.
+//   (2) `RmsNormSite` and `LandingRescale`, called DIRECTLY (real, production, already-tested
+//       elsewhere) with the fixture's own known inputs, to convert (1)'s predicted composed
+//       accumulator into a predicted int8 cache byte -- exactly the scale-conversion stages this
+//       cell is NOT testing, so calling them directly (rather than re-deriving their own
+//       arithmetic by hand) keeps the assertion about M1's own function, not a recomputation of
+//       arithmetic this suite already covers elsewhere (t2029_b2_red.cpp, the primitive-level
+//       WSC1/landing suites).
+// The prediction is then compared against `ValueRow`'s own real, observable read of the ACTUAL
+// engine run's cache row -- behavior, not arithmetic, per this fix round's own Significant 8
+// remedy discipline (assert what `SslmModel::Load`/`RunLayerLoop` actually DO, never a bound
+// recomputed and compared to itself).
+// =============================================================================================
+
+namespace t2042_pin2_fixtures {
+
+// Non-identity, negative-exponent delta-fold triple (identity=0, mult=round(0.6*2^31)=1288490189,
+// exponent=-2, net ratio 2.4) -- the amplifying branch M1 deletes.
+const int32_t kAmplifyingDeltaFoldTriples[2 * 3] = {
+    /*channel 0*/ 0, 1288490189, -2,
+    /*channel 1*/ 0, 1288490189, -2,
+};
+const superslm::SslmAmplifyingFoldEntry kAmplifyingDeltaFoldEntry{
+    /*name=*/{}, reinterpret_cast<const uint8_t*>(kAmplifyingDeltaFoldTriples), /*row_count=*/2};
+
+// Non-identity, ATTENUATING u-fold triple (identity=0, mult=2^30 (ratio 0.5), exponent=3 (>>3),
+// net ratio 1/16) -- ApplyWeightScaleFold's own already-covered branch shape, used here purely as
+// a scaling tool to keep delta_raw small enough that the delta-fold's own amplification has
+// headroom before the [-127,127] landing clamp (kAdapterBSmall's own comment states why this is
+// needed).
+const int32_t kAttenuatingUFoldTriples[1 * 3] = {0, 1 << 30, 3};
+const superslm::SslmAmplifyingFoldEntry kAttenuatingUFoldEntry{
+    /*name=*/{}, reinterpret_cast<const uint8_t*>(kAttenuatingUFoldTriples), /*row_count=*/1};
+
+const int8_t kZero2x2[4] = {0, 0, 0, 0};  // all-zero v_proj base weight -- base_acc == 0 exactly
+
+// A SMALL B (out_channels=2, rank=1) -- unlike B1a-c's own kAdapterBReal ({100,-100}, deliberately
+// large so its EFFECT survives residual reconciliation), this cell needs headroom: this fixture's
+// own incoming activation is always exactly [127,-127] (u_acc is therefore always an exact
+// multiple of 127), so a large B leaves no room between an in-range value and the [-127,127]
+// landing clamp for amplification to move WITHOUT immediately colliding with clamp saturation on
+// BOTH the correct and the mutated path alike (measured: with B=+-100 and a pass-through u-fold,
+// BOTH the correctly-amplified value and M1's own mutated value saturate to the identical +-127,
+// a null construction that cannot discriminate -- caught by this cell's own first execution,
+// below, before being trusted, per StandardsDocument.md Sec5.4).
+const int8_t kAdapterBSmall[2] = {5, -5};
+
+}  // namespace t2042_pin2_fixtures
+
+static void TestB2AmplifyingBranchWiredThroughComposedPathMatchesHandComputedLandedValue() {
+	using namespace t2029_b1_fixtures;
+	using namespace t2042_pin2_fixtures;
+	using superslm::CarriedScale;
+	using superslm::LayerAdapter;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture fixture;
+	fixture.layers[0].v_weight = kZero2x2;  // override the fixture's own default identity2x2
+
+	// T-2042's own second construction (the first, B=kAdapterBReal with a pass-through u-fold, was
+	// executed and found to be a null test -- see kAdapterBSmall's own comment above): the u-fold
+	// is ALSO non-identity here (attenuating, exponent>=0 -- ApplyWeightScaleFold's own already-
+	// covered branch, used here only as a scaling tool to engineer clean headroom, not as new
+	// coverage) so the delta-fold's own amplifying branch has room to move without both the
+	// correct and the mutated path colliding at the same clamp.
+	LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.v, kAdapterBSmall, &kAmplifyingDeltaFoldEntry, &kAttenuatingUFoldEntry);
+	fixture.layers[0].adapter = &adapter;
+	fixture.layers[1].adapter = nullptr;
+
+	// ---- Oracle (1): this cell's OWN scratch ApplyAmplifyingWeightScaleFold, independent of the
+	// production function AddAmplifyingLoraDelta calls -- Python-verified (SaturatingRoundingDoub
+	// lingHighMul + SaturatingLeftShift32 + RoundingDivideByPOT, the exact gemmlowp/T-1990
+	// construction):
+	//   u_acc[0] = A.[127,-127] = 1*127 + 2*(-127) = -127 (A={1,2}, the fixture's own measured
+	//     RMSNorm output for this token, per B1c's own D-493-documented finding -- confirmed
+	//     independently below via oracle (2)'s own RmsNormSite call, not merely assumed)
+	//   u-fold (attenuating, exponent>=0): mult=2^30 (ratio 0.5), exponent=3 (>>3) -> net ratio
+	//     1/16. hi = SRDHM(-127, 2^30) = -64 (round(-127*0.5)); RoundingDivideByPOT(-64, 3) = -8.
+	//   u_i8[0] = ClampRopeCode(-8) = -8 (well inside [-127,127], no clamp event)
+	//   delta_raw = u_i8[0] * B = [-8*5, -8*-5] = [-40, 40]  (B = kAdapterBSmall)
+	//   delta-fold (amplifying, exponent<0): mult=round(0.6*2^31)=1288490189 (ratio 0.6),
+	//     exponent=-2 -> net ratio 2.4. hi = SRDHM(delta_raw[i], mult) = [-24, 24];
+	//     SaturatingLeftShift32(hi, 2) = hi<<2 = [-96, 96], no int32 saturation at this magnitude.
+	//   composed_acc[i] = base_acc[i] (== 0, kZero2x2) + delta_wide[i] = [-96, 96] exactly -- well
+	//     inside [-127,127], NOT clamped, so the landed byte reflects this value precisely, not a
+	//     saturation ceiling both the correct and the mutated path could coincidentally share.
+	const int64_t kExpectedComposedAcc[2] = {-96, 96};
+
+	// ---- Oracle (2): REAL RmsNormSite + REAL LandingRescale, called directly, to convert oracle
+	// (1)'s composed_acc into a predicted int8 cache byte -- exactly the scale-conversion stages
+	// this cell is not testing.
+	CarriedScale normed_scale{};
+	{
+		int8_t normed_codes[2];
+		const int8_t seed_hidden_codes[2] = {5, -5};  // TwoLayerFixture's own seeded initial state
+		const CarriedScale seed_hidden_scale{INT64_C(1073741824), 0};
+		const auto norm_status = superslm::RmsNormSite(
+		    seed_hidden_codes, fixture.layers[0].attn_norm_gain, /*hidden_size=*/2,
+		    seed_hidden_scale, fixture.layers[0].attn_norm_site_constant, normed_codes,
+		    &normed_scale);
+		CHECK_MSG(norm_status == SslmForwardStatus::Ok, "RmsNormSite oracle call must succeed: got %s",
+		          SslmForwardStatusName(norm_status));
+		CHECK_MSG(normed_codes[0] == 127 && normed_codes[1] == -127,
+		          "independent confirmation of B1c's own documented [127,-127] RMSNorm output for "
+		          "this fixture/token: got [%d,%d]", normed_codes[0], normed_codes[1]);
+	}
+	int8_t predicted[2];
+	for (int i = 0; i < 2; ++i) {
+		const int64_t raw = superslm::LandingRescale(
+		    kExpectedComposedAcc[i], normed_scale.m, fixture.layers[0].kv_landing_r_t_v[0],
+		    normed_scale.e, fixture.layers[0].kv_landing_e_t_v[0]);
+		predicted[i] = static_cast<int8_t>(superslm::ClampRopeCode(raw));
+	}
+
+	// ---- The REAL engine run.
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
+	const auto status = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                            /*layer_budget=*/2, /*hidden_size=*/2,
+	                                            /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                                            /*intermediate_size=*/2, /*context_cap=*/1,
+	                                            fixture.view.rope_tables, workspace,
+	                                            sizeof(workspace));
+	CHECK_MSG(status == SslmForwardStatus::Ok, "the amplifying-triple composed run must succeed: got %s",
+	          SslmForwardStatusName(status));
+
+	const int8_t* actual_v = superslm::ValueRow(workspace, /*layer=*/0, /*context_cap=*/1,
+	                                             /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                             /*position=*/0);
+	CHECK_MSG(actual_v[0] == predicted[0] && actual_v[1] == predicted[1],
+	          "the amplifying delta-fold branch, wired through the REAL composed engine path, must "
+	          "produce the hand-computed landed cache value: got [%d,%d], predicted [%d,%d] (from "
+	          "composed_acc=[%lld,%lld] via the real RmsNormSite+LandingRescale oracle chain) -- "
+	          "this is the assertion M1 (ApplyAmplifyingWeightScaleFold -> `return acc`) must FAIL",
+	          actual_v[0], actual_v[1], predicted[0], predicted[1],
+	          (long long)kExpectedComposedAcc[0], (long long)kExpectedComposedAcc[1]);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -22453,6 +22688,10 @@ int main(int argc, char** argv) {
 
 	// T-2040 B9 structural cell (design Sec11 B9, D-SLM3139/3140).
 	TestB9StructuralMidForwardSwapUnattemptableLayersPointerConstForWholeCall();
+
+	// T-2042 PIN LIST items 3 and 4 (T-2041 fix round, Significant 10 / Significant 3 (D-SLM3146)).
+	TestB1aGateChecksAllFourProjectionFieldsIndependently();
+	TestB2AmplifyingBranchWiredThroughComposedPathMatchesHandComputedLandedValue();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
