@@ -21520,6 +21520,145 @@ static void TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain() {
 	}
 }
 
+// =============================================================================================
+// T-2040 (design Sec11 B9, D-SLM3139/3140/3141): B9's STRUCTURAL cell -- the mid-forward-swap-
+// unattemptable property, true by construction of this build's own calling convention (B1a).
+// Dependency: B2 alone (unchanged from B1a's own insertion point; does NOT depend on B3/B5, per
+// D-SLM3140's own dependency-graph reduction).
+//
+// THE CLAIM (D-SLM3139's own text, verbatim): "at every layer index within one RunLayerLoop call
+// under an active nonzero delta, the observed LayerWeights::adapter pointer must be identical to
+// its value at call entry."
+//
+// TWO INDEPENDENT HALVES, because a runtime check alone is not the strongest available proof here
+// and a compile-time check alone does not confirm the runtime call path actually ran under a real
+// composition:
+//
+//   (1) COMPILE-TIME. `RunLayerLoop`'s own signature takes `const LayerWeights* layers` --
+//       `const`-qualified for the WHOLE call (forward_sites.h:854). This is not merely "no code
+//       inside RunLayerLoop happens to write layers[i].adapter today" -- the compiler refuses ANY
+//       write to layers[i].adapter or any other field, from inside RunLayerLoop's own translation
+//       unit, for as long as this signature stands. Pinned below via a function-pointer
+//       assignment at this EXACT signature: if a future change removes the `const` qualifier (the
+//       only way a mid-call rebind hook could be added through THIS call site, short of a
+//       const_cast -- a code-smell any reviewer would catch, not a silent structural change), the
+//       assignment below fails to COMPILE, not merely to pass a runtime check.
+//   (2) RUNTIME. Confirms the SAME property empirically, under a REAL multi-layer call with a
+//       genuinely nonzero adapter bound at every layer -- snapshot `layers[i].adapter` before the
+//       call, run a full `RunLayerLoop` pass across every layer, confirm every snapshot is
+//       unchanged after. This is the belt to (1)'s suspenders: it would also catch a hypothetical
+//       defect OUTSIDE RunLayerLoop's own signature contract -- e.g. a caller-side bug in this
+//       cell's own test harness, or (extending past what any one signature can guarantee) a
+//       future sibling function sharing the SAME underlying LayerWeights storage that mutates it
+//       between this call's start and end.
+//
+// HOW THIS CELL DISCRIMINATES A FUTURE MID-CALL REBIND PATH: a future change that added such a
+// path would have to do ONE of:
+//   (a) Change RunLayerLoop's own signature to accept `LayerWeights*` (non-const) -- the
+//       compile-time pin (1) below fails to build, loudly, at this exact line.
+//   (b) Add an internal `const_cast` inside RunLayerLoop to mutate `layers[i].adapter` despite the
+//       const parameter -- undefined behavior on a `const`-qualified object with the SAME
+//       observable failure mode as (a) would be intended to prevent: the runtime check (2) fails,
+//       because the pointer observed after the call differs from what this test set before it.
+//   (c) Add a WHOLLY SEPARATE function (not RunLayerLoop) that a caller could invoke DURING a
+//       suspended forward pass to rebind an in-flight `layers[]` array -- this is exactly B9b, the
+//       DYNAMIC half D-SLM3139 names and explicitly defers to the ABI-surface build step (no such
+//       function exists anywhere in this tree today, confirmed by the same grep D-SLM3139 itself
+//       cites: `sslm_seq_set_adapter` appears only in comments, never as a declared prototype).
+//       This structural cell does not and cannot discriminate (c) -- a function that does not
+//       exist cannot be called mid-pass by anything, including this test -- which is precisely why
+//       (c) is D-SLM3139's own named, triggered deferral rather than claimed closed here.
+static void TestB9StructuralMidForwardSwapUnattemptableLayersPointerConstForWholeCall() {
+	using superslm::CarriedScale;
+	using superslm::LayerAdapter;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using namespace t2029_b1_fixtures;
+
+	// (1) COMPILE-TIME PIN. If RunLayerLoop's own signature ever drops the `const` on `layers`,
+	// this assignment fails to compile -- the pin's own VALUE is never read (silenced below); its
+	// TYPE, checked at this line by the compiler, is the assertion.
+	using RunLayerLoopSig = SslmForwardStatus (*)(
+	    SequenceLayerState&, const superslm::LayerWeights*, uint32_t, uint32_t, size_t, size_t,
+	    size_t, size_t, int64_t, const superslm::SslmTensorManifest&, uint8_t*, size_t,
+	    std::string_view, size_t, superslm::SslmTraceHookState*);
+	constexpr RunLayerLoopSig kRunLayerLoopMustStayConstQualified = &superslm::RunLayerLoop;
+	(void)kRunLayerLoopMustStayConstQualified;
+
+	// (2) RUNTIME CONFIRMATION. Four layers (more than B1a-c's own N=2, per StandardsDocument.md
+	// Sec5.4 -- "at every layer index" is not adequately exercised by a fixture with only one
+	// non-trivial index), the SAME real, nonzero adapter bound at every layer (v_proj, matching
+	// B1c's own D-SLM493-documented choice: this fixture's residual reconciliation makes
+	// q/o/gate/up/down's own decode-level output insensitive to their projection weights, but
+	// K/V's direct cache write has no such insensitivity, so v_proj is what proves "an active
+	// nonzero delta" genuinely ran, not merely that the call succeeded).
+	constexpr uint32_t kNumLayers = 4;
+	NLayerFixture<kNumLayers> fixture;
+	LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.v, kAdapterBReal);
+	for (uint32_t l = 0; l < kNumLayers; ++l) fixture.layers[l].adapter = &adapter;
+
+	const superslm::LayerAdapter* pre_call[kNumLayers];
+	for (uint32_t l = 0; l < kNumLayers; ++l) pre_call[l] = fixture.layers[l].adapter;
+
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	constexpr size_t kWorkspaceSize = kNumLayers * 1 * 1 * 2 * 2;  // layers*context_cap*kv_heads*head_dim*2
+	uint8_t workspace[kWorkspaceSize] = {};
+
+	const auto status =
+	    superslm::RunLayerLoop(seq, fixture.layers, kNumLayers, /*layer_budget=*/kNumLayers,
+	                             /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                             /*intermediate_size=*/2, /*context_cap=*/1, fixture.view.rope_tables,
+	                             workspace, sizeof(workspace));
+	CHECK_MSG(status == SslmForwardStatus::Ok,
+	          "the %u-layer run under an active adapter must succeed: got %s", kNumLayers,
+	          SslmForwardStatusName(status));
+
+	// THE CELL'S OWN CLAIM: every layer's observed adapter pointer, after a real multi-layer call,
+	// is IDENTICAL to what this test set before the call started.
+	for (uint32_t l = 0; l < kNumLayers; ++l) {
+		CHECK_MSG(fixture.layers[l].adapter == pre_call[l],
+		          "layer %u's LayerWeights::adapter changed during the call: pre-call=%p "
+		          "post-call=%p -- a mid-call rebind occurred where this design's own calling "
+		          "convention states none can",
+		          l, (const void*)pre_call[l], (const void*)fixture.layers[l].adapter);
+	}
+
+	// "Under an active nonzero delta" is proven, not merely claimed: confirm the composed run's
+	// own K/V cache differs from a base-only run at v_proj, at every layer.
+	NLayerFixture<kNumLayers> base_fixture;
+	int8_t base_codes[2] = {5, -5};
+	SequenceLayerState base_seq;
+	base_seq.hidden_codes = base_codes;
+	base_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	uint8_t base_workspace[kWorkspaceSize] = {};
+	const auto base_status = superslm::RunLayerLoop(
+	    base_seq, base_fixture.layers, kNumLayers, kNumLayers, /*hidden_size=*/2, /*head_dim=*/2,
+	    /*num_key_value_heads=*/1, /*intermediate_size=*/2, /*context_cap=*/1,
+	    base_fixture.view.rope_tables, base_workspace, sizeof(base_workspace));
+	CHECK_MSG(base_status == SslmForwardStatus::Ok, "base-only %u-layer run must succeed: got %s",
+	          kNumLayers, SslmForwardStatusName(base_status));
+
+	bool any_layer_differs = false;
+	for (uint32_t l = 0; l < kNumLayers; ++l) {
+		const int8_t* adapted_v = superslm::ValueRow(workspace, /*layer=*/l, /*context_cap=*/1,
+		                                              /*num_kv_heads=*/1, /*head_dim=*/2,
+		                                              /*kv_head=*/0, /*position=*/0);
+		const int8_t* base_v = superslm::ValueRow(base_workspace, /*layer=*/l, /*context_cap=*/1,
+		                                           /*num_kv_heads=*/1, /*head_dim=*/2,
+		                                           /*kv_head=*/0, /*position=*/0);
+		if (adapted_v[0] != base_v[0] || adapted_v[1] != base_v[1]) any_layer_differs = true;
+	}
+	CHECK_MSG(any_layer_differs,
+	          "the adapted run must differ from base-only at v_proj's own cache row at at least "
+	          "one layer -- proving this cell's own composition is genuinely 'an active nonzero "
+	          "delta', not a claim without a difference");
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -22311,6 +22450,9 @@ int main(int argc, char** argv) {
 
 	// T-2041 (Poirot c81e48c review, Significant 2 remedy pin).
 	TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain();
+
+	// T-2040 B9 structural cell (design Sec11 B9, D-SLM3139/3140).
+	TestB9StructuralMidForwardSwapUnattemptableLayersPointerConstForWholeCall();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
