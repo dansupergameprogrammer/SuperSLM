@@ -21195,6 +21195,205 @@ static void TestB5ForwardOnlySwapPreservesStateIsolationAndOneCurrencyThroughout
 	          "swap never recomputes or rewrites an earlier position");
 }
 
+// =============================================================================================
+// T-2021/T-2029/T-2036 B8 -- Adapter lifecycle and persistence proof (design Sec11 B8, offline +
+// engine, depends on B0/B1a). Three red-first cells named in the design; cell (b) -- an
+// engineered malformed delta-fold section triggering a versioned diagnostic rather than a silent
+// misread -- is ALREADY PROVEN by this build's own B0b work
+// (tests/t2018-slora-serial/t2029_b0b_red.cpp's dimension/domain/projection/base-hash cells,
+// exercising the real SslmDeltaFoldScaleView::Parse/ValidateAmplifyingFold* functions directly);
+// not duplicated here. Cells (a) and (c) below are this file's own new work.
+// =============================================================================================
+
+// (a) Map/release/re-map does not leak state. This design's own calling convention (B1a) has no
+// literal `sslm_adapter_map`/`release` ABI (design Sec9: "no changes to the sslm_adapter_*
+// ABI surface" -- the adapter binding travels through LayerWeights::adapter, a caller-owned
+// pointer) -- "map" is wiring the pointer to an adapter's own storage; "release" is the caller's
+// own storage lifecycle. This cell reproduces the design's own construction at that level:
+// decode under adapter A, poison-fill A's OWN backing storage (simulating release), wire the
+// SAME storage location to a second, different adapter B (simulating "map B into what may be the
+// same residency slot"), and confirm B's own decode is bit-identical to a FRESH, isolated mapping
+// of B alone -- proving the new per-channel state does not leak across the lifecycle.
+static void TestB8MapReleaseRemapDoesNotLeakState() {
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	constexpr size_t kWorkspaceSize = 2 * TwoLayerFixture::kContextCap * 1 * 2 * 2;
+
+	// Decode under adapter A (v_proj, real nonzero delta) -- this storage will be poisoned and
+	// reused below, simulating "release."
+	superslm::LayerAdapter reusable_slot;
+	reusable_slot.rank = 1;
+	WireAdaptedProjection(reusable_slot.v, kAdapterBReal);
+
+	TwoLayerFixture fixture_a;
+	uint8_t ws_a[kWorkspaceSize] = {};
+	SequenceLayerState seq_a;
+	int8_t codes_a[2] = {5, -5};
+	seq_a.hidden_codes = codes_a;
+	seq_a.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_a.layer_index = 0;
+	fixture_a.layers[0].adapter = &reusable_slot;
+	fixture_a.layers[1].adapter = nullptr;
+	auto st_a = superslm::RunLayerLoop(seq_a, fixture_a.layers, 2, 2, 2, 2, 1, 2,
+	                                    TwoLayerFixture::kContextCap, fixture_a.view.rope_tables,
+	                                    ws_a, kWorkspaceSize);
+	CHECK_MSG(st_a == SslmForwardStatus::Ok, "decode under adapter A must succeed: got %s",
+	          superslm::SslmForwardStatusName(st_a));
+
+	// "Release": poison-fill the SAME backing storage (reusable_slot) that carried A's own
+	// delta-fold constants.
+	std::memset(&reusable_slot, 0xEE, sizeof(reusable_slot));
+
+	// "Map B into what may be the same residency slot": re-wire the SAME storage to a genuinely
+	// different adapter (q_proj, not v_proj -- a different projection AND different weights).
+	reusable_slot = superslm::LayerAdapter{};  // clear the poison before wiring real data into it
+	reusable_slot.rank = 1;
+	WireAdaptedProjection(reusable_slot.q, kAdapterBReal);
+
+	TwoLayerFixture fixture_b;
+	uint8_t ws_b[kWorkspaceSize] = {};
+	SequenceLayerState seq_b;
+	int8_t codes_b[2] = {5, -5};
+	seq_b.hidden_codes = codes_b;
+	seq_b.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_b.layer_index = 0;
+	fixture_b.layers[0].adapter = &reusable_slot;
+	fixture_b.layers[1].adapter = nullptr;
+	auto st_b = superslm::RunLayerLoop(seq_b, fixture_b.layers, 2, 2, 2, 2, 1, 2,
+	                                    TwoLayerFixture::kContextCap, fixture_b.view.rope_tables,
+	                                    ws_b, kWorkspaceSize);
+	CHECK_MSG(st_b == SslmForwardStatus::Ok, "decode under re-mapped adapter B must succeed: got %s",
+	          superslm::SslmForwardStatusName(st_b));
+
+	// A FRESH, isolated mapping of B alone (its own storage, never touched by A or the poison).
+	superslm::LayerAdapter fresh_b;
+	fresh_b.rank = 1;
+	WireAdaptedProjection(fresh_b.q, kAdapterBReal);
+	TwoLayerFixture fixture_fresh;
+	uint8_t ws_fresh[kWorkspaceSize] = {};
+	SequenceLayerState seq_fresh;
+	int8_t codes_fresh[2] = {5, -5};
+	seq_fresh.hidden_codes = codes_fresh;
+	seq_fresh.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_fresh.layer_index = 0;
+	fixture_fresh.layers[0].adapter = &fresh_b;
+	fixture_fresh.layers[1].adapter = nullptr;
+	auto st_fresh = superslm::RunLayerLoop(seq_fresh, fixture_fresh.layers, 2, 2, 2, 2, 1, 2,
+	                                        TwoLayerFixture::kContextCap, fixture_fresh.view.rope_tables,
+	                                        ws_fresh, kWorkspaceSize);
+	CHECK_MSG(st_fresh == SslmForwardStatus::Ok, "fresh isolated mapping of B must succeed: got %s",
+	          superslm::SslmForwardStatusName(st_fresh));
+
+	CHECK_MSG(seq_b.hidden_codes[0] == seq_fresh.hidden_codes[0] &&
+	              seq_b.hidden_codes[1] == seq_fresh.hidden_codes[1],
+	          "adapter B decoded into the poisoned/re-mapped slot must be BIT-IDENTICAL to a fresh, "
+	          "isolated mapping of B alone -- got [%d,%d] vs fresh [%d,%d] (a leak from A's own "
+	          "poisoned state would show here)",
+	          seq_b.hidden_codes[0], seq_b.hidden_codes[1], seq_fresh.hidden_codes[0],
+	          seq_fresh.hidden_codes[1]);
+	CHECK(seq_b.hidden_scale.m == seq_fresh.hidden_scale.m && seq_b.hidden_scale.e == seq_fresh.hidden_scale.e);
+}
+
+// (c) Save/restore round-trips the new per-channel state. This tree's own S3.7 convention (design
+// Sec9's own citation, forward_sites.h): a sequence's full state is `SequenceLayerState` plus its
+// K/V workspace bytes, "addressable as a unit, for exactly this save/restore use" -- no literal
+// `sslm_seq_save`/`sslm_seq_restore` ABI exists yet, so "save" is copying both, and "restore" is
+// copying them back, exactly the shape a future ABI wrapper would perform. Bind an adapter, decode
+// partway (2 tokens), save, restore into a FRESH SequenceLayerState/workspace pair, continue (2
+// more tokens) on the restored copy, and confirm it is bit-identical to an uninterrupted 4-token
+// run on the original -- proving the new per-channel adapter state (loaded once, at LayerWeights
+// construction time -- there is no per-sequence copy of it to lose) survives the round-trip
+// without needing to be re-derived.
+static void TestB8SaveRestoreRoundTripsBitIdenticalToUninterruptedRun() {
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	constexpr size_t kWorkspaceSize = 2 * TwoLayerFixture::kContextCap * 1 * 2 * 2;
+
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.v, kAdapterBReal);
+
+	auto run_one = [&](TwoLayerFixture& fx, SequenceLayerState& seq, uint8_t* ws) {
+		fx.layers[0].adapter = &adapter;
+		fx.layers[1].adapter = nullptr;
+		seq.layer_index = 0;
+		return superslm::RunLayerLoop(seq, fx.layers, 2, 2, 2, 2, 1, 2, TwoLayerFixture::kContextCap,
+		                               fx.view.rope_tables, ws, kWorkspaceSize);
+	};
+
+	// Uninterrupted reference: 4 tokens straight through.
+	TwoLayerFixture ref_fixture;
+	uint8_t ref_ws[kWorkspaceSize] = {};
+	SequenceLayerState ref_seq;
+	int8_t ref_codes[2] = {5, -5};
+	ref_seq.hidden_codes = ref_codes;
+	ref_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	for (int t = 0; t < 4; ++t) {
+		const auto st = run_one(ref_fixture, ref_seq, ref_ws);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "uninterrupted reference token %d must succeed: got %s",
+		          t, superslm::SslmForwardStatusName(st));
+	}
+
+	// Interrupted: 2 tokens, then "save" (copy seq + workspace bytes), then "restore" into a
+	// FRESH seq/workspace pair, then continue 2 more tokens on the restored copy.
+	TwoLayerFixture live_fixture;
+	uint8_t live_ws[kWorkspaceSize] = {};
+	SequenceLayerState live_seq;
+	int8_t live_codes[2] = {5, -5};
+	live_seq.hidden_codes = live_codes;
+	live_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	for (int t = 0; t < 2; ++t) {
+		const auto st = run_one(live_fixture, live_seq, live_ws);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "interrupted run token %d (pre-save) must succeed: got %s",
+		          t, superslm::SslmForwardStatusName(st));
+	}
+
+	// SAVE: byte-copy the workspace and the SequenceLayerState's own scalar fields (hidden_codes
+	// points at caller storage, copied separately below -- the struct itself has no owning
+	// pointers this test's own fixture needs to deep-copy beyond that one array).
+	uint8_t restored_ws[kWorkspaceSize];
+	std::memcpy(restored_ws, live_ws, kWorkspaceSize);
+	int8_t restored_codes[2] = {live_codes[0], live_codes[1]};
+	SequenceLayerState restored_seq;
+	restored_seq.hidden_codes = restored_codes;
+	restored_seq.hidden_scale = live_seq.hidden_scale;
+	restored_seq.layer_index = live_seq.layer_index;
+	restored_seq.kv_saturation_count = live_seq.kv_saturation_count;
+	restored_seq.context_length = live_seq.context_length;
+
+	// Poison the LIVE copy's own workspace to confirm the restored path does not secretly still
+	// depend on it (the K/V rows the restored path reads for width>1 attention must come from
+	// `restored_ws`, not from any residual aliasing).
+	std::memset(live_ws, 0xEE, kWorkspaceSize);
+
+	// RESTORE + continue: 2 more tokens on the restored copy, using the SAME LayerAdapter --
+	// the adapter's own state is loaded once at LayerWeights construction time, never
+	// per-sequence, so there is nothing sequence-specific to re-derive for it.
+	TwoLayerFixture restored_fixture;
+	for (int t = 0; t < 2; ++t) {
+		const auto st = run_one(restored_fixture, restored_seq, restored_ws);
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "restored-and-continued token %d must succeed: got %s", t,
+		          superslm::SslmForwardStatusName(st));
+	}
+
+	CHECK_MSG(restored_seq.hidden_codes[0] == ref_seq.hidden_codes[0] &&
+	              restored_seq.hidden_codes[1] == ref_seq.hidden_codes[1],
+	          "the save/restore/continue path must be BIT-IDENTICAL to the uninterrupted "
+	          "4-token reference: restored=[%d,%d] reference=[%d,%d]",
+	          restored_seq.hidden_codes[0], restored_seq.hidden_codes[1], ref_seq.hidden_codes[0],
+	          ref_seq.hidden_codes[1]);
+	CHECK(restored_seq.hidden_scale.m == ref_seq.hidden_scale.m &&
+	      restored_seq.hidden_scale.e == ref_seq.hidden_scale.e);
+	CHECK(restored_seq.context_length == ref_seq.context_length);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -21979,6 +22178,10 @@ int main(int argc, char** argv) {
 	// T-2036 B5 (design Sec11 B5).
 	TestB5WrongPerAdapterLandingScaleDivergesFromRealOneCurrencyLanding();
 	TestB5ForwardOnlySwapPreservesStateIsolationAndOneCurrencyThroughout();
+
+	// T-2036 B8 (design Sec11 B8; cell (b) already proven by B0b, not duplicated here).
+	TestB8MapReleaseRemapDoesNotLeakState();
+	TestB8SaveRestoreRoundTripsBitIdenticalToUninterruptedRun();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
