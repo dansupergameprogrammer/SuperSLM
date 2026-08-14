@@ -1,0 +1,725 @@
+{
+  "n_items": 120,
+  "items": [
+    {
+      "item_id": "Q001",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer just won a bet and wants proof inked immediately",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q002",
+      "reaction_text": "Sure, it's done, that'll be all for today. We hear you about full sleeve of overlapping koi and wave work.",
+      "required_info_item": "the shop compliments the finished full sleeve of overlapping koi and wave work",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q003",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the ID appears to have a laminate edge that has been tampered with.",
+      "required_info_item": "the shop states that the ID appears to have a laminate edge that has been tampered with must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q004",
+      "reaction_text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for sending their coworker in for a matching piece",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q005",
+      "reaction_text": "We can't move forward until this is sorted out the right way. We hear you about the birthdate on the ID does not match the customer's stated age.",
+      "required_info_item": "the shop states that the birthdate on the ID does not match the customer's stated age must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q006",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. We hear you about the specific white ink needed for the highlight work.",
+      "required_info_item": "the shop explains that the specific white ink needed for the highlight work is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q007",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the UV-reactive ink the customer specifically requested is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q008",
+      "reaction_text": "We can't move forward until this is sorted out the right way. We hear you about the ID appears to have a laminate edge that has been tampered with.",
+      "required_info_item": "the shop states that the ID appears to have a laminate edge that has been tampered with must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q009",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer is on a lunch break with only forty-five minutes free.",
+      "required_info_item": "the shop acknowledges that the customer is on a lunch break with only forty-five minutes free",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q010",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a piece that changes meaning depending on the angle it's viewed from",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q011",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about redness that has not gone down after five days",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q012",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the ID's photo does not clearly resemble the customer.",
+      "required_info_item": "the shop states that the ID's photo does not clearly resemble the customer must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q013",
+      "reaction_text": "Okay, noted, moving on. We hear you about posting about the shop on their social media page.",
+      "required_info_item": "the shop thanks the customer for posting about the shop on their social media page",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q014",
+      "reaction_text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the linework on the forearm piece came out shakier than the reference design",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q015",
+      "reaction_text": "That is such a cool idea, tell me more about it. We hear you about a sleeve blending three unrelated mythologies into one scene.",
+      "required_info_item": "the shop responds to the customer's idea of a sleeve blending three unrelated mythologies into one scene",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q016",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that the customer is a regular and expects a loyalty discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q017",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about flaking that looks heavier than what the aftercare sheet described",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q018",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer is on a lunch break with only forty-five minutes free",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q019",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about a small area that feels warmer than the skin around it",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q020",
+      "reaction_text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for posting about the shop on their social media page",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q021",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about a small area that feels warmer than the skin around it.",
+      "required_info_item": "the shop addresses the customer's concern about a small area that feels warmer than the skin around it",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q022",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. We hear you about swapping the agreed black-and-grey style for full color partway through.",
+      "required_info_item": "the shop notes that swapping the agreed black-and-grey style for full color partway through was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q023",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that adding a second full sleeve to match the first, mid-session was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q024",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. We hear you about the fine-gauge needles required for the detailed linework.",
+      "required_info_item": "the shop explains that the fine-gauge needles required for the detailed linework is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q025",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. We hear you about a shop across town quoted a lower price for a similar piece.",
+      "required_info_item": "the shop responds to the customer's point that a shop across town quoted a lower price for a similar piece",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q026",
+      "reaction_text": "Sure, it's done, that'll be all for today. We hear you about backpiece phoenix that took three sessions to finish.",
+      "required_info_item": "the shop compliments the finished backpiece phoenix that took three sessions to finish",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q027",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about a small area that feels warmer than the skin around it",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q028",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer's flight leaves in three hours and they want it done now.",
+      "required_info_item": "the shop acknowledges that the customer's flight leaves in three hours and they want it done now",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q029",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. We hear you about extending the backpiece down to cover the entire lower back.",
+      "required_info_item": "the shop notes that extending the backpiece down to cover the entire lower back was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q030",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that swapping the agreed black-and-grey style for full color partway through was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q031",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer is on a lunch break with only forty-five minutes free.",
+      "required_info_item": "the shop acknowledges that the customer is on a lunch break with only forty-five minutes free",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q032",
+      "reaction_text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished chest piece built around a family crest",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q033",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the birthdate on the ID does not match the customer's stated age must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q034",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. We hear you about backpiece phoenix that took three sessions to finish.",
+      "required_info_item": "the shop compliments the finished backpiece phoenix that took three sessions to finish",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q035",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that adding a second full sleeve to match the first, mid-session was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q036",
+      "reaction_text": "Sure, it's done, that'll be all for today. We hear you about chest piece built around a family crest.",
+      "required_info_item": "the shop compliments the finished chest piece built around a family crest",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q037",
+      "reaction_text": "That's on you, not much we can do about it now. We hear you about the lettering was spaced too tightly and reads cramped.",
+      "required_info_item": "the shop acknowledges that the lettering was spaced too tightly and reads cramped",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q038",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. We hear you about redness that has not gone down after five days.",
+      "required_info_item": "the shop addresses the customer's concern about redness that has not gone down after five days",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q039",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that the customer is paying in cash and expects a cash discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q040",
+      "reaction_text": "That is such a cool idea, tell me more about it. We hear you about a full-back mural depicting their family's migration story.",
+      "required_info_item": "the shop responds to the customer's idea of a full-back mural depicting their family's migration story",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q041",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the specific white ink needed for the highlight work.",
+      "required_info_item": "the shop explains that the specific white ink needed for the highlight work is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q042",
+      "reaction_text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished backpiece phoenix that took three sessions to finish",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q043",
+      "reaction_text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished full sleeve of overlapping koi and wave work",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q044",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished backpiece phoenix that took three sessions to finish",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q045",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that a shop across town quoted a lower price for a similar piece",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q046",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about extending the backpiece down to cover the entire lower back.",
+      "required_info_item": "the shop notes that extending the backpiece down to cover the entire lower back was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q047",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that the customer is paying in cash and expects a cash discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q048",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the specific white ink needed for the highlight work is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q049",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the linework on the forearm piece came out shakier than the reference design.",
+      "required_info_item": "the shop acknowledges that the linework on the forearm piece came out shakier than the reference design",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q050",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished chest piece built around a family crest",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q051",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about flaking that looks heavier than what the aftercare sheet described.",
+      "required_info_item": "the shop addresses the customer's concern about flaking that looks heavier than what the aftercare sheet described",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q052",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer just won a bet and wants proof inked immediately.",
+      "required_info_item": "the shop acknowledges that the customer just won a bet and wants proof inked immediately",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q053",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that extending the backpiece down to cover the entire lower back was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q054",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the ID appears to have a laminate edge that has been tampered with must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q055",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about flaking that looks heavier than what the aftercare sheet described",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q056",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer just won a bet and wants proof inked immediately.",
+      "required_info_item": "the shop acknowledges that the customer just won a bet and wants proof inked immediately",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q057",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. We hear you about a shop across town quoted a lower price for a similar piece.",
+      "required_info_item": "the shop responds to the customer's point that a shop across town quoted a lower price for a similar piece",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q058",
+      "reaction_text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for recommending the shop to their entire book club",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q059",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the UV-reactive ink the customer specifically requested.",
+      "required_info_item": "the shop explains that the UV-reactive ink the customer specifically requested is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q060",
+      "reaction_text": "That means so much to us, truly, thank you. We hear you about sending their coworker in for a matching piece.",
+      "required_info_item": "the shop thanks the customer for sending their coworker in for a matching piece",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q061",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the shading on the back panel healed patchy in two spots",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q062",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that swapping the agreed black-and-grey style for full color partway through was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q063",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. We hear you about a piece that changes meaning depending on the angle it's viewed from.",
+      "required_info_item": "the shop responds to the customer's idea of a piece that changes meaning depending on the angle it's viewed from",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q064",
+      "reaction_text": "That is such a cool idea, tell me more about it. We hear you about a piece that changes meaning depending on the angle it's viewed from.",
+      "required_info_item": "the shop responds to the customer's idea of a piece that changes meaning depending on the angle it's viewed from",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q065",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a sleeve blending three unrelated mythologies into one scene",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q066",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the fine-gauge needles required for the detailed linework.",
+      "required_info_item": "the shop explains that the fine-gauge needles required for the detailed linework is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q067",
+      "reaction_text": "That's on you, not much we can do about it now. We hear you about the shading on the back panel healed patchy in two spots.",
+      "required_info_item": "the shop acknowledges that the shading on the back panel healed patchy in two spots",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q068",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. We hear you about full sleeve of overlapping koi and wave work.",
+      "required_info_item": "the shop compliments the finished full sleeve of overlapping koi and wave work",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q069",
+      "reaction_text": "That means so much to us, truly, thank you. We hear you about posting about the shop on their social media page.",
+      "required_info_item": "the shop thanks the customer for posting about the shop on their social media page",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q070",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop addresses the customer's concern about redness that has not gone down after five days",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q071",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that the customer is a regular and expects a loyalty discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q072",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the lettering was spaced too tightly and reads cramped.",
+      "required_info_item": "the shop acknowledges that the lettering was spaced too tightly and reads cramped",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q073",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the specific white ink needed for the highlight work is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q074",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the fine-gauge needles required for the detailed linework is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q075",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop notes that extending the backpiece down to cover the entire lower back was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q076",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer's flight leaves in three hours and they want it done now",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q077",
+      "reaction_text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a sleeve blending three unrelated mythologies into one scene",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q078",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. We hear you about the customer is paying in cash and expects a cash discount.",
+      "required_info_item": "the shop responds to the customer's point that the customer is paying in cash and expects a cash discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q079",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. We hear you about a full-back mural depicting their family's migration story.",
+      "required_info_item": "the shop responds to the customer's idea of a full-back mural depicting their family's migration story",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q080",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the fine-gauge needles required for the detailed linework is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q081",
+      "reaction_text": "That means so much to us, truly, thank you. We hear you about recommending the shop to their entire book club.",
+      "required_info_item": "the shop thanks the customer for recommending the shop to their entire book club",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q082",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the linework on the forearm piece came out shakier than the reference design",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q083",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a full-back mural depicting their family's migration story",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q084",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop compliments the finished full sleeve of overlapping koi and wave work",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q085",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. We hear you about the customer is paying in cash and expects a cash discount.",
+      "required_info_item": "the shop responds to the customer's point that the customer is paying in cash and expects a cash discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q086",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer's flight leaves in three hours and they want it done now.",
+      "required_info_item": "the shop acknowledges that the customer's flight leaves in three hours and they want it done now",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q087",
+      "reaction_text": "Fine, fine, we'll just knock the price down for you. We hear you about the customer is a regular and expects a loyalty discount.",
+      "required_info_item": "the shop responds to the customer's point that the customer is a regular and expects a loyalty discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q088",
+      "reaction_text": "Okay, noted, moving on. We hear you about recommending the shop to their entire book club.",
+      "required_info_item": "the shop thanks the customer for recommending the shop to their entire book club",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q089",
+      "reaction_text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for recommending the shop to their entire book club",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q090",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's point that a shop across town quoted a lower price for a similar piece",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q091",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the ID's photo does not clearly resemble the customer must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q092",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the shading on the back panel healed patchy in two spots.",
+      "required_info_item": "the shop acknowledges that the shading on the back panel healed patchy in two spots",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q093",
+      "reaction_text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the lettering was spaced too tightly and reads cramped",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q094",
+      "reaction_text": "This turned out amazing and we're honestly thrilled for you. We hear you about chest piece built around a family crest.",
+      "required_info_item": "the shop compliments the finished chest piece built around a family crest",
+      "intended_attitude": "warm and proud"
+    },
+    {
+      "item_id": "Q095",
+      "reaction_text": "That's on you, not much we can do about it now. We hear you about the linework on the forearm piece came out shakier than the reference design.",
+      "required_info_item": "the shop acknowledges that the linework on the forearm piece came out shakier than the reference design",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q096",
+      "reaction_text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the ID appears to have a laminate edge that has been tampered with must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q097",
+      "reaction_text": "We can't move forward until this is sorted out the right way. We hear you about the ID's photo does not clearly resemble the customer.",
+      "required_info_item": "the shop states that the ID's photo does not clearly resemble the customer must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q098",
+      "reaction_text": "Absolutely not, we're not doing anything outside the booking. We hear you about adding a second full sleeve to match the first, mid-session.",
+      "required_info_item": "the shop notes that adding a second full sleeve to match the first, mid-session was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q099",
+      "reaction_text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer is on a lunch break with only forty-five minutes free",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q100",
+      "reaction_text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for sending their coworker in for a matching piece",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q101",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer just won a bet and wants proof inked immediately",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q102",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about swapping the agreed black-and-grey style for full color partway through.",
+      "required_info_item": "the shop notes that swapping the agreed black-and-grey style for full color partway through was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q103",
+      "reaction_text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the birthdate on the ID does not match the customer's stated age must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q104",
+      "reaction_text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about adding a second full sleeve to match the first, mid-session.",
+      "required_info_item": "the shop notes that adding a second full sleeve to match the first, mid-session was not part of the original booking",
+      "intended_attitude": "firm but accommodating"
+    },
+    {
+      "item_id": "Q105",
+      "reaction_text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop thanks the customer for posting about the shop on their social media page",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q106",
+      "reaction_text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the shading on the back panel healed patchy in two spots",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q107",
+      "reaction_text": "Sure, whatever you want, doesn't matter to us. We hear you about a sleeve blending three unrelated mythologies into one scene.",
+      "required_info_item": "the shop responds to the customer's idea of a sleeve blending three unrelated mythologies into one scene",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q108",
+      "reaction_text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop explains that the UV-reactive ink the customer specifically requested is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q109",
+      "reaction_text": "Okay, noted, moving on. We hear you about sending their coworker in for a matching piece.",
+      "required_info_item": "the shop thanks the customer for sending their coworker in for a matching piece",
+      "intended_attitude": "grateful and warm"
+    },
+    {
+      "item_id": "Q110",
+      "reaction_text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop states that the ID's photo does not clearly resemble the customer must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q111",
+      "reaction_text": "We hear you, and we still have to keep our pricing where it is. We hear you about the customer is a regular and expects a loyalty discount.",
+      "required_info_item": "the shop responds to the customer's point that the customer is a regular and expects a loyalty discount",
+      "intended_attitude": "polite but firm"
+    },
+    {
+      "item_id": "Q112",
+      "reaction_text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a full-back mural depicting their family's migration story",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q113",
+      "reaction_text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop responds to the customer's idea of a piece that changes meaning depending on the angle it's viewed from",
+      "intended_attitude": "engaged and curious"
+    },
+    {
+      "item_id": "Q114",
+      "reaction_text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the customer's flight leaves in three hours and they want it done now",
+      "intended_attitude": "sympathetic but time-pressured"
+    },
+    {
+      "item_id": "Q115",
+      "reaction_text": "Not our problem, you'll have to figure that out yourself. We hear you about the UV-reactive ink the customer specifically requested.",
+      "required_info_item": "the shop explains that the UV-reactive ink the customer specifically requested is currently out of stock",
+      "intended_attitude": "apologetic and practical"
+    },
+    {
+      "item_id": "Q116",
+      "reaction_text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+      "required_info_item": "the shop acknowledges that the lettering was spaced too tightly and reads cramped",
+      "intended_attitude": "apologetic and reassuring"
+    },
+    {
+      "item_id": "Q117",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. We hear you about flaking that looks heavier than what the aftercare sheet described.",
+      "required_info_item": "the shop addresses the customer's concern about flaking that looks heavier than what the aftercare sheet described",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q118",
+      "reaction_text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about redness that has not gone down after five days.",
+      "required_info_item": "the shop addresses the customer's concern about redness that has not gone down after five days",
+      "intended_attitude": "calm and reassuring"
+    },
+    {
+      "item_id": "Q119",
+      "reaction_text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the birthdate on the ID does not match the customer's stated age.",
+      "required_info_item": "the shop states that the birthdate on the ID does not match the customer's stated age must be resolved before any work begins",
+      "intended_attitude": "stern and procedural"
+    },
+    {
+      "item_id": "Q120",
+      "reaction_text": "Oh no, that actually sounds really serious, you should be worried. We hear you about a small area that feels warmer than the skin around it.",
+      "required_info_item": "the shop addresses the customer's concern about a small area that feels warmer than the skin around it",
+      "intended_attitude": "calm and reassuring"
+    }
+  ]
+}

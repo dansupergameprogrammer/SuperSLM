@@ -1,0 +1,487 @@
+{
+  "ground_truth": {
+    "Q001": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q002": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q003": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q004": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q005": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q006": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q007": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q008": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q009": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q010": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q011": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q012": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q013": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q014": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q015": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q016": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q017": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q018": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q019": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q020": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q021": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q022": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q023": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q024": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q025": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q026": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q027": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q028": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q029": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q030": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q031": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q032": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q033": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q034": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q035": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q036": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q037": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q038": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q039": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q040": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q041": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q042": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q043": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q044": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q045": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q046": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q047": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q048": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q049": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q050": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q051": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q052": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q053": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q054": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q055": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q056": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q057": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q058": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q059": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q060": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q061": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q062": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q063": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q064": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q065": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q066": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q067": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q068": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q069": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q070": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q071": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q072": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q073": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q074": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q075": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q076": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q077": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q078": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q079": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q080": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q081": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q082": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q083": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q084": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q085": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q086": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q087": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q088": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q089": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q090": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q091": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q092": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q093": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q094": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q095": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q096": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q097": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q098": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q099": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q100": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q101": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q102": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q103": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q104": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q105": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q106": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q107": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q108": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q109": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q110": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q111": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q112": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q113": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q114": {
+      "attitude_present": true,
+      "info_present": false
+    },
+    "Q115": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q116": {
+      "attitude_present": false,
+      "info_present": false
+    },
+    "Q117": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q118": {
+      "attitude_present": true,
+      "info_present": true
+    },
+    "Q119": {
+      "attitude_present": false,
+      "info_present": true
+    },
+    "Q120": {
+      "attitude_present": false,
+      "info_present": true
+    }
+  },
+  "n_items": 120,
+  "note": "held out of the packet; used only by score_answers.py after answers.json is returned",
+  "shuffle_seed": 2064
+}
