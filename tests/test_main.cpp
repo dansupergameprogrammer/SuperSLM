@@ -21234,15 +21234,27 @@ static void TestB5ForwardOnlySwapPreservesStateIsolationAndOneCurrencyThroughout
 // not duplicated here. Cells (a) and (c) below are this file's own new work.
 // =============================================================================================
 
-// (a) Map/release/re-map does not leak state. This design's own calling convention (B1a) has no
-// literal `sslm_adapter_map`/`release` ABI (design Sec9: "no changes to the sslm_adapter_*
-// ABI surface" -- the adapter binding travels through LayerWeights::adapter, a caller-owned
-// pointer) -- "map" is wiring the pointer to an adapter's own storage; "release" is the caller's
-// own storage lifecycle. This cell reproduces the design's own construction at that level:
-// decode under adapter A, poison-fill A's OWN backing storage (simulating release), wire the
-// SAME storage location to a second, different adapter B (simulating "map B into what may be the
-// same residency slot"), and confirm B's own decode is bit-identical to a FRESH, isolated mapping
-// of B alone -- proving the new per-channel state does not leak across the lifecycle.
+// (a) Map/release/re-map does not leak state -- NOT APPLICABLE UNTIL THE ABI EXISTS. This
+// design's own calling convention (B1a) has no literal `sslm_adapter_map`/`release` ABI or
+// opaque residency slot (design Sec9: "no changes to the sslm_adapter_* ABI surface" -- the
+// adapter binding travels through LayerWeights::adapter, a caller-owned pointer). This cell
+// simulates "release" by poison-filling `reusable_slot`'s own backing storage
+// (`std::memset(..., 0xEE, ...)`) and then "map"-ping a different adapter into the SAME storage
+// location by C++ struct assignment (`reusable_slot = LayerAdapter{}`, then re-wiring its
+// fields) -- but T-2041 (Poirot c81e48c review, Significant 7) found that assignment overwrites
+// every poisoned byte before the second decode ever runs, so no poisoned state can reach the
+// code under test: deleting the `memset` line entirely leaves this build's engine suite at
+// 24157 checks, 0 failures (M3 in the review's own mutation log), which is definitional proof
+// the poison-fill is inert. The property this cell WANTS to prove -- that a real
+// map/release/remap lifecycle, through whatever ABI eventually owns adapter residency, cannot
+// leak a released adapter's state into a newly mapped one -- has no concrete input that can
+// make it fail today, because this calling convention has no residency slot for state to leak
+// through. Recorded here as NOT APPLICABLE UNTIL THE ABI EXISTS, not as a discharged red-first
+// leak-detection cell; the two decode-equivalence assertions below still hold (struct
+// assignment IS a correct, if trivial, isolation guarantee at this convention's own level) and
+// are kept as a standing green control, matching this suite's own "reproduced as a standing
+// green control, not a new red cell" framing used elsewhere (t2029_b0b_red.cpp's direction-(ii)
+// cell before its own T-2041 rewrite).
 static void TestB8MapReleaseRemapDoesNotLeakState() {
 	using namespace t2029_b1_fixtures;
 	using superslm::CarriedScale;
@@ -21273,7 +21285,9 @@ static void TestB8MapReleaseRemapDoesNotLeakState() {
 	          superslm::SslmForwardStatusName(st_a));
 
 	// "Release": poison-fill the SAME backing storage (reusable_slot) that carried A's own
-	// delta-fold constants.
+	// delta-fold constants. INERT by construction at this calling convention (see this
+	// function's own header comment, T-2041/Significant 7): the very next statement overwrites
+	// every poisoned byte via struct assignment before any decode reads it.
 	std::memset(&reusable_slot, 0xEE, sizeof(reusable_slot));
 
 	// "Map B into what may be the same residency slot": re-wire the SAME storage to a genuinely

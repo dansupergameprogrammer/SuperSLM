@@ -265,7 +265,9 @@ def test_derive_delta_fold_triples_matches_per_channel_gate():
     s_value = 1.0
     beta = [0.9, 0.3, 1.0]  # channel 2's beta=1.0 with T=1.0 => rho=1.0 => exact identity
     t_value = 1.0
-    triples, required = A.derive_delta_fold_triples([0.9, 0.3, 1.0], s_value, beta, t_value)
+    # T-2041 (Poirot c81e48c review, Minor 5): derive_delta_fold_triples dropped its unused
+    # base_channel_scales parameter -- mechanical call-site update, no assertion changed.
+    triples, required = A.derive_delta_fold_triples(s_value, beta, t_value)
     assert len(triples) == len(beta) == len(required)
     assert triples[2] == A.AmplifyingTriple(identity=1, mult=0, exponent=0)
     for triple, rho, b in zip(triples, required, beta):

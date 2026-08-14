@@ -46,10 +46,14 @@ inline constexpr uint8_t kWeightScalesMagic[4] = {'W', 'S', 'C', '1'};
 inline constexpr uint8_t kDeltaFoldScalesMagic[4] = {'D', 'F', 'S', '1'};
 inline constexpr uint8_t kUFoldScalesMagic[4] = {'U', 'F', 'S', '1'};
 
-// WSC1's own unsigned shift domain (RoundingDivideByPOT's documented int32 exponent domain) --
-// a PUBLIC copy of the same two constants src/model.cpp's own TU-internal
-// kWeightScaleShiftMin/Max already pin (pinned to each other by a static_assert in model.cpp, so
-// the two copies cannot silently drift). Exposed here because design Sec9's B0b build cell
+// WSC1's own unsigned shift domain (RoundingDivideByPOT's documented int32 exponent domain).
+// T-2041 (Poirot c81e48c review, Minor 1): this is now the ONLY definition of
+// kWeightScaleShiftMin/Max -- a prior TU-internal copy in model.cpp was removed this build, so
+// there is nothing left for a static_assert to pin these two constants AGAINST each other; the
+// static_assert in model.cpp (src/model.cpp, "WSC1 shift's domain must equal RoundingDivideByPOT's
+// documented int32 exponent domain") instead pins this single copy against
+// kRoundingDivideByPotExponentMinI32/Max (intmath.h) -- the primitive whose domain these
+// constants actually describe. Exposed here because design Sec9's B0b build cell
 // ("swap direction (ii): a genuine delta-fold/u-fold triple's negative exponent, read as WSC1's
 // own unsigned shift column, is already caught by the EXISTING check") needs a way to state that
 // existing, unchanged bound without duplicating WSC1's own internal validator's logic.

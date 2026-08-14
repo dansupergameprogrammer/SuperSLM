@@ -122,8 +122,8 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 // `ApplyWeightScaleFold` exactly as before, unmodified -- its ratio never needs amplification.
 //
 // Precondition, bounded by construction rather than asserted (design Sec4, D-SLM2983): `|acc| <
-// 2^31` at both real call sites (`delta_raw[i]`, a sum of `out_channels`-many int8x8 products
-// over `r` rank terms; `u_acc[k]`, a sum over `d` contracting terms) -- `static_cast<int32_t>`
+// 2^31` at both real call sites (`delta_raw[i]`, a sum of `r` int8x8 products, one per rank
+// term; `u_acc[k]`, a sum over `d` contracting terms) -- `static_cast<int32_t>`
 // on the first line silently TRUNCATES, not saturates, if this bound is exceeded. Bounded, not
 // checked: at this project's own widest rank/dimension (Qwen2.5, `SuperSLM_Plan.md` Sec11),
 // `|delta_raw[i]| <= r*127^2` and `|u_acc[k]| <= d*127^2` sit roughly two orders of magnitude

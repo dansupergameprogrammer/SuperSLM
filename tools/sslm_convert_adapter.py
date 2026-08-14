@@ -82,6 +82,13 @@ def derive_amplifying_triple(rho: float) -> Optional[AmplifyingTriple]:
     (D-SLM2917): a genuinely infeasible ratio is signaled explicitly, never silently clamped to
     `identity=1`.
     """
+    # T-2041 (Poirot c81e48c review, Minor 4): a non-finite `rho` (NaN or +/-inf -- reachable from
+    # malformed calibration input upstream, e.g. a zero `s_value`/`t_value` before Minor 4's own
+    # zero-guards below existed) must reach this function's own `AmplifyingScaleRatioOutOfDomain`
+    # signal (`None`) like any other out-of-domain ratio, never an uncaught OverflowError (inf) or
+    # ValueError (NaN) from `round()` a few lines down.
+    if not math.isfinite(rho):
+        return None
     if rho == 1.0:
         return AmplifyingTriple(identity=1, mult=0, exponent=0)
     if rho <= 0.0:
@@ -196,21 +203,28 @@ def compute_t(alpha: List[float], u_acc_magnitudes: List[float]) -> float:
     return t_value if t_value > 0.0 else 1.0
 
 
-def derive_delta_fold_triples(base_channel_scales: List[float], s_value: float,
-                               adapter_beta: List[float], t_value: float,
+def derive_delta_fold_triples(s_value: float, adapter_beta: List[float], t_value: float,
                                ) -> Tuple[List[Optional[AmplifyingTriple]], List[float]]:
     """One `delta_identity`/`delta_mult`/`delta_exponent` triple per adapted-projection output
     channel (design Sec9's `DeltaFoldScales` array; design Sec4's `rho_delta[i] = T*beta[i]/S`).
 
-    `base_channel_scales` is unused directly here (kept as a parameter for call-site symmetry with
-    the base's own WSC1 derivation, which this function's `s_value` is already the shared
-    reference scale of — `S = max_i base_channel_scales[i]`, computed by the caller from the base
-    artifact's own WSC1 arrays per design Sec2/Sec4). Returns `(triples, required_ratios)` — the
-    per-channel derived triple (`None` where `AmplifyingScaleRatioOutOfDomain` fires, design Sec6
-    item 2) and the required ratio each triple was derived from, so a caller can run `gate_check`
-    per channel without recomputing `rho`.
+    `s_value` is the base's own shared reference scale (`S = max_i base_channel_scales[i]`,
+    computed by the CALLER from the base artifact's own WSC1 arrays per design Sec2/Sec4) — this
+    function takes the already-reduced scalar, never the per-channel array it was reduced from.
+    T-2041 (Poirot c81e48c review, Minor 5): a prior `base_channel_scales: List[float]` parameter
+    was `del`-ed on this function's own first line, unread — dropped entirely rather than kept for
+    "call-site symmetry" that no call site actually needed.
+
+    Returns `(triples, required_ratios)` — the per-channel derived triple (`None` where
+    `AmplifyingScaleRatioOutOfDomain` fires, design Sec6 item 2) and the required ratio each triple
+    was derived from, so a caller can run `gate_check` per channel without recomputing `rho`.
     """
-    del base_channel_scales  # symmetry parameter, not read directly (see docstring)
+    # T-2041 (Minor 4): a zero (or non-finite) `s_value` must reach `AmplifyingScaleRatioOutOfDomain`
+    # (every entry `None`) like any other infeasible ratio, never an uncaught ZeroDivisionError --
+    # `derive_amplifying_triple` itself now guards non-finite `rho`, but the division below runs
+    # BEFORE that guard ever sees the result.
+    if s_value == 0.0 or not math.isfinite(s_value):
+        return [None] * len(adapter_beta), [float("nan")] * len(adapter_beta)
     required = [t_value * b / s_value for b in adapter_beta]
     triples = [derive_amplifying_triple(rho) for rho in required]
     return triples, required
@@ -220,6 +234,9 @@ def derive_u_fold_triples(adapter_alpha: List[float], t_value: float,
                            ) -> Tuple[List[Optional[AmplifyingTriple]], List[float]]:
     """One `u_identity`/`u_mult`/`u_exponent` triple per rank index (design Sec9's `UFoldScales`
     array; design Sec4's extension, `rho_u[k] = alpha[k]/T`)."""
+    # T-2041 (Minor 4): same zero/non-finite guard as derive_delta_fold_triples, for `t_value`.
+    if t_value == 0.0 or not math.isfinite(t_value):
+        return [None] * len(adapter_alpha), [float("nan")] * len(adapter_alpha)
     required = [a / t_value for a in adapter_alpha]
     triples = [derive_amplifying_triple(rho) for rho in required]
     return triples, required

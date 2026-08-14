@@ -17,6 +17,14 @@
 #include "superslm/artifact.h"
 #include "superslm/model.h"
 #include "../sslm_model_hostile_fixtures.h"
+// T-2041 (Poirot c81e48c review, Significant 8): pulled in so the direction-(ii) swap cell below
+// can build a full loadable artifact and call the REAL `SslmModel::Load` +
+// `ValidateWeightScalesDomain` path, matching test_main.cpp's own
+// `TestWsc1RejectsShiftUnderDocumentedBound` shape, instead of asserting the bound's arithmetic
+// directly on memcpy'd bytes.
+#include "../sslm_fixtures.h"
+#include "../sslm_cfg1_hostile_fixtures.h"
+#include "../sslm_sil1_hostile_fixtures.h"
 
 #include <array>
 #include <cstdio>
@@ -135,39 +143,31 @@ static void TestSwapDirectionTwoAmplifyingBytesWithNegativeExponentRejectedByWsc
 	CHECK(SslmModelStatus::Ok ==
 	      ValidateAmplifyingFoldScalesDomain(delta_out.Entries(), &derr));
 
-	// Now reinterpret the SAME bytes as if the section's magic were WSC1's own -- the structural
-	// parse (SslmTensorManifest::Parse, real and unmodified) still succeeds (this is a
-	// VALUE-domain rejection, not a structural one); the negative exponent occupies WSC1's own
-	// "shift" column, which is the PUBLIC, documented UNSIGNED [kWeightScaleShiftMin,
-	// kWeightScaleShiftMax] domain (model.h) -- a negative value is outside it, exactly as
-	// design Sec9 states this direction was already closed by the EXISTING value-domain check
-	// (WeightScaleShiftOutOfDomain, model.cpp's own ValidateWeightScalesDomain -- a TU-internal
-	// function this cell confirms the CONTRACT of via its public constants, per this suite's own
-	// "standing green control, not a new red cell" framing, T-2018/T-2027 casebook Sec18.3).
+	// Now reinterpret the SAME bytes as if the section's magic were WSC1's own, and run them
+	// through the REAL end-to-end path: `SslmModel::Load` -> `ValidateSectionValues` ->
+	// `ValidateWeightScalesDomain`. T-2041 (Poirot c81e48c review, Significant 8): the prior
+	// shape of this cell never called that validator -- it memcpy'd the shift column out of the
+	// reinterpreted bytes and asserted the bound arithmetic directly (`shift < kWeightScaleShiftMin
+	// || shift > kWeightScaleShiftMax`, i.e. `-5 < 0`), which would still pass unchanged even if
+	// `ValidateWeightScalesDomain` stopped checking `shift` entirely -- a tautology over two
+	// constants, not a confirmation of the validator's behavior. This shape instead builds a full
+	// loadable artifact and asserts the real `WeightScaleShiftOutOfDomain` status, matching
+	// test_main.cpp's own `TestWsc1RejectsShiftUnderDocumentedBound` (test_main.cpp:4169), which
+	// covers the identical property (`shift=-1`) against the identical validator.
 	std::vector<uint8_t> wsc1_bytes = m.bytes;
 	for (int i = 0; i < 4; ++i) wsc1_bytes[i] = kWeightScalesMagic[i];
-	SslmSectionView wsc1_view = MakeManifestSectionView(SslmSectionType::WeightScales,
-	                                                     SslmDtype::Int32, wsc1_bytes);
-	SslmTensorManifest wsc1_manifest;
+	auto built = BuildArtifact({MakeValidConfigSection(), MakeSigmoidLutSection(),
+	                             MakeSection(SslmSectionType::WeightScales, SslmDtype::Int32, wsc1_bytes)});
+	SslmModelView view;
 	std::string werr;
-	CHECK_MSG(SslmTensorManifest::Parse(wsc1_view, wsc1_manifest, &werr) == SslmModelStatus::Ok,
-	          "the structural parse itself must still succeed (this is a VALUE-domain rejection, "
-	          "not a structural one)");
-	const SslmTensorView* t = wsc1_manifest.Tensor("t0");
-	CHECK_MSG(t != nullptr, "the reinterpreted tensor must still be structurally present");
-	if (t != nullptr) {
-		// Read the shift column exactly as ValidateWeightScalesDomain itself does (row 0, byte
-		// offset 8: identity, mult, shift each 4 bytes) and confirm it falls outside the public,
-		// documented WSC1 domain -- the same fact ValidateWeightScalesDomain's own
-		// WeightScaleShiftOutOfDomain rejection is built on.
-		int32_t shift = 0;
-		std::memcpy(&shift, t->data + 8, 4);
-		CHECK_MSG(shift < kWeightScaleShiftMin || shift > kWeightScaleShiftMax,
-		          "a genuine delta-fold triple's negative exponent (%d), read as WSC1's own "
-		          "shift column, must fall outside [%d,%d] -- confirming WSC1's existing "
-		          "WeightScaleShiftOutOfDomain check already rejects this swap direction",
-		          shift, kWeightScaleShiftMin, kWeightScaleShiftMax);
-	}
+	const SslmModelStatus wsc1_status =
+	    SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &werr);
+	CHECK_MSG(wsc1_status == SslmModelStatus::WeightScaleShiftOutOfDomain,
+	          "a genuine delta-fold triple's negative exponent (-5), reinterpreted as WSC1's own "
+	          "shift column and loaded through the REAL SslmModel::Load path, must be rejected by "
+	          "ValidateWeightScalesDomain: got %s, want WeightScaleShiftOutOfDomain (%s)",
+	          SslmModelStatusName(wsc1_status), werr.c_str());
+	CHECK(!view.has_weight_scales);
 }
 
 // --- Cell: dimension validation --------------------------------------------------------------
