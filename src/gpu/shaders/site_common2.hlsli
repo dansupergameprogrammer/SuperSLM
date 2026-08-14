@@ -3,8 +3,12 @@
 // the i-exp softmax construction (IExpConstruct/IExpEvaluate/
 // IExpScaleConstants/CheckSoftmaxRowWidthDomain), a buffer-resident
 // SoftmaxRowQ15 (no per-call local array -- the row lives in a caller-
-// supplied WorkScratch window, sized at the real per-call `context_cap`,
-// never a compile-time capacity), and the SiLU LUT lookup (SiluSigmoidQ15/
+// supplied buffer window, sized at the real per-call `context_cap`, never a
+// compile-time capacity -- T-2052 M4, Claude/Poirot/36b9327-gpu-serial-
+// port-reconfirmation-review.md: the caller is LayerScratch's own persistent
+// `scores` region since T-2045's own C3 split attention into four separate
+// dispatches, never a WorkScratch window -- see SoftmaxRowQ15BufGpu's own
+// header comment below), and the SiLU LUT lookup (SiluSigmoidQ15/
 // CheckSiluCompositionScaleDomain, already array-free). Every function has a
 // named C++ sibling; see src/intmath.cpp, src/matmul.cpp, src/silu_lut.cpp,
 // src/forward/checked_chain_funnel.cpp.
@@ -164,8 +168,12 @@ bool CheckSoftmaxRowWidthDomainGpu(int64_t q_b, int64_t q_c, int width)
 
 // intmath.cpp SoftmaxRowQ15, bit-exact, buffer-resident version: `buf` at
 // `base` holds `width` int64 scores on entry (T-2039: never a per-call local
-// array -- WorkScratch's own per-thread AttnScores slice, sized to the real
-// per-call context_cap) and `width` int64 Q15 probs on success. This is the
+// array -- T-2052 M4 correction: the caller passes LayerScratch at its own
+// persistent `scores` region offset, ScratchLayout index 25, sized to the
+// real per-call `num_attention_heads * context_cap` -- not a WorkScratch
+// window; that region was retired at T-2045's own C3, which split attention
+// into four dispatches sharing this row across dispatch boundaries) and
+// `width` int64 Q15 probs on success. This is the
 // SAME sequential algorithm the original array-based primitive used --
 // softmax_site.hlsl's own per-thread head ownership (one thread computes
 // one head's softmax start to finish, Sec5.4's per-output-channel

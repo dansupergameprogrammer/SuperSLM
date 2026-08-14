@@ -88,6 +88,40 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size);
 
+// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md, M1's
+// own remedy): the structural closure for `RunLayerLoopGpu`'s own host-side
+// guard ladder -- generated from `gpu_layer_loop_guards.def`, the single
+// source of truth for how many guards, in what order, to what CPU-matching
+// status the ladder implements. `GpuLayerLoopGuard::kCount` is a compile-time
+// constant a test can assert against directly (`static_cast<int>(
+// GpuLayerLoopGuard::kCount) == 9`); the pin round's own table-walk cell
+// (Curie's work, not built here -- Brunel does not author tests) constructs
+// one malformed-input fixture per named guard and asserts CPU's
+// `RunLayerLoop` and GPU's `RunLayerLoopGpu` agree, status for status, so a
+// guard added to CPU without a matching `.def` row -- and a matching `return`
+// in `RunLayerLoopGpu`'s own ladder -- fails that walk loudly rather than
+// waiting for a fourth hand-count to miss it.
+enum class GpuLayerLoopGuard : int {
+#define SSLM_GPU_LAYER_LOOP_GUARD(enum_name, status_name, cpp_citation) enum_name,
+#include "superslm/gpu_layer_loop_guards.def"
+	kCount
+};
+
+// T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2):
+// the device-observable N3's own residency cache was missing. Content
+// correctness alone (a byte-for-byte match against the cached row) cannot
+// distinguish "read from the resident DEFAULT-heap buffer" from "read from a
+// plain upload-heap buffer holding the identical bytes" -- both would pass a
+// value-comparison pin identically. Set internally by `RunLayerLoopGpu`'s own
+// weight-residency decision, every call: `true` iff that call's own packed
+// row matched `g_resident_weights`' cached content and the DEFAULT-heap
+// upload/copy/transition sequence was skipped entirely (a cache hit); `false`
+// on a cache miss (a fresh upload+copy ran, whether because the content
+// changed or because this is the first call). Read back by the caller AFTER
+// `RunLayerLoopGpu` returns -- this is the pin round's own observable to
+// consume, not built as a test cell here (Brunel does not author tests).
+bool LastWeightUploadWasSkipped();
+
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
 // `workspace` is the device-resident twin of the identical buffer RunLayerLoop uses.
@@ -194,10 +228,17 @@ bool MapModelGpuResidencyTierCheck();
 // remains a permitted OPTIONAL SMOKE (D-SLM3067's own allowance), not authored as a
 // symbol here since this suite does not run it. `sslm_model_map`'s GPU-residency
 // setup makes a fixed, enumerable sequence of `kGpuResidencyAllocationCallCount`
-// ("N") device-allocation calls (Sec5.1's read-resource and write-resource tables). ---
-// N is a compile-time-known constant once Sec5.1's resource list is final -- declared
-// here as a symbol the build seat defines (extern, not a macro, so a red-suite build
-// against an undefined N is itself a LINK-RED cell, same as every other symbol here).
+// ("N") mock allocation calls. ---
+// T-2052 (M3, Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md):
+// this comment previously stated N's own provenance as "Sec5.1's read-resource
+// and write-resource tables" -- T-2049's own N4 remedy corrected that claim at
+// its definition site and left this declaring header still stating it, a
+// claim surviving in exactly one file for the third consecutive round (M3's
+// own finding). N's SINGLE definition, with its own current and honestly-
+// stated provenance, is `src/gpu/superslm_gpu.cpp`'s
+// `kGpuResidencyAllocationCallCount` -- this header does not restate that
+// provenance a second time, structurally, so it cannot go stale here again:
+// read the definition site, not this comment, for what N counts and why.
 extern const uint32_t kGpuResidencyAllocationCallCount;
 // Arms injection: the next `MapModelGpuResidencyWithInjection` call fails exactly
 // allocation call `index` (0-based, in [0, N)) with a synthetic out-of-memory result,
