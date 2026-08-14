@@ -47,6 +47,7 @@ import os
 import shutil
 import struct
 import tempfile
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -913,6 +914,270 @@ def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
         "n_pilot_pooled": int(pooled_composed_pilot.shape[0]), "n_val_pooled": int(pooled_composed_val.shape[0]),
         "per_pair_diagnostics": per_pair_diagnostics,
     }
+
+
+# =============================================================================================
+# Design §26.15, AS CORRECTED (T-2099) -- the freeze-time conversion-health gate.
+#
+# WHAT THIS GATES. At freeze time a CANDIDATE adapter's conversion health is compared against a
+# matched REFERENCE adapter's, per tier: Tier 1 over the pooled draw population, Tier 2 once per
+# projection type present. The decided quantity is a RATIO -- `stat(candidate) / stat(reference)`
+# for `stat` in {sample sd, p95} -- checked against a band, and the verdict is three-valued
+# (D-SLM3288): UNRESOLVED first, else PASS if in band, else REFUSE. `freeze_allowed` is true only
+# on an overall PASS.
+#
+# WHY THE ORIGINAL §26.15 REPAIR WAS ONE-SIDED, and what changed (the external review's finding,
+# 2026-08-14; D-SLM3295). §26.15 derived resolving power as `band / relSE(stat(REFERENCE))` --
+# the bootstrap relative SE of the reference population ALONE (`margin_of(ref_pooled, band)` in
+# `Claude/Vitruvius/t2096-verdict-repair-probe/t2096_verdict_repair_probe.py`) -- and its
+# escalation instruction re-collected the REFERENCE only, leaving the candidate at the production
+# default `pilot_n=200`. Statistical power for a ratio depends on BOTH samples. Two consequences,
+# and the second is the one that makes the gate unsafe rather than merely imprecise:
+#
+#   1. The margin is overstated. With equal-sized samples it is too large by a factor of about
+#      sqrt(2); as the reference is escalated it grows without bound while the candidate's own
+#      contribution to the ratio's uncertainty is untouched.
+#   2. **Escalating the reference alone can drive ANY cell to RESOLVED.** As
+#      `relSE(reference) -> 0`, the reported margin -> infinity, while `relSE(ratio)` floors at
+#      `relSE(candidate)`, which never moved. The specified escalation procedure was therefore a
+#      false-RESOLVED generator: spending collector time on the reference buys a RESOLVED verdict
+#      on a ratio whose real uncertainty is unchanged.
+#
+# The corrected form below computes the ratio's own relative SE jointly,
+# `relSE(R)^2 = relSE(stat(cand))^2 + relSE(stat(ref))^2` (first-order propagation for the ratio
+# of two independent estimates -- the candidate and reference populations are collected from
+# disjoint seed streams, `_b3_collect_pair_raw_draws`'s own `seed_base`/`validation_seed_base`
+# construction), and escalates BOTH sides together at the same geometric step. That also makes the
+# must-reject construction production-feasible for the first time: §26.15's own executed REFUSE
+# re-collected the CORRUPTED CANDIDATE at the escalated count, which the specified production
+# escalation never did, so the control exercised a data path production could not produce
+# (`StandardsDocument.md` §5.4). Under joint escalation the candidate IS re-collected, so the
+# construction and the production path are the same path.
+#
+# A SECOND ONE-SIDEDNESS, closed here rather than left for a later round to find: each tier gates
+# on TWO statistics (sd and p95) and §26.15 derived resolving power from the p95 alone. A tier
+# whose sd ratio is unresolvable cannot honestly PASS on the p95's resolving power, so the tier's
+# achieved margin is the MINIMUM over the statistics that gate it. The p95-only figure is still
+# reported, as `margin_p95_only`, so §26.15's own published table stays reproducible.
+# =============================================================================================
+
+_FREEZE_BANDS = {"sd_pooled": 0.20, "p95_pooled": 0.10, "sd_type": 0.25, "p95_type": 0.12}
+_FREEZE_MARGIN_SE = 2.0            # design §26.15.6 / §26.5's own established precedent.
+_FREEZE_N_BOOTSTRAP = 2000
+_FREEZE_BOOTSTRAP_SEED = 0xB007
+# Executed/fitted single-pair, single-side collector cost law, §26.15.5 (three executed points at
+# pilot_n 200/800/3200, cross-validated to 0.7% against a fourth at 4800).
+_FREEZE_COST_A, _FREEZE_COST_B = 0.0359, 0.985
+# ADAPTER-LEVEL TOTAL escalation budget (D-SLM3296). §26.15.3 derived a 30-minute ceiling for ONE
+# pair on ONE side and stated it per-pair; a 196-pair adapter escalating two sides against a
+# per-pair ceiling authorises up to 196*2*30 minutes = 196 hours, which is not a ceiling. The
+# budget is therefore charged against the WHOLE conversion: 30 minutes of escalation collector
+# time total, across every pair and both sides. A per-pair cap survives only as the pilot_n
+# ceiling below, which bounds any single step.
+_FREEZE_ESCALATION_BUDGET_SECONDS = 1800.0
+_FREEZE_PILOT_N_CEILING = 60000    # §26.15.3's own derived per-pair pilot_n ceiling.
+_FREEZE_ESCALATION_FACTOR = 2      # geometric; §26.15.3 specifies doubling or similar.
+
+FREEZE_PASS, FREEZE_REFUSE, FREEZE_UNRESOLVED = "PASS", "REFUSE", "UNRESOLVED"
+
+
+def _freeze_sd(arr) -> float:
+    return float(np.std(np.asarray(arr, dtype=np.float64), ddof=1))
+
+
+def _freeze_p95(arr) -> float:
+    return float(np.percentile(np.asarray(arr, dtype=np.float64), 95))
+
+
+_FREEZE_STATS = (("sd", _freeze_sd), ("p95", _freeze_p95))
+
+
+def freeze_relative_bootstrap_se(arr, stat_fn, *, n_resamples: int = _FREEZE_N_BOOTSTRAP,
+                                 seed: int = _FREEZE_BOOTSTRAP_SEED) -> float:
+    """The bootstrap SE of `stat_fn` over `arr`, divided by the point estimate -- one sample's own
+    RELATIVE sampling uncertainty, the term that composes into the ratio's below. Returns
+    `float('inf')` when the point estimate is zero (no relative uncertainty is defined, and the
+    caller must not read that as perfect resolution)."""
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.size < 2:
+        return float("inf")
+    point = stat_fn(arr)
+    se = _bootstrap_se(arr, stat_fn, n_resamples, np.random.default_rng(seed))
+    if point == 0.0:
+        return float("inf")
+    return abs(se / point)
+
+
+def freeze_ratio_relative_se(candidate, reference, stat_fn, *,
+                             n_resamples: int = _FREEZE_N_BOOTSTRAP,
+                             seed: int = _FREEZE_BOOTSTRAP_SEED) -> float:
+    """The relative SE of `stat(candidate) / stat(reference)` -- the quantity the band is actually
+    checked against.
+
+    `relSE(R)^2 = relSE(stat(cand))^2 + relSE(stat(ref))^2`, first-order propagation for a ratio of
+    two INDEPENDENT estimates. Independence is a property of the collection, not an assumption:
+    candidate and reference draws come from disjoint seed streams.
+
+    This is the correction the external review of 2026-08-14 required (D-SLM3295). §26.15 used
+    `relSE(stat(reference))` alone, which understates the ratio's uncertainty always, and without
+    bound once the reference is escalated and the candidate is not."""
+    rel_c = freeze_relative_bootstrap_se(candidate, stat_fn, n_resamples=n_resamples, seed=seed)
+    rel_r = freeze_relative_bootstrap_se(reference, stat_fn, n_resamples=n_resamples, seed=seed + 1)
+    if math.isinf(rel_c) or math.isinf(rel_r):
+        return float("inf")
+    return math.sqrt(rel_c * rel_c + rel_r * rel_r)
+
+
+def _freeze_in_band(value: float, ref: float, band: float) -> bool:
+    return bool(ref * (1.0 - band) <= value <= ref * (1.0 + band))
+
+
+def freeze_tier_verdict(candidate, reference, *, band_sd: float, band_p95: float,
+                        n_resamples: int = _FREEZE_N_BOOTSTRAP,
+                        seed: int = _FREEZE_BOOTSTRAP_SEED) -> dict:
+    """One tier's own three-valued verdict (D-SLM3288), with UNRESOLVED checked FIRST.
+
+    The tier gates on two statistics, so its achieved margin is the MINIMUM of the two -- a tier
+    cannot be better resolved than the worst statistic that can reject it. `margin_p95_only` is
+    reported alongside for continuity with §26.15's published table, and is never the deciding
+    number."""
+    bands = {"sd": band_sd, "p95": band_p95}
+    per_stat = {}
+    for stat_name, stat_fn in _FREEZE_STATS:
+        rel = freeze_ratio_relative_se(candidate, reference, stat_fn,
+                                       n_resamples=n_resamples, seed=seed)
+        band = bands[stat_name]
+        margin = (band / rel) if rel > 0.0 and not math.isinf(rel) else 0.0
+        c_point, r_point = stat_fn(candidate), stat_fn(reference)
+        per_stat[stat_name] = {
+            "band": band, "ratio_relative_se": rel, "margin": margin,
+            "candidate": c_point, "reference": r_point,
+            "ratio": (c_point / r_point) if r_point != 0.0 else float("inf"),
+            "in_band": _freeze_in_band(c_point, r_point, band),
+        }
+    margin = min(s["margin"] for s in per_stat.values())
+    in_band = all(s["in_band"] for s in per_stat.values())
+    if margin < _FREEZE_MARGIN_SE:
+        verdict = FREEZE_UNRESOLVED
+    else:
+        verdict = FREEZE_PASS if in_band else FREEZE_REFUSE
+    return {"verdict": verdict, "margin": margin,
+            "margin_p95_only": per_stat["p95"]["margin"],
+            "limiting_stat": min(per_stat, key=lambda s: per_stat[s]["margin"]),
+            "in_band": in_band, "per_stat": per_stat,
+            "n_candidate": int(np.asarray(candidate).size),
+            "n_reference": int(np.asarray(reference).size)}
+
+
+def compose_freeze_verdict(tier_verdicts) -> dict:
+    """D-SLM3288's across-tier composition: REFUSE dominates UNRESOLVED dominates PASS, and
+    `freeze_allowed` (boolean) is true only on an overall PASS. REFUSE and UNRESOLVED both read
+    `freeze_allowed=False` and are NOT the same disposition downstream -- REFUSE is terminal,
+    UNRESOLVED is an instruction to the collector -- so the three-valued verdict travels beside
+    the boolean and the operator-facing log carries it, never only the boolean."""
+    verdicts = list(tier_verdicts)
+    if FREEZE_REFUSE in verdicts:
+        overall = FREEZE_REFUSE
+    elif FREEZE_UNRESOLVED in verdicts:
+        overall = FREEZE_UNRESOLVED
+    else:
+        overall = FREEZE_PASS
+    return {"overall": overall, "freeze_allowed": overall == FREEZE_PASS}
+
+
+def freeze_predicted_step_seconds(pilot_n: int, n_pairs: int) -> float:
+    """Predicted collector cost of one escalation step: `n_pairs` pairs, BOTH sides, at `pilot_n`.
+    The factor of two is the correction's own direct cost -- joint escalation collects the
+    candidate as well as the reference, and a budget that priced only the reference would
+    under-charge every step by half."""
+    return 2.0 * n_pairs * _FREEZE_COST_A * (float(pilot_n) ** _FREEZE_COST_B)
+
+
+def run_freeze_health_gate(collect_pair, pair_names, *, projection_type_of,
+                           pilot_n: int = _B3_PILOT_N,
+                           budget_seconds: float = _FREEZE_ESCALATION_BUDGET_SECONDS,
+                           pilot_n_ceiling: int = _FREEZE_PILOT_N_CEILING,
+                           escalation_factor: int = _FREEZE_ESCALATION_FACTOR,
+                           n_resamples: int = _FREEZE_N_BOOTSTRAP,
+                           seed: int = _FREEZE_BOOTSTRAP_SEED,
+                           time_fn=None, verbose: bool = False) -> dict:
+    """The complete corrected gate: evaluate, and while any tier is UNRESOLVED and budget remains,
+    escalate BOTH sides together and re-evaluate the ACHIEVED joint margin.
+
+    `collect_pair(name, pilot_n) -> (candidate_draws, reference_draws)` is the production
+    collector, called once per pair per step and returning both sides at the same `pilot_n`.
+    Escalating both sides at the same geometric step is the whole correction: escalating the
+    reference alone drives the reported margin up without moving the ratio's real uncertainty.
+
+    Stopping, in the order checked: every tier RESOLVED; the next step's PREDICTED cost would
+    exceed the remaining ADAPTER-LEVEL budget; or `pilot_n` reaches `pilot_n_ceiling`. On either
+    of the latter two the tier's disposition is a terminal, honestly-logged UNRESOLVED rather than
+    an unbounded loop -- and the reason is recorded, so "we ran out of budget" is never reported as
+    "no difference detected."
+
+    The budget is charged with MEASURED elapsed time, not the fitted prediction; the prediction is
+    used only to decide whether to START a step. §26.15.2's own executed counter-example (a
+    2-3-point log-log fit that undershot in practice) is the reason the fit never decides an
+    outcome here."""
+    if time_fn is None:
+        time_fn = time.time
+    history = []
+    spent = 0.0
+    current_pilot_n = int(pilot_n)
+    stop_reason = "resolved"
+    while True:
+        t0 = time_fn()
+        draws = {name: collect_pair(name, current_pilot_n) for name in pair_names}
+        step_seconds = time_fn() - t0
+        spent += step_seconds
+
+        cand_pooled = np.concatenate([np.asarray(draws[n][0], dtype=np.float64) for n in pair_names])
+        ref_pooled = np.concatenate([np.asarray(draws[n][1], dtype=np.float64) for n in pair_names])
+        tier1 = freeze_tier_verdict(cand_pooled, ref_pooled,
+                                    band_sd=_FREEZE_BANDS["sd_pooled"],
+                                    band_p95=_FREEZE_BANDS["p95_pooled"],
+                                    n_resamples=n_resamples, seed=seed)
+        by_type = {}
+        for name in pair_names:
+            by_type.setdefault(projection_type_of(name), []).append(name)
+        tier2 = {}
+        for proj_type, names_t in sorted(by_type.items()):
+            c_t = np.concatenate([np.asarray(draws[n][0], dtype=np.float64) for n in names_t])
+            r_t = np.concatenate([np.asarray(draws[n][1], dtype=np.float64) for n in names_t])
+            tier2[proj_type] = freeze_tier_verdict(c_t, r_t,
+                                                   band_sd=_FREEZE_BANDS["sd_type"],
+                                                   band_p95=_FREEZE_BANDS["p95_type"],
+                                                   n_resamples=n_resamples, seed=seed)
+        all_tiers = [tier1] + [tier2[t] for t in sorted(tier2)]
+        composed = compose_freeze_verdict([t["verdict"] for t in all_tiers])
+        step = {"pilot_n": current_pilot_n, "step_seconds": step_seconds,
+                "cumulative_seconds": spent, "tier1": tier1, "tier2": tier2,
+                "overall": composed["overall"], "freeze_allowed": composed["freeze_allowed"]}
+        history.append(step)
+        if verbose:
+            print(f"  [freeze] pilot_n={current_pilot_n:6d} n_cand={tier1['n_candidate']:6d} "
+                  f"T1 margin={tier1['margin']:.3f}x ({tier1['limiting_stat']}) "
+                  f"-> {composed['overall']}  [{step_seconds:.1f}s, {spent:.1f}s total]")
+
+        if composed["overall"] != FREEZE_UNRESOLVED:
+            stop_reason = "resolved"
+            break
+        next_pilot_n = current_pilot_n * escalation_factor
+        if next_pilot_n > pilot_n_ceiling:
+            stop_reason = "pilot_n_ceiling"
+            break
+        predicted = freeze_predicted_step_seconds(next_pilot_n, len(pair_names))
+        if spent + predicted > budget_seconds:
+            stop_reason = "adapter_budget_exhausted"
+            break
+        current_pilot_n = next_pilot_n
+
+    final = history[-1]
+    return {"overall": final["overall"], "freeze_allowed": final["freeze_allowed"],
+            "stop_reason": stop_reason, "escalation_steps": len(history),
+            "final_pilot_n": final["pilot_n"], "seconds_spent": spent,
+            "budget_seconds": budget_seconds, "history": history,
+            "tier1": final["tier1"], "tier2": final["tier2"]}
 
 
 def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
