@@ -69,6 +69,14 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq, i
 	}
 	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 3, "x");
 	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	// T-2098 (S3): the fixture carries the real residency assignment, because the
+	// before/after path-count derivation CUTS on it. Round 15's fixture had no such
+	// statement at all, so `derive_lwuws_before_decision_count` silently fell back to
+	// the whole body and every cell below measured a region the production path does
+	// not have -- a fixture that lacks the boundary the check cuts on cannot exercise
+	// the check, which is why the repaired derivation raises instead of falling back.
+	const bool weights_resident = g_resident_weights.valid;
+	g_last_weight_upload_was_skipped = weights_resident;
 	// the real function ends via `return DecodeStickyTag(sticky_tag);` --
 	// not a literal `return SslmForwardStatus::X;` -- so this fixture ends
 	// the same unmatched way, never contributing a spurious status.
@@ -1361,6 +1369,177 @@ def test_wiring_vitality_cmake_path_disable_stops_catching_an_unwaived_hollow_sc
         without_path = chk.run_all_checks(**_real_tree_kwargs_with(build_bat_path=bb_path, cmake_path=None))
         assert with_path, "an unwaived hollow CMake scope must be caught when cmake_path is threaded"
         assert without_path == [], "cmake_path=None must remove the catch"
+
+
+# ===========================================================================
+# T-2098 -- Claude/Poirot/152035b-gpu-serial-port-substrate-removal-review.md
+# (D-SLM3291). One cell per remedy this round actually LANDED, derived from
+# the production diff rather than from the review's finding list, per
+# `Claude/CLAUDE.md`'s own standing rule that a fix round pins its own
+# changes in the same round. Every mutation named below is the reviewing
+# seat's own, re-run against the repair.
+# ===========================================================================
+
+# --- S1: the scan population's own vitality (the structural half) ---
+
+def test_marked_citation_population_is_live_on_the_real_tree():
+    # The round-15 state this closes, in one assertion: three files were named and one returned
+    # results (21, 0, 0). A member contributing nothing is indistinguishable from one that works.
+    assert chk.check_marked_citation_population_is_live() == []
+
+
+def test_every_real_scanned_file_yields_at_least_one_marked_citation():
+    # The reviewing seat's own distinguishing test, kept as a standing cell: run the mechanism over
+    # its own declared population and count what it returns.
+    for rel_path, marker in chk.MARKED_CITATION_SCANNED_FILES:
+        with open(os.path.join(chk._REPO_ROOT, rel_path), "r", encoding="utf-8") as f:
+            found = chk.find_marked_citations(f.read(), marker)
+        assert found, f"{rel_path} is scanned for marked citations and yields none"
+
+
+def test_marked_citation_population_is_live_reddens_on_a_silent_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        rel = "silent.h"
+        with open(os.path.join(tmp, rel), "w", encoding="utf-8") as f:
+            f.write("// prose naming RunLayerLoopImpl and forward_sites.cpp, but not as a citation\n")
+        failures = chk.check_marked_citation_population_is_live(
+            scanned_files=((rel, "//"),), repo_root=tmp
+        )
+        assert failures and "yields ZERO marked citations" in failures[0]
+
+
+def test_forward_sites_cpp_is_a_recognized_citation_target():
+    # MUT-C, re-run against the repair. Round 15: writing a citation in the round's OWN marked form,
+    # naming the file seven of nine converted citations point at, turned CI RED ("not a recognized
+    # citation target") -- so the convention forbade the correct form and prose was the only option.
+    assert chk.check_marked_citation("RunLayerLoopImpl", "forward_sites.cpp") is None
+    assert chk.check_marked_citation("RunLayerLoop", "forward_sites.h") is None
+    assert chk.check_marked_citation("CheckBiasAccumulateMagnitudeDomain", "checked_chain_funnel.cpp") is None
+    assert chk.check_marked_citation("kComposedResourceBindingCount", "d3d12_harness.h") is None
+
+
+def test_a_stale_citation_into_forward_sites_cpp_reddens():
+    # The other direction: widening the resolvable population must not make it accept anything.
+    failure = chk.check_marked_citation("RunLayerLoopImplRenamedAway", "forward_sites.cpp")
+    assert failure is not None and "citation is stale" in failure
+
+
+# --- S2: the four refreshed citations, pinned at source rather than by line ---
+
+def test_the_module_own_device_capability_citations_resolve():
+    # The four stale citations sat in THIS module and cited `superslm_gpu.cpp:643, 655, 1276-1277`
+    # while the real sites were `:777`, `:788`, `:1471` -- six rounds, through three rounds
+    # commissioned to close citation staleness, because the module was in its own scan population
+    # and the scan returned nothing for it. In the marked form there is no line number to go stale.
+    for name in ("dev.available", "MapModelGpuResidencyTierCheck", "device_removed_reason"):
+        assert chk.check_marked_citation(name, "superslm_gpu.cpp") is None, name
+
+
+# --- S3: the derivation cuts on the comment-stripped body, at a complete statement ---
+
+def test_derive_before_count_is_insensitive_to_an_unrelated_comment(monkeypatch):
+    # MUT-N2 / MUT-D, re-run against the repair. Round 15 cut on the UN-stripped body, so a comment
+    # merely CONTAINING `weights_resident;` decided the boundary: rewording an unrelated comment
+    # moved the count, and a comment naming the fragment above the ladder collapsed it to 1.
+    baseline = chk.derive_lwuws_before_decision_count(_GPU_FIXTURE)
+    reworded = _GPU_FIXTURE.replace(
+        "// the real function ends via",
+        "// mentions g_last_weight_upload_was_skipped = weights_resident; harmlessly\n\t// the real function ends via",
+    )
+    assert chk.derive_lwuws_before_decision_count(reworded) == baseline
+    above_the_ladder = _GPU_FIXTURE.replace(
+        "\tif (x == 0) return",
+        "\t// a comment naming g_last_weight_upload_was_skipped = weights_resident; up here\n\tif (x == 0) return",
+    )
+    assert chk.derive_lwuws_before_decision_count(above_the_ladder) == baseline
+
+
+def test_derive_before_count_sees_a_new_rejecting_return_before_the_residency_write():
+    # MUT-N, re-run against the repair: round 15 left this at 14, checker OK, exit 0 -- a fifteenth
+    # path before the residency decision that the check existing to pin exactly that number missed.
+    baseline = chk.derive_lwuws_before_decision_count(_GPU_FIXTURE)
+    mutated = _GPU_FIXTURE.replace(
+        "\tconst bool weights_resident",
+        "\tif (x == 99) return superslm::SslmForwardStatus::KvPrecisionUnsupported;\n\tconst bool weights_resident",
+    )
+    assert chk.derive_lwuws_before_decision_count(mutated) == baseline + 1
+
+
+def test_derive_before_count_raises_when_the_residency_statement_is_absent():
+    # Round 15 fell back to the whole body on a missing marker, silently measuring a different
+    # region. A check that cannot find the anchor it verifies must not pass.
+    without = _GPU_FIXTURE.replace("\tg_last_weight_upload_was_skipped = weights_resident;\n", "")
+    try:
+        chk.derive_lwuws_before_decision_count(without)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "no boundary to cut on" in str(e)
+
+
+# --- M1: catch ternaries are COUNTED, not detected ---
+
+def test_count_status_return_ternaries_counts_each_occurrence():
+    one = "return device_removed_reason != S_OK ? A::X : A::Y;"
+    assert chk.count_status_return_ternaries(one) == 1
+    assert chk.count_status_return_ternaries(one + "\n" + one) == 2
+    assert chk.count_status_return_ternaries("// " + one) == 0
+
+
+def test_a_second_catch_ternary_moves_the_derived_count():
+    # Round 15 asked whether `device_removed_reason` appeared anywhere and added exactly 1, so a
+    # SECOND ternary-returned rejection -- the shape T-2059 added once already -- was free.
+    with_one = _GPU_FIXTURE.replace(
+        "\treturn DecodeStickyTag(sticky_tag);",
+        "\tif (x == 7) { return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved\n"
+        "\t                                                   : superslm::SslmForwardStatus::GpuAllocationFailed; }\n"
+        "\treturn DecodeStickyTag(sticky_tag);",
+    )
+    with_two = with_one.replace(
+        "\treturn DecodeStickyTag(sticky_tag);",
+        "\tif (x == 8) { return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved\n"
+        "\t                                                   : superslm::SslmForwardStatus::GpuAllocationFailed; }\n"
+        "\treturn DecodeStickyTag(sticky_tag);",
+    )
+    assert chk.derive_lwuws_before_decision_count(with_two) == \
+        chk.derive_lwuws_before_decision_count(with_one) + 1
+
+
+def test_the_real_tree_catch_ternary_is_counted_from_the_whole_body():
+    # The one asymmetry in the derivation, pinned so it cannot be "tidied" into a positional cut:
+    # `gpu_port.h`'s own fourteen enumerates the ladder, the two device-capability rejections AND
+    # the recording-window catch, whose ternary sits BELOW the residency write. Cutting both terms
+    # at the same index reads 13 against a prose 14.
+    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+        gpu_text = f.read()
+    body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="x"))
+    before = body[:body.find(chk._LWUWS_RESIDENCY_WRITE_STATEMENT)]
+    assert chk.count_status_return_ternaries(before) == 0
+    assert chk.count_status_return_ternaries(body) == 1
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 14
+
+
+# --- M2: O34's successor residual is a MEASURED property, not a claim about one ---
+
+def test_a_citation_naming_a_different_real_symbol_is_not_caught():
+    # MUT-O, kept as a standing cell exactly as this module already keeps its set-equality residual:
+    # the existence check cannot distinguish a correct citation from a citation to a different real
+    # thing. This asserts the DOCUMENTED weakness, so a future change that closes it fails here and
+    # routes someone to the docstring rather than leaving the disclosure silently stale.
+    assert chk.check_marked_citation("WorkspaceTooSmall", "superslm_gpu.cpp") is None
+    assert chk.check_marked_citation("InvalidLayerBudget", "superslm_gpu.cpp") is None
+
+
+# --- O3: main() answers an unreadable source file in its own failure shape ---
+
+def test_main_reports_a_missing_scanned_file_without_a_traceback(monkeypatch, capsys):
+    monkeypatch.setattr(
+        chk, "MARKED_CITATION_SCANNED_FILES", (("does/not/exist.h", "//"),)
+    )
+    rc = chk.main()
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "check_gpu_guard_status_parity.py: FAILED" in err
+    assert "source file unreadable" in err
 
 
 if __name__ == "__main__":

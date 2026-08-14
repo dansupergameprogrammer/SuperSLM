@@ -100,8 +100,9 @@ that marker stayed green (`OK`, exit 0) while the identical guard placed
 before it reddened -- the marker, not the guard's own domain, decided the
 outcome, exactly the shape S2 was about. **Not a contrived placement**:
 `RunLayerLoopGpu` already returns a rejecting status twice below its own
-marker (`superslm_gpu.cpp:643, 655`, both device-capability rejections,
-`KvPrecisionUnsupported`), and T-2059 added two new enumerators
+marker (`dev.available` (`superslm_gpu.cpp`) and
+`MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`), both device-capability
+rejections, `KvPrecisionUnsupported`), and T-2059 added two new enumerators
 (`GpuAllocationFailed`/`GpuDeviceRemoved`) for exactly that region three
 commits before this fix -- a third device-capability rejection carrying a
 new status is the natural next addition, and the marker-truncated check
@@ -133,7 +134,8 @@ either side, is legal C++ and produces no observable difference to this
 check. **Also on both sides**: a status returned through anything other than
 a literal `return SslmForwardStatus::X;` (a local variable, a ternary --
 `GpuAllocationFailed`/`GpuDeviceRemoved`, T-2059, are returned through
-exactly such a ternary at `superslm_gpu.cpp:1276-1277` today) is invisible
+exactly such a ternary, `device_removed_reason` (`superslm_gpu.cpp`),
+today) is invisible
 to `_STATUS_RETURN_RE` and therefore to this whole module, independent of
 which side it is on (recorded, not fixed -- every guard in the tree today
 uses the literal form, so the likelihood is low). What this check DOES
@@ -167,10 +169,13 @@ this module's own table untouched -- `OK`, 48 passed before this fix;
 CORRECTED 2026-08-14 (T-2083, Claude/Poirot/42ecf79-gpu-serial-port-
 round9-review.md, O34/O35): two further, narrower residuals inside the
 citation machinery itself. O35 CLOSED: `GPU_PORT_H_LWUWS_CITATIONS`'s own
-`DecodeStickyTag` range citation (`superslm_gpu.cpp:583-601`) checks two
-ENDPOINTS' own content, not what is inside the range -- the range-end
-needle, a bare `"}"`, is satisfied by 177 of the file's own 2,023 lines
-(executed), so a shift onto the wrong closing brace would pass it, and
+`DecodeStickyTag` range citation -- which read `superslm_gpu.cpp:583-601` at
+T-2083, quoted here as the historical text of a citation T-2094 has since
+DELETED along with the whole table, never as a live location to resolve --
+checked two
+ENDPOINTS' own content, not what was inside the range -- the range-end
+needle, a bare `"}"`, was satisfied by 177 of the file's own 2,023 lines
+(executed at T-2083), so a shift onto the wrong closing brace would pass it, and
 deleting an interior `case` while preserving the file's own total line
 count (executed: `case 13` removed) left both endpoints individually valid
 and this module green, 54 passed, while the citation's own claim ("fourteen
@@ -180,27 +185,36 @@ extract `DecodeStickyTag`'s own real, brace-matched body and count DISTINCT
 statuses directly, pinning the exact claim the range citation exists to
 protect rather than two points near where it happens to sit.
 
-O34 NOT CLOSED, and named rather than silently dropped. The T-2080 remedy
-above compares SETS of line numbers, so a same-position SWAP of two
-citations' own numbers in `gpu_port.h`'s own text (executed: `:716`
-`!dev.available` swapped with `:728` the sub-Tier-3 check) left the set
-unchanged and this module `OK`. A SEQUENCE/ORDER-preserving comparison was
-built and tried -- and FALSIFIED against the real header, not just the
-synthetic fixture it first passed against: `gpu_port.h`'s own paragraph
-legitimately re-cites some of the same line numbers a second and third time
-across its own four dated corrections (`:903`, `:716`, `:728` each appear
-twice at HEAD), and the corrections' own citation order, accreted
-chronologically over four rounds, does not match `GPU_PORT_H_LWUWS_
-CITATIONS`'s fixed definition order even after deduplication. Wiring the
-order comparison into `check_gpu_port_h_citations_match_table` turned the
-check RED on the real, unmutated tree -- caught before landing by running
-the mechanism against real content rather than trusting the fixture alone
-(`StandardsDocument.md` §5.4), and reverted. Closing O34 for real needs a
-parser that associates each citation with WHICH of the paragraph's own
-dated-correction sub-sections it belongs to and compares within each
-section, not across the whole accreted paragraph as one sequence -- new
-machinery, specified here rather than forced into a check that would be
-wrong.
+O34 -- RETIRED as a residual, 2026-08-14 (T-2098,
+Claude/Poirot/152035b-gpu-serial-port-substrate-removal-review.md, M2;
+D-SLM3291). The paragraph that stood here reasoned, in the present tense,
+about `GPU_PORT_H_LWUWS_CITATIONS`, `check_gpu_port_h_citations_match_table`
+and a comparison of "SETS of line numbers" -- machinery T-2094 DELETED. Its
+own body was a same-position SWAP of two citations' line numbers in
+`gpu_port.h`, which left the set unchanged and this module `OK`; there are
+no line-number citations in `gpu_port.h` any more and no set to compare, so
+the defect it described cannot occur and the specification it carried
+(a parser associating each citation with its own dated-correction
+sub-section) is work nobody now owes. Left as a dated retirement rather
+than deleted, per this tree's own append-only discipline: a reader who finds
+O34 cited in an older record needs to land somewhere that says what became
+of it.
+
+THE SUCCESSOR RESIDUAL, which is O34's own defect generalized and is NOT
+closed. `check_marked_citations` below checks a citation for EXISTENCE and
+never for correspondence, so it cannot distinguish a correct citation from a
+citation to a DIFFERENT REAL THING. Executed (T-2098, MUT-O): in
+`gpu_port.h`'s own ladder enumeration, `InvalidLayerBudget`
+(`superslm_gpu.cpp`) swapped for `WorkspaceTooSmall` (`superslm_gpu.cpp`) --
+a citation now naming the wrong guard, both symbols real -- left this module
+`OK`, exit 0. O34 was "a swap of two POSITIONS is invisible"; this is "a
+swap of two LIVE SYMBOLS is invisible," the same class one level out, and it
+is the price the existence-not-position convention is bought at. It is named
+here, beside `check_marked_citations`'s own true claim that there is no
+boundary a citation can sit outside of, because that claim and this residual
+are about different axes and reading the first as covering the second is
+what would make this module look more closed than it is: the SCAN is
+complete and the RESOLUTION is shallow.
 
 Modelled on this tree's own established CI-source-check convention
 (`tests/ci/check_no_forward_leaf_calls.py`, `tests/ci/check_checked_chain_
@@ -272,15 +286,16 @@ GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpu("
 GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount)"
 # The distinct `SslmForwardStatus` values `RunLayerLoopGpu` legitimately
 # returns BELOW `GPU_GUARD_REGION_END_MARKER` -- both device-capability
-# rejections (`!dev.available` at `superslm_gpu.cpp:643`; the sub-Tier-3
-# `MapModelGpuResidencyTierCheck` check at `:654-656`) return the SAME
+# rejections (`dev.available` (`superslm_gpu.cpp`); the sub-Tier-3
+# `MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`) check) return the SAME
 # status, so this is a one-member set today. Named at source, not derived
 # (T-2069, S3's own remedy, symmetric with `CPU_BELOW_GUARD_ARITHMETIC_
 # STATUSES` above): a name added below the ladder that is NOT
 # `KvPrecisionUnsupported` surfaces as a real set disagreement, exactly like
 # a guard would. `GpuAllocationFailed`/`GpuDeviceRemoved` (T-2059) are NOT on
 # this list and do not need to be: both are returned through a ternary
-# (`superslm_gpu.cpp:1276-1277`), a shape `_STATUS_RETURN_RE` below does not
+# (`device_removed_reason` (`superslm_gpu.cpp`)), a shape `_STATUS_RETURN_RE`
+# below does not
 # match at all (O19, the same casebook) -- neither appears in the raw
 # extracted set in the first place, so there is nothing to subtract for
 # them. Recorded here rather than silently relied on: a future guard
@@ -304,9 +319,11 @@ _DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)
 # `gpu_port.h`'s own citation claims this function "maps the device's own
 # sticky tag to FOURTEEN statuses, THIRTEEN of them rejecting" -- the number
 # this module now pins directly against the function's own real body,
-# instead of via the two-endpoint range citation (`superslm_gpu.cpp:583`,
-# `:601`) whose own range-end needle, a bare `"}"`, is satisfied by 177 of
-# the file's 2,023 lines (executed) and therefore covers where the function
+# instead of via the two-endpoint range citation T-2083 retired (it read
+# `superslm_gpu.cpp:583`, `:601` then -- quoted as history, not a live
+# location; T-2094 deleted the table that held it) whose own range-end
+# needle, a bare `"}"`, was satisfied by 177 of the file's 2,023 lines
+# (executed at T-2083) and therefore covered where the function
 # ENDS, not what is inside it -- deleting an interior `case` while
 # preserving the file's own total line count left that citation green.
 DECODE_STICKY_TAG_EXPECTED_TOTAL = 14
@@ -919,8 +936,25 @@ MARKED_CITATION_SCANNED_FILES = (
 # able to resolve INTO, even though `test_main.cpp`'s own prose is not itself scanned FOR new
 # marked citations (its own pre-existing "Name (file)" convention is unrelated and out of this
 # round's scope, named above).
+#
+# T-2098 (S1, Claude/Poirot/152035b-gpu-serial-port-substrate-removal-review.md; D-SLM3291): the
+# four entries below `test_main.cpp` are the round-15 repair. T-2094 converted
+# `superslm_gpu.cpp`'s own twelve `file:LINE` citations to prose but could not write ONE of them
+# in the marked form, because the files they name were not on this list -- so
+# `check_marked_citation` returned "not a recognized citation target" for the correct form and
+# `OK` for the unchecked prose form, and the conversion produced nine citations nothing reads
+# (executed, the reviewing seat's own MUT-C). The resolvable list is the load-bearing half: until
+# a target file is on it, the convention FORBIDS the citation instead of checking it, and prose is
+# the only remaining option. `forward_sites.cpp` carries seven of the nine; `forward_sites.h`,
+# `checked_chain_funnel.cpp` and `d3d12_harness.h` are the three surviving `file:LINE` citations'
+# own targets, converted in the same round so no citation in this arc's own prose is left in a
+# form nothing resolves.
 MARKED_CITATION_RESOLVABLE_FILES = MARKED_CITATION_SCANNED_FILES + (
     ("tests/test_main.cpp", "//"),
+    ("src/forward/forward_sites.cpp", "//"),
+    ("include/superslm/forward_sites.h", "//"),
+    ("src/forward/checked_chain_funnel.cpp", "//"),
+    ("src/gpu/d3d12_harness.h", "//"),
 )
 
 # A marked citation: a backtick-quoted, identifier-shaped anchor (letters/digits/underscore, one
@@ -979,8 +1013,49 @@ def check_marked_citation(name: str, target_file: str, repo_root: str = _REPO_RO
     return f"`{name}` ({target_file}): does not resolve -- citation is stale, refresh it"
 
 
+def check_marked_citation_population_is_live(
+    scanned_files: tuple[tuple[str, str], ...] | None = None,
+    repo_root: str = _REPO_ROOT,
+) -> list[str]:
+    """None (empty list) iff EVERY file named in `scanned_files` actually yields at least one
+    marked citation. T-2098 (S1, Claude/Poirot/152035b-gpu-serial-port-substrate-removal-
+    review.md; D-SLM3291) -- the structural half of that finding, and the cheaper half by a wide
+    margin.
+
+    A scan population with a member that contributes NOTHING reads exactly like one that is
+    working: `check_marked_citations` iterates three files, finds citations in one, resolves all
+    of them, and returns green. That is the state round 15 shipped in and the state three
+    consecutive rounds commissioned to close citation staleness each read as covered --
+    `MARKED_CITATION_SCANNED_FILES` named `superslm_gpu.cpp` and the checker module, and
+    `find_marked_citations` returned 21, 0 and 0 over them. The reviewing seat's own distinguishing
+    test was one command: run the mechanism over its own declared population and count what it
+    returns. This function IS that command, wired into the build so it cannot go unrun.
+
+    It is deliberately a floor of ONE rather than a pinned count: a count would be a hardcoded
+    number of exactly the kind T-2094 removed the substrate for, and it would redden on any honest
+    prose edit. One is the number that distinguishes "this file participates" from "this file is
+    listed and silent," which is the whole failure."""
+    if scanned_files is None:
+        scanned_files = MARKED_CITATION_SCANNED_FILES
+    failures: list[str] = []
+    for rel_path, marker in scanned_files:
+        path = os.path.join(repo_root, rel_path)
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        if not find_marked_citations(text, marker):
+            failures.append(
+                f"{rel_path}: named in MARKED_CITATION_SCANNED_FILES but yields ZERO marked "
+                "citations -- it is being scanned and contributing nothing, which is "
+                "indistinguishable from being covered. Either its cross-file references are "
+                "written in a form this scan cannot see (the T-2094 conversion's own defect: "
+                "prose `Name`s and parenthesized files that are not adjacent), or the file no "
+                "longer cites anything and belongs off the list"
+            )
+    return failures
+
+
 def check_marked_citations(
-    scanned_files: tuple[tuple[str, str], ...] = None,
+    scanned_files: tuple[tuple[str, str], ...] | None = None,
     repo_root: str = _REPO_ROOT,
 ) -> list[str]:
     """None (empty list) iff every marked citation found in ANY of `scanned_files`' own prose
@@ -989,7 +1064,19 @@ def check_marked_citations(
     no boundary for one to sit outside of (T-2094, closing S1's own class: "no chunk list to be
     outside of"). `scanned_files` defaults to `MARKED_CITATION_SCANNED_FILES` (above) at CALL time,
     not at function-definition time, for the same monkeypatch-visibility reason `check_execution_
-    scope_waivers` already established for `EXECUTION_SCOPE_WAIVERS`."""
+    scope_waivers` already established for `EXECUTION_SCOPE_WAIVERS`.
+
+    THE COMPLETENESS CLAIM ABOVE IS ABOUT THE SCAN, AND THE RESOLUTION IS SHALLOW -- the two are
+    separate axes and this docstring states both, because stating only the first is what reads as
+    more closure than was bought (T-2098, M2; D-SLM3291). A citation is checked for EXISTENCE, so a
+    citation naming a DIFFERENT REAL SYMBOL passes: executed, MUT-O, two real anchor names swapped
+    in `gpu_port.h`'s own ladder enumeration left this check `OK`, exit 0. See this module's own
+    docstring, "THE SUCCESSOR RESIDUAL", for the full statement and for why the position-based
+    predecessor (O34) is retired rather than carried.
+
+    That the scan population is not merely complete but LIVE -- every listed file actually
+    contributing citations -- is `check_marked_citation_population_is_live`'s job, not this one's,
+    and it runs first."""
     if scanned_files is None:
         scanned_files = MARKED_CITATION_SCANNED_FILES
     failures: list[str] = []
@@ -1092,8 +1179,8 @@ def collect_code_identifiers(text: str, comment_marker: str) -> set[str]:
 
 
 def check_symbol_integrity(
-    scanned_files: tuple[tuple[str, str], ...] = None,
-    allowlist: frozenset[str] = None,
+    scanned_files: tuple[tuple[str, str], ...] | None = None,
+    allowlist: frozenset[str] | None = None,
     repo_root: str = _REPO_ROOT,
 ) -> list[str]:
     """None (empty list) iff every backtick-quoted identifier split across a line-wrap, anywhere in
@@ -1188,20 +1275,94 @@ def count_status_return_statements(region_text: str) -> int:
     return len(_STATUS_RETURN_RE.findall(strip_comments(region_text)))
 
 
+# T-2098 (S3/M1, Claude/Poirot/152035b-gpu-serial-port-substrate-removal-review.md; D-SLM3291).
+#
+# The CUT. The complete residency assignment statement, matched against the COMMENT-STRIPPED body.
+# Round 15 cut on `body.find("weights_resident;")` over UN-stripped text, so the boundary landed on
+# a T-2080 comment 24 lines above the write it named, and the outcome of a structural derivation
+# was decided by the wording of an unrelated comment: executed both ways by the reviewing seat -- a
+# genuinely new rejecting return added before the residency decision left the count at 14 and the
+# checker `OK` (MUT-N), while rewording that comment so it no longer contained the literal made the
+# IDENTICAL return counted (MUT-N2, "real body has 15"), and a comment merely MENTIONING the
+# fragment above the ladder collapsed the count to 1 and failed a correct tree (MUT-D). Stripping
+# comments removes the comment sensitivity; matching the whole statement rather than the bare
+# fragment removes the substring ambiguity. This is the marker-truncation class this module has now
+# repaired three times (T-2062 S2 on the CPU side, T-2069 S3 on the GPU side, here on the count).
+#
+# Stated plainly, because the honest form is what the two prior repairs each had to add later: this
+# is STILL A TEXT MARKER, not a language boundary. `find_matching_close_brace` is what this module
+# uses when the boundary must be one the language enforces; a "returns above the residency write"
+# region has no such boundary, because it is a claim about statement ORDER inside one body rather
+# than about nesting. What the repair buys is exactness of the marker (a complete statement, in
+# code, not in a comment) -- not immunity to a future edit that moves the statement itself.
+_LWUWS_RESIDENCY_WRITE_STATEMENT = "g_last_weight_upload_was_skipped = weights_resident;"
+# The CATCH TERNARY. Counted by matching the ternary's own return SHAPE, once per occurrence --
+# round 15 asked whether the string `device_removed_reason` existed anywhere in the body and added
+# exactly 1, so a SECOND ternary-returned rejection (the shape T-2059 added once already, and the
+# shape `_STATUS_RETURN_RE` is documented as blind to) was free: derived count 14, real count 15.
+# An existence flag standing in for a count is only ever right at a count of one.
+_STATUS_RETURN_TERNARY_RE = re.compile(
+    r"return\s+[A-Za-z_][A-Za-z0-9_]*\s*!=\s*S_OK\s*\?", re.DOTALL
+)
+
+
+def count_status_return_ternaries(region_text: str) -> int:
+    """Every `return <expr> != S_OK ? ... : ...;` OCCURRENCE in `region_text`, comments stripped
+    first -- the one return shape this arc's own guards use that `_STATUS_RETURN_RE` cannot see,
+    counted rather than merely detected (T-2098, M1)."""
+    return len(_STATUS_RETURN_TERNARY_RE.findall(strip_comments(region_text)))
+
+
 def derive_lwuws_before_decision_count(gpu_text: str) -> int:
     """The real, structural count of `RunLayerLoopGpu`'s own rejecting return paths that return
     BEFORE the weight-residency decision runs -- the nine-guard ladder's own eleven literal return
-    statements plus the two device-capability rejections' own two literal return statements
-    (everything in the function's own real body up to the `weights_resident` write), plus ONE for
-    the recording-window catch's own ternary (a `device_removed_reason` `?:` expression, invisible
-    to `_STATUS_RETURN_RE` since it is not a literal `return SslmForwardStatus::X;` -- counted by
-    checking the ternary's own anchor exists, not by the return-statement regex)."""
+    statements plus the two device-capability rejections' own two literal return statements, plus
+    one per recording-window catch ternary (a `device_removed_reason` `?:` expression, invisible to
+    `_STATUS_RETURN_RE` since it is not a literal `return SslmForwardStatus::X;` -- counted by
+    `count_status_return_ternaries`, per occurrence, not by asking whether one exists).
+
+    THE TWO TERMS HAVE DIFFERENT REGIONS, and that is a property of the claim rather than an
+    oversight -- stated here because it is the one thing about this derivation a reader would
+    otherwise have to re-derive from `gpu_port.h`'s own paragraph.
+
+    The LITERAL-RETURN term is cut positionally: everything in the function's own COMMENT-STRIPPED
+    body above the complete residency assignment statement `_LWUWS_RESIDENCY_WRITE_STATEMENT` -- a
+    text marker, named as one here rather than described as "the write", and exact in the two ways
+    round 15's was not (see that constant's own note). Thirteen today: the nine-guard ladder's own
+    eleven, plus the two device-capability rejections.
+
+    The TERNARY term is counted over the WHOLE body, and must be. The number this derivation
+    verifies is `gpu_port.h`'s own "fourteen paths in all," and that sentence enumerates
+    "the nine-guard ladder, the two device-capability rejections, AND THE RECORDING-WINDOW CATCH."
+    The catch's own ternary return sits textually BELOW the residency write, so a purely positional
+    cut excludes it and the derivation reads 13 against a prose 14 -- executed, and the reason this
+    function does not simply cut both terms at the same index. The catch belongs to the counted set
+    on the property the paragraph is actually about: it writes the observable back to `false`
+    (`lwuws_write_catch` (`superslm_gpu.cpp`)) before returning, so it reads `false` exactly like
+    the thirteen above it, despite having run past the decision. "Before the decision" is the
+    paragraph's shorthand for that class, not a claim about statement order, and the derivation
+    matches the class.
+
+    Round 15's whole-body scope for this term was therefore RIGHT and its arithmetic was wrong: it
+    asked whether `device_removed_reason` appeared anywhere and added exactly 1, so a second
+    ternary-returned rejection would have been free. `count_status_return_ternaries` keeps the
+    scope and counts the occurrences.
+
+    Raises `ValueError` if the residency marker is absent: a derivation whose region silently
+    collapses to the whole body would report a number computed over the wrong region, and this
+    module's standing discipline is that a check which cannot find the anchor it verifies must not
+    pass silently."""
     body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
-    residency_write_at = body.find("weights_resident;")
-    before_region = body[:residency_write_at] if residency_write_at != -1 else body
-    ladder_returns = count_status_return_statements(before_region)
-    has_catch_ternary = "device_removed_reason" in strip_comments(body)
-    return ladder_returns + (1 if has_catch_ternary else 0)
+    stripped_body = strip_comments(body)
+    residency_write_at = stripped_body.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
+    if residency_write_at == -1:
+        raise ValueError(
+            "superslm_gpu.cpp: RunLayerLoopGpu's own residency assignment "
+            f"{_LWUWS_RESIDENCY_WRITE_STATEMENT!r} not found in its comment-stripped body -- the "
+            "before/after path-count region has no boundary to cut on"
+        )
+    before_region = stripped_body[:residency_write_at]
+    return count_status_return_statements(before_region) + count_status_return_ternaries(stripped_body)
 
 
 def derive_lwuws_after_decision_count(gpu_text: str) -> int:
@@ -1363,6 +1524,11 @@ def run_all_checks(
     # LWUWS_CITATIONS/check_gpu_port_h_citations_match_table used to do with a chunk or a paragraph
     # boundary something could sit outside of.
     if check_marked_citation_scan:
+        # T-2098 (S1, D-SLM3291): the population's own vitality FIRST -- a listed file that yields
+        # zero citations makes the resolution pass below green for the wrong reason.
+        failures += check_marked_citation_population_is_live(
+            scanned_files=marked_citation_scanned_files, repo_root=repo_root
+        )
         failures += check_marked_citations(scanned_files=marked_citation_scanned_files, repo_root=repo_root)
     # T-2091 (S2, build log §27): the line-wrap symbol-integrity scan round 11's own M1 routed and
     # round 12 did not build -- every backtick-quoted identifier split across a line-wrap, across
@@ -1389,6 +1555,15 @@ def main() -> int:
         failures = run_all_checks()
     except ValueError as e:
         print(f"check_gpu_guard_status_parity.py: FAILED (source anchor missing) -- {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        # T-2098 (O3, D-SLM3291): a scanned or resolvable file that has been renamed or removed
+        # raises `FileNotFoundError` out of `check_marked_citations`/`check_symbol_integrity`, which
+        # `ValueError` above does not catch -- the module used to answer that with a traceback
+        # instead of its own failure line. Loud either way, so this is a conventions fix rather
+        # than a soundness one: the build now reads one message shape for every way this check can
+        # fail.
+        print(f"check_gpu_guard_status_parity.py: FAILED (source file unreadable) -- {e}", file=sys.stderr)
         return 1
     if failures:
         print("check_gpu_guard_status_parity.py: FAILED", file=sys.stderr)

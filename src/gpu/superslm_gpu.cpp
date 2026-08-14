@@ -190,8 +190,8 @@ superslm::SslmForwardStatus CheckBiasAccumulateMagnitudeDomainGpu(int64_t acc_i,
 	// coverage through RunLayerLoopGpu instead, Curie casebook Sec6). Built
 	// for real anyway, per B2's own declared scope (gpu_port.h) -- reuses the
 	// already-proven BiasReconcileWideGpu dispatch (B1) for the wide
-	// reconcile term, then reproduces CheckBiasAccumulateMagnitudeDomain's own
-	// second-stage overflow test (checked_chain_funnel.cpp:450-478) in the
+	// reconcile term, then reproduces the second-stage overflow test in
+	// `CheckBiasAccumulateMagnitudeDomain` (`checked_chain_funnel.cpp`) in the
 	// identical unsigned two's-complement form the CPU reference uses (no UB,
 	// same technique host-side as device-side would use).
 	int64_t term = 0;
@@ -256,8 +256,8 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 // q_proj, kv_proj fused, RoPE's own guard); T-2035 completes RoPE's own
 // rotation and builds sites 5-16 plus the real per-layer commit dispatch --
 // the full 14-dispatch-per-layer composition (Claude/Vitruvius/t1986-...-
-// 2026-08-13.md Sec4's own site order; `forward_sites.cpp`'s own per-layer
-// loop body, `RunLayerLoopImpl`).
+// 2026-08-13.md Sec4's own site order; the per-layer loop body of
+// `RunLayerLoopImpl` (`forward_sites.cpp`)).
 // ===========================================================================
 
 namespace {
@@ -676,8 +676,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
-	// CPU checks NINE in `RunLayerLoopImpl`'s own guard ladder (`forward_sites.
-	// cpp`), not eight, and the missing one (`seq.hidden_codes == nullptr` ->
+	// CPU checks NINE in the guard ladder of `RunLayerLoopImpl`
+	// (`forward_sites.cpp`), not eight, and the missing one (`seq.hidden_codes == nullptr` ->
 	// `InvalidHiddenCodes`) was reproduced crashing
 	// this process with `STATUS_ACCESS_VIOLATION` (0xC0000005) on a
 	// DEFAULT-CONSTRUCTED `SequenceLayerState` -- the exact input
@@ -695,7 +695,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// 2026-08-14, T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
 	// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own
 	// claim): every guard below is tagged with its own `GpuLayerLoopGuard`
-	// enum value (`gpu_port.h`, generated from `gpu_layer_loop_guards.def`)
+	// enum value (`GpuLayerLoopGuard` (`gpu_port.h`), generated from
+	// `gpu_layer_loop_guards.def`)
 	// in a trailing comment, and the `static_assert` immediately after this
 	// ladder ties the number of guards a maintainer believes were written
 	// here to `GpuLayerLoopGuard::kCount` -- the SAME compile-time constant
@@ -714,8 +715,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// own source.
 	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
-	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (`RunLayerLoopImpl`'s own CFG1 geometry
-	// join, `forward_sites.cpp`), checked on THIS call's own caller-supplied
+	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (the CFG1 geometry join in
+	// `RunLayerLoopImpl` (`forward_sites.cpp`)), checked on THIS call's own caller-supplied
 	// hidden_size/head_dim/num_key_value_heads exactly as CPU checks it --
 	// never assumed sound because some other caller (the loader's own
 	// ValidateConfigGeometryJoin) already checked an artifact-sourced
@@ -728,8 +729,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	    guard_num_heads % num_key_value_heads != 0) {
 		return superslm::SslmForwardStatus::KvHeadGeometryMismatch;  // KvHeadGeometryMismatch
 	}
-	// WorkspaceSizeOrOverflow (`RunLayerLoopImpl`'s own KV-size overflow guard, `forward_sites.
-	// cpp`): the overflow-guarded KV-size product, bit-exact against CPU's own
+	// WorkspaceSizeOrOverflow (the KV-size overflow guard in `RunLayerLoopImpl`
+	// (`forward_sites.cpp`)): the overflow-guarded KV-size product, bit-exact against CPU's own
 	// factor-by-factor `SIZE_MAX / factor` idiom (the third factor is
 	// num_key_value_heads, not guard_num_heads -- T-1654/S3.8a's own
 	// correction, matching KeyRow/ValueRow's real addressing) -- an
@@ -748,7 +749,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		if (workspace == nullptr) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
 		if (workspace_size < kv_bytes_needed) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
 	}
-	// HiddenCodesNull (`RunLayerLoopImpl`'s own null-hidden_codes guard, `forward_sites.cpp`) --
+	// HiddenCodesNull (the null-hidden_codes guard in `RunLayerLoopImpl`
+	// (`forward_sites.cpp`)) --
 	// CPU's own comment there names exactly this input -- a default-constructed SequenceLayerState, which
 	// is what `int8_t* hidden_codes = nullptr;`'s own default member
 	// initializer produces -- as "used to be dereferenced unconditionally...
@@ -761,8 +763,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	if (seq.layer_index >= num_hidden_layers) {
 		return superslm::SslmForwardStatus::SequenceAlreadyComplete;  // SequenceAlreadyComplete
 	}
-	// PositionOverCap / KvCapacityExhausted (`RunLayerLoopImpl`'s own `seq.context_length`
-	// domain guards, `forward_sites.cpp`) -- KvCapacityExhausted is
+	// PositionOverCap / KvCapacityExhausted (the two `seq.context_length` domain guards in
+	// `RunLayerLoopImpl` (`forward_sites.cpp`)) -- KvCapacityExhausted is
 	// the one T-2049's own confirmation review reproduced landing K/V bytes
 	// past the addressed row before rejecting.
 	if (seq.context_length < 0) return superslm::SslmForwardStatus::PositionOverCap;  // PositionOverCap
@@ -1052,8 +1054,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// than renumbering every index after it, which would touch every site
 	// shader's own hardcoded `ScratchLayout.Load<uint>(N*4)` call for no
 	// behavioural change. Index 26 is new: `work_rope_stage_off`, host-
-	// computed and shader-read (matching this table's own stated discipline,
-	// d3d12_harness.h:186-190) rather than re-derived in HLSL from index 24
+	// computed and shader-read (matching the stated discipline of the composed
+	// binding table, `kComposedResourceBindingCount` (`d3d12_harness.h`))
+	// rather than re-derived in HLSL from index 24
 	// the way `rope_guard_site.hlsl` used to.
 	std::vector<uint8_t> scratch_layout_bytes(27 * 4, 0);
 	{
@@ -1342,8 +1345,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `kDispatchesPerLayer` above exactly -- attention is now four real
 	// dispatches (attention-score, softmax, context-accumulate, ctx_fold),
 	// not T-2039's own fused one.
-	// T-2045 (C2): resume from seq.layer_index, exactly as `forward_sites.cpp`'s
-	// own `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)`
+	// T-2045 (C2): resume from seq.layer_index, exactly as the loop in
+	// `RunLayerLoopImpl` (`forward_sites.cpp`) --
+	// `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)` --
 	// does -- the guard above already proved
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
@@ -1629,8 +1633,8 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // pointee, since neither this function's own signature nor the design names
 // a hidden_size this call can use to bound that copy (Save/Restore take no
 // hidden_size parameter; hidden_codes stays the caller's own responsibility,
-// matching RunLayerLoop's own "residual lives in seq's own state" contract,
-// forward_sites.h:749-750 -- the pointER round-trips by the caller's own
+// matching the "residual lives in seq's own state" contract of
+// `RunLayerLoop` (`forward_sites.h`) -- the pointER round-trips by the caller's own
 // reuse of the same buffer across save/restore, never by this blob).
 // ===========================================================================
 
@@ -1694,8 +1698,8 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 
 		// T-2045 (S6, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
 		// this function's own declared contract sites the restore-time device
-		// allocation and host-to-device upload HERE (`gpu_port.h`'s own
-		// `RestoreGpuSequenceState` declaration comment) -- a plain host memcpy would pass this gate identically
+		// allocation and host-to-device upload HERE (the declaration comment on
+		// `RestoreGpuSequenceState` (`gpu_port.h`)) -- a plain host memcpy would pass this gate identically
 		// with no GPU present. The workspace bytes now round-trip through a
 		// real device: upload heap -> DEFAULT-heap device buffer (the
 		// "restored-sequence device allocation" itself) -> readback heap ->
