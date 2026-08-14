@@ -5735,6 +5735,34 @@ static int RunCrashProbe(const std::string& name) {
 		            superslm::SslmForwardStatusName(forward_status));
 		return 0;
 	}
+	// T-2053 (M1, Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md):
+	// a default-constructed SequenceLayerState IS the failing input --
+	// hidden_codes' own default member initializer is nullptr
+	// (forward_sites.h:442), reproducing STATUS_ACCESS_VIOLATION on a build
+	// missing guard 9. Guard 9 (InvalidHiddenCodes) is checked before any
+	// per-layer data is touched, so this probe needs no real LayerWeights or
+	// rope-table content -- only a well-formed call shape that reaches it
+	// (valid layer_budget/context_cap/geometry/workspace); `layers=nullptr`
+	// is never dereferenced before guard 9 rejects.
+	if (name == "gpu_null_hidden_codes") {
+		superslm::SequenceLayerState seq{};  // hidden_codes left at its own default: nullptr
+		seq.hidden_scale = superslm::CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		seq.context_length = 0;
+		uint8_t ws[32] = {0};
+		superslm::SslmTensorManifest rope_tables{};
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::printf("crash-probe gpu_null_hidden_codes: calling RunLayerLoopGpu with "
+		            "seq.hidden_codes == nullptr (the struct's own default), everything else "
+		            "well-formed -- M1, src/gpu/superslm_gpu.cpp\n");
+		std::fflush(stdout);
+		const auto st = superslm_gpu::RunLayerLoopGpu(
+		    seq, /*layers=*/nullptr, /*num_hidden_layers=*/8, /*layer_budget=*/8,
+		    /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		    /*intermediate_size=*/2, /*context_cap=*/1, rope_tables, ws, sizeof(ws));
+		std::printf("PROBE DID NOT CRASH (status=%s)\n", superslm::SslmForwardStatusName(st));
+		return 0;
+	}
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
 }
@@ -5797,6 +5825,35 @@ static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
 	          "RowBoundsWide(nullptr, 0, &out_max, &out_min) must not crash in any build "
 	          "configuration -- outcome was %s, child output was: %s",
 	          CrashProbeOutcomeName(outcome), tail.c_str());
+}
+
+// T-2053 (M1, Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md):
+// the ninth CPU guard's own GPU-leg pin, via the existing crash-probe
+// mechanism -- reverting guard 9 crashes the WHOLE process
+// (STATUS_ACCESS_VIOLATION, reproduced by the reconfirmation review on real
+// hardware), so an in-process mutation test would take this suite's own
+// binary down with it; the crash-probe child isolates exactly that risk,
+// matching this file's own established convention for a contract violation
+// that is a genuine memory access rather than an assert(). Mutation-proof
+// (red-then-green) is executed against the landed build via a SEPARATE,
+// never-committed scratch run at the pre-guard-9 commit (36b9327), quoted in
+// the casebook's own T-2053 section rather than re-incurred here; this cell
+// itself only needs to assert what the FIXED build must do.
+static void TestT2053_M1_NullHiddenCodesRejectedNotCrashed() {
+	static const char* kProbeName = "gpu_null_hidden_codes";
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes(kProbeName, &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "RunLayerLoopGpu(seq.hidden_codes=nullptr) must not crash -- guard 9 "
+	          "(InvalidHiddenCodes) rejects before any per-layer data is touched (M1) -- "
+	          "outcome was %s, child output was: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+	if (outcome == CrashProbeOutcome::kRanNoCrash) {
+		CHECK_MSG(tail.find("status=InvalidHiddenCodes") != std::string::npos,
+		          "RunLayerLoopGpu(seq.hidden_codes=nullptr) status == InvalidHiddenCodes "
+		          "specifically, not merely non-crashing -- child output was: %s",
+		          tail.c_str());
+	}
 }
 
 // N5, second half (Poirot 380b75f review): "the crash probe covers RowBoundsWide
@@ -22175,6 +22232,163 @@ static void TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched() {
 	          "witness, N1)");
 }
 
+// ---------------------------------------------------------------------------
+// T-2053 -- pins for the T-2052 fix round (Claude/Brunel/t2025-gpu-serial-
+// build-2026-08-13.md Sec17, D-SLM3182; findings in Claude/Poirot/36b9327-
+// gpu-serial-port-reconfirmation-review.md, D-SLM3180, M1/M2). Guard 9's own
+// crash-probe-based pin lives earlier in this file (search
+// "TestT2053_M1_NullHiddenCodesRejectedNotCrashed", beside this suite's other
+// crash-probe cells) -- it needs the child-process isolation that mechanism
+// provides and cannot live in this section. This section carries the
+// table-walk cell (item 2) and the LastWeightUploadWasSkipped pin (item 3).
+// Item 4 (M2's VRAM-doubling/release-ordering claim) has no cell here: no
+// device-observable distinguishes it through the current gpu_port.h surface
+// either, filed as a residual in the casebook rather than padded with a cell
+// that would not actually discriminate the property M2 claims to fix (see
+// the casebook's own T-2053 section for the full disposition).
+// ---------------------------------------------------------------------------
+
+static void TestT2053_M1_TableWalkAgainstGuardsDef() {
+	// Ties this cell's own row count to gpu_layer_loop_guards.def's own
+	// compile-time count directly -- a row added to the .def file without a
+	// matching row added here changes kCount but not this constant, so the
+	// mismatch check below fails loudly; a row REMOVED from the .def file
+	// changes kCount too, and THIS static_assert (not a runtime check) fails
+	// the BUILD, per the commission's own "verify kCount's static_assert
+	// wiring is itself alive" ask -- proven by construction: this line does
+	// not compile if `kCount` and the literal `9` disagree.
+	static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount) == 9,
+	              "gpu_layer_loop_guards.def's own row count changed -- update this table "
+	              "walk's own row count (T2053_GuardRows below) to match, in CPU's own "
+	              "source order (forward_sites.cpp:1137-1354)");
+
+	NLayerFixture<8> fixture;
+	int rows_tested = 0;
+
+	// One block per guard, in CPU's own source order (matching
+	// gpu_layer_loop_guards.def's own row order exactly) -- each fixture
+	// isolates its own guard's domain, and each assertion compares the REAL
+	// CPU RunLayerLoop status against RunLayerLoopGpu's, not a hand-copied
+	// status literal, so a status VALUE drift (not just a missing/extra row)
+	// is caught too.
+	auto run_both = [&](const char* label, SequenceLayerState cpu_seq, SequenceLayerState gpu_seq,
+	                     const LayerWeights* layers, uint32_t N, uint32_t layer_budget,
+	                     size_t hidden_size, size_t head_dim, size_t num_kv_heads,
+	                     size_t intermediate_size, int64_t context_cap, size_t ws_bytes,
+	                     size_t ws_arg_override /*0 = use ws_bytes*/) {
+		std::vector<uint8_t> cpu_ws(ws_bytes, 0);
+		std::vector<uint8_t> gpu_ws(ws_bytes, 0);
+		const size_t cpu_arg = ws_arg_override ? ws_arg_override : cpu_ws.size();
+		const size_t gpu_arg = ws_arg_override ? ws_arg_override : gpu_ws.size();
+		const auto cpu_st = superslm::RunLayerLoop(cpu_seq, layers, N, layer_budget, hidden_size,
+		                                             head_dim, num_kv_heads, intermediate_size,
+		                                             context_cap, fixture.view.rope_tables,
+		                                             cpu_ws.data(), cpu_arg);
+		const auto gpu_st = superslm_gpu::RunLayerLoopGpu(
+		    gpu_seq, layers, N, layer_budget, hidden_size, head_dim, num_kv_heads,
+		    intermediate_size, context_cap, fixture.view.rope_tables, gpu_ws.data(), gpu_arg);
+		CHECK_MSG(gpu_st == cpu_st,
+		          "T2053 table-walk row '%s': GPU status=%s, CPU oracle status=%s -- must "
+		          "agree (gpu_layer_loop_guards.def)",
+		          label, superslm::SslmForwardStatusName(gpu_st),
+		          superslm::SslmForwardStatusName(cpu_st));
+		++rows_tested;
+	};
+
+	int8_t codes1[2] = {5, -5};
+	SequenceLayerState s;
+	s.hidden_codes = codes1; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("LayerBudgetZero", s, s, fixture.layers, 8, /*layer_budget=*/0, 2, 2, 1, 2, 1, 32, 0);
+
+	int8_t codes2[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes2; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("ContextCapNonPositive", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, /*context_cap=*/0, 32, 0);
+
+	int8_t codes3[3] = {5, -5, 1};
+	s = SequenceLayerState{}; s.hidden_codes = codes3; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("HeadDimGeometryMismatch", s, s, fixture.layers, 8, 8, /*hidden_size=*/3, /*head_dim=*/2, 1, 2, 1, 32, 0);
+
+	int8_t codes4[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes4; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("KvHeadGeometryMismatch", s, s, fixture.layers, 8, 8, 2, 2, /*num_key_value_heads=*/2, 2, 1, 32, 0);
+
+	int8_t codes5[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes5; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("WorkspaceSizeOrOverflow", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, 1, 32, /*ws_arg_override=*/4);
+
+	// HiddenCodesNull: safe to run in-process here (unlike the crash-probe
+	// cell earlier in this file) because guard 9 EXISTS on the build this
+	// walk runs against -- it intercepts before any dereference. `codes6` is
+	// declared but deliberately never assigned to `s.hidden_codes`.
+	s = SequenceLayerState{}; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0;
+	run_both("HiddenCodesNull", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, 1, 32, 0);
+
+	int8_t codes7[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes7; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 8;
+	run_both("SequenceAlreadyComplete", s, s, fixture.layers, 8, 1, 2, 2, 1, 2, 1, 32, 0);
+
+	int8_t codes8[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes8; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0; s.context_length = -1;
+	run_both("PositionOverCap", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, /*context_cap=*/1, 32, 0);
+
+	int8_t codes9[2] = {5, -5};
+	s = SequenceLayerState{}; s.hidden_codes = codes9; s.hidden_scale = CarriedScale{INT64_C(1073741824), 0}; s.layer_index = 0; s.context_length = 1;
+	run_both("KvCapacityExhausted", s, s, fixture.layers, 8, 8, 2, 2, 1, 2, /*context_cap=*/1, 32, 0);
+
+	CHECK_MSG(rows_tested == static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount),
+	          "T2053 table-walk: %d rows tested, want %d (gpu_layer_loop_guards.def's own "
+	          "kCount) -- a guard present in the .def file but missing a row here (or vice "
+	          "versa) must fail this check",
+	          rows_tested, static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount));
+}
+
+static void TestT2053_Item3_LastWeightUploadWasSkipped() {
+	NLayerFixture<8> fixture;  // one object -- same `fixture.layers` pointer for both calls
+
+	auto call_once = [&]() {
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		return superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+		                                       fixture.view.rope_tables, ws.data(), ws.size());
+	};
+
+	// Call 1: whatever the process-lifetime cache's own state already is
+	// (O3, T-2047's own casebook note: this cache is shared across the
+	// whole suite) -- not asserted either way, only used to establish a
+	// KNOWN-resident baseline for call 2 below.
+	const auto st1 = call_once();
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "T2053 item 3 call 1: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st1));
+
+	// Call 2: SAME content (same fixture, unmodified) -- must be a cache
+	// hit, upload skipped.
+	const auto st2 = call_once();
+	CHECK_MSG(st2 == SslmForwardStatus::Ok, "T2053 item 3 call 2: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st2));
+	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),  // LINK-RED until item 3 lands
+	          "T2053 item 3: identical content on consecutive calls -- the second call's own "
+	          "weight upload must be skipped (a cache hit), LastWeightUploadWasSkipped() must "
+	          "read true");
+
+	// Call 3: content CHANGED (same pointer, mutated in place -- T-1356's
+	// own attn_norm_gain corner) -- must be a cache miss, upload NOT
+	// skipped.
+	static int32_t g[2] = {65536, 65536};
+	fixture.layers[3].attn_norm_gain = g;
+	const auto st3 = call_once();
+	CHECK_MSG(st3 == SslmForwardStatus::ChainInputOutOfDomain,
+	          "T2053 item 3 call 3 (mutated content): status=%s, want ChainInputOutOfDomain",
+	          superslm::SslmForwardStatusName(st3));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2053 item 3: content changed since the last call -- this call's own weight "
+	          "upload must NOT be skipped (a cache miss), LastWeightUploadWasSkipped() must "
+	          "read false");
+}
+
 // --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
 // level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
 // C-ABI wrapper is not yet built on any backend). Restore-time device allocation
@@ -22714,6 +22928,7 @@ int main(int argc, char** argv) {
 	//     S4 red; the two S9 cells already green at review time. ---
 	TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain();
 	TestRowBoundsWideZeroLenNullPtrDoesNotCrash();
+	TestT2053_M1_NullHiddenCodesRejectedNotCrashed();
 	TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference();
 	TestRequantChainCheckedHookInstalledProducesIdenticalOutputs();
 	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
@@ -23275,6 +23490,16 @@ int main(int argc, char** argv) {
 	TestT2050_N1_EightGuardLadderMatchesCpuOrderAndStatus();
 	TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete();
 	TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched();
+
+	// T-2053 -- pins for the T-2052 fix round (Claude/Brunel/t2025-gpu-
+	// serial-build-2026-08-13.md Sec17, D-SLM3182, M1/item-3). See this
+	// file's own T-2053 section above (and TestT2053_M1_
+	// NullHiddenCodesRejectedNotCrashed beside the other crash-probe cells);
+	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records
+	// worktree) "T-2053" section for the full derivation and executed
+	// proofs.
+	TestT2053_M1_TableWalkAgainstGuardsDef();
+	TestT2053_Item3_LastWeightUploadWasSkipped();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
