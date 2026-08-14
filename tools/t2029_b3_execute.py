@@ -233,7 +233,14 @@ def is_pilot_item(seed):
 
 
 def collect_gaps(fx, n_items, seed_base, t_scale=1.0):
-    composed_pilot, composed_val, effect_pilot, effect_val = [], [], [], []
+    """design Sec22/D-SLM3127's corrected form: alongside the composed conjunct's own paired
+    gap (unaffected by this correction) and the RETIRED paired effect_gap (kept only as a
+    diagnostic cross-check, per the disposition's own "checked directly rather than assumed"
+    text), also returns effect_distance_runtime UNPAIRED -- the single-arm quantity the
+    corrected effect-retention conjunct actually gates on."""
+    composed_pilot, composed_val = [], []
+    effect_gap_pilot, effect_gap_val = [], []  # RETIRED paired form -- diagnostic only (D-SLM3127)
+    effect_rt_pilot, effect_rt_val = [], []  # CORRECTED single-arm form (D-SLM3127/3128)
     for i in range(n_items):
         seed = (seed_base + i * 0x9E3779B1) & 0xFFFFFFFFFFFFFFFF
         cl_rt, cl_bk, el_rt, el_bk = run_token(fx, seed, t_scale)
@@ -241,11 +248,17 @@ def collect_gaps(fx, n_items, seed_base, t_scale=1.0):
         effect_gap = el_rt - el_bk
         if is_pilot_item(seed):
             composed_pilot.append(composed_gap)
-            effect_pilot.append(effect_gap)
+            effect_gap_pilot.append(effect_gap)
+            effect_rt_pilot.append(el_rt)
         else:
             composed_val.append(composed_gap)
-            effect_val.append(effect_gap)
-    return composed_pilot, composed_val, effect_pilot, effect_val
+            effect_gap_val.append(effect_gap)
+            effect_rt_val.append(el_rt)
+    return {
+        "composed_pilot": composed_pilot, "composed_val": composed_val,
+        "effect_gap_pilot": effect_gap_pilot, "effect_gap_val": effect_gap_val,
+        "effect_rt_pilot": effect_rt_pilot, "effect_rt_val": effect_rt_val,
+    }
 
 
 def stat(gaps, z=Z_95_ONE_SIDED):
@@ -276,33 +289,6 @@ def main():
     gate0 = A.gate_check(triple0, rho0, fx.T_honest, fx.beta[0], fx.S) if triple0 else None
     print(f"WIRING-AND-DERIVATION precondition, channel 0: rho={rho0:.6f} gate_passes={gate0.gate_passes if gate0 else False}")
 
-    print(f"\nCalibrating Delta on PILOT (n_target={PILOT_N})...")
-    composed_pilot, _, effect_pilot, _ = collect_gaps(fx, PILOT_N, PILOT_SEED_BASE, t_scale=1.0)
-    composed_pilot_stat = stat(composed_pilot)
-    effect_pilot_stat = stat(effect_pilot)
-
-    delta_composed_mean = SAFETY_INFLATION * (composed_pilot_stat["mean"] + Z_95_ONE_SIDED * composed_pilot_stat["se"])
-    delta_composed_tail = SAFETY_INFLATION * composed_pilot_stat["p95"]
-    delta_effect_mean = SAFETY_INFLATION * (effect_pilot_stat["mean"] + Z_95_ONE_SIDED * effect_pilot_stat["se"])
-    delta_effect_tail = SAFETY_INFLATION * effect_pilot_stat["p95"]
-
-    print(f"PILOT (n_composed={composed_pilot_stat['n']}, n_effect={effect_pilot_stat['n']}):")
-    print(f"  composed: mean={composed_pilot_stat['mean']:.6f} se={composed_pilot_stat['se']:.6f} p95={composed_pilot_stat['p95']:.6f}")
-    print(f"  effect:   mean={effect_pilot_stat['mean']:.6f} se={effect_pilot_stat['se']:.6f} p95={effect_pilot_stat['p95']:.6f}")
-    print(f"FROZEN Delta: composed_mean={delta_composed_mean:.6f} composed_tail={delta_composed_tail:.6f} "
-          f"effect_mean={delta_effect_mean:.6f} effect_tail={delta_effect_tail:.6f}")
-
-    print(f"\nGrading the SAME reference adapter on VALIDATION (n_target={PILOT_N}) against its own frozen Delta...")
-    _, composed_val, _, effect_val = collect_gaps(fx, PILOT_N, VALIDATION_SEED_BASE, t_scale=1.0)
-    composed_val_stat = stat(composed_val)
-    effect_val_stat = stat(effect_val)
-
-    composed_mean_accepts = composed_val_stat["upper_ci"] < delta_composed_mean
-    composed_tail_accepts = composed_val_stat["p95"] < delta_composed_tail
-    effect_mean_accepts = effect_val_stat["upper_ci"] < delta_effect_mean
-    effect_tail_accepts = effect_val_stat["p95"] < delta_effect_tail
-    all_accept = composed_mean_accepts and composed_tail_accepts and effect_mean_accepts and effect_tail_accepts
-
     # UNRESOLVED-never-PASSED discipline (D-SLM2846): a conjunct whose validation upper_ci sits
     # inside its own achieved resolving power of Delta is reported as unresolved, not silently
     # rounded to accept, even when the raw comparison happens to clear the bar.
@@ -313,29 +299,77 @@ def main():
             return "UNRESOLVED"
         return "ACCEPT"
 
+    print(f"\nCalibrating Delta on PILOT (n_target={PILOT_N})...")
+    pilot = collect_gaps(fx, PILOT_N, PILOT_SEED_BASE, t_scale=1.0)
+    composed_pilot_stat = stat(pilot["composed_pilot"])
+    # design Sec22/D-SLM3127: the corrected effect-retention Delta is calibrated from PILOT's
+    # own honest effect_distance_runtime distribution ALONE (single-arm), never the retired
+    # paired gap.
+    effect_rt_pilot_stat = stat(pilot["effect_rt_pilot"])
+
+    delta_composed_mean = SAFETY_INFLATION * (composed_pilot_stat["mean"] + Z_95_ONE_SIDED * composed_pilot_stat["se"])
+    delta_composed_tail = SAFETY_INFLATION * composed_pilot_stat["p95"]
+    delta_effect_mean = SAFETY_INFLATION * (effect_rt_pilot_stat["mean"] + Z_95_ONE_SIDED * effect_rt_pilot_stat["se"])
+    delta_effect_tail = SAFETY_INFLATION * effect_rt_pilot_stat["p95"]
+
+    print(f"PILOT (n_composed={composed_pilot_stat['n']}, n_effect={effect_rt_pilot_stat['n']}):")
+    print(f"  composed: mean={composed_pilot_stat['mean']:.6f} se={composed_pilot_stat['se']:.6f} p95={composed_pilot_stat['p95']:.6f}")
+    print(f"  effect_distance_runtime (corrected, single-arm): mean={effect_rt_pilot_stat['mean']:.6f} "
+          f"se={effect_rt_pilot_stat['se']:.6f} p95={effect_rt_pilot_stat['p95']:.6f}")
+    print(f"FROZEN Delta: composed_mean={delta_composed_mean!r} composed_tail={delta_composed_tail!r} "
+          f"effect_mean={delta_effect_mean!r} effect_tail={delta_effect_tail!r}")
+
+    print(f"\nGrading the SAME reference adapter on VALIDATION (n_target={PILOT_N}) against its own frozen Delta...")
+    val = collect_gaps(fx, PILOT_N, VALIDATION_SEED_BASE, t_scale=1.0)
+    composed_val_stat = stat(val["composed_val"])
+    effect_rt_val_stat = stat(val["effect_rt_val"])  # CORRECTED: single-arm, gates directly
+    effect_gap_val_stat = stat(val["effect_gap_val"])  # RETIRED paired form: diagnostic only
+
+    composed_mean_accepts = composed_val_stat["upper_ci"] < delta_composed_mean
+    composed_tail_accepts = composed_val_stat["p95"] < delta_composed_tail
+    effect_mean_accepts = effect_rt_val_stat["upper_ci"] < delta_effect_mean
+    effect_tail_accepts = effect_rt_val_stat["p95"] < delta_effect_tail
+    all_accept = composed_mean_accepts and composed_tail_accepts and effect_mean_accepts and effect_tail_accepts
+
     composed_mean_word = verdict_word(composed_mean_accepts, composed_val_stat["upper_ci"], delta_composed_mean,
                                        composed_val_stat["se"] * Z_95_ONE_SIDED)
-    effect_mean_word = verdict_word(effect_mean_accepts, effect_val_stat["upper_ci"], delta_effect_mean,
-                                     effect_val_stat["se"] * Z_95_ONE_SIDED)
+    effect_mean_word = verdict_word(effect_mean_accepts, effect_rt_val_stat["upper_ci"], delta_effect_mean,
+                                     effect_rt_val_stat["se"] * Z_95_ONE_SIDED)
 
-    print(f"\nVALIDATION (n_composed={composed_val_stat['n']}, n_effect={effect_val_stat['n']}):")
-    print(f"  composed: mean_gap={composed_val_stat['mean']:.6f} SE={composed_val_stat['se']:.6f} "
-          f"upper_CI={composed_val_stat['upper_ci']:.6f} p95={composed_val_stat['p95']:.6f} "
+    print(f"\nVALIDATION (n_composed={composed_val_stat['n']}, n_effect={effect_rt_val_stat['n']}):")
+    print(f"  composed: mean_gap={composed_val_stat['mean']!r} SE={composed_val_stat['se']!r} "
+          f"upper_CI={composed_val_stat['upper_ci']!r} p95={composed_val_stat['p95']!r} "
           f"sign+={composed_val_stat['sign_frac_positive']:.2f}")
-    print(f"    Delta_composed_mean={delta_composed_mean:.6f} -> mean conjunct: {composed_mean_word} "
+    print(f"    Delta_composed_mean={delta_composed_mean!r} -> mean conjunct: {composed_mean_word} "
           f"(accepts={composed_mean_accepts})")
-    print(f"    Delta_composed_tail={delta_composed_tail:.6f} -> tail conjunct accepts={composed_tail_accepts}")
-    print(f"  effect:   mean_gap={effect_val_stat['mean']:.6f} SE={effect_val_stat['se']:.6f} "
-          f"upper_CI={effect_val_stat['upper_ci']:.6f} p95={effect_val_stat['p95']:.6f} "
-          f"sign+={effect_val_stat['sign_frac_positive']:.2f}")
-    print(f"    Delta_effect_mean={delta_effect_mean:.6f} -> mean conjunct: {effect_mean_word} "
-          f"(accepts={effect_mean_accepts})")
-    print(f"    Delta_effect_tail={delta_effect_tail:.6f} -> tail conjunct accepts={effect_tail_accepts}")
+    print(f"    Delta_composed_tail={delta_composed_tail!r} -> tail conjunct accepts={composed_tail_accepts} "
+          f"(p95={composed_val_stat['p95']!r})")
+    print(f"  effect_distance_runtime (CORRECTED gate, single-arm, Sec22/D-SLM3127): "
+          f"mean={effect_rt_val_stat['mean']!r} SE={effect_rt_val_stat['se']!r} "
+          f"upper_CI={effect_rt_val_stat['upper_ci']!r} p95={effect_rt_val_stat['p95']!r}")
+    print(f"    Delta_effect_mean={delta_effect_mean!r} -> mean conjunct: {effect_mean_word} "
+          f"(accepts={effect_mean_accepts}, resolving_power={effect_rt_val_stat['se']*Z_95_ONE_SIDED!r})")
+    print(f"    Delta_effect_tail={delta_effect_tail!r} -> tail conjunct accepts={effect_tail_accepts}")
+    print(f"  effect_gap (RETIRED paired form, DIAGNOSTIC ONLY, never gates): mean={effect_gap_val_stat['mean']!r} "
+          f"upper_CI={effect_gap_val_stat['upper_ci']!r} vs the OLD Delta_effect_mean=-5.043226 (T-2029's own "
+          f"pre-correction figure) -> {'would have accepted' if effect_gap_val_stat['upper_ci'] < -5.043226 else 'would have rejected'}")
 
     overall = "ACCEPT" if all_accept else "REJECT"
     if all_accept and (composed_mean_word == "UNRESOLVED" or effect_mean_word == "UNRESOLVED"):
         overall = "UNRESOLVED"
-    print(f"\nOVERALL VERDICT: {overall}")
+    print(f"\nOVERALL VERDICT (honest, t=1): {overall}")
+
+    # Annihilation cross-check (T_SCALE(255.9), design's own D-SLM3091 construction) -- the
+    # corrected conjunct must still reject full annihilation, unconditionally, per D-SLM3128.
+    print("\n--- Cross-check: T_SCALE(255.9) full annihilation, corrected conjunct ---")
+    fx_annihilated = build_fixture()
+    fx_annihilated.T_honest = fx.T_honest  # reuse the SAME honest T; only t_scale differs at call time
+    ann = collect_gaps(fx_annihilated, PILOT_N, VALIDATION_SEED_BASE, t_scale=255.9)
+    ann_effect_rt = stat(ann["effect_rt_val"] + ann["effect_rt_pilot"])  # full n=200, annihilation isn't split-sensitive
+    ann_accepts = ann_effect_rt["upper_ci"] < delta_effect_mean
+    print(f"annihilated effect_distance_runtime (n={ann_effect_rt['n']}): mean={ann_effect_rt['mean']!r} "
+          f"upper_CI={ann_effect_rt['upper_ci']!r} p95={ann_effect_rt['p95']!r}")
+    print(f"vs Delta_effect_mean={delta_effect_mean!r} -> {'REJECT (correct)' if not ann_accepts else 'ACCEPT (WRONG -- annihilation must reject)'}")
 
 
 if __name__ == "__main__":
