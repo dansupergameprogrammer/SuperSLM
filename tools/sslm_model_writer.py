@@ -18,6 +18,11 @@ WSC1 = b"WSC1"
 KVC1 = b"KVC1"
 CFG1 = b"CFG1"
 SIL1 = b"SIL1"
+# T-2046 (design §24.2 D-SLM3159): B0b's own two magics (T-2021/T-2029), written via the SAME
+# write_tensor_manifest below, unmodified -- DFS1/UFS1 share WGT1/BIA1/ROP1/WSC1's own manifest
+# byte layout exactly (design's own "storage-shape-identical" framing).
+DFS1 = b"DFS1"
+UFS1 = b"UFS1"
 MANIFEST_VERSION = 1
 
 # Sigmoid-LUT geometry (mirror include/superslm/model.h + silu_lut.h). Pinned, not per-artifact.

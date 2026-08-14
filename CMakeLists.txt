@@ -82,6 +82,17 @@ else()
 	target_compile_options(sslm_verify PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
+# artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
+# as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).
+add_executable(sslm_adapter_dump tools/sslm_adapter_dump.cpp)
+target_link_libraries(sslm_adapter_dump PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_adapter_dump PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_adapter_dump PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # S-HARDEN-6 (design Sec2.1 component 2/3, T-410): the cross-toolchain /
 # cross-optimization axis-digest harness, promoted from a disposable
 # commission instrument into committed CI tooling

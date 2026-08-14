@@ -48,6 +48,11 @@ class SectionType:
     CHAT_TEMPLATE = 21  # S1: chat template + special-token metadata (JSON)
     UNICODE_TABLES = 22 # S1: pinned NFC + property-class tables (self-contained blob)
     SCHEMA_MASKS = 30
+    # T-2046 (design §24.2, D-SLM3159): mirrors include/superslm/artifact.h's SslmSectionType --
+    # B0b's own section types (T-2021/T-2029), never referenced from the Python writer side until
+    # this fold's adapter-artifact writer needed to emit them.
+    DELTA_FOLD_SCALES = 40
+    U_FOLD_SCALES = 41
 
 
 class Dtype:
@@ -68,6 +73,10 @@ EXPECTED_DTYPE = {
     SectionType.WEIGHT_SCALES: Dtype.INT32,  # WSC1 tensor manifest of (identity,mult,shift) fold ops
     SectionType.SIGMOID_LUT: Dtype.INT32,    # SIL1 fixed table of int32 Q15 nodes (int16 unsafe: 32768 > INT16_MAX)
     SectionType.ROPE_TABLES: Dtype.INT64,
+    # T-2046 (design §24.2): mirrors src/artifact.cpp's ExpectedDtype -- both DFS1/UFS1 manifests
+    # of (identity,mult,exponent) triples are Int32, exactly like WSC1's own fold-op manifest.
+    SectionType.DELTA_FOLD_SCALES: Dtype.INT32,
+    SectionType.U_FOLD_SCALES: Dtype.INT32,
 }  # everything else -> RAW
 
 
@@ -156,3 +165,49 @@ def write_artifact(path, sections, flags=0):
     with open(path, "wb") as f:
         f.write(data)
     return fingerprint
+
+
+# T-2046 (design §24.2 D-SLM3161/D-SLM3158): a minimal reader, the writer's own mirror image --
+# `build_artifact`'s own byte layout, read back directly, without needing the C++ loader from
+# Python. Used by the adapter artifact writer to copy the bound base artifact's own CFG1 bytes
+# byte-for-byte and to read its RawIntegrityHash for ADP1's own base_artifact_hash field.
+
+def read_header(path):
+    """The header + section table of a v2 `.sslm` at `path`, plus the raw file bytes."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[0:4] != MAGIC:
+        raise ValueError(f"{path}: not an .sslm file (bad magic)")
+    version, header_bytes, section_count, _flags, _reserved0 = struct.unpack_from("<IIIII", data, 4)
+    file_bytes, = struct.unpack_from("<Q", data, 24)
+    integrity_hash = bytes(data[INTEGRITY_HASH_OFFSET:INTEGRITY_HASH_OFFSET + INTEGRITY_HASH_BYTES])
+    sections = []
+    for i in range(section_count):
+        row = header_bytes + i * SECTION_DESC_BYTES
+        s_type, s_dtype = struct.unpack_from("<II", data, row)
+        off, byte_size, elem_count = struct.unpack_from("<QQQ", data, row + 8)
+        alignment, _reserved = struct.unpack_from("<II", data, row + 32)
+        sections.append({"type": s_type, "dtype": s_dtype, "offset": off,
+                         "byte_size": byte_size, "elem_count": elem_count, "alignment": alignment})
+    return {"version": version, "file_bytes": file_bytes, "integrity_hash": integrity_hash,
+           "sections": sections, "data": data}
+
+
+def read_section_bytes(path, section_type):
+    """The raw bytes of the first section of `section_type` in the `.sslm` at `path`, or `None`
+    if absent."""
+    h = read_header(path)
+    for s in h["sections"]:
+        if s["type"] == section_type:
+            off, size = s["offset"], s["byte_size"]
+            return bytes(h["data"][off:off + size])
+    return None
+
+
+def raw_integrity_hash(path):
+    """The artifact's own stored 32-byte integrity hash -- literally the header bytes at
+    `[INTEGRITY_HASH_OFFSET : +INTEGRITY_HASH_BYTES]` (`build_artifact`'s own write target),
+    the identical value `SslmArtifact::RawIntegrityHash()` exposes -- not a recomputation."""
+    with open(path, "rb") as f:
+        f.seek(INTEGRITY_HASH_OFFSET)
+        return f.read(INTEGRITY_HASH_BYTES)
