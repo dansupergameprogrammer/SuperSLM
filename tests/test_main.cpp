@@ -22536,6 +22536,20 @@ static void TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFai
 	// (gpu_port.h) is the named constant for this cell's own site; the
 	// sibling, kO11AllocInjectionSiteWeightDefaultHeap, now exists for a
 	// future cell to pin T-2062's own remedy directly.
+	//
+	// T-2083 sync: T-2080 gave the arm function (then still named ArmWeightAllocationFailure
+	// Injection) a `site` selector (build log S24, gpu_port.h's own T-2080 correction) -- this
+	// branch's own call was still the pre-T-2080 zero-argument form (a compile error against
+	// the landed signature); the build seat patched it directly on the build branch as a
+	// disclosed, necessary one-line fix (build log S24's own scene: "the only test edit T-2080
+	// itself made is the one-line site argument") and it is ported back here so this branch
+	// compiles against its own declared symbol again. T-2084 (build log S25.3) then renamed the
+	// whole family (ArmWeightAllocationFailureInjection/ClearWeightAllocationInjection/
+	// kWeightAllocInjectionSite* -> ArmO11AllocationFailureInjection/ClearO11AllocationInjection/
+	// kO11AllocInjectionSite*, SUPERSLM_O11_WEIGHT_ALLOC_INJECTION -> SUPERSLM_O11_ALLOC_
+	// INJECTION) to close O33 (the old names all said "weight" for an instrument that arms two
+	// sites, only one of which is a weight allocation) -- applied here too, mechanically, every
+	// occurrence in this file.
 	superslm_gpu::ArmO11AllocationFailureInjection(
 	    superslm_gpu::kO11AllocInjectionSiteWorkScratchUav);  // arms work_scratch_uav as of T-2075
 	const auto st3 = call_once();
@@ -22562,6 +22576,110 @@ static void TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFai
 	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
 	          "T2063 S1/M-b call 4: the catch's own invalidation forces THIS call to be a real "
 	          "cache miss -- LastWeightUploadWasSkipped() must read false");
+}
+
+// T-2083 (S1, Claude/Poirot/42ecf79-gpu-serial-port-round9-review.md; build log S24.6 item 1,
+// D-SLM3246): the weight DEFAULT-heap allocation's own arm site
+// (kO11AllocInjectionSiteWeightDefaultHeap, T-2080) has existed since T-2080 and had ZERO
+// committed cells reaching it -- three rounds running, the same falsifying mutation (restore
+// T-2062's own site-local catch at the weight allocation) left the suite at 33893/3 unchanged
+// each time, first because the instrument could not reach that site (T-2071), then because the
+// only cell that existed had moved off it (T-2075/T-2076), and now because a site the instrument
+// CAN arm and a site a committed test DOES arm were still two different facts. This cell is the
+// reviewer's own proven probe shape (S1, "the remedy is five lines and I proved it works"),
+// committed: force a genuine cache MISS (the weight site's own throw sits inside
+// `if (!weights_resident)`, unreachable on a hit -- unlike work_scratch_uav's own unconditional
+// allocation, this is the one site that must be armed on a MISS specifically), arm
+// kO11AllocInjectionSiteWeightDefaultHeap, and assert the shared outer catch returns
+// GpuAllocationFailed rather than the retired T-2062 single-site catch's own KvPrecisionUnsupported.
+// A second pair of calls closes MUT-B (deleting the site-equality condition entirely): arming the
+// WEIGHT site and then making a genuine cache-HIT call must NOT fire at all, since a hit never
+// reaches the weight site's own guarded call -- under a deleted site-equality condition,
+// work_scratch_uav's own UNCONDITIONAL call (which every call, hit or miss, makes) would incorrectly
+// fire too, since "is anything armed" is all that would be left to check.
+//
+// Authored against brunel/t2025-gpu-build@42ecf79; landed against @07ffe63 (T-2084, build log
+// S25.3), which renamed the whole injection-instrument family to close O33 -- every symbol below
+// uses the current (O11-prefixed) names; the mutation targets (MUT-A/MUT-B) are unchanged in
+// substance, only in which variable name the site-equality conjunct reads.
+static void TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed() {
+	NLayerFixture<8> fixture;
+
+	auto call_once = [&]() {
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		return superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+		                                       fixture.view.rope_tables, ws.data(), ws.size());
+	};
+
+	// Call 1: whatever the process-lifetime cache's own state already is (matching this suite's
+	// own established convention, e.g. TestT2053_Item3) -- not asserted on `skipped` either way,
+	// only used to establish a KNOWN-resident baseline (this fixture's own DEFAULT content) for
+	// the content mutation below to guarantee a genuine miss against.
+	const auto st1 = call_once();
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "T2083 S1 call 1: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st1));
+
+	// Content mutation: a SMALL change (16384 -> 16385, the reviewer's own probe value) to layer
+	// 0's own attn_norm_gain -- large enough to change lw_bytes (guaranteeing a cache-content
+	// mismatch, a genuine miss) but small enough to stay well inside every downstream arithmetic
+	// domain, so the call still completes as `Ok` rather than rejecting the way T-1356's own
+	// attn_norm_gain corner (TestT2053_Item3's own mutation, 65536) deliberately does -- this
+	// cell needs a clean, repeatable `Ok` on both the throwing call and its own recovery call.
+	fixture.norm_gain[0][0] = 16385;
+
+	// Call 2: mutated content -- a genuine cache MISS (the weight DEFAULT-heap allocation's own
+	// `if (!weights_resident)` guard is now entered) -- armed at the weight site specifically.
+	superslm_gpu::ArmO11AllocationFailureInjection(
+	    superslm_gpu::kO11AllocInjectionSiteWeightDefaultHeap);
+	const auto st2 = call_once();
+	superslm_gpu::ClearO11AllocationInjection();  // always clear, even on failure
+	CHECK_MSG(st2 == SslmForwardStatus::GpuAllocationFailed,
+	          "T2083 S1 (superslm_gpu.cpp, weight DEFAULT-heap arm site): status=%s, want "
+	          "GpuAllocationFailed -- the site-local catch T-2062 deleted must not still be "
+	          "returning KvPrecisionUnsupported for this allocation (MUT-A: restoring that catch "
+	          "must redden this assertion)",
+	          superslm::SslmForwardStatusName(st2));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2083 S1 call 2: this call's own residency decision was a MISS before the throw "
+	          "ran -- LastWeightUploadWasSkipped() must read false");
+
+	// Call 3: well-formed, SAME mutated content, no injection -- recovery. Call 2's own throw
+	// fired before its upload completed, so residency was never established with the mutated
+	// content; this call must ALSO be a genuine miss, re-uploading and succeeding cleanly.
+	const auto st3 = call_once();
+	CHECK_MSG(st3 == SslmForwardStatus::Ok,
+	          "T2083 S1 call 3 (post-throw recovery): status=%s, want Ok -- the catch must leave "
+	          "the command allocator in a state the next call can use",
+	          superslm::SslmForwardStatusName(st3));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2083 S1 call 3: call 2's own throw never completed its upload, so this call is a "
+	          "genuine cache miss too -- LastWeightUploadWasSkipped() must read false");
+
+	// Call 4: SAME mutated content again -- a genuine cache HIT this time (call 3 established
+	// residency with it). Arming the WEIGHT site must NOT fire here: a hit never enters the
+	// `if (!weights_resident)` block the weight site's own guarded call lives inside, so this
+	// call's only injection check at all is work_scratch_uav's own UNCONDITIONAL one -- which
+	// must not fire for a site it was never armed for (MUT-B: deleting the site-equality
+	// condition removes exactly that discrimination, and work_scratch_uav's own call would fire
+	// on ANY armed site, including this one).
+	superslm_gpu::ArmO11AllocationFailureInjection(
+	    superslm_gpu::kO11AllocInjectionSiteWeightDefaultHeap);
+	const auto st4 = call_once();
+	superslm_gpu::ClearO11AllocationInjection();
+	CHECK_MSG(st4 == SslmForwardStatus::Ok,
+	          "T2083 S1 call 4 (weight site armed, genuine cache HIT): status=%s, want Ok -- "
+	          "arming the weight DEFAULT-heap site must not fire on a call that never reaches "
+	          "that allocation (MUT-B: a deleted site-equality condition would let "
+	          "work_scratch_uav's own unconditional call fire here instead)",
+	          superslm::SslmForwardStatusName(st4));
+	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2083 S1 call 4: a genuine cache hit with the weight site armed but never reached "
+	          "-- LastWeightUploadWasSkipped() must still read true");
 }
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
 
@@ -23679,6 +23797,7 @@ int main(int argc, char** argv) {
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
+	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);

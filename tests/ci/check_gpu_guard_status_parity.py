@@ -161,6 +161,44 @@ files: corrupting all eleven ladder citations in `gpu_port.h` while leaving
 this module's own table untouched -- `OK`, 48 passed before this fix;
 `FAILED`, naming the exact eleven-line divergence, after it.
 
+CORRECTED 2026-08-14 (T-2083, Claude/Poirot/42ecf79-gpu-serial-port-
+round9-review.md, O34/O35): two further, narrower residuals inside the
+citation machinery itself. O35 CLOSED: `GPU_PORT_H_LWUWS_CITATIONS`'s own
+`DecodeStickyTag` range citation (`superslm_gpu.cpp:532-550`) checks two
+ENDPOINTS' own content, not what is inside the range -- the range-end
+needle, a bare `"}"`, is satisfied by 177 of the file's own 1,965 lines
+(executed), so a shift onto the wrong closing brace would pass it, and
+deleting an interior `case` while preserving the file's own total line
+count (executed: `case 13` removed) left both endpoints individually valid
+and this module green, 54 passed, while the citation's own claim ("fourteen
+statuses, THIRTEEN of them rejecting") became false. Fixed:
+`decode_sticky_tag_status_set`/`check_decode_sticky_tag_range` (below)
+extract `DecodeStickyTag`'s own real, brace-matched body and count DISTINCT
+statuses directly, pinning the exact claim the range citation exists to
+protect rather than two points near where it happens to sit.
+
+O34 NOT CLOSED, and named rather than silently dropped. The T-2080 remedy
+above compares SETS of line numbers, so a same-position SWAP of two
+citations' own numbers in `gpu_port.h`'s own text (executed: `:716`
+`!dev.available` swapped with `:728` the sub-Tier-3 check) left the set
+unchanged and this module `OK`. A SEQUENCE/ORDER-preserving comparison was
+built and tried -- and FALSIFIED against the real header, not just the
+synthetic fixture it first passed against: `gpu_port.h`'s own paragraph
+legitimately re-cites some of the same line numbers a second and third time
+across its own four dated corrections (`:903`, `:716`, `:728` each appear
+twice at HEAD), and the corrections' own citation order, accreted
+chronologically over four rounds, does not match `GPU_PORT_H_LWUWS_
+CITATIONS`'s fixed definition order even after deduplication. Wiring the
+order comparison into `check_gpu_port_h_citations_match_table` turned the
+check RED on the real, unmutated tree -- caught before landing by running
+the mechanism against real content rather than trusting the fixture alone
+(`StandardsDocument.md` §5.4), and reverted. Closing O34 for real needs a
+parser that associates each citation with WHICH of the paragraph's own
+dated-correction sub-sections it belongs to and compares within each
+section, not across the whole accreted paragraph as one sequence -- new
+machinery, specified here rather than forced into a check that would be
+wrong.
+
 Modelled on this tree's own established CI-source-check convention
 (`tests/ci/check_no_forward_leaf_calls.py`, `tests/ci/check_checked_chain_
 funnel_position_cap_not_a_stub.py`): a text scan over the real source with
@@ -248,6 +286,27 @@ GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuL
 GPU_BELOW_LADDER_STATUSES = frozenset({
     "KvPrecisionUnsupported",
 })
+
+# T-2083 (O35, Claude/Poirot/42ecf79-gpu-serial-port-round9-review.md): the
+# real, named anchor for `DecodeStickyTag`'s own function body -- unlike
+# every other function this module extracts from, `DecodeStickyTag` is not
+# scanned by `_STATUS_RETURN_RE` at all (it uses a function-local `using S =
+# superslm::SslmForwardStatus;` alias, `_DECODE_STICKY_TAG_RETURN_RE` below
+# matches `S::` specifically, scoped to this one extraction so it cannot
+# collide with an unrelated `S` elsewhere in the tree). Executed: this
+# signature occurs exactly once in `superslm_gpu.cpp` at HEAD.
+DECODE_STICKY_TAG_FUNC_SIGNATURE = "superslm::SslmForwardStatus DecodeStickyTag(int64_t tag) {"
+_DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)")
+# `gpu_port.h`'s own citation claims this function "maps the device's own
+# sticky tag to FOURTEEN statuses, THIRTEEN of them rejecting" -- the number
+# this module now pins directly against the function's own real body,
+# instead of via the two-endpoint range citation (`superslm_gpu.cpp:532`,
+# `:550`) whose own range-end needle, a bare `"}"`, is satisfied by 177 of
+# the file's 1,965 lines (executed) and therefore covers where the function
+# ENDS, not what is inside it -- deleting an interior `case` while
+# preserving the file's own total line count left that citation green.
+DECODE_STICKY_TAG_EXPECTED_TOTAL = 14
+DECODE_STICKY_TAG_EXPECTED_REJECTING = 13
 
 _STATUS_RETURN_RE = re.compile(r"return\s+(?:superslm::)?SslmForwardStatus::([A-Za-z_][A-Za-z0-9_]*)")
 _DEF_ROW_RE = re.compile(
@@ -427,6 +486,45 @@ def gpu_ladder_status_set(
     return extract_status_set(body) - below_ladder_statuses
 
 
+def decode_sticky_tag_status_set(gpu_text: str) -> set[str]:
+    """T-2083 (O35): every DISTINCT status name `DecodeStickyTag` returns
+    ANYWHERE in its own real, brace-matched body -- content, not the two
+    range-endpoint citations `gpu_port.h`'s own prose uses. Comments and
+    string/char literals stripped first (`strip_comments`, same convention
+    as every other extraction in this module), so a status name mentioned
+    only in a comment cannot inflate the set -- mirroring `extract_status_
+    set`'s own guarantee for the ladder extractions, applied to this
+    function's own `S::` alias instead of the `SslmForwardStatus::`/
+    `superslm::SslmForwardStatus::` forms those use."""
+    body = extract_function_body(gpu_text, DECODE_STICKY_TAG_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    stripped = strip_comments(body)
+    return set(_DECODE_STICKY_TAG_RETURN_RE.findall(stripped))
+
+
+def check_decode_sticky_tag_range(gpu_text: str) -> list[str]:
+    """T-2083 (O35): pins the EXACT claim `gpu_port.h`'s own citation exists
+    to protect -- "fourteen statuses, THIRTEEN of them rejecting" -- against
+    `DecodeStickyTag`'s own real body, rather than the two-endpoint range
+    citation whose own range-end needle (a bare `"}"`) is satisfied by 177 of
+    `superslm_gpu.cpp`'s own 1,965 lines and therefore proves only that the
+    function ends somewhere near the cited line, not what is inside it.
+    Falsified by execution: deleting one interior `case` while preserving
+    the file's own total line count left the two-endpoint citation green;
+    this check reads the function's own real content instead, so the same
+    deletion changes what it counts regardless of where anything else in the
+    file shifted to compensate."""
+    names = decode_sticky_tag_status_set(gpu_text)
+    total = len(names)
+    rejecting = len(names - {"Ok"})
+    if total == DECODE_STICKY_TAG_EXPECTED_TOTAL and rejecting == DECODE_STICKY_TAG_EXPECTED_REJECTING:
+        return []
+    return [
+        f"DecodeStickyTag's own real body returns {total} distinct statuses ({rejecting} rejecting), "
+        f"not the {DECODE_STICKY_TAG_EXPECTED_TOTAL} ({DECODE_STICKY_TAG_EXPECTED_REJECTING} rejecting) "
+        f"gpu_port.h's own citation claims -- names found: {sorted(names)}"
+    ]
+
+
 class DefRow:
     __slots__ = ("enum_name", "status_name", "citation")
 
@@ -596,7 +694,28 @@ def parse_gpu_port_h_citation_lines(gpu_port_h_text: str) -> set[int]:
     two entries. Line-wrapped `//`-continued comment prose (this header's own
     house style -- a citation list routinely spans two physical lines) is
     joined into one continuous span first, so a citation split across a line
-    break by ordinary word-wrap is not missed."""
+    break by ordinary word-wrap is not missed.
+
+    T-2083 (O34) tried a SEQUENCE/ORDER-preserving variant of this parser,
+    reasoning that a same-position SWAP of two citations' own numbers (the
+    review's own executed falsifying case, `:716`/`:728`) would change
+    encounter order even though it does not change the SET -- true on the
+    review's own small fixture, and FALSIFIED against the real header:
+    `gpu_port.h`'s own paragraph legitimately re-cites some of the same line
+    numbers a second and third time across its own four dated corrections
+    (`:903`, `:716`, `:728` each appear twice; the corrections' own citation
+    order does not match `GPU_PORT_H_LWUWS_CITATIONS`'s fixed definition
+    order even after deduplication, since later corrections were appended
+    chronologically, not re-sorted into the table's own logical order).
+    Wiring a sequence comparison into `check_gpu_port_h_citations_match_
+    table` below turned the check RED on the real, unmutated tree -- caught
+    before landing by running against real content rather than trusting the
+    fixture, `StandardsDocument.md` §5.4's own rule. O34 is filed as a named
+    residual instead (see this module's own top docstring): closing it needs
+    a parser that associates each citation with WHICH of the paragraph's own
+    dated-correction sub-sections it belongs to, and compares within each
+    section rather than across the whole accreted paragraph -- new
+    machinery, not a set-to-list type change."""
     start = gpu_port_h_text.find(GPU_PORT_H_LWUWS_PARAGRAPH_START)
     if start == -1:
         raise ValueError(f"gpu_port.h: paragraph start marker not found: {GPU_PORT_H_LWUWS_PARAGRAPH_START!r}")
@@ -631,7 +750,14 @@ def check_gpu_port_h_citations_match_table(
     cites, so an edit to `gpu_port.h`'s own citations (a correct refresh OR
     an accidental corruption) that is not mirrored in this table is caught,
     instead of leaving this module checking a frozen copy of a fact the
-    header no longer states."""
+    header no longer states.
+
+    T-2083 (O34): still a SET comparison, deliberately -- see `parse_gpu_
+    port_h_citation_lines`'s own docstring for the order-preserving variant
+    that was tried, found to false-positive against the real header's own
+    legitimate repeated citations, and reverted before landing. A same-
+    position swap of two citations' own numbers is a named, open residual,
+    not silently closed by a check that would have been wrong."""
     parsed = parse_gpu_port_h_citation_lines(gpu_port_h_text)
     table = {c.line for c in citations}
     if parsed == table:
@@ -690,6 +816,7 @@ def run_all_checks(
     repo_root: str = _REPO_ROOT,
     prose_citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
     gpu_port_h_path: str | None = GPU_PORT_H,
+    check_decode_sticky_tag: bool = True,
 ) -> list[str]:
     """Every failure this module can report against the three real files, or
     an empty list if all three status sets agree and every `.def` citation
@@ -713,7 +840,14 @@ def run_all_checks(
     citation POPULATION is derived FROM, checked against `prose_citations`
     for agreement -- pass `None` to skip this half (fixture-driven tests
     with no real `gpu_port.h` to parse do this, same reasoning as
-    `prose_citations=()`)."""
+    `prose_citations=()`).
+
+    `check_decode_sticky_tag` (T-2083, O35) -- pass `False` to skip: this
+    module's own small synthetic GPU fixture (`_GPU_FIXTURE`) ends with a
+    CALL to `DecodeStickyTag`, not a definition of it, so `extract_function_
+    body` would raise for every fixture-driven mechanism test the same way
+    `gpu_port_h_path=None` exists to avoid for the citation-population check
+    above; every REAL-tree call (`main()` included) gets it for free."""
     with open(forward_sites_path, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     with open(superslm_gpu_path, "r", encoding="utf-8") as f:
@@ -764,6 +898,12 @@ def run_all_checks(
         with open(gpu_port_h_path, "r", encoding="utf-8") as f:
             gpu_port_h_text = f.read()
         failures += check_gpu_port_h_citations_match_table(gpu_port_h_text, citations=prose_citations)
+    # T-2083 (O35): DecodeStickyTag's own real content, pinned against the
+    # exact count gpu_port.h's own citation claims -- see
+    # check_decode_sticky_tag_range's own docstring for why the two-endpoint
+    # range citation alone cannot do this.
+    if check_decode_sticky_tag:
+        failures += check_decode_sticky_tag_range(gpu_text)
     return failures
 
 
