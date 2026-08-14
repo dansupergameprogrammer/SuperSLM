@@ -22470,17 +22470,27 @@ static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCache
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 // T-2063 (item 2, S1/M-b, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md S1;
 // Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S20.2/20.3/20.7): the single discriminating
-// cell BOTH S1 (the weight-buffer's own throw must return GpuAllocationFailed, not the retired
+// cell BOTH S1 (an injected allocation throw must return GpuAllocationFailed, not the retired
 // KvPrecisionUnsupported) and M-b (the SAME catch's LastWeightUploadWasSkipped() must read false,
 // not the throwing call's own pre-throw true) actually need -- one fixture, since the T-2062 fix
-// unified both allocations under the SAME outer catch. LINK-RED until O11's own instrument
-// (superslm_gpu::ArmWeightAllocationFailureInjection/ClearWeightAllocationInjection, gpu_port.h)
-// is built -- both the reviewer's own probe (T-2060) and the build seat's own probe (T-2062,
-// build log S20.2's nine-call table) already measured every status this cell asserts, by editing
-// this source in disposable scratch; neither committed it. This cell reproduces that exact
-// sequence (their own call5/6/7/8) against the real, named API this suite's own convention uses
-// for committed injection (B12), ready to link and pass the moment the instrument exists.
-static void TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse() {
+// unified every allocation in the recording window under the SAME outer catch. This cell
+// reproduces the reviewer's own probe sequence (T-2060) and the build seat's own probe sequence
+// (T-2062, build log S20.2's nine-call table) against the real, named API this suite's own
+// convention uses for committed injection (B12).
+//
+// T-2076 refresh (Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S23.1, D-SLM3228 S1):
+// T-2071 built the instrument targeting the weight DEFAULT-heap allocation (inside
+// `if (!weights_resident)`, never reached on a cache HIT), which meant an armed call was routed
+// around the throw entirely rather than through it. T-2075's own S1 fix moved the arm site to
+// `work_scratch_uav` -- an allocation the cache-HIT path also makes -- so an armed call now
+// genuinely reaches the throw. The function names below (`ArmWeightAllocationFailureInjection`/
+// `ClearWeightAllocationInjection`) are UNCHANGED -- production naming is Brunel's own call, not
+// this suite's -- but this cell's own NAME and in-body comments described the injection as
+// targeting the weight buffer specifically, which stopped being true the moment the arm site
+// moved. Renamed and re-described below to match reality. Every assertion (the boolean CHECK_MSG
+// conditions) is byte-for-byte unchanged from T-2063's own landing -- this is a truth-up of what
+// the cell SAYS, not what it TESTS, and the property it tests was already correct throughout.
+static void TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse() {
 	NLayerFixture<8> fixture;
 
 	auto call_once = [&]() {
@@ -22506,24 +22516,28 @@ static void TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_Skip
 	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),
 	          "T2063 S1/M-b: call 2 is a cache hit -- must read true before call 3 means anything");
 
-	// Call 3: same content again (another cache hit), but this call's own weight-buffer
-	// CreateCommittedResource is armed to fail. S1: the throw must now surface as
-	// GpuAllocationFailed (the retired T-2052 single-site catch used to intercept it first and
-	// return KvPrecisionUnsupported instead). M-b: the SAME catch invalidates the residency
-	// cache it just destroyed -- LastWeightUploadWasSkipped() must read false, not this call's
-	// own pre-throw true.
-	superslm_gpu::ArmWeightAllocationFailureInjection();  // LINK-RED -- O11's own instrument
+	// Call 3: same content again (another cache hit) -- this call's own work_scratch_uav
+	// allocation is armed to fail (T-2075's own S1 remedy moved the arm site here; an allocation
+	// the cache-HIT path also makes, unlike the weight DEFAULT-heap buffer this cell originally
+	// targeted at T-2063). S1: the throw must now surface as GpuAllocationFailed (the retired
+	// T-2052 single-site catch used to intercept the WEIGHT allocation's own throw and return
+	// KvPrecisionUnsupported instead -- the shared outer catch this call's own throw reaches is
+	// unaffected by which allocation threw). M-b: the SAME catch invalidates the residency cache
+	// it just destroyed -- LastWeightUploadWasSkipped() must read false, not this call's own
+	// pre-throw true.
+	superslm_gpu::ArmWeightAllocationFailureInjection();  // arms work_scratch_uav as of T-2075
 	const auto st3 = call_once();
-	superslm_gpu::ClearWeightAllocationInjection();  // LINK-RED -- always clear, even on failure
+	superslm_gpu::ClearWeightAllocationInjection();  // always clear, even on failure
 	CHECK_MSG(st3 == SslmForwardStatus::GpuAllocationFailed,
-	          "T2063 S1 (superslm_gpu.cpp, S1 remedy): weight-buffer allocation throw: status=%s, "
-	          "want GpuAllocationFailed -- the retired single-site catch must not still be "
+	          "T2063 S1 (superslm_gpu.cpp, S1 remedy): work_scratch_uav allocation throw: "
+	          "status=%s, want GpuAllocationFailed -- the shared outer catch must not still be "
 	          "returning KvPrecisionUnsupported for this allocation",
 	          superslm::SslmForwardStatusName(st3));
 	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
 	          "T2063 M-b (superslm_gpu.cpp, catch-site cache invalidation): a cache-hit call whose "
-	          "own weight-buffer throw is caught must NOT read its own pre-throw true -- the catch "
-	          "invalidates the cache it describes, so LastWeightUploadWasSkipped() must read false");
+	          "own work_scratch_uav throw is caught must NOT read its own pre-throw true -- the "
+	          "catch invalidates the cache it describes, so LastWeightUploadWasSkipped() must read "
+	          "false");
 
 	// Call 4: well-formed, no injection -- the catch's own invalidation forces a real cache
 	// miss on the very next call, recovering cleanly (build log S20.2's own call5/6 and
@@ -23652,7 +23666,7 @@ int main(int argc, char** argv) {
 	TestT2053_Item3_LastWeightUploadWasSkipped();
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-	TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
+	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 #endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
