@@ -20864,6 +20864,178 @@ static void TestB1cAdapterBoundButKProjNotAdaptedLeavesKCacheRowByteIdenticalToB
 	          v_only_k_row[0], v_only_k_row[1], golden_k0, golden_k1);
 }
 
+// =============================================================================================
+// T-2021/T-2029/T-2036 B4 -- C30 q_scale-naturalness proof by execution (design Sec11 B4,
+// D-SLM2887). Reuses TwoLayerFixture + t2029_b1_fixtures' own adapter-wiring helpers.
+// Scope, stated exactly as the design states it (Sec11 B4's own text): this proves the FUNNEL
+// arithmetic -- that q_scale naturally carries the adapter's contribution once composed before
+// the funnel -- by execution. It does NOT prove the score-GEMM reads the adapter-composed q
+// (T-1462/D-SLM515's own finding: at softmax width=1, this fixture's own default,
+// SoftmaxRowQ15's ShiftByMax erases the score row before anything downstream reads it) -- that
+// half stays open at C2's own acceptance gate, per SuperSLM_Plan.md's own D-SLM2842 ruling, not
+// this cell's to close.
+// =============================================================================================
+
+namespace t2029_b4_fixtures {
+
+// Captures the chain-trace record at a named site (design's own trace-hook mechanism,
+// trace_hook.h) -- this is how q_scale (the funnel's own m_out/e_out at the q_proj.requant
+// site) is read back without RunLayerLoop exposing it as a return value.
+struct CapturedScale {
+	std::string_view want_site;
+	bool found = false;
+	int64_t m = 0, e = 0;
+};
+
+void CaptureSiteScale(const superslm::SslmChainTraceRecord* chain,
+                       const superslm::SslmKvLandingTraceRecord* /*kv*/, void* user) {
+	if (chain == nullptr) return;
+	auto* cap = static_cast<CapturedScale*>(user);
+	if (chain->site == cap->want_site) {
+		cap->found = true;
+		cap->m = chain->m_out;
+		cap->e = chain->e_out;
+	}
+}
+
+// Runs TwoLayerFixture for one token (t2029_b1_fixtures::RunOneToken's own construction) with a
+// trace hook installed, capturing "layer0.q_proj.requant"'s own emitted (m,e) -- q_scale, as
+// C30's own real call site (forward_sites.cpp) reads it.
+inline CapturedScale RunOneTokenCapturingQScale(TwoLayerFixture& fixture,
+                                                 const superslm::LayerAdapter* layer0_adapter) {
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmSetTraceHook;
+
+	fixture.layers[0].adapter = layer0_adapter;
+	fixture.layers[1].adapter = nullptr;
+
+	CapturedScale cap;
+	cap.want_site = "layer0.q_proj.requant";
+	superslm::SslmTraceHookState hook_state;
+	SslmSetTraceHook(hook_state, &CaptureSiteScale, &cap);
+
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+	uint8_t workspace[kWorkspaceSize] = {};
+	const auto status = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                            /*layer_budget=*/2, /*hidden_size=*/2,
+	                                            /*head_dim=*/2, /*num_key_value_heads=*/1,
+	                                            /*intermediate_size=*/2, /*context_cap=*/1,
+	                                            fixture.view.rope_tables, workspace,
+	                                            sizeof(workspace), /*site_prefix=*/{},
+	                                            /*token_index=*/0, &hook_state);
+	CHECK_MSG(status == superslm::SslmForwardStatus::Ok,
+	          "B4 fixture run must succeed: got %s", superslm::SslmForwardStatusName(status));
+	CHECK_MSG(cap.found, "the trace hook must have captured \"layer0.q_proj.requant\" -- if this "
+	          "fails, the site name convention drifted and this cell is reading nothing");
+	return cap;
+}
+
+}  // namespace t2029_b4_fixtures
+
+// Red-first (design Sec11 B4, added -- "the one step in this section that did not [previously
+// state a red condition]"): an oracle that substitutes the BASE-ONLY q_scale into C30's own
+// derivation -- deliberately discarding the adapter's contribution -- must diverge from the
+// adapter-composed run's own derivation, on a token where the delta measurably shifts q, before
+// the positive construction below is trusted.
+static void TestB4BaseOnlyQScaleSubstitutedIntoC30DivergesFromAdapterComposed() {
+	using namespace t2029_b1_fixtures;
+	using namespace t2029_b4_fixtures;
+	using superslm::CombineCarriedScale;
+	using superslm::IExpScaleConstants;
+	using superslm::IExpScaleDomain;
+	using superslm::CarriedScale;
+
+	TwoLayerFixture base_fixture;
+	const CapturedScale q_base = RunOneTokenCapturingQScale(base_fixture, nullptr);
+
+	TwoLayerFixture q_adapted_fixture;
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.q, kAdapterBReal);  // the SAME real, nonzero delta B1c uses
+	const CapturedScale q_adapted = RunOneTokenCapturingQScale(q_adapted_fixture, &adapter);
+
+	CHECK_MSG(q_base.m != q_adapted.m || q_base.e != q_adapted.e,
+	          "fixture sanity: q_scale must measurably differ between base-only and adapted runs "
+	          "on this token -- base=(m=%lld,e=%lld) adapted=(m=%lld,e=%lld)",
+	          (long long)q_base.m, (long long)q_base.e, (long long)q_adapted.m, (long long)q_adapted.e);
+
+	// Design's own softmax_khead constant (TwoLayerFixture's own fixed value, canonical) --
+	// combined with q_scale per C30's own real call site (forward_sites.cpp), then C30's own
+	// derivation is called directly with each of the two q_scales.
+	const CarriedScale khead{INT64_C(1073741824), INT64_C(-86)};
+
+	const CarriedScale sm_base = CombineCarriedScale(CarriedScale{q_base.m, q_base.e}, khead);
+	const CarriedScale sm_adapted = CombineCarriedScale(CarriedScale{q_adapted.m, q_adapted.e}, khead);
+
+	int64_t base_ln2 = 0, base_b = 0, base_c = 0;
+	const IExpScaleDomain base_domain = IExpScaleConstants(
+	    sm_base.m, sm_base.e, superslm::kIExpLn2Q, 30, superslm::kIExpBQ, 30, superslm::kIExpCaQ, 30,
+	    &base_ln2, &base_b, &base_c);
+	int64_t adapted_ln2 = 0, adapted_b = 0, adapted_c = 0;
+	const IExpScaleDomain adapted_domain = IExpScaleConstants(
+	    sm_adapted.m, sm_adapted.e, superslm::kIExpLn2Q, 30, superslm::kIExpBQ, 30, superslm::kIExpCaQ, 30,
+	    &adapted_ln2, &adapted_b, &adapted_c);
+
+	CHECK_MSG(adapted_domain == IExpScaleDomain::kOk,
+	          "the adapter-composed q_scale must derive an in-domain C30 triple (got domain=%d)",
+	          (int)adapted_domain);
+	// The RED-FIRST claim: substituting the base-only q_scale (discarding the adapter's own
+	// contribution) into C30's derivation must NOT reproduce the adapter-composed run's own
+	// triple -- proving this cell's own oracle can tell the two apart before the positive
+	// construction below is trusted.
+	const bool same_triple = (base_domain == adapted_domain) && (base_ln2 == adapted_ln2) &&
+	                          (base_b == adapted_b) && (base_c == adapted_c);
+	CHECK_MSG(!same_triple,
+	          "substituting the BASE-ONLY q_scale into C30's derivation must diverge from the "
+	          "adapter-composed run's own derivation: base=(domain=%d,ln2=%lld,b=%lld,c=%lld) "
+	          "adapted=(domain=%d,ln2=%lld,b=%lld,c=%lld)",
+	          (int)base_domain, (long long)base_ln2, (long long)base_b, (long long)base_c,
+	          (int)adapted_domain, (long long)adapted_ln2, (long long)adapted_b, (long long)adapted_c);
+}
+
+// Positive construction (design Sec11 B4): an adapter targeting q_proj changes q_scale's own
+// carried (m,e) relative to base-only on the same token (proven above); C30's derivation, called
+// with the adapter-composed q_scale, produces an in-domain triple (also proven above); this cell
+// adds the THIRD leg -- the end-to-end RunLayerLoop call this q_scale was captured DURING already
+// returned Ok (in-domain throughout the whole layer, not merely at this one derivation site) --
+// closing the funnel-arithmetic half of D-SLM2840's finding by execution. The score-GEMM-wiring
+// half (does the ATTENTION SCORE computation itself read this same composed q) stays open at C2's
+// own acceptance gate (design's own scope correction, T-1462/D-SLM515) -- not claimed here.
+static void TestB4AdapterComposedQScaleProducesInDomainTripleEndToEndLayerSucceeds() {
+	using namespace t2029_b1_fixtures;
+	using namespace t2029_b4_fixtures;
+	using superslm::CombineCarriedScale;
+	using superslm::IExpScaleConstants;
+	using superslm::IExpScaleDomain;
+	using superslm::CarriedScale;
+
+	TwoLayerFixture fixture;
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.q, kAdapterBReal);
+	// RunOneTokenCapturingQScale's own CHECK already asserts the end-to-end layer returned Ok --
+	// restated here as this cell's own explicit claim, not merely inherited silently.
+	const CapturedScale q = RunOneTokenCapturingQScale(fixture, &adapter);
+	CHECK_MSG(q.found, "q_scale must have been captured during a successful end-to-end layer run");
+
+	const CarriedScale khead{INT64_C(1073741824), INT64_C(-86)};
+	const CarriedScale sm = CombineCarriedScale(CarriedScale{q.m, q.e}, khead);
+	int64_t ln2 = 0, b = 0, c = 0;
+	const IExpScaleDomain domain = IExpScaleConstants(sm.m, sm.e, superslm::kIExpLn2Q, 30,
+	                                                   superslm::kIExpBQ, 30, superslm::kIExpCaQ, 30,
+	                                                   &ln2, &b, &c);
+	CHECK_MSG(domain == IExpScaleDomain::kOk,
+	          "C30's own derivation, called with the adapter-composed q_scale from a real "
+	          "end-to-end layer run, must be in-domain: got domain=%d", (int)domain);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -21640,6 +21812,10 @@ int main(int argc, char** argv) {
 	TestB1aBoundZeroEffectAdapterInsertionPointInertBeforeNonzeroTrusted();
 	TestB1bNullAdapterPathReachesSameGoldenViaADifferentBranchThanBoundZeroAdapter();
 	TestB1cAdapterBoundButKProjNotAdaptedLeavesKCacheRowByteIdenticalToBaseOnly();
+
+	// T-2036 B4 (design Sec11 B4).
+	TestB4BaseOnlyQScaleSubstitutedIntoC30DivergesFromAdapterComposed();
+	TestB4AdapterComposedQScaleProducesInDomainTripleEndToEndLayerSucceeds();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
