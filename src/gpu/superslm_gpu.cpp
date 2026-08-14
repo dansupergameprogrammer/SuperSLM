@@ -345,11 +345,6 @@ inline void MaybeThrowInjectedWeightAllocFault() {
 }
 }  // namespace
 
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-void ArmWeightAllocationFailureInjection() { g_weight_alloc_injection_armed = true; }
-void ClearWeightAllocationInjection() { g_weight_alloc_injection_armed = false; }
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-
 // The composed pipeline's own per-layer LayerWeights byte layout -- computed
 // ONCE per call from (hidden_size, kv_hidden_size, num_kv_heads) and uploaded
 // as the "Layout" SRV every real site shader reads offsets from (never
@@ -568,6 +563,17 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 }
 
 }  // namespace
+
+// T-2071: external linkage, deliberately OUTSIDE the anonymous namespace
+// above (unlike `g_weight_alloc_injection_armed`/`MaybeThrowInjectedWeight
+// AllocFault`, which stay internal-linkage on purpose) -- these two must be
+// callable as `superslm_gpu::ArmWeightAllocationFailureInjection()` from
+// `tests/test_main.cpp`, a different translation unit, matching
+// `gpu_port.h`'s own gated declarations exactly.
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+void ArmWeightAllocationFailureInjection() { g_weight_alloc_injection_armed = true; }
+void ClearWeightAllocationInjection() { g_weight_alloc_injection_armed = false; }
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
@@ -850,7 +856,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// T-2045 (S3): true iff this call's freshly-packed row is byte-identical
 	// to the last-uploaded one -- the ONLY sound invalidation signal here
 	// (ResidentWeights' own header comment).
-	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes;
+	//
+	// T-2071 (O11's own instrument): an ARMED injection forces this to
+	// `false` regardless of content -- the weight DEFAULT-heap allocation
+	// `MaybeThrowInjectedWeightAllocFault()` guards only runs inside the
+	// `if (!weights_resident)` branch below, so a real cache HIT (the
+	// pin cell's own call 3 shape: identical content to calls 1/2) would
+	// otherwise skip the allocation entirely and never reach the injected
+	// throw. Forcing a miss here is what makes "arm the weight allocation to
+	// fail" meaningful on a call that would otherwise be a hit.
+	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+	                               && !g_weight_alloc_injection_armed
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+	    ;
 	if (weights_resident) {
 		lw_buf = g_resident_weights.lw_buf;
 	}
