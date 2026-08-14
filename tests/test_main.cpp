@@ -20820,24 +20820,53 @@ static void TestT2019_B2_MantissaGuard_Step0AndStep5_RejectsOutOfDomain_GpuMatch
 		          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(gpu.status));
 	}
 
-	// Step 5: two `incoming` factors EACH individually in-domain (pass step
-	// 0), whose folded PRODUCT (CombineCarriedScale, checked after every
-	// combine per 380b75f review N1) does not fit int32_t --
-	// 100000 * 100000 == 10^10 >> INT32_MAX.
+	// Step 5: an incoming factor and a site_constant EACH individually
+	// in-domain (pass step 0), whose CombineCarriedScale fold does not fit
+	// int32_t.
+	//
+	// FIXED 2026-08-14 (T-2028, D-SLM3110). The prior construction here
+	// (two `{100000, 0}` incoming factors, comment claiming "100000 *
+	// 100000 == 10^10 >> INT32_MAX") modeled CombineCarriedScale as a raw
+	// mantissa MULTIPLY. It is not one: read at source
+	// (checked_chain_funnel.cpp:153-176), `m = SaturatingRoundingDoublingHighMul(
+	// ma, mb)` -- a Q31 doubling-high-mul whose own return type is
+	// `int32_t`, so its raw result is ALWAYS int32-representable before the
+	// function's own renormalization step ever runs; there is no path to
+	// int32 overflow through the naive product this cell's old comment
+	// assumed. Executed and confirmed this fold (scratch harness, real
+	// RequantChainChecked): the old {100000,100000} fixture returns `Ok`,
+	// not `CarriedScaleMantissaOutOfDomain` -- Brunel build log
+	// (Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec5, D-SLM3110)
+	// found this by execution; reproduced identically here.
+	//
+	// The real overflow channel is the function's OWN renormalization
+	// doubling (`if (m < 2^30) { m <<= 1; e -= 1; }`), which the source's
+	// own comment (checked_chain_funnel.cpp:128-146) names and marks
+	// "executed" against exactly this witness:
+	// `CombineCarriedScale({INT32_MIN, 0}, {INT32_MAX, 0})` -- the high-mul
+	// of `INT32_MIN` and `INT32_MAX` lands at a large negative value, the
+	// renormalization's unconditional doubling (a negative high-mul result
+	// is always below the positive `2^30` floor, so it always doubles)
+	// carries it to `m = -4294967294`, outside `[INT32_MIN, INT32_MAX]`.
+	// Independently re-executed for this fix (scratch harness, real
+	// CombineCarriedScale): confirmed `m = -4294967294`, `e = 30`.
 	{
-		const CarriedScale in_domain_incoming[2] = {{100000, 0}, {100000, 0}};
-		const CarriedScale site_constant{1, 0};
+		const CarriedScale bad_incoming[1] = {{static_cast<int64_t>(superslm::kInt32Min), 0}};
+		const CarriedScale site_constant{static_cast<int64_t>(superslm::kInt32Max), 0};
 		int8_t out_codes[2] = {};
 		CarriedScale out_scale{};
 		const auto cpu = superslm::RequantChainChecked(
-		    wide_row, 2, std::span<const CarriedScale>(in_domain_incoming, 2), site_constant,
-		    out_codes, &out_scale);
+		    wide_row, 2, std::span<const CarriedScale>(bad_incoming, 1), site_constant, out_codes,
+		    &out_scale);
 		CHECK_MSG(cpu.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
 		          "CPU oracle: RequantChainChecked step-5 running-fold guard == %s, want "
-		          "CarriedScaleMantissaOutOfDomain (real, running, must already pass) -- each "
-		          "individual incoming factor is in-domain; only the fold's own product overflows",
+		          "CarriedScaleMantissaOutOfDomain (real, running, must already pass) -- the "
+		          "single incoming factor (INT32_MIN) and site_constant (INT32_MAX) are each "
+		          "individually in-domain; CombineCarriedScale's own renormalization doubling "
+		          "carries their combine to m=-4294967294, outside int32_t (real, running, must "
+		          "already pass -- executed and confirmed this fix, D-SLM3110)",
 		          superslm::SslmForwardStatusName(cpu.status));
-		const auto gpu = superslm_gpu::RequantChainCheckedGpu(wide_row, 2, in_domain_incoming, 2,
+		const auto gpu = superslm_gpu::RequantChainCheckedGpu(wide_row, 2, bad_incoming, 1,
 		                                                       site_constant);  // LINK-RED
 		CHECK_MSG(gpu.status == cpu.status, "GPU status word == CPU oracle's %s, got %s",
 		          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(gpu.status));
@@ -21640,7 +21669,19 @@ static void TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu() {
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
 	seq.context_length = 0;
-	constexpr size_t kWs = 4 * 1 * 1 * 2 * 2;
+	// FIXED 2026-08-14 (T-2028, D-SLM3109): this test's own call passes
+	// context_cap=64 (deliberately -- S3.7's own fail-fast rejects a call
+	// where seq.context_length >= context_cap, so a context_cap of only 1
+	// would reject on this test's OWN 2nd step, before context_length could
+	// ever be read back past 1). The workspace must be sized to that same
+	// context_cap (RunLayerLoop's own guard, forward_sites.cpp:1196-1206:
+	// num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2),
+	// not the context_cap=1 formula this cell had been carrying since
+	// authoring -- the mismatch made both CPU-side CHECK_MSG blocks below
+	// fail with WorkspaceTooSmall instead of Ok, real code behaving exactly
+	// as documented against a fixture bug (Brunel build log
+	// Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec5, D-SLM3109).
+	constexpr size_t kWs = 4 * 64 * 1 * 2 * 2;
 	uint8_t ws[kWs] = {};
 
 	const int64_t kExpectedContextLength[3] = {1, 2, 3};  // N >= 2 decode steps, no rejection
@@ -21804,8 +21845,16 @@ static void TestT2019_B3_ResourceBindingTierFallback() {
 	seq.hidden_codes = codes;
 	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 	seq.layer_index = 0;
+	// FIXED 2026-08-14 (T-2028, D-SLM3109): context_cap corrected from 64 to
+	// 1 -- this cell is a single-token, single-call CPU-only smoke check (no
+	// multi-token context_length growth like B8's own cell, which genuinely
+	// needs a larger context_cap and is fixed by enlarging its workspace
+	// instead), so it never needed context_cap=64; the workspace below was
+	// always sized for context_cap=1, and the call's own argument is the one
+	// that was wrong (copy-paste from the B8 cell, per Brunel build log
+	// Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec5, D-SLM3109).
 	uint8_t ws[4 * 1 * 1 * 2 * 2] = {};
-	const auto cpu_status = superslm::RunLayerLoop(seq, fixture.layers, 4, 4, 2, 2, 1, 2, 64,
+	const auto cpu_status = superslm::RunLayerLoop(seq, fixture.layers, 4, 4, 2, 2, 1, 2, 1,
 	                                                 fixture.view.rope_tables, ws, sizeof(ws));
 	CHECK_MSG(cpu_status == SslmForwardStatus::Ok,
 	          "CPU-only forward path status == %s, want Ok -- unaffected by the GPU-unsupported "
