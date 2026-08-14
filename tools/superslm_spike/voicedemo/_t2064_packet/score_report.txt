@@ -1,0 +1,6 @@
+Scored 120 items against D:\SuperSLM\.worktrees\t2011-judge\Tools\superslm_spike\voicedemo\_t2064_ground_truth.json
+
+  info_present: tp=60 fp=0 tn=60 fn=0  precision=1.0000 (95% CI [0.9398, 1.0000])  recall=1.0000 (95% CI [0.9398, 1.0000])  PASS (bar: lower CI >= 0.85)
+  attitude_present: tp=60 fp=0 tn=60 fn=0  precision=1.0000 (95% CI [0.9398, 1.0000])  recall=1.0000 (95% CI [0.9398, 1.0000])  PASS (bar: lower CI >= 0.85)
+
+Overall: PASS (both fields must clear precision>=0.85 AND recall>=0.85, lower Wilson-CI bound)
