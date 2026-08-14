@@ -275,6 +275,20 @@ bool LastWeightUploadWasSkipped();
 // real bodies reproduces this ticket's own LINK-RED proof (`Claude/Curie/t2019-gpu-serial-
 // red-suite-2026-08-13.md` S16.2/S17), on purpose, as the gate's own self-check.
 //
+// CORRECTED 2026-08-14 (T-2088, Claude/Poirot/8420005-gpu-serial-port-round11-review.md, S1;
+// D-SLM3261): "Not defined by `build.bat`" and "the build seat's own trigger to arm this pin"
+// (naming a future condition) were true from T-2070 to T-2071 and false since -- `build.bat:28`
+// has defined `SUPERSLM_O11_ALLOC_INJECTION` alongside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION` on
+// the default test-binary compile line since T-2071 landed the real bodies, five rounds ago. The
+// trigger this paragraph describes as pending fired at `72a9b0d`; nothing in this file was edited
+// to say so, because the rename this same round made (M2, T-2084) touched `:273` one line below
+// this sentence without re-reading the paragraph it sits in (`StandardsDocument.md` §7). Believing
+// this sentence and removing the flag drops the O11 gate silently: gate-on and gate-off both then
+// report the SAME 3-failure count (16 checks and both discrimination cells vanish with no test
+// failure of any kind, D-SLM3261 S1's own executed measurement) -- the real, structural fix is the
+// pinned assertion in `tests/ci/check_gpu_guard_status_parity.py` (`check_build_bat_defines_o11_
+// gate`), not this sentence alone.
+//
 // Mirrors B12's own arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection):
 // arms injection so the NEXT allocation call AT THE NAMED SITE in RunLayerLoopGpu fails with a
 // synthetic allocation error; the call after clears it.

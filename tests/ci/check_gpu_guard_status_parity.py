@@ -164,9 +164,9 @@ this module's own table untouched -- `OK`, 48 passed before this fix;
 CORRECTED 2026-08-14 (T-2083, Claude/Poirot/42ecf79-gpu-serial-port-
 round9-review.md, O34/O35): two further, narrower residuals inside the
 citation machinery itself. O35 CLOSED: `GPU_PORT_H_LWUWS_CITATIONS`'s own
-`DecodeStickyTag` range citation (`superslm_gpu.cpp:532-550`) checks two
+`DecodeStickyTag` range citation (`superslm_gpu.cpp:583-601`) checks two
 ENDPOINTS' own content, not what is inside the range -- the range-end
-needle, a bare `"}"`, is satisfied by 177 of the file's own 1,965 lines
+needle, a bare `"}"`, is satisfied by 177 of the file's own 2,023 lines
 (executed), so a shift onto the wrong closing brace would pass it, and
 deleting an interior `case` while preserving the file's own total line
 count (executed: `case 13` removed) left both endpoints individually valid
@@ -225,6 +225,7 @@ FORWARD_SITES_CPP = os.path.join(_REPO_ROOT, "src", "forward", "forward_sites.cp
 SUPERSLM_GPU_CPP = os.path.join(_REPO_ROOT, "src", "gpu", "superslm_gpu.cpp")
 GUARDS_DEF = os.path.join(_REPO_ROOT, "include", "superslm", "gpu_layer_loop_guards.def")
 GPU_PORT_H = os.path.join(_REPO_ROOT, "include", "superslm", "gpu_port.h")
+BUILD_BAT = os.path.join(_REPO_ROOT, "build.bat")
 
 # --- Real, named anchors -- source TEXT, never a line number. ---
 CPU_FUNC_SIGNATURE = "static SslmForwardStatus RunLayerLoopImpl("
@@ -300,9 +301,9 @@ _DECODE_STICKY_TAG_RETURN_RE = re.compile(r"return\s+S::([A-Za-z_][A-Za-z0-9_]*)
 # `gpu_port.h`'s own citation claims this function "maps the device's own
 # sticky tag to FOURTEEN statuses, THIRTEEN of them rejecting" -- the number
 # this module now pins directly against the function's own real body,
-# instead of via the two-endpoint range citation (`superslm_gpu.cpp:532`,
-# `:550`) whose own range-end needle, a bare `"}"`, is satisfied by 177 of
-# the file's 1,965 lines (executed) and therefore covers where the function
+# instead of via the two-endpoint range citation (`superslm_gpu.cpp:583`,
+# `:601`) whose own range-end needle, a bare `"}"`, is satisfied by 177 of
+# the file's 2,023 lines (executed) and therefore covers where the function
 # ENDS, not what is inside it -- deleting an interior `case` while
 # preserving the file's own total line count left that citation green.
 DECODE_STICKY_TAG_EXPECTED_TOTAL = 14
@@ -506,7 +507,7 @@ def check_decode_sticky_tag_range(gpu_text: str) -> list[str]:
     to protect -- "fourteen statuses, THIRTEEN of them rejecting" -- against
     `DecodeStickyTag`'s own real body, rather than the two-endpoint range
     citation whose own range-end needle (a bare `"}"`) is satisfied by 177 of
-    `superslm_gpu.cpp`'s own 1,965 lines and therefore proves only that the
+    `superslm_gpu.cpp`'s own 2,023 lines and therefore proves only that the
     function ends somewhere near the cited line, not what is inside it.
     Falsified by execution: deleting one interior `case` while preserving
     the file's own total line count left the two-endpoint citation green;
@@ -522,6 +523,41 @@ def check_decode_sticky_tag_range(gpu_text: str) -> list[str]:
         f"DecodeStickyTag's own real body returns {total} distinct statuses ({rejecting} rejecting), "
         f"not the {DECODE_STICKY_TAG_EXPECTED_TOTAL} ({DECODE_STICKY_TAG_EXPECTED_REJECTING} rejecting) "
         f"gpu_port.h's own citation claims -- names found: {sorted(names)}"
+    ]
+
+
+# T-2088 (S1, Claude/Poirot/8420005-gpu-serial-port-round11-review.md; D-SLM3261): `gpu_port.h`'s
+# own paragraph claimed "Not defined by `build.bat` -- the default build never sees these two
+# declarations at all," true from T-2070 to T-2071 and false since -- `build.bat`'s test-binary
+# compile line has defined this macro for five rounds and nothing in the tree asserted the
+# opposite. Executed: removing the flag in scratch leaves gate-on and gate-off reporting the
+# IDENTICAL 3-failure count (16 checks and both O11 discrimination cells gone, no test failure of
+# any kind) -- the prose alone is the discipline that already failed five times; this is the
+# structure. The real anchor is TEXT POSITION, not a line number: `build.bat` issues exactly two
+# `cl /nologo` invocations, and only the FIRST (the test binary) may define this macro -- the
+# second (the C5 harness) must never see it, by design, so scanning the whole file would be the
+# wrong check.
+_CL_INVOCATION_MARKER = "cl /nologo"
+BUILD_BAT_O11_GATE_FLAG = "/DSUPERSLM_O11_ALLOC_INJECTION"
+
+
+def check_build_bat_defines_o11_gate(build_bat_text: str) -> list[str]:
+    """None (empty list) iff `build.bat`'s own FIRST `cl /nologo` invocation -- the test-binary
+    compile line -- contains `BUILD_BAT_O11_GATE_FLAG`. The C5-harness invocation (the second, or
+    everything after the first if there is only one) is deliberately excluded: it must never define
+    this macro, so its own absence there is correct and not what this check verifies."""
+    first_at = build_bat_text.find(_CL_INVOCATION_MARKER)
+    if first_at == -1:
+        return ["build.bat: no 'cl /nologo' invocation found -- cannot check the O11 gate flag"]
+    second_at = build_bat_text.find(_CL_INVOCATION_MARKER, first_at + len(_CL_INVOCATION_MARKER))
+    block = build_bat_text[first_at:second_at] if second_at != -1 else build_bat_text[first_at:]
+    if BUILD_BAT_O11_GATE_FLAG in block:
+        return []
+    return [
+        f"build.bat's own test-binary compile line no longer defines {BUILD_BAT_O11_GATE_FLAG} -- "
+        "the default build silently drops both O11 cells (gate-on and gate-off then report the "
+        "IDENTICAL check/failure count, D-SLM3261 S1's own executed measurement, with no test "
+        "failure of any kind to flag it)"
     ]
 
 
@@ -664,6 +700,44 @@ GPU_PORT_H_LWUWS_CITATIONS = (
     ProseCitation("DecodeStickyTag range end", "src/gpu/superslm_gpu.cpp", 601, "}"),
 )
 
+# T-2088 (M2, Claude/Poirot/8420005-gpu-serial-port-round11-review.md; D-SLM3261): this module's
+# own docstrings state `superslm_gpu.cpp`'s total line count three times (to argue the
+# DecodeStickyTag range-end needle's own false-positive rate) and cite its DecodeStickyTag range
+# four times (to describe what `check_decode_sticky_tag_range` above replaces) -- both went stale
+# when T-2084's own S2 restoration shifted the file, because that round's citation sweep refreshed
+# `GPU_PORT_H_LWUWS_CITATIONS` and `gpu_port.h` and never checked this module's OWN prose about a
+# file it does not own. "The module whose purpose is stopping stale citations carried four stale
+# citations and three stale line counts about its own subject" (the review's own words). Fixed the
+# same way every other self-inflicted staleness in this arc has been: the class dies by joining the
+# checked population, not by one more manual refresh. `SELF_CITATIONS` reuses `ProseCitation`/
+# `check_all_prose_citations` exactly as `GPU_PORT_H_LWUWS_CITATIONS` does; the line-count claim
+# gets its own pin below since a total-line-count is not a `(file, line, needle)` shape.
+SELF_CITATIONS = (
+    ProseCitation("this module's own DecodeStickyTag range start (self-citation)",
+                  "src/gpu/superslm_gpu.cpp", 583, "DecodeStickyTag"),
+    ProseCitation("this module's own DecodeStickyTag range end (self-citation)",
+                  "src/gpu/superslm_gpu.cpp", 601, "}"),
+)
+
+SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM = 2023
+
+
+def check_superslm_gpu_cpp_line_count_claim(gpu_text: str) -> list[str]:
+    """None iff `superslm_gpu.cpp`'s own real line count matches `SUPERSLM_GPU_CPP_LINE_COUNT_
+    CLAIM`, the figure this module's own docstrings state (three places) about a file this module
+    does not own. Not load-bearing by itself -- `check_decode_sticky_tag_range` already pins the
+    real claim the citation exists to protect, directly at source -- but the denominator is stated
+    as fact three times and D-SLM3261 M2 found it off by 58 (1,965 claimed, 2,023 real) after this
+    round's own S2 restoration alone, so it is checked exactly like every other prose claim this
+    module makes about a file it does not own."""
+    actual = len(gpu_text.splitlines())
+    if actual == SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM:
+        return []
+    return [
+        f"superslm_gpu.cpp has {actual} lines; this module's own docstrings (three places) claim "
+        f"{SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM} -- refresh both the prose and this constant together"
+    ]
+
 # T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M1): the
 # real anchors bounding `gpu_port.h`'s own `LastWeightUploadWasSkipped`
 # paragraph -- the SAME two markers used throughout this ticket's own
@@ -689,7 +763,7 @@ def parse_gpu_port_h_citation_lines(gpu_port_h_text: str) -> set[int]:
     the first-mention full form (`superslm_gpu.cpp:654, 655, 664, ...`, a
     comma list after ONE prefix) and every subsequent short form
     (`` `:716` ``, backtick-wrapped, no prefix) -- including RANGE forms of
-    either (`` `:532-550` ``), expanded to both endpoints, matching how
+    either (`` `:583-601` ``), expanded to both endpoints, matching how
     `GPU_PORT_H_LWUWS_CITATIONS` represents `DecodeStickyTag`'s own range as
     two entries. Line-wrapped `//`-continued comment prose (this header's own
     house style -- a citation list routinely spans two physical lines) is
@@ -817,6 +891,9 @@ def run_all_checks(
     prose_citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
     gpu_port_h_path: str | None = GPU_PORT_H,
     check_decode_sticky_tag: bool = True,
+    build_bat_path: str | None = BUILD_BAT,
+    self_citations: tuple[ProseCitation, ...] = SELF_CITATIONS,
+    check_self_line_count: bool = True,
 ) -> list[str]:
     """Every failure this module can report against the three real files, or
     an empty list if all three status sets agree and every `.def` citation
@@ -847,7 +924,21 @@ def run_all_checks(
     CALL to `DecodeStickyTag`, not a definition of it, so `extract_function_
     body` would raise for every fixture-driven mechanism test the same way
     `gpu_port_h_path=None` exists to avoid for the citation-population check
-    above; every REAL-tree call (`main()` included) gets it for free."""
+    above; every REAL-tree call (`main()` included) gets it for free.
+
+    `build_bat_path` (T-2088, S1's own structural remedy, D-SLM3261) -- pass
+    `None` to skip: fixture-driven tests have no real `build.bat` to scan,
+    same reasoning as `gpu_port_h_path=None`. Every REAL-tree call gets the
+    O11-gate-flag pin for free.
+
+    `self_citations`/`check_self_line_count` (T-2088, M2's own structural
+    remedy) -- this module's OWN prose makes claims about `superslm_gpu.cpp`
+    (the DecodeStickyTag range, cited four times; the file's total line
+    count, stated three times) exactly like `gpu_port.h`'s paragraph does,
+    and D-SLM3261 M2 found both classes stale here after a line shift that
+    was swept everywhere else. Checked the same way `prose_citations` is:
+    pass `self_citations=()` / `check_self_line_count=False` for a fixture
+    tree with no real `superslm_gpu.cpp` to check its own citations against."""
     with open(forward_sites_path, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     with open(superslm_gpu_path, "r", encoding="utf-8") as f:
@@ -904,6 +995,21 @@ def run_all_checks(
     # range citation alone cannot do this.
     if check_decode_sticky_tag:
         failures += check_decode_sticky_tag_range(gpu_text)
+    # T-2088 (S1, D-SLM3261): build.bat's own test-binary compile line must still define the O11
+    # gate flag -- see check_build_bat_defines_o11_gate's own docstring for the silent-shrink this
+    # closes (removing the flag leaves gate-on and gate-off reporting the identical failure count).
+    if build_bat_path is not None:
+        with open(build_bat_path, "r", encoding="utf-8") as f:
+            build_bat_text = f.read()
+        failures += check_build_bat_defines_o11_gate(build_bat_text)
+    # T-2088 (M2, D-SLM3261): this module's own prose about superslm_gpu.cpp -- the DecodeStickyTag
+    # range citations, the file's total line count -- is now checked the same way gpu_port.h's own
+    # prose about the same file already is, closing the class where this module's own citations
+    # were the one artifact its own machinery did not govern.
+    if self_citations:
+        failures += check_all_prose_citations(citations=self_citations, repo_root=repo_root)
+    if check_self_line_count:
+        failures += check_superslm_gpu_cpp_line_count_claim(gpu_text)
     return failures
 
 

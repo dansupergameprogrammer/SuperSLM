@@ -314,7 +314,9 @@ def test_run_all_checks_clean_on_the_matching_fixture_tree():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures == []
 
 
@@ -334,7 +336,9 @@ def test_mutation_a_new_status_with_no_def_row_reddens():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "a tenth guard with a status absent from the .def must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -355,7 +359,9 @@ def test_mutation_a_reused_status_with_no_def_row_does_not_redden_the_honest_res
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures == [], "reusing an existing status is the documented residual -- must stay green"
 
 
@@ -371,7 +377,9 @@ def test_mutation_b_def_row_with_no_matching_ladder_guard_reddens():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, def_text=def_text)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "a .def row naming a status neither ladder returns must fail the check"
 
 
@@ -385,7 +393,9 @@ def test_mutation_c_guard_removed_from_gpu_ladder_only_reddens():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "a guard present in CPU/.def but removed from the GPU ladder must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -407,7 +417,9 @@ def test_mutation_d_new_status_guard_placed_after_the_old_end_marker_reddens():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "a new-status guard placed after the old end marker must now be caught (S2)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -426,7 +438,9 @@ def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_r
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
 
 
@@ -453,7 +467,9 @@ def test_mutation_e_new_status_guard_placed_after_the_gpu_marker_reddens():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "a new-status GPU guard placed after the old marker must now be caught (S3)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -476,7 +492,9 @@ def test_mutation_e_control_new_status_guard_placed_before_the_gpu_marker_redden
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures, "the identical guard placed before the marker must redden, same as before this fix"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -495,7 +513,9 @@ def test_mutation_e_variant_reused_status_after_gpu_marker_stays_green_the_widen
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures == [], "reusing an existing status past the GPU marker is the (widened) documented residual"
 
 
@@ -512,7 +532,9 @@ def test_mutation_e_variant_reused_below_ladder_status_after_gpu_marker_stays_gr
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
         failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
-                                       gpu_port_h_path=None, check_decode_sticky_tag=False)
+                                       gpu_port_h_path=None, check_decode_sticky_tag=False,
+                                       build_bat_path=None, self_citations=(),
+                                       check_self_line_count=False)
         assert failures == [], "reusing the subtracted below-ladder status itself is also the documented residual"
 
 

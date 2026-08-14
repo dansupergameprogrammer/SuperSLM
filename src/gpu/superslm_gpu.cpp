@@ -627,7 +627,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 }  // namespace
 
 // T-2071: external linkage, deliberately OUTSIDE the anonymous namespace
-// above (unlike `g_o11_alloc_injection_armed`/`MaybeThrowInjectedWeight
+// above (unlike `g_o11_alloc_injection_armed`/`MaybeThrowInjectedO11
 // AllocFault`, which stay internal-linkage on purpose) -- these two must be
 // callable as `superslm_gpu::ArmO11AllocationFailureInjection(site)` from
 // `tests/test_main.cpp`, a different translation unit, matching
