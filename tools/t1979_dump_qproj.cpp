@@ -77,20 +77,47 @@ struct CapturedRecord {
 	int64_t e_out = 0;
 };
 
+// T-1987 fix (T-1983 review S-2): RunLayerLoop's own internal attn_norm call
+// (LayerSite(site_prefix, 0, "attn_norm") -> RmsNormSite -> RequantChainChecked,
+// forward_sites.cpp) forwards site/token_index/trace_hook_state unchanged, so it
+// emits its OWN "layer0.attn_norm" chain-trace record through this same hook --
+// a genuinely independent observation of what RunLayerLoop actually computed,
+// never re-invoked by this tool. Captured here and compared below against this
+// tool's own upfront RmsNormSite call.
+struct CapturedNormRecord {
+	bool found = false;
+	std::vector<int8_t> codes;
+	int64_t m_out = 0;
+	int64_t e_out = 0;
+};
+
+struct HookContext {
+	CapturedRecord* qproj;
+	CapturedNormRecord* norm;
+};
+
 void TraceHookFn(const SslmChainTraceRecord* chain, const SslmKvLandingTraceRecord* /*kv*/,
                   void* user) {
 	if (chain == nullptr) return;
-	if (chain->site != "layer0.q_proj.requant") return;
-	CapturedRecord* out = reinterpret_cast<CapturedRecord*>(user);
-	out->found = true;
-	out->x_int.assign(chain->x_int.begin(), chain->x_int.end());
-	out->d_prime = chain->d_prime;
-	out->dn = chain->dn;
-	out->s = chain->s;
-	out->r = chain->r;
-	out->codes.assign(chain->codes.begin(), chain->codes.end());
-	out->m_out = chain->m_out;
-	out->e_out = chain->e_out;
+	HookContext* ctx = reinterpret_cast<HookContext*>(user);
+	if (chain->site == "layer0.q_proj.requant") {
+		CapturedRecord* out = ctx->qproj;
+		out->found = true;
+		out->x_int.assign(chain->x_int.begin(), chain->x_int.end());
+		out->d_prime = chain->d_prime;
+		out->dn = chain->dn;
+		out->s = chain->s;
+		out->r = chain->r;
+		out->codes.assign(chain->codes.begin(), chain->codes.end());
+		out->m_out = chain->m_out;
+		out->e_out = chain->e_out;
+	} else if (chain->site == "layer0.attn_norm") {
+		CapturedNormRecord* out = ctx->norm;
+		out->found = true;
+		out->codes.assign(chain->codes.begin(), chain->codes.end());
+		out->m_out = chain->m_out;
+		out->e_out = chain->e_out;
+	}
 }
 
 template <typename T>
@@ -249,7 +276,9 @@ int main(int argc, char** argv) {
 	// is the production ProjectAndFunnel's own real output, instrumented, never
 	// re-derived by this tool. -----------------------------------------------
 	CapturedRecord captured;
-	SslmSetTraceHook(model_view.trace_hook, &TraceHookFn, &captured);
+	CapturedNormRecord captured_norm;
+	HookContext hook_ctx{&captured, &captured_norm};
+	SslmSetTraceHook(model_view.trace_hook, &TraceHookFn, &hook_ctx);
 
 	std::vector<uint8_t> workspace(kv_bytes);
 	std::vector<int8_t> seq_codes(normed_codes.size());
@@ -277,7 +306,9 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	if (!captured.found) {
-		std::fprintf(stderr, "FAILED at stage=trace_capture: no \"layer0.q_proj\" chain record observed\n");
+		std::fprintf(stderr,
+		             "FAILED at stage=trace_capture: no \"layer0.q_proj.requant\" chain record "
+		             "observed\n");
 		return 1;
 	}
 	if (captured.x_int.size() != hidden_size || captured.codes.size() != hidden_size) {
@@ -294,33 +325,44 @@ int main(int argc, char** argv) {
 	    static_cast<long long>(captured.r), static_cast<long long>(captured.m_out),
 	    static_cast<long long>(captured.e_out));
 
-	// Cross-check: this tool's own normed_codes/normed_scale (computed by
-	// calling RmsNormSite directly, above) must be BIT-IDENTICAL to what
-	// RunLayerLoop's own internal attn_norm call produced -- otherwise the
-	// in_codes/in_scale this dump ships as ProjectAndFunnel's real input would
-	// not be the same values the captured trace record was actually computed
-	// from. RunLayerLoop does not expose its internal normed row directly, so
-	// this is checked by recomputing it a second, independent time (same
-	// public RmsNormSite call, same real inputs) and comparing -- not by
-	// re-deriving the arithmetic, only by calling the same production
-	// function twice, matching this codebase's own established double-call
-	// self-check convention (sslm_layer_trace.cpp's interior_row_oracle).
+	// Cross-check (T-1987 fix, T-1983 review S-2): this tool's own
+	// normed_codes/normed_scale (computed by calling RmsNormSite directly,
+	// above) must be BIT-IDENTICAL to what RunLayerLoop's own internal
+	// attn_norm call produced -- otherwise the in_codes/in_scale this dump
+	// ships as ProjectAndFunnel's real input would not be the same values the
+	// captured "layer0.q_proj.requant" trace record was actually computed
+	// from. RunLayerLoop does not expose its internal normed row as a return
+	// value or an out-parameter, but it DOES expose it through the trace hook:
+	// its internal RmsNormSite call forwards site="layer0.attn_norm" to
+	// RequantChainChecked, which emits a chain-trace record for that site
+	// through the same hook already installed above (captured_norm). That
+	// record's codes/m_out/e_out are genuinely independent of this tool's own
+	// upfront call -- produced by RunLayerLoop's real internal composition,
+	// observed via the hook, never re-invoked by this tool -- so comparing
+	// them is a check that can actually fail if the two ever diverge. (The
+	// original build instead called RmsNormSite a second time with identical
+	// arguments and compared the result to itself, which cannot fail
+	// regardless of correctness -- a self-check with no reachable failing
+	// input. Fixed here rather than reworded.)
+	if (!captured_norm.found) {
+		std::fprintf(stderr,
+		             "FAILED at stage=self_check: no \"layer0.attn_norm\" chain record observed "
+		             "from RunLayerLoop -- cannot cross-check the dumped input\n");
+		return 1;
+	}
 	{
-		std::vector<int8_t> normed_codes_check(hidden_size);
-		CarriedScale normed_scale_check{};
-		const SslmForwardStatus cst =
-		    RmsNormSite(embed_codes.data(), layers[0].attn_norm_gain, hidden_size, embed_scale,
-		                layers[0].attn_norm_site_constant, normed_codes_check.data(),
-		                &normed_scale_check, "layer0.attn_norm");
-		const bool codes_match = cst == SslmForwardStatus::Ok &&
-		                          std::memcmp(normed_codes_check.data(), normed_codes.data(),
-		                                      hidden_size) == 0;
-		const bool scale_match = normed_scale_check.m == normed_scale.m &&
-		                          normed_scale_check.e == normed_scale.e;
+		const bool codes_match = captured_norm.codes.size() == normed_codes.size() &&
+		                          std::memcmp(captured_norm.codes.data(), normed_codes.data(),
+		                                      normed_codes.size()) == 0;
+		const bool scale_match = captured_norm.m_out == normed_scale.m &&
+		                          captured_norm.e_out == normed_scale.e;
 		if (!codes_match || !scale_match) {
 			std::fprintf(stderr,
-			             "FAILED at stage=self_check: repeated RmsNormSite call disagrees with itself "
-			             "(codes_match=%d scale_match=%d) -- refusing to dump\n",
+			             "FAILED at stage=self_check: RunLayerLoop's own internal "
+			             "\"layer0.attn_norm\" trace record disagrees with this tool's upfront "
+			             "RmsNormSite call (codes_match=%d scale_match=%d) -- the dumped "
+			             "in_codes/in_scale would not be the values ProjectAndFunnel actually ran "
+			             "on -- refusing to dump\n",
 			             codes_match ? 1 : 0, scale_match ? 1 : 0);
 			return 1;
 		}
@@ -369,6 +411,12 @@ int main(int argc, char** argv) {
 	WriteRaw(f, captured.m_out);
 	WriteRaw(f, captured.e_out);
 
+	// T-1987 fix (T-1983 review M-2): close before checking. `f.close()` is
+	// where a buffered write actually reaches disk and where a flush-time
+	// failure (e.g. disk full) first becomes observable; checking `!f` while
+	// the stream is still open, as the original code did, cannot see a
+	// failure that only surfaces at close.
+	f.close();
 	if (!f) {
 		std::fprintf(stderr, "FAILED at stage=dump_write: write error on \"%s\"\n", dump_path.c_str());
 		return 1;

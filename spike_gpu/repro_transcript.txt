@@ -1,0 +1,84 @@
+=== T-1979 reproducibility run — 2026-08-13T17:28:55.3256829-07:00 ===
+model=D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm
+tokenizer=D:\SuperSLM\.worktrees\t1979-gpu-spike\tests\fixtures\qwen2.5-1.5b.tok.sslm
+prompt=The lighthouse keeper counted the waves twice before writing anything down.
+
+--- build: tools\build_t1979_dump_qproj.bat ---
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+artifact.cpp
+sha256.cpp
+tokenizer.cpp
+model.cpp
+intmath.cpp
+silu_lut.cpp
+matmul.cpp
+proof_manifest.cpp
+trace_hook.cpp
+checked_chain_funnel.cpp
+forward_sites.cpp
+decode_digest.cpp
+t1979_dump_qproj.cpp
+Generating Code...
+
+--- build: spike_gpu\build.ps1 ---
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+t1979_gpu_harness.cpp
+
+--- run 1: dump ---
+preflight: 28/28 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 8960 rows in a single tensor (LayerWeights now carries one fold triple per output channel per projection, T-1666; MarshalLayer marshals every row)
+model loaded: hidden_size=1536 layers=28 heads=12/2 head_dim=128
+real in_codes/in_scale captured: layer0.attn_norm output for token=13, scale=(1201781687,-32)
+captured CPU production layer0.q_proj trace record: d_prime=31443 dn=2060648448 s=16 r=2237978061 out_scale=(1647307423,-31)
+has_bias=1 dumped -> D:\SuperSLM\.worktrees\t1979-gpu-spike\out\t1979_repro_run1.bin
+dump sha256 = FE39534200F11BD71A5B2D75C31995815B6C2D224C09FF8D3E745A2DD62ED722
+
+--- run 1: GPU harness ---
+dump loaded: hidden_size=1536 has_bias=1
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# Int64ShaderOps: 1
+# WaveOps: 1  WaveLaneCountMin: 32  WaveLaneCountMax: 32
+# HighestShaderModel: 0x67
+dispatching: one thread, one compute call, 18480-byte readback...
+dispatch complete, 18480 bytes read back
+GEMM+WSC1+BIA1 stage (wide_row, 1536 elements): MATCH (0 mismatches)
+funnel intermediates: d_prime=MATCH dn=MATCH s=MATCH r=MATCH
+  gpu: d_prime=31443 dn=2060648448 s=16 r=2237978061
+  cpu: d_prime=31443 dn=2060648448 s=16 r=2237978061
+out_codes (1536 elements): MATCH (0 mismatches)
+out_scale: MATCH  gpu=(1647307423,-31)  cpu=(1647307423,-31)
+
+T1979_RESULT: PASS (bit-identical GPU vs CPU)
+harness exit = 0
+
+--- run 2: dump ---
+preflight: 28/28 layers carry a non-degenerate (per-output-channel) WSC1 fold tensor on at least one of q/k/v/o/gate/up/down_proj; worst case 8960 rows in a single tensor (LayerWeights now carries one fold triple per output channel per projection, T-1666; MarshalLayer marshals every row)
+model loaded: hidden_size=1536 layers=28 heads=12/2 head_dim=128
+real in_codes/in_scale captured: layer0.attn_norm output for token=13, scale=(1201781687,-32)
+captured CPU production layer0.q_proj trace record: d_prime=31443 dn=2060648448 s=16 r=2237978061 out_scale=(1647307423,-31)
+has_bias=1 dumped -> D:\SuperSLM\.worktrees\t1979-gpu-spike\out\t1979_repro_run2.bin
+dump sha256 = FE39534200F11BD71A5B2D75C31995815B6C2D224C09FF8D3E745A2DD62ED722
+
+--- run 2: GPU harness ---
+dump loaded: hidden_size=1536 has_bias=1
+# adapter: NVIDIA GeForce RTX 2080 SUPER
+# Int64ShaderOps: 1
+# WaveOps: 1  WaveLaneCountMin: 32  WaveLaneCountMax: 32
+# HighestShaderModel: 0x67
+dispatching: one thread, one compute call, 18480-byte readback...
+dispatch complete, 18480 bytes read back
+GEMM+WSC1+BIA1 stage (wide_row, 1536 elements): MATCH (0 mismatches)
+funnel intermediates: d_prime=MATCH dn=MATCH s=MATCH r=MATCH
+  gpu: d_prime=31443 dn=2060648448 s=16 r=2237978061
+  cpu: d_prime=31443 dn=2060648448 s=16 r=2237978061
+out_codes (1536 elements): MATCH (0 mismatches)
+out_scale: MATCH  gpu=(1647307423,-31)  cpu=(1647307423,-31)
+
+T1979_RESULT: PASS (bit-identical GPU vs CPU)
+harness exit = 0
+
+=== reproducibility verdict ===
+DUMP BIT-IDENTICAL across both runs: FE39534200F11BD71A5B2D75C31995815B6C2D224C09FF8D3E745A2DD62ED722
+BOTH HARNESS RUNS PASS (exit 0)
+transcript written to D:\SuperSLM\.worktrees\t1979-gpu-spike\spike_gpu\repro_transcript.txt

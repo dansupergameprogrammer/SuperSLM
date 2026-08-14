@@ -189,12 +189,20 @@ int64_t DynamicScaleReciprocal(int64_t dn) {
     const int64_t kC32_2 = (2 * ((int64_t)32 << 31) + 17) / 34;
     int64_t y = kC32 - ((kC32_2 * dn) >> 31);
 
-    for (int i = 0; i < 3; ++i) {
+    // T-1987 fix (T-1983 review M-3): distinct loop-variable names. Under
+    // -HV 2018 (this file's own compile path, matching the sibling substrate)
+    // a `for`-scoped variable is NOT block-scoped -- it leaks into the
+    // enclosing function scope -- so a second `for (int i = ...)` here
+    // redeclares the first loop's `i` rather than shadowing an unrelated
+    // outer `i`. DXC's only warning on this file sat here, inside the one
+    // function whose unconditional, data-independent op count is a
+    // documented CPU-side determinism law (build log §14).
+    for (int newton_i = 0; newton_i < 3; ++newton_i) {
         int64_t dn_y = SShrToI64(SMul(dn, y), 31);
         int64_t delta = ((int64_t)1 << 32) - dn_y;
         y = SShrToI64(SMul(y, delta), 31);
     }
-    for (int i = 0; i < 2; ++i) {
+    for (int correct_i = 0; correct_i < 2; ++correct_i) {
         S128 residual_2x = STwice(SSub(SFromI64((int64_t)1 << 62), SMul(y, dn)));
         if (SGe(residual_2x, SFromI64(dn))) {
             y = y + 1;
