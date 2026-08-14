@@ -6,6 +6,23 @@
 // t2019-gpu-serial-red-suite-2026-08-13.md, dated section "T-2024 re-derivation")
 // gates the build against.
 //
+// THIS BANNER IS HISTORICAL, NOT CURRENT (corrected 2026-08-14, T-2055,
+// Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md, Minor
+// 3, closing an M5/O10 finding this file carried across at least the
+// 82cfca7, 36b9327, and db73b22 reviews without ever being routed for a
+// fix): at this header's OWN origin (Sec11's B1-B12 decomposition, before any
+// build round landed) every symbol below really was declared and not
+// defined, exactly as the paragraph below states. It is false of the tree
+// today -- every function this header declares has its real definition in
+// `src/gpu/superslm_gpu.cpp` (T-2024 through T-2052 landed them one B-step at
+// a time), and this round added a construct, `enum class GpuLayerLoopGuard`
+// directly below this banner, that this banner's own claim cannot even be
+// true OF: an enum has no separate declaration/definition split to be
+// pending. Left below for its historical value (the precedent citation, and
+// what this file's role was AT ITS ORIGIN) -- read it as describing how this
+// header started, not its current link-completeness, which build.bat's own
+// green link proves every time it runs:
+//
 // EVERY SYMBOL BELOW IS DECLARED, NOT DEFINED. This header exists so the red suite
 // compiles; it links to nothing until the build seat (Brunel, B1-B12) provides a
 // definition. This is test-authoring infrastructure -- the call SHAPE the suite
@@ -101,6 +118,22 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // guard added to CPU without a matching `.def` row -- and a matching `return`
 // in `RunLayerLoopGpu`'s own ladder -- fails that walk loudly rather than
 // waiting for a fourth hand-count to miss it.
+//
+// CORRECTED 2026-08-14 (T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
+// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own claim):
+// this comment's own last sentence overclaims. `kCount` and both
+// `static_assert`s below compare a literal to `gpu_layer_loop_guards.def`'s
+// own row count -- none of it, and no pin cell matched to that file's row
+// order by eye, ever reads `forward_sites.cpp`, so a guard added to BOTH
+// ladders with no `.def` row (proven by execution) leaves every one of these
+// green. The class-level guarantee this paragraph describes is
+// `tests/ci/check_gpu_guard_status_parity.py` (T-2055)'s job, not this
+// enum's or that cell's -- it derives CPU's own guard-status set from
+// `forward_sites.cpp` directly and compares it against this file's
+// generated set. `GpuLayerLoopGuard`/`kCount` remain exactly what they were:
+// the compile-time row count this header's `.def` include generates, useful
+// for the table-walk cell's own loop bound, not a guarantee that the count
+// is CPU-correct on their own.
 enum class GpuLayerLoopGuard : int {
 #define SSLM_GPU_LAYER_LOOP_GUARD(enum_name, status_name, cpp_citation) enum_name,
 #include "superslm/gpu_layer_loop_guards.def"
@@ -120,6 +153,105 @@ enum class GpuLayerLoopGuard : int {
 // changed or because this is the first call). Read back by the caller AFTER
 // `RunLayerLoopGpu` returns -- this is the pin round's own observable to
 // consume, not built as a test cell here (Brunel does not author tests).
+//
+// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md,
+// P2): "every call" above is now true of a REJECTING call too, corrected
+// from a code defect (not a doc defect) this round found and fixed --
+// `RunLayerLoopGpu` used to leave this flag holding the PREVIOUS call's
+// value across any of its eleven rejecting return paths, reproduced by
+// execution reading back a stale, sometimes-wrong `skipped` value after a
+// guard-rejected call. A rejecting call makes no weight-residency decision
+// at all, so it now reads `false` ("no upload was skipped") on every one of
+// those eleven paths -- set at function entry, before the first guard.
+//
+// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
+// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "eleven"
+// above undercounted by one -- the recording-window catch (`superslm_gpu.cpp`,
+// added by T-2055 the same round this paragraph was written) is a TWELFTH
+// rejecting return path, and it was not among the eleven this paragraph's
+// own fix touched: a cache-hit call that throws inside the try left this
+// flag reading the call's own stale `true` even though the catch had just
+// invalidated the cache it describes. Now set `false` at the catch site too,
+// beside the cache invalidation -- every one of the now-TWELVE rejecting
+// paths reads `false`.
+//
+// CORRECTED 2026-08-14 (T-2069, Claude/Poirot/
+// b543abe-gpu-serial-port-ship-reverdict-review.md, M1; line citations
+// refreshed 2026-08-14, T-2075, per that round's own M1 finding that all
+// but one had gone stale across two same-day commits -- the CLAIM below is
+// unchanged from what T-2069 wrote, only the `superslm_gpu.cpp:<line>`
+// pointers are corrected to resolve against current HEAD): "twelve" above is
+// also wrong -- the correction above counted the function's rejecting
+// RETURNS (its guard ladder), not its rejecting return PATHS, and never
+// re-derived the number from the function itself. Enumerated fresh, at
+// source, every rejecting `return superslm::SslmForwardStatus::` (or
+// return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
+// ladder (`superslm_gpu.cpp:654, 655, 664, 668, 683, 687, 688, 698, 701,
+// 707, 709` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
+// of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
+// sites); two device-capability rejections below the ladder (`:716`
+// `!dev.available`, `:728` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
+// check, both `KvPrecisionUnsupported`); and the recording-window catch
+// itself (`:1410`, one return statement, a ternary choosing between
+// `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve --
+// CORRECTED AGAIN below (T-2075, S2): fourteen is also short by one.
+// `g_last_weight_upload_was_skipped`'s own FOUR write sites (corrected from
+// "three" in the same sentence that listed four citations, T-2075, M2 --
+// `superslm_gpu.cpp:299` static init, `:614` function entry, `:903` the
+// residency decision, `:1400` the catch) still cover all fourteen of THIS
+// paragraph's own paths correctly -- `:903` is the only conditional write
+// and it sits below both `:716` and `:728`, so those two paths read the
+// entry-set `false` unchanged; this correction is to the COUNT, not to the
+// code, which was already right as far as this paragraph's own scope went.
+// The `!dev.available`/Tier-3 half of this claim is derived by inspection
+// of the write sites, not executed -- forcing either condition is outside
+// what this project's own test harness can do on real hardware.
+//
+// CORRECTED 2026-08-14 (T-2075, Claude/Poirot/
+// 72a9b0d-gpu-serial-port-final-review.md, S2; D-SLM3228): "fourteen" above
+// is short by one, and -- unlike the three corrections before it -- the
+// property being counted is FALSE, not merely mis-numbered, so this
+// correction does not just renumber it. `RunLayerLoopGpu`'s own TERMINAL
+// statement, `return DecodeStickyTag(sticky_tag);` (`superslm_gpu.cpp:1461`),
+// is neither a ladder return nor the catch's ternary -- it is a FUNCTION
+// CALL whose result is returned directly, and `DecodeStickyTag` (`:532-550`)
+// maps the device's own sticky tag to fourteen statuses, THIRTEEN of them
+// rejecting (`ChainInputOutOfDomain`, `RopeTableTensorMissing`, and eleven
+// more -- only tag 0, `Ok`, is non-rejecting). That is a FIFTEENTH rejecting
+// return path, it is not hypothetical, and this suite already drives it:
+// `TestT2053_Item3_LastWeightUploadWasSkipped`'s own call 3 rejects through
+// exactly this path (`ChainInputOutOfDomain`, a real content-mutation
+// fixture, not an injected fault) -- **executed and measured, that call
+// reads `LastWeightUploadWasSkipped() == true`.**
+//
+// This falsifies the property every version of this paragraph has stated
+// since T-2055: "every rejecting path reads `false`." On the sticky-tag
+// path the upload genuinely WAS skipped (the call was a real cache hit;
+// the rejection happens deep inside the per-layer dispatch, after the
+// weight-residency decision already ran and read `true`), so `true` is the
+// HONEST answer and the accessor's own primary contract --
+// `"true iff this call's own upload was skipped"` -- is satisfied on this
+// path. Making this path read `false` would require lying about a skipped
+// upload; that is not available as a fix. What changes is the SENTENCE, to
+// the smaller promise that is actually true, per `StandardsDocument.md`
+// §5.6:
+//
+// **The true contract, stated precisely rather than as a path count:**
+// `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
+// decision. It reads `false` on every path that returns BEFORE that
+// decision runs (`:903` above) -- the nine-guard ladder, the two
+// device-capability rejections, and the recording-window catch, fourteen
+// paths in all, none of which ever reached a residency decision to report.
+// It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
+// miss) on every path that returns AFTER the decision -- the success path
+// and the sticky-tag-decoded path alike, fifteen paths' own destination in
+// total across the function, whether the decoded status is `Ok` or one of
+// `DecodeStickyTag`'s thirteen rejecting statuses. A caller that wants "did
+// THIS call's upload run" reads this accessor for exactly that, on every
+// path, correctly; a caller that reads it as "did this call SUCCEED" is
+// reading a different question than the one it answers, on the sticky-tag
+// paths specifically -- named here so a future reader does not have to
+// re-derive it from the code a fourth time.
 bool LastWeightUploadWasSkipped();
 
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
@@ -141,17 +273,36 @@ bool LastWeightUploadWasSkipped();
 // red-suite-2026-08-13.md` S16.2/S17), on purpose, as the gate's own self-check.
 //
 // Mirrors B12's own arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection):
-// arms injection so the NEXT armed allocation call in RunLayerLoopGpu fails with a synthetic
-// allocation error; the call after clears it. T-2076 note: the definitions built by T-2071 target
-// `work_scratch_uav`'s own allocation, not the weight DEFAULT-heap buffer this comment originally
-// specified -- T-2075's own S1 fix moved the arm site there so an armed call reaches the throw on
-// a cache HIT too, which the weight buffer's own allocation (gated behind `!weights_resident`)
-// cannot. The function names below are unchanged; only the site they arm moved. `TestT2063_S1Mb_
-// WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse` (tests/test_main.cpp) is
-// gated identically -- it does not compile into the default build at all, so it cannot be the
-// thing that fails the default build's own link.
+// arms injection so the NEXT allocation call AT THE NAMED SITE in RunLayerLoopGpu fails with a
+// synthetic allocation error; the call after clears it.
+//
+// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, S1;
+// D-SLM3241, superseding the T-2076 note below -- left standing, not rewritten, per this tree's
+// own append-only discipline): T-2075's own fix MOVED the arm site from the weight DEFAULT-heap
+// allocation to `work_scratch_uav`, which made the M-b half of `TestT2063_S1Mb_...` live for the
+// first time -- and, measured by this review, made T-2062's OWN S1 remedy (the weight allocation's
+// throw reaching the shared outer catch rather than a site-local one) permanently unpinnable: that
+// allocation is gated behind `!weights_resident` and a hit never reaches it, so with a single arm
+// point the two remedies could never both be live at once. Fixed by taking the index-parameterized
+// shape this instrument declined when it was single-site (B12's own `ArmAllocationFailureInjection
+// (uint32_t)` convention, matched here): `ArmWeightAllocationFailureInjection` now takes a `site`
+// selector, one of the two named constants below, and the injected throw fires only when the ARMED
+// site matches the call site currently executing -- both the weight DEFAULT-heap allocation and
+// `work_scratch_uav`'s own allocation carry the check now, so either remedy can be pinned,
+// independently, by arming the site it lives at.
+constexpr uint32_t kWeightAllocInjectionSiteWeightDefaultHeap = 0;
+constexpr uint32_t kWeightAllocInjectionSiteWorkScratchUav = 1;
+//
+// T-2076 note (Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md): the definitions built by
+// T-2071 targeted `work_scratch_uav`'s own allocation, not the weight DEFAULT-heap buffer this
+// comment originally specified -- T-2075's own S1 fix moved the arm site there so an armed call
+// reaches the throw on a cache HIT too, which the weight buffer's own allocation (gated behind
+// `!weights_resident`) cannot. The function names below are unchanged; only the site they arm
+// moved. `TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse`
+// (tests/test_main.cpp) is gated identically -- it does not compile into the default build at all,
+// so it cannot be the thing that fails the default build's own link.
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-void ArmWeightAllocationFailureInjection();
+void ArmWeightAllocationFailureInjection(uint32_t site);
 void ClearWeightAllocationInjection();
 #endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
