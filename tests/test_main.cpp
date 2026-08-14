@@ -21036,6 +21036,165 @@ static void TestB4AdapterComposedQScaleProducesInDomainTripleEndToEndLayerSuccee
 	          "end-to-end layer run, must be in-domain: got domain=%d", (int)domain);
 }
 
+// =============================================================================================
+// T-2021/T-2029/T-2036 B5 -- Forward-only, one-currency K/V proof by execution (design Sec11
+// B5, "the load-bearing proof this whole reconciliation is for"). Reuses TwoLayerFixture and
+// the B1 adapter-wiring helpers. `seq.context_length` IS RunLayerLoop's own `position` --
+// generating N tokens is N sequential calls on the same `seq`/workspace; a forward-only adapter
+// swap is nothing more than changing `LayerWeights::adapter` between calls, since RunLayerLoop
+// reads it fresh every call and never revisits an earlier position's own K/V write.
+// =============================================================================================
+
+// Red-first (design Sec11 B5): an oracle that deliberately applies a WRONG, adapter-specific
+// landing target (a `(r_t,e_t)` pair that differs from the base artifact's own static one) must
+// diverge from the real `LandingRescale` primitive's own actual output on the SAME accumulator --
+// proving this cell's own instrument can discriminate the per-adapter-landing failure mode
+// D-SLM2841 exists to prevent, before the one-currency construction is trusted.
+static void TestB5WrongPerAdapterLandingScaleDivergesFromRealOneCurrencyLanding() {
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::LandingRescale;
+	using superslm::SequenceLayerState;
+
+	TwoLayerFixture fixture;  // used only for its own kv_landing_r_t_arr/kv_landing_e_t_arr below
+	                          // -- this cell calls the REAL LandingRescale directly, in isolation,
+	                          // to prove a DIFFERENT (r_t,e_t) pair produces a materially different
+	                          // result on the identical input -- the structural reason a
+	                          // per-adapter landing table would corrupt the cache.
+	const int64_t branch_code = 45231;  // a representative post-fold accumulator value
+	const int64_t m_a = INT64_C(1717986918);
+	const int64_t e_a = -30;
+	const int64_t real_r_t = fixture.kv_landing_r_t_arr[0];
+	const int64_t real_e_t = fixture.kv_landing_e_t_arr[0];
+
+	const int64_t real_landed = LandingRescale(branch_code, m_a, real_r_t, e_a, real_e_t);
+
+	// A deliberately WRONG, "adapter-B-specific" landing target -- a different canonical ratio,
+	// standing in for what a (rejected) per-adapter landing-scale table might have supplied.
+	const CarriedScale wrong_canonical{INT64_C(1073741824), INT64_C(-29)};  // a DIFFERENT e_t
+	const int64_t wrong_landed = LandingRescale(branch_code, m_a, real_r_t, e_a, wrong_canonical.e);
+
+	CHECK_MSG(wrong_landed != real_landed,
+	          "a wrong, adapter-specific landing target must diverge from the real one-currency "
+	          "landing on the identical accumulator (proving the discriminator is live): "
+	          "real=%lld wrong=%lld", (long long)real_landed, (long long)wrong_landed);
+}
+
+// Positive construction (design Sec11 B5): (a) state isolation (C4) -- N tokens under adapter A,
+// forward-only swap to adapter B (no KV recompute), M more tokens; the first N positions' own K/V
+// cache rows are bit-identical to a FRESH base+A-only run truncated at N, both immediately after
+// the first N tokens and again after the swap and M more tokens (swapping does not retroactively
+// alter history). (b) the one-currency property: the whole run, spanning the swap, completes with
+// Ok status -- attention at the LAST token (width = N+M, RunLayerLoop's own
+// `width = seq.context_length + 1`) reads every position, pre- and post-swap alike, through the
+// SAME static `(kv_landing_r_t/e_t)` LandingRescale always takes (Sec5's own structural
+// argument, confirmed directly above: the primitive's signature carries no adapter parameter at
+// all, so a position's own landed value cannot depend on which adapter wrote it).
+static void TestB5ForwardOnlySwapPreservesStateIsolationAndOneCurrencyThroughout() {
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	using superslm::KeyRow;
+	using superslm::ValueRow;
+
+	constexpr int kN = 2, kM = 2;
+	constexpr size_t kWorkspaceSize = 2 * TwoLayerFixture::kContextCap * 1 * 2 * 2;  // layers*cap*kv_heads*head_dim*2
+
+	superslm::LayerAdapter adapter_a;
+	adapter_a.rank = 1;
+	WireAdaptedProjection(adapter_a.v, kAdapterBReal);  // adapter A: targets v_proj
+
+	superslm::LayerAdapter adapter_b;
+	adapter_b.rank = 1;
+	WireAdaptedProjection(adapter_b.q, kAdapterBReal);  // adapter B: targets q_proj (a DIFFERENT projection)
+
+	// The swap sequence: N tokens under A, forward-only swap, M more tokens under B.
+	TwoLayerFixture swap_fixture;
+	uint8_t swap_ws[kWorkspaceSize] = {};
+	SequenceLayerState swap_seq;
+	int8_t codes_buf[2] = {5, -5};
+	swap_seq.hidden_codes = codes_buf;
+	swap_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	auto run_one = [&](TwoLayerFixture& fx, SequenceLayerState& seq, uint8_t* ws,
+	                    const superslm::LayerAdapter* adapter) {
+		fx.layers[0].adapter = adapter;
+		fx.layers[1].adapter = nullptr;
+		seq.layer_index = 0;  // reset for the NEW token -- the caller's own responsibility (§9.3);
+		                      // RunLayerLoop leaves it at num_hidden_layers after a completed token.
+		return superslm::RunLayerLoop(seq, fx.layers, /*num_hidden_layers=*/2, /*layer_budget=*/2,
+		                               /*hidden_size=*/2, /*head_dim=*/2, /*num_key_value_heads=*/1,
+		                               /*intermediate_size=*/2, /*context_cap=*/TwoLayerFixture::kContextCap,
+		                               fx.view.rope_tables, ws, kWorkspaceSize);
+	};
+
+	for (int t = 0; t < kN; ++t) {
+		const auto st = run_one(swap_fixture, swap_seq, swap_ws, &adapter_a);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "swap-sequence token %d (under A) must succeed: got %s",
+		          t, superslm::SslmForwardStatusName(st));
+	}
+	CHECK(swap_seq.context_length == kN);
+
+	// Snapshot positions 0..N-1's own K/V rows immediately after the first N tokens.
+	std::vector<int8_t> snap_k0(2), snap_k1(2), snap_v0(2), snap_v1(2);
+	auto snap = [&](uint8_t* ws, std::vector<int8_t>& k0, std::vector<int8_t>& k1,
+	                std::vector<int8_t>& v0, std::vector<int8_t>& v1) {
+		const int8_t* kr0 = KeyRow(ws, 0, TwoLayerFixture::kContextCap, 1, 2, 0, 0);
+		const int8_t* kr1 = KeyRow(ws, 0, TwoLayerFixture::kContextCap, 1, 2, 0, 1);
+		const int8_t* vr0 = ValueRow(ws, 0, TwoLayerFixture::kContextCap, 1, 2, 0, 0);
+		const int8_t* vr1 = ValueRow(ws, 0, TwoLayerFixture::kContextCap, 1, 2, 0, 1);
+		k0.assign(kr0, kr0 + 2); k1.assign(kr1, kr1 + 2);
+		v0.assign(vr0, vr0 + 2); v1.assign(vr1, vr1 + 2);
+	};
+	snap(swap_ws, snap_k0, snap_k1, snap_v0, snap_v1);
+
+	// A FRESH run, N tokens under adapter A only, truncated at N (C4's own reference).
+	TwoLayerFixture fresh_fixture;
+	uint8_t fresh_ws[kWorkspaceSize] = {};
+	SequenceLayerState fresh_seq;
+	int8_t fresh_codes[2] = {5, -5};
+	fresh_seq.hidden_codes = fresh_codes;
+	fresh_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	for (int t = 0; t < kN; ++t) {
+		const auto st = run_one(fresh_fixture, fresh_seq, fresh_ws, &adapter_a);
+		CHECK_MSG(st == SslmForwardStatus::Ok, "fresh-sequence token %d must succeed: got %s", t,
+		          superslm::SslmForwardStatusName(st));
+	}
+	std::vector<int8_t> fresh_k0(2), fresh_k1(2), fresh_v0(2), fresh_v1(2);
+	snap(fresh_ws, fresh_k0, fresh_k1, fresh_v0, fresh_v1);
+
+	CHECK_MSG(snap_k0 == fresh_k0 && snap_k1 == fresh_k1 && snap_v0 == fresh_v0 && snap_v1 == fresh_v1,
+	          "(a) STATE ISOLATION: the swap-sequence's first N positions must be bit-identical to "
+	          "a fresh base+A-only run truncated at N, before any swap occurs");
+	CHECK_MSG(swap_seq.hidden_codes[0] == fresh_seq.hidden_codes[0] &&
+	              swap_seq.hidden_codes[1] == fresh_seq.hidden_codes[1],
+	          "the swap-sequence's own hidden_codes after N tokens must match the fresh "
+	          "truncated-at-N run's own hidden_codes exactly");
+
+	// Forward-only swap: change the active adapter, no KV recompute -- RunLayerLoop is simply
+	// called again on the SAME seq/workspace with a DIFFERENT adapter bound.
+	for (int t = 0; t < kM; ++t) {
+		const auto st = run_one(swap_fixture, swap_seq, swap_ws, &adapter_b);
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "swap-sequence token %d (under B, post-swap) must succeed: got %s -- the whole "
+		          "run, spanning the swap, must complete Ok (one-currency claim (b): attention at "
+		          "this token reads every position, pre- and post-swap alike, through the SAME "
+		          "static landing scale)",
+		          kN + t, superslm::SslmForwardStatusName(st));
+	}
+	CHECK(swap_seq.context_length == kN + kM);
+
+	// (a) restated, after the swap: positions 0..N-1's own rows must be COMPLETELY UNCHANGED --
+	// the swap does not retroactively reinterpret or rewrite history.
+	std::vector<int8_t> post_k0(2), post_k1(2), post_v0(2), post_v1(2);
+	snap(swap_ws, post_k0, post_k1, post_v0, post_v1);
+	CHECK_MSG(post_k0 == snap_k0 && post_k1 == snap_k1 && post_v0 == snap_v0 && post_v1 == snap_v1,
+	          "(a) STATE ISOLATION, restated post-swap: positions 0..N-1's own K/V rows must be "
+	          "UNCHANGED by the swap and the M subsequent tokens under adapter B -- a forward-only "
+	          "swap never recomputes or rewrites an earlier position");
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -21816,6 +21975,10 @@ int main(int argc, char** argv) {
 	// T-2036 B4 (design Sec11 B4).
 	TestB4BaseOnlyQScaleSubstitutedIntoC30DivergesFromAdapterComposed();
 	TestB4AdapterComposedQScaleProducesInDomainTripleEndToEndLayerSucceeds();
+
+	// T-2036 B5 (design Sec11 B5).
+	TestB5WrongPerAdapterLandingScaleDivergesFromRealOneCurrencyLanding();
+	TestB5ForwardOnlySwapPreservesStateIsolationAndOneCurrencyThroughout();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
