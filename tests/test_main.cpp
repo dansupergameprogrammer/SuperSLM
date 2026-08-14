@@ -22287,6 +22287,20 @@ static void TestT2053_M1_TableWalkAgainstGuardsDef() {
 		const auto gpu_st = superslm_gpu::RunLayerLoopGpu(
 		    gpu_seq, layers, N, layer_budget, hidden_size, head_dim, num_kv_heads,
 		    intermediate_size, context_cap, fixture.view.rope_tables, gpu_ws.data(), gpu_arg);
+		// FIXED 2026-08-14 (T-2056, P6, Claude/Poirot/db73b22-gpu-serial-port-
+		// final-confirmation-review.md): agreement alone does not prove this
+		// row's own fixture still violates its guard -- a fixture that stops
+		// triggering (a geometry/kWsPerLayer/CPU-guard-order change under this
+		// row) goes green on Ok==Ok, invisibly, since `gpu_st == cpu_st` is
+		// satisfied by two sides agreeing to succeed just as much as by two
+		// sides agreeing to reject. Asserted here, per row: CPU's own oracle
+		// status is a REJECTION (never Ok) before the agreement check is read
+		// as meaning what this cell's own header claims it means.
+		CHECK_MSG(cpu_st != SslmForwardStatus::Ok,
+		          "T2053/T2056 table-walk row '%s': CPU oracle status=%s -- this row's own "
+		          "fixture must still violate its guard (never Ok); a row that stops "
+		          "triggering invalidates this row's own agreement check below, silently",
+		          label, superslm::SslmForwardStatusName(cpu_st));
 		CHECK_MSG(gpu_st == cpu_st,
 		          "T2053 table-walk row '%s': GPU status=%s, CPU oracle status=%s -- must "
 		          "agree (gpu_layer_loop_guards.def)",
