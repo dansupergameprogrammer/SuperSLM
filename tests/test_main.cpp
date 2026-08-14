@@ -22461,6 +22461,13 @@ static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCache
 	          "LastWeightUploadWasSkipped() must read false on this rejecting path");
 }
 
+// T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+// gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
+// to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
+// the WHOLE binary's link down with it, removing this suite's own only executing acceptance
+// gate (the reviewer's own re-verdict finding). Off by default; does not compile into the
+// default build at all, so it cannot be the thing that fails the default build's own link.
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 // T-2063 (item 2, S1/M-b, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md S1;
 // Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S20.2/20.3/20.7): the single discriminating
 // cell BOTH S1 (the weight-buffer's own throw must return GpuAllocationFailed, not the retired
@@ -22530,6 +22537,7 @@ static void TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_Skip
 	          "T2063 S1/M-b call 4: the catch's own invalidation forces THIS call to be a real "
 	          "cache miss -- LastWeightUploadWasSkipped() must read false");
 }
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 // --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
 // level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
@@ -23643,7 +23651,9 @@ int main(int argc, char** argv) {
 	TestT2053_M1_TableWalkAgainstGuardsDef();
 	TestT2053_Item3_LastWeightUploadWasSkipped();
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 	TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

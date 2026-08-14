@@ -122,24 +122,34 @@ enum class GpuLayerLoopGuard : int {
 // consume, not built as a test cell here (Brunel does not author tests).
 bool LastWeightUploadWasSkipped();
 
-// T-2063 (O11, Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md;
-// Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md S1/Ceilings;
-// Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S20.2/20.7): the long-owed
-// CreateCommittedResource failure-injection instrument, scoped to RunLayerLoopGpu's own
-// DEFAULT-heap weight-buffer allocation (the single largest allocation in the recording
-// window, and the one two independent probes -- the reviewer's own at T-2060 and the build
-// seat's own at T-2062, converging on the identical env-gated-throw shape without having
-// seen each other's -- used to verify S1/M-b/P3/T-2059's catch-site status vocabulary by
-// editing this source in disposable scratch, never as a committed cell. Mirrors B12's own
-// arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection): arms
-// injection so the NEXT weight-buffer allocation call in RunLayerLoopGpu fails with a
-// synthetic allocation error; the call after clears it. Declared, not defined (LINK-RED,
-// this header's own :9-18 banner) -- new production infrastructure, routed to the build
-// seat. Until it exists, `TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_
-// SkippedFalse` (tests/test_main.cpp) is a real, reproducible LINK failure, not a stand-in
-// for one.
+// T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
+// T-2063's own always-declared LINK-RED form of this instrument (`ArmWeightAllocationFailure
+// Injection`/`ClearWeightAllocationInjection`, undefined) is UNGATED, so merging it broke the
+// arc's own executing acceptance gate -- `tests/test_main.cpp` is not a pre-build red suite the
+// way T-1899's own LINK-RED precedent was (this file's own :9-18 banner describes the ORIGINAL,
+// whole-suite situation, not this one): most of this suite is already built and green, and a
+// SINGLE undefined symbol anywhere in the single translation unit `tests/test_main.cpp` compiles
+// into fails the WHOLE binary's link, taking the 33879-check baseline down with it. Corrected:
+// O11's own instrument is held behind a compile-time gate, off by default, mirroring this
+// project's own established precedent for exactly this shape (`src/bad_alloc_wrap.h`'s
+// `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`, defined only for the test-injection build target). Not
+// defined by `build.bat` -- the default build never sees these two declarations at all. The
+// build seat's own trigger to arm this pin: land the real bodies AND define
+// `SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` (e.g. via `build.bat`'s own `/D` list, beside
+// `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`) in the SAME round -- defining the macro without the
+// real bodies reproduces this ticket's own LINK-RED proof (`Claude/Curie/t2019-gpu-serial-
+// red-suite-2026-08-13.md` S16.2/S17), on purpose, as the gate's own self-check.
+//
+// Mirrors B12's own arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection):
+// arms injection so the NEXT weight-buffer allocation call in RunLayerLoopGpu fails with a
+// synthetic allocation error; the call after clears it. `TestT2063_S1Mb_
+// WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse` (tests/test_main.cpp) is gated
+// identically -- it does not compile into the default build at all, so it cannot be the thing
+// that fails the default build's own link.
+#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 void ArmWeightAllocationFailureInjection();
 void ClearWeightAllocationInjection();
+#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
