@@ -21,16 +21,19 @@ suite at 33870/3, unchanged in every count -- neither `static_assert` fired,
 no cell moved.
 
 WHAT THIS CHECK ACTUALLY DOES. Extracts the DISTINCT `SslmForwardStatus`
-values returned from three places -- (a) `RunLayerLoopImpl`'s own entry-
-guard range in `forward_sites.cpp` (from the function's opening brace to the
-first occurrence of `const int64_t position = seq.context_length;`, the
-real, named point in that source where the guards end and the per-token
-forward computation begins -- not a line-number range, so a guard inserted
-anywhere in that span is still seen), (b) `RunLayerLoopGpu`'s own guard
-ladder in `superslm_gpu.cpp` (from the function's opening brace to its own
-`static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount)`
-line), and (c) the `status_name` column of every `SSLM_GPU_LAYER_LOOP_GUARD`
-row in `gpu_layer_loop_guards.def` -- and asserts all three SETS are equal.
+values returned from three places -- (a) `RunLayerLoopImpl`'s own FULL body
+in `forward_sites.cpp` (from the function's own opening brace to its own
+real, brace-matched closing brace -- `extract_function_body`/`cpu_guard_
+status_set` below -- with the six per-site arithmetic-rejection statuses
+that legitimately live below the entry guards, plus `Ok`, subtracted back
+out; corrected 2026-08-14, T-2062, S2, from an earlier cut that stopped at
+the first occurrence of `const int64_t position = seq.context_length;`,
+a text marker a guard placed below it could silently exit past), (b)
+`RunLayerLoopGpu`'s own guard ladder in `superslm_gpu.cpp` (from the
+function's opening brace to its own `static_assert(static_cast<int>(
+superslm_gpu::GpuLayerLoopGuard::kCount)` line), and (c) the `status_name`
+column of every `SSLM_GPU_LAYER_LOOP_GUARD` row in `gpu_layer_loop_guards.def`
+-- and asserts all three SETS are equal.
 Verified at source, today: all three are the same nine members
 (`InvalidLayerBudget`, `InvalidContextCap`, `HeadDimGeometryMismatch`,
 `KvHeadGeometryMismatch`, `WorkspaceTooSmall`, `InvalidHiddenCodes`,
@@ -46,25 +49,62 @@ in the cited file -- catching a citation left stale by an unrelated edit
 that shifts line numbers, independent of whether the STATUS SET check above
 would also have caught the same drift.
 
-HONEST RESIDUAL, stated here rather than left to a fifth review to
+CORRECTED 2026-08-14 (T-2062, Claude/Poirot/a3d44e7-gpu-serial-port-ship-
+confirmation-review.md, S2; D-SLM3195, superseding whichever prior decision
+carried the "closes the class" claim about this module -- left as written
+above, not rewritten, per this tree's own append-only discipline): the
+paragraph above's own residual statement was honest and incomplete. It
+stated one mutation the prior review had actually run and none other. A
+SECOND residual existed the day this module shipped and was falsified by
+execution one review later: the CPU end anchor,
+`const int64_t position = seq.context_length;` (`forward_sites.cpp:1365`),
+is the real point where today's nine guards end, but it is a claim about
+CODE THAT EXISTS, not a boundary the language enforces -- a tenth guard
+placed one line PAST it, with a status new to the set and no `.def` row,
+was invisible to this check (`OK`, exit 0), because everything after the
+marker was simply never scanned. **Fixed** (the review's own first, class-
+closing remedy, chosen over the cheaper "document a second residual"
+alternative): the CPU region is no longer marker-truncated. It is now
+`RunLayerLoopImpl`'s own FULL body, found by real brace-depth counting from
+the function's own opening `{` to its own matching closing `}` (skipping
+comments and string/char literals, so no line of source can fool the
+depth count) -- never a second text marker guessing where new code will or
+will not land. The six per-site arithmetic-rejection statuses (plus `Ok`)
+that legitimately live below the old marker --
+`CPU_BELOW_GUARD_ARITHMETIC_STATUSES` below, enumerated at the reviewing
+seat's own source read and stable across this arc's every round to date --
+are subtracted back out, so today's real nine-member set is unchanged and
+this check stays green on the unmutated tree. A NEW status appearing
+ANYWHERE in the function -- guard region, arithmetic region, or a region
+that does not exist yet -- now surfaces in the raw set and is caught,
+UNLESS it happens to reuse one of the six subtracted names (folded into the
+honest residual below, widened rather than left the same size the fix that
+found the gap left it).
+
+HONEST RESIDUAL, stated here rather than left to a sixth review to
 rediscover the shape of (the failure this finding is about is the
 overclaim, not the apparatus, and restating that overclaim about THIS check
-would be the same mistake with a fifth author): **a tenth CPU guard that
-returns a status ALREADY in the nine-member set would not change the set,
-and this check would stay green.** The set-equality comparison this module
-performs cannot distinguish "CPU's guard range has exactly these nine
-returns" from "CPU's guard range has these nine returns, plus a tenth that
-happens to reuse one of them" -- reusing an existing `SslmForwardStatus`
-across two logically distinct guards is legal C++ and produces no
-observable difference to this check. What this check DOES close, exactly as
+would be the same mistake with a sixth author): **a tenth CPU guard that
+returns a status ALREADY in the derived nine-member set -- including any of
+the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names, now that they are
+subtracted rather than out of scan range entirely -- would not change the
+set, and this check would stay green.** The set-equality comparison this
+module performs cannot distinguish "CPU's guard range has exactly these
+nine returns" from "CPU's guard range has these nine returns, plus a tenth
+that happens to reuse one of them" -- reusing an existing `SslmForwardStatus`
+across two logically distinct guards, or across a guard and an unrelated
+per-site arithmetic check, is legal C++ and produces no observable
+difference to this check. What this check DOES close, exactly as
 `RunLayerLoopGpu`'s own comment claims for the `static_assert` it replaces
-in that role: a guard whose status is new to CPU's guard range but missing
+in that role: a guard whose status is new to the derived set but missing
 from the `.def` (the review's own mutation A, run with a status outside the
-nine, e.g. `RopeTableTensorMissing`) now fails the build here, where nothing
-previously caught it. This module's own test file (`test_check_gpu_guard_
-status_parity.py`) reproduces both cases -- reddens on a new-status tenth
-guard, stays green on a same-status one -- specifically so the residual
-above is a measured property of this check, not a claim about it.
+nine, e.g. `RopeTableTensorMissing`) now fails the build here, wherever in
+`RunLayerLoopImpl`'s own body it lands -- before or after the old marker.
+This module's own test file (`test_check_gpu_guard_status_parity.py`)
+reproduces every case named above -- reddens on a new-status tenth guard
+anywhere in the function, stays green on a same-status one anywhere in the
+function -- specifically so the residual above is a measured property of
+this check, not a claim about it.
 
 Modelled on this tree's own established CI-source-check convention
 (`tests/ci/check_no_forward_leaf_calls.py`, `tests/ci/check_checked_chain_
@@ -94,7 +134,35 @@ GUARDS_DEF = os.path.join(_REPO_ROOT, "include", "superslm", "gpu_layer_loop_gua
 
 # --- Real, named anchors -- source TEXT, never a line number. ---
 CPU_FUNC_SIGNATURE = "static SslmForwardStatus RunLayerLoopImpl("
+# T-2062 (S2): retained as a citation of the real, named point in
+# `forward_sites.cpp` where the nine entry guards end and the per-token
+# forward computation begins -- no longer used as an EXTRACTION boundary
+# (see `cpu_guard_status_set` below, which scans the function's own real
+# closing brace instead).
 CPU_GUARD_REGION_END_MARKER = "const int64_t position = seq.context_length;"
+# The distinct `SslmForwardStatus` values `RunLayerLoopImpl` legitimately
+# returns BELOW `CPU_GUARD_REGION_END_MARKER` -- one status per per-site
+# arithmetic/domain rejection inside the per-layer loop body (never a host-
+# visible entry guard), plus `Ok` itself at the function's own end. Named at
+# source, not derived: `OptionGWideRopeMagnitudeOutOfDomain` (RoPE rotation
+# overflow), `OptionGFusedLandingExponentOutOfDomain` (post-rotation landing
+# magnitude), `CarriedScaleMantissaOutOfDomain` (two sites, C26's own
+# combine step), `IExpScaleDerivationOutOfDomain` (the per-kv-head i-exp
+# derivation), `SoftmaxKernelRefusedAfterGateAccepted` (the softmax kernel's
+# own post-gate refusal). Stable across this arc's every round to date
+# (T-2062, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-
+# review.md, S2's own remedy) -- a name added to CPU's per-layer body that
+# is NOT on this list surfaces as a real set disagreement, exactly like a
+# guard would; only these six are treated as "known, non-guard, below-the-
+# guards" statuses.
+CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
+    "OptionGWideRopeMagnitudeOutOfDomain",
+    "OptionGFusedLandingExponentOutOfDomain",
+    "CarriedScaleMantissaOutOfDomain",
+    "IExpScaleDerivationOutOfDomain",
+    "SoftmaxKernelRefusedAfterGateAccepted",
+    "Ok",
+})
 GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpu("
 GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuLayerLoopGuard::kCount)"
 
@@ -159,8 +227,93 @@ def extract_status_set(region_text: str) -> set[str]:
     return set(_STATUS_RETURN_RE.findall(stripped))
 
 
-def cpu_guard_region_text(text: str) -> str:
-    return extract_region(text, CPU_FUNC_SIGNATURE, CPU_GUARD_REGION_END_MARKER, label="forward_sites.cpp")
+def find_matching_close_brace(text: str, open_brace_index: int) -> int:
+    """The index of the `}` that matches the `{` at `open_brace_index` in
+    `text`, found by real depth counting over CODE only -- a `//` line
+    comment, a `/* */` block comment, and a `"..."`/`'...'` literal
+    (backslash-escaped quotes honored) are all skipped without affecting
+    depth, so a brace character inside a comment or a string cannot desync
+    the count (T-2062, S2: the defect class this replaces was a text-marker
+    boundary that could not see past itself at all; a naive brace counter
+    that trusted every `{`/`}` byte would trade that gap for a narrower one
+    a stray brace in a comment could still open)."""
+    if text[open_brace_index] != "{":
+        raise ValueError(f"find_matching_close_brace: text[{open_brace_index}] is not '{{'")
+    depth = 0
+    i = open_brace_index
+    n = len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            i = n if j == -1 else j + 1
+            continue
+        if two == "/*":
+            j = text.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        c = text[i]
+        if c == '"' or c == "'":
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "{":
+            depth += 1
+            i += 1
+            continue
+        if c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+            i += 1
+            continue
+        i += 1
+    raise ValueError(f"find_matching_close_brace: no matching '}}' found for '{{' at index {open_brace_index}")
+
+
+def extract_function_body(text: str, signature: str, *, label: str) -> str:
+    """The full body of the function whose signature (a unique source-text
+    anchor) is `signature` -- from immediately after its own opening `{` to
+    immediately before its own matching closing `}`, found by real brace-
+    depth counting from the signature's own first `{` (`find_matching_close_
+    brace` above), never a second text marker. T-2062 (S2): this is what
+    replaced the CPU side's own marker-truncated extraction -- a marker
+    describes where the guards end IN CODE THAT EXISTS; a function's own
+    closing brace is where the language says the function ends, and nothing
+    added below a marker and above the real close can go unseen."""
+    start_at = text.find(signature)
+    if start_at == -1:
+        raise ValueError(f"{label}: signature not found: {signature!r}")
+    open_brace = text.find("{", start_at)
+    if open_brace == -1:
+        raise ValueError(f"{label}: no opening brace found after signature {signature!r}")
+    close_brace = find_matching_close_brace(text, open_brace)
+    return text[open_brace + 1:close_brace]
+
+
+def cpu_guard_status_set(
+    cpu_text: str,
+    below_guard_arithmetic_statuses: frozenset[str] = CPU_BELOW_GUARD_ARITHMETIC_STATUSES,
+) -> set[str]:
+    """The CPU guard range's own comparable status set (T-2062, S2): every
+    distinct `SslmForwardStatus` `RunLayerLoopImpl` returns ANYWHERE in its
+    own real body (`extract_function_body`, real brace boundaries -- not the
+    marker `cpu_guard_region_text` used to truncate at), with
+    `below_guard_arithmetic_statuses` subtracted back out. A name that is
+    new to the function and not on that named, source-derived list surfaces
+    in the returned set regardless of where in the function it appears --
+    the property `cpu_guard_region_text`'s own marker truncation did not
+    have."""
+    body = extract_function_body(cpu_text, CPU_FUNC_SIGNATURE, label="forward_sites.cpp")
+    return extract_status_set(body) - below_guard_arithmetic_statuses
 
 
 def gpu_ladder_region_text(text: str) -> str:
@@ -247,7 +400,7 @@ def run_all_checks(
     with open(guards_def_path, "r", encoding="utf-8") as f:
         def_text = f.read()
 
-    cpu_set = extract_status_set(cpu_guard_region_text(cpu_text))
+    cpu_set = cpu_guard_status_set(cpu_text)
     gpu_set = extract_status_set(gpu_ladder_region_text(gpu_text))
     def_rows = parse_def_rows(def_text)
     def_set = def_status_set(def_rows)

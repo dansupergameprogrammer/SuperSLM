@@ -21,6 +21,14 @@ cpp`/`superslm_gpu.cpp`/`gpu_layer_loop_guards.def` copies in disposable
 scratch, each built and run once) are recorded in the build log, not
 reproduced here as unit cells -- this file's job is the mechanism, not a
 second on-hardware proof run.
+
+T-2062 (Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md,
+S2): `test_mutation_d_*` are the fixture-level reproduction of the review's
+OWN second falsifying mutation -- a new-status guard placed past the old
+`CPU_GUARD_REGION_END_MARKER`, invisible to the marker-truncated extraction
+this round replaced. `test_find_matching_close_brace_*` and `test_extract_
+function_body_*` are direct mechanism cells for the new brace-based
+extractor those mutations exercise indirectly.
 """
 from __future__ import annotations
 
@@ -139,7 +147,8 @@ def test_extract_region_raises_when_end_marker_absent():
 # --- extract_status_set ---
 
 def test_extract_status_set_ignores_comment_only_mentions():
-    region = chk.cpu_guard_region_text(_CPU_FIXTURE)
+    region = chk.extract_region(_CPU_FIXTURE, chk.CPU_FUNC_SIGNATURE, chk.CPU_GUARD_REGION_END_MARKER,
+                                 label="fixture")
     s = chk.extract_status_set(region)
     # The fixture's leading `//` comment names InvalidContextCap and its block
     # comment names HeadDimGeometryMismatch -- both are ALSO real returns, so
@@ -148,6 +157,80 @@ def test_extract_status_set_ignores_comment_only_mentions():
     # mention_does_not_inflate_set below, against a name that is NEVER
     # returned.
     assert s == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
+
+
+# --- find_matching_close_brace / extract_function_body (T-2062, S2) ---
+
+def test_find_matching_close_brace_skips_braces_in_comments_and_strings():
+    text = '{ // a { comment\n /* another { */ "a } string" \'{\' x; }'
+    close = chk.find_matching_close_brace(text, 0)
+    assert close == len(text) - 1
+
+
+def test_find_matching_close_brace_handles_nested_braces():
+    text = "{ a { b { c } d } e }"
+    close = chk.find_matching_close_brace(text, 0)
+    assert close == len(text) - 1
+
+
+def test_find_matching_close_brace_raises_when_unterminated():
+    try:
+        chk.find_matching_close_brace("{ a { b }", 0)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "no matching" in str(e)
+
+
+def test_find_matching_close_brace_raises_when_not_a_brace():
+    try:
+        chk.find_matching_close_brace("abc", 0)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "is not '{'" in str(e)
+
+
+def test_extract_function_body_finds_the_real_closing_brace_past_the_old_marker():
+    body = chk.extract_function_body(_CPU_FIXTURE, chk.CPU_FUNC_SIGNATURE, label="fixture")
+    # Unlike extract_region (marker-truncated), the whole body -- including
+    # the trailing Ok past the old marker -- is present.
+    assert "InvalidLayerBudget" in body
+    assert "Ok" in body
+    # The enclosing `}  // namespace superslm` line is NOT included -- the
+    # function's own closing brace, not a later one, ends the extraction.
+    assert "namespace superslm" not in body
+    assert body.rstrip().endswith("SslmForwardStatus::Ok;")
+
+
+def test_extract_function_body_raises_when_signature_absent():
+    try:
+        chk.extract_function_body("nothing here", chk.CPU_FUNC_SIGNATURE, label="fixture")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "signature not found" in str(e)
+
+
+# --- cpu_guard_status_set ---
+
+def test_cpu_guard_status_set_subtracts_the_named_below_guard_statuses():
+    # Using the FIXTURE's own reduced subtraction set (only "Ok" applies to
+    # this fixture; the other five don't appear in it) rather than the real
+    # production six, to keep this cell independent of the production list's
+    # own membership.
+    s = chk.cpu_guard_status_set(_CPU_FIXTURE, below_guard_arithmetic_statuses=frozenset({"Ok"}))
+    assert s == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
+
+
+def test_cpu_guard_status_set_with_default_subtraction_set_matches_extract_region_on_the_fixture():
+    # The fixture's only below-guard status is "Ok", which IS in the real
+    # production CPU_BELOW_GUARD_ARITHMETIC_STATUSES default -- so the new,
+    # whole-function extraction with the default subtraction set agrees with
+    # the OLD marker-truncated extraction on this fixture, which has nothing
+    # past the marker except Ok.
+    old_way = chk.extract_status_set(
+        chk.extract_region(_CPU_FIXTURE, chk.CPU_FUNC_SIGNATURE, chk.CPU_GUARD_REGION_END_MARKER, label="fixture")
+    )
+    new_way = chk.cpu_guard_status_set(_CPU_FIXTURE)
+    assert new_way == old_way == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
 
 
 def test_extract_status_set_comment_only_mention_does_not_inflate_set():
@@ -298,6 +381,44 @@ def test_mutation_c_guard_removed_from_gpu_ladder_only_reddens():
         assert any("disagree" in f for f in failures)
 
 
+# --- Mutation D (T-2062, S2): a new-status guard placed PAST the old marker
+# -- the review's own second falsifying mutation, invisible to the
+# marker-truncated extraction, now caught by the whole-function extraction.
+
+def test_mutation_d_new_status_guard_placed_after_the_old_end_marker_reddens():
+    # CPU-only edit, exactly mirroring the real-file mutation: the GPU
+    # ladder and the .def are untouched, so a genuinely new CPU-side status
+    # appearing anywhere in RunLayerLoopImpl's own body -- guard region or
+    # not -- must now surface as a real disagreement.
+    cpu = _CPU_FIXTURE.replace(
+        "const int64_t position = seq.context_length;",
+        "const int64_t position = seq.context_length;\n"
+        "\tif (x == 99) return SslmForwardStatus::KvCapacityExhausted;  // new, past the old marker",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures, "a new-status guard placed after the old end marker must now be caught (S2)"
+        assert any("disagree" in f for f in failures)
+        assert any("KvCapacityExhausted" in f for f in failures)
+
+
+def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_residual():
+    # The widened honest residual: a status added past the marker that
+    # reuses one already in the derived set is indistinguishable from "no
+    # guard was added at all" -- exactly the same shape as mutation A's own
+    # documented residual, now proven true past the old marker too.
+    cpu = _CPU_FIXTURE.replace(
+        "const int64_t position = seq.context_length;",
+        "const int64_t position = seq.context_length;\n"
+        "\tif (x == 99) return SslmForwardStatus::InvalidLayerBudget;  // reused status, past the old marker",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
+
+
 # --- End-to-end against the real tree: not vacuous, and green today. ---
 
 def test_main_end_to_end_against_the_real_tree_is_green_today():
@@ -308,12 +429,33 @@ def test_main_end_to_end_against_the_real_tree_is_green_today():
 def test_real_tree_status_set_is_the_named_nine():
     with open(chk.FORWARD_SITES_CPP, "r", encoding="utf-8") as f:
         cpu_text = f.read()
-    cpu_set = chk.extract_status_set(chk.cpu_guard_region_text(cpu_text))
+    cpu_set = chk.cpu_guard_status_set(cpu_text)
     assert cpu_set == {
         "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
         "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
         "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
     }
+
+
+def test_real_tree_cpu_full_body_raw_set_before_subtraction_matches_the_review_own_enumeration():
+    # The review's own S2 finding enumerated, at source, the six statuses
+    # legitimately returned below the old marker (five per-site arithmetic
+    # rejections plus Ok). Confirmed here against the real file: the RAW
+    # (pre-subtraction) set over the whole function body is exactly the
+    # named nine guards plus those six.
+    with open(chk.FORWARD_SITES_CPP, "r", encoding="utf-8") as f:
+        cpu_text = f.read()
+    body = chk.extract_function_body(cpu_text, chk.CPU_FUNC_SIGNATURE, label="forward_sites.cpp")
+    raw = chk.extract_status_set(body)
+    assert raw - chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES == {
+        "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
+        "KvHeadGeometryMismatch", "WorkspaceTooSmall", "InvalidHiddenCodes",
+        "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
+    }
+    assert raw & chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES == chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES, (
+        "every one of the six named below-guard statuses must actually appear at source -- "
+        "an unused name in the subtraction list would silently widen the residual for nothing"
+    )
 
 
 def test_main_returns_0_against_the_real_tree(capsys):

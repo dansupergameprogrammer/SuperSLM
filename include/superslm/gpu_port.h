@@ -163,6 +163,17 @@ enum class GpuLayerLoopGuard : int {
 // guard-rejected call. A rejecting call makes no weight-residency decision
 // at all, so it now reads `false` ("no upload was skipped") on every one of
 // those eleven paths -- set at function entry, before the first guard.
+//
+// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
+// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "eleven"
+// above undercounted by one -- the recording-window catch (`superslm_gpu.cpp`,
+// added by T-2055 the same round this paragraph was written) is a TWELFTH
+// rejecting return path, and it was not among the eleven this paragraph's
+// own fix touched: a cache-hit call that throws inside the try left this
+// flag reading the call's own stale `true` even though the catch had just
+// invalidated the cache it describes. Now set `false` at the catch site too,
+// beside the cache invalidation -- every one of the now-TWELVE rejecting
+// paths reads `false`.
 bool LastWeightUploadWasSkipped();
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

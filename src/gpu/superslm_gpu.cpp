@@ -957,8 +957,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P3, superseding T-2052 M2's own "caught here specifically,
-	// not fixed by a blanket try/catch" comment, which this correction
-	// removes rather than restates): EVERY allocation between here and this
+	// not fixed by a blanket try/catch" comment, WHICH THIS CORRECTION CLAIMED
+	// TO REMOVE AND DID NOT): EVERY allocation between here and this
 	// command list's own Close() below throws `std::runtime_error`
 	// (`SSLM_GPU_HR`, `d3d12_harness.h`) on a failing HRESULT. M2's own
 	// remedy caught exactly ONE of six allocation call-groups in this window
@@ -973,6 +973,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// ~1.31 GiB allocation M2 already covered. Named as ONE boundary rather
 	// than site by site (the review's own remedy shape): the try below
 	// spans every allocation this window issues.
+	//
+	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
+	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, S1; D-SLM3195,
+	// superseding whichever prior decision carried the "removed" claim): the
+	// paragraph above's parenthetical was false the day it was written --
+	// M2's own inner `try`/`catch` (immediately below, around the
+	// DEFAULT-heap weight allocation) was NOT removed; it survived, byte-
+	// identical, inside this new outer try, for two further rounds
+	// (T-2055, T-2059), silently winning over the outer catch for that one
+	// allocation and returning `KvPrecisionUnsupported` on it long after
+	// T-2057's own fold (D-SLM3190/D-SLM3191) retired that status's use here.
+	// Deleted now (S1's own remedy, at the inner block's own site below) --
+	// this paragraph is left as written, not rewritten, per this tree's own
+	// append-only discipline for a claim already shipped.
 	//
 	// EVERY variable below this point that the command list's own GPU
 	// virtual addresses reference -- every buffer `bind_and_dispatch` binds,
@@ -1031,27 +1045,29 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		g_resident_weights.valid = false;
 
 		lw_upload_keep_alive = dev.Upload(lw_bytes.data(), lw_bytes.size());
-		// T-2052 (M2): the ~1.31 GiB VRAM allocation below is the one most
+		// T-2062 (Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-
+		// review.md, S1): the ~1.31 GiB VRAM allocation below is the one most
 		// likely to fail on this design's own target hardware (consumer
 		// cards, §9's own VRAM-budget concern) -- `MakeBuffer` routes
-		// `CreateCommittedResource` through `SSLM_GPU_HR`, which throws
-		// across this status-returning function's own boundary with the
-		// command list left mid-recording (no fence ever waited on,
-		// undefined recovery for the next call). Caught here specifically,
-		// not fixed by a blanket try/catch around the whole function: a
-		// thrown allocation failure closes the (unsubmitted) command list --
-		// legal per D3D12's own contract, since `ID3D12CommandAllocator::
-		// Reset` requires every associated list to be Closed, not executed
-		// -- so the NEXT call's own `alloc->Reset()`/`list->Reset()` starts
-		// from a clean, defined state rather than one left recording.
-		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default;
-		try {
-			lw_default = dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
-			                             D3D12_RESOURCE_STATE_COPY_DEST);
-		} catch (const std::runtime_error&) {
-			dev.list->Close();
-			return superslm::SslmForwardStatus::KvPrecisionUnsupported;
-		}
+		// `CreateCommittedResource` through `SSLM_GPU_HR`, which throws. No
+		// longer caught by its own inner try (T-2052's own site-specific
+		// catch, which T-2055's own comment above claimed to have removed
+		// and had not -- the review's own S1 finding, "a sentence describing
+		// what a correction removed, thirty-nine lines above the thing it
+		// did not remove"): the outer try this block sits inside (opened
+		// above, at this function's own recording-window boundary) now
+		// covers it, so a throw here reaches the SAME `GetDeviceRemovedReason()`-
+		// queried catch every other allocation in this window reaches, and
+		// returns `GpuAllocationFailed`/`GpuDeviceRemoved` -- never
+		// `KvPrecisionUnsupported`, the status this exact site returned under
+		// the deleted inner catch, on the single largest allocation on this
+		// leg, confirmed as a live divergence by the review's own executed
+		// probe (call 7: `status=KvPrecisionUnsupported`, against call 5's
+		// `status=GpuAllocationFailed` at `work_scratch_uav`, same outer
+		// catch, same call shape).
+		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
+		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
+		                    D3D12_RESOURCE_STATE_COPY_DEST);
 		dev.list->CopyResource(lw_default.Get(), lw_upload_keep_alive.Get());
 		D3D12_RESOURCE_BARRIER lw_barrier{};
 		lw_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1204,6 +1220,23 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// the cache was never touched this call (a hit, or a throw before the
 		// `!weights_resident` branch ran), this is a same-state no-op.
 		//
+		// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
+		// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "this is
+		// a same-state no-op" is false on the CACHE-HIT path specifically --
+		// left as written above, not rewritten, per this tree's own
+		// append-only discipline. On a hit, `g_resident_weights.valid` was
+		// already `true` and `lw_buf` already held the resident DEFAULT-heap
+		// copy BEFORE this call ever ran (a prior call's own success path set
+		// it); the two lines below unconditionally reset it to invalid --
+		// forcing the NEXT call into a full re-upload of the packed row
+		// (~1.31 GiB across PCIe at the 1.5B tier) that a hit exists to
+		// avoid, which is a real state CHANGE, not a no-op, on that one path.
+		// The conservative DIRECTION the paragraph above argues for is still
+		// correct and unchanged -- reproduced by execution (the review's own
+		// probe: a cache-hit call that throws, followed by a well-formed call
+		// with identical content, reads back a forced miss) -- what was wrong
+		// is calling a real, deliberate cache-state change a no-op.
+		//
 		// T-2057 (Claude/Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md
 		// §22.3, D-SLM3191): queried HERE, immediately before the cleanup
 		// below, not after -- `dev.dev` (ComPtr<ID3D12Device>) is in scope
@@ -1217,6 +1250,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		g_resident_weights.lw_buf.Reset();
 		g_resident_weights.valid = false;
+		// T-2062 (M-b): beside the cache invalidation above, not left to the
+		// function-entry assignment alone -- this catch is a TWELFTH
+		// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
+		// too" enumeration (T-2055, P2) did not count when it said eleven.
+		// Without this line, a cache-hit call that throws here left
+		// `LastWeightUploadWasSkipped()` reading the call's own STALE `true`
+		// (set on entry to `false`, then overwritten `true` at the residency
+		// decision earlier in this same call, before the throw) even though
+		// the two lines above have just made the cache non-resident --
+		// reproduced by the review's own probe (call 5: `skipped=1` from a
+		// call whose catch had just invalidated the cache). Setting it here
+		// makes the observable agree with the state it describes on every
+		// one of this function's now-twelve rejecting paths.
+		g_last_weight_upload_was_skipped = false;
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
 		// gone right now (device recreation owed, not a retry against this
