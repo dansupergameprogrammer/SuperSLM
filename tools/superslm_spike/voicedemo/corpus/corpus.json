@@ -1,0 +1,4078 @@
+{
+  "corpus_version": "voicedemo-corpus-2026-08-13-v1",
+  "n_train": 150,
+  "n_held_out": 50,
+  "n_validation_reactions": 120,
+  "entries": [
+    {
+      "event": {
+        "id": "botched_request-train-00",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the linework on the forearm piece came out shakier than the reference design"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the linework on the forearm piece came out shakier than the reference design",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the linework on the forearm piece came out shakier than the reference design.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. We hear you about the linework on the forearm piece came out shakier than the reference design.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "botched_request-train-01",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the shading on the back panel healed patchy in two spots"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the shading on the back panel healed patchy in two spots",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the shading on the back panel healed patchy in two spots.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. We hear you about the shading on the back panel healed patchy in two spots.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "botched_request-train-02",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the lettering was spaced too tightly and reads cramped"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the lettering was spaced too tightly and reads cramped",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. We hear you about the lettering was spaced too tightly and reads cramped.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're really sorry about how this turned out, and we're going to make it right for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. We hear you about the lettering was spaced too tightly and reads cramped.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "That's on you, not much we can do about it now. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "botched_request-train-03",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the color saturation faded unevenly after the first week"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the color saturation faded unevenly after the first week",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-04",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the outline drifted off the stencil placement by a few millimeters"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the outline drifted off the stencil placement by a few millimeters",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-05",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the symmetry on the matching pair of pieces is slightly off"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the symmetry on the matching pair of pieces is slightly off",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-06",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the fine detail work blew out and lost definition"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the fine detail work blew out and lost definition",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-07",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the black fill has visible patchiness near the elbow crease"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the black fill has visible patchiness near the elbow crease",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-08",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the gradient transition looks banded instead of smooth"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the gradient transition looks banded instead of smooth",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-09",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "a small section of the design was accidentally mirrored"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that a small section of the design was accidentally mirrored",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-10",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the portrait's proportions came out subtly distorted"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the portrait's proportions came out subtly distorted",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-11",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the script font used was not the one the customer approved"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the script font used was not the one the customer approved",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-12",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the placement ended up a full inch lower than discussed"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the placement ended up a full inch lower than discussed",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-13",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the needle depth left the linework looking slightly blown out"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the needle depth left the linework looking slightly blown out",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-train-14",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the stencil transfer smudged before the artist could trace it"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the stencil transfer smudged before the artist could trace it",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-held_out-00",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the geometric mandala's spokes are visibly uneven on one side"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the geometric mandala's spokes are visibly uneven on one side",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-held_out-01",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the watercolor-style splashes bled together into a muddy blur"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the watercolor-style splashes bled together into a muddy blur",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-held_out-02",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the negative-space lettering filled in instead of staying open"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the negative-space lettering filled in instead of staying open",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-held_out-03",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the customer's chosen quote was misspelled by one letter"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's chosen quote was misspelled by one letter",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "botched_request-held_out-04",
+        "kind": "botched_request",
+        "payload": {
+          "detail": "the wrap-around design does not line up when the arm bends"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the wrap-around design does not line up when the arm bends",
+        "the shop offers a free touch-up appointment"
+      ],
+      "intended_attitude": "apologetic and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-00",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "full sleeve of overlapping koi and wave work"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished full sleeve of overlapping koi and wave work",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. We hear you about full sleeve of overlapping koi and wave work.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. We hear you about full sleeve of overlapping koi and wave work.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "brag_result-train-01",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "chest piece built around a family crest"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished chest piece built around a family crest",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. We hear you about chest piece built around a family crest.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. We hear you about chest piece built around a family crest.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "brag_result-train-02",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "backpiece phoenix that took three sessions to finish"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished backpiece phoenix that took three sessions to finish",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. We hear you about backpiece phoenix that took three sessions to finish.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "This turned out amazing and we're honestly thrilled for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. We hear you about backpiece phoenix that took three sessions to finish.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, it's done, that'll be all for today. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "brag_result-train-03",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "forearm script tribute to the customer's late grandmother"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished forearm script tribute to the customer's late grandmother",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-04",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "thigh piece of a detailed clockwork owl"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished thigh piece of a detailed clockwork owl",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-05",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "ribcage floral bouquet in fine linework"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished ribcage floral bouquet in fine linework",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-06",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "shoulder cap of geometric wolf silhouette"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished shoulder cap of geometric wolf silhouette",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-07",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "calf piece of a lighthouse in a storm"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished calf piece of a lighthouse in a storm",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-08",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "hand-and-fingers set of tiny botanical stamps"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished hand-and-fingers set of tiny botanical stamps",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-09",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "collarbone piece of a minimalist mountain range"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished collarbone piece of a minimalist mountain range",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-10",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "half-sleeve blackwork sleeve of forest scenery"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished half-sleeve blackwork sleeve of forest scenery",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-11",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "ankle piece of a coiled serpent"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished ankle piece of a coiled serpent",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-12",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "spine piece running the length of the back"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished spine piece running the length of the back",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-13",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "bicep piece of a roaring bear portrait"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished bicep piece of a roaring bear portrait",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-train-14",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "neckline piece of delicate lace patterning"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished neckline piece of delicate lace patterning",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-held_out-00",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "knee-to-hip leg piece of a cathedral facade"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished knee-to-hip leg piece of a cathedral facade",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-held_out-01",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "underarm piece of a swarm of dragonflies"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished underarm piece of a swarm of dragonflies",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-held_out-02",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "sternum piece shaped like a slow hourglass with sand mid-fall"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished sternum piece shaped like a slow hourglass with sand mid-fall",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-held_out-03",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "wraparound wrist cuff of interlocking chain links"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished wraparound wrist cuff of interlocking chain links",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "brag_result-held_out-04",
+        "kind": "brag_result",
+        "payload": {
+          "detail": "temple-to-jaw piece of a crescent moon and stars"
+        }
+      },
+      "required_info": [
+        "the shop compliments the finished temple-to-jaw piece of a crescent moon and stars",
+        "the shop invites the customer to share photos on the shop's wall of fame"
+      ],
+      "intended_attitude": "warm and proud",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-00",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "adding a second full sleeve to match the first, mid-session"
+        }
+      },
+      "required_info": [
+        "the shop notes that adding a second full sleeve to match the first, mid-session was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about adding a second full sleeve to match the first, mid-session.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. We hear you about adding a second full sleeve to match the first, mid-session.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-01",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "extending the backpiece down to cover the entire lower back"
+        }
+      },
+      "required_info": [
+        "the shop notes that extending the backpiece down to cover the entire lower back was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about extending the backpiece down to cover the entire lower back.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. We hear you about extending the backpiece down to cover the entire lower back.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-02",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "swapping the agreed black-and-grey style for full color partway through"
+        }
+      },
+      "required_info": [
+        "the shop notes that swapping the agreed black-and-grey style for full color partway through was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. We hear you about swapping the agreed black-and-grey style for full color partway through.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That wasn't part of what we booked, but we can absolutely find a way to fit it in properly. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. We hear you about swapping the agreed black-and-grey style for full color partway through.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Absolutely not, we're not doing anything outside the booking. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-03",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking for three extra names to be added to the memorial piece"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking for three extra names to be added to the memorial piece was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-04",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting the design be doubled in size once the outline was done"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting the design be doubled in size once the outline was done was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-05",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "wanting an entirely new second tattoo squeezed into the same slot"
+        }
+      },
+      "required_info": [
+        "the shop notes that wanting an entirely new second tattoo squeezed into the same slot was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-06",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking to add a matching piece on the other arm right after"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking to add a matching piece on the other arm right after was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-07",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting the shading be redone in a completely different technique"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting the shading be redone in a completely different technique was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-08",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "wanting the piece extended to wrap around to the back"
+        }
+      },
+      "required_info": [
+        "the shop notes that wanting the piece extended to wrap around to the back was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-09",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking for a friend's walk-in piece to be worked in immediately"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking for a friend's walk-in piece to be worked in immediately was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-10",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting an additional four hours of work beyond the booked two"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting an additional four hours of work beyond the booked two was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-11",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "wanting the original small piece turned into a full sleeve on the spot"
+        }
+      },
+      "required_info": [
+        "the shop notes that wanting the original small piece turned into a full sleeve on the spot was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-12",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking to add a portrait into a design that had none planned"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking to add a portrait into a design that had none planned was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-13",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting the appointment be extended to cover a second body part"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting the appointment be extended to cover a second body part was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-train-14",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "wanting the whole design re-drawn from scratch after the outline started"
+        }
+      },
+      "required_info": [
+        "the shop notes that wanting the whole design re-drawn from scratch after the outline started was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-held_out-00",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking for a matching set of five tiny tattoos instead of the one booked"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking for a matching set of five tiny tattoos instead of the one booked was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-held_out-01",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting the piece get mirrored onto the opposite leg right after this session"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting the piece get mirrored onto the opposite leg right after this session was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-held_out-02",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "wanting a completely unrelated cover-up squeezed in before the booked piece begins"
+        }
+      },
+      "required_info": [
+        "the shop notes that wanting a completely unrelated cover-up squeezed in before the booked piece begins was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-held_out-03",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "asking to fold a second client's design into the same booked slot"
+        }
+      },
+      "required_info": [
+        "the shop notes that asking to fold a second client's design into the same booked slot was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "scope_creep-held_out-04",
+        "kind": "scope_creep",
+        "payload": {
+          "detail": "requesting the linework redone in a style never discussed at booking"
+        }
+      },
+      "required_info": [
+        "the shop notes that requesting the linework redone in a style never discussed at booking was not part of the original booking",
+        "the shop offers to schedule a follow-up session for the extra work"
+      ],
+      "intended_attitude": "firm but accommodating",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-00",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the birthdate on the ID does not match the customer's stated age"
+        }
+      },
+      "required_info": [
+        "the shop states that the birthdate on the ID does not match the customer's stated age must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We can't move forward until this is sorted out the right way. We hear you about the birthdate on the ID does not match the customer's stated age.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the birthdate on the ID does not match the customer's stated age.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-01",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID's photo does not clearly resemble the customer"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID's photo does not clearly resemble the customer must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We can't move forward until this is sorted out the right way. We hear you about the ID's photo does not clearly resemble the customer.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the ID's photo does not clearly resemble the customer.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-02",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID appears to have a laminate edge that has been tampered with"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID appears to have a laminate edge that has been tampered with must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We can't move forward until this is sorted out the right way. We hear you about the ID appears to have a laminate edge that has been tampered with.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We can't move forward until this is sorted out the right way. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. We hear you about the ID appears to have a laminate edge that has been tampered with.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Eh, don't worry about the paperwork, let's just get started. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-03",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID was issued in a format the shop cannot verify on-site"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID was issued in a format the shop cannot verify on-site must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-04",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer could not produce any ID when asked at check-in"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer could not produce any ID when asked at check-in must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-05",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID presented is expired by several years"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID presented is expired by several years must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-06",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID's listed address does not match the customer's paperwork"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID's listed address does not match the customer's paperwork must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-07",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer's guardian consent form is missing a required signature"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer's guardian consent form is missing a required signature must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-08",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID font and spacing do not match the state's known template"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID font and spacing do not match the state's known template must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-09",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer appears visibly younger than the ID's stated birth year"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer appears visibly younger than the ID's stated birth year must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-10",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID was reported as a photocopy rather than an original"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID was reported as a photocopy rather than an original must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-11",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the barcode on the ID fails the shop's scanner check"
+        }
+      },
+      "required_info": [
+        "the shop states that the barcode on the ID fails the shop's scanner check must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-12",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer's name on the ID does not match the booking name"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer's name on the ID does not match the booking name must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-13",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID's hologram seal is missing under the shop's UV light"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID's hologram seal is missing under the shop's UV light must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-train-14",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer admits the ID belongs to an older sibling"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer admits the ID belongs to an older sibling must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-held_out-00",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the passport presented has a visibly re-glued photo page"
+        }
+      },
+      "required_info": [
+        "the shop states that the passport presented has a visibly re-glued photo page must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-held_out-01",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer's student ID has no birthdate printed on it at all"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer's student ID has no birthdate printed on it at all must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-held_out-02",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID's raised text does not respond to the shop's verification light"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID's raised text does not respond to the shop's verification light must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-held_out-03",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the customer's temporary paper ID was issued only yesterday"
+        }
+      },
+      "required_info": [
+        "the shop states that the customer's temporary paper ID was issued only yesterday must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "underage_or_bad_id-held_out-04",
+        "kind": "underage_or_bad_id",
+        "payload": {
+          "detail": "the ID's signature strip has clearly been rewritten over"
+        }
+      },
+      "required_info": [
+        "the shop states that the ID's signature strip has clearly been rewritten over must be resolved before any work begins",
+        "the shop asks for a second form of identification"
+      ],
+      "intended_attitude": "stern and procedural",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-00",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the specific white ink needed for the highlight work"
+        }
+      },
+      "required_info": [
+        "the shop explains that the specific white ink needed for the highlight work is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the specific white ink needed for the highlight work.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. We hear you about the specific white ink needed for the highlight work.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-01",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the fine-gauge needles required for the detailed linework"
+        }
+      },
+      "required_info": [
+        "the shop explains that the fine-gauge needles required for the detailed linework is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the fine-gauge needles required for the detailed linework.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. We hear you about the fine-gauge needles required for the detailed linework.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-02",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the UV-reactive ink the customer specifically requested"
+        }
+      },
+      "required_info": [
+        "the shop explains that the UV-reactive ink the customer specifically requested is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. We hear you about the UV-reactive ink the customer specifically requested.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We're sorry for the inconvenience, and here's exactly how we'll handle it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. We hear you about the UV-reactive ink the customer specifically requested.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Not our problem, you'll have to figure that out yourself. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-03",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the exact shade of teal the reference design calls for"
+        }
+      },
+      "required_info": [
+        "the shop explains that the exact shade of teal the reference design calls for is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-04",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the numbing cream the customer asked to use beforehand"
+        }
+      },
+      "required_info": [
+        "the shop explains that the numbing cream the customer asked to use beforehand is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-05",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the extra-large stencil paper needed for the backpiece"
+        }
+      },
+      "required_info": [
+        "the shop explains that the extra-large stencil paper needed for the backpiece is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-06",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the specific grey wash set used for the portrait style"
+        }
+      },
+      "required_info": [
+        "the shop explains that the specific grey wash set used for the portrait style is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-07",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the disposable grips sized for the artist's preferred machine"
+        }
+      },
+      "required_info": [
+        "the shop explains that the disposable grips sized for the artist's preferred machine is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-08",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the gold-tone metallic ink for the accent details"
+        }
+      },
+      "required_info": [
+        "the shop explains that the gold-tone metallic ink for the accent details is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-09",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the hypoallergenic ink line for the customer's sensitive skin"
+        }
+      },
+      "required_info": [
+        "the shop explains that the hypoallergenic ink line for the customer's sensitive skin is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-10",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the extra-fine liner cartridges the piece requires"
+        }
+      },
+      "required_info": [
+        "the shop explains that the extra-fine liner cartridges the piece requires is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-11",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the skin-prep wipes the shop normally uses before outlining"
+        }
+      },
+      "required_info": [
+        "the shop explains that the skin-prep wipes the shop normally uses before outlining is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-12",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the specific green shade needed for the botanical piece"
+        }
+      },
+      "required_info": [
+        "the shop explains that the specific green shade needed for the botanical piece is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-13",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the wide-format bandage wrap for the large finished piece"
+        }
+      },
+      "required_info": [
+        "the shop explains that the wide-format bandage wrap for the large finished piece is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-train-14",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the touch-up ink batch matched to the customer's healed piece"
+        }
+      },
+      "required_info": [
+        "the shop explains that the touch-up ink batch matched to the customer's healed piece is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-held_out-00",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the glow-in-the-dark ink the customer wanted for the accent lines"
+        }
+      },
+      "required_info": [
+        "the shop explains that the glow-in-the-dark ink the customer wanted for the accent lines is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-held_out-01",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the extra-wide shading cartridges the backpiece design calls for"
+        }
+      },
+      "required_info": [
+        "the shop explains that the extra-wide shading cartridges the backpiece design calls for is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-held_out-02",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the specific matte-black ink used for the blackout sleeve style"
+        }
+      },
+      "required_info": [
+        "the shop explains that the specific matte-black ink used for the blackout sleeve style is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-held_out-03",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the sterile cover sheets sized for the reclining chair setup"
+        }
+      },
+      "required_info": [
+        "the shop explains that the sterile cover sheets sized for the reclining chair setup is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "supply_shortage-held_out-04",
+        "kind": "supply_shortage",
+        "payload": {
+          "detail": "the custom stencil transfer gel the artist prefers for large pieces"
+        }
+      },
+      "required_info": [
+        "the shop explains that the custom stencil transfer gel the artist prefers for large pieces is currently out of stock",
+        "the shop offers to reschedule once the supply order arrives"
+      ],
+      "intended_attitude": "apologetic and practical",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-00",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's flight leaves in three hours and they want it done now"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's flight leaves in three hours and they want it done now",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer's flight leaves in three hours and they want it done now.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer's flight leaves in three hours and they want it done now.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-01",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer is on a lunch break with only forty-five minutes free"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer is on a lunch break with only forty-five minutes free",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer is on a lunch break with only forty-five minutes free.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer is on a lunch break with only forty-five minutes free.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-02",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer just won a bet and wants proof inked immediately"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer just won a bet and wants proof inked immediately",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. We hear you about the customer just won a bet and wants proof inked immediately.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We totally get that you're in a rush, and here's the fastest way we can help. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. We hear you about the customer just won a bet and wants proof inked immediately.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "There's no rush at all, take a seat and we'll get to it whenever. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-03",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's ride is waiting outside with the meter running"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's ride is waiting outside with the meter running",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-04",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer has a work event tonight and wants it healed by then"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer has a work event tonight and wants it healed by then",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-05",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer is leaving town tomorrow for a long deployment"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer is leaving town tomorrow for a long deployment",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-06",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's friend is getting married this weekend and it's a group tattoo"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's friend is getting married this weekend and it's a group tattoo",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-07",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer wants it done before a video call in twenty minutes"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer wants it done before a video call in twenty minutes",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-08",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's babysitter is only booked for another hour"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's babysitter is only booked for another hour",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-09",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer is celebrating a milestone that happens today only"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer is celebrating a milestone that happens today only",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-10",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's train departs from the station across town shortly"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's train departs from the station across town shortly",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-11",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer has a hospital visit later and wants this done first"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer has a hospital visit later and wants this done first",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-12",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's shift at work starts in under an hour"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's shift at work starts in under an hour",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-13",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer is meeting someone for a surprise reveal tonight"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer is meeting someone for a surprise reveal tonight",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-train-14",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's rental car needs to be returned within the hour"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's rental car needs to be returned within the hour",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-held_out-00",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's ferry to the island leaves at the top of the hour"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's ferry to the island leaves at the top of the hour",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-held_out-01",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's court appearance comes up later today and this matters to them now"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's court appearance comes up later today and this matters to them now",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-held_out-02",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's band goes on stage in under two hours"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's band goes on stage in under two hours",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-held_out-03",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's parole check-in comes later and they wanted this done first"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's parole check-in comes later and they wanted this done first",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "walk_in_rush-held_out-04",
+        "kind": "walk_in_rush",
+        "payload": {
+          "detail": "the customer's graduation ceremony starts in ninety minutes"
+        }
+      },
+      "required_info": [
+        "the shop acknowledges that the customer's graduation ceremony starts in ninety minutes",
+        "the shop offers the next available appointment slot"
+      ],
+      "intended_attitude": "sympathetic but time-pressured",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-00",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "a shop across town quoted a lower price for a similar piece"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that a shop across town quoted a lower price for a similar piece",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. We hear you about a shop across town quoted a lower price for a similar piece.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. We hear you about a shop across town quoted a lower price for a similar piece.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-01",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer is a regular and expects a loyalty discount"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer is a regular and expects a loyalty discount",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. We hear you about the customer is a regular and expects a loyalty discount.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. We hear you about the customer is a regular and expects a loyalty discount.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-02",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer is paying in cash and expects a cash discount"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer is paying in cash and expects a cash discount",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. We hear you about the customer is paying in cash and expects a cash discount.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "We hear you, and we still have to keep our pricing where it is. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. We hear you about the customer is paying in cash and expects a cash discount.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Fine, fine, we'll just knock the price down for you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-03",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer's friend got a better rate last month for less work"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer's friend got a better rate last month for less work",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-04",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the design looks simple to the customer so it should cost less"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the design looks simple to the customer so it should cost less",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-05",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer is bringing in three friends and wants a group rate"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer is bringing in three friends and wants a group rate",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-06",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer found a cheaper flash-sheet option online"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer found a cheaper flash-sheet option online",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-07",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says the quoted time seems shorter than the price implies"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says the quoted time seems shorter than the price implies",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-08",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer wants to skip the deposit to save money upfront"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer wants to skip the deposit to save money upfront",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-09",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer offers to trade a favor instead of paying full price"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer offers to trade a favor instead of paying full price",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-10",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says the ink alone can't cost what's being charged"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says the ink alone can't cost what's being charged",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-11",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer wants a discount for referring two new clients today"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer wants a discount for referring two new clients today",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-12",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says a student discount should apply here"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says a student discount should apply here",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-13",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer wants to pay less since they're supplying their own reference art"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer wants to pay less since they're supplying their own reference art",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-train-14",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says the piece is small so the minimum charge feels unfair"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says the piece is small so the minimum charge feels unfair",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-held_out-00",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer mentions it's their birthday and expects a lower total because of it"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer mentions it's their birthday and expects a lower total because of it",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-held_out-01",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer wants a bundle rate for two unrelated small tattoos today"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer wants a bundle rate for two unrelated small tattoos today",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-held_out-02",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says the shop's own website listed a lower starting price"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says the shop's own website listed a lower starting price",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-held_out-03",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer offers to leave a five-star review in exchange for a discount"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer offers to leave a five-star review in exchange for a discount",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "haggle_price-held_out-04",
+        "kind": "haggle_price",
+        "payload": {
+          "detail": "the customer says they'll book a much bigger piece later for a discount now"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's point that the customer says they'll book a much bigger piece later for a discount now",
+        "the shop states the shop's price is fixed for the requested work"
+      ],
+      "intended_attitude": "polite but firm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-00",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "redness that has not gone down after five days"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about redness that has not gone down after five days",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about redness that has not gone down after five days.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. We hear you about redness that has not gone down after five days.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-01",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a small area that feels warmer than the skin around it"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a small area that feels warmer than the skin around it",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about a small area that feels warmer than the skin around it.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. We hear you about a small area that feels warmer than the skin around it.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-02",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "flaking that looks heavier than what the aftercare sheet described"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about flaking that looks heavier than what the aftercare sheet described",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. We hear you about flaking that looks heavier than what the aftercare sheet described.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That's completely normal, and we're here to make sure it heals just fine. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. We hear you about flaking that looks heavier than what the aftercare sheet described.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Oh no, that actually sounds really serious, you should be worried. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-03",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a faint ring of irritation around the edges of the piece"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a faint ring of irritation around the edges of the piece",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-04",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "ink that seems to be fading unusually fast in the first week"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about ink that seems to be fading unusually fast in the first week",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-05",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a raised, slightly puffy texture over part of the linework"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a raised, slightly puffy texture over part of the linework",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-06",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "itching that has not settled down after several days"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about itching that has not settled down after several days",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-07",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a small cluster of tiny bumps near the shading"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a small cluster of tiny bumps near the shading",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-08",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "the piece looking duller than expected once the peeling finished"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about the piece looking duller than expected once the peeling finished",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-09",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a patch that stayed shiny and tight-feeling longer than the rest"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a patch that stayed shiny and tight-feeling longer than the rest",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-10",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "mild swelling that appeared after a long day in the sun"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about mild swelling that appeared after a long day in the sun",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-11",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a slightly different color developing in one small section"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a slightly different color developing in one small section",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-12",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "tenderness that returned after the customer went back to the gym"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about tenderness that returned after the customer went back to the gym",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-13",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a scab that came off earlier than the aftercare sheet expected"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a scab that came off earlier than the aftercare sheet expected",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-train-14",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a faint line of dryness tracking along the tattoo's edge"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a faint line of dryness tracking along the tattoo's edge",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-held_out-00",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a cool, clammy patch of skin the customer noticed this morning"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a cool, clammy patch of skin the customer noticed this morning",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-held_out-01",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a faint discoloration spreading just past the tattoo's border"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a faint discoloration spreading just past the tattoo's border",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-held_out-02",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "unusual tightness in the skin whenever the customer stretches"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about unusual tightness in the skin whenever the customer stretches",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-held_out-03",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "a small blister that appeared overnight near the wrist"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about a small blister that appeared overnight near the wrist",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "aftercare_worry-held_out-04",
+        "kind": "aftercare_worry",
+        "payload": {
+          "detail": "the piece looking oddly glossy days after it should have matted down"
+        }
+      },
+      "required_info": [
+        "the shop addresses the customer's concern about the piece looking oddly glossy days after it should have matted down",
+        "the shop recommends the customer come back in for a look if it does not improve"
+      ],
+      "intended_attitude": "calm and reassuring",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-00",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "sending their coworker in for a matching piece"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for sending their coworker in for a matching piece",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That means so much to us, truly, thank you. We hear you about sending their coworker in for a matching piece.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Okay, noted, moving on. We hear you about sending their coworker in for a matching piece.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-01",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "posting about the shop on their social media page"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for posting about the shop on their social media page",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That means so much to us, truly, thank you. We hear you about posting about the shop on their social media page.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Okay, noted, moving on. We hear you about posting about the shop on their social media page.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-02",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "recommending the shop to their entire book club"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for recommending the shop to their entire book club",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That means so much to us, truly, thank you. We hear you about recommending the shop to their entire book club.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That means so much to us, truly, thank you. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Okay, noted, moving on. We hear you about recommending the shop to their entire book club.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Okay, noted, moving on. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-03",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "bringing their sibling in for a first tattoo"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for bringing their sibling in for a first tattoo",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-04",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "telling their gym group about the shop's custom work"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for telling their gym group about the shop's custom work",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-05",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "leaving a glowing review after their last visit"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for leaving a glowing review after their last visit",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-06",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "referring a coworker who now wants a full sleeve"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for referring a coworker who now wants a full sleeve",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-07",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "bringing three friends in together for a group session"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for bringing three friends in together for a group session",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-08",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "recommending the shop during a local radio interview"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for recommending the shop during a local radio interview",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-09",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "telling their tattoo-collector friends about the shop's linework"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for telling their tattoo-collector friends about the shop's linework",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-10",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "bringing their partner in after loving their own piece"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for bringing their partner in after loving their own piece",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-11",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "sharing healed photos that brought in two new walk-ins"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for sharing healed photos that brought in two new walk-ins",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-12",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "recommending the shop to their entire wedding party"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for recommending the shop to their entire wedding party",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-13",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "telling a stranger at a coffee shop about their piece"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for telling a stranger at a coffee shop about their piece",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-train-14",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "bringing their neighbor in for a cover-up consultation"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for bringing their neighbor in for a cover-up consultation",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-held_out-00",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "vouching for the shop to a visiting out-of-town friend"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for vouching for the shop to a visiting out-of-town friend",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-held_out-01",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "recommending the shop in a local community newsletter"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for recommending the shop in a local community newsletter",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-held_out-02",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "bringing their entire hiking club in for matching pieces"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for bringing their entire hiking club in for matching pieces",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-held_out-03",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "telling a tattoo convention booth about the shop's work"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for telling a tattoo convention booth about the shop's work",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "referral_praise-held_out-04",
+        "kind": "referral_praise",
+        "payload": {
+          "detail": "referring their landlord, who booked a large backpiece"
+        }
+      },
+      "required_info": [
+        "the shop thanks the customer for referring their landlord, who booked a large backpiece",
+        "the shop mentions a referral discount for the customer's next visit"
+      ],
+      "intended_attitude": "grateful and warm",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-00",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a full-back mural depicting their family's migration story"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a full-back mural depicting their family's migration story",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That is such a cool idea, tell me more about it. We hear you about a full-back mural depicting their family's migration story.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. We hear you about a full-back mural depicting their family's migration story.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-01",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a sleeve blending three unrelated mythologies into one scene"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a sleeve blending three unrelated mythologies into one scene",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That is such a cool idea, tell me more about it. We hear you about a sleeve blending three unrelated mythologies into one scene.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. We hear you about a sleeve blending three unrelated mythologies into one scene.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-02",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece that changes meaning depending on the angle it's viewed from"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece that changes meaning depending on the angle it's viewed from",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": [
+        {
+          "text": "That is such a cool idea, tell me more about it. We hear you about a piece that changes meaning depending on the angle it's viewed from.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": true,
+          "label_kind": "positive"
+        },
+        {
+          "text": "That is such a cool idea, tell me more about it. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": true,
+          "label_kind": "planted_negative_info"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. We hear you about a piece that changes meaning depending on the angle it's viewed from.",
+          "info_target_index": 0,
+          "info_present": true,
+          "attitude_present": false,
+          "label_kind": "planted_negative_attitude"
+        },
+        {
+          "text": "Sure, whatever you want, doesn't matter to us. Anyway, let's talk about scheduling your next visit.",
+          "info_target_index": 0,
+          "info_present": false,
+          "attitude_present": false,
+          "label_kind": "planted_negative_both"
+        }
+      ]
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-03",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design built entirely from their grandmother's handwriting"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design built entirely from their grandmother's handwriting",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-04",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece incorporating their own hand-drawn childhood sketches"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece incorporating their own hand-drawn childhood sketches",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-05",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design that maps constellations onto their exact birth date and location"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design that maps constellations onto their exact birth date and location",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-06",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece built around a recurring dream they've had for years"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece built around a recurring dream they've had for years",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-07",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design combining their pet's silhouette with a family motto"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design combining their pet's silhouette with a family motto",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-08",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece that tells their recovery story in three linked scenes"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece that tells their recovery story in three linked scenes",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-09",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design based on a song's lyrics rendered as visual metaphor"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design based on a song's lyrics rendered as visual metaphor",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-10",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece incorporating their late father's fingerprint pattern"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece incorporating their late father's fingerprint pattern",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-11",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design that reproduces a page from their favorite book verbatim"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design that reproduces a page from their favorite book verbatim",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-12",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece built from a collage of their travel photographs"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece built from a collage of their travel photographs",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-13",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design representing every city they've ever lived in"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design representing every city they've ever lived in",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-train-14",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece that incorporates their own handwriting alongside an illustration"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece that incorporates their own handwriting alongside an illustration",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "train",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-held_out-00",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design built from a heart-monitor readout during a meaningful hospital stay"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design built from a heart-monitor readout during a meaningful hospital stay",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-held_out-01",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece mapping their family tree as a branching tree illustration"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece mapping their family tree as a branching tree illustration",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-held_out-02",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design translating their favorite recipe into symbolic imagery"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design translating their favorite recipe into symbolic imagery",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-held_out-03",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a piece built around the exact coordinates of their childhood home"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a piece built around the exact coordinates of their childhood home",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "held_out",
+      "validation_reactions": []
+    },
+    {
+      "event": {
+        "id": "custom_design_pitch-held_out-04",
+        "kind": "custom_design_pitch",
+        "payload": {
+          "detail": "a design that reinterprets their old varsity jersey number as art"
+        }
+      },
+      "required_info": [
+        "the shop responds to the customer's idea of a design that reinterprets their old varsity jersey number as art",
+        "the shop asks to schedule a design consultation before booking the session"
+      ],
+      "intended_attitude": "engaged and curious",
+      "split": "held_out",
+      "validation_reactions": []
+    }
+  ]
+}

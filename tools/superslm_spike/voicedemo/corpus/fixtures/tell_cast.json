@@ -1,0 +1,757 @@
+{
+  "corpus_version": "voicedemo-corpus-2026-08-13-v1",
+  "n_events": 50,
+  "n_lines": 150,
+  "lines": [
+    {
+      "event_id": "botched_request-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the geometric mandala's spokes are visibly uneven on one side, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the geometric mandala's spokes are visibly uneven on one side, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the geometric mandala's spokes are visibly uneven on one side, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the watercolor-style splashes bled together into a muddy blur, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the watercolor-style splashes bled together into a muddy blur, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the watercolor-style splashes bled together into a muddy blur, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the negative-space lettering filled in instead of staying open, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the negative-space lettering filled in instead of staying open, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the negative-space lettering filled in instead of staying open, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's chosen quote was misspelled by one letter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's chosen quote was misspelled by one letter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's chosen quote was misspelled by one letter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the wrap-around design does not line up when the arm bends, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the wrap-around design does not line up when the arm bends, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "botched_request-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the wrap-around design does not line up when the arm bends, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that knee-to-hip leg piece of a cathedral facade, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that knee-to-hip leg piece of a cathedral facade, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that knee-to-hip leg piece of a cathedral facade, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that underarm piece of a swarm of dragonflies, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that underarm piece of a swarm of dragonflies, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that underarm piece of a swarm of dragonflies, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that sternum piece shaped like a slow hourglass with sand mid-fall, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that sternum piece shaped like a slow hourglass with sand mid-fall, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that sternum piece shaped like a slow hourglass with sand mid-fall, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that wraparound wrist cuff of interlocking chain links, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that wraparound wrist cuff of interlocking chain links, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that wraparound wrist cuff of interlocking chain links, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that temple-to-jaw piece of a crescent moon and stars, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that temple-to-jaw piece of a crescent moon and stars, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "brag_result-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that temple-to-jaw piece of a crescent moon and stars, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that asking for a matching set of five tiny tattoos instead of the one booked, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that asking for a matching set of five tiny tattoos instead of the one booked, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that asking for a matching set of five tiny tattoos instead of the one booked, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that requesting the piece get mirrored onto the opposite leg right after this session, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that requesting the piece get mirrored onto the opposite leg right after this session, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that requesting the piece get mirrored onto the opposite leg right after this session, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that wanting a completely unrelated cover-up squeezed in before the booked piece begins, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that wanting a completely unrelated cover-up squeezed in before the booked piece begins, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that wanting a completely unrelated cover-up squeezed in before the booked piece begins, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that asking to fold a second client's design into the same booked slot, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that asking to fold a second client's design into the same booked slot, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that asking to fold a second client's design into the same booked slot, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that requesting the linework redone in a style never discussed at booking, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that requesting the linework redone in a style never discussed at booking, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "scope_creep-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that requesting the linework redone in a style never discussed at booking, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the passport presented has a visibly re-glued photo page, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the passport presented has a visibly re-glued photo page, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the passport presented has a visibly re-glued photo page, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's student ID has no birthdate printed on it at all, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's student ID has no birthdate printed on it at all, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's student ID has no birthdate printed on it at all, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the ID's raised text does not respond to the shop's verification light, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the ID's raised text does not respond to the shop's verification light, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the ID's raised text does not respond to the shop's verification light, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's temporary paper ID was issued only yesterday, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's temporary paper ID was issued only yesterday, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's temporary paper ID was issued only yesterday, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the ID's signature strip has clearly been rewritten over, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the ID's signature strip has clearly been rewritten over, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "underage_or_bad_id-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the ID's signature strip has clearly been rewritten over, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the glow-in-the-dark ink the customer wanted for the accent lines, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the glow-in-the-dark ink the customer wanted for the accent lines, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the glow-in-the-dark ink the customer wanted for the accent lines, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the extra-wide shading cartridges the backpiece design calls for, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the extra-wide shading cartridges the backpiece design calls for, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the extra-wide shading cartridges the backpiece design calls for, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the specific matte-black ink used for the blackout sleeve style, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the specific matte-black ink used for the blackout sleeve style, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the specific matte-black ink used for the blackout sleeve style, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the sterile cover sheets sized for the reclining chair setup, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the sterile cover sheets sized for the reclining chair setup, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the sterile cover sheets sized for the reclining chair setup, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the custom stencil transfer gel the artist prefers for large pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the custom stencil transfer gel the artist prefers for large pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "supply_shortage-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the custom stencil transfer gel the artist prefers for large pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's ferry to the island leaves at the top of the hour, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's ferry to the island leaves at the top of the hour, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's ferry to the island leaves at the top of the hour, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's court appearance comes up later today and this matters to them now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's court appearance comes up later today and this matters to them now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's court appearance comes up later today and this matters to them now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's band goes on stage in under two hours, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's band goes on stage in under two hours, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's band goes on stage in under two hours, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's parole check-in comes later and they wanted this done first, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's parole check-in comes later and they wanted this done first, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's parole check-in comes later and they wanted this done first, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer's graduation ceremony starts in ninety minutes, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer's graduation ceremony starts in ninety minutes, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "walk_in_rush-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer's graduation ceremony starts in ninety minutes, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer mentions it's their birthday and expects a lower total because of it, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer mentions it's their birthday and expects a lower total because of it, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer mentions it's their birthday and expects a lower total because of it, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer wants a bundle rate for two unrelated small tattoos today, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer wants a bundle rate for two unrelated small tattoos today, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer wants a bundle rate for two unrelated small tattoos today, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer says the shop's own website listed a lower starting price, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer says the shop's own website listed a lower starting price, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer says the shop's own website listed a lower starting price, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer offers to leave a five-star review in exchange for a discount, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer offers to leave a five-star review in exchange for a discount, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer offers to leave a five-star review in exchange for a discount, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the customer says they'll book a much bigger piece later for a discount now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the customer says they'll book a much bigger piece later for a discount now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "haggle_price-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the customer says they'll book a much bigger piece later for a discount now, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a cool, clammy patch of skin the customer noticed this morning, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a cool, clammy patch of skin the customer noticed this morning, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a cool, clammy patch of skin the customer noticed this morning, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a faint discoloration spreading just past the tattoo's border, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a faint discoloration spreading just past the tattoo's border, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a faint discoloration spreading just past the tattoo's border, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that unusual tightness in the skin whenever the customer stretches, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that unusual tightness in the skin whenever the customer stretches, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that unusual tightness in the skin whenever the customer stretches, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a small blister that appeared overnight near the wrist, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a small blister that appeared overnight near the wrist, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a small blister that appeared overnight near the wrist, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that the piece looking oddly glossy days after it should have matted down, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that the piece looking oddly glossy days after it should have matted down, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "aftercare_worry-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that the piece looking oddly glossy days after it should have matted down, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that vouching for the shop to a visiting out-of-town friend, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that vouching for the shop to a visiting out-of-town friend, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that vouching for the shop to a visiting out-of-town friend, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that recommending the shop in a local community newsletter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that recommending the shop in a local community newsletter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that recommending the shop in a local community newsletter, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that bringing their entire hiking club in for matching pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that bringing their entire hiking club in for matching pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that bringing their entire hiking club in for matching pieces, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that telling a tattoo convention booth about the shop's work, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that telling a tattoo convention booth about the shop's work, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that telling a tattoo convention booth about the shop's work, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that referring their landlord, who booked a large backpiece, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that referring their landlord, who booked a large backpiece, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "referral_praise-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that referring their landlord, who booked a large backpiece, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-00",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a design built from a heart-monitor readout during a meaningful hospital stay, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-00",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a design built from a heart-monitor readout during a meaningful hospital stay, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-00",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a design built from a heart-monitor readout during a meaningful hospital stay, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-01",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a piece mapping their family tree as a branching tree illustration, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-01",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a piece mapping their family tree as a branching tree illustration, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-01",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a piece mapping their family tree as a branching tree illustration, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-02",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a design translating their favorite recipe into symbolic imagery, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-02",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a design translating their favorite recipe into symbolic imagery, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-02",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a design translating their favorite recipe into symbolic imagery, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-03",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a piece built around the exact coordinates of their childhood home, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-03",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a piece built around the exact coordinates of their childhood home, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-03",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a piece built around the exact coordinates of their childhood home, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-04",
+      "race": "Human",
+      "text": "Well, Thanks for coming in today. We understand that a design that reinterprets their old varsity jersey number as art, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-04",
+      "race": "Troll",
+      "text": "Grah! Thanks for coming in today. We understand that a design that reinterprets their old varsity jersey number as art, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    },
+    {
+      "event_id": "custom_design_pitch-held_out-04",
+      "race": "Dwarf",
+      "text": "Aye, Thanks for coming in today. We understand that a design that reinterprets their old varsity jersey number as art, and we know your time and your trust are both valuable to us. The team here feels glad you are one of the shop's regulars, and the plan for the rest of your visit stays simple: we take care of the details, and you enjoy the results."
+    }
+  ]
+}
