@@ -244,6 +244,51 @@ enum class SslmForwardStatus {
 	                                          // rotation's own in-domain output) lose magnitude" --
 	                                          // two different arithmetic stages, two different
 	                                          // guards, per the design's own T-1898-repaired text.
+	// --- T-2057 (Claude/Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md
+	// §22, D-SLM3190/D-SLM3191): the GPU-serial port's recording-window catch
+	// (superslm_gpu.cpp, RunLayerLoopGpu) used to reuse KvPrecisionUnsupported
+	// for "an allocation inside the command-list recording window threw" --
+	// already carrying two other meanings on that leg (no device at all;
+	// sub-Tier-3 hardware), both permanent-hardware conditions a caller
+	// should stop retrying against. These two are host-observed AT THE
+	// CATCH SITE via ID3D12Device::GetDeviceRemovedReason(), never derived
+	// from SSLM_GPU_HR's own thrown std::runtime_error (which carries no
+	// HRESULT payload) and never encoded into the GPU-side sticky-tag space
+	// DecodeStickyTag decodes (superslm_gpu.cpp) -- appending here is
+	// ABI-safe by every constraint this tree enforces or has planned
+	// (D-SLM3190 §22.2: no fixed underlying values beyond Ok=0, never
+	// serialized, no shipped sslm_status C-ABI type exists yet to freeze). ---
+	GpuAllocationFailed,                      // T-2057 (D-SLM3191): a device allocation, or any
+	                                          // other command-recording-window D3D12 operation,
+	                                          // failed while the device is CONFIRMED STILL PRESENT
+	                                          // (GetDeviceRemovedReason() == S_OK). Transient and
+	                                          // size-dependent -- the correct host response is to
+	                                          // retry at a smaller configuration, never to fall
+	                                          // back off this GPU permanently (the same class of
+	                                          // host-facing confusion this enum's own
+	                                          // HeadDimGeometryMismatch/WorkspaceTooSmall history
+	                                          // documents as a defect when the wrong status sends
+	                                          // the host down the wrong recovery path).
+	GpuDeviceRemoved,                         // T-2057 (D-SLM3191): the GPU device itself was
+	                                          // removed, reset, or hung
+	                                          // (GetDeviceRemovedReason() != S_OK) during a
+	                                          // recording-window operation. The device object is no
+	                                          // longer usable for any further call -- the host must
+	                                          // recreate it, not retry against the same handle.
+	                                          // Distinct from GpuAllocationFailed (device alive,
+	                                          // this one call failed) and from
+	                                          // KvPrecisionUnsupported's "no device"/"tier too low"
+	                                          // meanings (this device WAS usable a moment ago and
+	                                          // may be again after recreation -- neither a
+	                                          // permanent-hardware nor a size-dependent condition).
+	                                          // Named residual (D-SLM3191): GetDeviceRemovedReason()
+	                                          // answers "is the device gone right now," not "did
+	                                          // removal cause THIS call's throw" -- an allocation
+	                                          // failure racing an unrelated, asynchronous device
+	                                          // removal reads as GpuDeviceRemoved, the conservative
+	                                          // direction (an unneeded device-recreation costs less
+	                                          // than an unneeded retry against a device that is
+	                                          // actually gone).
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

@@ -1203,30 +1203,31 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// merely the crash class M1 already closed. Safe unconditionally: if
 		// the cache was never touched this call (a hit, or a throw before the
 		// `!weights_resident` branch ran), this is a same-state no-op.
+		//
+		// T-2057 (Claude/Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md
+		// §22.3, D-SLM3191): queried HERE, immediately before the cleanup
+		// below, not after -- `dev.dev` (ComPtr<ID3D12Device>) is in scope
+		// through this whole function via the `harness::Device& dev` bound
+		// above, and `GetDeviceRemovedReason()` is always safely callable on
+		// it regardless of removal state (a standard D3D12 idiom). Zero
+		// changes to `SSLM_GPU_HR` or the caught exception type -- the ruling
+		// resolves T-2055's own P4 (`KvPrecisionUnsupported` already carrying
+		// two unrelated permanent-hardware meanings on this leg) without
+		// needing either.
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		g_resident_weights.lw_buf.Reset();
 		g_resident_weights.valid = false;
 		dev.list->Close();
-		// T-2055 (P4): `KvPrecisionUnsupported` already carries two other
-		// meanings on this leg (no device at all, `!dev.available`; a
-		// sub-Tier-3 adapter, `MapModelGpuResidencyTierCheck`) -- reusing it a
-		// third time for "this allocation failed" collapses a transient,
-		// size-dependent, RETRYABLE condition into a permanent-hardware one,
-		// the same class of confusion `checked_chain_funnel.h`'s own
-		// HeadDimGeometryMismatch/WorkspaceTooSmall history documents as a
-		// defect (a host that enlarges its buffer in response, or gives up on
-		// this GPU permanently in response, wants the OTHER answer). No
-		// EXISTING `SslmForwardStatus` enumerator names "a device allocation
-		// failed" -- every other member is either an arithmetic/domain-funnel
-		// rejection or one of the two meanings already assigned to
-		// `KvPrecisionUnsupported` above. Per this ticket's own routing (derive
-		// a status from the EXISTING enum if one fits; only propose a new
-		// enumerator to the design seat if nothing does), this is named as an
-		// open design-level item rather than resolved unilaterally here -- see
-		// this ticket's own build log handoff and D-SLM3184 -- and
-		// `KvPrecisionUnsupported` is kept as the interim return, unchanged
-		// from what M2 already returned for the one site it used to cover, not
-		// a new ambiguity this round introduces.
-		return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
+		// gone right now (device recreation owed, not a retry against this
+		// handle); `GpuAllocationFailed` otherwise (device alive, this one
+		// call failed -- transient/size-dependent, retry smaller). Named
+		// residual, not fixed here (the ruling's own §22.3): this answers "is
+		// the device gone right now," not "did removal cause THIS throw" -- an
+		// allocation failure racing an unrelated async device removal reads
+		// as `GpuDeviceRemoved`, the conservative direction.
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	}
 	SSLM_GPU_HR(dev.list->Close());
 	ID3D12CommandList* lists[] = {dev.list.Get()};

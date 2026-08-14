@@ -60,6 +60,8 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 			return "OptionGWideRopeMagnitudeOutOfDomain";
 		case SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain:
 			return "OptionGFusedLandingExponentOutOfDomain";
+		case SslmForwardStatus::GpuAllocationFailed: return "GpuAllocationFailed";
+		case SslmForwardStatus::GpuDeviceRemoved: return "GpuDeviceRemoved";
 	}
 	return "?";
 }
