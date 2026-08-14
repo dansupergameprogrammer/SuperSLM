@@ -58,5 +58,26 @@ if errorlevel 1 (
 
 out\superslm_tests.exe
 set ec=%errorlevel%
+
+rem T-2091 (O30's own local-half closure, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-
+rem review.md; D-SLM3271): this script ran no Python at all until now, so the O11 gate-flag pin
+rem and the rest of tests/ci/check_gpu_guard_status_parity.py's own structural population never
+rem fired on the LOCAL build path -- only in GitHub Actions, which does not even compile
+rem src/gpu/superslm_gpu.cpp into the target that runs it (EXECUTION_SCOPE_WAIVERS's own named,
+rem dated residual in that same module). Guarded, non-fatal if python is absent: this script's own
+rem contract is a C++-only build, and "don't chase CI" (Claude/CLAUDE.md) is about not gating the
+rem local build on tooling that may not be installed, never about skipping a check that IS
+rem installed and IS the real gate this arc's own ship decisions run against.
+where python >nul 2>nul
+if not errorlevel 1 (
+	python tests\ci\check_gpu_guard_status_parity.py
+	if errorlevel 1 (
+		echo check_gpu_guard_status_parity.py FAILED -- see output above
+		set ec=1
+	)
+) else (
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py ^(non-fatal^)
+)
+
 popd
 exit /b %ec%

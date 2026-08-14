@@ -281,13 +281,19 @@ bool LastWeightUploadWasSkipped();
 // has defined `SUPERSLM_O11_ALLOC_INJECTION` alongside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION` on
 // the default test-binary compile line since T-2071 landed the real bodies, five rounds ago. The
 // trigger this paragraph describes as pending fired at `72a9b0d`; nothing in this file was edited
-// to say so, because the rename this same round made (M2, T-2084) touched `:273` one line below
+// to say so, because the rename T-2084 made (M2, the previous round) touched `:273` one line below
 // this sentence without re-reading the paragraph it sits in (`StandardsDocument.md` §7). Believing
 // this sentence and removing the flag drops the O11 gate silently: gate-on and gate-off both then
 // report the SAME 3-failure count (16 checks and both discrimination cells vanish with no test
 // failure of any kind, D-SLM3261 S1's own executed measurement) -- the real, structural fix is the
-// pinned assertion in `tests/ci/check_gpu_guard_status_parity.py` (`check_build_bat_defines_o11_
-// gate`), not this sentence alone.
+// pinned assertion in `tests/ci/check_gpu_guard_status_parity.py`
+// (`check_build_bat_defines_o11_gate`), not this sentence alone.
+//
+// CORRECTED 2026-08-14 (T-2091, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md,
+// M1; D-SLM3271): the block above's own header said T-2088 while attributing the rename it
+// describes to "this same round" -- the rename was T-2084's own M2, the PREVIOUS round; "this
+// same round" made the two the same round, which they were not. Corrected to the wording
+// D-SLM3262 already had right ("the rename this same arc made at T-2084 (M2)").
 //
 // Mirrors B12's own arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection):
 // arms injection so the NEXT allocation call AT THE NAMED SITE in RunLayerLoopGpu fails with a
@@ -318,6 +324,17 @@ constexpr uint32_t kO11AllocInjectionSiteWorkScratchUav = 1;
 // moved. `TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse`
 // (tests/test_main.cpp) is gated identically -- it does not compile into the default build at all,
 // so it cannot be the thing that fails the default build's own link.
+//
+// CLARIFIED 2026-08-14 (T-2091, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md's
+// own class sweep; D-SLM3271): "the default build" above means the CMake target (`superslm_tests`,
+// `CMakeLists.txt`) -- the ONLY build configuration where `SUPERSLM_O11_ALLOC_INJECTION` is ever
+// undefined, since `build.bat`'s own default test-binary line has defined it since T-2071 (S1,
+// this same file's own dated correction below). Not a correction to the CLAIM (both builds
+// genuinely never compile this cell without the macro) -- a disambiguation of "default," the exact
+// word S1 found already misleading readers about a DIFFERENT sentence in this same paragraph
+// group. See `derive_execution_scope`/`check_execution_scope_waivers` (`tests/ci/check_gpu_guard_
+// status_parity.py`) for the machine-derived, standing-waived statement of which build compiles
+// what.
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 void ArmO11AllocationFailureInjection(uint32_t site);
 void ClearO11AllocationInjection();
