@@ -708,7 +708,8 @@ def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_
 
 
 def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
-                                    source_adapter_name: Optional[str] = None, verbose: bool = True):
+                                    source_adapter_name: Optional[str] = None, verbose: bool = True,
+                                    checkpoint_path=None):
     """Design §24.2: assembles the six pinned sections (Config, SigmoidLut, Provenance/ADP1,
     Weights/WGT1, DeltaFoldScales/DFS1, UFoldScales/UFS1) for EVERY adapted (layer, projection)
     pair the adapter's own `target_modules` declares, across every layer the bound base checkpoint
@@ -732,6 +733,14 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
     and also carries every pair's own diagnostic. `round_trip` is this build's own record of what
     was derived and written, per `"layer{L}.{proj}"` key -- what the round-trip proof (T-2046
     handoff) compares the REAL C++ loader's own output against, bit-for-bit.
+
+    `checkpoint_path` (T-2046, added after a real 196-pair sweep was killed mid-run by an
+    external process-management event, not a crash -- 2026-08-14): if given, this pair's own B3
+    verdict (the ~6.5s-per-pair cost; every other step -- reading tensors, quantizing, deriving
+    triples -- is ~0.1s/pair and simply re-run) is appended as one JSON line per pair to this
+    path as soon as it is computed, and on entry, any pair already recorded there has its SAVED
+    verdict reused instead of re-running `run_b3_bootstrap_check`. A resumed run therefore re-pays
+    only the cheap per-pair steps for already-checkpointed pairs, never the expensive one.
     """
     adapter_dir = Path(adapter_dir)
     meta = load_adapter_meta(adapter_dir)
@@ -757,6 +766,22 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
                                   # BuildAdapter, t2029_b3_execute.py) -- a real-text corpus for T
                                   # remains the SAME already-tracked residual named since B3's
                                   # first execution (this build does not newly open that gap).
+
+    saved_b3: Dict[str, dict] = {}
+    checkpoint_file = None
+    if checkpoint_path is not None:
+        checkpoint_path = Path(checkpoint_path)
+        if checkpoint_path.exists():
+            with open(checkpoint_path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rec = json.loads(line)
+                    saved_b3[rec["name"]] = rec["b3"]
+            if verbose and saved_b3:
+                print(f"resuming: {len(saved_b3)} pairs already checkpointed at {checkpoint_path}")
+        checkpoint_file = open(checkpoint_path, "a", encoding="utf-8")
 
     for layer in range(cfg.num_hidden_layers):
         for proj in PEFT_ADAPTABLE_PROJECTIONS:
@@ -795,7 +820,13 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
 
             b3 = None
             if not pair_domain_trip:
-                b3 = run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
+                if name in saved_b3:
+                    b3 = saved_b3[name]
+                else:
+                    b3 = run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
+                    if checkpoint_file is not None:
+                        checkpoint_file.write(json.dumps({"name": name, "b3": b3}) + "\n")
+                        checkpoint_file.flush()
                 if not b3["accepted"]:
                     margin_exceeded = True
 
@@ -830,6 +861,9 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
                 "u": [(t.identity, t.mult, t.exponent) for t in u_triples],
                 "a_codes": Ac.tolist(), "b_codes": Bc.tolist(),
             }
+
+    if checkpoint_file is not None:
+        checkpoint_file.close()
 
     verdict = {"domain_trip": domain_trip, "margin_exceeded": margin_exceeded,
               "saturation_elevated": False, "pairs": pair_diagnostics}
@@ -913,12 +947,22 @@ def build_merged_checkpoint(adapter_dir, out_dir, *, verbose: bool = True) -> Pa
 
 
 def run_merge_quantize_conversion(adapter_dir, out_path, *, verifier=None, manifest_out=None,
-                                  skip_verify: bool = False, verbose: bool = True) -> dict:
+                                  skip_verify: bool = False, verbose: bool = True,
+                                  merged_dir=None) -> dict:
     """Design §24.3: `--fallback=merge`'s own output. Materializes the merged checkpoint
     (`build_merged_checkpoint`), then runs `pipeline.load_model`/`convert_model.build_sections`/
     `sslm_convert_validate.validate_model`/`sslm_format.write_artifact`/
     `sslm_convert_manifest.verify_and_merge` COMPLETELY UNCHANGED -- the same two-phase checked
     transaction any base artifact passes (D-SLM3168), never an adapter-specific relaxation.
+
+    `merged_dir` (T-2046, added after a real `pipeline.load_model` calibration run was killed
+    mid-flight by an external process-management event, not a crash, 2026-08-14): if given, an
+    ALREADY-materialized merged checkpoint directory (`build_merged_checkpoint`'s own prior
+    output) is used directly and `tempfile.TemporaryDirectory`'s own auto-cleanup is skipped --
+    lets a retry reuse a merge step that already completed and survived the kill (a hard process
+    termination does not run a `with`-block's `__exit__`, so the temp directory is not deleted),
+    rather than re-paying that cost. Default (`None`): materialize fresh into a real temp
+    directory, cleaned up on exit, exactly as before this parameter existed.
     """
     import convert_model as cm
     import sslm_convert_manifest as scm
@@ -926,13 +970,13 @@ def run_merge_quantize_conversion(adapter_dir, out_path, *, verifier=None, manif
 
     pipeline = _load_spike()
     adapter_dir = Path(adapter_dir)
-    with tempfile.TemporaryDirectory(prefix="sslm_merge_") as tmp:
-        merged_dir = build_merged_checkpoint(adapter_dir, Path(tmp) / "merged", verbose=verbose)
+
+    def _run(merged_dir_path):
         if verbose:
             print("running pipeline.load_model against the merged checkpoint (fresh activation "
                  "calibration over the pinned corpus -- this is the real cost; T-1953 measured "
                  "~57min for a full 600-record calibration)...")
-        model = pipeline.load_model(merged_dir)
+        model = pipeline.load_model(merged_dir_path)
 
         scv.validate_model(model, fold_ops_tensor=cm._fold_ops_tensor, ctx_fold_tensor=cm._ctx_fold_tensor,
                            unicode_major=scv.PINNED_UNICODE_VERSION[0],
@@ -949,12 +993,18 @@ def run_merge_quantize_conversion(adapter_dir, out_path, *, verifier=None, manif
 
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         verifier_cmd = [verifier] if verifier else None
-        manifest = scm.verify_and_merge(repo_root, str(out_path), str(merged_dir),
+        manifest = scm.verify_and_merge(repo_root, str(out_path), str(merged_dir_path),
                                         verifier_cmd=verifier_cmd, manifest_out_path=manifest_out,
                                         model=model, fold_approximation_error=fold_approximation_error)
         if verbose:
             print("verified: independent loader accepted the merge+quantize artifact")
         return {"fingerprint": fingerprint, "verified": True, "manifest": manifest}
+
+    if merged_dir is not None:
+        return _run(Path(merged_dir))
+    with tempfile.TemporaryDirectory(prefix="sslm_merge_") as tmp:
+        built_dir = build_merged_checkpoint(adapter_dir, Path(tmp) / "merged", verbose=verbose)
+        return _run(built_dir)
 
 
 def main():
