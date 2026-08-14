@@ -372,6 +372,14 @@ struct GpuScratchLayout {
 	uint32_t act_codes = 0, act_scale = 0;
 	uint32_t down_codes = 0, down_scale = 0;
 	uint32_t stream_next = 0, stream_next_scale = 0;
+	// T-2045 (C3, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): a
+	// persistent scores/probs region, `num_attention_heads * context_cap`
+	// int64 elements -- the ratified 16-site decomposition splits attention
+	// into four separate dispatches (attention-score, softmax, context-
+	// accumulate, ctx_fold), so the score row one dispatch computes and the
+	// probs row the next reads/overwrites in place must survive ACROSS
+	// dispatches, unlike WorkScratch's transient per-dispatch regions.
+	uint32_t scores = 0;
 	uint32_t total = 0;
 };
 
@@ -390,7 +398,8 @@ uint32_t SeqCtxLenOff(uint32_t hidden_size) { return SeqSatHiOff(hidden_size) + 
 uint32_t SeqStickyOff(uint32_t hidden_size) { return SeqCtxLenOff(hidden_size) + 8u; }
 uint32_t SeqTotalSize(uint32_t hidden_size) { return SeqStickyOff(hidden_size) + 8u; }
 
-GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediate_size) {
+GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediate_size,
+                                       uint32_t num_attention_heads, uint32_t context_cap) {
 	GpuScratchLayout L;
 	uint32_t cur = 0;
 	auto codes_block = [&](uint32_t width) {
@@ -414,6 +423,9 @@ GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediat
 	L.act_codes = codes_block(intermediate_size); L.act_scale = scale_block();
 	L.down_codes = codes_block(hidden_size); L.down_scale = scale_block();
 	L.stream_next = codes_block(hidden_size); L.stream_next_scale = scale_block();
+	L.scores = cur;
+	cur += static_cast<uint32_t>(static_cast<uint64_t>(num_attention_heads) *
+	                              static_cast<uint64_t>(context_cap) * 8ull);
 	L.total = cur;
 	return L;
 }
@@ -476,6 +488,18 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size) {
+	// T-2045 (C2, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): the
+	// same three host-side guards forward_sites.cpp's own RunLayerLoopImpl
+	// checks before touching `seq`, `workspace`, or issuing any device work
+	// (forward_sites.cpp:1137/1147/1316) -- checked in the SAME order, before
+	// the device-availability check even, since none of them needs a device
+	// to answer and CPU checks them before anything else too.
+	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;
+	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;
+	if (seq.layer_index >= num_hidden_layers) {
+		return superslm::SslmForwardStatus::SequenceAlreadyComplete;
+	}
+
 	harness::Device& dev = harness::GetDevice();
 	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
 
@@ -636,7 +660,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// T-2039: LayerScratch's own dynamic, per-real-dims layout (superseding
 	// T-2035's fixed 640-byte assumption, Sec13.5's own named blocker) --
 	// ComputeScratchLayout above, driven by the real H/I this call carries.
-	const GpuScratchLayout scratch_layout = ComputeScratchLayout(H, I);
+	// T-2045 (C3): also carries num_attention_heads/context_cap now, for the
+	// persistent cross-dispatch scores/probs region the de-fused attention
+	// sites need.
+	const GpuScratchLayout scratch_layout =
+	    ComputeScratchLayout(H, I, NQH, static_cast<uint32_t>(context_cap));
 	std::vector<uint8_t> scratch_bytes(scratch_layout.total, 0);
 	std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
 
@@ -658,14 +686,21 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// per-primitive header comments state this for each cooperative
 	// primitive) -- no cross-dispatch or cross-call persistence is needed or
 	// assumed.
+	// T-2045 (C1): a fourth region, ROPE_STAGE, immediately after ATTN_SCORES --
+	// 256 * head_dim int32 slots (one full head_dim-sized staging row per
+	// thread), so RoPE's own K write-back can stage every owned head's
+	// pre-rotation row before any thread writes back (Claude/Poirot/
+	// 82cfca7-gpu-serial-port-build-review.md C1; the design's own D-SLM2993
+	// staged shape, rope_guard_site.hlsl's own header comment).
 	const uint32_t max_width = std::max(H, I);
 	const uint64_t work_wide_a_off = 0;
 	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
 	const uint64_t work_attn_scores_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
-	const uint64_t work_total =
+	const uint64_t work_rope_stage_off =
 	    work_attn_scores_off + 256ull * static_cast<uint64_t>(context_cap) * 8u;
+	const uint64_t work_total = work_rope_stage_off + 256ull * static_cast<uint64_t>(HD) * 4u;
 
-	std::vector<uint8_t> scratch_layout_bytes(25 * 4, 0);
+	std::vector<uint8_t> scratch_layout_bytes(26 * 4, 0);
 	{
 		auto put = [&](int idx, uint32_t v) { PutI32At(scratch_layout_bytes, static_cast<size_t>(idx) * 4, static_cast<int32_t>(v)); };
 		put(0, scratch_layout.normed); put(1, scratch_layout.normed_scale);
@@ -683,6 +718,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		put(22, static_cast<uint32_t>(work_wide_a_off));
 		put(23, static_cast<uint32_t>(work_wide_b_off));
 		put(24, static_cast<uint32_t>(work_attn_scores_off));
+		put(25, scratch_layout.scores);  // T-2045 (C3): persistent cross-dispatch scores/probs region
 	}
 
 	// ModelConstants (t3): kIExpLn2Q/kIExpBQ/kIExpCaQ, the i-exp derivation's
@@ -741,7 +777,14 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
 	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
 	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
-	auto& attention_pipe = harness::GetOrBuildComposedPipeline("attention_site");
+	// T-2045 (C3): the four ratified attention sites, de-fused from T-2039's
+	// own single fused dispatch (Claude/Poirot/82cfca7-gpu-serial-port-build-
+	// review.md, C3 -- Sec5.4/Sec13 place cross-site fusion outside this
+	// design's build target).
+	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
+	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
+	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
+	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
 	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
 	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
 	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
@@ -786,16 +829,27 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
 
-	// T-2035: the full 16-site + commit composition, real dispatches throughout
-	// (Claude/Vitruvius/t1986-...-2026-08-13.md Sec4's own order; forward_sites.
-	// cpp:1390-1800).
-	const uint32_t layers_to_record = std::min(layer_budget, N);  // Sec5.8: never past the token boundary
-	for (uint32_t l = 0; l < layers_to_record; ++l) {
+	// T-2045 (C3): the full 16-site + commit composition, 17 real dispatches
+	// per layer, matching the ratified §5.8 quantum (D-SLM3069) and
+	// `kDispatchesPerLayer` above exactly -- attention is now four real
+	// dispatches (attention-score, softmax, context-accumulate, ctx_fold),
+	// not T-2039's own fused one.
+	// T-2045 (C2): resume from seq.layer_index, exactly as forward_sites.cpp's
+	// own `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)`
+	// does (forward_sites.cpp:1381) -- the guard above already proved
+	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
+	const uint32_t start_layer = seq.layer_index;
+	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
+	for (uint32_t i = 0; i < layers_to_record; ++i) {
+		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(rope_pipe.pso.Get(), l);
-		bind_and_dispatch(attention_pipe.pso.Get(), l);
+		bind_and_dispatch(attention_score_pipe.pso.Get(), l);
+		bind_and_dispatch(softmax_pipe.pso.Get(), l);
+		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l);
+		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
