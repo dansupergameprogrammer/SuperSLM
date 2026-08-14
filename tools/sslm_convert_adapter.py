@@ -584,13 +584,22 @@ def _realized_ratio_vectorized(identity, mult, exponent):
     return np.where(is_id, 1.0, r)
 
 
-def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_honest,
-                           pilot_n: int = _B3_PILOT_N, seed_base: int = 0x1000,
-                           validation_seed_base: int = 0x9000) -> dict:
-    """One (layer, proj) pair's own PILOT partition calibrates the four Deltas (composed
-    mean/tail, effect mean/tail); the SAME pair's own VALIDATION partition is graded against its
-    own just-frozen Deltas. Returns a dict with `accepted` (bool, feeding `margin_exceeded`) and
-    the measured figures.
+def _b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_honest,
+                               pilot_n: int = _B3_PILOT_N, seed_base: int = 0x1000,
+                               validation_seed_base: int = 0x9000) -> dict:
+    """One (layer, proj) pair's own raw per-draw `composed_gap`/`effect_distance_runtime` arrays,
+    split by the deterministic PILOT/VALIDATION partition -- the shared computation both the
+    per-pair diagnostic (`run_b3_bootstrap_check`, below) and the pooled corpus-level gate
+    (`run_b3_multi_pair_check`, T-2065, design §25.5) are built from, so the two never risk
+    independently drifting from each other's own arithmetic.
+
+    T-2065 (design §25, D-SLM3201-3208, T-2058 disposition of D-SLM3185's own routed 196-pair
+    sweep interpretation): extracted, unchanged in every formula/branch, from what was
+    `run_b3_bootstrap_check`'s own inline `collect`/`run_token` closures before this fold -- byte-
+    for-byte the same computation `Claude/Vitruvius/t2058-sweep-interpretation/
+    t2058_full_sweep_stats.py`'s own read-only `collect_raw` already reproduced and cross-checked
+    bit-exact against the original T-2046 sweep's own D-SLM3128 figures. Returns
+    `{"composed_pilot", "composed_val", "effect_pilot", "effect_val"}`, each a 1-D `np.ndarray`.
 
     PERFORMANCE NOTE (T-2046, not present in `t2029_b3_execute.py`'s own single-pair probe): the
     four per-channel triple sets (u-fold, base-fold, delta-fold, baked-fold) depend only on this
@@ -683,16 +692,43 @@ def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_
         return composed_pilot, composed_val, effect_rt_pilot, effect_rt_val
 
     c_pilot, _c_val1, e_pilot, _e_val1 = collect(pilot_n, seed_base)
-    c_pilot_stat = _b3_stat(c_pilot)
-    e_pilot_stat = _b3_stat(e_pilot)
+    _c_pilot2, c_val, _e_pilot2, e_val = collect(pilot_n, validation_seed_base)
+
+    return {"composed_pilot": np.asarray(c_pilot, dtype=np.float64),
+           "composed_val": np.asarray(c_val, dtype=np.float64),
+           "effect_pilot": np.asarray(e_pilot, dtype=np.float64),
+           "effect_val": np.asarray(e_val, dtype=np.float64)}
+
+
+def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_honest,
+                           pilot_n: int = _B3_PILOT_N, seed_base: int = 0x1000,
+                           validation_seed_base: int = 0x9000) -> dict:
+    """One (layer, proj) pair's own PILOT partition calibrates the four Deltas (composed
+    mean/tail, effect mean/tail); the SAME pair's own VALIDATION partition is graded against its
+    own just-frozen Deltas. Returns a dict with `accepted` and the measured figures.
+
+    T-2065 (design §25.5 item 2, D-SLM3205): this per-pair self-calibrated check is no longer the
+    PRIMARY accept/reject gate (`run_b3_multi_pair_check`, below, is) -- it is now the DIAGNOSTIC
+    layer: its own `accepted`/`Delta`/validation figures are what `_b3_pair_diagnostic` (below)
+    reads to decide whether a pair's own margin against ITS OWN self-calibrated Delta exceeds the
+    2x-bootstrap-SE review threshold (§25.5 item 2's own "matching §25.2's own margin analysis"),
+    never to independently fail the whole adapter (the AND-of-196 structure §25.3 found
+    structurally broken, at any real per-pair noise level, regardless of true adapter quality).
+    Unchanged arithmetic from the pre-T-2065 form -- same Deltas, same accept/reject shape -- only
+    its ROLE changed.
+    """
+    raw = _b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_honest,
+                                     pilot_n=pilot_n, seed_base=seed_base,
+                                     validation_seed_base=validation_seed_base)
+    c_pilot_stat = _b3_stat(raw["composed_pilot"])
+    e_pilot_stat = _b3_stat(raw["effect_pilot"])
     delta_composed_mean = _B3_SAFETY_INFLATION * (c_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * c_pilot_stat["se"])
     delta_composed_tail = _B3_SAFETY_INFLATION * c_pilot_stat["p95"]
     delta_effect_mean = _B3_SAFETY_INFLATION * (e_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * e_pilot_stat["se"])
     delta_effect_tail = _B3_SAFETY_INFLATION * e_pilot_stat["p95"]
 
-    _c_pilot2, c_val, _e_pilot2, e_val = collect(pilot_n, validation_seed_base)
-    c_val_stat = _b3_stat(c_val)
-    e_val_stat = _b3_stat(e_val)
+    c_val_stat = _b3_stat(raw["composed_val"])
+    e_val_stat = _b3_stat(raw["effect_val"])
 
     composed_mean_accepts = c_val_stat["upper_ci"] < delta_composed_mean
     composed_tail_accepts = c_val_stat["p95"] < delta_composed_tail
@@ -704,7 +740,179 @@ def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_
            "delta_composed_mean": delta_composed_mean, "delta_composed_tail": delta_composed_tail,
            "delta_effect_mean": delta_effect_mean, "delta_effect_tail": delta_effect_tail,
            "validation_composed_upper_ci": c_val_stat["upper_ci"], "validation_composed_p95": c_val_stat["p95"],
-           "validation_effect_upper_ci": e_val_stat["upper_ci"], "validation_effect_p95": e_val_stat["p95"]}
+           "validation_effect_upper_ci": e_val_stat["upper_ci"], "validation_effect_p95": e_val_stat["p95"],
+           "raw": raw}
+
+
+def _bootstrap_se(arr, stat_fn, n_resamples: int, rng) -> float:
+    """Nonparametric bootstrap SE of `stat_fn` over `arr` (resample-with-replacement, `n_resamples`
+    draws) -- design §25.5 item 3's own resolving-power term for the P95 (tail) estimator, which
+    (unlike the mean conjuncts' own parametric `z*SE`) has no closed-form sampling-SE formula.
+    Verbatim from `Claude/Vitruvius/t2058-sweep-interpretation/t2058_full_sweep_stats.py`'s own
+    already-executed, already-cross-checked construction (Wizard repo, T-2058)."""
+    arr = np.asarray(arr, dtype=np.float64)
+    n = len(arr)
+    if n < 2:
+        return 0.0
+    vals = np.empty(n_resamples, dtype=np.float64)
+    for i in range(n_resamples):
+        idx = rng.integers(0, n, size=n)
+        vals[i] = stat_fn(arr[idx])
+    return float(np.std(vals, ddof=1))
+
+
+def _p95(arr) -> float:
+    return float(np.percentile(arr, 95))
+
+
+_B3_REVIEW_MARGIN_SE = 2.0  # design §25.5 item 2's own stated multiple, matching §25.2's analysis.
+
+
+def _b3_pair_diagnostic(name: str, raw: dict, own_check: dict, *, n_bootstrap_resamples: int,
+                        rng) -> dict:
+    """One pair's own diagnostic record (design §25.5 item 2): for each of the four conjuncts,
+    the margin between this pair's own VALIDATION-partition point estimate and its OWN
+    self-calibrated `Delta` (from `run_b3_bootstrap_check`, unchanged arithmetic), in units of that
+    conjunct's own resolving power -- the PARAMETRIC `upper_CI`-implied SE for the mean conjuncts
+    (already carried by `_b3_stat`), the BOOTSTRAP SE of the VALIDATION-partition P95 for the tail
+    conjuncts (§25.2's own dual-track construction, restated verbatim here). A conjunct-instance
+    with `margin_se > 2.0` is a NAMED FINDING (never gates); `0 <= margin_se <= 2.0` is
+    UNRESOLVED-band noise (D-SLM2846's own discipline: never rounded to a pass or a fail);
+    `margin_se < 0` clears with margin. Diagnostic only -- `flagged` never sets `margin_exceeded`.
+    """
+    c_val = raw["composed_val"]
+    e_val = raw["effect_val"]
+    c_val_stat = _b3_stat(c_val)
+    e_val_stat = _b3_stat(e_val)
+    se_composed_tail = _bootstrap_se(c_val, _p95, n_bootstrap_resamples, rng)
+    se_effect_tail = _bootstrap_se(e_val, _p95, n_bootstrap_resamples, rng)
+    se_composed_mean = c_val_stat["se"]
+    se_effect_mean = e_val_stat["se"]
+
+    def _margin(point, delta, se):
+        return (point - delta) / se if se > 0.0 else float("inf") if point > delta else float("-inf")
+
+    margins = {
+        "composed_mean": _margin(c_val_stat["upper_ci"], own_check["delta_composed_mean"], se_composed_mean),
+        "composed_tail": _margin(c_val_stat["p95"], own_check["delta_composed_tail"], se_composed_tail),
+        "effect_mean": _margin(e_val_stat["upper_ci"], own_check["delta_effect_mean"], se_effect_mean),
+        "effect_tail": _margin(e_val_stat["p95"], own_check["delta_effect_tail"], se_effect_tail),
+    }
+    flagged = [conjunct for conjunct, m in margins.items() if m > _B3_REVIEW_MARGIN_SE]
+    return {"name": name, "own_accepted": own_check["accepted"], "margins_se": margins, "flagged": flagged}
+
+
+def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
+                            bootstrap_seed: int = 0xB007, verbose: bool = False) -> dict:
+    """Design §25.5's own corrected multi-pair acceptance form (D-SLM3205) -- the PRIMARY
+    accept/reject gate for a multi-pair adapter, replacing the per-pair AND-of-196 architecture
+    §25.3 found structurally broken (at the observed 23.5% per-pair reject rate, the probability
+    all 196 pairs independently clear an AND-gate is `1.7e-23` -- near-certain whole-adapter
+    rejection at ANY realistic per-pair noise level, independent of true adapter quality,
+    D-SLM3185/T-2058).
+
+    `pair_draws`: an ordered list of `(name, raw)` pairs, `raw` being `_b3_collect_pair_raw_draws`'s
+    own return shape -- one entry per adapted (layer, projection) pair. `gap[i]`/
+    `effect_distance_runtime[i]` are pooled across every pair's own PILOT/VALIDATION draws into ONE
+    joint population per conjunct (design §6 item 1/1a's own original "aggregated over every
+    adapted channel and token item a forward pass touches" conception, restored at the granularity
+    it was written for -- item 1 below is a strict aggregation of the SAME already-computed
+    per-pair quantities `_b3_collect_pair_raw_draws` produces, no new measurement), and ONE
+    mean/P95/`upper_CI`/`Delta` is computed per conjunct and gated ONCE for the whole adapter --
+    exactly §6 item 1/1a's own form, evaluated once rather than 196 times.
+
+    `Delta`-stability correction (design §25.5 item 3), applied to the POOLED pilot population:
+    the tail Deltas (`composed_tail`/`effect_tail`) gain an explicit bootstrap-derived
+    resolving-power term (`Delta_tail = SAFETY_INFLATION*(p95_pilot + Z*bootstrap_SE(p95_pilot))`),
+    replacing the old flat `SAFETY_INFLATION*p95_pilot` with no sampling-noise account at all; the
+    mean Deltas (`composed_mean`/`effect_mean`) gain a stated non-negative floor
+    (`max(0.0, ...)`), so a merely-unlucky pilot draw can never produce a bar no honest VALIDATION
+    run could clear (the exact failure mode §25.2 found on six per-pair Deltas before pooling --
+    pooling ~196x the pilot size independently makes this floor near-unreachable in practice, since
+    an ~8,400-item pooled mean cannot plausibly land negative the way a ~43-item per-pair draw can,
+    but the floor is retained as the stated, unconditional guarantee design §25.5 item 3 specifies,
+    not merely an emergent property of pooling).
+
+    Returns `{"accepted", "delta_*", "pooled_validation": {...}, "n_pairs", "n_pilot_pooled",
+    "n_val_pooled", "per_pair_diagnostics": [...]}` — `per_pair_diagnostics` is every pair's own
+    §25.5-item-2 review record (never gates; `flagged` names a conjunct-instance whose own margin
+    against ITS OWN self-calibrated Delta exceeds `_B3_REVIEW_MARGIN_SE` (2.0) bootstrap/parametric
+    SEs, per §25.2's own margin analysis).
+    """
+    if not pair_draws:
+        raise ValueError("run_b3_multi_pair_check: pair_draws is empty -- no pairs to pool")
+
+    pooled_composed_pilot = np.concatenate([raw["composed_pilot"] for _name, raw in pair_draws])
+    pooled_composed_val = np.concatenate([raw["composed_val"] for _name, raw in pair_draws])
+    pooled_effect_pilot = np.concatenate([raw["effect_pilot"] for _name, raw in pair_draws])
+    pooled_effect_val = np.concatenate([raw["effect_val"] for _name, raw in pair_draws])
+
+    rng = np.random.default_rng(bootstrap_seed)
+
+    pooled_c_pilot_stat = _b3_stat(pooled_composed_pilot)
+    pooled_e_pilot_stat = _b3_stat(pooled_effect_pilot)
+    se_composed_tail_pilot = _bootstrap_se(pooled_composed_pilot, _p95, n_bootstrap_resamples, rng)
+    se_effect_tail_pilot = _bootstrap_se(pooled_effect_pilot, _p95, n_bootstrap_resamples, rng)
+
+    # Delta-stability correction (design §25.5 item 3).
+    delta_composed_mean = max(0.0, _B3_SAFETY_INFLATION *
+                              (pooled_c_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * pooled_c_pilot_stat["se"]))
+    delta_effect_mean = max(0.0, _B3_SAFETY_INFLATION *
+                            (pooled_e_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * pooled_e_pilot_stat["se"]))
+    delta_composed_tail = _B3_SAFETY_INFLATION * (pooled_c_pilot_stat["p95"] +
+                                                  _B3_Z_95_ONE_SIDED * se_composed_tail_pilot)
+    delta_effect_tail = _B3_SAFETY_INFLATION * (pooled_e_pilot_stat["p95"] +
+                                                _B3_Z_95_ONE_SIDED * se_effect_tail_pilot)
+
+    pooled_c_val_stat = _b3_stat(pooled_composed_val)
+    pooled_e_val_stat = _b3_stat(pooled_effect_val)
+
+    composed_mean_accepts = pooled_c_val_stat["upper_ci"] < delta_composed_mean
+    composed_tail_accepts = pooled_c_val_stat["p95"] < delta_composed_tail
+    effect_mean_accepts = pooled_e_val_stat["upper_ci"] < delta_effect_mean
+    effect_tail_accepts = pooled_e_val_stat["p95"] < delta_effect_tail
+    accepted = composed_mean_accepts and composed_tail_accepts and effect_mean_accepts and effect_tail_accepts
+
+    per_pair_diagnostics = []
+    for name, raw in pair_draws:
+        own_check_pilot_c = _b3_stat(raw["composed_pilot"])
+        own_check_pilot_e = _b3_stat(raw["effect_pilot"])
+        own_check = {
+            "delta_composed_mean": _B3_SAFETY_INFLATION * (own_check_pilot_c["mean"] +
+                                                            _B3_Z_95_ONE_SIDED * own_check_pilot_c["se"]),
+            "delta_composed_tail": _B3_SAFETY_INFLATION * own_check_pilot_c["p95"],
+            "delta_effect_mean": _B3_SAFETY_INFLATION * (own_check_pilot_e["mean"] +
+                                                          _B3_Z_95_ONE_SIDED * own_check_pilot_e["se"]),
+            "delta_effect_tail": _B3_SAFETY_INFLATION * own_check_pilot_e["p95"],
+        }
+        own_val_c = _b3_stat(raw["composed_val"])
+        own_val_e = _b3_stat(raw["effect_val"])
+        own_check["accepted"] = (
+            own_val_c["upper_ci"] < own_check["delta_composed_mean"]
+            and own_val_c["p95"] < own_check["delta_composed_tail"]
+            and own_val_e["upper_ci"] < own_check["delta_effect_mean"]
+            and own_val_e["p95"] < own_check["delta_effect_tail"])
+        per_pair_diagnostics.append(_b3_pair_diagnostic(name, raw, own_check,
+                                                        n_bootstrap_resamples=n_bootstrap_resamples, rng=rng))
+        if verbose:
+            d = per_pair_diagnostics[-1]
+            if d["flagged"]:
+                print(f"  [B3 review-flag] {name}: {d['flagged']} margins_se={d['margins_se']}")
+
+    return {
+        "accepted": accepted,
+        "composed_mean_accepts": composed_mean_accepts, "composed_tail_accepts": composed_tail_accepts,
+        "effect_mean_accepts": effect_mean_accepts, "effect_tail_accepts": effect_tail_accepts,
+        "delta_composed_mean": delta_composed_mean, "delta_composed_tail": delta_composed_tail,
+        "delta_effect_mean": delta_effect_mean, "delta_effect_tail": delta_effect_tail,
+        "pooled_validation": {
+            "composed_upper_ci": pooled_c_val_stat["upper_ci"], "composed_p95": pooled_c_val_stat["p95"],
+            "effect_upper_ci": pooled_e_val_stat["upper_ci"], "effect_p95": pooled_e_val_stat["p95"],
+        },
+        "n_pairs": len(pair_draws),
+        "n_pilot_pooled": int(pooled_composed_pilot.shape[0]), "n_val_pooled": int(pooled_composed_val.shape[0]),
+        "per_pair_diagnostics": per_pair_diagnostics,
+    }
 
 
 def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
@@ -714,14 +922,24 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
     Weights/WGT1, DeltaFoldScales/DFS1, UFoldScales/UFS1) for EVERY adapted (layer, projection)
     pair the adapter's own `target_modules` declares, across every layer the bound base checkpoint
     names. Runs, per pair: the real domain-trip check (this module's own B0 derivation) and the
-    real B3 bootstrap self-calibration (above) -- `saturation_elevated` is the named residual
-    stated in this file's own §24 banner comment, never computed here.
+    real B3 raw-draw collection (`_b3_collect_pair_raw_draws`) -- `saturation_elevated` is the
+    named residual stated in this file's own §24 banner comment, never computed here.
+
+    T-2065 (design §25.5, D-SLM3205, T-2058 disposition of D-SLM3185's own routed 196-pair sweep
+    interpretation): B3's own PRIMARY accept/reject gate is now `run_b3_multi_pair_check`'s own
+    POOLED, whole-adapter statistic (called ONCE after this loop, over every pair's own raw
+    draws), not a per-pair AND-gate -- the per-pair AND architecture this function used before
+    this fold was found structurally broken independent of true adapter quality (§25.3: at the
+    real 196-pair sweep's own 23.5% per-pair reject rate, the probability all pairs simultaneously
+    clear an AND-gate is `1.7e-23`). `run_b3_bootstrap_check`'s own per-pair self-calibrated
+    verdict survives only as `run_b3_multi_pair_check`'s own per-pair DIAGNOSTIC layer (flagged,
+    never gating, §25.5 item 2).
 
     `sections` is `None` only when `domain_trip` fires somewhere (a `None` triple is not
-    serializable at all -- structurally excluded, design §6 item 2). A pair that merely fails B3
-    (contributes to `margin_exceeded`) is still derivable and still assembled: §7 distinguishes
-    "cannot even represent the ratio" (structural) from "represents it, but the composed quality
-    is not good enough" (a QUALITY gate on an otherwise well-formed artifact) -- whether an
+    serializable at all -- structurally excluded, design §6 item 2). A pair that contributes to a
+    pooled-gate REJECT is still derivable and still assembled: §7 distinguishes "cannot even
+    represent the ratio" (structural) from "represents it, but the composed quality is not good
+    enough" (a QUALITY gate on an otherwise well-formed artifact) -- whether an
     assembled-but-quality-failing artifact is actually WRITTEN to `--out` is
     `dispatch_conversion_outcome`'s own call (`main()`, below), never this function's; this
     function's only job is "can it be built," never "should it ship" (design §7/D-SLM2864/
@@ -730,17 +948,21 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
 
     Returns `(sections_or_None, verdict, round_trip)`. `verdict` feeds
     `dispatch_conversion_outcome` directly (`domain_trip`/`margin_exceeded`/`saturation_elevated`)
-    and also carries every pair's own diagnostic. `round_trip` is this build's own record of what
-    was derived and written, per `"layer{L}.{proj}"` key -- what the round-trip proof (T-2046
-    handoff) compares the REAL C++ loader's own output against, bit-for-bit.
+    and carries the pooled gate's own full result (`verdict["pooled"]`, including
+    `per_pair_diagnostics`) plus each pair's own domain-trip status. `round_trip` is this build's
+    own record of what was derived and written, per `"layer{L}.{proj}"` key -- what the
+    round-trip proof (T-2046 handoff) compares the REAL C++ loader's own output against,
+    bit-for-bit.
 
     `checkpoint_path` (T-2046, added after a real 196-pair sweep was killed mid-run by an
-    external process-management event, not a crash -- 2026-08-14): if given, this pair's own B3
-    verdict (the ~6.5s-per-pair cost; every other step -- reading tensors, quantizing, deriving
-    triples -- is ~0.1s/pair and simply re-run) is appended as one JSON line per pair to this
-    path as soon as it is computed, and on entry, any pair already recorded there has its SAVED
-    verdict reused instead of re-running `run_b3_bootstrap_check`. A resumed run therefore re-pays
-    only the cheap per-pair steps for already-checkpointed pairs, never the expensive one.
+    external process-management event, not a crash -- 2026-08-14; format changed under T-2065 to
+    persist each pair's own RAW draws rather than only its old per-pair `accepted` boolean, since
+    the pooled gate needs the raw per-item populations, not per-pair summaries): if given, each
+    pair's own raw draw arrays (the ~6.5s/pair cost; every other step -- reading tensors,
+    quantizing, deriving triples -- is ~0.1s/pair and simply re-run) are appended as one JSON line
+    per pair to this path as soon as computed, and on entry, any pair already recorded there has
+    its SAVED raw draws reused instead of re-running `_b3_collect_pair_raw_draws`. A resumed run
+    therefore re-pays only the cheap per-pair steps for already-checkpointed pairs.
     """
     adapter_dir = Path(adapter_dir)
     meta = load_adapter_meta(adapter_dir)
@@ -759,15 +981,15 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
     ufs1_tensors: Dict[str, np.ndarray] = {}
     round_trip: Dict[str, dict] = {}
     pair_diagnostics = []
+    pair_draws_for_pooling = []  # [(name, raw_draws_dict), ...] -- T-2065's own pooled-gate input
     domain_trip = False
-    margin_exceeded = False
     calibration_seed = 0xC0FFEE  # the SAME synthetic-Gaussian single-draw convention T_honest
                                   # already uses throughout this project (t2018_offline_red.cpp's
                                   # BuildAdapter, t2029_b3_execute.py) -- a real-text corpus for T
                                   # remains the SAME already-tracked residual named since B3's
                                   # first execution (this build does not newly open that gap).
 
-    saved_b3: Dict[str, dict] = {}
+    saved_draws: Dict[str, dict] = {}
     checkpoint_file = None
     if checkpoint_path is not None:
         checkpoint_path = Path(checkpoint_path)
@@ -778,9 +1000,10 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
                     if not line:
                         continue
                     rec = json.loads(line)
-                    saved_b3[rec["name"]] = rec["b3"]
-            if verbose and saved_b3:
-                print(f"resuming: {len(saved_b3)} pairs already checkpointed at {checkpoint_path}")
+                    saved_draws[rec["name"]] = {k: np.asarray(v, dtype=np.float64)
+                                                for k, v in rec["draws"].items()}
+            if verbose and saved_draws:
+                print(f"resuming: {len(saved_draws)} pairs' raw draws already checkpointed at {checkpoint_path}")
         checkpoint_file = open(checkpoint_path, "a", encoding="utf-8")
 
     for layer in range(cfg.num_hidden_layers):
@@ -818,25 +1041,20 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
             pair_domain_trip = any(t is None for t in delta_triples) or any(t is None for t in u_triples)
             domain_trip = domain_trip or pair_domain_trip
 
-            b3 = None
             if not pair_domain_trip:
-                if name in saved_b3:
-                    b3 = saved_b3[name]
+                if name in saved_draws:
+                    raw = saved_draws[name]
                 else:
-                    b3 = run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
+                    raw = _b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
                     if checkpoint_file is not None:
-                        checkpoint_file.write(json.dumps({"name": name, "b3": b3}) + "\n")
+                        checkpoint_file.write(json.dumps(
+                            {"name": name, "draws": {k: v.tolist() for k, v in raw.items()}}) + "\n")
                         checkpoint_file.flush()
-                if not b3["accepted"]:
-                    margin_exceeded = True
+                pair_draws_for_pooling.append((name, raw))
 
-            pair_diagnostics.append({
-                "layer": layer, "proj": proj, "domain_trip": pair_domain_trip,
-                "b3_accepted": (b3["accepted"] if b3 else None),
-            })
+            pair_diagnostics.append({"layer": layer, "proj": proj, "domain_trip": pair_domain_trip})
             if verbose:
-                print(f"  {name}: r={r} d_in={d_in} d_out={d_out} domain_trip={pair_domain_trip} "
-                     f"b3_accepted={(b3['accepted'] if b3 else 'N/A (domain-tripped)')}")
+                print(f"  {name}: r={r} d_in={d_in} d_out={d_out} domain_trip={pair_domain_trip}")
 
             if pair_domain_trip:
                 continue  # a None triple is not serializable at all -- structurally excluded.
@@ -865,8 +1083,22 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
     if checkpoint_file is not None:
         checkpoint_file.close()
 
+    # T-2065 (design §25.5, D-SLM3205): the PRIMARY B3 gate is now the pooled, whole-adapter
+    # statistic, computed ONCE over every pair's own raw draws -- never the old per-pair
+    # AND-of-196 architecture (§25.3: structurally broken independent of true adapter quality).
+    pooled = None
+    margin_exceeded = False
+    if pair_draws_for_pooling:
+        pooled = run_b3_multi_pair_check(pair_draws_for_pooling, verbose=verbose)
+        margin_exceeded = not pooled["accepted"]
+        if verbose:
+            n_flagged = sum(1 for d in pooled["per_pair_diagnostics"] if d["flagged"])
+            print(f"  POOLED GATE: accepted={pooled['accepted']} "
+                 f"(n_pairs={pooled['n_pairs']} n_pilot_pooled={pooled['n_pilot_pooled']} "
+                 f"n_val_pooled={pooled['n_val_pooled']}, {n_flagged} pair(s) flagged for review)")
+
     verdict = {"domain_trip": domain_trip, "margin_exceeded": margin_exceeded,
-              "saturation_elevated": False, "pairs": pair_diagnostics}
+              "saturation_elevated": False, "pairs": pair_diagnostics, "pooled": pooled}
 
     sections = None
     if not domain_trip:
@@ -1060,6 +1292,17 @@ def main():
     print(f"REJECTED: {branch.name} -- no runtime-additive artifact emitted (domain_trip="
          f"{verdict['domain_trip']} margin_exceeded={verdict['margin_exceeded']} "
          f"saturation_elevated={verdict['saturation_elevated']})", file=sys.stderr)
+    if verdict["margin_exceeded"] and verdict["pooled"] is not None:
+        p = verdict["pooled"]
+        print(f"  pooled B3 gate (design §25.5, whole-adapter, n_pairs={p['n_pairs']}): "
+             f"composed_mean_accepts={p['composed_mean_accepts']} "
+             f"composed_tail_accepts={p['composed_tail_accepts']} "
+             f"effect_mean_accepts={p['effect_mean_accepts']} "
+             f"effect_tail_accepts={p['effect_tail_accepts']}", file=sys.stderr)
+        flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
+        if flagged:
+            print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
+                 f"{flagged}", file=sys.stderr)
 
     if outcome == ArtifactOutcome.NO_ARTIFACT_EMITTED:
         if out_path.exists():
