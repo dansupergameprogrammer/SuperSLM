@@ -178,29 +178,32 @@ enum class GpuLayerLoopGuard : int {
 // CORRECTED 2026-08-14 (T-2069, Claude/Poirot/
 // b543abe-gpu-serial-port-ship-reverdict-review.md, M1; line citations
 // refreshed 2026-08-14, T-2075, per that round's own M1 finding that all
-// but one had gone stale across two same-day commits -- the CLAIM below is
-// unchanged from what T-2069 wrote, only the `superslm_gpu.cpp:<line>`
+// but one had gone stale across two same-day commits; refreshed AGAIN
+// 2026-08-14, T-2084, S2, Claude/Poirot/42ecf79-gpu-serial-port-round9-
+// review.md, D-SLM3247, after S2's own restoration of superslm_gpu.cpp's
+// deleted T-2071 paragraph shifted every line below it -- the CLAIM below
+// is unchanged from what T-2069 wrote, only the `superslm_gpu.cpp:<line>`
 // pointers are corrected to resolve against current HEAD): "twelve" above is
 // also wrong -- the correction above counted the function's rejecting
 // RETURNS (its guard ladder), not its rejecting return PATHS, and never
 // re-derived the number from the function itself. Enumerated fresh, at
 // source, every rejecting `return superslm::SslmForwardStatus::` (or
 // return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
-// ladder (`superslm_gpu.cpp:654, 655, 664, 668, 683, 687, 688, 698, 701,
-// 707, 709` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
+// ladder (`superslm_gpu.cpp:712, 713, 722, 726, 741, 745, 746, 756, 759,
+// 765, 767` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
 // of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
-// sites); two device-capability rejections below the ladder (`:716`
-// `!dev.available`, `:728` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
+// sites); two device-capability rejections below the ladder (`:774`
+// `!dev.available`, `:786` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
 // check, both `KvPrecisionUnsupported`); and the recording-window catch
-// itself (`:1410`, one return statement, a ternary choosing between
+// itself (`:1468`, one return statement, a ternary choosing between
 // `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve --
 // CORRECTED AGAIN below (T-2075, S2): fourteen is also short by one.
 // `g_last_weight_upload_was_skipped`'s own FOUR write sites (corrected from
 // "three" in the same sentence that listed four citations, T-2075, M2 --
-// `superslm_gpu.cpp:299` static init, `:614` function entry, `:903` the
-// residency decision, `:1400` the catch) still cover all fourteen of THIS
-// paragraph's own paths correctly -- `:903` is the only conditional write
-// and it sits below both `:716` and `:728`, so those two paths read the
+// `superslm_gpu.cpp:299` static init, `:672` function entry, `:961` the
+// residency decision, `:1458` the catch) still cover all fourteen of THIS
+// paragraph's own paths correctly -- `:961` is the only conditional write
+// and it sits below both `:774` and `:786`, so those two paths read the
 // entry-set `false` unchanged; this correction is to the COUNT, not to the
 // code, which was already right as far as this paragraph's own scope went.
 // The `!dev.available`/Tier-3 half of this claim is derived by inspection
@@ -212,9 +215,9 @@ enum class GpuLayerLoopGuard : int {
 // is short by one, and -- unlike the three corrections before it -- the
 // property being counted is FALSE, not merely mis-numbered, so this
 // correction does not just renumber it. `RunLayerLoopGpu`'s own TERMINAL
-// statement, `return DecodeStickyTag(sticky_tag);` (`superslm_gpu.cpp:1461`),
+// statement, `return DecodeStickyTag(sticky_tag);` (`superslm_gpu.cpp:1519`),
 // is neither a ladder return nor the catch's ternary -- it is a FUNCTION
-// CALL whose result is returned directly, and `DecodeStickyTag` (`:532-550`)
+// CALL whose result is returned directly, and `DecodeStickyTag` (`:583-601`)
 // maps the device's own sticky tag to fourteen statuses, THIRTEEN of them
 // rejecting (`ChainInputOutOfDomain`, `RopeTableTensorMissing`, and eleven
 // more -- only tag 0, `Ok`, is non-rejecting). That is a FIFTEENTH rejecting
@@ -239,7 +242,7 @@ enum class GpuLayerLoopGuard : int {
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
-// decision runs (`:903` above) -- the nine-guard ladder, the two
+// decision runs (`:961` above) -- the nine-guard ladder, the two
 // device-capability rejections, and the recording-window catch, fourteen
 // paths in all, none of which ever reached a residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
@@ -255,8 +258,8 @@ enum class GpuLayerLoopGuard : int {
 bool LastWeightUploadWasSkipped();
 
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
-// T-2063's own always-declared LINK-RED form of this instrument (`ArmWeightAllocationFailure
-// Injection`/`ClearWeightAllocationInjection`, undefined) is UNGATED, so merging it broke the
+// T-2063's own always-declared LINK-RED form of this instrument (`ArmO11AllocationFailure
+// Injection`/`ClearO11AllocationInjection`, undefined) is UNGATED, so merging it broke the
 // arc's own executing acceptance gate -- `tests/test_main.cpp` is not a pre-build red suite the
 // way T-1899's own LINK-RED precedent was (this file's own :9-18 banner describes the ORIGINAL,
 // whole-suite situation, not this one): most of this suite is already built and green, and a
@@ -267,7 +270,7 @@ bool LastWeightUploadWasSkipped();
 // `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`, defined only for the test-injection build target). Not
 // defined by `build.bat` -- the default build never sees these two declarations at all. The
 // build seat's own trigger to arm this pin: land the real bodies AND define
-// `SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` (e.g. via `build.bat`'s own `/D` list, beside
+// `SUPERSLM_O11_ALLOC_INJECTION` (e.g. via `build.bat`'s own `/D` list, beside
 // `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`) in the SAME round -- defining the macro without the
 // real bodies reproduces this ticket's own LINK-RED proof (`Claude/Curie/t2019-gpu-serial-
 // red-suite-2026-08-13.md` S16.2/S17), on purpose, as the gate's own self-check.
@@ -285,13 +288,13 @@ bool LastWeightUploadWasSkipped();
 // allocation is gated behind `!weights_resident` and a hit never reaches it, so with a single arm
 // point the two remedies could never both be live at once. Fixed by taking the index-parameterized
 // shape this instrument declined when it was single-site (B12's own `ArmAllocationFailureInjection
-// (uint32_t)` convention, matched here): `ArmWeightAllocationFailureInjection` now takes a `site`
+// (uint32_t)` convention, matched here): `ArmO11AllocationFailureInjection` now takes a `site`
 // selector, one of the two named constants below, and the injected throw fires only when the ARMED
 // site matches the call site currently executing -- both the weight DEFAULT-heap allocation and
 // `work_scratch_uav`'s own allocation carry the check now, so either remedy can be pinned,
 // independently, by arming the site it lives at.
-constexpr uint32_t kWeightAllocInjectionSiteWeightDefaultHeap = 0;
-constexpr uint32_t kWeightAllocInjectionSiteWorkScratchUav = 1;
+constexpr uint32_t kO11AllocInjectionSiteWeightDefaultHeap = 0;
+constexpr uint32_t kO11AllocInjectionSiteWorkScratchUav = 1;
 //
 // T-2076 note (Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md): the definitions built by
 // T-2071 targeted `work_scratch_uav`'s own allocation, not the weight DEFAULT-heap buffer this
@@ -301,10 +304,10 @@ constexpr uint32_t kWeightAllocInjectionSiteWorkScratchUav = 1;
 // moved. `TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse`
 // (tests/test_main.cpp) is gated identically -- it does not compile into the default build at all,
 // so it cannot be the thing that fails the default build's own link.
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-void ArmWeightAllocationFailureInjection(uint32_t site);
-void ClearWeightAllocationInjection();
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
+#ifdef SUPERSLM_O11_ALLOC_INJECTION
+void ArmO11AllocationFailureInjection(uint32_t site);
+void ClearO11AllocationInjection();
+#endif  // SUPERSLM_O11_ALLOC_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
