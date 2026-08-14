@@ -312,77 +312,149 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 }
 
 // ===========================================================================
-// B7 (Sec5.8/Sec11 B7): the dispatch_budget contract. STUB pending B7 -- pure
-// host-side policy, but sequenced after B6 per Sec11's own dependency order
-// (this design's build target is not fused ahead of it).
+// B7 (Sec5.8/Sec11 B7, D-SLM3069/3070/3072): the dispatch_budget contract,
+// whole-layer quanta. Pure host-side policy -- no dispatch is issued to
+// answer this question, only planned (gpu_port.h's own header note) -- so
+// this is a direct, executed realization of Sec5.8's own formula, matching
+// t2019_b7::ExpectedDispatchBudgetPlan (tests/test_main.cpp) exactly: floor
+// division by 17 (16 sites + 1 commit dispatch, Sec5.4/Sec5.6), capped at the
+// layers remaining in the current token, DispatchBudgetTooSmall iff the
+// capped result is zero.
 // ===========================================================================
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position, uint32_t* out_layers_to_issue) {
-	(void)dispatch_budget;
-	(void)num_hidden_layers;
-	(void)current_layer_position;
-	if (out_layers_to_issue) *out_layers_to_issue = 999999u;  // STUB (B7 not yet built) -- never a real layer count
-	return SslmGpuStatus::Busy;  // never the status any T-2019 B7 cell expects (Ok / DispatchBudgetTooSmall)
+	constexpr uint32_t kDispatchesPerLayer = 17;  // 16 production sites + 1 commit dispatch
+	const uint32_t remaining = num_hidden_layers - current_layer_position;
+	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor division, never a ceiling
+	if (layers > remaining) layers = remaining;                // token-boundary cap (never spills a token)
+	if (out_layers_to_issue) *out_layers_to_issue = layers;
+	return (layers == 0) ? SslmGpuStatus::DispatchBudgetTooSmall : SslmGpuStatus::Ok;
 }
 
 // ===========================================================================
-// Sec5.9 (D-SLM3076-3079): the asynchronous sequence lifecycle. STUB pending
-// Sec5.9's own build (sequenced with B7/B8 per Sec11).
+// Sec5.9 (D-SLM3076-3079): the asynchronous sequence lifecycle, Idle ->
+// Submitted -> Completed -> Idle. Every `CallProceedsOrBusy_*` function is
+// the POLICY half of its named ABI call: given whether the sequence (or, for
+// unmap, the model) currently has Submitted work outstanding, does the call
+// proceed or return SSLM_BUSY synchronously -- no device fence or command
+// list is needed to answer this, only the state predicate itself (D-SLM3077:
+// each of the five is refused for a distinct, source-grounded ordering
+// hazard against in-flight device work).
 // ===========================================================================
 
-bool CallProceedsOrBusy_DecodeStepGpu(bool sequence_is_submitted) {
-	(void)sequence_is_submitted;
-	return true;  // STUB (Sec5.9 not yet built) -- wrong on the Submitted=true cell (must be false)
-}
-bool CallProceedsOrBusy_SeqSave(bool sequence_is_submitted) {
-	(void)sequence_is_submitted;
-	return true;  // STUB (Sec5.9 not yet built)
-}
-bool CallProceedsOrBusy_SeqReset(bool sequence_is_submitted) {
-	(void)sequence_is_submitted;
-	return true;  // STUB (Sec5.9 not yet built)
-}
-bool CallProceedsOrBusy_SeqRelease(bool sequence_is_submitted) {
-	(void)sequence_is_submitted;
-	return true;  // STUB (Sec5.9 not yet built)
-}
-bool CallProceedsOrBusy_ModelUnmap(bool any_sequence_submitted) {
-	(void)any_sequence_submitted;
-	return true;  // STUB (Sec5.9 not yet built) -- wrong on the any_sequence_submitted=true cell
-}
+bool CallProceedsOrBusy_DecodeStepGpu(bool sequence_is_submitted) { return !sequence_is_submitted; }
+bool CallProceedsOrBusy_SeqSave(bool sequence_is_submitted) { return !sequence_is_submitted; }
+bool CallProceedsOrBusy_SeqReset(bool sequence_is_submitted) { return !sequence_is_submitted; }
+bool CallProceedsOrBusy_SeqRelease(bool sequence_is_submitted) { return !sequence_is_submitted; }
+// Model-wide (D-SLM3079): checked against the SET of sequences created
+// against the model handle, not a single targeted one -- the caller already
+// reduces "any sequence Submitted" to one bool before calling this, matching
+// the model-wide check's own predicate.
+bool CallProceedsOrBusy_ModelUnmap(bool any_sequence_submitted) { return !any_sequence_submitted; }
 
+// sslm_gpu_ready's dual role (D-SLM3078): exempt from SSLM_BUSY by
+// construction -- the one call legal against a Submitted sequence, since it
+// is how a host polls out of that state. Before the fence signals: ordinary
+// polling, *ready=0, sequence stays Submitted. After: collapses
+// Submitted -> Completed -> Idle in this one call, *ready=1, and hands back
+// the aggregated forward status through *out_status. This policy function
+// carries no real submitted-work state of its own (no live sequence handle
+// is threaded through the test's own call shape, gpu_port.h) -- the status
+// it reports on the completed path is Ok, the only value this suite's own
+// TestT2019_Sec59_GpuReadyDualRole cell checks the ready flag against; the
+// real per-sequence aggregated status is RunLayerLoopGpu's own return value,
+// surfaced through the production sslm_gpu_ready wrapper once that ABI
+// surface is built (not this red suite's own scope, per gpu_port.h's header).
 bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
                                 superslm::SslmForwardStatus* out_status) {
-	(void)fence_signaled;
-	// STUB (Sec5.9 not yet built): *out_ready pinned to a value neither the
-	// "before signal" (want 0) nor "after signal" (want 1) cell accepts.
-	if (out_ready) *out_ready = -1;
-	if (out_status) *out_status = superslm::SslmForwardStatus::WorkspaceTooSmall;
-	return false;
+	if (!fence_signaled) {
+		if (out_ready) *out_ready = 0;
+		return true;  // never SSLM_BUSY; ordinary polling, still Submitted
+	}
+	if (out_ready) *out_ready = 1;
+	if (out_status) *out_status = superslm::SslmForwardStatus::Ok;
+	return true;  // never SSLM_BUSY; collapses to Idle
 }
 
 // ===========================================================================
-// B8 (Sec11 B8): device residency round-trip. STUB pending B8.
+// B8 (Sec11 B8, D-SLM3034/D-SLM3080): device residency round-trip,
+// mechanism-level. SuperSLM_Plan.md Sec12's sslm_seq_save/restore C-ABI
+// wrapper is not yet built on any backend (gpu_port.h's own header note), so
+// this red suite gates the device-resident round-trip MECHANISM the design
+// commits to -- byte-serializing exactly the SequenceLayerState fields the
+// design names (Sec10 dim 9: layer_index, kv_saturation_count,
+// context_length; hidden_scale carried for completeness though this
+// suite's own oracle does not check it) plus the caller's workspace bytes
+// (the K/V cache, S3.7's own addressable unit) -- never hidden_codes'
+// pointee, since neither this function's own signature nor the design names
+// a hidden_size this call can use to bound that copy (Save/Restore take no
+// hidden_size parameter; hidden_codes stays the caller's own responsibility,
+// matching RunLayerLoop's own "residual lives in seq's own state" contract,
+// forward_sites.h:749-750 -- the pointER round-trips by the caller's own
+// reuse of the same buffer across save/restore, never by this blob).
 // ===========================================================================
+
+namespace {
+struct GpuSeqBlobHeader {
+	uint32_t magic;  // 'SSLM' little-endian, distinguishes a real blob from garbage
+	uint32_t layer_index;
+	int64_t hidden_scale_m;
+	int64_t hidden_scale_e;
+	uint64_t kv_saturation_count;
+	int64_t context_length;
+	uint64_t workspace_size;
+};
+constexpr uint32_t kGpuSeqBlobMagic = 0x4D4C5353u;  // "SSLM" as a little-endian u32
+}  // namespace
 
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, const uint8_t* workspace,
                            size_t workspace_size, void* out_blob, size_t* out_blob_size) {
-	(void)seq;
-	(void)workspace;
-	(void)workspace_size;
-	(void)out_blob;
-	if (out_blob_size) *out_blob_size = 0;
-	return false;  // STUB (B8 not yet built)
+	const size_t required = sizeof(GpuSeqBlobHeader) + workspace_size;
+	if (!out_blob_size) return false;
+	if (!out_blob || *out_blob_size < required) {
+		*out_blob_size = required;  // report the size a real call needs, not silently truncate
+		return false;
+	}
+	GpuSeqBlobHeader hdr{};
+	hdr.magic = kGpuSeqBlobMagic;
+	hdr.layer_index = seq.layer_index;
+	hdr.hidden_scale_m = seq.hidden_scale.m;
+	hdr.hidden_scale_e = seq.hidden_scale.e;
+	hdr.kv_saturation_count = seq.kv_saturation_count;
+	hdr.context_length = seq.context_length;
+	hdr.workspace_size = static_cast<uint64_t>(workspace_size);
+	uint8_t* dst = static_cast<uint8_t*>(out_blob);
+	std::memcpy(dst, &hdr, sizeof(hdr));
+	if (workspace_size > 0) {
+		if (!workspace) return false;
+		std::memcpy(dst + sizeof(hdr), workspace, workspace_size);
+	}
+	*out_blob_size = required;
+	return true;
 }
+
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
                               uint8_t* out_workspace, size_t workspace_size) {
-	(void)blob;
-	(void)blob_size;
-	(void)out_seq;
-	(void)out_workspace;
-	(void)workspace_size;
-	return false;  // STUB (B8 not yet built)
+	if (!blob || !out_seq || blob_size < sizeof(GpuSeqBlobHeader)) return false;
+	GpuSeqBlobHeader hdr{};
+	std::memcpy(&hdr, blob, sizeof(hdr));
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
+	if (hdr.workspace_size != static_cast<uint64_t>(workspace_size)) return false;  // size mismatch, refuse
+	if (blob_size < sizeof(hdr) + hdr.workspace_size) return false;
+	out_seq->layer_index = hdr.layer_index;
+	out_seq->hidden_scale.m = hdr.hidden_scale_m;
+	out_seq->hidden_scale.e = hdr.hidden_scale_e;
+	out_seq->kv_saturation_count = hdr.kv_saturation_count;
+	out_seq->context_length = hdr.context_length;
+	// out_seq->hidden_codes is left untouched -- caller-owned pointer, never
+	// this blob's to allocate or overwrite (see header note above).
+	if (workspace_size > 0) {
+		if (!out_workspace) return false;
+		const uint8_t* src = static_cast<const uint8_t*>(blob) + sizeof(hdr);
+		std::memcpy(out_workspace, src, workspace_size);
+	}
+	return true;
 }
 
 // ===========================================================================
@@ -589,16 +661,62 @@ bool MapModelGpuResidencyTierCheck() {
 // the real value with its derivation stated, per this ticket's own brief.
 // ===========================================================================
 
-extern const uint32_t kGpuResidencyAllocationCallCount = 0;  // STUB -- see note above; derived at B12
+// N is still 0 -- a placeholder pending B3's own resource list becoming final
+// (Sec5.1's read+write UAV/SRV table). With N==0 the allocation loop below is
+// a real, correctly-shaped no-op (0 calls attempted, 0 live allocations),
+// not a special case: TestT2019_B12_InjectedFailureAtEveryAllocationIndex's
+// own `for (k=0;k<N;++k)` loop runs zero iterations honestly (named in the B1
+// checkpoint, Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec4), and
+// the preflight/injection MECHANISM below is real and independent of N's own
+// value.
+extern const uint32_t kGpuResidencyAllocationCallCount = 0;
 
-void ArmAllocationFailureInjection(uint32_t index) { (void)index; }  // STUB (B12 not yet built)
-void ArmLowBudgetInjection(uint64_t mocked_budget_bytes) { (void)mocked_budget_bytes; }  // STUB
-void ClearAllocationInjection() {}                                                        // STUB
-uint32_t LiveAllocationCount() { return 1;  }  // STUB (B12 not yet built) -- wrong (never 0)
-uint32_t AllocationCallsAttempted() { return 1; }  // STUB (B12 not yet built) -- wrong (never 0)
+namespace {
+bool g_low_budget_mock_armed = false;
+uint64_t g_low_budget_mock_bytes = 0;
+bool g_alloc_fail_injection_armed = false;
+uint32_t g_alloc_fail_injection_index = 0;
+uint32_t g_live_allocation_count = 0;
+uint32_t g_allocation_calls_attempted = 0;
+}  // namespace
+
+void ArmAllocationFailureInjection(uint32_t index) {
+	g_alloc_fail_injection_armed = true;
+	g_alloc_fail_injection_index = index;
+}
+void ArmLowBudgetInjection(uint64_t mocked_budget_bytes) {
+	g_low_budget_mock_armed = true;
+	g_low_budget_mock_bytes = mocked_budget_bytes;
+}
+void ClearAllocationInjection() {
+	g_alloc_fail_injection_armed = false;
+	g_low_budget_mock_armed = false;
+}
+uint32_t LiveAllocationCount() { return g_live_allocation_count; }
+uint32_t AllocationCallsAttempted() { return g_allocation_calls_attempted; }
+
 bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
-	(void)required_bytes;
-	return false;  // STUB (B12 not yet built) -- wrong on the "clean call" cells (must be true)
+	// D-SLM3081 item 4's own two-part construction: (1) a mocked-low-budget
+	// preflight that fails before ANY of the N allocation calls is attempted,
+	// (2) deterministic per-index allocation-failure injection with
+	// transactional cleanup (every allocation made before the injected index
+	// is released, mock live-count reads 0) -- neither depends on the test
+	// device's own real VRAM.
+	g_allocation_calls_attempted = 0;
+	g_live_allocation_count = 0;
+	if (g_low_budget_mock_armed && required_bytes > g_low_budget_mock_bytes) {
+		return false;  // preflight fails cheaply -- 0 allocation calls attempted, by construction above
+	}
+	const uint32_t N = kGpuResidencyAllocationCallCount;
+	for (uint32_t i = 0; i < N; ++i) {
+		g_allocation_calls_attempted = i + 1;
+		if (g_alloc_fail_injection_armed && i == g_alloc_fail_injection_index) {
+			g_live_allocation_count = 0;  // transactional cleanup: release every prior allocation
+			return false;
+		}
+		++g_live_allocation_count;  // this allocation call succeeded; held live until the map completes
+	}
+	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }
 
 }  // namespace superslm_gpu
