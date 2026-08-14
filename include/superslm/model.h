@@ -18,6 +18,7 @@
 #ifndef SUPERSLM_MODEL_H
 #define SUPERSLM_MODEL_H
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -40,6 +41,26 @@ inline constexpr uint8_t kBiasesMagic[4] = {'B', 'I', 'A', '1'};
 inline constexpr uint8_t kRopeMagic[4] = {'R', 'O', 'P', '1'};
 // WeightScales is a tensor manifest too (int32 (identity,mult,shift) fold ops); its magic.
 inline constexpr uint8_t kWeightScalesMagic[4] = {'W', 'S', 'C', '1'};
+// T-2021/T-2029 B0b (design Sec9, D-SLM3093): the two new runtime-additive-LoRA adapter arrays
+// get their OWN magics, distinct from WSC1's -- never reused or aliased.
+inline constexpr uint8_t kDeltaFoldScalesMagic[4] = {'D', 'F', 'S', '1'};
+inline constexpr uint8_t kUFoldScalesMagic[4] = {'U', 'F', 'S', '1'};
+
+// WSC1's own unsigned shift domain (RoundingDivideByPOT's documented int32 exponent domain) --
+// a PUBLIC copy of the same two constants src/model.cpp's own TU-internal
+// kWeightScaleShiftMin/Max already pin (pinned to each other by a static_assert in model.cpp, so
+// the two copies cannot silently drift). Exposed here because design Sec9's B0b build cell
+// ("swap direction (ii): a genuine delta-fold/u-fold triple's negative exponent, read as WSC1's
+// own unsigned shift column, is already caught by the EXISTING check") needs a way to state that
+// existing, unchanged bound without duplicating WSC1's own internal validator's logic.
+inline constexpr int32_t kWeightScaleShiftMin = 0;
+inline constexpr int32_t kWeightScaleShiftMax = 31;
+
+// The amplifying-fold triple's own signed domain (design Sec4/Sec9, D-SLM2917) --
+// ApplyAmplifyingWeightScaleFold's consumption shape, widened relative to WSC1's own unsigned
+// [kWeightScaleShiftMin=0, kWeightScaleShiftMax=31] (ApplyWeightScaleFold's domain, unchanged).
+inline constexpr int32_t kAmplifyingScaleExponentMin = -31;
+inline constexpr int32_t kAmplifyingScaleExponentMax = 31;
 
 // Keyed numeric-constant geometry (v1). See docs/sslm_format.md "Keyed numeric-constant
 // blob — KVC1". The three keyed integer-constant sections (CompositionConstants,
@@ -200,6 +221,38 @@ enum class SslmModelStatus {
 	CalibrationBandOutOfDomain,          // a CalibrationBand entry's (min, max) violates min <= max,
 	                                      // min >= 0, or max > 0 -- ValidateCalibrationBandDomain
 	                                      // (model.cpp), wired into ValidateSectionValues.
+	// --- T-2021/T-2029 B0b (design Sec4/Sec9/Sec11 B0b, D-SLM3093/D-SLM3094): the two new
+	// runtime-additive-LoRA adapter arrays (DeltaFoldScales/DFS1, UFoldScales/UFS1) ---
+	AmplifyingFoldSectionTypeMismatch,   // a section's DECLARED type does not match the wrapper
+	                                      // kind that attempted to parse it (design's own
+	                                      // "constructed only by parsing a section whose declared
+	                                      // type matches the wrapper's own kind") -- checked
+	                                      // BEFORE any byte is read; the direction-(i) swap
+	                                      // mutation (a genuine WeightScales section handed to
+	                                      // the DeltaFoldScales/UFoldScales parser) is caught here.
+	AmplifyingFoldTripleCountInvalid,    // an entry's elem_count is not a multiple of 3 (mirrors
+	                                      // WeightScaleTripleCountInvalid)
+	AmplifyingFoldIdentityNotBool,       // identity column not in {0,1}
+	AmplifyingFoldExponentOutOfDomain,   // exponent column outside the SIGNED
+	                                      // [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax]
+	                                      // = [-31,31] domain (design Sec4/Sec9, D-SLM2917;
+	                                      // WIDENED relative to WSC1's own unsigned [0,31] -- the
+	                                      // direction-(ii) swap mutation, a genuine delta/u-fold
+	                                      // section's negative exponent handed to WSC1's OWN
+	                                      // ValidateWeightScalesDomain, is already caught by the
+	                                      // EXISTING WeightScaleShiftOutOfDomain check, retained
+	                                      // as defense-in-depth per design Sec9)
+	AmplifyingFoldDimensionMismatch,     // a DeltaFoldScales entry's row_count != the adapted
+	                                      // projection's own declared out_channels, or a
+	                                      // UFoldScales entry's row_count != the adapter's own
+	                                      // declared rank r (design Sec9 item (a))
+	AmplifyingFoldProjectionInvalid,     // an entry's declared target projection is not one of
+	                                      // the seven PEFT-adaptable projections, or is not
+	                                      // claimed by the adapter's own target_modules (design
+	                                      // Sec9 item (c))
+	AmplifyingFoldBaseHashMismatch,      // an entry's declared base-artifact integrity hash does
+	                                      // not match the actually-mapped base's own hash (design
+	                                      // Sec9 item (d))
 };
 
 // Human-readable name for a status, for diagnostics and test messages.
@@ -290,6 +343,103 @@ private:
 
 	std::vector<SslmConstantEntry> entries_;
 };
+
+// T-2021/T-2029 B0b (design Sec4/Sec9/Sec11 B0b, D-SLM3093/D-SLM3094): the two new
+// runtime-additive-LoRA adapter arrays this design's build adds -- `DeltaFoldScales`/`DFS1`
+// (design Sec4's own `delta_identity`/`delta_mult`/`delta_exponent`, one triple per adapted
+// output channel) and `UFoldScales`/`UFS1` (design Sec4's extension `u_identity`/`u_mult`/
+// `u_exponent`, one triple per rank index). NEVER `int32_t*`, NEVER `WeightScales`'s own
+// `SslmTensorManifest` (a genuinely distinct C++ type, section-type-gated at parse time, per
+// design Sec9's own "never implicitly convertible... to each other" requirement) -- `Kind`
+// makes `SslmAmplifyingFoldScaleView<Delta>` and `SslmAmplifyingFoldScaleView<U>` two distinct
+// template instantiations with no implicit conversion between them.
+enum class SslmAmplifyingFoldKind : uint32_t { Delta, U };
+
+// One entry's raw view: `name` is the adapted (layer, projection) this triple set targets
+// (e.g. "layer3.q_proj", the same per-projection naming convention WeightScales' own tensors
+// already use); `data` points at `row_count * 3` little-endian int32 values (identity, mult,
+// exponent per row); `row_count` is out_channels (DeltaFoldScales) or rank r (UFoldScales) --
+// checked against the caller's own expectation by `ValidateAmplifyingFoldDimension` (design
+// Sec9 item (a)), not asserted here.
+struct SslmAmplifyingFoldEntry {
+	std::string_view name;
+	const uint8_t* data = nullptr;
+	uint64_t row_count = 0;
+};
+
+template <SslmAmplifyingFoldKind Kind>
+class SslmAmplifyingFoldScaleView {
+public:
+	SslmAmplifyingFoldScaleView() = default;
+
+	// Parses `section` ONLY if `section.type` matches THIS Kind's own SslmSectionType
+	// (`DeltaFoldScales` for `Kind::Delta`, `UFoldScales` for `Kind::U`) -- checked FIRST,
+	// before any manifest byte is read (design Sec9's own "constructed only by parsing a
+	// section whose declared type matches the wrapper's own kind"). A section declared as the
+	// OTHER kind, or as `WeightScales`, is rejected with `AmplifyingFoldSectionTypeMismatch`
+	// regardless of its byte contents -- the swap-mutation direction (i) this design's own B0b
+	// build cell exercises (design Sec11 B0b). On any rejection, `out` is left empty. Throws
+	// only std::bad_alloc (S-HARDEN-7 convention, matching every other sub-parse in this file).
+	static SslmModelStatus Parse(const SslmSectionView& section, SslmAmplifyingFoldScaleView& out,
+	                             std::string* err);
+
+	const std::vector<SslmAmplifyingFoldEntry>& Entries() const noexcept { return entries_; }
+	const SslmAmplifyingFoldEntry* Entry(std::string_view name) const noexcept;
+
+	// Typed per-row accessors over the SIGNED [kAmplifyingScaleExponentMin,
+	// kAmplifyingScaleExponentMax] domain `ApplyAmplifyingWeightScaleFold` consumes --
+	// structurally distinct from WSC1's own unsigned-domain `ApplyWeightScaleFold` reads.
+	// Behavior is undefined if `row >= entry.row_count`.
+	static int32_t Identity(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept;
+	static int32_t Mult(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept;
+	static int32_t Exponent(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept;
+
+private:
+	std::vector<SslmAmplifyingFoldEntry> entries_;
+};
+
+using SslmDeltaFoldScaleView = SslmAmplifyingFoldScaleView<SslmAmplifyingFoldKind::Delta>;
+using SslmUFoldScaleView = SslmAmplifyingFoldScaleView<SslmAmplifyingFoldKind::U>;
+
+// The section type and on-disk magic each Kind requires -- the single source both Parse's own
+// type-gate and a future adapter-loader's own section-table walk read, so the two can never
+// independently drift.
+SslmSectionType AmplifyingFoldSectionTypeFor(SslmAmplifyingFoldKind kind) noexcept;
+const uint8_t* AmplifyingFoldMagicFor(SslmAmplifyingFoldKind kind) noexcept;
+
+// Design Sec9's four explicit B0b validations, as free functions (the adapter-loading ABI that
+// calls them, `sslm_adapter_map`, is outside this design's own B0-B9 scope, design Sec11's own
+// stated build boundary -- these are the checks that ABI will call, specified and tested here).
+
+// (b) signed domain (D-SLM2917, unchanged in value, run through this array kind's OWN dedicated
+// validator rather than WSC1's `ValidateWeightScalesDomain`): identity in {0,1}, exponent in
+// [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax].
+SslmModelStatus ValidateAmplifyingFoldScalesDomain(const std::vector<SslmAmplifyingFoldEntry>& entries,
+                                                    std::string* err);
+
+// (a) dimension: one entry's row_count against the caller-supplied expectation (out_channels
+// for DeltaFoldScales, rank r for UFoldScales -- the caller reads the expectation from the base
+// artifact's own geometry or the adapter's own declared rank, per design Sec9).
+SslmModelStatus ValidateAmplifyingFoldDimension(const SslmAmplifyingFoldEntry& entry,
+                                                 uint64_t expected_row_count, std::string* err);
+
+// (c) projection: the entry's own declared target projection (parsed from its `name`, by the
+// caller's own convention) must be one of the seven PEFT-adaptable projections AND must be
+// claimed by the adapter's own target_modules.
+inline constexpr std::string_view kPeftAdaptableProjections[7] = {
+    "q_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "k_proj", "v_proj",
+};
+SslmModelStatus ValidateAmplifyingFoldProjection(std::string_view declared_projection,
+                                                  const std::vector<std::string_view>& adapter_target_modules,
+                                                  std::string* err);
+
+// (d) base-hash: the entry's own declared base-artifact integrity hash (32 bytes, the same
+// value `SslmArtifact::RawIntegrityHash()` exposes) must match the ACTUALLY-mapped base's own
+// hash, extending `sslm_adapter_map`'s existing mismatch rejection (SuperSLM_Plan.md Sec12) to
+// these two sections specifically.
+SslmModelStatus ValidateAmplifyingFoldBaseHash(const std::array<uint8_t, kIntegrityHashBytes>& declared,
+                                                const std::array<uint8_t, kIntegrityHashBytes>& actual,
+                                                std::string* err);
 
 // Parse the CFG1 Config section into `out`. The section must already be validated by
 // SslmArtifact. Rejects (fails closed, `out` left default) on a wrong size/magic/version,

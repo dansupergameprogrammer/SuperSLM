@@ -16,6 +16,7 @@
 #ifndef SUPERSLM_ARTIFACT_H
 #define SUPERSLM_ARTIFACT_H
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -63,6 +64,19 @@ enum class SslmSectionType : uint32_t {
 	// current container version, not a CFG1 extension and not a version
 	// bump -- absence loads exactly as before this type existed.
 	CalibrationBand = 31,
+	// T-2021/T-2029 B0b (design Sec9/Sec11, D-SLM3093/D-SLM3094): the two new runtime-additive-
+	// LoRA adapter arrays (design Sec4, D-SLM2915) get their OWN, distinct section types --
+	// never WeightScales'/WSC1's own type or magic -- so a genuine WSC1 section and a genuine
+	// DeltaFoldScales/UFoldScales section are structurally different from the moment the
+	// artifact's top-level section table is walked, before any triple's values are ever read
+	// (closing the loader-confusion hazard D-SLM2970/D-SLM2984 named: both array kinds share
+	// WSC1's own [count,3] int32 storage shape, but are domain-incompatible -- WSC1's triple is
+	// unsigned [0,31], these two are signed [-31,31] and consumed by a different runtime
+	// primitive, ApplyAmplifyingWeightScaleFold, design Sec4). Values chosen to sit past the
+	// existing reserved range (S5's SchemaMasks=30, S3.7's CalibrationBand=31) rather than
+	// inside it.
+	DeltaFoldScales = 40,
+	UFoldScales = 41,
 };
 
 enum class SslmDtype : uint32_t {
@@ -182,6 +196,17 @@ public:
 	bool Ok() const noexcept { return ok_; }
 	uint32_t FormatVersion() const noexcept { return format_version_; }
 	uint64_t FileBytes() const noexcept { return file_bytes_; }
+
+	// T-2021/T-2029 B0b (design Sec9, D-SLM3093's "base-hash" validation): the raw 32-byte
+	// integrity hash `FingerprintHex()` already hex-encodes, exposed as bytes so a
+	// DeltaFoldScales/UFoldScales section's own declared base-artifact hash (design Sec9 item
+	// (d)) can be compared against the ACTUALLY-mapped base's own hash without a hex
+	// round-trip. Same value FingerprintHex() derives from; this is not a second hash.
+	std::array<uint8_t, kIntegrityHashBytes> RawIntegrityHash() const noexcept {
+		std::array<uint8_t, kIntegrityHashBytes> out{};
+		for (uint32_t i = 0; i < kIntegrityHashBytes; ++i) out[i] = integrity_[i];
+		return out;
+	}
 
 	// Lowercase hex of the stored integrity hash (the artifact's fingerprint).
 	// Throws only std::bad_alloc (S-HARDEN-7, F5).

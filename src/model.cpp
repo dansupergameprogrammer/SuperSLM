@@ -120,6 +120,13 @@ const char* SslmModelStatusName(SslmModelStatus s) noexcept {
 		case SslmModelStatus::ConfigGeometryHiddenSizeMismatch: return "ConfigGeometryHiddenSizeMismatch";
 		case SslmModelStatus::RopeTablesShapeMismatchConfig: return "RopeTablesShapeMismatchConfig";
 		case SslmModelStatus::CalibrationBandOutOfDomain: return "CalibrationBandOutOfDomain";
+		case SslmModelStatus::AmplifyingFoldSectionTypeMismatch: return "AmplifyingFoldSectionTypeMismatch";
+		case SslmModelStatus::AmplifyingFoldTripleCountInvalid: return "AmplifyingFoldTripleCountInvalid";
+		case SslmModelStatus::AmplifyingFoldIdentityNotBool: return "AmplifyingFoldIdentityNotBool";
+		case SslmModelStatus::AmplifyingFoldExponentOutOfDomain: return "AmplifyingFoldExponentOutOfDomain";
+		case SslmModelStatus::AmplifyingFoldDimensionMismatch: return "AmplifyingFoldDimensionMismatch";
+		case SslmModelStatus::AmplifyingFoldProjectionInvalid: return "AmplifyingFoldProjectionInvalid";
+		case SslmModelStatus::AmplifyingFoldBaseHashMismatch: return "AmplifyingFoldBaseHashMismatch";
 	}
 	return "Unknown";
 }
@@ -155,6 +162,270 @@ const uint8_t* ManifestMagicFor(SslmSectionType type) noexcept {
 		default: return nullptr;
 	}
 }
+
+// T-2021/T-2029 B0b (design Sec9, D-SLM3093): DeltaFoldScales/UFoldScales, deliberately NOT
+// added to ManifestMagicFor/SslmTensorManifest above -- that function and class are WSC1's own
+// (and Weights/Biases/RopeTables', which share its generic container), and design Sec9's own
+// text requires the two new arrays never share WeightScales' type or magic. Their own
+// magic/section-type mapping is a separate, single-source pair of switches.
+SslmSectionType AmplifyingFoldSectionTypeFor(SslmAmplifyingFoldKind kind) noexcept {
+	switch (kind) {
+		case SslmAmplifyingFoldKind::Delta: return SslmSectionType::DeltaFoldScales;
+		case SslmAmplifyingFoldKind::U: return SslmSectionType::UFoldScales;
+	}
+	return SslmSectionType::DeltaFoldScales; // unreachable -- Kind is a 2-value enum class
+}
+
+const uint8_t* AmplifyingFoldMagicFor(SslmAmplifyingFoldKind kind) noexcept {
+	switch (kind) {
+		case SslmAmplifyingFoldKind::Delta: return kDeltaFoldScalesMagic;
+		case SslmAmplifyingFoldKind::U: return kUFoldScalesMagic;
+	}
+	return kDeltaFoldScalesMagic; // unreachable
+}
+
+// SslmAmplifyingFoldScaleView<Kind>::Parse -- mirrors SslmTensorManifest::ParseImpl's own
+// header/descriptor walk (byte-for-byte offset convention, same kManifestHeaderBytes/
+// kTensorDescBytes geometry, so the two array kinds stay a drop-in-compatible ON-DISK shape
+// with WSC1 even though their C++ TYPES are never interconvertible -- design Sec9's own
+// "storage-shape-identical... but domain-incompatible" framing), with the ONE load-bearing
+// difference this design's own B0b build cell requires: the section's DECLARED type is checked
+// against THIS Kind's own expected type FIRST, before the magic bytes or any descriptor is
+// read -- so a genuine WeightScales section (or the other Kind's own section) is rejected by
+// AmplifyingFoldSectionTypeMismatch at the very first line, never reaching a byte comparison
+// that a crafted WSC1 payload might otherwise pass.
+template <SslmAmplifyingFoldKind Kind>
+SslmModelStatus SslmAmplifyingFoldScaleView<Kind>::Parse(const SslmSectionView& section,
+                                                         SslmAmplifyingFoldScaleView& out,
+                                                         std::string* err) {
+	internal::MaybeThrowInjectedBadAllocFault();
+	out.entries_.clear();
+	if (err) err->clear();
+
+	// --- Section-type gate: FIRST, before any byte is read (design Sec9's own requirement). ---
+	if (section.type != AmplifyingFoldSectionTypeFor(Kind)) {
+		return Reject(SslmModelStatus::AmplifyingFoldSectionTypeMismatch, err,
+		              "section's declared type does not match this wrapper's own kind "
+		              "(DeltaFoldScales vs UFoldScales vs WeightScales are never interchangeable)");
+	}
+
+	const uint8_t* base = section.data;
+	const uint64_t size = section.byte_size;
+
+	if (base == nullptr || size < kManifestHeaderBytes)
+		return Reject(SslmModelStatus::SectionTooShort, err, "section smaller than the manifest header");
+
+	const uint8_t* magic = AmplifyingFoldMagicFor(Kind);
+	for (int i = 0; i < 4; ++i) {
+		if (base[i] != magic[i])
+			return Reject(SslmModelStatus::BadManifestMagic, err, "manifest magic mismatch");
+	}
+
+	if (RdU32(base + kOffVersion) != kManifestVersion)
+		return Reject(SslmModelStatus::UnsupportedManifestVersion, err, "unsupported manifest version");
+
+	const uint32_t tensor_count = RdU32(base + kOffTensorCount);
+	if (tensor_count > kMaxTensors)
+		return Reject(SslmModelStatus::TooManyTensors, err, "tensor_count exceeds kMaxTensors");
+
+	const uint32_t name_blob_len = RdU32(base + kOffNameBlobLen);
+	const uint64_t name_blob_off = uint64_t(kManifestHeaderBytes) + uint64_t(tensor_count) * kTensorDescBytes;
+	const uint64_t data_region_floor = name_blob_off + name_blob_len;
+	if (data_region_floor > size)
+		return Reject(SslmModelStatus::ManifestOutOfBounds, err,
+		              "header + descriptors + name blob exceed the section");
+
+	// This section's own dtype is always Int32 (ExpectedDtype, artifact.cpp) -- 4 bytes/elem.
+	constexpr uint32_t kElementSize = 4;
+
+	std::vector<SslmAmplifyingFoldEntry> entries;
+	entries.reserve(tensor_count);
+	std::vector<std::pair<uint64_t, uint64_t>> ranges;
+	ranges.reserve(tensor_count);
+	std::unordered_set<std::string_view> seen_names;
+	seen_names.reserve(tensor_count);
+
+	for (uint32_t i = 0; i < tensor_count; ++i) {
+		const uint8_t* d = base + kManifestHeaderBytes + uint64_t(i) * kTensorDescBytes;
+		const uint32_t name_off = RdU32(d + kDescNameOff);
+		const uint32_t name_len = RdU32(d + kDescNameLen);
+		const uint32_t rank = RdU32(d + kDescRank);
+		uint32_t shape[kMaxTensorRank];
+		for (uint32_t k = 0; k < kMaxTensorRank; ++k) shape[k] = RdU32(d + kDescShape + k * 4);
+		const uint64_t data_off = RdU64(d + kDescDataOff);
+		const uint64_t elem_count = RdU64(d + kDescElemCount);
+		const uint32_t reserved = RdU32(d + kDescReserved);
+
+		if (name_len == 0)
+			return Reject(SslmModelStatus::EmptyTensorName, err, "entry name is empty");
+		if (uint64_t(name_off) + name_len > name_blob_len)
+			return Reject(SslmModelStatus::BadTensorName, err, "entry name range outside the name blob");
+		std::string_view name(reinterpret_cast<const char*>(base + name_blob_off + name_off), name_len);
+		if (!seen_names.insert(name).second)
+			return Reject(SslmModelStatus::DuplicateTensorName, err, "duplicate entry name");
+
+		if (rank == 0 || rank > kMaxTensorRank)
+			return Reject(SslmModelStatus::BadTensorRank, err, "entry rank out of range");
+		uint64_t product = 1;
+		for (uint32_t k = 0; k < kMaxTensorRank; ++k) {
+			if (k < rank) {
+				if (shape[k] == 0)
+					return Reject(SslmModelStatus::BadTensorShape, err, "shape entry zero within rank");
+				if (product > UINT64_MAX / shape[k])
+					return Reject(SslmModelStatus::ShapeCountMismatch, err, "shape product overflows 64-bit");
+				product *= shape[k];
+			} else if (shape[k] != 0) {
+				return Reject(SslmModelStatus::BadTensorShape, err, "shape entry nonzero past rank");
+			}
+		}
+		if (elem_count != product)
+			return Reject(SslmModelStatus::ShapeCountMismatch, err, "elem_count != product(shape)");
+		if (reserved != 0)
+			return Reject(SslmModelStatus::BadDescriptorReserved, err, "descriptor reserved field != 0");
+
+		// design Sec9 item (a)/(b) precursor: elem_count must be a multiple of 3 (one
+		// (identity,mult,exponent) triple per row) -- mirrors WeightScaleTripleCountInvalid,
+		// but under THIS kind's own status code, per model.h's own documented rationale.
+		if (elem_count % 3 != 0)
+			return Reject(SslmModelStatus::AmplifyingFoldTripleCountInvalid, err,
+			              "entry elem_count is not a multiple of 3");
+
+		if (data_off % kElementSize != 0)
+			return Reject(SslmModelStatus::TensorMisaligned, err, "data_off not a multiple of the element size");
+		if (data_off < data_region_floor)
+			return Reject(SslmModelStatus::TensorOutOfBounds, err, "data_off below the data region");
+		if (elem_count > UINT64_MAX / kElementSize)
+			return Reject(SslmModelStatus::TensorOutOfBounds, err, "elem_count * element_size overflows 64-bit");
+		const uint64_t nbytes = elem_count * kElementSize;
+		if (data_off > size || nbytes > size - data_off)
+			return Reject(SslmModelStatus::TensorOutOfBounds, err, "entry data range exceeds the section");
+
+		const uint64_t range_start = data_off, range_end = data_off + nbytes;
+		for (const auto& r : ranges) {
+			if (range_start < r.second && r.first < range_end)
+				return Reject(SslmModelStatus::TensorOverlap, err, "entry data ranges overlap");
+		}
+		ranges.emplace_back(range_start, range_end);
+
+		SslmAmplifyingFoldEntry entry;
+		entry.name = name;
+		entry.data = base + data_off;
+		entry.row_count = elem_count / 3;
+		entries.push_back(entry);
+	}
+
+	out.entries_ = std::move(entries);
+	return SslmModelStatus::Ok;
+}
+
+template <SslmAmplifyingFoldKind Kind>
+const SslmAmplifyingFoldEntry* SslmAmplifyingFoldScaleView<Kind>::Entry(std::string_view name) const noexcept {
+	for (const auto& e : entries_) {
+		if (e.name == name) return &e;
+	}
+	return nullptr;
+}
+
+template <SslmAmplifyingFoldKind Kind>
+int32_t SslmAmplifyingFoldScaleView<Kind>::Identity(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept {
+	return static_cast<int32_t>(RdU32(entry.data + (row * 3 + 0) * 4));
+}
+template <SslmAmplifyingFoldKind Kind>
+int32_t SslmAmplifyingFoldScaleView<Kind>::Mult(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept {
+	return static_cast<int32_t>(RdU32(entry.data + (row * 3 + 1) * 4));
+}
+template <SslmAmplifyingFoldKind Kind>
+int32_t SslmAmplifyingFoldScaleView<Kind>::Exponent(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept {
+	return static_cast<int32_t>(RdU32(entry.data + (row * 3 + 2) * 4));
+}
+
+// Explicit instantiation -- the only two Kind values this design specifies (Sec9); keeps the
+// template's body in this .cpp, matching this file's own "no *Impl body in the header" convention.
+template class SslmAmplifyingFoldScaleView<SslmAmplifyingFoldKind::Delta>;
+template class SslmAmplifyingFoldScaleView<SslmAmplifyingFoldKind::U>;
+
+// design Sec9 item (b): signed domain, run through this array kind's own dedicated validator
+// (not WSC1's ValidateWeightScalesDomain) -- identity in {0,1}, exponent in
+// [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax] = [-31,31] (widened relative to
+// WSC1's own unsigned [0,31]).
+SslmModelStatus ValidateAmplifyingFoldScalesDomain(const std::vector<SslmAmplifyingFoldEntry>& entries,
+                                                    std::string* err) {
+	for (const SslmAmplifyingFoldEntry& e : entries) {
+		for (uint64_t row = 0; row < e.row_count; ++row) {
+			const int32_t identity = static_cast<int32_t>(RdU32(e.data + (row * 3 + 0) * 4));
+			const int32_t exponent = static_cast<int32_t>(RdU32(e.data + (row * 3 + 2) * 4));
+			if (identity < 0 || identity > 1) {
+				if (err) {
+					*err = "AmplifyingFold entry \"" + std::string(e.name) + "\" row " + std::to_string(row) +
+					       " identity=" + std::to_string(identity) + " not in {0,1}";
+				}
+				return SslmModelStatus::AmplifyingFoldIdentityNotBool;
+			}
+			if (exponent < kAmplifyingScaleExponentMin || exponent > kAmplifyingScaleExponentMax) {
+				if (err) {
+					*err = "AmplifyingFold entry \"" + std::string(e.name) + "\" row " + std::to_string(row) +
+					       " exponent=" + std::to_string(exponent) + " outside [" +
+					       std::to_string(kAmplifyingScaleExponentMin) + "," +
+					       std::to_string(kAmplifyingScaleExponentMax) + "]";
+				}
+				return SslmModelStatus::AmplifyingFoldExponentOutOfDomain;
+			}
+		}
+	}
+	return SslmModelStatus::Ok;
+}
+
+// design Sec9 item (a): dimension.
+SslmModelStatus ValidateAmplifyingFoldDimension(const SslmAmplifyingFoldEntry& entry,
+                                                 uint64_t expected_row_count, std::string* err) {
+	if (entry.row_count != expected_row_count) {
+		if (err) {
+			*err = "AmplifyingFold entry \"" + std::string(entry.name) + "\" row_count=" +
+			       std::to_string(entry.row_count) + " != expected " + std::to_string(expected_row_count);
+		}
+		return SslmModelStatus::AmplifyingFoldDimensionMismatch;
+	}
+	return SslmModelStatus::Ok;
+}
+
+// design Sec9 item (c): projection. `declared_projection` must be one of the seven
+// PEFT-adaptable projections AND must be claimed by the adapter's own target_modules.
+SslmModelStatus ValidateAmplifyingFoldProjection(std::string_view declared_projection,
+                                                  const std::vector<std::string_view>& adapter_target_modules,
+                                                  std::string* err) {
+	bool is_peft_adaptable = false;
+	for (std::string_view p : kPeftAdaptableProjections) {
+		if (p == declared_projection) { is_peft_adaptable = true; break; }
+	}
+	if (!is_peft_adaptable) {
+		if (err) *err = "AmplifyingFold declared projection \"" + std::string(declared_projection) +
+		                "\" is not one of the seven PEFT-adaptable projections";
+		return SslmModelStatus::AmplifyingFoldProjectionInvalid;
+	}
+	bool claimed = false;
+	for (std::string_view t : adapter_target_modules) {
+		if (t == declared_projection) { claimed = true; break; }
+	}
+	if (!claimed) {
+		if (err) *err = "AmplifyingFold declared projection \"" + std::string(declared_projection) +
+		                "\" is not claimed by the adapter's own target_modules";
+		return SslmModelStatus::AmplifyingFoldProjectionInvalid;
+	}
+	return SslmModelStatus::Ok;
+}
+
+// design Sec9 item (d): base-hash.
+SslmModelStatus ValidateAmplifyingFoldBaseHash(const std::array<uint8_t, kIntegrityHashBytes>& declared,
+                                                const std::array<uint8_t, kIntegrityHashBytes>& actual,
+                                                std::string* err) {
+	if (declared != actual) {
+		if (err) *err = "AmplifyingFold entry's declared base-artifact integrity hash does not match "
+		                "the actually-mapped base's own hash";
+		return SslmModelStatus::AmplifyingFoldBaseHashMismatch;
+	}
+	return SslmModelStatus::Ok;
+}
+
 
 // S-HARDEN-7 (design Sec3.1): the *Impl bodies below need private access to
 // their class (out.tensors_, out.entries_, out.backing_), which a free
@@ -602,8 +873,10 @@ int64_t RdI64(const uint8_t* p) noexcept { return static_cast<int64_t>(RdU64(p))
 // negative shift are shift-count UB in RoundingDivideByPOTImpl). identity is
 // a documented format invariant (sslm_format.md:315) with no in-tree consumer
 // yet — enforced early at the gate, not because it is UB-linked.
-constexpr int32_t kWeightScaleShiftMin = 0;
-constexpr int32_t kWeightScaleShiftMax = 31;
+// T-2021/T-2029 B0b: kWeightScaleShiftMin/Max moved to model.h as PUBLIC constants (design
+// Sec9's B0b build cell needs to state this existing, unchanged bound from outside this TU) --
+// this file now reads the single public copy rather than shadowing it with a second, TU-local
+// one of the same name and value.
 
 // RopeTables (ROP1): RopeApplyPair's safety argument (intmath.cpp:451) holds
 // iff |cos|,|sin| <= ROPE_ONE (2^30, intmath.h:360) — the exact bound that

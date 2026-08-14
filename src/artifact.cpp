@@ -44,6 +44,8 @@ bool IsKnownSectionType(uint32_t type) noexcept {
 		case SslmSectionType::UnicodeTables:
 		case SslmSectionType::SchemaMasks:
 		case SslmSectionType::CalibrationBand:
+		case SslmSectionType::DeltaFoldScales:
+		case SslmSectionType::UFoldScales:
 			return true;
 	}
 	return false;
@@ -60,6 +62,11 @@ SslmDtype ExpectedDtype(uint32_t type) noexcept {
 		// = 32768 exceeds INT16_MAX; SuperSLM_S2.4_SiLU_LUT_Design §8).
 		case SslmSectionType::SigmoidLut: return SslmDtype::Int32;
 		case SslmSectionType::RopeTables: return SslmDtype::Int64;
+		// T-2021/T-2029 B0b (design Sec9): DeltaFoldScales/UFoldScales are DFS1/UFS1 manifests of
+		// int32 (identity,mult,exponent) triples -- same element dtype as WSC1, distinct section
+		// type and distinct on-disk magic (never WSC1's own).
+		case SslmSectionType::DeltaFoldScales: return SslmDtype::Int32;
+		case SslmSectionType::UFoldScales: return SslmDtype::Int32;
 		// All binary-struct / keyed / opaque-byte sections are Raw (CFG1, KVC1, JSON).
 		case SslmSectionType::Config:
 		case SslmSectionType::Provenance:
