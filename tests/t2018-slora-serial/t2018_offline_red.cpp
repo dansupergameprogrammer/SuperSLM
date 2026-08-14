@@ -604,10 +604,29 @@ static NonInferiorityStat ComputeNonInferiorityStat(const std::vector<double>& g
 	return s;
 }
 
-// Per-item composed and effect-retention gaps (L2, primary), split by pilot/validation membership.
+// Per-item composed gap (L2, paired, unchanged) and effect-retention quantities, split by
+// pilot/validation membership.
+//
+// T-2040 AMENDMENT (D-SLM3126-3131/D-SLM3143, design Sec22, T-2033 disposition): the
+// effect-retention conjunct's GATED quantity is corrected from the paired `effect_gap[i] =
+// effect_l2_runtime[i] - effect_l2_baked[i]` form (T-2022/Sec21's shape) to
+// `effect_l2_runtime[i]` ALONE, one-sided against the float PEFT delta reference --
+// `effect_l2_baked` is retained and reported but never gates. Root cause (D-SLM3126): the baked
+// arm's own effect isolation (`baked_composed - shared_base`) is a subtraction of two
+// independently-quantized, near-equal LARGE quantities -- catastrophic cancellation -- while the
+// runtime arm's own effect (`runtime_composed - runtime_base`) reduces algebraically to
+// `delta_wide*scale` exactly (both terms share the identical `acc_wide`), carrying no such
+// cancellation. Pairing a clean signal against a noisy one (the paired-gap form) mixes a
+// structurally unrelated noise source into the decision-relevant statistic at slices where the
+// adapter's genuine trained effect is small relative to base-quantization noise --
+// `StandardsDocument.md` Sec5.4's "reference whose own dispersion swamps the quantity under
+// decision" species. The retired paired form (`effect_gap`) is kept below as a reported,
+// non-gating diagnostic, per Sec22's own "checked directly rather than assumed" convention.
 struct CorpusGaps {
-	std::vector<double> composed_pilot, composed_validation;
-	std::vector<double> effect_pilot, effect_validation;
+	std::vector<double> composed_pilot, composed_validation;              // item 1, unchanged
+	std::vector<double> effect_runtime_pilot, effect_runtime_validation;  // item 1a, CORRECTED -- gates
+	std::vector<double> effect_baked_pilot, effect_baked_validation;      // item 1a, diagnostic only
+	std::vector<double> effect_gap_pilot, effect_gap_validation;          // RETIRED paired form -- diagnostic only
 };
 
 static CorpusGaps CollectCorpusGaps(const QuantizedBase& qb, int mech, double knob, int n_items,
@@ -617,22 +636,35 @@ static CorpusGaps CollectCorpusGaps(const QuantizedBase& qb, int mech, double kn
 		const uint64_t item_seed = seed_base + (uint64_t)i * 0x9E3779B1u;
 		const TokenResult tr = RunToken(qb, item_seed, mech, knob);
 		const double composed_gap = tr.composed_l2_runtime - tr.composed_l2_baked;
-		const double effect_gap = tr.effect_l2_runtime - tr.effect_l2_baked;
+		const double effect_gap = tr.effect_l2_runtime - tr.effect_l2_baked;  // retired, diagnostic
 		if (IsPilotItem(item_seed)) {
 			g.composed_pilot.push_back(composed_gap);
-			g.effect_pilot.push_back(effect_gap);
+			g.effect_runtime_pilot.push_back(tr.effect_l2_runtime);
+			g.effect_baked_pilot.push_back(tr.effect_l2_baked);
+			g.effect_gap_pilot.push_back(effect_gap);
 		} else {
 			g.composed_validation.push_back(composed_gap);
-			g.effect_validation.push_back(effect_gap);
+			g.effect_runtime_validation.push_back(tr.effect_l2_runtime);
+			g.effect_baked_validation.push_back(tr.effect_l2_baked);
+			g.effect_gap_validation.push_back(effect_gap);
 		}
 	}
 	return g;
 }
 
-// The four frozen Deltas (design Sec6 item 1/1a, D-SLM3086/3090): calibrated ONCE, from a
+// The four frozen Deltas (design Sec6 item 1/1a, D-SLM3086/3090/3127): calibrated ONCE, from a
 // WIRING-AND-DERIVATION-clean reference adapter's honest (t=1, mech=1) run over the PILOT
 // partition only -- never from the adapter under test's own grading run (the circularity Dan's
 // ruling names). `Delta = 1.5 * (mean_pilot + z*se_pilot)`; `Delta_tail = 1.5 * P95_pilot`.
+// `effect_mean`/`effect_tail` are now calibrated from `effect_runtime_pilot` ALONE (D-SLM3127),
+// not the retired paired `effect_gap_pilot`.
+//
+// Independence property (D-SLM3126's own argument, restated): the gated quantity,
+// `effect_l2_runtime[i]`, is graded against the float PEFT delta `yd = scaling*(B*A)*x`,
+// computed directly from the trained A/B in float -- sharing none of the runtime mechanism's
+// internals (no T, no delta fold, no u_i8, no rho). This is the identical independence argument
+// design Sec6 item 1's own D-SLM3006 finding already makes for grading the runtime arm against
+// the baked arm, applied here to the float delta reference directly.
 struct FrozenDelta {
 	double composed_mean = 0.0, composed_tail = 0.0;
 	double effect_mean = 0.0, effect_tail = 0.0;
@@ -645,7 +677,9 @@ static FrozenDelta CalibrateDelta(const QuantizedBase& reference, int n_items, u
 	// requires (B0's gate passes on this construction by this suite's own B0 cells, above).
 	const CorpusGaps g = CollectCorpusGaps(reference, /*mech=*/1, 0.0, n_items, seed_base);
 	const NonInferiorityStat composed_pilot = ComputeNonInferiorityStat(g.composed_pilot, kZ95OneSided);
-	const NonInferiorityStat effect_pilot = ComputeNonInferiorityStat(g.effect_pilot, kZ95OneSided);
+	// T-2040/D-SLM3127: single-arm, not the retired paired effect_gap_pilot.
+	const NonInferiorityStat effect_pilot =
+	    ComputeNonInferiorityStat(g.effect_runtime_pilot, kZ95OneSided);
 	FrozenDelta d;
 	d.composed_mean = kSafetyInflation * (composed_pilot.mean + kZ95OneSided * composed_pilot.se);
 	d.composed_tail = kSafetyInflation * composed_pilot.p95;
@@ -658,8 +692,13 @@ static FrozenDelta CalibrateDelta(const QuantizedBase& reference, int n_items, u
 
 // The full acceptance verdict (design Sec6 item 1/1a): both conjuncts, each its own mean-and-tail
 // non-inferiority test against the frozen Delta, graded on the VALIDATION partition only.
+// `effect_stat` (T-2040/D-SLM3127) is now computed from `effect_runtime_validation` alone;
+// `effect_baked_diagnostic_mean` is retained and reported, never gates (Sec6 item 1a's own
+// "retained as a DIAGNOSTIC only" text, the same status Sec6 item 1 already gives its own
+// per-arm float-distance figures).
 struct Verdict {
 	NonInferiorityStat composed_stat, effect_stat;
+	double effect_baked_diagnostic_mean = 0.0;  // reported only, never gates (D-SLM3127)
 	bool composed_mean_accepts = false, composed_tail_accepts = false;
 	bool effect_mean_accepts = false, effect_tail_accepts = false;
 	bool accepts = false;  // ALL four conjuncts must accept
@@ -670,7 +709,14 @@ static Verdict Grade(const QuantizedBase& qb, int mech, double knob, const Froze
 	const CorpusGaps g = CollectCorpusGaps(qb, mech, knob, n_items, seed_base);
 	Verdict v;
 	v.composed_stat = ComputeNonInferiorityStat(g.composed_validation, kZ95OneSided);
-	v.effect_stat = ComputeNonInferiorityStat(g.effect_validation, kZ95OneSided);
+	// T-2040/D-SLM3127: gates on effect_runtime_validation alone (single-arm).
+	v.effect_stat = ComputeNonInferiorityStat(g.effect_runtime_validation, kZ95OneSided);
+	{
+		double sum = 0.0;
+		for (double x : g.effect_baked_validation) sum += x;
+		v.effect_baked_diagnostic_mean =
+		    g.effect_baked_validation.empty() ? 0.0 : sum / (double)g.effect_baked_validation.size();
+	}
 	v.composed_mean_accepts = v.composed_stat.upper_ci < delta.composed_mean;
 	v.composed_tail_accepts = v.composed_stat.p95 < delta.composed_tail;
 	v.effect_mean_accepts = v.effect_stat.upper_ci < delta.effect_mean;
@@ -1043,10 +1089,21 @@ static void TestB3WrongDirectionMutationRejectedAgainstFrozenDelta() {
 	          "frozen Delta -- upper_ci=%.6f Delta=%.6f", v.composed_stat.upper_ci, delta.composed_mean);
 }
 
-// B3's own fifth red-first cell (design Sec6 item 1a, D-SLM3088/D-SLM3091): T_SCALE(255.9) full
-// annihilation must fail the EFFECT-RETENTION conjunct UNCONDITIONALLY -- independent of the
-// composed conjunct's own Delta, and independent of base-output magnitude, because the base has
-// already been subtracted out of the graded quantity before the metric runs.
+// B3's own fifth red-first cell, RE-DERIVED to design Sec22's corrected form (T-2040, D-SLM3126-
+// 3131/D-SLM3143, superseding T-2022/Sec21's paired `gap_effect` shape this cell used through
+// T-2027). Gated quantity: `effect_l2_runtime[i]` ALONE (single-arm), one-sided against
+// `Delta_effect` calibrated from PILOT's own honest single-arm distribution (`CalibrateDelta`/
+// `Grade`, above) -- `effect_l2_baked` is retained and reported as a DIAGNOSTIC only, never
+// gating. Root cause this correction removes (D-SLM3126): the RETIRED paired form
+// (`effect_l2_runtime - effect_l2_baked`) mixed a clean signal (the runtime arm's own effect,
+// which reduces algebraically to `delta_wide*scale` exactly) with the baked arm's own
+// catastrophic-cancellation noise (`baked_composed - shared_base`, a subtraction of two
+// independently-quantized near-equal large quantities) -- exactly the species that rejected the
+// real shopkeeper adapter at layer0/q_proj in T-2029's own first execution (D-SLM3123/3124) even
+// though its genuine trained effect was real and retained. T_SCALE(255.9) full annihilation must
+// still fail this conjunct UNCONDITIONALLY -- independent of the composed conjunct's own Delta,
+// and independent of base-output magnitude, because the base has already been subtracted out of
+// the graded quantity before the metric runs.
 static void TestB3EffectRetentionRejectsFullAnnihilationUnconditionally() {
 	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
 	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
@@ -1065,9 +1122,10 @@ static void TestB3EffectRetentionRejectsFullAnnihilationUnconditionally() {
 
 	const Verdict v = Grade(annihilated, /*mech=*/1, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
 	std::printf("   [B3 fifth cell] annihilated on VALIDATION: effect upper_ci=%.6f (Delta_effect=%.6f) "
-	            "effect p95=%.6f (Delta_effect_tail=%.6f) composed accepts=%d effect accepts=%d "
-	            "-> overall %s\n", v.effect_stat.upper_ci, delta.effect_mean, v.effect_stat.p95,
-	            delta.effect_tail, v.composed_mean_accepts && v.composed_tail_accepts,
+	            "effect p95=%.6f (Delta_effect_tail=%.6f) baked-arm DIAGNOSTIC mean=%.6f (never gates) "
+	            "composed accepts=%d effect accepts=%d -> overall %s\n",
+	            v.effect_stat.upper_ci, delta.effect_mean, v.effect_stat.p95, delta.effect_tail,
+	            v.effect_baked_diagnostic_mean, v.composed_mean_accepts && v.composed_tail_accepts,
 	            v.effect_mean_accepts && v.effect_tail_accepts, v.accepts ? "ACCEPT (should not happen)"
 	                                                                       : "reject");
 	CHECK_MSG(!v.effect_mean_accepts,
@@ -1075,6 +1133,30 @@ static void TestB3EffectRetentionRejectsFullAnnihilationUnconditionally() {
 	          "Delta_effect=%.6f", v.effect_stat.upper_ci, delta.effect_mean);
 	CHECK_MSG(!v.accepts, "the overall verdict must reject full annihilation via effect retention "
 	          "alone, regardless of what the composed conjunct's own Delta would tolerate");
+
+	// D-SLM3128's own "checked directly rather than assumed" verification: does the RETIRED
+	// paired form still reject this same annihilation construction at this fixture, using its
+	// OWN (differently-calibrated) frozen Delta? Reported for cross-reference only -- this suite's
+	// own gate no longer depends on this form holding.
+	{
+		const CorpusGaps pilot_g =
+		    CollectCorpusGaps(reference, /*mech=*/1, 0.0, kT2027PilotCorpusN, kT2027PilotSeedBase);
+		const NonInferiorityStat retired_pilot =
+		    ComputeNonInferiorityStat(pilot_g.effect_gap_pilot, kZ95OneSided);
+		const double retired_delta_mean =
+		    kSafetyInflation * (retired_pilot.mean + kZ95OneSided * retired_pilot.se);
+		const CorpusGaps ann_g = CollectCorpusGaps(annihilated, /*mech=*/1, 0.0, kT2027GradeCorpusN,
+		                                            kT2027GradeSeedBase);
+		std::vector<double> retired_ann_all = ann_g.effect_gap_pilot;
+		retired_ann_all.insert(retired_ann_all.end(), ann_g.effect_gap_validation.begin(),
+		                        ann_g.effect_gap_validation.end());
+		const NonInferiorityStat retired_ann = ComputeNonInferiorityStat(retired_ann_all, kZ95OneSided);
+		const bool retired_still_rejects = retired_ann.upper_ci >= retired_delta_mean;
+		std::printf("   [B3 fifth cell] retired paired form, checked directly: Delta_effect_mean(retired)"
+		            "=%.6f annihilated upper_ci(retired)=%.6f -> %s (D-SLM3128's own cross-check)\n",
+		            retired_delta_mean, retired_ann.upper_ci,
+		            retired_still_rejects ? "still rejects" : "would have accepted");
+	}
 	// This holds regardless of base-output magnitude (D-SLM3091's own clause) -- re-run at a much
 	// larger base weight scale (10x) to confirm the effect-retention refusal is unaffected.
 	QuantizedBase annihilated_large_base = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank,
