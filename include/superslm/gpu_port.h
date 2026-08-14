@@ -122,6 +122,25 @@ enum class GpuLayerLoopGuard : int {
 // consume, not built as a test cell here (Brunel does not author tests).
 bool LastWeightUploadWasSkipped();
 
+// T-2063 (O11, Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md;
+// Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md S1/Ceilings;
+// Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S20.2/20.7): the long-owed
+// CreateCommittedResource failure-injection instrument, scoped to RunLayerLoopGpu's own
+// DEFAULT-heap weight-buffer allocation (the single largest allocation in the recording
+// window, and the one two independent probes -- the reviewer's own at T-2060 and the build
+// seat's own at T-2062, converging on the identical env-gated-throw shape without having
+// seen each other's -- used to verify S1/M-b/P3/T-2059's catch-site status vocabulary by
+// editing this source in disposable scratch, never as a committed cell. Mirrors B12's own
+// arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection): arms
+// injection so the NEXT weight-buffer allocation call in RunLayerLoopGpu fails with a
+// synthetic allocation error; the call after clears it. Declared, not defined (LINK-RED,
+// this header's own :9-18 banner) -- new production infrastructure, routed to the build
+// seat. Until it exists, `TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_
+// SkippedFalse` (tests/test_main.cpp) is a real, reproducible LINK failure, not a stand-in
+// for one.
+void ArmWeightAllocationFailureInjection();
+void ClearWeightAllocationInjection();
+
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
 // `workspace` is the device-resident twin of the identical buffer RunLayerLoop uses.

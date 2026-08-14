@@ -22403,6 +22403,134 @@ static void TestT2053_Item3_LastWeightUploadWasSkipped() {
 	          "read false");
 }
 
+// T-2063 (M-a, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md): the existing
+// item-3 cell above never exercises P2's own defect class -- its own call 3 rejection
+// (ChainInputOutOfDomain) happens deep inside the per-layer forward pass, past the point normal
+// weight-upload bookkeeping already runs and sets the flag correctly on its own. P2's own bug was
+// at the NINE-GUARD LADDER'S entry point (superslm_gpu.cpp:581), which returns BEFORE weight
+// bookkeeping runs at all -- before the fix (superslm_gpu.cpp:541, "set false at entry"), a
+// guard-rejecting call immediately after a cache-hit call read the PREVIOUS call's own true,
+// stale. This cell is that exact sequence, three lines against the existing fixture shape.
+static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit() {
+	NLayerFixture<8> fixture;
+
+	auto call_once = [&]() {
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		return superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+		                                       fixture.view.rope_tables, ws.data(), ws.size());
+	};
+
+	// Call 1: cache miss, establishes residency.
+	const auto st1 = call_once();
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "T2063 M-a call 1: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st1));
+
+	// Call 2: SAME content -- a cache hit. LastWeightUploadWasSkipped() must now read true.
+	const auto st2 = call_once();
+	CHECK_MSG(st2 == SslmForwardStatus::Ok, "T2063 M-a call 2: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st2));
+	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2063 M-a: call 2 is a cache hit -- LastWeightUploadWasSkipped() must read true "
+	          "before call 3 below can mean anything");
+
+	// Call 3: layer_budget=0 -- rejected by the FIRST guard in the ladder
+	// (InvalidLayerBudget), before any weight bookkeeping runs. Before the
+	// superslm_gpu.cpp:541 fix, this read call 2's own stale `true`.
+	SequenceLayerState seq3;
+	int8_t codes3[2] = {5, -5};
+	seq3.hidden_codes = codes3;
+	seq3.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq3.layer_index = 0;
+	std::vector<uint8_t> ws3(8 * t2019_b11::kWsPerLayer, 0);
+	const auto st3 = superslm_gpu::RunLayerLoopGpu(seq3, fixture.layers, 8, /*layer_budget=*/0, 2,
+	                                                 2, 1, 2, 1, fixture.view.rope_tables,
+	                                                 ws3.data(), ws3.size());
+	CHECK_MSG(st3 == SslmForwardStatus::InvalidLayerBudget,
+	          "T2063 M-a call 3 (layer_budget=0): status=%s, want InvalidLayerBudget -- this "
+	          "cell's own guard-rejection premise failed, the assertion below cannot be read as "
+	          "meaning what it claims",
+	          superslm::SslmForwardStatusName(st3));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2063 M-a (P2, superslm_gpu.cpp:541): a guard-rejecting call immediately after a "
+	          "cache-hit call must NOT read the PREVIOUS call's own true -- "
+	          "LastWeightUploadWasSkipped() must read false on this rejecting path");
+}
+
+// T-2063 (item 2, S1/M-b, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-review.md S1;
+// Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md S20.2/20.3/20.7): the single discriminating
+// cell BOTH S1 (the weight-buffer's own throw must return GpuAllocationFailed, not the retired
+// KvPrecisionUnsupported) and M-b (the SAME catch's LastWeightUploadWasSkipped() must read false,
+// not the throwing call's own pre-throw true) actually need -- one fixture, since the T-2062 fix
+// unified both allocations under the SAME outer catch. LINK-RED until O11's own instrument
+// (superslm_gpu::ArmWeightAllocationFailureInjection/ClearWeightAllocationInjection, gpu_port.h)
+// is built -- both the reviewer's own probe (T-2060) and the build seat's own probe (T-2062,
+// build log S20.2's nine-call table) already measured every status this cell asserts, by editing
+// this source in disposable scratch; neither committed it. This cell reproduces that exact
+// sequence (their own call5/6/7/8) against the real, named API this suite's own convention uses
+// for committed injection (B12), ready to link and pass the moment the instrument exists.
+static void TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse() {
+	NLayerFixture<8> fixture;
+
+	auto call_once = [&]() {
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		return superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+		                                       fixture.view.rope_tables, ws.data(), ws.size());
+	};
+
+	// Call 1: cache miss, establishes residency.
+	const auto st1 = call_once();
+	CHECK_MSG(st1 == SslmForwardStatus::Ok, "T2063 S1/M-b call 1: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st1));
+
+	// Call 2: same content -- a cache hit. LastWeightUploadWasSkipped() must read true.
+	const auto st2 = call_once();
+	CHECK_MSG(st2 == SslmForwardStatus::Ok, "T2063 S1/M-b call 2: status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st2));
+	CHECK_MSG(superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2063 S1/M-b: call 2 is a cache hit -- must read true before call 3 means anything");
+
+	// Call 3: same content again (another cache hit), but this call's own weight-buffer
+	// CreateCommittedResource is armed to fail. S1: the throw must now surface as
+	// GpuAllocationFailed (the retired T-2052 single-site catch used to intercept it first and
+	// return KvPrecisionUnsupported instead). M-b: the SAME catch invalidates the residency
+	// cache it just destroyed -- LastWeightUploadWasSkipped() must read false, not this call's
+	// own pre-throw true.
+	superslm_gpu::ArmWeightAllocationFailureInjection();  // LINK-RED -- O11's own instrument
+	const auto st3 = call_once();
+	superslm_gpu::ClearWeightAllocationInjection();  // LINK-RED -- always clear, even on failure
+	CHECK_MSG(st3 == SslmForwardStatus::GpuAllocationFailed,
+	          "T2063 S1 (superslm_gpu.cpp, S1 remedy): weight-buffer allocation throw: status=%s, "
+	          "want GpuAllocationFailed -- the retired single-site catch must not still be "
+	          "returning KvPrecisionUnsupported for this allocation",
+	          superslm::SslmForwardStatusName(st3));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2063 M-b (superslm_gpu.cpp, catch-site cache invalidation): a cache-hit call whose "
+	          "own weight-buffer throw is caught must NOT read its own pre-throw true -- the catch "
+	          "invalidates the cache it describes, so LastWeightUploadWasSkipped() must read false");
+
+	// Call 4: well-formed, no injection -- the catch's own invalidation forces a real cache
+	// miss on the very next call, recovering cleanly (build log S20.2's own call5/6 and
+	// call7/8, reproduced here as one property: recovery is real, not argued).
+	const auto st4 = call_once();
+	CHECK_MSG(st4 == SslmForwardStatus::Ok,
+	          "T2063 S1/M-b call 4 (post-throw recovery): status=%s, want Ok -- the catch must "
+	          "leave the command allocator and residency cache in a state the next call can use",
+	          superslm::SslmForwardStatusName(st4));
+	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
+	          "T2063 S1/M-b call 4: the catch's own invalidation forces THIS call to be a real "
+	          "cache miss -- LastWeightUploadWasSkipped() must read false");
+}
+
 // --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
 // level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
 // C-ABI wrapper is not yet built on any backend). Restore-time device allocation
@@ -23514,6 +23642,8 @@ int main(int argc, char** argv) {
 	// proofs.
 	TestT2053_M1_TableWalkAgainstGuardsDef();
 	TestT2053_Item3_LastWeightUploadWasSkipped();
+	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
+	TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
