@@ -256,7 +256,8 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 // q_proj, kv_proj fused, RoPE's own guard); T-2035 completes RoPE's own
 // rotation and builds sites 5-16 plus the real per-layer commit dispatch --
 // the full 14-dispatch-per-layer composition (Claude/Vitruvius/t1986-...-
-// 2026-08-13.md Sec4's own site order; forward_sites.cpp:1390-1800).
+// 2026-08-13.md Sec4's own site order; `forward_sites.cpp`'s own per-layer
+// loop body, `RunLayerLoopImpl`).
 // ===========================================================================
 
 namespace {
@@ -330,8 +331,9 @@ bool g_last_weight_upload_was_skipped = false;
 // -- it was DELETED, not left standing, taking with it the tree's only
 // explanation of why the call site inside `RunLayerLoopGpu` carries no
 // `#ifdef` at all. Restored below, verbatim, exactly as `gpu_port.h`'s own
-// sibling correction (`:284`, the T-2076 note) already does this correctly
-// on the same day: original text standing, correction beside it, not one
+// sibling correction (the "T-2076 note" paragraph, beside its own T-2091
+// CORRECTED block) already does this correctly on the same day: original
+// text standing, correction beside it, not one
 // replacing the other.
 //
 // T-2071 note (original text, superseded above by T-2080's own S1/S2, kept
@@ -661,7 +663,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// the Tier-3 preflight check) so `LastWeightUploadWasSkipped()`'s own
 	// documented contract ("set internally... every call") is actually true
 	// of every call, not only of the calls that reach the weight-residency
-	// decision past line ~780. Before this fix the accessor held the
+	// decision (`weights_resident`, this function's own residency branch,
+	// well below this point). Before this fix the accessor held the
 	// PREVIOUS call's answer across a rejecting call -- reproduced by
 	// execution: a probe driving guard-rejected calls read back a stale,
 	// sometimes-Ok-sometimes-not `skipped` value that had nothing to do with
@@ -669,13 +672,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// decision at all, so `false` ("no upload was skipped") is the honest
 	// answer for one, matching the reject-over-silently-degrade shape every
 	// other guard in this function already follows.
-	g_last_weight_upload_was_skipped = false;
+	g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_function_entry
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
-	// CPU checks NINE in the cited range (forward_sites.cpp:1137-1354), not
-	// eight, and the missing one (`seq.hidden_codes == nullptr` ->
-	// `InvalidHiddenCodes`, forward_sites.cpp:1298) was reproduced crashing
+	// CPU checks NINE in `RunLayerLoopImpl`'s own guard ladder (`forward_sites.
+	// cpp`), not eight, and the missing one (`seq.hidden_codes == nullptr` ->
+	// `InvalidHiddenCodes`) was reproduced crashing
 	// this process with `STATUS_ACCESS_VIOLATION` (0xC0000005) on a
 	// DEFAULT-CONSTRUCTED `SequenceLayerState` -- the exact input
 	// `sslm_seq_restore`'s own documented contract produces
@@ -711,8 +714,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// own source.
 	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
-	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (forward_sites.cpp:1161-1175):
-	// the CFG1 geometry join, checked on THIS call's own caller-supplied
+	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (`RunLayerLoopImpl`'s own CFG1 geometry
+	// join, `forward_sites.cpp`), checked on THIS call's own caller-supplied
 	// hidden_size/head_dim/num_key_value_heads exactly as CPU checks it --
 	// never assumed sound because some other caller (the loader's own
 	// ValidateConfigGeometryJoin) already checked an artifact-sourced
@@ -725,8 +728,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	    guard_num_heads % num_key_value_heads != 0) {
 		return superslm::SslmForwardStatus::KvHeadGeometryMismatch;  // KvHeadGeometryMismatch
 	}
-	// WorkspaceSizeOrOverflow (forward_sites.cpp:1196-1218): the
-	// overflow-guarded KV-size product, bit-exact against CPU's own
+	// WorkspaceSizeOrOverflow (`RunLayerLoopImpl`'s own KV-size overflow guard, `forward_sites.
+	// cpp`): the overflow-guarded KV-size product, bit-exact against CPU's own
 	// factor-by-factor `SIZE_MAX / factor` idiom (the third factor is
 	// num_key_value_heads, not guard_num_heads -- T-1654/S3.8a's own
 	// correction, matching KeyRow/ValueRow's real addressing) -- an
@@ -745,8 +748,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		if (workspace == nullptr) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
 		if (workspace_size < kv_bytes_needed) return superslm::SslmForwardStatus::WorkspaceTooSmall;  // WorkspaceSizeOrOverflow
 	}
-	// HiddenCodesNull (forward_sites.cpp:1298): CPU's own comment there names
-	// exactly this input -- a default-constructed SequenceLayerState, which
+	// HiddenCodesNull (`RunLayerLoopImpl`'s own null-hidden_codes guard, `forward_sites.cpp`) --
+	// CPU's own comment there names exactly this input -- a default-constructed SequenceLayerState, which
 	// is what `int8_t* hidden_codes = nullptr;`'s own default member
 	// initializer produces -- as "used to be dereferenced unconditionally...
 	// rejected here instead of left to crash the process." Checked in CPU's
@@ -758,8 +761,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	if (seq.layer_index >= num_hidden_layers) {
 		return superslm::SslmForwardStatus::SequenceAlreadyComplete;  // SequenceAlreadyComplete
 	}
-	// PositionOverCap / KvCapacityExhausted (forward_sites.cpp:1351-1354):
-	// the two `seq.context_length` domain guards -- KvCapacityExhausted is
+	// PositionOverCap / KvCapacityExhausted (`RunLayerLoopImpl`'s own `seq.context_length`
+	// domain guards, `forward_sites.cpp`) -- KvCapacityExhausted is
 	// the one T-2049's own confirmation review reproduced landing K/V bytes
 	// past the addressed row before rejecting.
 	if (seq.context_length < 0) return superslm::SslmForwardStatus::PositionOverCap;  // PositionOverCap
@@ -1339,9 +1342,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `kDispatchesPerLayer` above exactly -- attention is now four real
 	// dispatches (attention-score, softmax, context-accumulate, ctx_fold),
 	// not T-2039's own fused one.
-	// T-2045 (C2): resume from seq.layer_index, exactly as forward_sites.cpp's
+	// T-2045 (C2): resume from seq.layer_index, exactly as `forward_sites.cpp`'s
 	// own `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)`
-	// does (forward_sites.cpp:1381) -- the guard above already proved
+	// does -- the guard above already proved
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
@@ -1455,7 +1458,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// `gpu_port.h`'s own paragraph for the actual one (`false` before
 		// the residency decision runs, exactly `weights_resident` after
 		// it) -- not restated a second time here.
-		g_last_weight_upload_was_skipped = false;
+		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
 		// gone right now (device recreation owed, not a retry against this
@@ -1691,8 +1694,8 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 
 		// T-2045 (S6, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
 		// this function's own declared contract sites the restore-time device
-		// allocation and host-to-device upload HERE (gpu_port.h:149-154's own
-		// comment) -- a plain host memcpy would pass this gate identically
+		// allocation and host-to-device upload HERE (`gpu_port.h`'s own
+		// `RestoreGpuSequenceState` declaration comment) -- a plain host memcpy would pass this gate identically
 		// with no GPU present. The workspace bytes now round-trip through a
 		// real device: upload heap -> DEFAULT-heap device buffer (the
 		// "restored-sequence device allocation" itself) -> readback heap ->

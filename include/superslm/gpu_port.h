@@ -181,29 +181,44 @@ enum class GpuLayerLoopGuard : int {
 // but one had gone stale across two same-day commits; refreshed AGAIN
 // 2026-08-14, T-2084, S2, Claude/Poirot/42ecf79-gpu-serial-port-round9-
 // review.md, D-SLM3247, after S2's own restoration of superslm_gpu.cpp's
-// deleted T-2071 paragraph shifted every line below it -- the CLAIM below
-// is unchanged from what T-2069 wrote, only the `superslm_gpu.cpp:<line>`
-// pointers are corrected to resolve against current HEAD): "twelve" above is
+// deleted T-2071 paragraph shifted every line below it; CONVERTED 2026-08-14,
+// T-2094, Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md
+// (S1/S3), from line-number pointers to SYMBOL/ANCHOR references -- a line
+// number drifts on any unrelated edit that shifts source; a symbol name or a
+// named anchor comment does not drift until the symbol itself is renamed,
+// which `check_symbol_integrity` (`tests/ci/check_gpu_guard_status_parity.py`)
+// already catches. The CLAIM below is unchanged from what T-2069 wrote, only
+// HOW it points at `superslm_gpu.cpp` has changed twice, first refreshed,
+// now removed as a class): "twelve" above is
 // also wrong -- the correction above counted the function's rejecting
 // RETURNS (its guard ladder), not its rejecting return PATHS, and never
 // re-derived the number from the function itself. Enumerated fresh, at
 // source, every rejecting `return superslm::SslmForwardStatus::` (or
 // return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
-// ladder (`superslm_gpu.cpp:712, 713, 722, 726, 741, 745, 746, 756, 759,
-// 765, 767` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
+// ladder (`InvalidLayerBudget` (`superslm_gpu.cpp`), `InvalidContextCap`
+// (`superslm_gpu.cpp`), `HeadDimGeometryMismatch` (`superslm_gpu.cpp`),
+// `KvHeadGeometryMismatch` (`superslm_gpu.cpp`), `WorkspaceTooSmall`
+// (`superslm_gpu.cpp`), `InvalidHiddenCodes` (`superslm_gpu.cpp`),
+// `SequenceAlreadyComplete` (`superslm_gpu.cpp`), `PositionOverCap`
+// (`superslm_gpu.cpp`), `KvCapacityExhausted` (`superslm_gpu.cpp`) --
+// eleven RETURN STATEMENTS realizing nine distinct guards, two
 // of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
-// sites); two device-capability rejections below the ladder (`:774`
-// `!dev.available`, `:786` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
+// sites); two device-capability rejections below the ladder (the
+// `dev.available` (`superslm_gpu.cpp`) check, the sub-Tier-3
+// `MapModelGpuResidencyTierCheck` (`superslm_gpu.cpp`)
 // check, both `KvPrecisionUnsupported`); and the recording-window catch
-// itself (`:1468`, one return statement, a ternary choosing between
+// itself (`device_removed_reason` (`superslm_gpu.cpp`), one return statement, a ternary choosing between
 // `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve --
 // CORRECTED AGAIN below (T-2075, S2): fourteen is also short by one.
 // `g_last_weight_upload_was_skipped`'s own FOUR write sites (corrected from
 // "three" in the same sentence that listed four citations, T-2075, M2 --
-// `superslm_gpu.cpp:299` static init, `:672` function entry, `:961` the
-// residency decision, `:1458` the catch) still cover all fourteen of THIS
-// paragraph's own paths correctly -- `:961` is the only conditional write
-// and it sits below both `:774` and `:786`, so those two paths read the
+// the static init (`g_last_weight_upload_was_skipped` (`superslm_gpu.cpp`)),
+// the function-entry write anchored
+// `lwuws_write_function_entry` (`superslm_gpu.cpp`), the residency-decision
+// write (`weights_resident` (`superslm_gpu.cpp`)), the catch's own write
+// anchored `lwuws_write_catch` (`superslm_gpu.cpp`)) still cover all fourteen of THIS
+// paragraph's own paths correctly -- the residency-decision write is the only conditional write
+// and it sits below both device-capability rejections, so those two paths read the
 // entry-set `false` unchanged; this correction is to the COUNT, not to the
 // code, which was already right as far as this paragraph's own scope went.
 // The `!dev.available`/Tier-3 half of this claim is derived by inspection
@@ -215,9 +230,10 @@ enum class GpuLayerLoopGuard : int {
 // is short by one, and -- unlike the three corrections before it -- the
 // property being counted is FALSE, not merely mis-numbered, so this
 // correction does not just renumber it. `RunLayerLoopGpu`'s own TERMINAL
-// statement, `return DecodeStickyTag(sticky_tag);` (`superslm_gpu.cpp:1519`),
+// statement, `return DecodeStickyTag(sticky_tag);` (`DecodeStickyTag`
+// (`superslm_gpu.cpp`)),
 // is neither a ladder return nor the catch's ternary -- it is a FUNCTION
-// CALL whose result is returned directly, and `DecodeStickyTag` (`:583-601`)
+// CALL whose result is returned directly, and `DecodeStickyTag` (`superslm_gpu.cpp`)
 // maps the device's own sticky tag to fourteen statuses, THIRTEEN of them
 // rejecting (`ChainInputOutOfDomain`, `RopeTableTensorMissing`, and eleven
 // more -- only tag 0, `Ok`, is non-rejecting). That is a FIFTEENTH rejecting
@@ -242,7 +258,7 @@ enum class GpuLayerLoopGuard : int {
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
-// decision runs (`:961` above) -- the nine-guard ladder, the two
+// decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
 // device-capability rejections, and the recording-window catch, fourteen
 // paths in all, none of which ever reached a residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
@@ -277,11 +293,13 @@ bool LastWeightUploadWasSkipped();
 //
 // CORRECTED 2026-08-14 (T-2088, Claude/Poirot/8420005-gpu-serial-port-round11-review.md, S1;
 // D-SLM3261): "Not defined by `build.bat`" and "the build seat's own trigger to arm this pin"
-// (naming a future condition) were true from T-2070 to T-2071 and false since -- `build.bat:28`
+// (naming a future condition) were true from T-2070 to T-2071 and false since -- `build.bat`'s own
+// test-binary compile line
 // has defined `SUPERSLM_O11_ALLOC_INJECTION` alongside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION` on
 // the default test-binary compile line since T-2071 landed the real bodies, five rounds ago. The
 // trigger this paragraph describes as pending fired at `72a9b0d`; nothing in this file was edited
-// to say so, because the rename T-2084 made (M2, the previous round) touched `:273` one line below
+// to say so, because the rename T-2084 made (M2, the previous round) touched the `SUPERSLM_O11_
+// ALLOC_INJECTION` mention one paragraph below
 // this sentence without re-reading the paragraph it sits in (`StandardsDocument.md` §7). Believing
 // this sentence and removing the flag drops the O11 gate silently: gate-on and gate-off both then
 // report the SAME 3-failure count (16 checks and both discrimination cells vanish with no test
@@ -290,7 +308,7 @@ bool LastWeightUploadWasSkipped();
 // (`check_build_bat_defines_o11_gate`), not this sentence alone.
 //
 // CORRECTED 2026-08-14 (T-2091, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md,
-// M1; D-SLM3271): the block above's own header said T-2088 while attributing the rename it
+// M1; build log §27): the block above's own header said T-2088 while attributing the rename it
 // describes to "this same round" -- the rename was T-2084's own M2, the PREVIOUS round; "this
 // same round" made the two the same round, which they were not. Corrected to the wording
 // D-SLM3262 already had right ("the rename this same arc made at T-2084 (M2)").
@@ -326,15 +344,24 @@ constexpr uint32_t kO11AllocInjectionSiteWorkScratchUav = 1;
 // so it cannot be the thing that fails the default build's own link.
 //
 // CLARIFIED 2026-08-14 (T-2091, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md's
-// own class sweep; D-SLM3271): "the default build" above means the CMake target (`superslm_tests`,
+// own class sweep; build log §27): "the default build" above means the CMake target (`superslm_tests`,
 // `CMakeLists.txt`) -- the ONLY build configuration where `SUPERSLM_O11_ALLOC_INJECTION` is ever
 // undefined, since `build.bat`'s own default test-binary line has defined it since T-2071 (S1,
 // this same file's own dated correction below). Not a correction to the CLAIM (both builds
 // genuinely never compile this cell without the macro) -- a disambiguation of "default," the exact
 // word S1 found already misleading readers about a DIFFERENT sentence in this same paragraph
-// group. See `derive_execution_scope`/`check_execution_scope_waivers` (`tests/ci/check_gpu_guard_
-// status_parity.py`) for the machine-derived, standing-waived statement of which build compiles
-// what.
+// group. See `derive_execution_scope`/`check_execution_scope_waivers` (`check_gpu_guard_status_parity.py`)
+// for the machine-derived, standing-waived statement of which build compiles what.
+//
+// CORRECTED 2026-08-14 (T-2094, Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md, M2;
+// build log §28): the CLARIFIED block above is itself false -- `build.bat`'s own C5-harness `cl`
+// invocation (the second of its own two, `t2039_c5_harness.cpp`'s own build line) ALSO compiles
+// `superslm_gpu.cpp` without ever defining `SUPERSLM_O11_ALLOC_INJECTION`; it does not compile
+// `test_main.cpp`, so it is not "the default build" in the sense this paragraph means, but "the
+// ONLY build configuration where the macro is ever undefined" was false the day it was written --
+// `derive_execution_scope` (`check_gpu_guard_status_parity.py`) has always reported two such
+// configurations, not one. Corrected to the property the sentence actually needs: the CMake target
+// is the only configuration compiling `test_main.cpp` without the macro.
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 void ArmO11AllocationFailureInjection(uint32_t site);
 void ClearO11AllocationInjection();

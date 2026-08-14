@@ -60,7 +60,7 @@ out\superslm_tests.exe
 set ec=%errorlevel%
 
 rem T-2091 (O30's own local-half closure, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-
-rem review.md; D-SLM3271): this script ran no Python at all until now, so the O11 gate-flag pin
+rem review.md; build log §27): this script ran no Python at all until now, so the O11 gate-flag pin
 rem and the rest of tests/ci/check_gpu_guard_status_parity.py's own structural population never
 rem fired on the LOCAL build path -- only in GitHub Actions, which does not even compile
 rem src/gpu/superslm_gpu.cpp into the target that runs it (EXECUTION_SCOPE_WAIVERS's own named,

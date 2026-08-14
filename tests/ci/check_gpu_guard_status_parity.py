@@ -1,6 +1,7 @@
 """CI source check: the GPU-serial port's guard-count "structural closure"
-claim (`include/superslm/gpu_layer_loop_guards.def`, `gpu_port.h:91-103`,
-`superslm_gpu.cpp:544-553`) is itself checked against `forward_sites.cpp`,
+claim (`include/superslm/gpu_layer_loop_guards.def`, `gpu_port.h`'s own
+`GpuLayerLoopGuard` enum, `superslm_gpu.cpp`'s own `static_assert` beside its
+guard ladder) is itself checked against `forward_sites.cpp`,
 not merely restated three ways.
 
 WHY THIS EXISTS (T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
@@ -8,8 +9,9 @@ confirmation-review.md, P1). T-2052 built `gpu_layer_loop_guards.def` plus a
 `static_assert(GpuLayerLoopGuard::kCount == 9)` on both the `.def`-generated
 enum and the pin round's own table-walk cell, and FOUR records then claimed
 this closed CPU-guard-count drift as a class rather than a fourth hand-count
-(the `.def` file's own header, `gpu_port.h:91-103`, `superslm_gpu.cpp:544-
-553`, and build log §17.2). It does not: **nothing in that apparatus reads
+(the `.def` file's own header, `gpu_port.h`'s own `GpuLayerLoopGuard` enum,
+`superslm_gpu.cpp`'s own guard-ladder `static_assert`, and build log §17.2).
+It does not: **nothing in that apparatus reads
 `forward_sites.cpp`.** The `.def` file is a hand-written mirror of one
 reading of CPU's own ladder; `kCount` is generated from the mirror, not from
 CPU; both `static_assert`s compare `kCount` against the literal `9`; the
@@ -61,7 +63,8 @@ paragraph above's own residual statement was honest and incomplete. It
 stated one mutation the prior review had actually run and none other. A
 SECOND residual existed the day this module shipped and was falsified by
 execution one review later: the CPU end anchor,
-`const int64_t position = seq.context_length;` (`forward_sites.cpp:1365`),
+`const int64_t position = seq.context_length;` (`forward_sites.cpp`,
+`RunLayerLoopImpl`'s own guard/arithmetic boundary),
 is the real point where today's nine guards end, but it is a claim about
 CODE THAT EXISTS, not a boundary the language enforces -- a tenth guard
 placed one line PAST it, with a status new to the set and no `.def` row,
@@ -506,8 +509,8 @@ def check_decode_sticky_tag_range(gpu_text: str) -> list[str]:
     """T-2083 (O35): pins the EXACT claim `gpu_port.h`'s own citation exists
     to protect -- "fourteen statuses, THIRTEEN of them rejecting" -- against
     `DecodeStickyTag`'s own real body, rather than the two-endpoint range
-    citation whose own range-end needle (a bare `"}"`) is satisfied by 177 of
-    `superslm_gpu.cpp`'s own 2,023 lines and therefore proves only that the
+    citation whose own range-end needle (a bare `"}"`) is satisfied by a great
+    many of `superslm_gpu.cpp`'s own lines and therefore proves only that the
     function ends somewhere near the cited line, not what is inside it.
     Falsified by execution: deleting one interior `case` while preserving
     the file's own total line count left the two-endpoint citation green;
@@ -561,7 +564,7 @@ def check_build_bat_defines_o11_gate(build_bat_text: str) -> list[str]:
     ]
 
 
-# T-2091 (class B / O30, Dan's own scope-change dispatch, D-SLM3271): a PIN protecting a cell that
+# T-2091 (class B / O30, Dan's own scope-change dispatch, build log §27): a PIN protecting a cell that
 # a given pipeline never runs is hollow in that pipeline -- O30/O3 (rounds 9-12's own honestly
 # disclosed residual) found ONE instance by hand: `build.bat` ran no Python at all (CORRECTED this
 # same round, below -- it now does), so `check_build_bat_defines_o11_gate`'s own pin never fired
@@ -589,8 +592,36 @@ def check_build_bat_defines_o11_gate(build_bat_text: str) -> list[str]:
 # introduces a NEW hollow scope to name it explicitly rather than let the class re-accrete quietly
 # the way the O11 gate flag's own false "not defined" claim did for five rounds.
 CMAKE_LISTS = os.path.join(_REPO_ROOT, "CMakeLists.txt")
-_CMAKE_CORE_SOURCES_RE = re.compile(r"set\(SUPERSLM_CORE_SOURCES(.*?)\)", re.DOTALL)
-_CMAKE_SUPERSLM_TESTS_LINK_RE = re.compile(r"target_link_libraries\(superslm_tests\s+PRIVATE\s+([A-Za-z_]+)\)")
+
+# T-2094 (S4, Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md; D-SLM3277): the
+# original manifest hardcoded ONE CMake target by name (`_CMAKE_SUPERSLM_TESTS_LINK_RE` matched
+# only `target_link_libraries(superslm_tests ...)`) -- a NEW `add_executable` compiling
+# `test_main.cpp` (the exact case the module's own docstring claimed it prevents) landed green
+# (T-2094's own MUT-J reproduction). Generic now: every `add_executable`, its own direct source
+# list, and its own `target_link_libraries` -> `add_library` -> source-list chain, all derived by
+# NAME from the real text, no target hardcoded.
+_CMAKE_ADD_EXECUTABLE_RE = re.compile(r"add_executable\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+([^)]*)\)")
+_CMAKE_ADD_LIBRARY_RE = re.compile(
+    r"add_library\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+(?:STATIC|SHARED|MODULE)?\s*([^)]*)\)"
+)
+_CMAKE_TARGET_LINK_LIBRARIES_RE = re.compile(
+    r"target_link_libraries\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+(?:PUBLIC|PRIVATE|INTERFACE)?\s*([^)]*)\)"
+)
+_CMAKE_VAR_REF_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _cmake_resolve_sources(raw_args: str, cmake_text: str) -> str:
+    """`raw_args` (an `add_executable`/`add_library`'s own literal argument text) with every
+    `${VAR}` reference expanded against the file's own `set(VAR ...)` definitions -- a flat string
+    checked by substring, not a real CMake source-list parse, but enough to answer "does this
+    target's own source graph include `superslm_gpu.cpp`" without hardcoding a variable name."""
+    resolved = raw_args
+    for var_m in _CMAKE_VAR_REF_RE.finditer(raw_args):
+        var_name = var_m.group(1)
+        set_m = re.search(r"set\(\s*" + re.escape(var_name) + r"\s(.*?)\)", cmake_text, re.DOTALL)
+        if set_m is not None:
+            resolved += " " + set_m.group(1)
+    return resolved
 
 
 class ExecutionScope:
@@ -648,28 +679,34 @@ def derive_execution_scope(build_bat_text: str, cmake_text: str) -> tuple[Execut
                 compiles_gpu_source="superslm_gpu.cpp" in second_block,
                 defines_o11_macro=BUILD_BAT_O11_GATE_FLAG in second_block,
             ))
-    # CMakeLists.txt: `superslm_tests` (`add_executable(superslm_tests tests/test_main.cpp)`,
-    # linked against whichever library `target_link_libraries(superslm_tests PRIVATE ...)` names)
-    # -- that library's own `set(<NAME> ...)` source list is checked for the GPU translation unit,
-    # and the whole file is checked for the O11 macro (`target_compile_definitions`), by NAME, not
-    # assumed present or absent.
-    link_m = _CMAKE_SUPERSLM_TESTS_LINK_RE.search(cmake_text)
-    if link_m is not None:
-        linked_lib = link_m.group(1)
-        sources_re = re.compile(r"add_library\(" + re.escape(linked_lib) + r"\s+STATIC\s+\$\{([A-Za-z_]+)\}\)")
-        sources_m = sources_re.search(cmake_text)
-        gpu_in_sources = False
-        if sources_m is not None:
-            var_name = sources_m.group(1)
-            var_re = re.compile(r"set\(" + re.escape(var_name) + r"(.*?)\)", re.DOTALL)
-            var_m = var_re.search(cmake_text)
-            if var_m is not None:
-                gpu_in_sources = "gpu/superslm_gpu.cpp" in var_m.group(1) or "superslm_gpu.cpp" in var_m.group(1)
+    # CMakeLists.txt: EVERY `add_executable` target, generically -- not one hardcoded name (S4,
+    # T-2094). A target is in this manifest's own scope at all only if IT ITSELF compiles
+    # `test_main.cpp` (a tool with no test_main.cpp in its own source graph cannot be hollow in
+    # the sense this manifest tracks, whatever else it links). `compiles_gpu_source` is true if
+    # `superslm_gpu.cpp` appears in the executable's OWN direct sources OR anywhere in its own
+    # `target_link_libraries` -> `add_library` chain (one level; this tree's own real graph never
+    # nests a library inside another).
+    libraries: dict[str, str] = {}
+    for lib_m in _CMAKE_ADD_LIBRARY_RE.finditer(cmake_text):
+        libraries[lib_m.group(1)] = _cmake_resolve_sources(lib_m.group(2), cmake_text)
+    links: dict[str, list[str]] = {}
+    for link_m in _CMAKE_TARGET_LINK_LIBRARIES_RE.finditer(cmake_text):
+        links.setdefault(link_m.group(1), []).extend(link_m.group(2).split())
+    o11_macro_anywhere = "SUPERSLM_O11_ALLOC_INJECTION" in cmake_text
+    for exe_m in _CMAKE_ADD_EXECUTABLE_RE.finditer(cmake_text):
+        exe_name = exe_m.group(1)
+        own_sources = _cmake_resolve_sources(exe_m.group(2), cmake_text)
+        if "test_main.cpp" not in own_sources:
+            continue
+        compiles_gpu_source = "superslm_gpu.cpp" in own_sources
+        for lib_name in links.get(exe_name, []):
+            if "superslm_gpu.cpp" in libraries.get(lib_name, ""):
+                compiles_gpu_source = True
         scopes.append(ExecutionScope(
-            "CMake: superslm_tests (GitHub Actions)",
-            compiles_test_main=True,  # add_executable(superslm_tests tests/test_main.cpp) is unconditional
-            compiles_gpu_source=gpu_in_sources,
-            defines_o11_macro="SUPERSLM_O11_ALLOC_INJECTION" in cmake_text,
+            f"CMake: {exe_name} (GitHub Actions)",
+            compiles_test_main=True,
+            compiles_gpu_source=compiles_gpu_source,
+            defines_o11_macro=o11_macro_anywhere,
         ))
     return tuple(scopes)
 
@@ -683,7 +720,7 @@ def derive_execution_scope(build_bat_text: str, cmake_text: str) -> tuple[Execut
 # excuse for every future gap.
 EXECUTION_SCOPE_WAIVERS = {
     "CMake: superslm_tests (GitHub Actions)": (
-        "T-2091 (D-SLM3271), 2026-08-14: does not compile src/gpu/superslm_gpu.cpp at all "
+        "T-2091 (build log §27), 2026-08-14: does not compile src/gpu/superslm_gpu.cpp at all "
         "(SUPERSLM_CORE_SOURCES never lists it, confirmed by direct read of CMakeLists.txt) and "
         "never defines SUPERSLM_O11_ALLOC_INJECTION -- test_main.cpp calls superslm_gpu::* symbols "
         "unconditionally (no preprocessor gate wider than the narrow O11 one), so on inspection "
@@ -702,10 +739,13 @@ def check_execution_scope_waivers(
     waivers: dict[str, str] | None = None,
 ) -> list[str]:
     """None (empty list) iff every hollow `ExecutionScope` `derive_execution_scope` finds is a KEY
-    in `waivers` -- an UNNAMED hollow scope fails the build, so a future change that introduces one
-    (a new CMake target compiling `test_main.cpp`, a new macro-gated cell family) cannot land
-    silently the way the O11 gate flag's own false "not defined" claim did for five rounds. Pass
-    either path as `None` to skip (no real `build.bat`/`CMakeLists.txt` in a fixture tree).
+    in `waivers`, AND every key in `waivers` names a scope that currently EXISTS and is currently
+    HOLLOW -- an unnamed hollow scope fails the build (a future change that introduces one, a new
+    CMake target compiling `test_main.cpp`, cannot land silently the way the O11 gate flag's own
+    false "not defined" claim did for five rounds); a STALE waiver -- naming a scope that no longer
+    exists, or that a later fix made non-hollow -- ALSO fails the build (T-2094, S4: a waiver
+    registry that never expires is the identical class one level up, D-SLM3277's own finding, MUT-H).
+    Pass either path as `None` to skip (no real `build.bat`/`CMakeLists.txt` in a fixture tree).
     `waivers` defaults to the CURRENT `EXECUTION_SCOPE_WAIVERS` at CALL time, not at function-
     definition time (`None` resolved inside the body, deliberately, not a `= EXECUTION_SCOPE_
     WAIVERS` default) -- a default bound at definition time would not see a test's own monkeypatch
@@ -720,6 +760,7 @@ def check_execution_scope_waivers(
     with open(cmake_path, "r", encoding="utf-8") as f:
         cmake_text = f.read()
     scopes = derive_execution_scope(build_bat_text, cmake_text)
+    scopes_by_name = {s.name: s for s in scopes}
     failures: list[str] = []
     for scope in scopes:
         if scope.is_hollow and scope.name not in waivers:
@@ -727,6 +768,18 @@ def check_execution_scope_waivers(
                 f"{scope.name}: hollow execution scope (compiles test_main.cpp without compiling "
                 "superslm_gpu.cpp, so its own GPU-calling cells cannot link) with no named waiver "
                 "in EXECUTION_SCOPE_WAIVERS -- either fix it or waive it by name, dated, with a reason"
+            )
+    for waived_name in waivers:
+        current = scopes_by_name.get(waived_name)
+        if current is None:
+            failures.append(
+                f"{waived_name}: named in EXECUTION_SCOPE_WAIVERS but no longer exists as a derived "
+                "execution scope -- stale waiver, remove it"
+            )
+        elif not current.is_hollow:
+            failures.append(
+                f"{waived_name}: named in EXECUTION_SCOPE_WAIVERS as hollow, but it is not hollow "
+                "any more -- the waiver's own claim is now false, remove it"
             )
     return failures
 
@@ -791,245 +844,185 @@ def check_citation(row: DefRow, repo_root: str = _REPO_ROOT) -> str | None:
     return None
 
 
-# --- T-2075 (Claude/Poirot/72a9b0d-gpu-serial-port-final-review.md,
-# Structural remedy routed by S2/M1): prose-citation resolution, extending
-# `check_citation`'s own "a file:line citation must resolve against the
-# statement it claims to hold" discipline from the `.def`'s own citations to
-# the PROSE citations this module and `gpu_port.h` carry -- the class M1
-# found (seventeen of eighteen line citations stale, broken by a sibling
-# commit eight minutes after they were written, in the same worktree) is
-# exactly what `check_citation` already prevents for `.def` rows; nothing
-# extended that same machinery to a hand-written paragraph's own citations,
-# which is why they went stale silently while the `.def`'s never have.
+# --- T-2094 (Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md, S1/S2; D-SLM3277;
+# Dan's own "prefer removing the defect class's SUBSTRATE over checking it more carefully" order):
+# this module used to carry TWO separate line-number-citation systems -- `ProseCitation`
+# (`(file, line, needle)`, checked by POSITION) for `gpu_port.h`'s own paragraph, and a
+# four-hand-picked-chunk mirror of the identical shape (`SELF_CITATIONS`) for this module's own
+# prose about `superslm_gpu.cpp`. Both were brittle by construction: ANY unrelated line inserted
+# above a cited line moves every citation below it, which is what made T-2084's own S2 restoration
+# (nineteen inserted lines) break twenty-one citations in one edit, and a chunk boundary is a place
+# a citation can silently sit OUTSIDE the checked population, which is what let M2's exact defect
+# (four stale citations, three stale line counts) hide outside `SELF_CITATIONS`' own four chunks in
+# T-2091's own round (D-SLM3277's own S1 finding).
 #
-# Each entry names ONE claim about CURRENT source -- a `superslm_gpu.cpp`
-# line that must still contain a given substring. Deliberately does NOT
-# cover every citation in this tree: this module's own "WHY THIS EXISTS"
-# docstring cites `gpu_port.h:91-103`/`superslm_gpu.cpp:544-553` as a
-# description of what the code looked like AT THE TIME T-2055 found the
-# guard-count "structural closure" claim false -- a historical record of a
-# past state, not a claim resolvable against HEAD, and checking it against
-# HEAD would produce a false positive on every unrelated line shift forever
-# after. The population below is `gpu_port.h`'s own `LastWeightUploadWasSkipped`
-# paragraph -- the ONE paragraph that has been re-corrected four consecutive
-# rounds (T-2055, T-2062, T-2069, T-2075) and is therefore the citation
-# surface most likely to drift again.
-class ProseCitation:
-    __slots__ = ("label", "file_relpath", "line", "needle")
-
-    def __init__(self, label: str, file_relpath: str, line: int, needle: str) -> None:
-        self.label = label
-        self.file_relpath = file_relpath
-        self.line = line
-        self.needle = needle
-
-    def __repr__(self) -> str:  # pragma: no cover -- diagnostics only
-        return f"ProseCitation({self.label!r}, {self.file_relpath!r}, {self.line!r}, {self.needle!r})"
-
-
-# `gpu_port.h`'s own `LastWeightUploadWasSkipped` paragraph, T-2075's own
-# fresh re-derivation: eleven ladder returns, two device-capability
-# rejections, the catch's own ternary, the sticky-tag terminal call, and the
-# observable's own four write sites -- nineteen citations, all fifteen
-# rejecting-return-path members plus the four write sites S2/M2 both name.
+# The substrate is removed, not scanned more carefully. A citation in this tree's own prose is now
+# ALWAYS a MARKED ANCHOR reference -- `` `Name` (file.ext) `` in prose, a backtick-quoted
+# symbol/constant/member-access name immediately followed by its target file in parens -- checked
+# for EXISTENCE (does `Name` still appear as real code in `file.ext`), never for POSITION.
+# Inserting a comment anywhere in `superslm_gpu.cpp` cannot break an anchor citation, because
+# nothing here reads WHERE `Name` sits, only whether it is still there. Where a symbol name would
+# collide between two distinct sites prose needs to distinguish (`g_last_weight_upload_was_skipped`'s
+# own four write sites, two of them byte-identical statements), a named `// ANCHOR:<name>` comment
+# is placed at the target site instead -- `gpu_port.h`'s own citations name
+# `lwuws_write_function_entry`/`lwuws_write_catch` this way (`src/gpu/superslm_gpu.cpp`).
 #
-# CORRECTED 2026-08-14 (T-2084, Claude/Poirot/42ecf79-gpu-serial-port-round9-
-# review.md; D-SLM3247): every citation below shifted when S2's restoration
-# (superslm_gpu.cpp) reinserted the 19 lines T-2080's own correction had
-# actually deleted -- re-derived at source, one grep per anchor, not by
-# assuming a uniform per-line delta (the shift is NOT uniform: 51 lines
-# ahead of `DecodeStickyTag`, 58 lines ahead of the write sites below it,
-# because T-2084's own M1/M2/M3 fixes add lines of their own between them).
-GPU_PORT_H_LWUWS_CITATIONS = (
-    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 712, "InvalidLayerBudget"),
-    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 713, "InvalidContextCap"),
-    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 722, "HeadDimGeometryMismatch"),
-    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 726, "KvHeadGeometryMismatch"),
-    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 741, "InvalidContextCap"),
-    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 745, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 746, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 756, "InvalidHiddenCodes"),
-    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 759, "SequenceAlreadyComplete"),
-    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 765, "PositionOverCap"),
-    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 767, "KvCapacityExhausted"),
-    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 774, "dev.available"),
-    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 786, "KvPrecisionUnsupported"),
-    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1468, "device_removed_reason"),
-    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1519, "DecodeStickyTag"),
-    ProseCitation("write site 1 (static init)", "src/gpu/superslm_gpu.cpp", 299, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 672, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 961, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1458, "g_last_weight_upload_was_skipped"),
-    # T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M2):
-    # the paragraph's own `DecodeStickyTag` citation is a RANGE
-    # (`superslm_gpu.cpp:583-601`), which `ProseCitation`'s single-`line`
-    # shape cannot represent as one entry -- covered here as its own two
-    # endpoints, the review's own named cheap fix, rather than widening
-    # `ProseCitation` itself for a population of one range.
-    ProseCitation("DecodeStickyTag range start", "src/gpu/superslm_gpu.cpp", 583, "DecodeStickyTag"),
-    ProseCitation("DecodeStickyTag range end", "src/gpu/superslm_gpu.cpp", 601, "}"),
+# ONE mechanism now covers what were five: `find_marked_citations`/`check_marked_citations` below
+# replace `ProseCitation`, `GPU_PORT_H_LWUWS_CITATIONS`, `SELF_CITATIONS`,
+# `parse_gpu_port_h_citation_lines`, `check_gpu_port_h_citations_match_table`,
+# `parse_self_citation_population`, `check_self_citation_population_matches`, `check_prose_citation`,
+# and `check_all_prose_citations` in one pass -- scanning the WHOLE tree's own prose for
+# marked citations directly, never a maintained Python-side population that could itself drift from
+# what the prose actually states, and never a chunk list a citation could sit outside of. There is
+# no longer a table to keep in sync with `gpu_port.h`'s own text, because the table IS `gpu_port.h`'s
+# own text, read fresh every run. The old line-count-claim constant and its own check function are
+# removed outright, not replaced: `check_decode_sticky_tag_range` (above) already pins the real
+# claim that figure existed to argue for, directly at source, so the figure itself was never
+# load-bearing (round 12's own O1, the cheaper alternative this round takes instead of building a
+# third mechanism).
+#
+# Split-identifier detection (T-2091's own S2, `find_split_backtick_identifiers`/`check_symbol_
+# integrity` below) is UNCHANGED in mechanism and EXTENDED in population: it already scans every
+# backtick-quoted identifier split across a line-wrap, across the whole tree, with no chunk
+# boundary -- exactly the shape S1's own remedy needed, generalized to marked citations too rather
+# than duplicated. A marked citation split by a line-wrap is caught by `check_symbol_integrity`'s
+# own split-shape match (the identifier half); `check_marked_citations` catches the wider harm --
+# a NAME that is not split at all but simply wrong, renamed, or removed.
+
+
+def _join_wrapped_comment_lines(text: str, comment_marker: str) -> str:
+    """Joins `comment_marker`-continued lines with ZERO inserted characters -- a marked citation's
+    own `` `Name` (file.ext) `` shape, if line-wrapped between the name and the parenthesized file,
+    has zero characters between the two halves in the source a reader sees once the wrap is
+    mentally removed, the same reasoning `find_split_backtick_identifiers` already applies to a
+    split identifier."""
+    pattern = r"\n[ \t]*" + re.escape(comment_marker) + r"[ \t]?"
+    return re.sub(pattern, "", text)
+
+
+# T-2094 (item 1's own scope): the marked-citation form is a new convention this round introduces
+# specifically for `gpu_port.h`'s and `superslm_gpu.cpp`'s own prose (and this module's own
+# docstrings about them) -- NOT a claim that `tests/test_main.cpp`'s own pre-existing "Name (file)"
+# -shaped parentheticals (a different, older, unrelated convention Curie's own file uses for its
+# own citations to headers this module does not track) are wrong. Scoped narrower than `SYMBOL_
+# INTEGRITY_SCANNED_FILES` on purpose: `check_symbol_integrity`'s own split-identifier scan still
+# covers all six files (that class is general); the marked-citation-resolution scan below covers
+# only the three files this round's conversion actually touched.
+MARKED_CITATION_SCANNED_FILES = (
+    ("src/gpu/superslm_gpu.cpp", "//"),
+    ("include/superslm/gpu_port.h", "//"),
+    ("tests/ci/check_gpu_guard_status_parity.py", "#"),
+)
+# The RESOLUTION population is wider than the SCAN population: `gpu_port.h`'s own T-2076 note
+# legitimately cites a real cell in `tests/test_main.cpp` by name (`TestT2063_S1Mb_WorkScratchUav
+# AllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse`) -- a real target this module must be
+# able to resolve INTO, even though `test_main.cpp`'s own prose is not itself scanned FOR new
+# marked citations (its own pre-existing "Name (file)" convention is unrelated and out of this
+# round's scope, named above).
+MARKED_CITATION_RESOLVABLE_FILES = MARKED_CITATION_SCANNED_FILES + (
+    ("tests/test_main.cpp", "//"),
 )
 
-# T-2088 (M2, Claude/Poirot/8420005-gpu-serial-port-round11-review.md; D-SLM3261): this module's
-# own docstrings state `superslm_gpu.cpp`'s total line count three times (to argue the
-# DecodeStickyTag range-end needle's own false-positive rate) and cite its DecodeStickyTag range
-# four times (to describe what `check_decode_sticky_tag_range` above replaces) -- both went stale
-# when T-2084's own S2 restoration shifted the file, because that round's citation sweep refreshed
-# `GPU_PORT_H_LWUWS_CITATIONS` and `gpu_port.h` and never checked this module's OWN prose about a
-# file it does not own. "The module whose purpose is stopping stale citations carried four stale
-# citations and three stale line counts about its own subject" (the review's own words). Fixed the
-# same way every other self-inflicted staleness in this arc has been: the class dies by joining the
-# checked population, not by one more manual refresh. `SELF_CITATIONS` reuses `ProseCitation`/
-# `check_all_prose_citations` exactly as `GPU_PORT_H_LWUWS_CITATIONS` does; the line-count claim
-# gets its own pin below since a total-line-count is not a `(file, line, needle)` shape.
-SELF_CITATIONS = (
-    ProseCitation("this module's own DecodeStickyTag range start (self-citation)",
-                  "src/gpu/superslm_gpu.cpp", 583, "DecodeStickyTag"),
-    ProseCitation("this module's own DecodeStickyTag range end (self-citation)",
-                  "src/gpu/superslm_gpu.cpp", 601, "}"),
+# A marked citation: a backtick-quoted, identifier-shaped anchor (letters/digits/underscore, one
+# embedded dot allowed for a member-access anchor such as one naming a `dev` field) immediately
+# followed by its target file in parens, backticks around the filename optional -- REQUIRED to end
+# in one of this arc's own five real extensions (`.cpp`/`.h`/`.py`/`.def`/`.bat`), which is what
+# keeps this pattern from firing on ordinary English parentheticals ("(below)", "(inclusive)") or a
+# hex literal ("(0xC0000005)") that happen to sit after a backtick-quoted word for unrelated
+# reasons -- those are not filenames and never were the shape this class was about. The ONLY
+# citation form the files this module scans use to reference another file's content by name.
+_MARKED_CITATION_RE = re.compile(
+    r"`([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)`\s*"
+    r"\(`?([A-Za-z0-9_./\\-]+\.(?:cpp|h|py|def|bat))`?\)"
 )
 
-SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM = 2023
+
+def find_marked_citations(text: str, comment_marker: str) -> list[tuple[str, str]]:
+    """Every `` `Name` (some.ext) `` marked citation in `text`, in order, duplicates included."""
+    joined = _join_wrapped_comment_lines(text, comment_marker)
+    return _MARKED_CITATION_RE.findall(joined)
 
 
-def check_superslm_gpu_cpp_line_count_claim(gpu_text: str) -> list[str]:
-    """None iff `superslm_gpu.cpp`'s own real line count matches `SUPERSLM_GPU_CPP_LINE_COUNT_
-    CLAIM`, the figure this module's own docstrings state (three places) about a file this module
-    does not own. Not load-bearing by itself -- `check_decode_sticky_tag_range` already pins the
-    real claim the citation exists to protect, directly at source -- but the denominator is stated
-    as fact three times and D-SLM3261 M2 found it off by 58 (1,965 claimed, 2,023 real) after this
-    round's own S2 restoration alone, so it is checked exactly like every other prose claim this
-    module makes about a file it does not own."""
-    actual = len(gpu_text.splitlines())
-    if actual == SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM:
-        return []
-    return [
-        f"superslm_gpu.cpp has {actual} lines; this module's own docstrings (three places) claim "
-        f"{SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM} -- refresh both the prose and this constant together"
-    ]
+def _resolve_citation_target(target_file: str) -> tuple[str, str] | None:
+    """`(rel_path, comment_marker)` for `target_file` against `MARKED_CITATION_RESOLVABLE_FILES`
+    (below) -- matched by exact relative path first, then by bare basename, so prose can cite the
+    short (bare-filename) form without repeating the full repo-relative path. `None` if
+    `target_file` names something this population does not include."""
+    for rel, marker in MARKED_CITATION_RESOLVABLE_FILES:
+        if rel == target_file or os.path.basename(rel) == target_file:
+            return rel, marker
+    return None
 
 
-# T-2091 (S1, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md; D-SLM3271):
-# SELF_CITATIONS/SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM (T-2088) are fixed values checked AGAINST the
-# real superslm_gpu.cpp -- sound as far as it goes, but nothing derives either one FROM this
-# module's own prose, so restoring the exact stale text D-SLM3261's own M2 found (four
-# `:532-550` citations, three "1,965 lines" claims) left every check in this module green, exit 0
-# (MUT-3, the review's own falsifying case): three records called this "closing the class... the
-# same way gpu_port.h's prose is checked," and it was not the same way -- gpu_port.h's own
-# citations get a SECOND check, `check_gpu_port_h_citations_match_table`, that derives the
-# citation POPULATION from the header's own text; this module's citations about ITSELF had only
-# the first (resolution) half. Built here: the population is parsed from this module's own
-# docstrings/comments, at the four chunks that currently state either fact -- not the whole file,
-# because a whole-file scan would also match this module's own DELIBERATELY historical citations
-# (the top docstring's `:544-553`, `:643, 655`, `:1276-1277`, none of them claims about HEAD) and
-# false-positive on every one of them, which is exactly the false-positive risk `GPU_PORT_H_LWUWS_
-# CITATIONS`'s own docstring names for the identical reason.
-_SELF_CITATION_TEXT_CHUNKS = (
-    ("O35 CLOSED: `GPU_PORT_H_LWUWS_CITATIONS`'s own",
-     "O34 NOT CLOSED, and named rather than silently dropped."),
-    ("# `gpu_port.h`'s own citation claims this function \"maps the device's own",
-     "DECODE_STICKY_TAG_EXPECTED_TOTAL = 14"),
-    ('"""T-2083 (O35): pins the EXACT claim',
-     'file shifted to compensate."""'),
-    ("the paragraph's own `DecodeStickyTag` citation is a RANGE",
-     'ProseCitation("DecodeStickyTag range end"'),
-)
-_LINE_COUNT_FIGURE_RE = re.compile(r"([\d,]+) lines")
+def check_marked_citation(name: str, target_file: str, repo_root: str = _REPO_ROOT) -> str | None:
+    """None iff `name` resolves against `target_file` -- as a real CODE identifier (comments
+    stripped), as a literal substring of the comment-stripped code (for a member-access anchor like
+    `dev.available`, which is not identifier-shaped), or as a `// ANCHOR:<name>` marker comment
+    placed deliberately at a target site (checked against the RAW text, since it lives inside a
+    comment on purpose) -- else a one-line failure description."""
+    resolved = _resolve_citation_target(target_file)
+    if resolved is None:
+        return f"`{name}` ({target_file}): not a recognized citation target"
+    rel_path, marker = resolved
+    path = os.path.join(repo_root, rel_path)
+    if not os.path.isfile(path):
+        return f"`{name}` ({target_file}): file not found: {rel_path}"
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    stripped = strip_comments(text) if marker == "//" else strip_python_comments(text)
+    if name in collect_code_identifiers(text, marker):
+        return None
+    if "." in name and name in stripped:
+        return None
+    if f"ANCHOR:{name}" in text:
+        return None
+    return f"`{name}` ({target_file}): does not resolve -- citation is stale, refresh it"
 
 
-def parse_self_citation_population(this_module_text: str) -> tuple[set[int], list[int]]:
-    """Every `superslm_gpu.cpp:<line>` citation and every `N,NNN lines` figure THIS module's own
-    docstrings/comments state about `superslm_gpu.cpp` -- parsed from the TEXT ITSELF at the four
-    named chunks in `_SELF_CITATION_TEXT_CHUNKS`, reusing `_GPU_PORT_H_CITATION_RE` (the identical
-    full-form/short-form/range matcher `parse_gpu_port_h_citation_lines` uses for `gpu_port.h`'s
-    own paragraph) and the SAME `//`-continuation-joining transformation, applied per chunk rather
-    than to one contiguous span. Returns (the set of distinct cited lines, every line-count figure
-    found, in encounter order) -- the caller compares each against its own real population."""
-    citation_lines: set[int] = set()
-    line_count_claims: list[int] = []
-    for start_marker, end_marker in _SELF_CITATION_TEXT_CHUNKS:
-        start = this_module_text.find(start_marker)
-        if start == -1:
-            raise ValueError(
-                f"check_gpu_guard_status_parity.py: self-citation chunk start marker not found: {start_marker!r}"
-            )
-        end = this_module_text.find(end_marker, start)
-        if end == -1:
-            raise ValueError(
-                f"check_gpu_guard_status_parity.py: self-citation chunk end marker not found after start: {end_marker!r}"
-            )
-        chunk = this_module_text[start:end]
-        joined = re.sub(r"\n[ \t]*#?[ \t]?", " ", chunk)
-        for m in _GPU_PORT_H_CITATION_RE.finditer(joined):
-            for part in m.group(1).split(","):
-                part = part.strip()
-                if "-" in part:
-                    a, b = part.split("-")
-                    citation_lines.add(int(a))
-                    citation_lines.add(int(b))
-                else:
-                    citation_lines.add(int(part))
-        for m in _LINE_COUNT_FIGURE_RE.finditer(joined):
-            line_count_claims.append(int(m.group(1).replace(",", "")))
-    return citation_lines, line_count_claims
-
-
-def check_self_citation_population_matches(
-    this_module_text: str,
-    self_citations: tuple[ProseCitation, ...] = SELF_CITATIONS,
-    line_count_claim: int = SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM,
+def check_marked_citations(
+    scanned_files: tuple[tuple[str, str], ...] = None,
+    repo_root: str = _REPO_ROOT,
 ) -> list[str]:
-    """The structural half of S1's remedy (T-2091, D-SLM3271): derives the citation/line-count
-    POPULATION from this module's own docstrings/comments (`parse_self_citation_population`
-    above) and asserts it equals `self_citations`'s own line set and `line_count_claim` -- the
-    exact shape `check_gpu_port_h_citations_match_table` already implements against `gpu_port.h`,
-    now applied to this module's OWN claims about a file it does not own. Catches restoring the
-    M2 defect verbatim even when `SELF_CITATIONS`/`SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM` themselves
-    are untouched and correct -- MUT-3, the review's own falsifying case, which T-2088's
-    fixed-value-only checks could not see. `self_citations`/`line_count_claim` default to the real
-    module-level constants for every production call; a test passes an alternate tuple/int to
-    prove the comparison catches drift in EITHER direction (prose stale, or the constant itself
-    moved without the prose following)."""
-    parsed_lines, parsed_line_counts = parse_self_citation_population(this_module_text)
+    """None (empty list) iff every marked citation found in ANY of `scanned_files`' own prose
+    resolves (`check_marked_citation`). Scans the WHOLE of each file -- no chunk, no bounded
+    paragraph -- so a citation added anywhere, by anyone, in any of these files is checked; there is
+    no boundary for one to sit outside of (T-2094, closing S1's own class: "no chunk list to be
+    outside of"). `scanned_files` defaults to `MARKED_CITATION_SCANNED_FILES` (above) at CALL time,
+    not at function-definition time, for the same monkeypatch-visibility reason `check_execution_
+    scope_waivers` already established for `EXECUTION_SCOPE_WAIVERS`."""
+    if scanned_files is None:
+        scanned_files = MARKED_CITATION_SCANNED_FILES
     failures: list[str] = []
-    table_lines = {c.line for c in self_citations}
-    if parsed_lines != table_lines:
-        failures.append(
-            "check_gpu_guard_status_parity.py's own docstrings cite a different set of "
-            "superslm_gpu.cpp lines than SELF_CITATIONS does -- the constant is a copy that has "
-            "drifted from this module's own prose:\n"
-            f"    this module's own prose cites: {sorted(parsed_lines)}\n"
-            f"    SELF_CITATIONS states:         {sorted(table_lines)}\n"
-            f"    prose has, constant lacks: {sorted(parsed_lines - table_lines)}   "
-            f"constant has, prose lacks: {sorted(table_lines - parsed_lines)}"
-        )
-    wrong_counts = sorted({n for n in parsed_line_counts if n != line_count_claim})
-    if wrong_counts:
-        failures.append(
-            "check_gpu_guard_status_parity.py's own docstrings state a superslm_gpu.cpp line "
-            f"count ({wrong_counts}) that disagrees with SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM "
-            f"({line_count_claim}) -- the prose and the constant must state the same figure"
-        )
+    seen: set[tuple[str, str]] = set()
+    for rel_path, marker in scanned_files:
+        path = os.path.join(repo_root, rel_path)
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        for name, target_file in find_marked_citations(text, marker):
+            if (name, target_file) in seen:
+                continue
+            seen.add((name, target_file))
+            failure = check_marked_citation(name, target_file, repo_root)
+            if failure is not None:
+                failures.append(f"{rel_path}: {failure}")
     return failures
 
 
-# T-2091 (S2, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md; D-SLM3271): round
+# T-2091 (S2, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-review.md; build log §27): round
 # 11's own M1 routed a structural remedy -- "a scan for the old family's fragments with
-# `//`-continuation joining, which is machinery `parse_gpu_port_h_citation_lines` already
-# implements for exactly this header style" -- and round 12 (T-2088) built a manual fragment-grep
-# re-run instead, with no record stating the routed half was dropped. The class stayed live and
-# minted an ELEVENTH carrier the same round: `gpu_port.h`'s own dated correction split
+# `//`-continuation joining" -- and round 12 (T-2088) built a manual fragment-grep re-run instead,
+# with no record stating the routed half was dropped. The class stayed live and minted an ELEVENTH
+# carrier the same round: `gpu_port.h`'s own dated correction split
 # `` `check_build_bat_defines_o11_gate` `` -- the symbol T-2088 itself created -- across the same
 # `//`-continuation shape, so an exact-string `grep` for it returns nothing at that site. Built for
-# real here: unlike `parse_gpu_port_h_citation_lines`'s own joiner (built for comma-separated
-# citation LISTS, where inserting a space between physical lines is harmless), a split IDENTIFIER
-# has ZERO characters between its own two halves in the source the compiler/linker sees -- the
-# regex below matches the split shape directly in the RAW text (backtick, identifier prefix,
-# newline, comment marker, identifier suffix, backtick), which is also narrower and less noisy
-# than joining first and then hunting for backtick spans: a whole-file join-then-scan matched 307
-# distinct backtick-quoted terms in this tree, the overwhelming majority ordinary prose/local
-# variable names never meant to resolve against a symbol table; matching the SPLIT shape directly
-# finds exactly the eleven candidates this class is actually about.
+# real here: unlike a citation-LIST joiner (where inserting a space between physical lines is
+# harmless), a split IDENTIFIER has ZERO characters between its own two halves in the source the
+# compiler/linker sees -- the regex below matches the split shape directly in the RAW text
+# (backtick, identifier prefix, newline, comment marker, identifier suffix, backtick), which is
+# also narrower and less noisy than joining first and then hunting for backtick spans: a whole-file
+# join-then-scan matched 307 distinct backtick-quoted terms in this tree, the overwhelming majority
+# ordinary prose/local variable names never meant to resolve against a symbol table; matching the
+# SPLIT shape directly finds exactly the eleven candidates this class is actually about.
 _SPLIT_BACKTICK_IDENTIFIER_RE_CACHE: dict[str, "re.Pattern[str]"] = {}
 
 
@@ -1045,7 +1038,8 @@ _CODE_IDENTIFIER_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{3,})\b")
 
 # The six files this arc's own O11-rename history has touched -- the same population M1's own
 # fragment-grep swept, generalized from "one hardcoded name list per rename" to "every backtick
-# identifier split by a line-wrap, in any of these files, forever." `(relpath, comment_marker)`.
+# identifier split by a line-wrap, in any of these files, forever," and now also the population
+# `check_marked_citations` scans for the whole-file anchor-citation class. `(relpath, comment_marker)`.
 SYMBOL_INTEGRITY_SCANNED_FILES = (
     ("src/gpu/superslm_gpu.cpp", "//"),
     ("include/superslm/gpu_port.h", "//"),
@@ -1098,15 +1092,25 @@ def collect_code_identifiers(text: str, comment_marker: str) -> set[str]:
 
 
 def check_symbol_integrity(
-    scanned_files: tuple[tuple[str, str], ...] = SYMBOL_INTEGRITY_SCANNED_FILES,
-    allowlist: frozenset[str] = SYMBOL_INTEGRITY_ALLOWLIST,
+    scanned_files: tuple[tuple[str, str], ...] = None,
+    allowlist: frozenset[str] = None,
     repo_root: str = _REPO_ROOT,
 ) -> list[str]:
     """None (empty list) iff every backtick-quoted identifier split across a line-wrap, anywhere in
     `scanned_files`, reconstructs to a real symbol appearing as CODE somewhere in `scanned_files` --
-    or is in `allowlist`. T-2091's own red-proof: restoring `gpu_port.h`'s own pre-fix split,
-    `` `check_build_bat_defines_o11_\\n// gate` ``, must redden this check by the reconstructed
-    name; the fixed carrier (one line, no mid-identifier wrap) must not."""
+    or is in `allowlist`. T-2091's own red-proof, corrected by T-2094's own M1 (D-SLM3277: the
+    original claim was false on the real tree, true only against a fixture that could never
+    reproduce the production path): a split of a symbol that is STILL LIVE resolves by design and
+    must not redden; this check catches a split whose reconstructed name does NOT resolve --
+    typically the moment a rename sweeps every UNSPLIT occurrence and misses the split one, which a
+    naive exact-string grep cannot see to sweep in the first place. `scanned_files`/`allowlist`
+    default to `SYMBOL_INTEGRITY_SCANNED_FILES`/`SYMBOL_INTEGRITY_ALLOWLIST` at CALL time, not at
+    function-definition time, for the same monkeypatch-visibility reason `check_execution_scope_
+    waivers` already established."""
+    if scanned_files is None:
+        scanned_files = SYMBOL_INTEGRITY_SCANNED_FILES
+    if allowlist is None:
+        allowlist = SYMBOL_INTEGRITY_ALLOWLIST
     all_identifiers: set[str] = set()
     per_file_splits: list[tuple[str, str]] = []
     for rel_path, marker in scanned_files:
@@ -1133,195 +1137,104 @@ def check_symbol_integrity(
     return failures
 
 
-# T-2091 (class A, Dan's own scope-change dispatch -- the "15-path count saga" instance): the
-# "fourteen paths... fifteen paths' own destination in total" claim `gpu_port.h`'s own
-# LastWeightUploadWasSkipped paragraph makes is a SUM over labelled groups within
-# `GPU_PORT_H_LWUWS_CITATIONS` -- a claim that was re-derived by hand four times (T-2055's
-# "twelve," T-2062's "twelve" corrected, T-2069's "fourteen," T-2075's "fifteen," each landing
-# only after a review found the prior count wrong) and never pinned as a property of the SAME
-# table `check_gpu_port_h_citations_match_table` already derives from the header's own text.
-# Pinned here structurally instead of narratively: the paragraph's own labels ("ladder return N",
-# "device-capability N", "catch's own ternary" -- fourteen BEFORE-decision destinations; "sticky-
-# tag terminal return" -- the one AFTER-decision destination that fans into Ok/thirteen rejecting
-# sub-statuses but is ONE return statement) are counted directly from the table, not re-typed as a
-# second copy of the number.
-_LWUWS_BEFORE_DECISION_LABEL_PREFIXES = ("ladder return", "device-capability", "catch's own ternary")
-_LWUWS_AFTER_DECISION_LABEL_PREFIXES = ("sticky-tag terminal return",)
-LWUWS_EXPECTED_BEFORE_DECISION_COUNT = 14
-LWUWS_EXPECTED_AFTER_DECISION_COUNT = 1
+# T-2094 (S3, Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md; D-SLM3277): the
+# "15-path count saga" -- `gpu_port.h`'s own "fourteen paths in all... fifteen paths' own
+# destination in total" claim, hand-re-derived wrong four times across five rounds (T-2055's
+# "twelve," corrected wrong again, T-2069's "fourteen," T-2075's "fifteen") -- closed for real.
+# T-2091's own attempt compared two HARDCODED constants against a citation table's own label
+# counts; neither the constants nor the table read the SENTENCE, so the English words themselves
+# could be edited to anything and the check stayed green (T-2091's own MUT-D, D-SLM3277's S3).
+# Fixed here by reading BOTH sides fresh: the two number-WORDS parsed directly from `gpu_port.h`'s
+# own sentence (`parse_lwuws_path_counts`), and the real structural count derived directly from
+# `RunLayerLoopGpu`'s own body (`derive_lwuws_before_decision_count`/`derive_lwuws_after_decision_
+# count`) -- no citation table, no hardcoded constant, in either direction.
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+_LWUWS_BEFORE_COUNT_RE = re.compile(r"catch, (\w+)\s*paths in all")
+_LWUWS_TOTAL_COUNT_RE = re.compile(r"alike, (\w+) paths' own destination in\s*total")
 
 
-def check_lwuws_path_count_claim(
-    citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
-) -> list[str]:
-    """None iff `citations` (`gpu_port.h`'s own citation population, already checked against the
-    header's real text by `check_gpu_port_h_citations_match_table`) has exactly `LWUWS_EXPECTED_
-    BEFORE_DECISION_COUNT` labels naming a before-the-residency-decision destination and exactly
-    `LWUWS_EXPECTED_AFTER_DECISION_COUNT` naming an after-the-decision one -- the sum ("fourteen ...
-    fifteen paths' own destination in total") `gpu_port.h`'s own prose states in English, now
-    derived from the SAME table rather than re-typed as an independent number four rounds have
-    each gotten wrong at least once before the next review caught it."""
-    before = [c.label for c in citations if c.label.startswith(_LWUWS_BEFORE_DECISION_LABEL_PREFIXES)]
-    after = [c.label for c in citations if c.label.startswith(_LWUWS_AFTER_DECISION_LABEL_PREFIXES)]
+def parse_lwuws_path_counts(gpu_port_h_text: str) -> tuple[int, int]:
+    """The two number-words `gpu_port.h`'s own `LastWeightUploadWasSkipped` paragraph states in
+    English -- "...catch, **fourteen** paths in all" (before the residency decision) and "...alike,
+    **fifteen** paths' own destination in total" (the grand total, before + after) -- parsed
+    directly from the prose via `_NUMBER_WORDS`, never a hardcoded constant re-typing what the
+    sentence already says. Raises `ValueError` if either anchor phrase is missing or its number
+    word is not recognized -- the same loud-failure discipline this module has used since T-2080's
+    own marker-based parsing: a check that cannot find the sentence it verifies must not pass
+    silently."""
+    joined = re.sub(r"\n[ \t]*//[ \t]?", " ", gpu_port_h_text)
+    before_m = _LWUWS_BEFORE_COUNT_RE.search(joined)
+    total_m = _LWUWS_TOTAL_COUNT_RE.search(joined)
+    if before_m is None:
+        raise ValueError("gpu_port.h: 'catch, <N> paths in all' sentence not found")
+    if total_m is None:
+        raise ValueError("gpu_port.h: '<N> paths' own destination in total' sentence not found")
+    before_word = before_m.group(1).lower()
+    total_word = total_m.group(1).lower()
+    if before_word not in _NUMBER_WORDS:
+        raise ValueError(f"gpu_port.h: unrecognized number word {before_word!r} in path-count sentence")
+    if total_word not in _NUMBER_WORDS:
+        raise ValueError(f"gpu_port.h: unrecognized number word {total_word!r} in path-count sentence")
+    return _NUMBER_WORDS[before_word], _NUMBER_WORDS[total_word]
+
+
+def count_status_return_statements(region_text: str) -> int:
+    """Every literal `return (superslm::)?SslmForwardStatus::X;` OCCURRENCE (not distinct name,
+    unlike `extract_status_set`) in `region_text`, comments stripped first."""
+    return len(_STATUS_RETURN_RE.findall(strip_comments(region_text)))
+
+
+def derive_lwuws_before_decision_count(gpu_text: str) -> int:
+    """The real, structural count of `RunLayerLoopGpu`'s own rejecting return paths that return
+    BEFORE the weight-residency decision runs -- the nine-guard ladder's own eleven literal return
+    statements plus the two device-capability rejections' own two literal return statements
+    (everything in the function's own real body up to the `weights_resident` write), plus ONE for
+    the recording-window catch's own ternary (a `device_removed_reason` `?:` expression, invisible
+    to `_STATUS_RETURN_RE` since it is not a literal `return SslmForwardStatus::X;` -- counted by
+    checking the ternary's own anchor exists, not by the return-statement regex)."""
+    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    residency_write_at = body.find("weights_resident;")
+    before_region = body[:residency_write_at] if residency_write_at != -1 else body
+    ladder_returns = count_status_return_statements(before_region)
+    has_catch_ternary = "device_removed_reason" in strip_comments(body)
+    return ladder_returns + (1 if has_catch_ternary else 0)
+
+
+def derive_lwuws_after_decision_count(gpu_text: str) -> int:
+    """ONE -- `RunLayerLoopGpu`'s own single terminal call-based return, `return DecodeStickyTag(
+    sticky_tag);`, the only path structure that returns AFTER the residency decision (the success
+    path and the sticky-tag-decoded path share this one return statement; `DecodeStickyTag`'s own
+    internal branching is a separate function, not a second return site in `RunLayerLoopGpu`
+    itself)."""
+    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    return len(re.findall(r"return\s+DecodeStickyTag\(", strip_comments(body)))
+
+
+def check_lwuws_path_count_claim(gpu_port_h_text: str, gpu_text: str) -> list[str]:
+    """None iff the two number-words `gpu_port.h`'s own prose states (`parse_lwuws_path_counts`)
+    equal the real, structural counts `RunLayerLoopGpu`'s own body has
+    (`derive_lwuws_before_decision_count`/`derive_lwuws_after_decision_count`) -- reads the actual
+    sentence it governs, both directions, rather than comparing two numbers neither of which was
+    the sentence itself (T-2091's own gap, D-SLM3277's S3)."""
+    before_word, total_word = parse_lwuws_path_counts(gpu_port_h_text)
+    before_real = derive_lwuws_before_decision_count(gpu_text)
+    after_real = derive_lwuws_after_decision_count(gpu_text)
+    total_real = before_real + after_real
     failures: list[str] = []
-    if len(before) != LWUWS_EXPECTED_BEFORE_DECISION_COUNT:
+    if before_word != before_real:
         failures.append(
-            f"GPU_PORT_H_LWUWS_CITATIONS has {len(before)} before-the-decision labels "
-            f"(ladder/device-capability/catch), not the {LWUWS_EXPECTED_BEFORE_DECISION_COUNT} "
-            "gpu_port.h's own prose claims ('fourteen paths in all') -- found: "
-            f"{before}"
+            f"gpu_port.h's own prose says '{before_word}' paths in all before the residency "
+            f"decision; RunLayerLoopGpu's own real body has {before_real}"
         )
-    if len(after) != LWUWS_EXPECTED_AFTER_DECISION_COUNT:
+    if total_word != total_real:
         failures.append(
-            f"GPU_PORT_H_LWUWS_CITATIONS has {len(after)} after-the-decision labels "
-            f"(sticky-tag terminal), not the {LWUWS_EXPECTED_AFTER_DECISION_COUNT} gpu_port.h's "
-            f"own prose structure implies -- found: {after}"
+            f"gpu_port.h's own prose says '{total_word}' paths' own destination in total; "
+            f"RunLayerLoopGpu's own real body has {total_real} ({before_real} before + {after_real} after)"
         )
-    return failures
-
-
-# T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M1): the
-# real anchors bounding `gpu_port.h`'s own `LastWeightUploadWasSkipped`
-# paragraph -- the SAME two markers used throughout this ticket's own
-# citation refresh -- so `parse_gpu_port_h_citation_lines` below reads
-# exactly the span `GPU_PORT_H_LWUWS_CITATIONS` claims to describe, never
-# the whole file.
-GPU_PORT_H_LWUWS_PARAGRAPH_START = (
-    "T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2):"
-)
-GPU_PORT_H_LWUWS_PARAGRAPH_END = "bool LastWeightUploadWasSkipped();"
-
-_GPU_PORT_H_CITATION_RE = re.compile(r"(?:superslm_gpu\.cpp:|`:)(\d+(?:-\d+)?(?:,\s*\d+)*)")
-
-
-def parse_gpu_port_h_citation_lines(gpu_port_h_text: str) -> set[int]:
-    """Every line number `gpu_port.h`'s own `LastWeightUploadWasSkipped`
-    paragraph cites -- parsed from the TEXT ITSELF, not a hand-transcribed
-    copy of it (T-2080, M1: `GPU_PORT_H_LWUWS_CITATIONS` above WAS such a
-    copy, held in this Python module, and nothing checked it against the
-    header it claims to describe -- corrupting the header's own citations
-    left this whole module green, since nothing here ever read `gpu_port.h`
-    at all). Both citation shapes the paragraph actually uses are matched:
-    the first-mention full form (`superslm_gpu.cpp:654, 655, 664, ...`, a
-    comma list after ONE prefix) and every subsequent short form
-    (`` `:716` ``, backtick-wrapped, no prefix) -- including RANGE forms of
-    either (`` `:583-601` ``), expanded to both endpoints, matching how
-    `GPU_PORT_H_LWUWS_CITATIONS` represents `DecodeStickyTag`'s own range as
-    two entries. Line-wrapped `//`-continued comment prose (this header's own
-    house style -- a citation list routinely spans two physical lines) is
-    joined into one continuous span first, so a citation split across a line
-    break by ordinary word-wrap is not missed.
-
-    T-2083 (O34) tried a SEQUENCE/ORDER-preserving variant of this parser,
-    reasoning that a same-position SWAP of two citations' own numbers (the
-    review's own executed falsifying case, `:716`/`:728`) would change
-    encounter order even though it does not change the SET -- true on the
-    review's own small fixture, and FALSIFIED against the real header:
-    `gpu_port.h`'s own paragraph legitimately re-cites some of the same line
-    numbers a second and third time across its own four dated corrections
-    (`:903`, `:716`, `:728` each appear twice; the corrections' own citation
-    order does not match `GPU_PORT_H_LWUWS_CITATIONS`'s fixed definition
-    order even after deduplication, since later corrections were appended
-    chronologically, not re-sorted into the table's own logical order).
-    Wiring a sequence comparison into `check_gpu_port_h_citations_match_
-    table` below turned the check RED on the real, unmutated tree -- caught
-    before landing by running against real content rather than trusting the
-    fixture, `StandardsDocument.md` §5.4's own rule. O34 is filed as a named
-    residual instead (see this module's own top docstring): closing it needs
-    a parser that associates each citation with WHICH of the paragraph's own
-    dated-correction sub-sections it belongs to, and compares within each
-    section rather than across the whole accreted paragraph -- new
-    machinery, not a set-to-list type change."""
-    start = gpu_port_h_text.find(GPU_PORT_H_LWUWS_PARAGRAPH_START)
-    if start == -1:
-        raise ValueError(f"gpu_port.h: paragraph start marker not found: {GPU_PORT_H_LWUWS_PARAGRAPH_START!r}")
-    end = gpu_port_h_text.find(GPU_PORT_H_LWUWS_PARAGRAPH_END, start)
-    if end == -1:
-        raise ValueError(f"gpu_port.h: paragraph end marker not found after start: {GPU_PORT_H_LWUWS_PARAGRAPH_END!r}")
-    paragraph = gpu_port_h_text[start:end]
-    joined = re.sub(r"\n[ \t]*//[ \t]?", " ", paragraph)
-    lines: set[int] = set()
-    for m in _GPU_PORT_H_CITATION_RE.finditer(joined):
-        for part in m.group(1).split(","):
-            part = part.strip()
-            if "-" in part:
-                a, b = part.split("-")
-                lines.add(int(a))
-                lines.add(int(b))
-            else:
-                lines.add(int(part))
-    return lines
-
-
-def check_gpu_port_h_citations_match_table(
-    gpu_port_h_text: str,
-    citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
-) -> list[str]:
-    """The structural half of M1's remedy: derives the citation POPULATION
-    from `gpu_port.h`'s own text and asserts it equals `GPU_PORT_H_LWUWS_
-    CITATIONS`'s own line-number set. `check_prose_citation` (below) still
-    verifies each of THIS module's citations resolves against `superslm_gpu.
-    cpp` -- that half was already sound. What was missing is this one: that
-    the table's own line numbers are the SAME ones the header currently
-    cites, so an edit to `gpu_port.h`'s own citations (a correct refresh OR
-    an accidental corruption) that is not mirrored in this table is caught,
-    instead of leaving this module checking a frozen copy of a fact the
-    header no longer states.
-
-    T-2083 (O34): still a SET comparison, deliberately -- see `parse_gpu_
-    port_h_citation_lines`'s own docstring for the order-preserving variant
-    that was tried, found to false-positive against the real header's own
-    legitimate repeated citations, and reverted before landing. A same-
-    position swap of two citations' own numbers is a named, open residual,
-    not silently closed by a check that would have been wrong."""
-    parsed = parse_gpu_port_h_citation_lines(gpu_port_h_text)
-    table = {c.line for c in citations}
-    if parsed == table:
-        return []
-    return [
-        "gpu_port.h's own LastWeightUploadWasSkipped paragraph cites a different set of lines than "
-        "GPU_PORT_H_LWUWS_CITATIONS does -- the table is a copy that has drifted from the header it "
-        "describes:\n"
-        f"    gpu_port.h's own citations: {sorted(parsed)}\n"
-        f"    this module's own table:    {sorted(table)}\n"
-        f"    header has, table lacks: {sorted(parsed - table)}   table has, header lacks: {sorted(table - parsed)}"
-    ]
-
-
-def check_prose_citation(citation: ProseCitation, repo_root: str = _REPO_ROOT) -> str | None:
-    """None if `citation.needle` appears on line `citation.line` of
-    `citation.file_relpath` (resolved against `repo_root`); else a one-line
-    failure description naming the citation and what is actually there --
-    the exact shape `check_citation` already gives `.def` rows, applied to a
-    hand-written paragraph's own citations instead of a generated table's."""
-    path = os.path.join(repo_root, citation.file_relpath)
-    if not os.path.isfile(path):
-        return f"{citation.label}: file not found: {citation.file_relpath}"
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    if citation.line < 1 or citation.line > len(lines):
-        return (
-            f"{citation.label}: {citation.file_relpath}:{citation.line} out of range "
-            f"({len(lines)} lines in file) -- citation is stale, refresh it"
-        )
-    actual = lines[citation.line - 1]
-    if citation.needle not in actual:
-        return (
-            f"{citation.label}: {citation.file_relpath}:{citation.line} does not contain "
-            f"{citation.needle!r} -- actual line: {actual.strip()!r} -- citation is stale, refresh it"
-        )
-    return None
-
-
-def check_all_prose_citations(
-    citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
-    repo_root: str = _REPO_ROOT,
-) -> list[str]:
-    failures: list[str] = []
-    for c in citations:
-        failure = check_prose_citation(c, repo_root)
-        if failure is not None:
-            failures.append(failure)
     return failures
 
 
@@ -1330,88 +1243,71 @@ def run_all_checks(
     superslm_gpu_path: str = SUPERSLM_GPU_CPP,
     guards_def_path: str = GUARDS_DEF,
     repo_root: str = _REPO_ROOT,
-    prose_citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
     gpu_port_h_path: str | None = GPU_PORT_H,
     check_decode_sticky_tag: bool = True,
     build_bat_path: str | None = BUILD_BAT,
-    self_citations: tuple[ProseCitation, ...] = SELF_CITATIONS,
-    check_self_line_count: bool = True,
-    check_self_citation_population: bool = True,
+    check_marked_citation_scan: bool = True,
     run_symbol_integrity_scan: bool = True,
     check_lwuws_path_count: bool = True,
     cmake_path: str | None = CMAKE_LISTS,
+    marked_citation_scanned_files: tuple[tuple[str, str], ...] | None = None,
+    symbol_integrity_scanned_files: tuple[tuple[str, str], ...] | None = None,
 ) -> list[str]:
-    """Every failure this module can report against the three real files, or
-    an empty list if all three status sets agree and every `.def` citation
-    resolves. Raises `ValueError` (not a failure list) if a source anchor
-    itself is missing -- that is an environment/drift problem this check's
-    own extraction logic cannot route around, matching `check_no_forward_
-    leaf_calls.py`'s own ClangUnavailable precedent of raising rather than
-    reporting a false pass.
+    """Every failure this module can report against the real tree, or an empty list if all three
+    guard-status sets agree, every `.def` citation resolves, and every marked/split citation and
+    derived count checks out. Raises `ValueError` (not a failure list) if a source anchor itself is
+    missing -- an environment/drift problem this check's own extraction logic cannot route around,
+    matching `check_no_forward_leaf_calls.py`'s own `ClangUnavailable` precedent of raising rather
+    than reporting a false pass.
 
-    `prose_citations` defaults to the real population (`gpu_port.h`'s own
-    `LastWeightUploadWasSkipped` paragraph, `GPU_PORT_H_LWUWS_CITATIONS`) --
-    every REAL-tree call site (`main()` included) gets this module's own
-    structural citation check for free. A caller driving a small SYNTHETIC
-    `superslm_gpu.cpp` fixture (this module's own mechanism/mutation tests)
-    passes `prose_citations=()` explicitly: the real population cites real
-    production line numbers no tiny fixture file has, and checking it
-    against a fixture would fail for a reason that has nothing to do with
-    what that test is exercising.
+    T-2094 (Claude/Poirot/2a937f5-gpu-serial-port-class-closure-review.md; D-SLM3277) removed the
+    line-number-citation substrate entirely -- `prose_citations`/`self_citations`/`GPU_PORT_H_
+    LWUWS_CITATIONS`/`SELF_CITATIONS`/`SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM` and their own checks no
+    longer exist. `check_marked_citation_scan` (below) is what replaces ALL of them at once: a
+    whole-tree scan for `` `Name` (file.ext) `` marked citations, checked for existence, never
+    position. Nothing here needs a real `gpu_port.h`/`superslm_gpu.cpp` fixture path threaded
+    through separately any more, because the scan reads whichever files `marked_citation_scanned_
+    files` names directly.
 
-    `gpu_port_h_path` (T-2080, M1's own structural remedy) is where the
-    citation POPULATION is derived FROM, checked against `prose_citations`
-    for agreement -- pass `None` to skip this half (fixture-driven tests
-    with no real `gpu_port.h` to parse do this, same reasoning as
-    `prose_citations=()`).
+    `gpu_port_h_path` (T-2080, M1's own structural remedy) -- retained ONLY for `check_lwuws_path_
+    count` below, which reads `gpu_port.h`'s own real prose to parse its two number-words. Pass
+    `None` to skip both (fixture-driven tests with no real `gpu_port.h`).
 
-    `check_decode_sticky_tag` (T-2083, O35) -- pass `False` to skip: this
-    module's own small synthetic GPU fixture (`_GPU_FIXTURE`) ends with a
-    CALL to `DecodeStickyTag`, not a definition of it, so `extract_function_
-    body` would raise for every fixture-driven mechanism test the same way
-    `gpu_port_h_path=None` exists to avoid for the citation-population check
-    above; every REAL-tree call (`main()` included) gets it for free.
+    `check_decode_sticky_tag` (T-2083, O35) -- pass `False` to skip: this module's own small
+    synthetic GPU fixture (`_GPU_FIXTURE`) ends with a CALL to `DecodeStickyTag`, not a definition
+    of it, so `extract_function_body` would raise for every fixture-driven mechanism test the same
+    way `gpu_port_h_path=None` exists to avoid; every REAL-tree call (`main()` included) gets it
+    for free.
 
-    `build_bat_path` (T-2088, S1's own structural remedy, D-SLM3261) -- pass
-    `None` to skip: fixture-driven tests have no real `build.bat` to scan,
-    same reasoning as `gpu_port_h_path=None`. Every REAL-tree call gets the
+    `build_bat_path` (T-2088, S1's own structural remedy, build log §26) -- pass `None` to skip:
+    fixture-driven tests have no real `build.bat` to scan. Every REAL-tree call gets the
     O11-gate-flag pin for free.
 
-    `self_citations`/`check_self_line_count` (T-2088, M2's own structural
-    remedy) -- this module's OWN prose makes claims about `superslm_gpu.cpp`
-    (the DecodeStickyTag range, cited four times; the file's total line
-    count, stated three times) exactly like `gpu_port.h`'s paragraph does,
-    and D-SLM3261 M2 found both classes stale here after a line shift that
-    was swept everywhere else. Checked the same way `prose_citations` is:
-    pass `self_citations=()` / `check_self_line_count=False` for a fixture
-    tree with no real `superslm_gpu.cpp` to check its own citations against.
+    `check_marked_citation_scan`/`marked_citation_scanned_files` (T-2094, S1's own structural
+    remedy) -- `check_marked_citations` reads EVERY marked citation in EVERY scanned file's own
+    prose, whole-file, no chunk boundary: this is what makes M2's own defect class (a stale
+    citation sitting outside a hand-picked chunk) structurally impossible rather than merely
+    covered more chunks. Pass `check_marked_citation_scan=False`, or an alternate `marked_citation_
+    scanned_files` tuple, for a fixture tree with no real files to scan.
 
-    `check_self_citation_population` (T-2091, S1's own structural remedy, D-SLM3271) -- the
-    POPULATION half `self_citations`/`check_self_line_count` were missing: derives the citation/
-    line-count claims from THIS MODULE'S OWN docstrings (`parse_self_citation_population`) and
-    asserts they equal `SELF_CITATIONS`/`SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM` -- catches restoring
-    the exact M2 defect verbatim even when those two constants are untouched and correct (MUT-3,
-    the review's own falsifying case). Reads this module's OWN source text, not a fixture, so it
-    needs no path parameter and no fixture-test gating beyond the bool itself.
+    `run_symbol_integrity_scan` (T-2091, S2's own structural remedy, build log §27) -- every
+    backtick-quoted identifier split across a line-wrap, across `SYMBOL_INTEGRITY_SCANNED_FILES`,
+    must resolve to a real symbol or sit in `SYMBOL_INTEGRITY_ALLOWLIST`. Reads six real files
+    directly, so it too needs no fixture-path threading -- pass `False` only to isolate another
+    check's own failure in a test.
 
-    `run_symbol_integrity_scan` (T-2091, S2's own structural remedy, D-SLM3271) -- round 11's own
-    M1 routed a line-wrap-aware symbol-integrity scan and round 12 built a manual fragment-grep
-    instead, silently. `check_symbol_integrity` closes it for real: every backtick-quoted
-    identifier split across a line-wrap, across `SYMBOL_INTEGRITY_SCANNED_FILES`, must resolve to
-    a real symbol or sit in `SYMBOL_INTEGRITY_ALLOWLIST`. Reads six real files directly (its own
-    parameters default from `SYMBOL_INTEGRITY_SCANNED_FILES`/`repo_root`), so it too needs no
-    fixture-path threading -- pass `False` only to isolate another check's own failure in a test.
+    `check_lwuws_path_count` (T-2094, S3's own structural remedy) -- parses `gpu_port.h`'s own two
+    number-words directly (`parse_lwuws_path_counts`) and compares them against `RunLayerLoopGpu`'s
+    own real, structurally-derived path counts (`derive_lwuws_before_decision_count`/`derive_lwuws_
+    after_decision_count`) -- no citation table, no hardcoded constant, on either side. Reads
+    `gpu_port_h_path` and `superslm_gpu_path`; pass `False` (or `gpu_port_h_path=None`) to skip for
+    a fixture tree.
 
-    `check_lwuws_path_count` (T-2091, class-A sweep) -- reuses `prose_citations` (the SAME
-    already-checked table) to derive the "fourteen ... fifteen paths' own destination" sum
-    `gpu_port.h`'s own prose states in English, closing the "15-path count saga" class (re-derived
-    by hand four times across five rounds, each landing a different wrong number before the next
-    review caught it) as a structural property instead of a fifth hand-count.
-
-    `cmake_path` (T-2091, class-B sweep, the execution-scope manifest) -- `None` skips, same
-    reasoning as `build_bat_path=None`. Every real-tree call gets `check_execution_scope_waivers`
-    for free: any hollow execution scope (a target that compiles `test_main.cpp` without compiling
-    `superslm_gpu.cpp`) not named in `EXECUTION_SCOPE_WAIVERS` fails the build."""
+    `cmake_path` (T-2091, class-B sweep, the execution-scope manifest; generalized by T-2094's S4
+    to enumerate every `add_executable` target rather than one hardcoded name) -- `None` skips,
+    same reasoning as `build_bat_path=None`. Every real-tree call gets `check_execution_scope_
+    waivers` for free: any hollow execution scope not named in `EXECUTION_SCOPE_WAIVERS`, or any
+    waiver naming a scope that is no longer hollow or no longer exists, fails the build."""
     with open(forward_sites_path, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     with open(superslm_gpu_path, "r", encoding="utf-8") as f:
@@ -1449,59 +1345,41 @@ def run_all_checks(
         failure = check_citation(row, repo_root)
         if failure is not None:
             failures.append(failure)
-    # T-2075 (Structural): the prose-citation population is checked against
-    # `repo_root` too -- resolved relative to it exactly like the `.def`
-    # citations above, so a scratch-tree mutation test can exercise this the
-    # same way it exercises everything else in this function.
-    failures += check_all_prose_citations(citations=prose_citations, repo_root=repo_root)
-    # T-2080 (M1's own structural remedy): the population itself is checked
-    # against `gpu_port.h`'s own text -- editing the header without mirroring
-    # the edit into `prose_citations` (a correct refresh OR a corruption) is
-    # what M1 found this module blind to.
-    if gpu_port_h_path is not None:
-        with open(gpu_port_h_path, "r", encoding="utf-8") as f:
-            gpu_port_h_text = f.read()
-        failures += check_gpu_port_h_citations_match_table(gpu_port_h_text, citations=prose_citations)
     # T-2083 (O35): DecodeStickyTag's own real content, pinned against the
     # exact count gpu_port.h's own citation claims -- see
     # check_decode_sticky_tag_range's own docstring for why the two-endpoint
     # range citation alone cannot do this.
     if check_decode_sticky_tag:
         failures += check_decode_sticky_tag_range(gpu_text)
-    # T-2088 (S1, D-SLM3261): build.bat's own test-binary compile line must still define the O11
-    # gate flag -- see check_build_bat_defines_o11_gate's own docstring for the silent-shrink this
-    # closes (removing the flag leaves gate-on and gate-off reporting the identical failure count).
+    # T-2088 (S1, build log §26): build.bat's own test-binary compile line must still define the
+    # O11 gate flag -- see check_build_bat_defines_o11_gate's own docstring for the silent-shrink
+    # this closes (removing the flag leaves gate-on and gate-off reporting the identical count).
     if build_bat_path is not None:
         with open(build_bat_path, "r", encoding="utf-8") as f:
             build_bat_text = f.read()
         failures += check_build_bat_defines_o11_gate(build_bat_text)
-    # T-2088 (M2, D-SLM3261): this module's own prose about superslm_gpu.cpp -- the DecodeStickyTag
-    # range citations, the file's total line count -- is now checked the same way gpu_port.h's own
-    # prose about the same file already is, closing the class where this module's own citations
-    # were the one artifact its own machinery did not govern.
-    if self_citations:
-        failures += check_all_prose_citations(citations=self_citations, repo_root=repo_root)
-    if check_self_line_count:
-        failures += check_superslm_gpu_cpp_line_count_claim(gpu_text)
-    # T-2091 (S1, D-SLM3271): the population half M2's own "structural remedy" was missing --
-    # this module's own docstring claims about superslm_gpu.cpp, derived from the TEXT ITSELF and
-    # checked against SELF_CITATIONS/SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM, the way gpu_port.h's own
-    # citation population already is against GPU_PORT_H_LWUWS_CITATIONS.
-    if check_self_citation_population:
-        with open(os.path.abspath(__file__), "r", encoding="utf-8") as f:
-            this_module_text = f.read()
-        failures += check_self_citation_population_matches(this_module_text)
-    # T-2091 (S2, D-SLM3271): the line-wrap symbol-integrity scan round 11's own M1 routed and
+    # T-2094 (S1, D-SLM3277): every marked `` `Name` (file.ext) `` citation, in every scanned
+    # file's own prose, whole-file -- the class-closing remedy for what SELF_CITATIONS/GPU_PORT_H_
+    # LWUWS_CITATIONS/check_gpu_port_h_citations_match_table used to do with a chunk or a paragraph
+    # boundary something could sit outside of.
+    if check_marked_citation_scan:
+        failures += check_marked_citations(scanned_files=marked_citation_scanned_files, repo_root=repo_root)
+    # T-2091 (S2, build log §27): the line-wrap symbol-integrity scan round 11's own M1 routed and
     # round 12 did not build -- every backtick-quoted identifier split across a line-wrap, across
     # the arc's own six files, must resolve to a real symbol or sit in the named allowlist.
     if run_symbol_integrity_scan:
-        failures += check_symbol_integrity(repo_root=repo_root)
-    # T-2091 (class A, the "15-path count saga" instance): the path-count sum is derived from the
-    # SAME citations table already checked against gpu_port.h's own text, not re-typed.
-    if check_lwuws_path_count:
-        failures += check_lwuws_path_count_claim(citations=prose_citations)
-    # T-2091 (class B, the execution-scope manifest): a hollow scope (a target that compiles
-    # test_main.cpp's GPU calls without compiling superslm_gpu.cpp) must be a named, dated waiver.
+        failures += check_symbol_integrity(
+            scanned_files=symbol_integrity_scanned_files, repo_root=repo_root
+        )
+    # T-2094 (S3, D-SLM3277): the path-count sum is derived from gpu_port.h's own real sentence AND
+    # RunLayerLoopGpu's own real body -- neither side is a hardcoded/re-typed number any more.
+    if check_lwuws_path_count and gpu_port_h_path is not None:
+        with open(gpu_port_h_path, "r", encoding="utf-8") as f:
+            gpu_port_h_text = f.read()
+        failures += check_lwuws_path_count_claim(gpu_port_h_text, gpu_text)
+    # T-2091/T-2094 (class B, S4): a hollow scope (a target that compiles test_main.cpp's GPU calls
+    # without compiling superslm_gpu.cpp) must be a named, dated, CURRENT waiver -- a stale one
+    # (naming a scope that no longer exists or is no longer hollow) fails just as loudly.
     failures += check_execution_scope_waivers(build_bat_path=build_bat_path, cmake_path=cmake_path)
     return failures
 

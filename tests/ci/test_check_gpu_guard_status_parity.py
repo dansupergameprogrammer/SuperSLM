@@ -313,11 +313,10 @@ def test_check_citation_fails_for_a_malformed_citation():
 def test_run_all_checks_clean_on_the_matching_fixture_tree():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures == []
@@ -338,11 +337,10 @@ def test_mutation_a_new_status_with_no_def_row_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "a tenth guard with a status absent from the .def must fail the check"
@@ -364,11 +362,10 @@ def test_mutation_a_reused_status_with_no_def_row_does_not_redden_the_honest_res
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures == [], "reusing an existing status is the documented residual -- must stay green"
@@ -385,11 +382,10 @@ def test_mutation_b_def_row_with_no_matching_ladder_guard_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, def_text=def_text)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "a .def row naming a status neither ladder returns must fail the check"
@@ -404,11 +400,10 @@ def test_mutation_c_guard_removed_from_gpu_ladder_only_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "a guard present in CPU/.def but removed from the GPU ladder must fail the check"
@@ -431,11 +426,10 @@ def test_mutation_d_new_status_guard_placed_after_the_old_end_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "a new-status guard placed after the old end marker must now be caught (S2)"
@@ -455,11 +449,10 @@ def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_r
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
@@ -487,11 +480,10 @@ def test_mutation_e_new_status_guard_placed_after_the_gpu_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "a new-status GPU guard placed after the old marker must now be caught (S3)"
@@ -515,11 +507,10 @@ def test_mutation_e_control_new_status_guard_placed_before_the_gpu_marker_redden
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures, "the identical guard placed before the marker must redden, same as before this fix"
@@ -539,11 +530,10 @@ def test_mutation_e_variant_reused_status_after_gpu_marker_stays_green_the_widen
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures == [], "reusing an existing status past the GPU marker is the (widened) documented residual"
@@ -561,11 +551,10 @@ def test_mutation_e_variant_reused_below_ladder_status_after_gpu_marker_stays_gr
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(),
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp,
                                        gpu_port_h_path=None, check_decode_sticky_tag=False,
-                                       build_bat_path=None, self_citations=(),
-                                       check_self_line_count=False,
-                                       check_self_citation_population=False,
+                                       build_bat_path=None,
+                                       check_marked_citation_scan=False,
                                        run_symbol_integrity_scan=False,
                                        check_lwuws_path_count=False)
         assert failures == [], "reusing the subtracted below-ladder status itself is also the documented residual"
@@ -680,183 +669,110 @@ def test_real_tree_decode_sticky_tag_status_set_is_the_named_fourteen():
     }
 
 
-# --- ProseCitation / check_prose_citation / check_all_prose_citations
-# (T-2075, Structural remedy) ---
+# --- find_marked_citations / check_marked_citation / check_marked_citations
+# (T-2094, S1's own structural remedy: line-number citations removed entirely, replaced by
+# `` `Name` (file.ext) `` existence-checked marked citations, whole-tree, no chunk boundary) ---
 
-def test_check_prose_citation_passes_for_a_real_matching_line():
-    with tempfile.TemporaryDirectory() as tmp:
-        cpu_path, _, _ = _write_fixture_tree(tmp)
-        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 4, "InvalidLayerBudget")
-        assert chk.check_prose_citation(citation, repo_root=tmp) is None
-
-
-def test_check_prose_citation_fails_when_needle_absent_from_cited_line():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_fixture_tree(tmp)
-        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 4, "SomethingNotThere")
-        failure = chk.check_prose_citation(citation, repo_root=tmp)
-        assert failure is not None
-        assert "citation is stale" in failure
+def test_find_marked_citations_extracts_every_occurrence():
+    text = "see `InvalidLayerBudget` (superslm_gpu.cpp) and `DecodeStickyTag` (superslm_gpu.cpp) too"
+    found = chk.find_marked_citations(text, "//")
+    assert found == [("InvalidLayerBudget", "superslm_gpu.cpp"), ("DecodeStickyTag", "superslm_gpu.cpp")]
 
 
-def test_check_prose_citation_fails_when_line_out_of_range():
-    with tempfile.TemporaryDirectory() as tmp:
-        _write_fixture_tree(tmp)
-        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 9999, "x")
-        failure = chk.check_prose_citation(citation, repo_root=tmp)
-        assert failure is not None
-        assert "out of range" in failure
+def test_find_marked_citations_joins_a_line_wrap_between_name_and_file():
+    text = "see `InvalidLayerBudget`\n// (superslm_gpu.cpp) for real"
+    found = chk.find_marked_citations(text, "//")
+    assert found == [("InvalidLayerBudget", "superslm_gpu.cpp")]
 
 
-def test_check_prose_citation_fails_when_file_missing():
-    citation = chk.ProseCitation("fixture label", "nonexistent/file.cpp", 1, "x")
-    failure = chk.check_prose_citation(citation, repo_root=os.getcwd())
-    assert failure is not None
-    assert "file not found" in failure
+def test_find_marked_citations_ignores_ordinary_english_parentheticals():
+    # "(below)"/"(inclusive)" and a hex literal are not filenames -- the required real extension
+    # (.cpp/.h/.py/.def/.bat) is what keeps this pattern from firing on prose that merely happens
+    # to sit after a backtick-quoted word.
+    text = "`gpu_ladder_status_set` (below) and `STATUS_ACCESS_VIOLATION` (0xC0000005)"
+    assert chk.find_marked_citations(text, "//") == []
 
 
-def test_check_all_prose_citations_reddens_when_one_of_several_shifts():
-    with tempfile.TemporaryDirectory() as tmp:
-        cpu_path, _, _ = _write_fixture_tree(tmp)
-        good = chk.ProseCitation("good", "src/forward/forward_sites.cpp", 4, "InvalidLayerBudget")
-        bad = chk.ProseCitation("bad (shifted)", "src/forward/forward_sites.cpp", 4, "NeverThere")
-        failures = chk.check_all_prose_citations(citations=(good, bad), repo_root=tmp)
-        assert len(failures) == 1
-        assert "bad (shifted)" in failures[0]
-
-
-# --- parse_gpu_port_h_citation_lines / check_gpu_port_h_citations_match_table
-# (T-2080, M1's own structural remedy: the population is derived from
-# gpu_port.h's own text, not a hand-transcribed copy of it) ---
-
-_GPU_PORT_H_LWUWS_FIXTURE = """\
-namespace superslm_gpu {
-// T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2):
-// backs the accessor. Set every call.
-//
-// eleven in the nine-guard ladder (`superslm_gpu.cpp:654, 655, 664, 668,
-// 683, 687, 688, 698, 701, 707, 709` -- eleven return statements); two
-// device-capability rejections (`:716` !dev.available, `:728` Tier-3); the
-// catch's own ternary (`:1410`); the sticky-tag terminal call
-// (`superslm_gpu.cpp:1461`); DecodeStickyTag itself (`:532-550`); four
-// write sites (`superslm_gpu.cpp:299` static init, `:614` entry, `:903`
-// residency, `:1400` the catch).
-bool LastWeightUploadWasSkipped();
-}  // namespace superslm_gpu
-"""
-
-
-def test_parse_gpu_port_h_citation_lines_extracts_every_shape():
-    lines = chk.parse_gpu_port_h_citation_lines(_GPU_PORT_H_LWUWS_FIXTURE)
-    assert lines == {
-        654, 655, 664, 668, 683, 687, 688, 698, 701, 707, 709,  # ladder (comma list, line-wrapped)
-        716, 728,  # device-capability (short form)
-        1410,  # catch ternary (short form)
-        1461,  # sticky-tag terminal (full form)
-        532, 550,  # DecodeStickyTag range (short form, range)
-        299, 614, 903, 1400,  # write sites (full form comma... actually individual short forms)
-    }
-
-
-def test_parse_gpu_port_h_citation_lines_raises_when_start_marker_absent():
-    try:
-        chk.parse_gpu_port_h_citation_lines("nothing relevant here")
-        assert False, "expected ValueError"
-    except ValueError as e:
-        assert "paragraph start marker" in str(e)
-
-
-def test_parse_gpu_port_h_citation_lines_raises_when_end_marker_absent():
-    try:
-        chk.parse_gpu_port_h_citation_lines(chk.GPU_PORT_H_LWUWS_PARAGRAPH_START + "\nno end marker here")
-        assert False, "expected ValueError"
-    except ValueError as e:
-        assert "paragraph end marker" in str(e)
-
-
-def test_check_gpu_port_h_citations_match_table_passes_when_they_agree():
-    citations = (
-        chk.ProseCitation("a", "x", 654, "n"), chk.ProseCitation("b", "x", 655, "n"),
-        chk.ProseCitation("c", "x", 664, "n"), chk.ProseCitation("d", "x", 668, "n"),
-        chk.ProseCitation("e", "x", 683, "n"), chk.ProseCitation("f", "x", 687, "n"),
-        chk.ProseCitation("g", "x", 688, "n"), chk.ProseCitation("h", "x", 698, "n"),
-        chk.ProseCitation("i", "x", 701, "n"), chk.ProseCitation("j", "x", 707, "n"),
-        chk.ProseCitation("k", "x", 709, "n"), chk.ProseCitation("l", "x", 716, "n"),
-        chk.ProseCitation("m", "x", 728, "n"), chk.ProseCitation("n_", "x", 1410, "n"),
-        chk.ProseCitation("o", "x", 1461, "n"), chk.ProseCitation("p", "x", 532, "n"),
-        chk.ProseCitation("q", "x", 550, "n"), chk.ProseCitation("r", "x", 299, "n"),
-        chk.ProseCitation("s", "x", 614, "n"), chk.ProseCitation("t", "x", 903, "n"),
-        chk.ProseCitation("u", "x", 1400, "n"),
-    )
-    failures = chk.check_gpu_port_h_citations_match_table(_GPU_PORT_H_LWUWS_FIXTURE, citations=citations)
-    assert failures == []
-
-
-def test_check_gpu_port_h_citations_match_table_reddens_on_a_corrupted_header():
-    # T-2080, M1's own falsifying case: the header's own citations are
-    # corrupted (shifted by a constant) while the Python table is
-    # untouched -- exactly the shape the review's own real-file mutation
-    # exercises, reproduced here at the fixture level.
-    corrupted = _GPU_PORT_H_LWUWS_FIXTURE.replace("654, 655, 664", "6540, 6550, 6640")
-    citations = (chk.ProseCitation("a", "x", 654, "n"),)
-    failures = chk.check_gpu_port_h_citations_match_table(corrupted, citations=citations)
-    assert failures, "a corrupted header citation must be caught against the table"
-    assert "drifted" in failures[0]
-
-
-# T-2083 (O34): a same-position-swap mutation cell and an order-preserving
-# parser were both built and then REVERTED here -- the order comparison
-# false-positived against the real header's own legitimate repeated
-# citations across its four dated corrections (see `parse_gpu_port_h_
-# citation_lines`'s own docstring above for the full account). O34 is filed
-# as a named, open residual rather than landed as a check that would have
-# been wrong; no cell for it exists in this file by design, not omission.
-
-
-def test_real_tree_gpu_port_h_lwuws_citations_all_resolve_today():
-    # Every citation in gpu_port.h's own LastWeightUploadWasSkipped
-    # paragraph, re-derived fresh at T-2075, resolves against the real file
-    # today -- the exact property M1 found false for the T-2069 correction's
-    # own citations one round after they were written.
-    failures = chk.check_all_prose_citations()
-    assert failures == [], f"gpu_port.h's own citations should all resolve today: {failures}"
-
-
-def test_real_tree_prose_citation_population_is_the_named_twenty_one():
-    # Nineteen (T-2075) plus two (T-2080, M2: DecodeStickyTag's own range
-    # citation, covered as its two endpoints).
-    assert len(chk.GPU_PORT_H_LWUWS_CITATIONS) == 21
-
-
-def test_real_tree_gpu_port_h_citations_match_the_table_today():
-    with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
-        gpu_port_h_text = f.read()
-    failures = chk.check_gpu_port_h_citations_match_table(gpu_port_h_text)
-    assert failures == [], f"gpu_port.h's own citations should match the table today: {failures}"
-
-
-# --- Structural red proof (T-2075): shifting a cited line reddens run_all_checks. ---
-
-def test_mutation_f_shifting_a_cited_gpu_line_reddens_via_prose_citation_check():
-    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
-        real_gpu_text = f.read()
+def test_check_marked_citation_passes_for_a_real_identifier():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
-        # Overwrite the fixture tree's GPU file with a shifted copy of the
-        # REAL file (one blank line inserted before the first ladder
-        # citation's own line, 640) -- proves the structural machinery
-        # against the real citation population, not only the small fixture
-        # population used elsewhere in this file.
-        real_lines = real_gpu_text.splitlines(keepends=True)
-        shifted = real_lines[:639] + ["\n"] + real_lines[639:]
-        with open(gpu_path, "w", encoding="utf-8") as f:
-            f.writelines(shifted)
-        failures = chk.check_all_prose_citations(repo_root=tmp)
-        # citations relative to repo_root resolve against tmp's OWN tree
-        # layout (src/gpu/superslm_gpu.cpp under tmp), which now holds the
-        # shifted content at the real citations' own line numbers.
-        assert failures, "a shifted cited line must redden the prose-citation check"
-        assert any("citation is stale" in f for f in failures)
+        assert chk.check_marked_citation("InvalidLayerBudget", "superslm_gpu.cpp", repo_root=tmp) is None
+
+
+def test_check_marked_citation_fails_when_name_does_not_resolve():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_fixture_tree(tmp)
+        failure = chk.check_marked_citation("NeverExisted", "superslm_gpu.cpp", repo_root=tmp)
+        assert failure is not None
+        assert "does not resolve" in failure
+
+
+def test_check_marked_citation_fails_for_an_unrecognized_target_file():
+    failure = chk.check_marked_citation("Anything", "not_a_real_file.cpp", repo_root=os.getcwd())
+    assert failure is not None
+    assert "not a recognized citation target" in failure
+
+
+def test_check_marked_citation_passes_for_a_member_access_anchor():
+    # `dev.available` is not identifier-shaped (contains a dot) -- resolved as a literal substring
+    # of the comment-stripped code instead of via the identifier-token universe.
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
+        assert chk.check_marked_citation("dev.available", "superslm_gpu.cpp", repo_root=tmp) is None
+
+
+def test_check_marked_citation_passes_for_an_anchor_comment_marker():
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(
+            tmp, gpu=_GPU_FIXTURE.replace(
+                "if (!dev.available)",
+                "// ANCHOR:my_test_anchor\n\tif (!dev.available)",
+            ),
+        )
+        assert chk.check_marked_citation("my_test_anchor", "superslm_gpu.cpp", repo_root=tmp) is None
+
+
+def test_check_marked_citations_reddens_on_one_stale_citation_among_several():
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
+        gph_dir = os.path.join(tmp, "include", "superslm")
+        os.makedirs(gph_dir, exist_ok=True)
+        gph_path = os.path.join(gph_dir, "gpu_port.h")
+        with open(gph_path, "w", encoding="utf-8") as f:
+            f.write(
+                "// see `InvalidLayerBudget` (superslm_gpu.cpp), real\n"
+                "// and `TotallyMadeUp` (superslm_gpu.cpp), not real\n"
+            )
+        failures = chk.check_marked_citations(
+            scanned_files=(("include/superslm/gpu_port.h", "//"),), repo_root=tmp,
+        )
+        assert len(failures) == 1
+        assert "TotallyMadeUp" in failures[0]
+
+
+def test_check_marked_citations_reddens_regardless_of_WHERE_in_the_file_the_citation_sits():
+    # T-2094's own closure of S1's class: no chunk boundary exists any more -- a marked citation
+    # placed ANYWHERE in a scanned file's own prose is checked, unlike SELF_CITATIONS' own four
+    # hand-picked chunks (T-2091), which the exact M2 defect could hide outside of.
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
+        gph_dir = os.path.join(tmp, "include", "superslm")
+        os.makedirs(gph_dir, exist_ok=True)
+        gph_path = os.path.join(gph_dir, "gpu_port.h")
+        # A long file with the stale citation at the very END, nowhere near any conventional
+        # "paragraph" a chunk-based scan might have bounded.
+        padding = "\n".join(f"// padding line {i}, nothing relevant here" for i in range(200))
+        with open(gph_path, "w", encoding="utf-8") as f:
+            f.write(padding + "\n// finally, `NeverExisted` (superslm_gpu.cpp) cited at the very end\n")
+        failures = chk.check_marked_citations(
+            scanned_files=(("include/superslm/gpu_port.h", "//"),), repo_root=tmp,
+        )
+        assert failures, "a stale citation at the end of a long file, no chunk involved, must redden"
+        assert "NeverExisted" in failures[0]
+
+
+def test_real_tree_check_marked_citations_passes_today():
+    assert chk.check_marked_citations() == []
 
 
 # --- End-to-end against the real tree: not vacuous, and green today. ---
@@ -952,98 +868,12 @@ def test_real_tree_check_build_bat_defines_o11_gate_passes_today():
     assert chk.check_build_bat_defines_o11_gate(build_bat_text) == []
 
 
-# --- check_superslm_gpu_cpp_line_count_claim (T-2088, M2's own structural remedy; T-2091
-# Minor 2: also landed with zero cells). ---
-
-def test_check_superslm_gpu_cpp_line_count_claim_passes_when_it_matches():
-    fixture = "\n".join(f"line {i}" for i in range(chk.SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM))
-    assert chk.check_superslm_gpu_cpp_line_count_claim(fixture) == []
-
-
-def test_check_superslm_gpu_cpp_line_count_claim_reddens_when_the_file_shifts():
-    fixture = "\n".join(f"line {i}" for i in range(chk.SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM + 3))
-    failures = chk.check_superslm_gpu_cpp_line_count_claim(fixture)
-    assert failures, "a shifted line count must redden"
-    assert str(chk.SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM) in failures[0]
-
-
-def test_real_tree_check_superslm_gpu_cpp_line_count_claim_passes_today():
-    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
-        gpu_text = f.read()
-    assert chk.check_superslm_gpu_cpp_line_count_claim(gpu_text) == []
-
-
-# --- SELF_CITATIONS resolution (T-2088, M2's own structural remedy; T-2091 Minor 2: the
-# resolution half had no cell of its own, only the population half S1 adds below does). ---
-
-def test_real_tree_self_citations_all_resolve_today():
-    failures = chk.check_all_prose_citations(citations=chk.SELF_CITATIONS)
-    assert failures == [], f"this module's own DecodeStickyTag self-citations should resolve today: {failures}"
-
-
-# --- parse_self_citation_population / check_self_citation_population_matches (T-2091, S1's own
-# structural remedy, D-SLM3271): the population half SELF_CITATIONS/SUPERSLM_GPU_CPP_LINE_COUNT_
-# CLAIM were missing -- MUT-3 (the round-12 review's own falsifying case) restored the exact M2
-# defect into this module's own prose while leaving both constants correct, and every T-2088 check
-# stayed green. These cells prove the population-derivation half catches exactly that. ---
-
-def test_parse_self_citation_population_matches_today_on_the_real_module():
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        this_module_text = f.read()
-    lines, counts = chk.parse_self_citation_population(this_module_text)
-    assert lines == {c.line for c in chk.SELF_CITATIONS}
-    assert counts and all(n == chk.SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM for n in counts)
-
-
-def test_check_self_citation_population_matches_passes_on_the_real_module():
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        this_module_text = f.read()
-    assert chk.check_self_citation_population_matches(this_module_text) == []
-
-
-def test_check_self_citation_population_matches_reddens_when_m2s_exact_defect_is_restored():
-    # T-2091's own MUT-3 reproduction, at the fixture level: the four `:532-550` citations and
-    # the three "1,965 lines" claims put back into a synthetic copy of this module's own text,
-    # SELF_CITATIONS/SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM untouched at their real, correct values.
-    # This is exactly the case check_all_prose_citations(self_citations=...) cannot see (it only
-    # checks SELF_CITATIONS' own two fixed entries against superslm_gpu.cpp, never against this
-    # module's own prose) -- must redden here, where it did not before this round.
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        real_text = f.read()
-    mutated = real_text.replace("superslm_gpu.cpp:583-601", "superslm_gpu.cpp:532-550")
-    mutated = mutated.replace("`superslm_gpu.cpp:583`,\n     `:601`)", "`superslm_gpu.cpp:532`,\n     `:550`)")
-    mutated = mutated.replace("2,023 lines", "1,965 lines")
-    failures = chk.check_self_citation_population_matches(mutated)
-    assert failures, "restoring M2's exact defect (citations + line counts) must redden the population check"
-
-
-def test_check_self_citation_population_matches_reddens_when_only_the_constant_moves():
-    # The reverse of MUT-3: SELF_CITATIONS' own line set moves (as if a future round refreshed
-    # the constant but not the prose beside it) while this module's own real text still says
-    # 583/601 -- the population comparison must disagree in this direction too, not just when
-    # the prose is the one that goes stale.
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        this_module_text = f.read()
-    shifted = tuple(
-        chk.ProseCitation(c.label, c.file_relpath, c.line + 1, c.needle) for c in chk.SELF_CITATIONS
-    )
-    failures = chk.check_self_citation_population_matches(this_module_text, self_citations=shifted)
-    assert failures, "a moved SELF_CITATIONS constant, with the real prose unchanged, must redden"
-
-
-def test_check_self_citation_population_matches_reddens_when_only_the_line_count_constant_moves():
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        this_module_text = f.read()
-    failures = chk.check_self_citation_population_matches(
-        this_module_text, line_count_claim=chk.SUPERSLM_GPU_CPP_LINE_COUNT_CLAIM + 1
-    )
-    assert failures, "a moved line-count constant, with the real prose unchanged, must redden"
-
-
-# --- check_symbol_integrity (T-2091, S2's own structural remedy, D-SLM3271): round 11's own M1
-# routed this and round 12 built a manual fragment-grep instead, without disclosing the deferral.
-# T-2091's own red-proof carrier: gpu_port.h's pre-fix split of `check_build_bat_defines_o11_gate`
-# (the symbol T-2088 itself created), reproduced here at the fixture level. ---
+# --- check_symbol_integrity (T-2091, S2's own structural remedy, build log §27): round 11's own
+# M1 routed this and round 12 built a manual fragment-grep instead, without disclosing the
+# deferral. T-2094's own M1 correction: the ORIGINAL claimed red-proof (restoring gpu_port.h's
+# pre-fix split alone) is false on the real tree -- a split of a symbol that is STILL LIVE
+# resolves by design; the real defect this check catches is a RENAME that misses the split
+# occurrence, reproduced below. ---
 
 def test_check_symbol_integrity_passes_on_the_real_tree_today():
     assert chk.check_symbol_integrity() == []
@@ -1099,50 +929,170 @@ def test_check_symbol_integrity_stays_clean_when_the_split_identifier_is_allowli
         assert failures == [], f"an allowlisted split identifier must not redden: {failures}"
 
 
-def test_check_symbol_integrity_reddens_on_gpu_port_h_s_own_pre_fix_split():
-    # T-2091's own named red-proof (the eleventh carrier, D-SLM3271 S2): gpu_port.h's own
-    # correction split `check_build_bat_defines_o11_gate` -- the symbol T-2088 itself created --
-    # across a //-continuation. Reconstructed here exactly as it read before this round's fix.
+def test_check_symbol_integrity_reddens_when_a_rename_misses_the_split_occurrence():
+    # T-2094's own M1 correction (build log §28): the ORIGINAL claim here ("restoring gpu_port.h's
+    # pre-fix split alone must redden") was FALSE on the real tree -- executed, restoring that
+    # exact split leaves the check green, because the reconstructed name still resolves to the
+    # live function. The real defect class is a RENAME that sweeps every UNSPLIT occurrence and
+    # misses the split one -- reproduced for real here: a scanned "library" file where the real
+    # function is named `RenamedFunction`, and a scanned "header" file whose own split citation
+    # still names the OLD, pre-rename form across a line-wrap.
     with tempfile.TemporaryDirectory() as tmp:
-        fake_dir = os.path.join(tmp, "fake_include")
-        os.makedirs(fake_dir, exist_ok=True)
-        fake_path = os.path.join(fake_dir, "fake_gpu_port.h")
-        with open(fake_path, "w", encoding="utf-8") as f:
+        lib_dir = os.path.join(tmp, "lib")
+        os.makedirs(lib_dir, exist_ok=True)
+        lib_path = os.path.join(lib_dir, "lib.cpp")
+        with open(lib_path, "w", encoding="utf-8") as f:
+            f.write("void RenamedFunction() {}\n")  # the rename landed here...
+        header_dir = os.path.join(tmp, "include")
+        os.makedirs(header_dir, exist_ok=True)
+        header_path = os.path.join(header_dir, "header.h")
+        with open(header_path, "w", encoding="utf-8") as f:
             f.write(
-                "// pinned assertion in `tests/ci/check_gpu_guard_status_parity.py` "
-                "(`check_build_bat_defines_o11_\n"
-                "// gate`), not this sentence alone.\n"
+                "// pinned assertion in `lib.cpp` (`OldFunction\n"
+                "// Name`), not this sentence alone.\n"  # ...but not swept here, hidden by the wrap
             )
         failures = chk.check_symbol_integrity(
-            scanned_files=(("fake_include/fake_gpu_port.h", "//"),), allowlist=frozenset(), repo_root=tmp,
+            scanned_files=(("lib/lib.cpp", "//"), ("include/header.h", "//")),
+            allowlist=frozenset(), repo_root=tmp,
         )
-        assert failures, "gpu_port.h's own pre-fix split of a real symbol must redden when unresolved"
+        assert failures, "a rename that misses a split occurrence must redden the reconstructed old name"
+        assert "OldFunctionName" in failures[0]
+
+
+def test_check_symbol_integrity_stays_clean_when_a_split_symbol_is_still_live():
+    # The corrected claim's OTHER half, stated as its own cell rather than left implicit: a split
+    # of a symbol that IS still live (no rename happened) resolves by design and must NOT redden --
+    # this is `test_check_symbol_integrity_stays_clean_when_the_split_identifier_resolves` above,
+    # confirmed again here against the exact real-world shape (a file citation split mid-name) M1
+    # found the original test's own claim wrong about.
+    with tempfile.TemporaryDirectory() as tmp:
+        lib_dir = os.path.join(tmp, "lib")
+        os.makedirs(lib_dir, exist_ok=True)
+        lib_path = os.path.join(lib_dir, "lib.cpp")
+        with open(lib_path, "w", encoding="utf-8") as f:
+            f.write("void StillLiveFunction() {}\n")
+        header_dir = os.path.join(tmp, "include")
+        os.makedirs(header_dir, exist_ok=True)
+        header_path = os.path.join(header_dir, "header.h")
+        with open(header_path, "w", encoding="utf-8") as f:
+            f.write("// pinned assertion in `lib.cpp` (`StillLiveFunction\n// `), not this sentence alone.\n")
+        failures = chk.check_symbol_integrity(
+            scanned_files=(("lib/lib.cpp", "//"), ("include/header.h", "//")),
+            allowlist=frozenset(), repo_root=tmp,
+        )
+        assert failures == [], f"a split of a still-live symbol must not redden: {failures}"
+
+
+def test_real_tree_check_symbol_integrity_reddens_when_gpu_port_h_s_own_split_is_restored_and_renamed():
+    # The real-tree reproduction of the corrected claim, in scratch-equivalent form: `gpu_port.h`'s
+    # own pre-T-2088 split of `check_build_bat_defines_o11_gate` restored, WHILE the real function
+    # is renamed in a scratch copy of this module -- the exact class M1 named ("the next rename of
+    # it is the fifth instance, by construction").
+    with tempfile.TemporaryDirectory() as tmp:
+        gph_dir = os.path.join(tmp, "include")
+        os.makedirs(gph_dir, exist_ok=True)
+        gph_path = os.path.join(gph_dir, "gpu_port.h")
+        with open(gph_path, "w", encoding="utf-8") as f:
+            f.write(
+                "// pinned assertion in `check.py` (`check_build_bat_defines_o11_\n"
+                "// gate`), not this sentence alone.\n"
+            )
+        py_dir = os.path.join(tmp, "py")
+        os.makedirs(py_dir, exist_ok=True)
+        py_path = os.path.join(py_dir, "check.py")
+        with open(py_path, "w", encoding="utf-8") as f:
+            f.write("def check_build_bat_defines_the_o11_gate(x):\n    return x\n")
+        failures = chk.check_symbol_integrity(
+            scanned_files=(("include/gpu_port.h", "//"), ("py/check.py", "#")),
+            allowlist=frozenset(), repo_root=tmp,
+        )
+        assert failures, "a rename that misses gpu_port.h's own split occurrence must redden"
         assert "check_build_bat_defines_o11_gate" in failures[0]
 
 
-# --- check_lwuws_path_count_claim (T-2091, class-A sweep, D-SLM3271): the "15-path count saga"
-# closed structurally -- the sum is derived from GPU_PORT_H_LWUWS_CITATIONS, not re-typed. ---
+# --- parse_lwuws_path_counts / derive_lwuws_before_decision_count / derive_lwuws_after_decision_
+# count / check_lwuws_path_count_claim (T-2094, S3's own structural remedy, build log §28): the
+# "15-path count saga" closed structurally -- BOTH sides read fresh (the prose's own number-words,
+# RunLayerLoopGpu's own real body), neither a re-typed constant. ---
 
-def test_check_lwuws_path_count_claim_passes_on_the_real_table():
-    assert chk.check_lwuws_path_count_claim() == []
+_LWUWS_SENTENCE_FIXTURE = """\
+// ...the recording-window catch, fourteen
+// paths in all, none of which...
+// ...the sticky-tag-decoded path alike, fifteen paths' own destination in
+// total across the function...
+"""
 
 
-def test_check_lwuws_path_count_claim_reddens_when_a_before_decision_citation_is_missing():
-    trimmed = tuple(c for c in chk.GPU_PORT_H_LWUWS_CITATIONS if c.label != "ladder return 9 (KvCapacityExhausted)")
-    failures = chk.check_lwuws_path_count_claim(citations=trimmed)
-    assert failures, "dropping one before-decision citation must redden the sum claim"
-    assert "13" in failures[0] and "14" in failures[0]
+def test_parse_lwuws_path_counts_extracts_both_number_words():
+    assert chk.parse_lwuws_path_counts(_LWUWS_SENTENCE_FIXTURE) == (14, 15)
 
 
-def test_check_lwuws_path_count_claim_reddens_when_the_after_decision_citation_is_missing():
-    trimmed = tuple(c for c in chk.GPU_PORT_H_LWUWS_CITATIONS if c.label != "sticky-tag terminal return")
-    failures = chk.check_lwuws_path_count_claim(citations=trimmed)
-    assert failures, "dropping the sticky-tag terminal citation must redden the sum claim"
-    assert any("0" in f for f in failures)
+def test_parse_lwuws_path_counts_raises_when_before_sentence_absent():
+    try:
+        chk.parse_lwuws_path_counts("nothing relevant here")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "paths in all" in str(e)
+
+
+def test_parse_lwuws_path_counts_raises_when_total_sentence_absent():
+    try:
+        chk.parse_lwuws_path_counts("// catch, fourteen\n// paths in all, none of which")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "own destination in total" in str(e)
+
+
+def test_derive_lwuws_before_decision_count_matches_the_gpu_fixture():
+    # _GPU_FIXTURE has three ladder returns (InvalidLayerBudget, InvalidContextCap,
+    # HeadDimGeometryMismatch) plus one device-capability rejection (!dev.available) before
+    # `weights_resident` -- no catch/ternary in this small fixture, so no +1.
+    assert chk.derive_lwuws_before_decision_count(_GPU_FIXTURE) == 4
+
+
+def test_derive_lwuws_after_decision_count_is_one_on_the_gpu_fixture():
+    assert chk.derive_lwuws_after_decision_count(_GPU_FIXTURE) == 1
+
+
+def test_check_lwuws_path_count_claim_passes_when_the_words_match_real_structure():
+    gph = "// catch, four\n// paths in all\n// alike, five paths' own destination in\n// total, ..."
+    assert chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE) == []
+
+
+def test_check_lwuws_path_count_claim_reddens_when_the_before_word_is_wrong():
+    gph = "// catch, three\n// paths in all\n// alike, five paths' own destination in\n// total, ..."
+    failures = chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE)
+    assert failures, "a wrong before-decision word must redden"
+    assert "'3'" in failures[0] and "4" in failures[0]
+
+
+def test_check_lwuws_path_count_claim_reddens_when_the_total_word_is_wrong():
+    gph = "// catch, four\n// paths in all\n// alike, six paths' own destination in\n// total, ..."
+    failures = chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE)
+    assert failures, "a wrong total word must redden"
+    assert "'6'" in failures[0]
+
+
+def test_check_lwuws_path_count_claim_reddens_when_only_the_english_word_is_wrong_structure_untouched():
+    # The class this remedy specifically closes (T-2091's own gap, D-SLM3277 S3): the structural
+    # side (RunLayerLoopGpu's own real body) is UNCHANGED and correct; only the ENGLISH WORD in the
+    # sentence is wrong -- T-2091's own check (comparing two hardcoded constants) could not see
+    # this at all, because neither side it compared was the sentence itself.
+    gph = "// catch, NINETEEN\n// paths in all\n// alike, TWENTY paths' own destination in\n// total, ..."
+    failures = chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE)
+    assert failures, "a corrupted English word, with the real structure untouched, must redden"
+
+
+def test_real_tree_check_lwuws_path_count_claim_passes_today():
+    with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
+        gph = f.read()
+    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+        gpu = f.read()
+    assert chk.check_lwuws_path_count_claim(gph, gpu) == []
 
 
 # --- derive_execution_scope / check_execution_scope_waivers (T-2091, class-B sweep, O30's own
-# generalized closure, D-SLM3271): a pin protecting cells a pipeline never runs is hollow; a
+# generalized closure, build log §27): a pin protecting cells a pipeline never runs is hollow; a
 # hollow scope with no named waiver fails the build. ---
 
 _BUILD_BAT_SCOPE_FIXTURE = """\
@@ -1236,15 +1186,22 @@ def test_real_tree_cmake_superslm_tests_target_is_hollow_today():
     )
 
 
-# --- Wiring-vitality registry (T-2091, Minor 2 generalized, class B, D-SLM3271): MUT-6's own
-# falsifying case (three wiring blocks replaced with `if False: pass`, 59 passed, OK, nothing
-# noticed) turned into a standing, table-driven proof for every check `run_all_checks` can
-# individually disable -- for each, a fixture built to defeat EXACTLY that check reddens when the
-# check is enabled (the default) and stops reddening FOR THAT REASON when explicitly disabled,
-# proving the kwarg is load-bearing plumbing rather than a decorative parameter nobody reads. Uses
-# the REAL disable kwargs (the tree's own escape hatches, already exercised by every fixture-driven
-# cell above) rather than editing source text to `if False:` -- equivalent in what it proves, and a
-# standing regression cell survives where a one-time source edit would not. ---
+# --- Wiring-vitality registry (T-2091, Minor 2; T-2094, S2's own rebuild, D-SLM3277): MUT-6's own
+# falsifying case (wiring blocks replaced with `if False: pass`, nothing reddened) turned into a
+# standing, table-driven proof for every check `run_all_checks` can individually disable -- for
+# each, a fixture built to defeat EXACTLY that check reddens when the check is enabled (the
+# default) AND stops reddening FOR THAT REASON when explicitly disabled, THE SAME DEFEATING INPUT
+# THREADED IN BOTH RUNS. The T-2091 registry proved only half of this for five of its eleven cells
+# (asserting "the standalone function discriminates" and "the fully-disabled run is clean"
+# separately, never the conjunction against a live defeating input run THROUGH `run_all_checks`
+# itself) -- D-SLM3277's own S2 finding, reproduced by its MUT-G (five blocks neutered, 98 passed,
+# OK, nothing noticed). Every cell below passes the SAME on/off pair the same defeating fixture, so
+# neutering the wiring block it exercises must flip its own `enabled` assertion, by name. Four of
+# the old population's cells (`self_citations`, `prose_citations`, `check_self_citation_population`,
+# `check_self_line_count`) no longer exist -- T-2094's substrate removal folded the first three into
+# `check_marked_citation_scan` (one whole-file scan replaces three chunk/table/population checks)
+# and deleted the fourth's own claim entirely (`gpu_port.h`'s "N lines" self-citation sentence was
+# removed, not converted -- nothing claims it any more, so nothing needs pinning). ---
 
 def _real_tree_kwargs_with(**overrides):
     kwargs = dict(
@@ -1252,19 +1209,40 @@ def _real_tree_kwargs_with(**overrides):
         superslm_gpu_path=chk.SUPERSLM_GPU_CPP,
         guards_def_path=chk.GUARDS_DEF,
         repo_root=chk._REPO_ROOT,
+        gpu_port_h_path=None,
+        check_decode_sticky_tag=False,
+        build_bat_path=None,
+        check_marked_citation_scan=False,
+        run_symbol_integrity_scan=False,
+        check_lwuws_path_count=False,
+        cmake_path=None,
     )
     kwargs.update(overrides)
     return kwargs
 
 
-def test_wiring_vitality_check_decode_sticky_tag():
-    on = chk.run_all_checks(**_real_tree_kwargs_with(check_decode_sticky_tag=True))
-    off = chk.run_all_checks(**_real_tree_kwargs_with(check_decode_sticky_tag=False))
-    # The real tree is clean, so this proves the kwarg is READ (both empty) rather than that it
-    # discriminates -- test_decode_sticky_tag_status_set_reddens_when_an_interior_case_is_deleted
-    # and test_real_tree_decode_sticky_tag_range_matches_the_citation_today already prove the
-    # underlying check itself discriminates; this proves run_all_checks' own wiring reaches it.
-    assert on == [] and off == []
+def test_wiring_vitality_check_decode_sticky_tag_disable_stops_catching_a_shrunk_switch():
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+            real_text = f.read()
+        mutated = real_text.replace("\t\tcase 13: return S::SiluCompositionScaleOutOfDomain;\n", "", 1)
+        assert mutated != real_text, "sanity: case 13 must exist verbatim in the real file to mutate"
+        gpu_path = os.path.join(tmp, "shrunk_decode_gpu.cpp")
+        with open(gpu_path, "w", encoding="utf-8") as f:
+            f.write(mutated)
+        on = chk.check_decode_sticky_tag_range(mutated)
+        assert on, "sanity: deleting one interior DecodeStickyTag case must defeat the standalone check"
+        # superslm_gpu_path points at the mutated COPY (only DecodeStickyTag's own body changed --
+        # RunLayerLoopGpu's own ladder is untouched, so the unconditional CPU/GPU/.def three-way
+        # comparison stays clean and this proof isolates check_decode_sticky_tag alone).
+        enabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            superslm_gpu_path=gpu_path, check_decode_sticky_tag=True,
+        ))
+        disabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            superslm_gpu_path=gpu_path, check_decode_sticky_tag=False,
+        ))
+        assert enabled, "a shrunk DecodeStickyTag switch must be caught when check_decode_sticky_tag is enabled"
+        assert disabled == [], "check_decode_sticky_tag=False must remove the catch with the same mutated file threaded"
 
 
 def test_wiring_vitality_build_bat_path_disable_stops_catching_the_missing_flag():
@@ -1274,107 +1252,96 @@ def test_wiring_vitality_build_bat_path_disable_stops_catching_the_missing_flag(
             f.write(_BUILD_BAT_SCOPE_FIXTURE.replace(" /DSUPERSLM_O11_ALLOC_INJECTION", ""))
         on = chk.check_build_bat_defines_o11_gate(open(bb_path, encoding="utf-8").read())
         assert on, "sanity: the mutated fixture must defeat the standalone check"
-        enabled = chk.run_all_checks(**_real_tree_kwargs_with(
-            build_bat_path=bb_path, gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, cmake_path=None,
-        ))
-        disabled = chk.run_all_checks(**_real_tree_kwargs_with(
-            build_bat_path=None, gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, cmake_path=None,
-        ))
+        enabled = chk.run_all_checks(**_real_tree_kwargs_with(build_bat_path=bb_path))
+        disabled = chk.run_all_checks(**_real_tree_kwargs_with(build_bat_path=None))
         assert enabled, "the missing flag must be caught when build_bat_path is threaded"
         assert disabled == [], "disabling build_bat_path must remove the catch -- proves the kwarg is load-bearing"
 
 
-def test_wiring_vitality_self_citations_disable_stops_catching_a_broken_resolution():
-    bad = (chk.ProseCitation("bad self-citation", "src/gpu/superslm_gpu.cpp", 583, "NeverThere"),)
-    enabled = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-        self_citations=bad, check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    disabled = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-        self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    assert enabled, "a broken self-citation must be caught when self_citations is threaded"
-    assert disabled == [], "an empty self_citations tuple must remove the catch"
-
-
-def test_wiring_vitality_check_self_line_count_disable_stops_catching_a_shifted_file():
+def test_wiring_vitality_check_marked_citation_scan_disable_stops_catching_a_stale_citation():
     with tempfile.TemporaryDirectory() as tmp:
-        gpu_path = os.path.join(tmp, "shifted_gpu.cpp")
-        with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
-            real_text = f.read()
-        with open(gpu_path, "w", encoding="utf-8") as f:
-            f.write(real_text + "\n// one extra line\n")
-        enabled = chk.check_superslm_gpu_cpp_line_count_claim(open(gpu_path, encoding="utf-8").read())
-        assert enabled, "sanity: the shifted fixture must defeat the standalone check"
-        # run_all_checks itself: with the real (unmutated) gpu source, check_self_line_count=False
-        # must produce no line-count failure even though the check function itself would catch a
-        # real shift -- proving the kwarg, not the function, is what run_all_checks actually reads.
-        off = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
+        fake_path = os.path.join(tmp, "fake.cpp")
+        with open(fake_path, "w", encoding="utf-8") as f:
+            f.write("// `TotallyMadeUpSymbolThatDoesNotExistXyz` (check_gpu_guard_status_parity.py)\n")
+        scanned = ((fake_path, "//"),)
+        on = chk.check_marked_citations(scanned_files=scanned, repo_root=chk._REPO_ROOT)
+        assert on, "sanity: a made-up symbol name must defeat the standalone check"
+        enabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            check_marked_citation_scan=True, marked_citation_scanned_files=scanned,
         ))
-        assert off == []
-
-
-def test_wiring_vitality_check_self_citation_population_disable_stops_catching_mut3():
-    with open(chk.__file__, "r", encoding="utf-8") as f:
-        real_text = f.read()
-    mutated = real_text.replace("superslm_gpu.cpp:583-601", "superslm_gpu.cpp:532-550")
-    mutated = mutated.replace("2,023 lines", "1,965 lines")
-    on = chk.check_self_citation_population_matches(mutated)
-    assert on, "sanity: MUT-3's own reconstruction must defeat the standalone check"
-    # run_all_checks with check_self_citation_population=False must not read this module's own
-    # text at all for this purpose -- proven indirectly: it cannot fail for a reason it never
-    # computes, so the real (unmutated) tree stays clean either way, but the DISABLE path must not
-    # raise or behave differently just because the check is off.
-    off = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-        self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    assert off == []
+        disabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            check_marked_citation_scan=False, marked_citation_scanned_files=scanned,
+        ))
+        assert enabled, "a stale marked citation must be caught when check_marked_citation_scan is enabled"
+        assert disabled == [], (
+            "check_marked_citation_scan=False must remove the catch even with the same defeating "
+            "scanned_files threaded"
+        )
 
 
 def test_wiring_vitality_run_symbol_integrity_scan_disable_stops_catching_a_split():
     with tempfile.TemporaryDirectory() as tmp:
-        fake_dir = os.path.join(tmp, "fake")
-        os.makedirs(fake_dir, exist_ok=True)
-        fake_path = os.path.join(fake_dir, "fake.cpp")
+        fake_path = os.path.join(tmp, "fake.cpp")
         with open(fake_path, "w", encoding="utf-8") as f:
             f.write("// `SomeRenamedSymbol\n// ThatNoLongerExists` split\n")
-        on = chk.check_symbol_integrity(
-            scanned_files=(("fake/fake.cpp", "//"),), allowlist=frozenset(), repo_root=tmp,
-        )
+        scanned = ((fake_path, "//"),)
+        on = chk.check_symbol_integrity(scanned_files=scanned, allowlist=frozenset(), repo_root=chk._REPO_ROOT)
         assert on, "sanity: the split fixture must defeat the standalone check"
-        # run_symbol_integrity_scan=False must skip the check on the REAL tree without error --
-        # the standalone function's own scanned_files defaults to the real six files, which this
-        # kwarg is what prevents run_all_checks from calling at all.
-        off = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
+        enabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            run_symbol_integrity_scan=True, symbol_integrity_scanned_files=scanned,
         ))
-        assert off == []
+        disabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            run_symbol_integrity_scan=False, symbol_integrity_scanned_files=scanned,
+        ))
+        assert enabled, "a split identifier must be caught when run_symbol_integrity_scan is enabled"
+        assert disabled == [], (
+            "run_symbol_integrity_scan=False must remove the catch even with the same defeating "
+            "scanned_files threaded"
+        )
 
 
-def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_trimmed_table():
-    trimmed = tuple(c for c in chk.GPU_PORT_H_LWUWS_CITATIONS if c.label != "sticky-tag terminal return")
-    on = chk.check_lwuws_path_count_claim(citations=trimmed)
-    assert on, "sanity: the trimmed table must defeat the standalone check"
-    off = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=trimmed, check_decode_sticky_tag=False,
-        self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    assert off == [], "check_lwuws_path_count=False must remove the catch even with a defective table threaded"
+def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupted_word():
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
+            real_text = f.read()
+        corrupted = real_text.replace("catch, fourteen\n", "catch, nineteen\n", 1)
+        assert corrupted != real_text, "sanity: the exact wrapped phrase must exist in the real file"
+        gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
+        with open(gph_path, "w", encoding="utf-8") as f:
+            f.write(corrupted)
+        with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+            gpu_text = f.read()
+        on = chk.check_lwuws_path_count_claim(corrupted, gpu_text)
+        assert on, "sanity: the corrupted number-word must defeat the standalone check"
+        enabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            gpu_port_h_path=gph_path, check_lwuws_path_count=True,
+        ))
+        disabled = chk.run_all_checks(**_real_tree_kwargs_with(
+            gpu_port_h_path=gph_path, check_lwuws_path_count=False,
+        ))
+        assert enabled, "a corrupted number-word must be caught when check_lwuws_path_count is enabled"
+        assert disabled == [], (
+            "check_lwuws_path_count=False must remove the catch even with the same corrupted file threaded"
+        )
+
+
+def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word():
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
+            real_text = f.read()
+        corrupted = real_text.replace("alike, fifteen", "alike, twenty", 1)
+        assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
+        gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
+        with open(gph_path, "w", encoding="utf-8") as f:
+            f.write(corrupted)
+        with_path = chk.run_all_checks(**_real_tree_kwargs_with(
+            gpu_port_h_path=gph_path, check_lwuws_path_count=True,
+        ))
+        without_path = chk.run_all_checks(**_real_tree_kwargs_with(
+            gpu_port_h_path=None, check_lwuws_path_count=True,
+        ))
+        assert with_path, "a corrupted total word must be caught when gpu_port_h_path is threaded"
+        assert without_path == [], "gpu_port_h_path=None must remove the catch"
 
 
 def test_wiring_vitality_cmake_path_disable_stops_catching_an_unwaived_hollow_scope(monkeypatch):
@@ -1390,58 +1357,10 @@ def test_wiring_vitality_cmake_path_disable_stops_catching_an_unwaived_hollow_sc
         # monkeypatch to an empty dict for this cell only, so this proves the cmake_path KWARG's
         # own wiring, not whether the real waiver happens to cover this fixture's scope name too.
         monkeypatch.setattr(chk, "EXECUTION_SCOPE_WAIVERS", {})
-        with_path = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False,
-            build_bat_path=bb_path, cmake_path=cm_path,
-        ))
-        without_path = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False,
-            build_bat_path=bb_path, cmake_path=None,
-        ))
+        with_path = chk.run_all_checks(**_real_tree_kwargs_with(build_bat_path=bb_path, cmake_path=cm_path))
+        without_path = chk.run_all_checks(**_real_tree_kwargs_with(build_bat_path=bb_path, cmake_path=None))
         assert with_path, "an unwaived hollow CMake scope must be caught when cmake_path is threaded"
         assert without_path == [], "cmake_path=None must remove the catch"
-
-
-def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_header():
-    with tempfile.TemporaryDirectory() as tmp:
-        gph_path = os.path.join(tmp, "gpu_port.h")
-        with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
-            real_text = f.read()
-        corrupted = real_text.replace("712, 713, 722", "7120, 7130, 7220")
-        with open(gph_path, "w", encoding="utf-8") as f:
-            f.write(corrupted)
-        with_path = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=gph_path, check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-        ))
-        without_path = chk.run_all_checks(**_real_tree_kwargs_with(
-            gpu_port_h_path=None, check_decode_sticky_tag=False,
-            self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-            run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-        ))
-        assert with_path, "a corrupted header's own citation population must be caught when threaded"
-        assert without_path == [], "gpu_port_h_path=None must remove the catch"
-
-
-def test_wiring_vitality_prose_citations_disable_stops_catching_a_broken_resolution():
-    bad = (chk.ProseCitation("bad", "src/gpu/superslm_gpu.cpp", 712, "NeverThere"),)
-    with_citations = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=bad, check_decode_sticky_tag=False,
-        self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    without_citations = chk.run_all_checks(**_real_tree_kwargs_with(
-        gpu_port_h_path=None, prose_citations=(), check_decode_sticky_tag=False,
-        self_citations=(), check_self_line_count=False, check_self_citation_population=False,
-        run_symbol_integrity_scan=False, check_lwuws_path_count=False, build_bat_path=None, cmake_path=None,
-    ))
-    assert with_citations, "a broken prose citation must be caught when prose_citations is threaded"
-    assert without_citations == [], "an empty prose_citations tuple must remove the catch"
 
 
 if __name__ == "__main__":
