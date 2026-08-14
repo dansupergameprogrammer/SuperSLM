@@ -127,24 +127,31 @@ superslm::CarriedScale CombineCarriedScaleGpu(superslm::CarriedScale a, superslm
 }
 
 // ===========================================================================
-// B5 (Sec5.5/Sec11 B5): the two-schedule int64 abs-max reduction. STUB pending
-// B5 -- returns a sentinel that diverges from the CPU oracle on any nonzero
-// row so a false pass cannot occur.
+// B5 (Sec5.5/Sec11 B5): the two-schedule int64 abs-max reduction. Real GPU
+// dispatch, ported from the proven Claude/Loki/t1993-probe/
+// reduce_max_abs_i64.hlsl (T-1993's own remedy, D-SLM2924) -- SCHEME 0
+// (sequential) and SCHEME 1 (shared-memory tree) only; SCHEME 2/3 are not
+// built for this operator/width at this design's pinned compile target
+// (Sec5.5's own ruling: no groupshared 64-bit atomic compiles clean at -WX).
 // ===========================================================================
 
+namespace {
+int64_t MaxAbsReduceWideGpuDispatch(const char* shader_name, const int64_t* x, size_t n) {
+	auto& pipe = GetOrBuildPipeline(shader_name);
+	std::vector<uint8_t> in;
+	PutI64(in, static_cast<int64_t>(n));
+	for (size_t i = 0; i < n; ++i) PutI64(in, x[i]);
+	auto out = GetDevice().DispatchOne(pipe.root_sig.Get(), pipe.pso.Get(), in, 8);
+	return GetI64(out, 0);
+}
+}  // namespace
+
 int64_t MaxAbsReduceWideGpuScheme0(const int64_t* x, size_t n) {
-	(void)x;
-	(void)n;
-	// STUB (B5 not yet built): INT64_MIN can never equal a real MaxAbsReduceWide
-	// result (that function's own range is [1, INT64_MAX], intmath.h:217), so
-	// this sentinel is always an observable mismatch, never an accidental pass.
-	return INT64_MIN;
+	return MaxAbsReduceWideGpuDispatch("reduce_max_abs_i64_scheme0", x, n);
 }
 
 int64_t MaxAbsReduceWideGpuScheme1(const int64_t* x, size_t n) {
-	(void)x;
-	(void)n;
-	return INT64_MIN;  // STUB (B5 not yet built) -- see Scheme0's own note.
+	return MaxAbsReduceWideGpuDispatch("reduce_max_abs_i64_scheme1", x, n);
 }
 
 // ===========================================================================
