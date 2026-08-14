@@ -545,6 +545,17 @@ struct SslmModelView {
 	SslmKeyedConstants calibration_band;
 	bool has_calibration_band = false;
 
+	// T-2041 (Poirot c81e48c review, Significant 2): DeltaFoldScales/UFoldScales -- B0b's own
+	// section types (design Sec9), parsed structurally AND value-domain-validated at load time,
+	// the same two-phase gate every other typed section here already gets (WeightScales'
+	// ValidateWeightScalesDomain is the sibling). OPTIONAL: `has_* == false` is a valid artifact
+	// (a base-model-only artifact carries neither; an adapter artifact carries both) -- absence
+	// is not a rejection on its own.
+	SslmDeltaFoldScaleView delta_fold_scales;
+	bool has_delta_fold_scales = false;
+	SslmUFoldScaleView u_fold_scales;
+	bool has_u_fold_scales = false;
+
 	// The tokenizer join (S-HARDEN-2, F18/F6/F7/F15): present iff the artifact
 	// carries BOTH the Tokenizer and UnicodeTables sections and TokenizerView::Open
 	// accepted them structurally. An artifact carrying neither is a valid
@@ -642,6 +653,10 @@ private:
 		has_kv_landing_reciprocals = other.has_kv_landing_reciprocals;
 		calibration_band = std::move(other.calibration_band);
 		has_calibration_band = other.has_calibration_band;
+		delta_fold_scales = std::move(other.delta_fold_scales);
+		has_delta_fold_scales = other.has_delta_fold_scales;
+		u_fold_scales = std::move(other.u_fold_scales);
+		has_u_fold_scales = other.has_u_fold_scales;
 		tokenizer = std::move(other.tokenizer);
 		has_tokenizer = other.has_tokenizer;
 		option_g_fused_k_landing = other.option_g_fused_k_landing;
@@ -666,6 +681,8 @@ private:
 		other.has_kv_landing_scales = false;
 		other.has_kv_landing_reciprocals = false;
 		other.has_calibration_band = false;
+		other.has_delta_fold_scales = false;
+		other.has_u_fold_scales = false;
 		other.has_tokenizer = false;
 		other.option_g_fused_k_landing = false;
 		other.trace_hook = SslmTraceHookState{};

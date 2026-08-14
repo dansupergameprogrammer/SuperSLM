@@ -20648,21 +20648,30 @@ const int8_t kAdapterBZero[2] = {0, 0};   // [out_channels=2, rank=1] -- zero-ef
 // clamped), so this is deliberately large and NEGATIVE on channel 0 (pulls it down off the
 // ceiling) and large on channel 1 (near zero in the base case, plenty of headroom either way).
 const int8_t kAdapterBReal[2] = {100, -100};
-const int32_t kFoldIdentityOne[2] = {1, 1};  // identity=1 pass-through, 2 elements (out_channels)
-const int32_t kFoldZero2[2] = {0, 0};
-const int32_t kFoldIdentityOneRank1[1] = {1};  // identity=1 pass-through, 1 element (rank)
-const int32_t kFoldZeroRank1[1] = {0};
+
+// T-2041 (Poirot c81e48c review, Significant 1): the delta-fold/u-fold triples are now carried
+// as raw little-endian int32 bytes behind a real `SslmAmplifyingFoldEntry` -- the SAME on-disk
+// row layout B0b's own `SslmDeltaFoldScaleView`/`SslmUFoldScaleView::Parse` produce (design Sec9)
+// -- read back through those views' own typed accessors, never a raw `int32_t*`. Declared as
+// `int32_t[]` and reinterpreted as `const uint8_t*` below: this test process is little-endian
+// (x86_64), so the array's own byte layout already matches what `RdU32`'s explicit byte-assembly
+// reads -- no manual byte-packing helper needed for a fixture this small.
+// identity=1 pass-through (mult/exponent irrelevant when identity=1), 2 rows (out_channels=2).
+const int32_t kDeltaFoldPassThroughTriples[2 * 3] = {1, 0, 0, 1, 0, 0};
+// identity=1 pass-through, 1 row (rank=1).
+const int32_t kUFoldPassThroughTriples[1 * 3] = {1, 0, 0};
+
+const superslm::SslmAmplifyingFoldEntry kDeltaFoldEntry{
+    /*name=*/{}, reinterpret_cast<const uint8_t*>(kDeltaFoldPassThroughTriples), /*row_count=*/2};
+const superslm::SslmAmplifyingFoldEntry kUFoldEntry{
+    /*name=*/{}, reinterpret_cast<const uint8_t*>(kUFoldPassThroughTriples), /*row_count=*/1};
 
 // Wires `proj` as an adapted projection with the given B weight (A, fold triples fixed above).
 inline void WireAdaptedProjection(superslm::LayerAdapterProjection& proj, const int8_t* b_weight) {
 	proj.a_weight = kAdapterA;
 	proj.b_weight = b_weight;
-	proj.delta_fold_identity = kFoldIdentityOne;
-	proj.delta_fold_mult = kFoldZero2;
-	proj.delta_fold_exponent = kFoldZero2;
-	proj.u_fold_identity = kFoldIdentityOneRank1;
-	proj.u_fold_mult = kFoldZeroRank1;
-	proj.u_fold_exponent = kFoldZeroRank1;
+	proj.delta_fold_entry = &kDeltaFoldEntry;
+	proj.u_fold_entry = &kUFoldEntry;
 }
 
 // Runs TwoLayerFixture's own two-layer, hidden_size=2 geometry for one token, with layer 0's
@@ -21392,6 +21401,89 @@ static void TestB8SaveRestoreRoundTripsBitIdenticalToUninterruptedRun() {
 	CHECK(restored_seq.hidden_scale.m == ref_seq.hidden_scale.m &&
 	      restored_seq.hidden_scale.e == ref_seq.hidden_scale.e);
 	CHECK(restored_seq.context_length == ref_seq.context_length);
+}
+
+// =============================================================================================
+// T-2041 (Poirot c81e48c review, Significant 2 remedy): DeltaFoldScales/UFoldScales now reach a
+// real sub-parser in SslmModelAccess::LoadImpl and a real value-domain check in
+// ValidateSectionValues (model.cpp) -- this is the pin cell proving it, the ONLY suite a checkout
+// can build (CMakeLists.txt builds test_main.cpp alone). Reuses this tree's own artifact-building
+// fixture headers (sslm_fixtures.h/sslm_cfg1_hostile_fixtures.h/sslm_sil1_hostile_fixtures.h/
+// sslm_model_hostile_fixtures.h), the SAME construction TwoLayerFixture/CriticalOneFixture use.
+// =============================================================================================
+
+static void TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain() {
+	using namespace superslm_test;
+	using superslm::SslmDtype;
+	using superslm::SslmModelStatus;
+	using superslm::SslmModelView;
+	using superslm::SslmSectionType;
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	const int64_t cos_flat[1] = {INT64_C(1073741824)};
+	const int64_t sin_flat[1] = {0};
+	FixtureSection rope = MakeRop1SectionMultiRow(/*context_cap=*/1, /*pairs=*/1, cos_flat, sin_flat);
+
+	// A single-row DeltaFoldScales manifest (out_channels=1) -- (identity, mult, exponent).
+	auto build_dfs1 = [](int32_t identity, int32_t mult, int32_t exponent) {
+		BuiltManifest m = BuildManifest(superslm::kDeltaFoldScalesMagic, 4, {{"layer0.q_proj", {3}}});
+		auto put = [&](size_t off, int32_t v) {
+			uint32_t u = static_cast<uint32_t>(v);
+			for (int i = 0; i < 4; ++i) m.bytes[off + i] = static_cast<uint8_t>((u >> (8 * i)) & 0xFF);
+		};
+		const size_t base = m.tensor_data_off[0];
+		put(base + 0, identity);
+		put(base + 4, mult);
+		put(base + 8, exponent);
+		return m;
+	};
+
+	// (i) OUT-OF-DOMAIN: exponent=32, outside the signed [-31,31] design Sec4/Sec9 specifies.
+	{
+		BuiltManifest dfs1 = build_dfs1(/*identity=*/0, /*mult=*/1000000000, /*exponent=*/32);
+		FixtureSection dfs1_section = MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32,
+		                                          dfs1.bytes, /*alignment=*/64);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope, dfs1_section});
+		SslmModelView view;
+		std::string err;
+		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::AmplifyingFoldExponentOutOfDomain,
+		          "an artifact carrying a DeltaFoldScales section with exponent=32 (outside "
+		          "[-31,31]) must be REJECTED at load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+	}
+
+	// (ii) IN-DOMAIN, negative-domain-widened: exponent=-31, illegal for WSC1's own [0,31] but
+	// legal here -- confirms the check is genuinely live (rejects out-of-domain) and not merely
+	// mis-wired to reject everything.
+	{
+		BuiltManifest dfs1 = build_dfs1(/*identity=*/0, /*mult=*/1000000000, /*exponent=*/-31);
+		FixtureSection dfs1_section = MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32,
+		                                          dfs1.bytes, /*alignment=*/64);
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope, dfs1_section});
+		SslmModelView view;
+		std::string err;
+		const auto status = superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+		CHECK_MSG(status == SslmModelStatus::Ok,
+		          "an artifact carrying a DeltaFoldScales section with exponent=-31 (inside "
+		          "[-31,31]) must load Ok: got %s (%s)", superslm::SslmModelStatusName(status),
+		          err.c_str());
+		CHECK_MSG(view.has_delta_fold_scales,
+		          "a successfully loaded DeltaFoldScales section must be registered in "
+		          "SslmModelView (has_delta_fold_scales == true) -- confirming it is reachable, "
+		          "not merely accepted and discarded");
+		CHECK(view.delta_fold_scales.Entries().size() == 1);
+	}
 }
 
 int main(int argc, char** argv) {
@@ -22182,6 +22274,9 @@ int main(int argc, char** argv) {
 	// T-2036 B8 (design Sec11 B8; cell (b) already proven by B0b, not duplicated here).
 	TestB8MapReleaseRemapDoesNotLeakState();
 	TestB8SaveRestoreRoundTripsBitIdenticalToUninterruptedRun();
+
+	// T-2041 (Poirot c81e48c review, Significant 2 remedy pin).
+	TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

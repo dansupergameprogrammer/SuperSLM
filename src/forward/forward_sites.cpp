@@ -1038,22 +1038,38 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 void AddAmplifyingLoraDelta(const int8_t* in_codes, size_t in_channels,
                             const LayerAdapterProjection* adapter, uint32_t rank,
                             size_t out_channels, int64_t* acc) {
-	if (adapter == nullptr || adapter->a_weight == nullptr) return;  // gated no-op (B1b/B1c)
+	// T-2041 (Poirot c81e48c review, Significant 10): the gate checks EVERY field the struct's
+	// own header states must be populated together ("Present iff a_weight != nullptr"), not just
+	// one of them -- a partially-populated struct (a real possibility once a loader exists: B0b's
+	// own section-level validation cannot see a missing UFoldScales section, since the defect is
+	// in the ASSEMBLED struct, not in any one section) now fails this gate rather than reaching
+	// a null dereference below.
+	if (adapter == nullptr || adapter->a_weight == nullptr || adapter->b_weight == nullptr ||
+	    adapter->delta_fold_entry == nullptr || adapter->u_fold_entry == nullptr) {
+		return;  // gated no-op (B1b/B1c, or a malformed adapter struct -- treated identically:
+		         // absent-and-inert, never a partial composition)
+	}
 
 	// design Sec4 extension: GemmInt8AccumulateRow(x, A) -> u_acc[r] (raw, rank-r intermediate).
 	std::vector<int64_t> u_acc(rank);
 	GemmInt8AccumulateRow(in_codes, adapter->a_weight, in_channels, rank, u_acc.data());
 
 	// u_wide[k] = ApplyAmplifyingWeightScaleFold(u_acc[k], u-fold triple[k]); u_i8[k] =
-	// NarrowAndClamp(u_wide[k]) -- this engine's existing [-127,127] activation-code range
-	// (matching ClampRopeCode's own pinned convention, design Sec4's own citation).
+	// NarrowAndClamp(u_wide[k]) -- this engine's existing [-127,127] activation-code range,
+	// via the ALREADY-SHIPPED, NAMED `ClampRopeCode` (T-2041, Poirot c81e48c review, Minor 6:
+	// use the pinned convention itself, not an open-coded 127/-127 literal duplicating it, so a
+	// future change to the activation-code range reaches both sites automatically).
+	//
+	// T-2041 (Significant 1): read through B0b's own typed accessor
+	// (SslmUFoldScaleView::Identity/Mult/Exponent), never a raw int32_t* -- the structural
+	// disambiguation design Sec11 B0b was made a build blocker to buy.
 	std::vector<int8_t> u_i8(rank);
 	for (uint32_t k = 0; k < rank; ++k) {
 		const int64_t u_wide = ApplyAmplifyingWeightScaleFold(
-		    u_acc[k], adapter->u_fold_identity[k], adapter->u_fold_mult[k],
-		    adapter->u_fold_exponent[k]);
-		const int64_t clamped = u_wide > 127 ? 127 : (u_wide < -127 ? -127 : u_wide);
-		u_i8[k] = static_cast<int8_t>(clamped);
+		    u_acc[k], SslmUFoldScaleView::Identity(*adapter->u_fold_entry, k),
+		    SslmUFoldScaleView::Mult(*adapter->u_fold_entry, k),
+		    SslmUFoldScaleView::Exponent(*adapter->u_fold_entry, k));
+		u_i8[k] = static_cast<int8_t>(ClampRopeCode(u_wide));
 	}
 
 	// GemmInt8AccumulateRow(u_i8, B) -> delta_raw[out_channels] (raw, adapter's own scale) --
@@ -1062,11 +1078,13 @@ void AddAmplifyingLoraDelta(const int8_t* in_codes, size_t in_channels,
 	GemmInt8AccumulateRow(u_i8.data(), adapter->b_weight, rank, out_channels, delta_raw.data());
 
 	// delta_wide[i] = ApplyAmplifyingWeightScaleFold(delta_raw[i], delta-fold triple[i]);
-	// acc[i] += delta_wide[i] -- design Sec3's own NEW insertion point, exactly here.
+	// acc[i] += delta_wide[i] -- design Sec3's own NEW insertion point, exactly here. Read
+	// through SslmDeltaFoldScaleView, the delta-fold sibling of the u-fold accessor above.
 	for (size_t i = 0; i < out_channels; ++i) {
 		const int64_t delta_wide = ApplyAmplifyingWeightScaleFold(
-		    delta_raw[i], adapter->delta_fold_identity[i], adapter->delta_fold_mult[i],
-		    adapter->delta_fold_exponent[i]);
+		    delta_raw[i], SslmDeltaFoldScaleView::Identity(*adapter->delta_fold_entry, i),
+		    SslmDeltaFoldScaleView::Mult(*adapter->delta_fold_entry, i),
+		    SslmDeltaFoldScaleView::Exponent(*adapter->delta_fold_entry, i));
 		acc[i] += delta_wide;
 	}
 }

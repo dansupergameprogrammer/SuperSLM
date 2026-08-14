@@ -1325,6 +1325,20 @@ SslmModelStatus ValidateSectionValues(const SslmModelView& view, std::string* er
 		const SslmModelStatus s = ValidateCalibrationBandDomain(view.calibration_band, err);
 		if (s != SslmModelStatus::Ok) return s;
 	}
+	// T-2041 (Poirot c81e48c review, Significant 2): DeltaFoldScales/UFoldScales's own
+	// value-domain check -- an out-of-domain exponent (outside the signed
+	// [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax] design Sec4/Sec9 specifies) or a
+	// non-boolean identity now REJECTS at load, the same two-phase (structural parse, then value
+	// validation) gate every other typed section here already gets.
+	if (view.has_delta_fold_scales) {
+		const SslmModelStatus s =
+		    ValidateAmplifyingFoldScalesDomain(view.delta_fold_scales.Entries(), err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
+	if (view.has_u_fold_scales) {
+		const SslmModelStatus s = ValidateAmplifyingFoldScalesDomain(view.u_fold_scales.Entries(), err);
+		if (s != SslmModelStatus::Ok) return s;
+	}
 	// S-HARDEN-2 (F18): the tokenizer's own cross-section join.
 	{
 		const SslmModelStatus s = ValidateTokenizerVocabSizeJoin(view, err);
@@ -1420,6 +1434,23 @@ SslmModelStatus SslmModelAccess::LoadImpl(const uint8_t* data, size_t size, Sslm
 			case SslmSectionType::CalibrationBand:
 				s = SslmKeyedConstants::Parse(section, out.calibration_band, err);
 				out.has_calibration_band = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::DeltaFoldScales:
+				// T-2041 (Poirot c81e48c review, Significant 2): DeltaFoldScales/UFoldScales now
+				// reach a real sub-parser -- previously fell through `default: continue`,
+				// meaning they parsed structurally (via SslmArtifact::OpenFromMemory) but were
+				// never registered in SslmModelView and never reached ValidateSectionValues, so
+				// an out-of-domain triple loaded clean. `SslmDeltaFoldScaleView::Parse` itself
+				// enforces the section-type gate (Sec9's own "constructed only by parsing a
+				// section whose declared type matches the wrapper's own kind") before any byte
+				// is read; the VALUE-domain check runs below, in ValidateSectionValues, the same
+				// two-phase split every other typed section here already uses.
+				s = SslmDeltaFoldScaleView::Parse(section, out.delta_fold_scales, err);
+				out.has_delta_fold_scales = (s == SslmModelStatus::Ok);
+				break;
+			case SslmSectionType::UFoldScales:
+				s = SslmUFoldScaleView::Parse(section, out.u_fold_scales, err);
+				out.has_u_fold_scales = (s == SslmModelStatus::Ok);
 				break;
 			default:
 				// No sub-parser owns this section type here (Provenance, Scales,

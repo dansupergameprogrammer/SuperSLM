@@ -607,23 +607,25 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // `a_weight` is `[rank, in_channels]` row-major (PEFT's own `lora_A.weight = (r, in)`, folded
 // per `SuperSLM_Plan.md` Sec11's converter text); `b_weight` is `[out_channels, rank]`
 // (`lora_B.weight = (out, r)`) -- both already-quantized int8, PEFT scaling folded into the
-// fold triples below, per design Sec4/Sec9. `delta_fold_*`/`u_fold_*` are the two new artifact
-// arrays design Sec9 specifies (B0b's own `SslmDeltaFoldScaleView`/`SslmUFoldScaleView`, model.h)
-// -- SIGNED `[-31,31]` triples, consumed by `ApplyAmplifyingWeightScaleFold`, never
-// `ApplyWeightScaleFold`. `delta_fold_*` is one triple PER OUTPUT CHANNEL (shaped like this
-// projection's own `*_fold_identity`/`_mult`/`_shift` above); `u_fold_*` is one triple PER RANK
-// INDEX (shaped `[rank]`, design Sec4's extension). Caller-resolved, no runtime length field --
-// `LayerAdapter::rank` and this call site's own `out_channels` argument bound every read, the
-// same convention every other field in this struct already follows.
+// fold triples below, per design Sec4/Sec9.
+//
+// T-2041 (Poirot c81e48c review, Significant 1): `delta_fold_entry`/`u_fold_entry` carry B0b's
+// own typed `SslmAmplifyingFoldEntry` (model.h) -- never raw `const int32_t*` -- so the
+// insertion point reads triples ONLY through `SslmDeltaFoldScaleView::Identity/Mult/Exponent(entry,row)`
+// / `SslmUFoldScaleView::...`, the structural disambiguation design Sec11 B0b was made a build
+// blocker to buy ("the engine insertion point reads delta_*/u_* values through B0b's own typed
+// accessors, not through a raw pointer this design would otherwise have to trust was pointed at
+// the right section"). A `SslmTensorView` (WSC1's own entry type) cannot be assigned into either
+// field and compile -- `SslmAmplifyingFoldEntry` is a distinct type. `delta_fold_entry`'s own
+// `row_count` is the adapted projection's `out_channels` (one triple PER OUTPUT CHANNEL);
+// `u_fold_entry`'s own `row_count` is `LayerAdapter::rank` (one triple PER RANK INDEX, design
+// Sec4's extension) -- both already carried on the entry itself (B0b's own dimension
+// validation, `ValidateAmplifyingFoldDimension`), not re-derived here.
 struct LayerAdapterProjection {
 	const int8_t* a_weight = nullptr;
 	const int8_t* b_weight = nullptr;
-	const int32_t* delta_fold_identity = nullptr;  // out_channels
-	const int32_t* delta_fold_mult = nullptr;      // out_channels
-	const int32_t* delta_fold_exponent = nullptr;  // out_channels, SIGNED
-	const int32_t* u_fold_identity = nullptr;      // rank
-	const int32_t* u_fold_mult = nullptr;          // rank
-	const int32_t* u_fold_exponent = nullptr;      // rank, SIGNED
+	const SslmAmplifyingFoldEntry* delta_fold_entry = nullptr;  // DeltaFoldScales entry, out_channels rows
+	const SslmAmplifyingFoldEntry* u_fold_entry = nullptr;      // UFoldScales entry, rank rows
 };
 
 // T-2021/T-2029 B1a (design Sec8, D-SLM2843): the active sequence's bound adapter state for ONE
