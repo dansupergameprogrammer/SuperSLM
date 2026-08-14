@@ -26,6 +26,28 @@
 // test walks to build one fixture per row and assert CPU and GPU agree,
 // status for status, in this exact order.
 //
+// CORRECTED 2026-08-14 (T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
+// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own "the
+// enumeration itself is now structural" claim): the paragraph above, and the
+// two paragraphs before it, describe this file as what closes CPU-guard-
+// count drift as a CLASS. It does not, on its own: this file is still a
+// hand-written mirror of one reading of `forward_sites.cpp`, `kCount` is
+// generated from the mirror, not from CPU, and neither `static_assert`
+// comparing `kCount` to a literal `9` -- nor the pin round's own table-walk
+// cell, matched to this file's row order by eye -- reads `forward_sites.cpp`
+// at all. Falsified by execution: a tenth guard added to both
+// `RunLayerLoopImpl` and `RunLayerLoopGpu`, with no matching row here, left
+// the build green and the suite unchanged in every count. What actually
+// closes the class is `tests/ci/check_gpu_guard_status_parity.py` (T-2055),
+// a build-step check that extracts the real, distinct `SslmForwardStatus`
+// set CPU's guard range returns, from `forward_sites.cpp` itself, and
+// compares it against this file's own `status_name` column and against
+// `RunLayerLoopGpu`'s own ladder -- reddening on exactly the mutation above.
+// That check's own honest residual (a tenth CPU guard reusing a status
+// already among the nine would not change the derived set, and would not be
+// caught) is real and is stated, and proven by execution both ways, in that
+// module's own header comment -- not repeated a second time here.
+//
 // Adding a tenth CPU guard: add one SSLM_GPU_LAYER_LOOP_GUARD row below, in
 // CPU's own source position, AND add the matching `return` in
 // RunLayerLoopGpu's own guard ladder (superslm_gpu.cpp) -- the pin round's

@@ -498,6 +498,31 @@ jobs:
       - name: Fail the build if a test-suite comment cites a severity finding with no resolution marker
         run: python tests/ci/check_present_tense_defect_comments.py
 
+  # T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md,
+  # P1): the GPU-serial port's own "the guard-count class is closed" claim
+  # (gpu_layer_loop_guards.def, gpu_port.h, superslm_gpu.cpp) was, four
+  # records running, restating a hand-written mirror of forward_sites.cpp
+  # rather than checking against it -- falsified by execution (a tenth guard
+  # added to both RunLayerLoopImpl and RunLayerLoopGpu, no matching .def row,
+  # left the build green and the suite unchanged). This job's check reads
+  # forward_sites.cpp itself and fails the build the moment its own derived
+  # guard-status set stops agreeing with the GPU ladder's or the .def's own.
+  # Mirrors forward-leaf-check's own two-step shape (self-test, then the gate
+  # script) exactly; no compiler dependency (unlike forward-leaf-check's
+  # clang++ AST walk), so no pinned-toolchain env var is needed here.
+  gpu-guard-status-parity-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: GPU guard-status-parity check's own red suite (mechanism + the review's own three mutations)
+        run: python -m pytest tests/ci/test_check_gpu_guard_status_parity.py -v
+      - name: Fail the build if CPU's guard range, the GPU ladder, and gpu_layer_loop_guards.def disagree
+        run: python tests/ci/check_gpu_guard_status_parity.py
+
   # S-HARDEN-3 (F13): the converter's validate/serialize/verify transaction and
   # its proof manifest. Builds `sslm_verify` (the §13 item 7 independent C++
   # verifier) so tools/test_sslm_convert_loader_join.py (§17.3 cell 2) and

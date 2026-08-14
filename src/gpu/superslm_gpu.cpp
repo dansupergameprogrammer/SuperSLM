@@ -524,6 +524,21 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
                                              uint8_t* workspace, size_t workspace_size) {
+	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
+	// review.md, P2): set BEFORE every one of this function's eleven
+	// rejecting return paths (the nine guards below, `!dev.available`, and
+	// the Tier-3 preflight check) so `LastWeightUploadWasSkipped()`'s own
+	// documented contract ("set internally... every call") is actually true
+	// of every call, not only of the calls that reach the weight-residency
+	// decision past line ~780. Before this fix the accessor held the
+	// PREVIOUS call's answer across a rejecting call -- reproduced by
+	// execution: a probe driving guard-rejected calls read back a stale,
+	// sometimes-Ok-sometimes-not `skipped` value that had nothing to do with
+	// the call that had just run. A rejected call makes no weight-residency
+	// decision at all, so `false` ("no upload was skipped") is the honest
+	// answer for one, matching the reject-over-silently-degrade shape every
+	// other guard in this function already follows.
+	g_last_weight_upload_was_skipped = false;
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -541,16 +556,28 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// construction: a return here issues no upload, no dispatch, no
 	// readback, so nothing GPU-side is ever touched.
 	//
-	// STRUCTURAL closure (M1's own remedy, not a fourth hand-count): every
-	// guard below is tagged with its own `GpuLayerLoopGuard` enum value
-	// (`gpu_port.h`, generated from `gpu_layer_loop_guards.def`) in a trailing
-	// comment. The `static_assert` immediately after this ladder ties the
-	// number of guards a maintainer believes were written here to
-	// `GpuLayerLoopGuard::kCount`, the SAME compile-time constant the pin
-	// round's own table-walk cell (Curie's work) asserts against -- three
-	// independent hand-counts of CPU's own source produced three, eight, and
-	// the true nine; this does not trust a fourth hand-count of this
-	// function's own body either.
+	// STRUCTURAL closure (M1's own remedy, not a fourth hand-count) -- OF THE
+	// LADDER'S OWN INTERNAL CONSISTENCY, not of drift against CPU (corrected
+	// 2026-08-14, T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
+	// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own
+	// claim): every guard below is tagged with its own `GpuLayerLoopGuard`
+	// enum value (`gpu_port.h`, generated from `gpu_layer_loop_guards.def`)
+	// in a trailing comment, and the `static_assert` immediately after this
+	// ladder ties the number of guards a maintainer believes were written
+	// here to `GpuLayerLoopGuard::kCount` -- the SAME compile-time constant
+	// the pin round's own table-walk cell (Curie's work) asserts against.
+	// That ties a literal to a constant; NEITHER is compared against
+	// `forward_sites.cpp` itself, so this does not, on its own, close the
+	// three-hand-counts-produced-three-different-numbers class the paragraph
+	// used to claim it closed -- proven false by execution: a tenth guard
+	// added here AND to CPU's own ladder, with no matching `.def` row, left
+	// this `static_assert`, the table-walk cell, and the full suite all
+	// green. `tests/ci/check_gpu_guard_status_parity.py` (T-2055) is what
+	// reads `forward_sites.cpp` and closes that class -- this ladder's own
+	// tagging and `static_assert` remain useful (a guard added here with no
+	// `.def` row, or vice versa, still fails to compile or fails that CI
+	// check), just not sufficient alone against a drift that touches CPU's
+	// own source.
 	if (layer_budget == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (context_cap < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
 	// HeadDimGeometryMismatch / KvHeadGeometryMismatch (forward_sites.cpp:1161-1175):
@@ -775,8 +802,12 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		lw_buf = g_resident_weights.lw_buf;
 	}
 	// T-2052 (item 3): the device-observable Curie §13.2 specified --
-	// LastWeightUploadWasSkipped() reads this back, set every call, true iff
-	// this call's own upload was skipped (a cache hit).
+	// LastWeightUploadWasSkipped() reads this back, true iff this call's own
+	// upload was skipped (a cache hit). T-2055 (P2): this is the SECOND of
+	// two assignment sites, reached only once every guard above has already
+	// passed -- the function-entry assignment (this function's own opening
+	// lines) is what makes the accessor's "every call" contract true of the
+	// nine rejecting calls that never reach here too, not this one alone.
 	g_last_weight_upload_was_skipped = weights_resident;
 
 	std::vector<uint8_t> layout_bytes(57 * 4, 0);
@@ -924,6 +955,57 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
+	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
+	// review.md, P3, superseding T-2052 M2's own "caught here specifically,
+	// not fixed by a blanket try/catch" comment, which this correction
+	// removes rather than restates): EVERY allocation between here and this
+	// command list's own Close() below throws `std::runtime_error`
+	// (`SSLM_GPU_HR`, `d3d12_harness.h`) on a failing HRESULT. M2's own
+	// remedy caught exactly ONE of six allocation call-groups in this window
+	// (the DEFAULT-heap weight buffer, immediately below) -- the review
+	// found five others still uncaught, including the two allocations C5's
+	// own real 1.5B-tier run measures at 448.00 MiB each
+	// (`MakeInitializedUav`'s own DEFAULT-heap buffer for `kv_uav`, and
+	// `kv_readback` below). An uncaught throw from any of them left this
+	// command list mid-recording with no fence ever waited on -- undefined
+	// recovery for the caller's NEXT call, reachable on the consumer
+	// hardware §9 is written about, not only on the weight buffer's own
+	// ~1.31 GiB allocation M2 already covered. Named as ONE boundary rather
+	// than site by site (the review's own remedy shape): the try below
+	// spans every allocation this window issues.
+	//
+	// EVERY variable below this point that the command list's own GPU
+	// virtual addresses reference -- every buffer `bind_and_dispatch` binds,
+	// plus the two readback buffers -- is declared HERE, OUTSIDE the try,
+	// and only ASSIGNED inside it. This is load-bearing, not cosmetic: a
+	// `ComPtr<ID3D12Resource>` declared WITH `auto` INSIDE the try releases
+	// its D3D12 resource at the try block's own closing brace, which runs
+	// BEFORE `ExecuteCommandLists`/the fence wait below (both outside the
+	// try) -- a genuine use-after-free of GPU memory the command list still
+	// references, not merely a C++-level scoping question. Caught by this
+	// round's OWN full-suite run: an intermediate draft of this change
+	// declared these buffers with `auto` inside the try and reproduced,
+	// deterministically, a real `DXGI_ERROR_DEVICE_REMOVED` (0x887a0005) on
+	// the second `RunLayerLoopGpu` call of the suite (a content-changed
+	// weight-cache-miss call, `TestT2019_B2_GuardPath...RoundingDivideByPot
+	// ExponentOutOfDomain`'s `which == 1` iteration) -- fixed by this
+	// hoisting, re-verified by a full, clean 33870/3 re-run before this
+	// round's own checkpoint.
+	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> silu_lut_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> cos_table_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> sin_table_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
 	// DEFAULT-heap (VRAM-resident) buffer -- not cached as an UPLOAD-heap
@@ -983,23 +1065,22 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		g_resident_weights.bytes = std::move(lw_bytes);
 		g_resident_weights.valid = true;
 	}
-	auto layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
-	auto rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
-	auto model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
-	auto silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
-	auto cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
-	auto sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
-	auto scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
-	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
-	auto seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
-	auto scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
-	auto kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
+	layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
+	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
+	model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
+	silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
+	cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
+	sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
+	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
+	scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
+	kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
 	// T-2039: WorkScratch is transient, per-dispatch scratch -- every byte is
 	// written before it is read within the SAME dispatch (site_common.hlsli's
 	// own per-primitive contract), so no host-side initial content is needed;
 	// created directly in the UAV state, matching this file's own established
 	// idiom for a device-only scratch buffer (RunDescriptorTableBind's out_uav).
-	auto work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
+	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
@@ -1092,9 +1173,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	}
 
 	// --- Readback: SeqState + the KV cache twin, into `seq`/`workspace`. ---
-	auto seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                    D3D12_RESOURCE_STATE_COPY_DEST);
-	auto kv_readback = dev.MakeBuffer(kv_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	kv_readback = dev.MakeBuffer(kv_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                   D3D12_RESOURCE_STATE_COPY_DEST);
 	D3D12_RESOURCE_BARRIER pre_copy[2]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1107,6 +1188,46 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	dev.list->ResourceBarrier(2, pre_copy);
 	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
 	dev.list->CopyResource(kv_readback.Get(), kv_uav.Get());
+	} catch (const std::runtime_error&) {
+		// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
+		// review.md, P3): defensively invalidate the weight-residency cache
+		// regardless of WHERE in the window the throw happened. A throw
+		// reached AFTER `g_resident_weights` was already marked valid+resident
+		// (the `!weights_resident` branch above, once ITS OWN CopyResource is
+		// merely RECORDED) but BEFORE this command list actually executes
+		// would otherwise leave that assignment describing a DEFAULT-heap
+		// buffer whose content copy was never submitted to the GPU -- serving
+		// it back to the NEXT call as a cache hit would bind an uninitialized
+		// VRAM buffer to every site's own weight reads with no error at all,
+		// the silent-wrong-answer class this whole arc exists to close, not
+		// merely the crash class M1 already closed. Safe unconditionally: if
+		// the cache was never touched this call (a hit, or a throw before the
+		// `!weights_resident` branch ran), this is a same-state no-op.
+		g_resident_weights.lw_buf.Reset();
+		g_resident_weights.valid = false;
+		dev.list->Close();
+		// T-2055 (P4): `KvPrecisionUnsupported` already carries two other
+		// meanings on this leg (no device at all, `!dev.available`; a
+		// sub-Tier-3 adapter, `MapModelGpuResidencyTierCheck`) -- reusing it a
+		// third time for "this allocation failed" collapses a transient,
+		// size-dependent, RETRYABLE condition into a permanent-hardware one,
+		// the same class of confusion `checked_chain_funnel.h`'s own
+		// HeadDimGeometryMismatch/WorkspaceTooSmall history documents as a
+		// defect (a host that enlarges its buffer in response, or gives up on
+		// this GPU permanently in response, wants the OTHER answer). No
+		// EXISTING `SslmForwardStatus` enumerator names "a device allocation
+		// failed" -- every other member is either an arithmetic/domain-funnel
+		// rejection or one of the two meanings already assigned to
+		// `KvPrecisionUnsupported` above. Per this ticket's own routing (derive
+		// a status from the EXISTING enum if one fits; only propose a new
+		// enumerator to the design seat if nothing does), this is named as an
+		// open design-level item rather than resolved unilaterally here -- see
+		// this ticket's own build log handoff and D-SLM3184 -- and
+		// `KvPrecisionUnsupported` is kept as the interim return, unchanged
+		// from what M2 already returned for the one site it used to cover, not
+		// a new ambiguity this round introduces.
+		return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	}
 	SSLM_GPU_HR(dev.list->Close());
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);

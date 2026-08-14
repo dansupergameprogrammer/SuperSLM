@@ -6,6 +6,23 @@
 // t2019-gpu-serial-red-suite-2026-08-13.md, dated section "T-2024 re-derivation")
 // gates the build against.
 //
+// THIS BANNER IS HISTORICAL, NOT CURRENT (corrected 2026-08-14, T-2055,
+// Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md, Minor
+// 3, closing an M5/O10 finding this file carried across at least the
+// 82cfca7, 36b9327, and db73b22 reviews without ever being routed for a
+// fix): at this header's OWN origin (Sec11's B1-B12 decomposition, before any
+// build round landed) every symbol below really was declared and not
+// defined, exactly as the paragraph below states. It is false of the tree
+// today -- every function this header declares has its real definition in
+// `src/gpu/superslm_gpu.cpp` (T-2024 through T-2052 landed them one B-step at
+// a time), and this round added a construct, `enum class GpuLayerLoopGuard`
+// directly below this banner, that this banner's own claim cannot even be
+// true OF: an enum has no separate declaration/definition split to be
+// pending. Left below for its historical value (the precedent citation, and
+// what this file's role was AT ITS ORIGIN) -- read it as describing how this
+// header started, not its current link-completeness, which build.bat's own
+// green link proves every time it runs:
+//
 // EVERY SYMBOL BELOW IS DECLARED, NOT DEFINED. This header exists so the red suite
 // compiles; it links to nothing until the build seat (Brunel, B1-B12) provides a
 // definition. This is test-authoring infrastructure -- the call SHAPE the suite
@@ -101,6 +118,22 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // guard added to CPU without a matching `.def` row -- and a matching `return`
 // in `RunLayerLoopGpu`'s own ladder -- fails that walk loudly rather than
 // waiting for a fourth hand-count to miss it.
+//
+// CORRECTED 2026-08-14 (T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
+// confirmation-review.md, P1; D-SLM3183, superseding D-SLM3182's own claim):
+// this comment's own last sentence overclaims. `kCount` and both
+// `static_assert`s below compare a literal to `gpu_layer_loop_guards.def`'s
+// own row count -- none of it, and no pin cell matched to that file's row
+// order by eye, ever reads `forward_sites.cpp`, so a guard added to BOTH
+// ladders with no `.def` row (proven by execution) leaves every one of these
+// green. The class-level guarantee this paragraph describes is
+// `tests/ci/check_gpu_guard_status_parity.py` (T-2055)'s job, not this
+// enum's or that cell's -- it derives CPU's own guard-status set from
+// `forward_sites.cpp` directly and compares it against this file's
+// generated set. `GpuLayerLoopGuard`/`kCount` remain exactly what they were:
+// the compile-time row count this header's `.def` include generates, useful
+// for the table-walk cell's own loop bound, not a guarantee that the count
+// is CPU-correct on their own.
 enum class GpuLayerLoopGuard : int {
 #define SSLM_GPU_LAYER_LOOP_GUARD(enum_name, status_name, cpp_citation) enum_name,
 #include "superslm/gpu_layer_loop_guards.def"
@@ -120,6 +153,16 @@ enum class GpuLayerLoopGuard : int {
 // changed or because this is the first call). Read back by the caller AFTER
 // `RunLayerLoopGpu` returns -- this is the pin round's own observable to
 // consume, not built as a test cell here (Brunel does not author tests).
+//
+// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md,
+// P2): "every call" above is now true of a REJECTING call too, corrected
+// from a code defect (not a doc defect) this round found and fixed --
+// `RunLayerLoopGpu` used to leave this flag holding the PREVIOUS call's
+// value across any of its eleven rejecting return paths, reproduced by
+// execution reading back a stale, sometimes-wrong `skipped` value after a
+// guard-rejected call. A rejecting call makes no weight-residency decision
+// at all, so it now reads `false` ("no upload was skipped") on every one of
+// those eleven paths -- set at function entry, before the first guard.
 bool LastWeightUploadWasSkipped();
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

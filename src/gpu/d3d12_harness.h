@@ -175,21 +175,37 @@ struct Device {
 		return o.ResourceBindingTier;
 	}
 
-	// T-2032/T-2035: the composed pipeline's own root signature -- one 9-value
-	// 32-bit-constants block (b0: layer_index, hidden_size, head_dim,
-	// num_kv_heads, context_cap, position, num_attention_heads, width,
-	// intermediate_size; T-2032 shaders read only the first six), eight root
-	// SRVs (t0 LayerWeights, t1 Layout, t2 RopeInfo, t3 ModelConstants [the
-	// i-exp derivation's own three compile-time constants, T-2035], t4
+	// T-2032/T-2035: the composed pipeline's own root signature -- one
+	// 10-value 32-bit-constants block (b0: layer_index, hidden_size,
+	// head_dim, num_kv_heads, context_cap, position, num_attention_heads,
+	// width, intermediate_size, num_hidden_layers [T-2045 (C3): the 10th
+	// value, `commit_site.hlsl`'s own dispatch alone reads it -- corrected
+	// 2026-08-14, T-2055, Claude/Poirot/db73b22-gpu-serial-port-final-
+	// confirmation-review.md, P5/O7, superseding this paragraph's own
+	// "9-value" claim, false against `Num32BitValues = 10` and
+	// `bind_and_dispatch`'s own 10-element `consts[10]` array below since
+	// T-2045 landed the 10th value and never updated this count]), eight
+	// root SRVs (t0 LayerWeights, t1 Layout, t2 RopeInfo, t3 ModelConstants
+	// [the i-exp derivation's own three compile-time constants, T-2035], t4
 	// SiluLut, t5 RopeCosTable, t6 RopeSinTable [T-2035: RoPE's own real
 	// rotation data, not just presence/extent], t7 ScratchLayout [T-2039: the
 	// per-call, per-real-dims LayerScratch/WorkScratch byte offsets, computed
 	// once host-side -- never re-derived shader-side, matching Layout's own
 	// established host-computes/shader-reads discipline]), four root UAVs (u0
-	// SeqState, u1 LayerScratch, u2 KvCache, u3 WorkScratch [T-2039: the
-	// transient, per-call-sized wide-row/attention-scores scratch every real
-	// production geometry site now streams through instead of a fixed-
-	// capacity local array]). Shared by every shader the composed dispatch
+	// SeqState, u1 LayerScratch, u2 KvCache, u3 WorkScratch [corrected
+	// 2026-08-14, T-2055, P5: this bracket used to describe WorkScratch as
+	// carrying "attention-scores" -- false since T-2049's own N6 retired
+	// that region (superslm_gpu.cpp's own WorkScratch layout comment, and
+	// three sibling instances elsewhere in this tree, were corrected the
+	// same round; this was the fourth live instance, missed because that
+	// round's own sweep re-ran the PRIOR finding's phrase family rather than
+	// grepping fresh for this one -- StandardsDocument.md §7/§6.6). WorkScratch
+	// is the transient, per-call-sized WIDE_A/WIDE_B wide-row scratch every
+	// real production-geometry GEMM-funneled site now streams through
+	// instead of a fixed-capacity local array; the attention score/probs row
+	// lives in LayerScratch's own persistent `scores` field instead
+	// (`ScratchLayout` index 25, `superslm_gpu.cpp`'s `ComputeScratchLayout`)]).
+	// Shared by every shader the composed dispatch
 	// issues -- a dispatch that does not use one of these bindings simply
 	// never reads it; D3D12 does not require a PSO to consume every root
 	// parameter its shared signature declares.
