@@ -21936,6 +21936,245 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	          ws.size());
 }
 
+// ---------------------------------------------------------------------------
+// T-2050 -- pins for the T-2049 fix round (Claude/Brunel/t2025-gpu-serial-
+// build-2026-08-13.md Sec16, D-SLM3179; findings in Claude/Poirot/34ef30f-gpu-
+// serial-port-confirmation-review.md, D-SLM3178, N1). N1 landed all eight of
+// CPU's own RunLayerLoopImpl guards, in CPU's own order
+// (forward_sites.cpp:1137-1354); this section pins each guard's own status
+// plus the two properties the confirmation review's own probes name beyond
+// status alone -- zero landed device bytes on rejection (guard 8), and
+// correct precedence between the geometry guards and the already-complete
+// guard (guard 3 before guard 6). SAFETY NOTE, read before mutation-testing
+// any row below: guards 3 (geometry) and 7 (negative context_length) are NOT
+// live-tested against a guard-less build in this suite -- a hidden_size/
+// head_dim mismatch reaching the packing loop below an absent guard 3 reads
+// past this suite's own fixture arrays (real heap-buffer-overflow, not a
+// device-side effect); a negative context_length reaching the KV offset
+// arithmetic below an absent guard 7 addresses near-4 GiB into a root UAV
+// D3D12 does not bounds-check (the confirmation review's own stated reason
+// for not executing it either). Both rows are GREEN-only against the landed
+// build, with the pre-fix divergence cited from the review's own
+// already-executed, hardware-confirmed evidence (Claude/Poirot/34ef30f-...-
+// confirmation-review.md N1) rather than re-incurred here.
+// ---------------------------------------------------------------------------
+
+static void TestT2050_N1_EightGuardLadderMatchesCpuOrderAndStatus() {
+	NLayerFixture<8> fixture;
+
+	// Guard 1: layer_budget == 0. (Also pinned by T-2047; re-included here
+	// for the ladder's own completeness.)
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, /*layer_budget=*/0,
+		                                                2, 2, 1, 2, 1, fixture.view.rope_tables,
+		                                                ws.data(), ws.size());
+		CHECK_MSG(st == SslmForwardStatus::InvalidLayerBudget,
+		          "N1 guard 1 (layer_budget=0): status=%s, want InvalidLayerBudget",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 2: context_cap < 1.
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2,
+		                                                /*context_cap=*/0, fixture.view.rope_tables,
+		                                                ws.data(), ws.size());
+		CHECK_MSG(st == SslmForwardStatus::InvalidContextCap,
+		          "N1 guard 2 (context_cap=0): status=%s, want InvalidContextCap",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 3: num_heads == 0 || num_heads*head_dim != hidden_size. GREEN-
+	// only (see file-level safety note); the confirmation review's own
+	// executed witness for this exact construction is cited in
+	// TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete below.
+	{
+		SequenceLayerState seq;
+		int8_t codes[3] = {5, -5, 1};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8,
+		                                                /*hidden_size=*/3, /*head_dim=*/2, 1, 2, 1,
+		                                                fixture.view.rope_tables, ws.data(),
+		                                                ws.size());
+		CHECK_MSG(st == SslmForwardStatus::HeadDimGeometryMismatch,
+		          "N1 guard 3 (hidden_size=3, head_dim=2): status=%s, want "
+		          "HeadDimGeometryMismatch (the confirmation review's own executed witness, N1)",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 4: num_key_value_heads == 0 || > num_heads || num_heads %
+	// num_key_value_heads != 0. num_key_value_heads=2 > num_heads=1 --
+	// chosen over the ==0 case specifically because it cannot divide by
+	// zero if this guard were ever absent (`group = num_heads /
+	// num_key_value_heads` a few lines later), making a live "before" run
+	// safe (see the casebook's own T-2050 section for the executed proof).
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2,
+		                                                /*num_key_value_heads=*/2, 2, 1,
+		                                                fixture.view.rope_tables, ws.data(),
+		                                                ws.size());
+		CHECK_MSG(st == SslmForwardStatus::KvHeadGeometryMismatch,
+		          "N1 guard 4 (num_key_value_heads=2 > num_heads=1): status=%s, want "
+		          "KvHeadGeometryMismatch",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 5: workspace undersized. The confirmation review's own exact
+	// byte counts (workspace_size=4 where 32 bytes are addressed) --
+	// allocated at the REAL required size (32 bytes) in this test's own
+	// buffer so an absent/reverted guard cannot write past this process's
+	// own memory; only the SIZE ARGUMENT lies, matching the review's own
+	// safe construction (its own probe used the identical technique).
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		std::vector<uint8_t> ws(32, 0);  // the real required size; only the arg below lies
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+		                                                fixture.view.rope_tables, ws.data(),
+		                                                /*workspace_size=*/4);
+		CHECK_MSG(st == SslmForwardStatus::WorkspaceTooSmall,
+		          "N1 guard 5 (workspace_size=4, 32 bytes addressed): status=%s, want "
+		          "WorkspaceTooSmall -- never Ok (the confirmation review's own executed "
+		          "witness, N1)",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 6: seq.layer_index >= num_hidden_layers.
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 8;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 1, 2, 2, 1, 2, 1,
+		                                                fixture.view.rope_tables, ws.data(),
+		                                                ws.size());
+		CHECK_MSG(st == SslmForwardStatus::SequenceAlreadyComplete,
+		          "N1 guard 6 (layer_index=8=N): status=%s, want SequenceAlreadyComplete",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 7: seq.context_length < 0. GREEN-only (see file-level safety
+	// note) -- not reordered relative to guard 8 below by construction, so
+	// this row alone does not need a combined fixture to prove existence.
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		seq.context_length = -1;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2,
+		                                                /*context_cap=*/1, fixture.view.rope_tables,
+		                                                ws.data(), ws.size());
+		CHECK_MSG(st == SslmForwardStatus::PositionOverCap,
+		          "N1 guard 7 (context_length=-1): status=%s, want PositionOverCap",
+		          superslm::SslmForwardStatusName(st));
+	}
+	// Guard 8: seq.context_length >= context_cap. Status half only; the
+	// zero-landed-device-bytes half is TestT2050_N1_KvCapacityExhausted
+	// LeavesWorkspaceUntouched below (the review's own probe (a)).
+	{
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		seq.context_length = 1;
+		std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+		const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2,
+		                                                /*context_cap=*/1, fixture.view.rope_tables,
+		                                                ws.data(), ws.size());
+		CHECK_MSG(st == SslmForwardStatus::KvCapacityExhausted,
+		          "N1 guard 8 (context_length=1 >= context_cap=1): status=%s, want "
+		          "KvCapacityExhausted (the confirmation review's own executed witness, N1)",
+		          superslm::SslmForwardStatusName(st));
+	}
+}
+
+static void TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete() {
+	// Probe (c): bad geometry AND an already-complete sequence
+	// simultaneously -- the confirmation review's own precedence witness
+	// (N1: "With hidden_size = 3, head_dim = 2 and layer_index = 8, CPU
+	// returns HeadDimGeometryMismatch; [the pre-fix] GPU return[ed]
+	// SequenceAlreadyComplete", the direct consequence of guard 6 having
+	// been checked ahead of guards 3-5 rather than in CPU's own order).
+	// GREEN-only against the landed build (hidden_size=3 risks reading past
+	// this fixture's own arrays if guard 3 does not intercept first -- see
+	// the file-level safety note); the pre-fix divergence is the review's
+	// own already-executed, hardware-confirmed evidence, cited rather than
+	// re-incurred.
+	NLayerFixture<8> fixture;
+	SequenceLayerState seq;
+	int8_t codes[3] = {5, -5, 1};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 8;  // == num_hidden_layers: guard 6's own condition is ALSO true
+	std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+	const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 1, /*hidden_size=*/3,
+	                                                /*head_dim=*/2, 1, 2, 1, fixture.view.rope_tables,
+	                                                ws.data(), ws.size());
+	CHECK_MSG(st == SslmForwardStatus::HeadDimGeometryMismatch,
+	          "N1 precedence (hidden_size=3/head_dim=2 AND layer_index=8=N simultaneously): "
+	          "status=%s, want HeadDimGeometryMismatch -- guard 3 must fire before guard 6 "
+	          "reaches its own true condition, matching CPU's own source order "
+	          "(forward_sites.cpp:1137-1354); the pre-fix GPU returned SequenceAlreadyComplete "
+	          "here instead (the confirmation review's own executed witness, N1)",
+	          superslm::SslmForwardStatusName(st));
+}
+
+static void TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched() {
+	// Probe (a): the confirmation review's own executed witness
+	// (context_length=1, context_cap=1) -- pre-fix, kv_proj/rope_guard
+	// landed K/V bytes into another layer's row before the sequence-level
+	// sticky word ever latched (N1: workspace read back
+	// "00 00 7F 81 7F 81 00 00 ..." instead of all zeros). This cell
+	// asserts the STRONGER property the status alone does not: the
+	// workspace is bit-identical to its pre-call (poisoned) state, not
+	// merely that the call reports rejection.
+	NLayerFixture<8> fixture;
+	SequenceLayerState seq;
+	int8_t codes[2] = {5, -5};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	seq.context_length = 1;
+	std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0xEE);  // poison, not zero -- a status-
+	                                                              // only check could pass on an
+	                                                              // all-zero buffer by accident
+	std::vector<uint8_t> ws_before = ws;
+	const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2,
+	                                                /*context_cap=*/1, fixture.view.rope_tables,
+	                                                ws.data(), ws.size());
+	CHECK_MSG(st == SslmForwardStatus::KvCapacityExhausted,
+	          "N1 guard 8, zero-landed-bytes probe: status=%s, want KvCapacityExhausted",
+	          superslm::SslmForwardStatusName(st));
+	CHECK_MSG(ws == ws_before,
+	          "N1 guard 8, zero-landed-bytes probe: the workspace is bit-identical to its "
+	          "pre-call (poisoned) state -- guard 8 rejects before kv_proj/rope_guard land any "
+	          "K/V bytes, matching CPU's own contract (the confirmation review's own executed "
+	          "witness, N1)");
+}
+
 // --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
 // level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
 // C-ABI wrapper is not yet built on any backend). Restore-time device allocation
@@ -23027,6 +23266,15 @@ int main(int argc, char** argv) {
 	TestT2047_S2_TierPreflightEnforcedOnForwardPath();
 	TestT2047_S3_ResidencyCacheIsContentKeyedNotPointerKeyed();
 	TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice();
+
+	// T-2050 -- pins for the T-2049 fix round (Claude/Brunel/t2025-gpu-
+	// serial-build-2026-08-13.md Sec16, D-SLM3179, N1). See this file's own
+	// T-2050 section above; Claude/Curie/t2019-gpu-serial-red-suite-2026-08-
+	// 13.md (records worktree) "T-2050" section for the full derivation and
+	// executed proofs.
+	TestT2050_N1_EightGuardLadderMatchesCpuOrderAndStatus();
+	TestT2050_N1_GeometryGuardPrecedesSequenceAlreadyComplete();
+	TestT2050_N1_KvCapacityExhaustedLeavesWorkspaceUntouched();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
