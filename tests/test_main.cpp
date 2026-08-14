@@ -22525,7 +22525,19 @@ static void TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFai
 	// unaffected by which allocation threw). M-b: the SAME catch invalidates the residency cache
 	// it just destroyed -- LastWeightUploadWasSkipped() must read false, not this call's own
 	// pre-throw true.
-	superslm_gpu::ArmWeightAllocationFailureInjection();  // arms work_scratch_uav as of T-2075
+	// T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, S1;
+	// D-SLM3241): the build seat's own instrument gained a site selector this
+	// round -- T-2075's single arm point made this cell's own target
+	// (work_scratch_uav) reachable but made T-2062's own weight-allocation
+	// remedy permanently unpinnable with no arm point left at that site. The
+	// ONLY change this cell needed is this one argument, naming the site it
+	// has always targeted; the eight CHECK_MSG conditions above and below are
+	// unchanged. superslm_gpu::kWeightAllocInjectionSiteWorkScratchUav
+	// (gpu_port.h) is the named constant for this cell's own site; the
+	// sibling, kWeightAllocInjectionSiteWeightDefaultHeap, now exists for a
+	// future cell to pin T-2062's own remedy directly.
+	superslm_gpu::ArmWeightAllocationFailureInjection(
+	    superslm_gpu::kWeightAllocInjectionSiteWorkScratchUav);  // arms work_scratch_uav as of T-2075
 	const auto st3 = call_once();
 	superslm_gpu::ClearWeightAllocationInjection();  // always clear, even on failure
 	CHECK_MSG(st3 == SslmForwardStatus::GpuAllocationFailed,

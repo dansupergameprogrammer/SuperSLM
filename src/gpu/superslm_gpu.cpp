@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "d3d12_harness.h"
@@ -300,28 +301,32 @@ bool g_last_weight_upload_was_skipped = false;
 // T-2071 (O11's own instrument, retiring the long-named gap: "no way to
 // force `CreateCommittedResource` to fail from the suite" -- Claude/Poirot/
 // db73b22-.../a3d44e7-.../b543abe-gpu-serial-port-ship-*-review.md, every
-// round since T-2055's own P3): deterministic failure injection scoped to
-// the weight DEFAULT-heap allocation specifically -- the single site S1
-// (T-2062) fixed and T-2063's own pin cell
-// (`TestT2063_S1Mb_WeightAllocationThrow_ReturnsGpuAllocationFailed_
-// SkippedFalse`, `tests/test_main.cpp`) exercises. Mirrors
-// `src/bad_alloc_wrap.h`'s own established discipline exactly, not B12's
-// index-parameterized `ArmAllocationFailureInjection(uint32_t)` (this
-// instrument targets ONE named site, not an enumerable sequence, so it
-// takes no index): the CALL SITE inside `RunLayerLoopGpu` below is never
-// `#ifdef`-guarded -- `MaybeThrowInjectedWeightAllocFault()` is always
-// callable and is a no-op that costs nothing once inlined and optimized
-// away when `SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` is undefined ("zero
-// overhead unarmed"); only the flag, the throw body, and the public
-// Arm/Clear functions below are compiled at all when the macro is defined
-// (`build.bat`, beside `SUPERSLM_ENABLE_BAD_ALLOC_INJECTION`) -- exactly
-// `gpu_port.h`'s own `#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION` guard
-// around these two declarations, which is what makes this definition link
-// against them rather than reproducing T-2063's own deliberate LINK-RED
-// proof.
+// round since T-2055's own P3): deterministic failure injection.
+//
+// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
+// 94ebee3-gpu-serial-port-closing-review.md, S1/S2; D-SLM3241, superseding
+// this paragraph's own original text -- left standing below, not rewritten,
+// per this tree's own append-only discipline): the paragraph originally
+// said this instrument was scoped to the weight DEFAULT-heap allocation
+// "specifically -- the single site S1 (T-2062) fixed," and declined B12's
+// own index-parameterized shape on the grounds that it "targets ONE named
+// site, not an enumerable sequence." T-2075's own S1 fix then MOVED the arm
+// site to `work_scratch_uav` (making the M-b pin live), which this review
+// measured as a SWAP, not a widening: with one arm point, the weight
+// DEFAULT-heap allocation -- T-2062's own S1 remedy's own site -- became
+// permanently unreachable by any test. Fixed here by taking the
+// index-parameterized shape after all: `ArmWeightAllocationFailureInjection`
+// now takes a `site` selector
+// (`kWeightAllocInjectionSiteWeightDefaultHeap`/`kWeightAllocInjectionSite
+// WorkScratchUav`, `gpu_port.h`), and BOTH call sites below carry the check
+// -- either remedy can be pinned, independently, by arming the site it
+// lives at. The original paragraph's own "targets ONE named site... takes
+// no index" reasoning is exactly what produced the swap this correction
+// closes.
 namespace {
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 bool g_weight_alloc_injection_armed = false;
+uint32_t g_weight_alloc_injection_site = 0;
 #endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
 // Always defined, always callable -- see the header comment above for why
@@ -330,16 +335,22 @@ bool g_weight_alloc_injection_armed = false;
 // (`RunLayerLoopGpu`, below), so it need not -- and, to avoid an unused
 // external symbol in the unarmed default build, should not -- be visible
 // outside it.
-inline void MaybeThrowInjectedWeightAllocFault() {
+//
+// T-2080: takes `this_site` -- one of `gpu_port.h`'s own named site
+// constants, passed by each call site naming itself. Fires only when the
+// ARMED site matches the site currently executing, so arming one site
+// never fires at the other.
+inline void MaybeThrowInjectedWeightAllocFault(uint32_t this_site) {
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-	if (g_weight_alloc_injection_armed) {
+	if (g_weight_alloc_injection_armed && g_weight_alloc_injection_site == this_site) {
 		// Single-shot: fires exactly once per `Arm` call, matching the pin
 		// cell's own "call 4 (no injection) recovers cleanly" expectation --
 		// a re-armed-forever flag would make every subsequent call in the
 		// same process fail too, which is not what "the next matching
 		// allocation" means.
 		g_weight_alloc_injection_armed = false;
-		throw std::runtime_error("T2071 O11: injected weight-allocation failure");
+		throw std::runtime_error("T2080 O11: injected allocation failure at site " +
+		                          std::to_string(this_site));
 	}
 #endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 }
@@ -571,7 +582,10 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 // `tests/test_main.cpp`, a different translation unit, matching
 // `gpu_port.h`'s own gated declarations exactly.
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-void ArmWeightAllocationFailureInjection() { g_weight_alloc_injection_armed = true; }
+void ArmWeightAllocationFailureInjection(uint32_t site) {
+	g_weight_alloc_injection_armed = true;
+	g_weight_alloc_injection_site = site;
+}
 void ClearWeightAllocationInjection() { g_weight_alloc_injection_armed = false; }
 #endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 
@@ -1143,6 +1157,17 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// probe (call 7: `status=KvPrecisionUnsupported`, against call 5's
 		// `status=GpuAllocationFailed` at `work_scratch_uav`, same outer
 		// catch, same call shape).
+		//
+		// T-2080 (S1): the injection instrument's own weight-DEFAULT-heap
+		// site -- restored here after T-2075 moved the instrument's ONLY arm
+		// point to `work_scratch_uav` below, which made this allocation
+		// permanently unreachable by any test (this review's own S1
+		// finding). Site-parameterized now: arming THIS site (`gpu_port.h`'s
+		// `kWeightAllocInjectionSiteWeightDefaultHeap`) exercises T-2062's
+		// own S1 remedy specifically (the throw here reaches the SAME outer
+		// catch as every other allocation in the window); arming
+		// `work_scratch_uav`'s own site below is unaffected.
+		MaybeThrowInjectedWeightAllocFault(kWeightAllocInjectionSiteWeightDefaultHeap);
 		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
 		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
 		                    D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1175,19 +1200,22 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// created directly in the UAV state, matching this file's own established
 	// idiom for a device-only scratch buffer (RunDescriptorTableBind's out_uav).
 	//
-	// CORRECTED 2026-08-14 (T-2075, S1; D-SLM3228): O11's own instrument
-	// (`MaybeThrowInjectedWeightAllocFault`) now arms HERE, not at the
-	// weight DEFAULT-heap allocation above. This allocation runs
-	// UNCONDITIONALLY, on both the cache-hit and cache-miss legs (it is
-	// outside the `if (!weights_resident)` block entirely) -- so an armed
-	// call reaches the injected throw on a GENUINE cache hit, without
-	// forcing any residency-decision change to make it reachable. That is
-	// what makes `TestT2063_S1Mb_...`'s own call 3 ("same content again,
-	// another cache hit") actually a hit again: the catch's own two remedy
-	// lines (the observable write, the cache invalidation) are now the
-	// ONLY thing that can make that cell's M-b assertions pass, because
-	// nothing upstream of this call has already done their job.
-	MaybeThrowInjectedWeightAllocFault();
+	// CORRECTED 2026-08-14 (T-2075, S1; D-SLM3228; site-parameterized by
+	// T-2080, S1, D-SLM3241 -- this instrument now checks TWO named sites,
+	// this one and the weight DEFAULT-heap allocation above, not one):
+	// O11's own instrument (`MaybeThrowInjectedWeightAllocFault`) also arms
+	// HERE. This allocation runs UNCONDITIONALLY, on both the cache-hit and
+	// cache-miss legs (it is outside the `if (!weights_resident)` block
+	// entirely) -- so arming THIS site (`kWeightAllocInjectionSiteWork
+	// ScratchUav`) reaches the injected throw on a GENUINE cache hit,
+	// without forcing any residency-decision change to make it reachable.
+	// That is what makes `TestT2063_S1Mb_WorkScratchUavAllocationThrow_...`'s
+	// own call 3 ("same content again, another cache hit") actually a hit
+	// again: the catch's own two remedy lines (the observable write, the
+	// cache invalidation) are the ONLY thing that can make that cell's M-b
+	// assertions pass, because nothing upstream of this call has already
+	// done their job.
+	MaybeThrowInjectedWeightAllocFault(kWeightAllocInjectionSiteWorkScratchUav);
 	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1352,9 +1380,23 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// decision earlier in this same call, before the throw) even though
 		// the two lines above have just made the cache non-resident --
 		// reproduced by the review's own probe (call 5: `skipped=1` from a
-		// call whose catch had just invalidated the cache). Setting it here
-		// makes the observable agree with the state it describes on every
-		// one of this function's now-twelve rejecting paths.
+		// call whose catch had just invalidated the cache). Setting it
+		// here makes the observable agree with the state it describes on
+		// this path.
+		//
+		// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
+		// 94ebee3-gpu-serial-port-closing-review.md, S3; D-SLM3241): the
+		// sentence this replaces claimed the observable "agrees with the
+		// state it describes on every one of this function's ... rejecting
+		// paths" -- unscoped, and false: `gpu_port.h`'s own `Last
+		// WeightUploadWasSkipped` paragraph (T-2075, S2) measured that the
+		// STICKY-TAG-decoded path (this function's own terminal `return
+		// DecodeStickyTag(sticky_tag);`) reads `true` on a rejecting call,
+		// honestly, because that call's own upload genuinely was skipped.
+		// "Agrees on every rejecting path" is not the true contract; see
+		// `gpu_port.h`'s own paragraph for the actual one (`false` before
+		// the residency decision runs, exactly `weights_resident` after
+		// it) -- not restated a second time here.
 		g_last_weight_upload_was_skipped = false;
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed

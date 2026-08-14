@@ -146,6 +146,21 @@ reddens on a new-status rejection anywhere in either function, stays green
 on a same-status one anywhere in either function -- specifically so the
 residual above is a measured property of this check, not a claim about it.
 
+CORRECTED 2026-08-14 (T-2080, Claude/Poirot/94ebee3-gpu-serial-port-closing-
+review.md, M1; D-SLM3241): a SEPARATE residual existed in the citation
+machinery itself, orthogonal to the two named above -- `GPU_PORT_H_LWUWS_
+CITATIONS` (below) was a hand-transcribed MIRROR of `gpu_port.h`'s own
+citations, held in this file, and nothing checked the mirror against the
+original: corrupting every citation in the header's own text left this
+whole module green, since nothing here ever read `gpu_port.h` at all.
+Fixed: `parse_gpu_port_h_citation_lines`/`check_gpu_port_h_citations_
+match_table` (below) derive the citation POPULATION from `gpu_port.h`'s own
+text and assert it equals the table -- an edit to either side that is not
+mirrored in the other now fails CI. Proven by execution, on the real
+files: corrupting all eleven ladder citations in `gpu_port.h` while leaving
+this module's own table untouched -- `OK`, 48 passed before this fix;
+`FAILED`, naming the exact eleven-line divergence, after it.
+
 Modelled on this tree's own established CI-source-check convention
 (`tests/ci/check_no_forward_leaf_calls.py`, `tests/ci/check_checked_chain_
 funnel_position_cap_not_a_stub.py`): a text scan over the real source with
@@ -171,6 +186,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 FORWARD_SITES_CPP = os.path.join(_REPO_ROOT, "src", "forward", "forward_sites.cpp")
 SUPERSLM_GPU_CPP = os.path.join(_REPO_ROOT, "src", "gpu", "superslm_gpu.cpp")
 GUARDS_DEF = os.path.join(_REPO_ROOT, "include", "superslm", "gpu_layer_loop_guards.def")
+GPU_PORT_H = os.path.join(_REPO_ROOT, "include", "superslm", "gpu_port.h")
 
 # --- Real, named anchors -- source TEXT, never a line number. ---
 CPU_FUNC_SIGNATURE = "static SslmForwardStatus RunLayerLoopImpl("
@@ -513,26 +529,113 @@ class ProseCitation:
 # observable's own four write sites -- nineteen citations, all fifteen
 # rejecting-return-path members plus the four write sites S2/M2 both name.
 GPU_PORT_H_LWUWS_CITATIONS = (
-    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 640, "InvalidLayerBudget"),
-    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 641, "InvalidContextCap"),
-    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 650, "HeadDimGeometryMismatch"),
-    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 654, "KvHeadGeometryMismatch"),
-    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 669, "InvalidContextCap"),
-    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 673, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 674, "WorkspaceTooSmall"),
-    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 684, "InvalidHiddenCodes"),
-    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 687, "SequenceAlreadyComplete"),
-    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 693, "PositionOverCap"),
-    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 695, "KvCapacityExhausted"),
-    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 702, "dev.available"),
-    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 714, "KvPrecisionUnsupported"),
-    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1368, "device_removed_reason"),
-    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1419, "DecodeStickyTag"),
-    ProseCitation("write site 1 (static init)", "src/gpu/superslm_gpu.cpp", 298, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 600, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 889, "g_last_weight_upload_was_skipped"),
-    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1358, "g_last_weight_upload_was_skipped"),
+    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 654, "InvalidLayerBudget"),
+    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 655, "InvalidContextCap"),
+    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 664, "HeadDimGeometryMismatch"),
+    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 668, "KvHeadGeometryMismatch"),
+    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 683, "InvalidContextCap"),
+    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 687, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 688, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 698, "InvalidHiddenCodes"),
+    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 701, "SequenceAlreadyComplete"),
+    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 707, "PositionOverCap"),
+    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 709, "KvCapacityExhausted"),
+    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 716, "dev.available"),
+    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 728, "KvPrecisionUnsupported"),
+    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1410, "device_removed_reason"),
+    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1461, "DecodeStickyTag"),
+    ProseCitation("write site 1 (static init)", "src/gpu/superslm_gpu.cpp", 299, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 614, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 903, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1400, "g_last_weight_upload_was_skipped"),
+    # T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M2):
+    # the paragraph's own `DecodeStickyTag` citation is a RANGE
+    # (`superslm_gpu.cpp:532-550`), which `ProseCitation`'s single-`line`
+    # shape cannot represent as one entry -- covered here as its own two
+    # endpoints, the review's own named cheap fix, rather than widening
+    # `ProseCitation` itself for a population of one range.
+    ProseCitation("DecodeStickyTag range start", "src/gpu/superslm_gpu.cpp", 532, "DecodeStickyTag"),
+    ProseCitation("DecodeStickyTag range end", "src/gpu/superslm_gpu.cpp", 550, "}"),
 )
+
+# T-2080 (Claude/Poirot/94ebee3-gpu-serial-port-closing-review.md, M1): the
+# real anchors bounding `gpu_port.h`'s own `LastWeightUploadWasSkipped`
+# paragraph -- the SAME two markers used throughout this ticket's own
+# citation refresh -- so `parse_gpu_port_h_citation_lines` below reads
+# exactly the span `GPU_PORT_H_LWUWS_CITATIONS` claims to describe, never
+# the whole file.
+GPU_PORT_H_LWUWS_PARAGRAPH_START = (
+    "T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2):"
+)
+GPU_PORT_H_LWUWS_PARAGRAPH_END = "bool LastWeightUploadWasSkipped();"
+
+_GPU_PORT_H_CITATION_RE = re.compile(r"(?:superslm_gpu\.cpp:|`:)(\d+(?:-\d+)?(?:,\s*\d+)*)")
+
+
+def parse_gpu_port_h_citation_lines(gpu_port_h_text: str) -> set[int]:
+    """Every line number `gpu_port.h`'s own `LastWeightUploadWasSkipped`
+    paragraph cites -- parsed from the TEXT ITSELF, not a hand-transcribed
+    copy of it (T-2080, M1: `GPU_PORT_H_LWUWS_CITATIONS` above WAS such a
+    copy, held in this Python module, and nothing checked it against the
+    header it claims to describe -- corrupting the header's own citations
+    left this whole module green, since nothing here ever read `gpu_port.h`
+    at all). Both citation shapes the paragraph actually uses are matched:
+    the first-mention full form (`superslm_gpu.cpp:654, 655, 664, ...`, a
+    comma list after ONE prefix) and every subsequent short form
+    (`` `:716` ``, backtick-wrapped, no prefix) -- including RANGE forms of
+    either (`` `:532-550` ``), expanded to both endpoints, matching how
+    `GPU_PORT_H_LWUWS_CITATIONS` represents `DecodeStickyTag`'s own range as
+    two entries. Line-wrapped `//`-continued comment prose (this header's own
+    house style -- a citation list routinely spans two physical lines) is
+    joined into one continuous span first, so a citation split across a line
+    break by ordinary word-wrap is not missed."""
+    start = gpu_port_h_text.find(GPU_PORT_H_LWUWS_PARAGRAPH_START)
+    if start == -1:
+        raise ValueError(f"gpu_port.h: paragraph start marker not found: {GPU_PORT_H_LWUWS_PARAGRAPH_START!r}")
+    end = gpu_port_h_text.find(GPU_PORT_H_LWUWS_PARAGRAPH_END, start)
+    if end == -1:
+        raise ValueError(f"gpu_port.h: paragraph end marker not found after start: {GPU_PORT_H_LWUWS_PARAGRAPH_END!r}")
+    paragraph = gpu_port_h_text[start:end]
+    joined = re.sub(r"\n[ \t]*//[ \t]?", " ", paragraph)
+    lines: set[int] = set()
+    for m in _GPU_PORT_H_CITATION_RE.finditer(joined):
+        for part in m.group(1).split(","):
+            part = part.strip()
+            if "-" in part:
+                a, b = part.split("-")
+                lines.add(int(a))
+                lines.add(int(b))
+            else:
+                lines.add(int(part))
+    return lines
+
+
+def check_gpu_port_h_citations_match_table(
+    gpu_port_h_text: str,
+    citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
+) -> list[str]:
+    """The structural half of M1's remedy: derives the citation POPULATION
+    from `gpu_port.h`'s own text and asserts it equals `GPU_PORT_H_LWUWS_
+    CITATIONS`'s own line-number set. `check_prose_citation` (below) still
+    verifies each of THIS module's citations resolves against `superslm_gpu.
+    cpp` -- that half was already sound. What was missing is this one: that
+    the table's own line numbers are the SAME ones the header currently
+    cites, so an edit to `gpu_port.h`'s own citations (a correct refresh OR
+    an accidental corruption) that is not mirrored in this table is caught,
+    instead of leaving this module checking a frozen copy of a fact the
+    header no longer states."""
+    parsed = parse_gpu_port_h_citation_lines(gpu_port_h_text)
+    table = {c.line for c in citations}
+    if parsed == table:
+        return []
+    return [
+        "gpu_port.h's own LastWeightUploadWasSkipped paragraph cites a different set of lines than "
+        "GPU_PORT_H_LWUWS_CITATIONS does -- the table is a copy that has drifted from the header it "
+        "describes:\n"
+        f"    gpu_port.h's own citations: {sorted(parsed)}\n"
+        f"    this module's own table:    {sorted(table)}\n"
+        f"    header has, table lacks: {sorted(parsed - table)}   table has, header lacks: {sorted(table - parsed)}"
+    ]
 
 
 def check_prose_citation(citation: ProseCitation, repo_root: str = _REPO_ROOT) -> str | None:
@@ -578,6 +681,7 @@ def run_all_checks(
     guards_def_path: str = GUARDS_DEF,
     repo_root: str = _REPO_ROOT,
     prose_citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
+    gpu_port_h_path: str | None = GPU_PORT_H,
 ) -> list[str]:
     """Every failure this module can report against the three real files, or
     an empty list if all three status sets agree and every `.def` citation
@@ -595,7 +699,13 @@ def run_all_checks(
     passes `prose_citations=()` explicitly: the real population cites real
     production line numbers no tiny fixture file has, and checking it
     against a fixture would fail for a reason that has nothing to do with
-    what that test is exercising."""
+    what that test is exercising.
+
+    `gpu_port_h_path` (T-2080, M1's own structural remedy) is where the
+    citation POPULATION is derived FROM, checked against `prose_citations`
+    for agreement -- pass `None` to skip this half (fixture-driven tests
+    with no real `gpu_port.h` to parse do this, same reasoning as
+    `prose_citations=()`)."""
     with open(forward_sites_path, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     with open(superslm_gpu_path, "r", encoding="utf-8") as f:
@@ -638,6 +748,14 @@ def run_all_checks(
     # citations above, so a scratch-tree mutation test can exercise this the
     # same way it exercises everything else in this function.
     failures += check_all_prose_citations(citations=prose_citations, repo_root=repo_root)
+    # T-2080 (M1's own structural remedy): the population itself is checked
+    # against `gpu_port.h`'s own text -- editing the header without mirroring
+    # the edit into `prose_citations` (a correct refresh OR a corruption) is
+    # what M1 found this module blind to.
+    if gpu_port_h_path is not None:
+        with open(gpu_port_h_path, "r", encoding="utf-8") as f:
+            gpu_port_h_text = f.read()
+        failures += check_gpu_port_h_citations_match_table(gpu_port_h_text, citations=prose_citations)
     return failures
 
 

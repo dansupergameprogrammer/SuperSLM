@@ -313,7 +313,7 @@ def test_check_citation_fails_for_a_malformed_citation():
 def test_run_all_checks_clean_on_the_matching_fixture_tree():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures == []
 
 
@@ -332,7 +332,7 @@ def test_mutation_a_new_status_with_no_def_row_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "a tenth guard with a status absent from the .def must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -352,7 +352,7 @@ def test_mutation_a_reused_status_with_no_def_row_does_not_redden_the_honest_res
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures == [], "reusing an existing status is the documented residual -- must stay green"
 
 
@@ -367,7 +367,7 @@ def test_mutation_b_def_row_with_no_matching_ladder_guard_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, def_text=def_text)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "a .def row naming a status neither ladder returns must fail the check"
 
 
@@ -380,7 +380,7 @@ def test_mutation_c_guard_removed_from_gpu_ladder_only_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "a guard present in CPU/.def but removed from the GPU ladder must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -401,7 +401,7 @@ def test_mutation_d_new_status_guard_placed_after_the_old_end_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "a new-status guard placed after the old end marker must now be caught (S2)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -419,7 +419,7 @@ def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_r
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
 
 
@@ -445,7 +445,7 @@ def test_mutation_e_new_status_guard_placed_after_the_gpu_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "a new-status GPU guard placed after the old marker must now be caught (S3)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -467,7 +467,7 @@ def test_mutation_e_control_new_status_guard_placed_before_the_gpu_marker_redden
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures, "the identical guard placed before the marker must redden, same as before this fix"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -485,7 +485,7 @@ def test_mutation_e_variant_reused_status_after_gpu_marker_stays_green_the_widen
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures == [], "reusing an existing status past the GPU marker is the (widened) documented residual"
 
 
@@ -501,7 +501,7 @@ def test_mutation_e_variant_reused_below_ladder_status_after_gpu_marker_stays_gr
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=(), gpu_port_h_path=None)
         assert failures == [], "reusing the subtracted below-ladder status itself is also the documented residual"
 
 
@@ -591,6 +591,85 @@ def test_check_all_prose_citations_reddens_when_one_of_several_shifts():
         assert "bad (shifted)" in failures[0]
 
 
+# --- parse_gpu_port_h_citation_lines / check_gpu_port_h_citations_match_table
+# (T-2080, M1's own structural remedy: the population is derived from
+# gpu_port.h's own text, not a hand-transcribed copy of it) ---
+
+_GPU_PORT_H_LWUWS_FIXTURE = """\
+namespace superslm_gpu {
+// T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2):
+// backs the accessor. Set every call.
+//
+// eleven in the nine-guard ladder (`superslm_gpu.cpp:654, 655, 664, 668,
+// 683, 687, 688, 698, 701, 707, 709` -- eleven return statements); two
+// device-capability rejections (`:716` !dev.available, `:728` Tier-3); the
+// catch's own ternary (`:1410`); the sticky-tag terminal call
+// (`superslm_gpu.cpp:1461`); DecodeStickyTag itself (`:532-550`); four
+// write sites (`superslm_gpu.cpp:299` static init, `:614` entry, `:903`
+// residency, `:1400` the catch).
+bool LastWeightUploadWasSkipped();
+}  // namespace superslm_gpu
+"""
+
+
+def test_parse_gpu_port_h_citation_lines_extracts_every_shape():
+    lines = chk.parse_gpu_port_h_citation_lines(_GPU_PORT_H_LWUWS_FIXTURE)
+    assert lines == {
+        654, 655, 664, 668, 683, 687, 688, 698, 701, 707, 709,  # ladder (comma list, line-wrapped)
+        716, 728,  # device-capability (short form)
+        1410,  # catch ternary (short form)
+        1461,  # sticky-tag terminal (full form)
+        532, 550,  # DecodeStickyTag range (short form, range)
+        299, 614, 903, 1400,  # write sites (full form comma... actually individual short forms)
+    }
+
+
+def test_parse_gpu_port_h_citation_lines_raises_when_start_marker_absent():
+    try:
+        chk.parse_gpu_port_h_citation_lines("nothing relevant here")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "paragraph start marker" in str(e)
+
+
+def test_parse_gpu_port_h_citation_lines_raises_when_end_marker_absent():
+    try:
+        chk.parse_gpu_port_h_citation_lines(chk.GPU_PORT_H_LWUWS_PARAGRAPH_START + "\nno end marker here")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "paragraph end marker" in str(e)
+
+
+def test_check_gpu_port_h_citations_match_table_passes_when_they_agree():
+    citations = (
+        chk.ProseCitation("a", "x", 654, "n"), chk.ProseCitation("b", "x", 655, "n"),
+        chk.ProseCitation("c", "x", 664, "n"), chk.ProseCitation("d", "x", 668, "n"),
+        chk.ProseCitation("e", "x", 683, "n"), chk.ProseCitation("f", "x", 687, "n"),
+        chk.ProseCitation("g", "x", 688, "n"), chk.ProseCitation("h", "x", 698, "n"),
+        chk.ProseCitation("i", "x", 701, "n"), chk.ProseCitation("j", "x", 707, "n"),
+        chk.ProseCitation("k", "x", 709, "n"), chk.ProseCitation("l", "x", 716, "n"),
+        chk.ProseCitation("m", "x", 728, "n"), chk.ProseCitation("n_", "x", 1410, "n"),
+        chk.ProseCitation("o", "x", 1461, "n"), chk.ProseCitation("p", "x", 532, "n"),
+        chk.ProseCitation("q", "x", 550, "n"), chk.ProseCitation("r", "x", 299, "n"),
+        chk.ProseCitation("s", "x", 614, "n"), chk.ProseCitation("t", "x", 903, "n"),
+        chk.ProseCitation("u", "x", 1400, "n"),
+    )
+    failures = chk.check_gpu_port_h_citations_match_table(_GPU_PORT_H_LWUWS_FIXTURE, citations=citations)
+    assert failures == []
+
+
+def test_check_gpu_port_h_citations_match_table_reddens_on_a_corrupted_header():
+    # T-2080, M1's own falsifying case: the header's own citations are
+    # corrupted (shifted by a constant) while the Python table is
+    # untouched -- exactly the shape the review's own real-file mutation
+    # exercises, reproduced here at the fixture level.
+    corrupted = _GPU_PORT_H_LWUWS_FIXTURE.replace("654, 655, 664", "6540, 6550, 6640")
+    citations = (chk.ProseCitation("a", "x", 654, "n"),)
+    failures = chk.check_gpu_port_h_citations_match_table(corrupted, citations=citations)
+    assert failures, "a corrupted header citation must be caught against the table"
+    assert "drifted" in failures[0]
+
+
 def test_real_tree_gpu_port_h_lwuws_citations_all_resolve_today():
     # Every citation in gpu_port.h's own LastWeightUploadWasSkipped
     # paragraph, re-derived fresh at T-2075, resolves against the real file
@@ -600,8 +679,17 @@ def test_real_tree_gpu_port_h_lwuws_citations_all_resolve_today():
     assert failures == [], f"gpu_port.h's own citations should all resolve today: {failures}"
 
 
-def test_real_tree_prose_citation_population_is_the_named_nineteen():
-    assert len(chk.GPU_PORT_H_LWUWS_CITATIONS) == 19
+def test_real_tree_prose_citation_population_is_the_named_twenty_one():
+    # Nineteen (T-2075) plus two (T-2080, M2: DecodeStickyTag's own range
+    # citation, covered as its two endpoints).
+    assert len(chk.GPU_PORT_H_LWUWS_CITATIONS) == 21
+
+
+def test_real_tree_gpu_port_h_citations_match_the_table_today():
+    with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
+        gpu_port_h_text = f.read()
+    failures = chk.check_gpu_port_h_citations_match_table(gpu_port_h_text)
+    assert failures == [], f"gpu_port.h's own citations should match the table today: {failures}"
 
 
 # --- Structural red proof (T-2075): shifting a cited line reddens run_all_checks. ---
