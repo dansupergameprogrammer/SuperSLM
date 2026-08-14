@@ -148,40 +148,95 @@ int64_t MaxAbsReduceWideGpuScheme1(const int64_t* x, size_t n) {
 }
 
 // ===========================================================================
-// B2 (Sec6/Sec11 B2): the guard-path port, isolated tier. STUB pending B2.
+// B2 (Sec6/Sec11 B2): the guard-path port, isolated tier. Real GPU dispatch,
+// bit-exact against the shipped CPU predicate of the same name. B2 does not
+// depend on B5 (Sec11's own dependency graph: B1 -> B2 -> B4 -> ...; B1 -> B5
+// -> B4), so RequantChainCheckedGpu's own reduction is a self-contained,
+// single-thread guard-tier port (requant_chain_checked.hlsl's own, not B5's
+// two-schedule production reduction).
 // ===========================================================================
 
 superslm::SslmForwardStatus CheckRoundingDivideByPotExponentDomainGpu(int64_t q_B, int64_t e_a) {
-	(void)q_B;
-	(void)e_a;
-	// STUB (B2 not yet built): a status this predicate can never legitimately
-	// return on its own two-valued domain (Ok / RoundingDivideByPotExponentOutOfDomain)
-	// -- WorkspaceTooSmall is unrelated to this guard, so any real fixture's
-	// expected status diverges from it observably.
-	return superslm::SslmForwardStatus::WorkspaceTooSmall;
+	auto& pipe = GetOrBuildPipeline("check_rdp_exponent");
+	std::vector<uint8_t> in;
+	PutI64(in, q_B);
+	PutI64(in, e_a);
+	auto out = GetDevice().DispatchOne(pipe.root_sig.Get(), pipe.pso.Get(), in, 8);
+	const int64_t tag = GetI64(out, 0);
+	switch (tag) {
+		case 3:
+			return superslm::SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain;
+		default:
+			return superslm::SslmForwardStatus::Ok;
+	}
 }
 
 superslm::SslmForwardStatus CheckBiasAccumulateMagnitudeDomainGpu(int64_t acc_i, int64_t b,
                                                                     int64_t q_b, int64_t r_a,
                                                                     int64_t e_a) {
-	(void)acc_i;
-	(void)b;
-	(void)q_b;
-	(void)r_a;
-	(void)e_a;
-	return superslm::SslmForwardStatus::WorkspaceTooSmall;  // STUB (B2 not yet built)
+	// Not exercised by any T-2019 cell (grep of tests/test_main.cpp finds no
+	// caller; the design's own B2(3) construction routes the equivalent
+	// coverage through RunLayerLoopGpu instead, Curie casebook Sec6). Built
+	// for real anyway, per B2's own declared scope (gpu_port.h) -- reuses the
+	// already-proven BiasReconcileWideGpu dispatch (B1) for the wide
+	// reconcile term, then reproduces CheckBiasAccumulateMagnitudeDomain's own
+	// second-stage overflow test (checked_chain_funnel.cpp:450-478) in the
+	// identical unsigned two's-complement form the CPU reference uses (no UB,
+	// same technique host-side as device-side would use).
+	int64_t term = 0;
+	const bool fits = BiasReconcileWideGpu(b, q_b, r_a, e_a, &term);
+	if (!fits) return superslm::SslmForwardStatus::BiasReconcileProductOutOfDomain;
+	const uint64_t ua = static_cast<uint64_t>(acc_i);
+	const uint64_t ub = static_cast<uint64_t>(term);
+	const uint64_t sum = ua + ub;
+	const bool same_sign_operands = ((ua ^ ub) >> 63) == 0;
+	const bool sum_sign_differs = ((ua ^ sum) >> 63) != 0;
+	if (same_sign_operands && sum_sign_differs) {
+		return superslm::SslmForwardStatus::BiasReconcileProductOutOfDomain;
+	}
+	return superslm::SslmForwardStatus::Ok;
 }
 
 superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
                                               const superslm::CarriedScale* incoming,
                                               size_t n_incoming,
                                               superslm::CarriedScale site_constant) {
-	(void)wide_row;
-	(void)n;
-	(void)incoming;
-	(void)n_incoming;
-	(void)site_constant;
-	return superslm::ChainResult{superslm::SslmForwardStatus::WorkspaceTooSmall};  // STUB (B2)
+	static constexpr size_t kMaxRow = 32;
+	static constexpr size_t kMaxIncoming = 32;
+	if (n > kMaxRow || n_incoming > kMaxIncoming) {
+		throw std::runtime_error(
+		    "RequantChainCheckedGpu: fixture exceeds this guard-tier kernel's fixed capacity "
+		    "(32 row elements / 32 incoming factors) -- B4's production shader (not this B2 "
+		    "guard-only tier) is where the real per-site row widths are handled");
+	}
+	std::vector<uint8_t> in(16 + kMaxRow * 8 + kMaxIncoming * 16 + 16, 0);
+	const int64_t n_val = static_cast<int64_t>(n);            // n <= kMaxRow, always representable
+	const int64_t n_inc_val = static_cast<int64_t>(n_incoming);
+	std::memcpy(in.data() + 0, &n_val, 8);
+	std::memcpy(in.data() + 8, &n_inc_val, 8);
+	for (size_t i = 0; i < n; ++i) {
+		std::memcpy(in.data() + 16 + i * 8, &wide_row[i], 8);
+	}
+	const size_t incoming_off = 16 + kMaxRow * 8;
+	for (size_t i = 0; i < n_incoming; ++i) {
+		std::memcpy(in.data() + incoming_off + i * 16 + 0, &incoming[i].m, 8);
+		std::memcpy(in.data() + incoming_off + i * 16 + 8, &incoming[i].e, 8);
+	}
+	const size_t site_off = incoming_off + kMaxIncoming * 16;
+	std::memcpy(in.data() + site_off + 0, &site_constant.m, 8);
+	std::memcpy(in.data() + site_off + 8, &site_constant.e, 8);
+
+	auto& pipe = GetOrBuildPipeline("requant_chain_checked");
+	auto out = GetDevice().DispatchOne(pipe.root_sig.Get(), pipe.pso.Get(), in, 8);
+	const int64_t tag = GetI64(out, 0);
+	switch (tag) {
+		case 1:
+			return superslm::ChainResult{superslm::SslmForwardStatus::CarriedScaleMantissaOutOfDomain};
+		case 2:
+			return superslm::ChainResult{superslm::SslmForwardStatus::ChainInputOutOfDomain};
+		default:
+			return superslm::ChainResult{superslm::SslmForwardStatus::Ok};
+	}
 }
 
 // ===========================================================================
