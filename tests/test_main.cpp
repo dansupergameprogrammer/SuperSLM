@@ -20620,23 +20620,43 @@ static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
 }
 
 // ---------------------------------------------------------------------------
-// T-2019 -- Curie's red suite for T-1986 (GPU-serial port: base-only single-
-// sequence forward on D3D12/HLSL). Realizes Sec10's Coverage Model and
-// Sec11's B1-B12 build decomposition (Claude/Vitruvius/t1986-gpu-serial-
-// port-design-2026-08-13.md, commit 0160876d14). Test-design record:
-// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md.
+// T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port: base-only
+// single-sequence forward on D3D12/HLSL). Realizes Sec10's Coverage Model and
+// Sec11's B1-B12 build decomposition, Sec5.8's dispatch_budget contract, and
+// Sec5.9's asynchronous sequence lifecycle (Claude/Vitruvius/t1986-gpu-
+// serial-port-design-2026-08-13.md, commit 2de2e388a6 -- the Sec21 Amendments
+// Fold). Test-design record: Claude/Curie/t2019-gpu-serial-red-suite-2026-08-
+// 13.md, dated section "T-2024 re-derivation."
+//
+// T-2019 authored the original pass against commit 0160876d14 and stopped at
+// Dan's ruling that the design needed amendment (checkpoint filed, casebook
+// Sec8). T-2024 resumes against the amended design: B1/B2/B5's cells and
+// B11's core mechanism (the resumed-RunLayerLoop chain against the real CPU
+// engine) carry forward unchanged, per the checkpoint's own Sec3/Sec4/Sec7
+// classification of what an amendment to the GPU-side contract does and does
+// not move; B7 (dispatch_budget), B8 (restore-time placement), B11's census
+// (X-macro-driven), B12 (injection-based), Sec5.9 (the lifecycle), and B3
+// (Tier 1/2 fallback) are re-derived or newly authored against Sec21. The
+// D-SLM3056 kv_proj precedence fixture is RETIRED (D-SLM3084, proven
+// unconstructible at source) -- see the retirement note above
+// TestT2019_B11_KvProj_BothGuardsFail_StatusInvariantUnderPrecedence.
 //
 // AUTHORED RED AGAINST main@727e63e -- the GPU port does not exist yet. Same
 // two red shapes as T-1899's own section above (Claude/Curie/t1832-...-red-
-// suite-test-design-2026-08-08.md Sec3, Sec9.5; T-1839), plus a third this
+// suite-test-design-2026-08-08.md Sec3, Sec9.5; T-1839), plus two this
 // design's own scale requires:
-//   - LINK-RED: a cell that calls a `superslm_gpu::*Gpu` symbol
+//   - LINK-RED: a cell that calls a `superslm_gpu::*` symbol
 //     (superslm/gpu_port.h) -- declared, never defined. The suite compiles
 //     with 0 errors and fails to LINK on exactly these symbols until
 //     Brunel's build (B1-B12) provides them.
-//   - ASSERTION-RED (none in this section -- every cell's CPU side is
-//     already-shipped, correct production code the GPU comparison is
-//     checked against; the CPU side is expected to keep passing).
+//   - ASSERTION-RED (none in this section -- every cell's CPU/reference side
+//     is either already-shipped, correct production code, or (Sec5.8's
+//     dispatch_budget arithmetic, Sec5.9's lifecycle policy) a local
+//     reference implementation grounded directly in the design's own
+//     specified formula/rules, executed rather than reasoned about, since no
+//     shipped implementation of either NEW contract exists yet to call as an
+//     oracle. Either way, the reference/CPU side is expected to keep
+//     passing; only the GPU comparison half is red, by link failure.
 //   - GREEN-CPU-SIDE, RED-ONLY-AT-LINK: several cells' own CPU-side fixture
 //     construction (the adversarial input, the CPU's own rejecting status)
 //     is real, executes today, and is expected to PASS -- it is the
@@ -20649,10 +20669,7 @@ static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
 // engine (main@727e63e) in a disposable scratch harness before being copied
 // into this suite (StandardsDocument.md Sec5.4: "verified at source or by
 // execution, never by construction") -- not reasoned from the header
-// comments alone. Where a cell's own construction did not converge inside
-// this session's budget, it is marked TODO-CONSTRUCTION below and named in
-// the casebook's own routed-findings section, never silently asserted as
-// proven.
+// comments alone.
 // ---------------------------------------------------------------------------
 
 // --- B1 (Sec7.1/7.2, Sec11 B1): per-primitive battery. Oracle: the real,
@@ -21006,6 +21023,51 @@ struct Cell {
 	bool is_rope;  // true: swap rope_tables at reject_at; false: mutate layers[reject_at]
 };
 
+// Added Sec21 Fold (T-1986 design, D-SLM3083, Dan's amendment 5): the census this
+// oracle checks against is corrected from prose's "closes the class... without
+// anyone remembering to name it" (retired, false) to a schema-driven, compile-time-
+// enumerated field list -- one X-macro header (superslm/sequence_layer_state_fields.def)
+// expanded here once, so a sixth field costs one explicit edit to that header plus
+// this constant, not zero edits and a silent gap.
+enum SequenceLayerStateFieldIndex {
+#define SSLM_SEQ_LAYER_STATE_FIELD(name) kField_##name,
+#include "superslm/sequence_layer_state_fields.def"
+#undef SSLM_SEQ_LAYER_STATE_FIELD
+	kSequenceLayerStateFieldCount
+};
+static_assert(kSequenceLayerStateFieldCount == 5,
+              "SequenceLayerState field census must be updated -- both "
+              "sequence_layer_state_fields.def and this expected count -- when the "
+              "struct (forward_sites.h:441-464) gains or loses a field (D-SLM3083)");
+
+// Compares every field the X-macro above enumerates, incrementing `*fields_compared`
+// once per field, so a mismatch between this function's own coverage and the
+// X-macro's count is a runtime-checkable property (asserted at every call site
+// below), not merely a hoped-for correspondence between two hand-maintained lists.
+// hidden_codes is compared element-wise at this suite's own fixed hidden_size=2
+// (not driven by the X-macro itself, since a pointer-to-buffer field needs its size
+// from the caller -- the X-macro's job is the CENSUS, not every field's own
+// comparison mechanics, matching D-SLM3083's own "one place the field list is
+// written," not "one generic comparator for heterogeneous types").
+inline bool CompareSequenceLayerStateComplete(const SequenceLayerState& cpu,
+                                                const SequenceLayerState& gpu,
+                                                int* fields_compared) {
+	int n = 0;
+	bool ok = true;
+	ok = ok && cpu.hidden_codes[0] == gpu.hidden_codes[0] && cpu.hidden_codes[1] == gpu.hidden_codes[1];
+	++n;  // hidden_codes
+	ok = ok && cpu.hidden_scale.m == gpu.hidden_scale.m && cpu.hidden_scale.e == gpu.hidden_scale.e;
+	++n;  // hidden_scale
+	ok = ok && cpu.layer_index == gpu.layer_index;
+	++n;  // layer_index
+	ok = ok && cpu.kv_saturation_count == gpu.kv_saturation_count;
+	++n;  // kv_saturation_count
+	ok = ok && cpu.context_length == gpu.context_length;
+	++n;  // context_length
+	if (fields_compared) *fields_compared = n;
+	return ok;
+}
+
 }  // namespace t2019_b11
 
 static void TestT2019_B11_SequenceLayerStateComplete_QProj() {
@@ -21038,14 +21100,16 @@ static void TestT2019_B11_SequenceLayerStateComplete_QProj() {
 		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
 		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
 		    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
-		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
-		              gpu_seq.hidden_codes[0] == cpu_seq.hidden_codes[0] &&
-		              gpu_seq.hidden_codes[1] == cpu_seq.hidden_codes[1] &&
-		              gpu_seq.hidden_scale.m == cpu_seq.hidden_scale.m &&
-		              gpu_seq.hidden_scale.e == cpu_seq.hidden_scale.e &&
-		              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count &&
-		              gpu_seq.context_length == cpu_seq.context_length,
-		          "q_proj@k=%u: GPU SequenceLayerState (all 5 fields) == CPU oracle's", k);
+		int fields_compared = 0;
+		const bool state_ok =
+		    CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+		CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+		          "q_proj@k=%u: SequenceLayerState comparison covers %d fields, want %d "
+		          "(X-macro census, D-SLM3083)",
+		          k, fields_compared, kSequenceLayerStateFieldCount);
+		CHECK_MSG(gpu == cpu && state_ok,
+		          "q_proj@k=%u: GPU SequenceLayerState (%d-field census) == CPU oracle's", k,
+		          kSequenceLayerStateFieldCount);
 	}
 }
 
@@ -21092,37 +21156,63 @@ static void TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias() {
 			    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
 			const int8_t* gpu_k = superslm_gpu::KeyRowGpu(gpu_ws.data(), k, 1, 1, 2, 0, 0);  // LINK-RED
 			const int8_t* gpu_v = superslm_gpu::ValueRowGpu(gpu_ws.data(), k, 1, 1, 2, 0, 0);  // LINK-RED
-			CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
-			              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count &&
-			              gpu_seq.context_length == cpu_seq.context_length &&
-			              gpu_k[0] == 0 && gpu_k[1] == 0 && gpu_v[0] == 0 && gpu_v[1] == 0,
-			          "kv_proj(%s)@k=%u: GPU SequenceLayerState + K/V-absent == CPU oracle's",
-			          which == 0 ? "k_bias" : "v_bias", k);
+			int fields_compared = 0;
+			const bool state_ok =
+			    CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+			CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+			          "kv_proj(%s)@k=%u: SequenceLayerState comparison covers %d fields, want "
+			          "%d (X-macro census, D-SLM3083)",
+			          which == 0 ? "k_bias" : "v_bias", k, fields_compared,
+			          kSequenceLayerStateFieldCount);
+			CHECK_MSG(gpu == cpu && state_ok && gpu_k[0] == 0 && gpu_k[1] == 0 && gpu_v[0] == 0 &&
+			              gpu_v[1] == 0,
+			          "kv_proj(%s)@k=%u: GPU SequenceLayerState (%d-field census) + K/V-absent "
+			          "== CPU oracle's",
+			          which == 0 ? "k_bias" : "v_bias", k, kSequenceLayerStateFieldCount);
 		}
 	}
 }
 
-// TODO-CONSTRUCTION (routed, Curie casebook Sec6): D-SLM3056's own 3rd,
-// precedence-discriminating kv_proj fixture requires k_bias and v_bias to
-// fail SIMULTANEOUSLY with DISTINGUISHABLE statuses (one via
-// CheckRoundingDivideByPotExponentDomain, the other via
-// CheckBiasAccumulateMagnitudeDomain's own BiasReconcileProductOutOfDomain).
-// This session's scratch-harness search (32+ (magnitude, kv_landing_e_t_v)
-// combinations, k_bias and v_bias independently, NLayerFixture's own
-// canonical scale) found ONLY RoundingDivideByPotExponentOutOfDomain
-// reachable at every tested cell -- BiasReconcileProductOutOfDomain was
-// never observed. The fixture below asserts the CONFIRMED, EXECUTED
-// two-guards-fire cell (both k_bias and v_bias set simultaneously, both via
-// the SAME check) and documents that it does NOT yet discriminate a
-// reversed-precedence implementation (a build reporting v_bias's status
-// where k_bias's is due would pass this cell identically) -- named as an
-// open construction question for the build seat / a follow-up session, not
-// asserted as closed. This is NOT a Coverage Model gap: the model correctly
-// demands the discriminating fixture; this session did not find its input.
-static void TestT2019_B11_SequenceLayerStateComplete_KvProj_PrecedenceFixture_TodoConstruction() {
+// RETIRED 2026-08-13 (T-1986 design Sec21 Fold, D-SLM3084) -- the prior
+// TestT2019_B11_SequenceLayerStateComplete_KvProj_PrecedenceFixture_TodoConstruction
+// asserted a fixture proven, at source, unconstructible: `forward_sites.cpp:1435,1440`
+// pass the IDENTICAL `normed_scale.m`/`normed_scale.e` as `in_scale_m`/`in_scale_e` to
+// both the `k_bias` and `v_bias` calls of `ApplyBiasReconcileRow`, and that function's
+// entire per-channel loop is gated behind one scalar check,
+// `CheckRoundingDivideByPotExponentDomain(kBiasQFormat, in_scale_e)`
+// (`forward_sites.cpp:993`), evaluated over byte-identical arguments for both calls --
+// so (a) if that scalar gate is out of domain, BOTH calls return the identical
+// `RoundingDivideByPotExponentOutOfDomain`, and (b) if it is in-domain, both calls'
+// own per-channel `CheckBiasAccumulateMagnitudeDomain` guards return only `Ok` or
+// `BiasReconcileProductOutOfDomain` -- never the scalar gate's status -- so a
+// per-channel failure on either side is ALSO the identical status. No admissible
+// artifact makes `k_bias`'s call and `v_bias`'s call return two different non-`Ok`
+// statuses from one `kv_proj` invocation. This is exactly what this session's own
+// prior 32+-combination execution search found without exception (never once
+// observing `BiasReconcileProductOutOfDomain` alongside the scalar guard) -- the
+// search was not incomplete, it was probing a structural impossibility. The
+// precedence claim (Sec5.6: "`k_bias`'s failure status if `k_bias` failed, else
+// `v_bias`'s") is proven, and provable, only on the single-guard-failure branch --
+// already discharged by the two mandatory fixtures in
+// TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias above (D-SLM3053/
+// D-SLM3054) -- and is status-invariant under precedence choice BY CONSTRUCTION on
+// the both-fail branch: a correct-precedence and a reversed-precedence
+// implementation report the identical status on every admissible input, so there is
+// no discriminating instrument to build, not an untested residual gap. The cell
+// below replaces the retired one: it pins the impossibility itself, on the real CPU
+// engine, so a future change to the K/V landing block's own call site (should one
+// ever decouple `k_bias`/`v_bias` onto independent scales) is caught by this
+// assertion going RED rather than by a silent, unnoticed change in what "the
+// precedence claim's scope" actually is.
+static void TestT2019_B11_KvProj_BothGuardsFail_StatusInvariantUnderPrecedence() {
 	using namespace t2019_b11;
+	// k_bias and v_bias set to DIFFERENT magnitudes (so a naive "same array
+	// reused" objection does not explain the result) -- both still trip the
+	// SAME scalar exponent guard, because both calls read the SAME
+	// normed_scale.e (forward_sites.cpp:1435,1440), not because the
+	// magnitudes happen to coincide.
 	static int64_t kBias[2] = {INT64_C(4611686018427387903), INT64_C(4611686018427387903)};
-	static int64_t vBias[2] = {INT64_C(2305843009213693951), INT64_C(2305843009213693951)};  // distinct magnitude
+	static int64_t vBias[2] = {INT64_C(2305843009213693951), INT64_C(2305843009213693951)};
 	NLayerFixture<4> fixture;
 	fixture.layers[1].k_bias = kBias;
 	fixture.layers[1].v_bias = vBias;
@@ -21131,34 +21221,18 @@ static void TestT2019_B11_SequenceLayerStateComplete_KvProj_PrecedenceFixture_To
 	std::vector<uint8_t> cpu_ws;
 	std::vector<std::pair<bool, bool>> cpu_kv;
 	const auto cpu = RunResumedToRejection<4>(fixture, 1, nullptr, cpu_seq, cpu_ws, cpu_kv);
-	// Per Sec5.6's own precedence rule: k_bias's failure status if k_bias
-	// failed, else v_bias's. Both guards are the same check family in every
-	// combination this session found, so this assertion currently pins "a
-	// rejection occurred," not "k_bias's status specifically was chosen over
-	// v_bias's" -- the discrimination the design's own D-SLM3056 finding
-	// requires is NOT yet closed by this cell (see TODO-CONSTRUCTION above).
-	CHECK_MSG(cpu != SslmForwardStatus::Ok,
-	          "kv_proj precedence fixture: CPU oracle rejects (status=%s) when both k_bias and "
-	          "v_bias fail simultaneously (real, running, must already pass)",
+	CHECK_MSG(cpu == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+	          "both k_bias and v_bias failing simultaneously (distinct magnitudes, shared "
+	          "normed_scale.e): CPU oracle status == %s, want "
+	          "RoundingDivideByPotExponentOutOfDomain -- the SAME status either guard alone "
+	          "produces (D-SLM3084's own proof, real, running, must already pass)",
 	          superslm::SslmForwardStatusName(cpu));
-
-	SequenceLayerState gpu_seq;
-	int8_t gpu_codes[2] = {5, -5};
-	gpu_seq.hidden_codes = gpu_codes;
-	gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
-	gpu_seq.layer_index = 0;
-	std::vector<uint8_t> gpu_ws(4 * kWsPerLayer, 0);
-	const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
-	    gpu_seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1, 2, /*context_cap=*/1,
-	    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
-	CHECK_MSG(gpu == cpu, "kv_proj precedence fixture: GPU status == CPU oracle's %s, got %s",
-	          superslm::SslmForwardStatusName(cpu), superslm::SslmForwardStatusName(gpu));
 }
 
 static void TestT2019_B11_SequenceLayerStateComplete_Rope() {
 	using namespace t2019_b11;
-	using superslm::FixtureSection;
 	using namespace superslm_test;
+	using superslm_test::FixtureSection;
 	// Verified by execution (scratch harness): a rope-table view carrying
 	// ONLY "cos" (no "sin") makes RopeApplySite's own step-2 guard return
 	// RopeTableTensorMissing, uniformly for every layer that reaches RoPE --
@@ -21226,8 +21300,16 @@ static void TestT2019_B11_SequenceLayerStateComplete_Rope() {
 		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
 		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
 		    bad_view.rope_tables, gpu_ws.data(), gpu_ws.size());
-		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index,
-		          "RoPE@k=%u: GPU status/layer_index == CPU oracle's", k);
+		int fields_compared = 0;
+		const bool state_ok =
+		    CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+		CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+		          "RoPE@k=%u: SequenceLayerState comparison covers %d fields, want %d "
+		          "(X-macro census, D-SLM3083)",
+		          k, fields_compared, kSequenceLayerStateFieldCount);
+		CHECK_MSG(gpu == cpu && state_ok,
+		          "RoPE@k=%u: GPU SequenceLayerState (%d-field census) == CPU oracle's", k,
+		          kSequenceLayerStateFieldCount);
 	}
 }
 
@@ -21264,9 +21346,16 @@ static void TestT2019_B11_SequenceLayerStateComplete_PostKvProjSite_DownProj() {
 		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
 		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
 		    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
-		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
-		              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count,
-		          "down_proj@k=%u: GPU SequenceLayerState == CPU oracle's", k);
+		int fields_compared = 0;
+		const bool state_ok =
+		    CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+		CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+		          "down_proj@k=%u: SequenceLayerState comparison covers %d fields, want %d "
+		          "(X-macro census, D-SLM3083)",
+		          k, fields_compared, kSequenceLayerStateFieldCount);
+		CHECK_MSG(gpu == cpu && state_ok,
+		          "down_proj@k=%u: GPU SequenceLayerState (%d-field census) == CPU oracle's", k,
+		          kSequenceLayerStateFieldCount);
 	}
 }
 
@@ -21298,14 +21387,240 @@ static void TestT2019_B11_SequenceLayerStateComplete_L2K0() {
 	const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
 	    gpu_seq, fixture.layers, 2, /*layer_budget=*/2, 2, 2, 1, 2, /*context_cap=*/1,
 	    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
-	CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index,
-	          "L=2,k=0: GPU SequenceLayerState == CPU oracle's");
+	int fields_compared = 0;
+	const bool state_ok = CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+	CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+	          "L=2,k=0: SequenceLayerState comparison covers %d fields, want %d (X-macro "
+	          "census, D-SLM3083)",
+	          fields_compared, kSequenceLayerStateFieldCount);
+	CHECK_MSG(gpu == cpu && state_ok,
+	          "L=2,k=0: GPU SequenceLayerState (%d-field census) == CPU oracle's",
+	          kSequenceLayerStateFieldCount);
+}
+
+// --- B7 (Sec5.8, Sec11 B7, D-SLM3069-D-SLM3072, T-1986 Sec21 Fold amendment 1):
+// the dispatch_budget whole-layer-quanta contract. Retires the prior layer_budget
+// red-first construction (it tested a CPU-side ABI parameter this step's GPU
+// recorder never consumes -- SuperSLM_Plan.md Sec12's sslm_decode_step's own
+// layerBudget, not sslm_decode_step_gpu's own dispatch_budget). Oracle: this
+// design's own Sec5.8 formula, computed by a local reference function
+// (ExpectedDispatchBudgetPlan below) grounded directly in the design text --
+// there is no shipped implementation of this NEW contract to call as an oracle,
+// so the oracle is the specified arithmetic itself, executed (trivial, no
+// execution risk), not reasoned about in the assertion. LINK-RED via
+// PlanDispatchBudgetGpu. ---
+
+namespace t2019_b7 {
+using superslm::SslmForwardStatus;
+using superslm_gpu::SslmGpuStatus;
+
+constexpr uint32_t kDispatchesPerLayer = 17;  // 16 sites + 1 commit, Sec5.4/Sec5.6/Sec5.8
+
+// Sec5.8's own formula, computed locally: complete_layers = floor(dispatch_budget /
+// 17), capped at (num_hidden_layers - current_layer_position); status is
+// DispatchBudgetTooSmall iff the floor division yields zero layers AND the cap
+// itself is not already zero (a sequence already at the last layer with budget for
+// one more isn't "too small," it has nothing left to do -- Ok with 0 layers is a
+// distinct, unnamed-by-this-fixture case this suite does not need to construct
+// since every cell below keeps current_layer_position at 0).
+SslmGpuStatus ExpectedDispatchBudgetPlan(uint32_t dispatch_budget, uint32_t num_hidden_layers,
+                                          uint32_t current_layer_position,
+                                          uint32_t* out_layers) {
+	const uint32_t remaining = num_hidden_layers - current_layer_position;
+	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor
+	if (layers > remaining) layers = remaining;               // token-boundary cap
+	*out_layers = layers;
+	return (layers == 0) ? SslmGpuStatus::DispatchBudgetTooSmall : SslmGpuStatus::Ok;
+}
+}  // namespace t2019_b7
+
+static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
+	using namespace t2019_b7;
+	constexpr uint32_t N = 28;  // 1.5B-Instruct tier's own layer count (Sec14 Fold F1)
+
+	// {0, ..., 16} individually -- uniform DispatchBudgetTooSmall, zero layers,
+	// not merely the endpoints (Sec5.8's own explicit obligation).
+	for (uint32_t budget = 0; budget <= 16; ++budget) {
+		uint32_t cpu_layers = 0;
+		const auto cpu_status = ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_status == SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
+		          "dispatch_budget=%u: reference formula gives DispatchBudgetTooSmall/0 layers "
+		          "(Sec5.8's own floor-division-is-uniformly-zero-here property, executed)",
+		          budget);
+		uint32_t gpu_layers = 999;
+		const auto gpu_status =
+		    superslm_gpu::PlanDispatchBudgetGpu(budget, N, 0, &gpu_layers);  // LINK-RED
+		CHECK_MSG(gpu_status == cpu_status && gpu_layers == cpu_layers,
+		          "dispatch_budget=%u: GPU plan (status=?, layers=%u) == reference (status=%s, "
+		          "layers=%u)",
+		          budget, gpu_layers, superslm::SslmForwardStatusName(SslmForwardStatus::Ok),
+		          cpu_layers);
+	}
+
+	// 17: exactly one layer.
+	{
+		uint32_t cpu_layers = 0;
+		ExpectedDispatchBudgetPlan(17, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_layers == 1, "dispatch_budget=17: reference formula gives exactly 1 layer");
+		uint32_t gpu_layers = 999;
+		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(17, N, 0, &gpu_layers);  // LINK-RED
+		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 1,
+		          "dispatch_budget=17: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
+	}
+
+	// Non-dividing remainder 17k+r (0<r<17) at a small k and a k near N.
+	for (uint32_t k : {2u, N - 2u}) {
+		for (uint32_t r : {1u, 8u, 16u}) {
+			const uint32_t budget = 17 * k + r;
+			uint32_t cpu_layers = 0;
+			ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
+			CHECK_MSG(cpu_layers == k,
+			          "dispatch_budget=%u (17*%u+%u): reference formula gives exactly %u layers "
+			          "(remainder %u unused)",
+			          budget, k, r, k, r);
+			uint32_t gpu_layers = 999;
+			const auto gpu_status =
+			    superslm_gpu::PlanDispatchBudgetGpu(budget, N, 0, &gpu_layers);  // LINK-RED
+			CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == k,
+			          "dispatch_budget=%u: GPU plan gives Ok/%u layers, got layers=%u", budget, k,
+			          gpu_layers);
+		}
+	}
+
+	// Exact-token-completion boundary (17*N) and one unit past it (17*N+1) --
+	// the token-boundary cap, not the raw quotient, must be what stops the call.
+	for (uint32_t budget : {kDispatchesPerLayer * N, kDispatchesPerLayer * N + 1}) {
+		uint32_t cpu_layers = 0;
+		ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_layers == N,
+		          "dispatch_budget=%u: reference formula caps at num_hidden_layers=%u, not the "
+		          "raw quotient (%u)",
+		          budget, N, budget / kDispatchesPerLayer);
+		uint32_t gpu_layers = 999;
+		const auto gpu_status =
+		    superslm_gpu::PlanDispatchBudgetGpu(budget, N, 0, &gpu_layers);  // LINK-RED
+		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == N,
+		          "dispatch_budget=%u: GPU plan caps at %u layers, got layers=%u -- must not spill "
+		          "into a second token's dispatches regardless of leftover budget",
+		          budget, N, gpu_layers);
+	}
+}
+
+static void TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum() {
+	// A rejecting layer inside the budgeted span still records and executes its
+	// full 17-dispatch quantum (never truncated early on a guard firing) --
+	// "never suspend mid-layer" holds independent of whether the layer's own
+	// guards fire (Sec5.8's own obligation). Realized on the real CPU engine:
+	// the resumed-call mechanism already proves a rejecting layer is either
+	// fully attempted (all its checked calls run until the first rejects) or
+	// not attempted at all -- there is no CPU-side notion of "half a layer's
+	// dispatches," so this cell pins that the GPU plan's own layer-granularity
+	// (never finer) matches, via the same q_proj fixture already proven in
+	// TestT2019_B11_SequenceLayerStateComplete_QProj.
+	using namespace t2019_b11;
+	using namespace t2019_b7;
+	NLayerFixture<8> fixture;
+	static int32_t g[2] = {65536, 65536};
+	fixture.layers[3].attn_norm_gain = g;  // reject at layer 3, budget spans past it
+
+	SequenceLayerState cpu_seq;
+	std::vector<uint8_t> cpu_ws;
+	std::vector<std::pair<bool, bool>> cpu_kv;
+	const auto cpu = RunResumedToRejection<8>(fixture, 3, nullptr, cpu_seq, cpu_ws, cpu_kv);
+	CHECK_MSG(cpu == SslmForwardStatus::ChainInputOutOfDomain && cpu_seq.layer_index == 3,
+	          "reference: a rejecting layer inside a multi-layer budget commits every layer "
+	          "strictly before it and none at or after -- layer_index=%u, want 3",
+	          cpu_seq.layer_index);
+	// The GPU plan for a budget spanning 8 layers (136 dispatches) at
+	// current_layer_position=0 must still report 8 layers PLANNED (the
+	// rejection is a runtime outcome of executing the plan, not a change to
+	// the plan itself -- Sec5.8's own "never truncated on a guard firing").
+	uint32_t gpu_layers = 999;
+	const auto gpu_status =
+	    superslm_gpu::PlanDispatchBudgetGpu(8 * kDispatchesPerLayer, 8, 0, &gpu_layers);  // LINK-RED
+	CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 8,
+	          "GPU plan for an 8-layer budget spanning a rejecting layer still plans all 8 "
+	          "layers (the rejection is executed, not pre-empted by the planner) -- got %u",
+	          gpu_layers);
+}
+
+// --- Sec5.9 (T-1986 Sec21 Fold, D-SLM3076-D-SLM3079, amendment 3): the
+// asynchronous sequence lifecycle. Every cell is a POLICY assertion (does this
+// call proceed or return SSLM_BUSY given the sequence's/model's current state) --
+// testable without a device, since no actual GPU submission is needed to answer a
+// policy question. LINK-RED via the `CallProceedsOrBusy_*`/`GpuReadySignalsCompletion`
+// symbols. ---
+
+static void TestT2019_Sec59_BusyOnEachOfTheFiveNamedCallsWhileSubmitted() {
+	// Each of the five calls Sec5.9 names must refuse (return false = would
+	// report SSLM_BUSY) against a Submitted sequence, and proceed against an
+	// Idle/Completed one (sequence_is_submitted=false covers both, since
+	// sslm_gpu_ready itself is what collapses Completed back to Idle -- see
+	// the dual-role cell below).
+	struct Call {
+		const char* name;
+		bool (*fn)(bool);
+	};
+	const Call calls[] = {
+	    {"sslm_decode_step_gpu", superslm_gpu::CallProceedsOrBusy_DecodeStepGpu},
+	    {"sslm_seq_save", superslm_gpu::CallProceedsOrBusy_SeqSave},
+	    {"sslm_seq_reset", superslm_gpu::CallProceedsOrBusy_SeqReset},
+	    {"sslm_seq_release", superslm_gpu::CallProceedsOrBusy_SeqRelease},
+	};
+	for (const auto& c : calls) {
+		const bool proceeds_while_submitted = c.fn(/*sequence_is_submitted=*/true);  // LINK-RED
+		CHECK_MSG(!proceeds_while_submitted,
+		          "%s against a Submitted sequence must refuse (SSLM_BUSY), never block or race "
+		          "against the in-flight command list (Sec5.9, D-SLM3077)",
+		          c.name);
+		const bool proceeds_while_idle = c.fn(/*sequence_is_submitted=*/false);  // LINK-RED
+		CHECK_MSG(proceeds_while_idle,
+		          "%s against an Idle sequence must proceed normally", c.name);
+	}
+}
+
+static void TestT2019_Sec59_ModelUnmapRequiresNoLiveSequences() {
+	// Model-wide (D-SLM3079): checked against the SET of sequences created
+	// against the model handle, not a single targeted one.
+	const bool proceeds_with_one_submitted =
+	    superslm_gpu::CallProceedsOrBusy_ModelUnmap(/*any_sequence_submitted=*/true);  // LINK-RED
+	CHECK_MSG(!proceeds_with_one_submitted,
+	          "sslm_model_unmap with ANY sequence Submitted must refuse (SSLM_BUSY) and tear "
+	          "nothing down, even if the examined sequence itself is Idle (Sec5.9, D-SLM3079)");
+	const bool proceeds_with_none_submitted =
+	    superslm_gpu::CallProceedsOrBusy_ModelUnmap(/*any_sequence_submitted=*/false);  // LINK-RED
+	CHECK_MSG(proceeds_with_none_submitted,
+	          "sslm_model_unmap with every sequence Idle or collapsed-to-Idle must unmap cleanly");
+}
+
+static void TestT2019_Sec59_GpuReadyDualRole() {
+	using superslm::SslmForwardStatus;
+	// sslm_gpu_ready is exempt from SSLM_BUSY by construction (Sec5.9) --
+	// polling before the fence signals leaves the sequence Submitted, *ready=0.
+	int32_t ready = -1;
+	SslmForwardStatus status = SslmForwardStatus::Ok;
+	const bool proceeded_before_signal =
+	    superslm_gpu::GpuReadySignalsCompletion(/*fence_signaled=*/false, &ready, &status);  // LINK-RED
+	CHECK_MSG(proceeded_before_signal && ready == 0,
+	          "sslm_gpu_ready polled before the fence signals: call proceeds (never SSLM_BUSY), "
+	          "*ready == 0 (still Submitted, ordinary polling, not an error) -- got ready=%d",
+	          ready);
+
+	ready = -1;
+	const bool proceeded_after_signal =
+	    superslm_gpu::GpuReadySignalsCompletion(/*fence_signaled=*/true, &ready, &status);  // LINK-RED
+	CHECK_MSG(proceeded_after_signal && ready == 1,
+	          "sslm_gpu_ready polled after the fence signals: collapses Submitted -> Completed "
+	          "-> Idle in this one call, *ready == 1 with the aggregated status handed back -- "
+	          "got ready=%d",
+	          ready);
 }
 
 // --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
 // level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
-// C-ABI wrapper is not yet built on any backend). Oracle: the real,
-// shipped RunLayerLoop, called once per token. ---
+// C-ABI wrapper is not yet built on any backend). Restore-time device allocation
+// happens inside RestoreGpuSequenceState (D-SLM3080, Sec5.9), never a model-map-
+// level call. Oracle: the real, shipped RunLayerLoop, called once per token. ---
 
 static void TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu() {
 	// Verified by execution (scratch harness): a single-token, clean,
@@ -21458,25 +21773,103 @@ static void TestT2019_B3_DescriptorHeapRegionCleanAfterHandleRelease() {
 	          "map into the freed region (Sec10 dim 1, Sec11 B3)");
 }
 
-// --- B12 (Sec10 dim 5, Sec11 B12): GPU residency allocation-failure handling. ---
-
-static void TestT2019_B12_AllocationFailureReturnsDefinedStatusNoResidue() {
-	// An over-budget request, sized past any plausible real adapter's VRAM
-	// (Sec9's own envelope figures top out in single-digit GiB) -- the
-	// build seat's own IDXGIAdapter3::QueryVideoMemoryInfo-driven sizing is
-	// what makes this concretely "over budget" on the test device; this
-	// cell states the property the gate requires (a defined failure, no
-	// partial device state) rather than the exact byte count, which is a
-	// property of the test device B3/B12 run on, not of this fixture.
-	constexpr uint64_t kAbsurdlyOverBudget = UINT64_C(1) << 40;  // 1 TiB
-	const bool defined_failure =
-	    superslm_gpu::GpuResidencyMapReturnsDefinedFailureOnOverBudgetRequest(  // LINK-RED
-	        kAbsurdlyOverBudget);
-	CHECK_MSG(defined_failure,
-	          "an over-budget GPU-residency map request returns a defined failure status with no "
-	          "partial device-resident state left behind, confirmed reachable on a real "
-	          "memory-pressure configuration (Sec9/Sec10 dim 5) -- not merely coded and never hit");
+// Added Sec21 Fold, D-SLM3082 (Dan's amendment 5): Resource Binding Tier 1/2
+// feature-query fallback -- every device this project's probes have run on
+// reports Tier 3 (this design's own binding architecture requirement,
+// D-SLM3000), so the sub-Tier-3 path is untestable on owned hardware and must be
+// exercised through a mocked feature query, the same injection technique B12
+// uses below for allocation failure.
+static void TestT2019_B3_ResourceBindingTierFallback() {
+	for (int tier : {1, 2}) {
+		superslm_gpu::ArmResourceBindingTierMock(tier);  // LINK-RED
+		const bool proceeds = superslm_gpu::MapModelGpuResidencyTierCheck();  // LINK-RED
+		CHECK_MSG(!proceeds,
+		          "ResourceBindingTier mocked to Tier %d: the GPU path returns the defined "
+		          "\"unsupported on this device\" status, attempts no descriptor-table build, "
+		          "no UAV table, and no device allocation (Sec11 B3, D-SLM3082)",
+		          tier);
+		superslm_gpu::ClearResourceBindingTierMock();  // LINK-RED
+	}
+	// With the mock removed, the existing CPU-only forward path remains fully
+	// functional -- the GPU-unsupported path must not second-order break the
+	// CPU leg this design does not otherwise touch. Realized here as: the real,
+	// shipped RunLayerLoop (no GPU involvement at all) still runs clean on a
+	// fresh fixture, unaffected by anything the Tier-mock cells above did.
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+	NLayerFixture<4> fixture;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	uint8_t ws[4 * 1 * 1 * 2 * 2] = {};
+	const auto cpu_status = superslm::RunLayerLoop(seq, fixture.layers, 4, 4, 2, 2, 1, 2, 64,
+	                                                 fixture.view.rope_tables, ws, sizeof(ws));
+	CHECK_MSG(cpu_status == SslmForwardStatus::Ok,
+	          "CPU-only forward path status == %s, want Ok -- unaffected by the GPU-unsupported "
+	          "path above (real, running, must already pass)",
+	          superslm::SslmForwardStatusName(cpu_status));
 }
+
+// --- B12 (Sec10 dim 5, Sec11 B12, redesigned Sec21 Fold D-SLM3081, Dan's
+// amendment 4): deterministic allocation-failure injection, not real VRAM
+// exhaustion (non-deterministic, therefore not a valid gate). Retires
+// TestT2019_B12_AllocationFailureReturnsDefinedStatusNoResidue's own
+// GpuResidencyMapReturnsDefinedFailureOnOverBudgetRequest construction --
+// superseded, not merely extended, since a gate that sometimes passes for the
+// wrong reason (the test device's own free VRAM at run time) is not a gate. ---
+
+static void TestT2019_B12_InjectedFailureAtEveryAllocationIndex() {
+	const uint32_t N = superslm_gpu::kGpuResidencyAllocationCallCount;  // LINK-RED
+	for (uint32_t k = 0; k < N; ++k) {
+		superslm_gpu::ArmAllocationFailureInjection(k);  // LINK-RED
+		const bool ok = superslm_gpu::MapModelGpuResidencyWithInjection(  // LINK-RED
+		    /*required_bytes=*/UINT64_C(1) << 30);
+		CHECK_MSG(!ok,
+		          "allocation call index %u/%u injected to fail: sslm_model_map's GPU path "
+		          "returns the defined failure status (Sec11 B12, D-SLM3081 item (1))",
+		          k, N);
+		CHECK_MSG(superslm_gpu::LiveAllocationCount() == 0,  // LINK-RED
+		          "allocation call index %u/%u: transactional-cleanup verification -- every "
+		          "allocation made at index 0..%u (the ones that succeeded before the injected "
+		          "failure) is released before the call returns; mock allocator's own "
+		          "live-allocation count must read 0, got %u",
+		          k, N, k == 0 ? 0 : k - 1, superslm_gpu::LiveAllocationCount());
+		superslm_gpu::ClearAllocationInjection();  // LINK-RED
+		const bool clean_map_ok =
+		    superslm_gpu::MapModelGpuResidencyWithInjection(UINT64_C(1) << 30);  // LINK-RED
+		CHECK_MSG(clean_map_ok,
+		          "allocation call index %u/%u: a subsequent, uninjected map at the same budget "
+		          "succeeds cleanly, with no residue from the failed attempt", k, N);
+	}
+}
+
+static void TestT2019_B12_LowBudgetPreflightSkipsAllAllocationCalls() {
+	// Mocked budget smaller than the computed requirement -- deterministic and
+	// independent of the test device's real VRAM (Sec11 B12, D-SLM3081 item
+	// "second, independent construction").
+	superslm_gpu::ArmLowBudgetInjection(/*mocked_budget_bytes=*/1);  // LINK-RED
+	const bool ok = superslm_gpu::MapModelGpuResidencyWithInjection(  // LINK-RED
+	    /*required_bytes=*/UINT64_C(1) << 30);
+	CHECK_MSG(!ok,
+	          "budget mocked to 1 byte (far below any computed requirement): map returns the "
+	          "defined failure status without attempting a single one of the N allocation calls");
+	CHECK_MSG(superslm_gpu::AllocationCallsAttempted() == 0,  // LINK-RED
+	          "budget mocked low: 0 of the N allocation calls attempted (the preflight fails "
+	          "cheaply, before any partial allocation), got %u attempted",
+	          superslm_gpu::AllocationCallsAttempted());
+	superslm_gpu::ClearAllocationInjection();  // LINK-RED
+	const bool clean_ok = superslm_gpu::MapModelGpuResidencyWithInjection(UINT64_C(1) << 30);  // LINK-RED
+	CHECK_MSG(clean_ok, "with the low-budget mock removed, the same call proceeds normally");
+}
+
+// A real memory-pressure configuration is an OPTIONAL SMOKE (D-SLM3067 item 4's
+// own allowance), not a required gate -- not authored as a CHECK_MSG-bearing test
+// cell in this suite; its pass/fail is not what B12's correctness rests on, and
+// this suite does not run it. Named here so its absence from this file reads as
+// a deliberate disposition, not an oversight.
 
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
@@ -22249,6 +22642,38 @@ int main(int argc, char** argv) {
 	TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand();
 	TestOptionGMicrostepWholeTokenParity_CompiledEngine();
 	TestOptionGSelectionDispatch_EndToEndProductionPath();
+
+	// T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port), amended
+	// design commit 2de2e388a6. See this file's own T-2019/T-2024 section above;
+	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records worktree)
+	// for the full test-design casebook and the T-2024 re-derivation section.
+	TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_RequantTokenCodeWide_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_BiasReconcileWide_DomainSweep_GpuMatchesCpu();
+	TestT2019_B1_CombineCarriedScale_ExponentSaturationBoundary_GpuMatchesCpu();
+	TestT2019_B2_ComposedExponentGuard_RejectsOutOfDomain_GpuMatchesCpu();
+	TestT2019_B2_MantissaGuard_Step0AndStep5_RejectsOutOfDomain_GpuMatchesCpu();
+	TestT2019_B2_DPrimeGuard_RejectsAbove2Pow31_GpuMatchesCpu();
+	TestT2019_B2_ApplyBiasReconcileRow_KBiasVBias_ScalarGuard_GpuMatchesCpu();
+	TestT2019_B5_MaxAbsReduceWide_FixtureDomainAbove2Pow31_GpuMatchesCpu();
+	TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary();
+	TestT2019_B7_DispatchBudget_RejectingLayerStillRecordsFullQuantum();
+	TestT2019_Sec59_BusyOnEachOfTheFiveNamedCallsWhileSubmitted();
+	TestT2019_Sec59_ModelUnmapRequiresNoLiveSequences();
+	TestT2019_Sec59_GpuReadyDualRole();
+	TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu();
+	TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu();
+	TestT2019_B11_SequenceLayerStateComplete_QProj();
+	TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias();
+	TestT2019_B11_KvProj_BothGuardsFail_StatusInvariantUnderPrecedence();
+	TestT2019_B11_SequenceLayerStateComplete_Rope();
+	TestT2019_B11_SequenceLayerStateComplete_PostKvProjSite_DownProj();
+	TestT2019_B11_SequenceLayerStateComplete_L2K0();
+	TestT2019_B3_DescriptorTableBinding_KnownPatternReadback();
+	TestT2019_B3_DescriptorHeapRegionCleanAfterHandleRelease();
+	TestT2019_B3_ResourceBindingTierFallback();
+	TestT2019_B12_InjectedFailureAtEveryAllocationIndex();
+	TestT2019_B12_LowBudgetPreflightSkipsAllAllocationCalls();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
