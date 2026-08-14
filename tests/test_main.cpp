@@ -20674,6 +20674,26 @@ inline void WireAdaptedProjection(superslm::LayerAdapterProjection& proj, const 
 	proj.u_fold_entry = &kUFoldEntry;
 }
 
+// T-2041 (Poirot c81e48c review, Significant 3 -- production-side hook, no assertion landed
+// here): every existing engine cell wires the pass-through triples above
+// (identity=1, so `ApplyAmplifyingWeightScaleFold` short-circuits before reading `mult` or
+// `exponent` -- M1 in the review's own mutation log proves the engine suite cannot detect the
+// fold arithmetic's removal as a result). This overload lets a cell wire an ARBITRARY
+// non-pass-through delta-fold/u-fold entry pair through the exact same `LayerAdapterProjection`
+// field assignment, so the pin round's own cell (a non-identity triple with a negative exponent,
+// asserted against a hand-computed composed value -- the review's own remedy text) does not need
+// to duplicate this wiring or reach into `LayerAdapterProjection`'s fields directly. This
+// overload adds no new coverage by itself; it is infrastructure for a cell this build does not
+// author (routed to the coverage auditor's pin round per the coordinator's own instruction).
+inline void WireAdaptedProjection(superslm::LayerAdapterProjection& proj, const int8_t* b_weight,
+                                   const superslm::SslmAmplifyingFoldEntry* delta_fold_entry,
+                                   const superslm::SslmAmplifyingFoldEntry* u_fold_entry) {
+	proj.a_weight = kAdapterA;
+	proj.b_weight = b_weight;
+	proj.delta_fold_entry = delta_fold_entry;
+	proj.u_fold_entry = u_fold_entry;
+}
+
 // Runs TwoLayerFixture's own two-layer, hidden_size=2 geometry for one token, with layer 0's
 // `adapter` set to `layer0_adapter` (nullptr for the NULL-adapter case). Returns the resulting
 // hidden_codes (2 bytes) and hidden_scale, and exposes the fixture's own workspace so a caller

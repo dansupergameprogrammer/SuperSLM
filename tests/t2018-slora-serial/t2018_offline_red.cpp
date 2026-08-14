@@ -36,6 +36,17 @@
 // family, oracle, and assertion is BYTE-IDENTICAL to before this rename -- confirmed by
 // re-running this file after the rename and reproducing the identical 75/75 passing count.
 //
+// T-2041 AMENDMENT (2026-08-14, Poirot c81e48c review, Significant 5 -- build.bat only, nothing
+// below this line changed): the line-21 claim above ("against the REAL unmodified engine
+// primitives at D:\SuperSLM\.worktrees\run @ 727e63e") described the committed build path
+// CORRECTLY at authoring time and is now STALE as a description of what `build.bat` links --
+// that script's own `ENG` no longer names any fixed worktree; it resolves relative to wherever
+// this file itself is checked out, so the committed path now always links the SAME tree this
+// file lives in. The T-2021/T-2029 rename note immediately above (line 29) is the one that
+// remains true without qualification: the real, non-scratch primitives it describes exist in
+// THIS tree, whichever checkout that is. This amendment is prose-only -- no fixture, mutation,
+// oracle, or assertion in this file changed; see build.bat's own comment for the mechanical fix.
+//
 
 // PROVENANCE (StandardsDocument.md Sec7 sibling-pinning discipline: the reused source is named,
 // not silently absorbed). The fixture generator, seed, quantization, DeriveTripleOld/New,
