@@ -1,8 +1,14 @@
-// T-2032: q_proj -- real GPU dispatch, site 2 of 16. Bit-exact port of
-// forward_sites.cpp's ProjectAndFunnel (forward_sites.cpp:1020-1048) at the
-// q_proj call site (forward_sites.cpp:1395-1400): GemmInt8AccumulateRow ->
+// T-2039 (real-capacity shader geometry): q_proj -- real GPU dispatch, site 2
+// of 16. Bit-exact port of forward_sites.cpp's ProjectAndFunnel
+// (forward_sites.cpp:1020-1048) at the q_proj call site
+// (forward_sites.cpp:1395-1400): GemmInt8AccumulateRow ->
 // per-channel ApplyWeightScaleFold -> optional ApplyBiasReconcileRow (q_bias)
 // -> RequantChainCheckedFull with incoming={normed_scale}.
+//
+// Rebuilt to the design's own production dispatch geometry (Sec5.4/Sec5.5):
+// numthreads(256,1,1), the GEMM's own out_channels (hidden_size) spread
+// across the group via N-per-thread striding, the wide row streamed through
+// WorkScratch -- driven entirely by the real g_hidden_size root constant.
 #include "site_common.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -15,31 +21,30 @@ cbuffer RootConstants : register(b0)
     uint g_position;
 };
 
-ByteAddressBuffer   LayerWeights : register(t0);
-ByteAddressBuffer   Layout       : register(t1);
-ByteAddressBuffer   RopeInfo     : register(t2);
-RWByteAddressBuffer SeqState     : register(u0);
-RWByteAddressBuffer LayerScratch : register(u1);
-RWByteAddressBuffer KvCache      : register(u2);
+ByteAddressBuffer   LayerWeights  : register(t0);
+ByteAddressBuffer   Layout        : register(t1);
+ByteAddressBuffer   RopeInfo      : register(t2);
+ByteAddressBuffer   ScratchLayout : register(t7);
+RWByteAddressBuffer SeqState      : register(u0);
+RWByteAddressBuffer LayerScratch  : register(u1);
+RWByteAddressBuffer KvCache       : register(u2);
+RWByteAddressBuffer WorkScratch   : register(u3);
 
-[numthreads(1, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+[numthreads(256, 1, 1)]
+void main(uint3 gtid : SV_GroupThreadID)
 {
-    int64_t sticky = SeqState.Load<int64_t>(72);
+    uint t = gtid.x;
+    int hidden_size = (int)g_hidden_size;
+    uint sticky_off = SeqStickyOffGpu(hidden_size);
+    int64_t sticky = SeqState.Load<int64_t>(sticky_off);
     if (sticky != kTagOk) return;
 
-    int hidden_size = (int)g_hidden_size;
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
-    int normed_codes[kMaxSiteN];
-    [unroll]
-    for (int z = 0; z < kMaxSiteN; ++z) normed_codes[z] = 0;
-    for (int i = 0; i < hidden_size; ++i)
-    {
-        normed_codes[i] = (int)LayerScratch.Load<int>(0 + i * 4);
-    }
-    int64_t normed_scale_m = LayerScratch.Load<int64_t>(32);
-    int64_t normed_scale_e = LayerScratch.Load<int64_t>(40);
+    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
+    uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
+    int64_t normed_scale_m = LayerScratch.Load<int64_t>(normed_scale_off + 0);
+    int64_t normed_scale_e = LayerScratch.Load<int64_t>(normed_scale_off + 8);
 
     uint off_weight = layer_base + Layout.Load<uint>(2 * 4);
     uint off_id = layer_base + Layout.Load<uint>(3 * 4);
@@ -49,70 +54,44 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint off_bias_present = layer_base + Layout.Load<uint>(7 * 4);
     uint off_bias = layer_base + Layout.Load<uint>(8 * 4);
 
-    int64_t acc[kMaxSiteN];
-    [unroll]
-    for (int z2 = 0; z2 < kMaxSiteN; ++z2) acc[z2] = 0;
-    for (int j = 0; j < hidden_size; ++j)
-    {
-        int weight_row[kMaxSiteN];
-        [unroll]
-        for (int z3 = 0; z3 < kMaxSiteN; ++z3) weight_row[z3] = 0;
-        for (int i2 = 0; i2 < hidden_size; ++i2)
-        {
-            weight_row[i2] = LoadSignedByteGpu(LayerWeights, off_weight + (uint)(j * hidden_size + i2));
-        }
-        int64_t dot = GemmDotGpu(normed_codes, weight_row, hidden_size);
-        int identity = (int)LayerWeights.Load<int>(off_id + (uint)j * 4u);
-        int mult = (int)LayerWeights.Load<int>(off_mult + (uint)j * 4u);
-        int shift = (int)LayerWeights.Load<int>(off_shift + (uint)j * 4u);
-        acc[j] = ApplyWeightScaleFoldGpu(dot, identity, mult, shift);
-    }
+    GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
+                     LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, hidden_size,
+                     WorkScratch, 0u);
+    DeviceMemoryBarrierWithGroupSync();
 
     int64_t bias_present = LayerWeights.Load<int64_t>(off_bias_present);
     if (bias_present != 0)
     {
-        int64_t bias[kMaxSiteN];
-        [unroll]
-        for (int z4 = 0; z4 < kMaxSiteN; ++z4) bias[z4] = 0;
-        for (int i3 = 0; i3 < hidden_size; ++i3)
-        {
-            bias[i3] = LayerWeights.Load<int64_t>(off_bias + (uint)i3 * 8u);
-        }
         int64_t bias_tag;
-        if (!ApplyBiasReconcileRowGpu(acc, hidden_size, bias, normed_scale_m, normed_scale_e, bias_tag))
+        if (!ApplyBiasReconcileRowGpuP(t, WorkScratch, 0u, hidden_size, LayerWeights, off_bias,
+                                        normed_scale_m, normed_scale_e, bias_tag))
         {
-            SeqState.Store<int64_t>(72, bias_tag);
+            if (t == 0) SeqState.Store<int64_t>(sticky_off, bias_tag);
             return;
         }
+        DeviceMemoryBarrierWithGroupSync();
     }
 
-    int64_t incoming_m[kMaxSiteN];
-    int64_t incoming_e[kMaxSiteN];
+    int64_t incoming_m[kMaxIncoming];
+    int64_t incoming_e[kMaxIncoming];
     [unroll]
-    for (int z5 = 0; z5 < kMaxSiteN; ++z5) { incoming_m[z5] = 0; incoming_e[z5] = 0; }
+    for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
     incoming_m[0] = normed_scale_m;
     incoming_e[0] = normed_scale_e;
 
     int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
     int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
 
-    int64_t out_codes[kMaxSiteN];
-    int64_t out_scale_m, out_scale_e, status_tag;
-    RequantChainCheckedFullGpu(acc, hidden_size, incoming_m, incoming_e, /*n_incoming=*/1, site_m,
-                                site_e, out_codes, out_scale_m, out_scale_e, status_tag);
-
+    // T-2035: q_codes/q_scale feed RoPE (site 4) and, through RoPE's own
+    // rotated output, attention.
+    uint q_codes_off = ScratchLayout.Load<uint>(2 * 4);
+    uint q_scale_off = ScratchLayout.Load<uint>(3 * 4);
+    int64_t status_tag;
+    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, /*n_incoming=*/1,
+                                 site_m, site_e, LayerScratch, q_codes_off, q_scale_off, status_tag);
     if (status_tag != kTagOk)
     {
-        SeqState.Store<int64_t>(72, status_tag);
+        if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
         return;
     }
-    // T-2035: q_codes/q_scale feed RoPE (site 4) and, through RoPE's own
-    // rotated output, attention -- LayerScratch offsets 48 (q_codes[8] i32)
-    // and 80 (q_scale, 16 bytes).
-    for (int i6 = 0; i6 < hidden_size; ++i6)
-    {
-        LayerScratch.Store<int>(48 + i6 * 4, (int)out_codes[i6]);
-    }
-    LayerScratch.Store<int64_t>(80, out_scale_m);
-    LayerScratch.Store<int64_t>(88, out_scale_e);
 }

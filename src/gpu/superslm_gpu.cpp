@@ -348,6 +348,76 @@ void PutBytesAt(std::vector<uint8_t>& buf, size_t off, const void* data, size_t 
 void PutI32At(std::vector<uint8_t>& buf, size_t off, int32_t v) { PutBytesAt(buf, off, &v, 4); }
 void PutI64At(std::vector<uint8_t>& buf, size_t off, int64_t v) { PutBytesAt(buf, off, &v, 8); }
 
+// T-2039 (real-capacity shader geometry): LayerScratch's own per-call, per-
+// real-dims byte layout -- computed ONCE per call from (hidden_size,
+// intermediate_size), exactly the same "host computes, shader never re-
+// derives" discipline GpuLayerLayout already established for LayerWeights,
+// so the two can never drift apart. Every offset is a codes block
+// (width * 4 bytes, one int32 per code, 8-byte aligned) or a scale block (16
+// bytes, CarriedScale.m/e). Superseding T-2035's own fixed 640-byte layout
+// (Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec13.5's own named
+// blocker): that layout's per-field 32-byte reservations were sized for the
+// T-2019 suite's own hidden_size<=8 fixture and overflow at real widths;
+// this layout is driven entirely by the real per-call hidden_size/
+// intermediate_size root-constant values.
+struct GpuScratchLayout {
+	uint32_t normed = 0, normed_scale = 0;
+	uint32_t q_codes = 0, q_scale = 0;
+	uint32_t q_rot = 0;
+	uint32_t ctx_codes = 0, ctx_scale = 0;
+	uint32_t o_codes = 0, o_scale = 0;
+	uint32_t attn_stream = 0, attn_stream_scale = 0;
+	uint32_t gate_codes = 0, gate_scale = 0;
+	uint32_t up_codes = 0, up_scale = 0;
+	uint32_t act_codes = 0, act_scale = 0;
+	uint32_t down_codes = 0, down_scale = 0;
+	uint32_t stream_next = 0, stream_next_scale = 0;
+	uint32_t total = 0;
+};
+
+// T-2039: SeqState's own per-call, per-real-hidden_size byte layout -- the
+// IDENTICAL one-line formula site_common.hlsli's SeqScaleOffGpu/.../
+// SeqStickyOffGpu family computes shader-side from the same real
+// g_hidden_size root constant (a trivial, single-field-order layout, safe to
+// compute independently on both sides rather than round-trip through
+// another SRV table, unlike LayerWeights'/LayerScratch's own multi-field
+// packing). Superseding T-2035's fixed hidden_codes[8]/32-byte assumption.
+uint32_t SeqScaleOff(uint32_t hidden_size) { return Align8U32(hidden_size * 4); }
+uint32_t SeqLayerIdxOff(uint32_t hidden_size) { return SeqScaleOff(hidden_size) + 16u; }
+uint32_t SeqSatLoOff(uint32_t hidden_size) { return SeqLayerIdxOff(hidden_size) + 8u; }
+uint32_t SeqSatHiOff(uint32_t hidden_size) { return SeqSatLoOff(hidden_size) + 4u; }
+uint32_t SeqCtxLenOff(uint32_t hidden_size) { return SeqSatHiOff(hidden_size) + 4u; }
+uint32_t SeqStickyOff(uint32_t hidden_size) { return SeqCtxLenOff(hidden_size) + 8u; }
+uint32_t SeqTotalSize(uint32_t hidden_size) { return SeqStickyOff(hidden_size) + 8u; }
+
+GpuScratchLayout ComputeScratchLayout(uint32_t hidden_size, uint32_t intermediate_size) {
+	GpuScratchLayout L;
+	uint32_t cur = 0;
+	auto codes_block = [&](uint32_t width) {
+		uint32_t o = cur;
+		cur += Align8U32(width * 4);
+		return o;
+	};
+	auto scale_block = [&]() {
+		uint32_t o = cur;
+		cur += 16;
+		return o;
+	};
+	L.normed = codes_block(hidden_size); L.normed_scale = scale_block();
+	L.q_codes = codes_block(hidden_size); L.q_scale = scale_block();
+	L.q_rot = codes_block(hidden_size);
+	L.ctx_codes = codes_block(hidden_size); L.ctx_scale = scale_block();
+	L.o_codes = codes_block(hidden_size); L.o_scale = scale_block();
+	L.attn_stream = codes_block(hidden_size); L.attn_stream_scale = scale_block();
+	L.gate_codes = codes_block(intermediate_size); L.gate_scale = scale_block();
+	L.up_codes = codes_block(intermediate_size); L.up_scale = scale_block();
+	L.act_codes = codes_block(intermediate_size); L.act_scale = scale_block();
+	L.down_codes = codes_block(hidden_size); L.down_scale = scale_block();
+	L.stream_next = codes_block(hidden_size); L.stream_next_scale = scale_block();
+	L.total = cur;
+	return L;
+}
+
 // T-2032's own local status-tag encoding (site_common.hlsli's kTag* family),
 // mapped to the real superslm::SslmForwardStatus by name -- the same
 // switch-mapped convention check_rdp_exponent.hlsl/requant_chain_checked.hlsl
@@ -548,28 +618,72 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		PutBytesAt(rope_info_bytes, 16, &sec, 8);
 	}
 
-	// --- SeqState (96 bytes: hidden_codes[8] i32, hidden_scale.m/e i64,
-	// layer_index u32, kv_sat_lo/hi u32, context_length i64, sticky_status i64
-	// -- see site_common.hlsli's own byte-offset comments). ---
-	std::vector<uint8_t> seq_bytes(96, 0);
+	// --- SeqState (T-2039: dynamic, per-real-hidden_size layout -- hidden_codes[H]
+	// i32, hidden_scale.m/e i64, layer_index u32, kv_sat_lo/hi u32,
+	// context_length i64, sticky_status i64; see SeqScaleOff/.../SeqStickyOff
+	// above, matched shader-side by site_common.hlsli's own SeqScaleOffGpu
+	// family). ---
+	std::vector<uint8_t> seq_bytes(SeqTotalSize(H), 0);
 	for (uint32_t i = 0; i < H; ++i) PutI32At(seq_bytes, i * 4, static_cast<int32_t>(seq.hidden_codes[i]));
-	PutI64At(seq_bytes, 32, seq.hidden_scale.m);
-	PutI64At(seq_bytes, 40, seq.hidden_scale.e);
-	PutI32At(seq_bytes, 48, static_cast<int32_t>(seq.layer_index));
-	PutI32At(seq_bytes, 56, static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
-	PutI32At(seq_bytes, 60, static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
-	PutI64At(seq_bytes, 64, seq.context_length);
-	PutI64At(seq_bytes, 72, 0);  // sticky_status = kTagOk
+	PutI64At(seq_bytes, SeqScaleOff(H) + 0, seq.hidden_scale.m);
+	PutI64At(seq_bytes, SeqScaleOff(H) + 8, seq.hidden_scale.e);
+	PutI32At(seq_bytes, SeqLayerIdxOff(H), static_cast<int32_t>(seq.layer_index));
+	PutI32At(seq_bytes, SeqSatLoOff(H), static_cast<int32_t>(seq.kv_saturation_count & 0xFFFFFFFFu));
+	PutI32At(seq_bytes, SeqSatHiOff(H), static_cast<int32_t>((seq.kv_saturation_count >> 32) & 0xFFFFFFFFu));
+	PutI64At(seq_bytes, SeqCtxLenOff(H), seq.context_length);
+	PutI64At(seq_bytes, SeqStickyOff(H), 0);  // sticky_status = kTagOk
 
-	// T-2035: LayerScratch's own extended layout (site_common2.hlsli's shaders'
-	// own byte-offset comments carry the same table): normed[0/32] (attn_norm,
-	// reused by mlp_norm), q_codes[48]/q_scale[80], q_rot[96], ctx_wide[128]
-	// (i64x8), ctx_codes[192]/ctx_scale[224], o_codes[240]/o_scale[272],
-	// attn_stream[288]/attn_stream_scale[320], gate_codes[336]/gate_scale[368],
-	// up_codes[384]/up_scale[416], act_codes[432]/act_scale[464],
-	// down_codes[480]/down_scale[512], stream_next[528]/stream_scale[560].
-	std::vector<uint8_t> scratch_bytes(640, 0);
+	// T-2039: LayerScratch's own dynamic, per-real-dims layout (superseding
+	// T-2035's fixed 640-byte assumption, Sec13.5's own named blocker) --
+	// ComputeScratchLayout above, driven by the real H/I this call carries.
+	const GpuScratchLayout scratch_layout = ComputeScratchLayout(H, I);
+	std::vector<uint8_t> scratch_bytes(scratch_layout.total, 0);
 	std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+
+	// T-2039: WorkScratch -- the transient, per-call-sized scratch every real
+	// production-geometry site streams a wide row (or, for attention, a
+	// per-thread scores/probs row) through instead of a fixed-capacity local
+	// array (site_common.hlsli/site_common2.hlsli's own header comments).
+	// Two adjacent WIDE_A/WIDE_B regions, each `max_width` int64 elements
+	// (max_width = max(hidden_size, intermediate_size) -- covers every GEMM-
+	// funneled site's own widest row, and kv_proj's kacc/vacc pair, which is
+	// never wider than hidden_size); one ATTN_SCORES region, 256 * context_cap
+	// int64 elements (one full-context-length slice per thread -- attention_
+	// site.hlsl partitions attention heads across threads, so at most
+	// num_attention_heads of the 256 slices are ever touched by a real
+	// dispatch, and 256 is this design's own fixed thread-group width, never
+	// a model-tier quantity). Uninitialized on creation: every byte this
+	// design ever reads from WorkScratch was written earlier in the SAME
+	// dispatch, by the SAME thread, before that read (site_common.hlsli's own
+	// per-primitive header comments state this for each cooperative
+	// primitive) -- no cross-dispatch or cross-call persistence is needed or
+	// assumed.
+	const uint32_t max_width = std::max(H, I);
+	const uint64_t work_wide_a_off = 0;
+	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
+	const uint64_t work_attn_scores_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
+	const uint64_t work_total =
+	    work_attn_scores_off + 256ull * static_cast<uint64_t>(context_cap) * 8u;
+
+	std::vector<uint8_t> scratch_layout_bytes(25 * 4, 0);
+	{
+		auto put = [&](int idx, uint32_t v) { PutI32At(scratch_layout_bytes, static_cast<size_t>(idx) * 4, static_cast<int32_t>(v)); };
+		put(0, scratch_layout.normed); put(1, scratch_layout.normed_scale);
+		put(2, scratch_layout.q_codes); put(3, scratch_layout.q_scale);
+		put(4, scratch_layout.q_rot);
+		put(5, scratch_layout.ctx_codes); put(6, scratch_layout.ctx_scale);
+		put(7, scratch_layout.o_codes); put(8, scratch_layout.o_scale);
+		put(9, scratch_layout.attn_stream); put(10, scratch_layout.attn_stream_scale);
+		put(11, scratch_layout.gate_codes); put(12, scratch_layout.gate_scale);
+		put(13, scratch_layout.up_codes); put(14, scratch_layout.up_scale);
+		put(15, scratch_layout.act_codes); put(16, scratch_layout.act_scale);
+		put(17, scratch_layout.down_codes); put(18, scratch_layout.down_scale);
+		put(19, scratch_layout.stream_next); put(20, scratch_layout.stream_next_scale);
+		put(21, scratch_layout.total);
+		put(22, static_cast<uint32_t>(work_wide_a_off));
+		put(23, static_cast<uint32_t>(work_wide_b_off));
+		put(24, static_cast<uint32_t>(work_attn_scores_off));
+	}
 
 	// ModelConstants (t3): kIExpLn2Q/kIExpBQ/kIExpCaQ, the i-exp derivation's
 	// own compile-time constants (intmath.h) -- read directly from the
@@ -609,10 +723,19 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
 	auto cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
 	auto sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+	auto scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
 	auto seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 	auto scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
 	auto kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
+	// T-2039: WorkScratch is transient, per-dispatch scratch -- every byte is
+	// written before it is read within the SAME dispatch (site_common.hlsli's
+	// own per-primitive contract), so no host-side initial content is needed;
+	// created directly in the UAV state, matching this file's own established
+	// idiom for a device-only scratch buffer (RunDescriptorTableBind's out_uav).
+	auto work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
+	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
@@ -653,9 +776,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
 		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
 		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(8, seq_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(9, scratch_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(10, kv_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
+		dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(1, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
@@ -731,14 +856,14 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		seq.hidden_codes[i] = static_cast<int8_t>(v);
 	}
 	int64_t hs_m, hs_e, lidx32, sat_lo32, sat_hi32, ctxlen, sticky_tag;
-	std::memcpy(&hs_m, seq_out.data() + 32, 8);
-	std::memcpy(&hs_e, seq_out.data() + 40, 8);
+	std::memcpy(&hs_m, seq_out.data() + SeqScaleOff(H) + 0, 8);
+	std::memcpy(&hs_e, seq_out.data() + SeqScaleOff(H) + 8, 8);
 	uint32_t lidx_u, lo_u, hi_u;
-	std::memcpy(&lidx_u, seq_out.data() + 48, 4);
-	std::memcpy(&lo_u, seq_out.data() + 56, 4);
-	std::memcpy(&hi_u, seq_out.data() + 60, 4);
-	std::memcpy(&ctxlen, seq_out.data() + 64, 8);
-	std::memcpy(&sticky_tag, seq_out.data() + 72, 8);
+	std::memcpy(&lidx_u, seq_out.data() + SeqLayerIdxOff(H), 4);
+	std::memcpy(&lo_u, seq_out.data() + SeqSatLoOff(H), 4);
+	std::memcpy(&hi_u, seq_out.data() + SeqSatHiOff(H), 4);
+	std::memcpy(&ctxlen, seq_out.data() + SeqCtxLenOff(H), 8);
+	std::memcpy(&sticky_tag, seq_out.data() + SeqStickyOff(H), 8);
 	(void)lidx32; (void)sat_lo32; (void)sat_hi32;
 	seq.hidden_scale.m = hs_m;
 	seq.hidden_scale.e = hs_e;

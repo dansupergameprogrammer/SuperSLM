@@ -1,8 +1,17 @@
-// T-2032 (Sec5.6/Sec11 B4 well-scoped next checkpoint): attn_norm -- real GPU
-// dispatch, site 1 of 16. Bit-exact port of forward_sites.cpp's RmsNormSite
+// T-2039 (real-capacity shader geometry): attn_norm -- real GPU dispatch,
+// site 1 of 16. Bit-exact port of forward_sites.cpp's RmsNormSite
 // (forward_sites.cpp:410-446): sumsq -> ISqrt(FloorDivI64(sumsq<<32,
 // hidden_size)) -> root=max(root,1) -> per-element FloorDivI64(h[i]<<32,
 // root)*g[i] -> RequantChainCheckedFull with the incoming span EMPTY.
+//
+// Rebuilt to the design's own production dispatch geometry (Claude/
+// Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md Sec5.4/Sec5.5):
+// numthreads(256,1,1), sumsq via the SCHEME-1 groupshared tree
+// (RmsSumSqParallelGpu), the wide row streamed through WorkScratch (never a
+// per-call local array), driven entirely by the real g_hidden_size root
+// constant -- the identical shader dispatches correctly at the T-2019
+// suite's own hidden_size=2 fixture and at the real 1.5B/0.5B artifacts'
+// hidden_size=1536/896.
 //
 // Every dispatch this design issues begins by reading the sequence-level
 // sticky word (Sec5.6) -- a dispatch that reads Reject performs no
@@ -23,81 +32,59 @@ cbuffer RootConstants : register(b0)
     uint g_position;
 };
 
-ByteAddressBuffer   LayerWeights : register(t0);
-ByteAddressBuffer   Layout       : register(t1);
-ByteAddressBuffer   RopeInfo     : register(t2);
-RWByteAddressBuffer SeqState     : register(u0);
-RWByteAddressBuffer LayerScratch : register(u1);
-RWByteAddressBuffer KvCache      : register(u2);
+ByteAddressBuffer   LayerWeights  : register(t0);
+ByteAddressBuffer   Layout        : register(t1);
+ByteAddressBuffer   RopeInfo      : register(t2);
+ByteAddressBuffer   ScratchLayout : register(t7);
+RWByteAddressBuffer SeqState      : register(u0);
+RWByteAddressBuffer LayerScratch  : register(u1);
+RWByteAddressBuffer KvCache       : register(u2);
+RWByteAddressBuffer WorkScratch   : register(u3);
 
 static const int kNormFracBitsGpu = 16;
 
-[numthreads(1, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+[numthreads(256, 1, 1)]
+void main(uint3 gtid : SV_GroupThreadID)
 {
-    int64_t sticky = SeqState.Load<int64_t>(72);
+    uint t = gtid.x;
+    int hidden_size = (int)g_hidden_size;
+    uint sticky_off = SeqStickyOffGpu(hidden_size);
+    int64_t sticky = SeqState.Load<int64_t>(sticky_off);
     if (sticky != kTagOk) return;  // a prior dispatch already rejected -- no arithmetic, no writes
 
-    int hidden_size = (int)g_hidden_size;
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);  // Layout[56] = kLayerStride
 
-    int64_t h[kMaxSiteN];
-    [unroll]
-    for (int z = 0; z < kMaxSiteN; ++z) h[z] = 0;
-    for (int i = 0; i < hidden_size; ++i)
-    {
-        h[i] = (int64_t)(int)SeqState.Load<int>(0 + i * 4);  // hidden_codes[i]
-    }
-
-    uint off_gain = layer_base + Layout.Load<uint>(0 * 4);
-    int g[kMaxSiteN];
-    [unroll]
-    for (int z2 = 0; z2 < kMaxSiteN; ++z2) g[z2] = 0;
-    for (int i2 = 0; i2 < hidden_size; ++i2)
-    {
-        g[i2] = (int)LayerWeights.Load<int>(off_gain + (uint)i2 * 4u);
-    }
-
-    int64_t sumsq = 0;
-    for (int i3 = 0; i3 < hidden_size; ++i3)
-    {
-        sumsq += h[i3] * h[i3];
-    }
+    int64_t sumsq = RmsSumSqParallelGpu(t, SeqState, 0u, hidden_size);
     int64_t root = ISqrtGpu(FloorDivI64Gpu(sumsq << (2 * kNormFracBitsGpu), (int64_t)hidden_size));
     root = (root > 1) ? root : 1;
 
-    int64_t wide[kMaxSiteN];
-    [unroll]
-    for (int z3 = 0; z3 < kMaxSiteN; ++z3) wide[z3] = 0;
-    for (int i4 = 0; i4 < hidden_size; ++i4)
+    uint off_gain = layer_base + Layout.Load<uint>(0 * 4);
+    for (int i = (int)t; i < hidden_size; i += 256)
     {
-        wide[i4] = FloorDivI64Gpu(h[i4] << (2 * kNormFracBitsGpu), root) * (int64_t)g[i4];
+        int64_t hv = (int64_t)(int)SeqState.Load<int>((uint)i * 4u);
+        int g = (int)LayerWeights.Load<int>(off_gain + (uint)i * 4u);
+        int64_t wv = FloorDivI64Gpu(hv << (2 * kNormFracBitsGpu), root) * (int64_t)g;
+        WorkScratch.Store<int64_t>(0u + (uint)i * 8u, wv);
     }
+    DeviceMemoryBarrierWithGroupSync();
 
     uint off_site = layer_base + Layout.Load<uint>(1 * 4);
     int64_t site_m = LayerWeights.Load<int64_t>(off_site + 0);
     int64_t site_e = LayerWeights.Load<int64_t>(off_site + 8);
-
-    int64_t incoming_m[kMaxSiteN];
-    int64_t incoming_e[kMaxSiteN];
+    int64_t incoming_m[kMaxIncoming];
+    int64_t incoming_e[kMaxIncoming];
     [unroll]
-    for (int z4 = 0; z4 < kMaxSiteN; ++z4) { incoming_m[z4] = 0; incoming_e[z4] = 0; }
+    for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }
 
-    int64_t out_codes[kMaxSiteN];
-    int64_t out_scale_m, out_scale_e, status_tag;
-    RequantChainCheckedFullGpu(wide, hidden_size, incoming_m, incoming_e, /*n_incoming=*/0, site_m,
-                                site_e, out_codes, out_scale_m, out_scale_e, status_tag);
+    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
+    uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
+    int64_t status_tag;
+    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, hidden_size, incoming_m, incoming_e, /*n_incoming=*/0,
+                                 site_m, site_e, LayerScratch, normed_off, normed_scale_off, status_tag);
 
     if (status_tag != kTagOk)
     {
-        SeqState.Store<int64_t>(72, status_tag);
+        if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);
         return;
     }
-
-    for (int i5 = 0; i5 < hidden_size; ++i5)
-    {
-        LayerScratch.Store<int>(0 + i5 * 4, (int)out_codes[i5]);
-    }
-    LayerScratch.Store<int64_t>(32, out_scale_m);
-    LayerScratch.Store<int64_t>(40, out_scale_e);
 }

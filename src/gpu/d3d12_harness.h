@@ -178,17 +178,23 @@ struct Device {
 	// T-2032/T-2035: the composed pipeline's own root signature -- one 9-value
 	// 32-bit-constants block (b0: layer_index, hidden_size, head_dim,
 	// num_kv_heads, context_cap, position, num_attention_heads, width,
-	// intermediate_size; T-2032 shaders read only the first six), seven root
+	// intermediate_size; T-2032 shaders read only the first six), eight root
 	// SRVs (t0 LayerWeights, t1 Layout, t2 RopeInfo, t3 ModelConstants [the
 	// i-exp derivation's own three compile-time constants, T-2035], t4
 	// SiluLut, t5 RopeCosTable, t6 RopeSinTable [T-2035: RoPE's own real
-	// rotation data, not just presence/extent]), three root UAVs (u0
-	// SeqState, u1 LayerScratch, u2 KvCache). Shared by every shader the
-	// composed dispatch issues -- a dispatch that does not use one of these
-	// bindings simply never reads it; D3D12 does not require a PSO to
-	// consume every root parameter its shared signature declares.
+	// rotation data, not just presence/extent], t7 ScratchLayout [T-2039: the
+	// per-call, per-real-dims LayerScratch/WorkScratch byte offsets, computed
+	// once host-side -- never re-derived shader-side, matching Layout's own
+	// established host-computes/shader-reads discipline]), four root UAVs (u0
+	// SeqState, u1 LayerScratch, u2 KvCache, u3 WorkScratch [T-2039: the
+	// transient, per-call-sized wide-row/attention-scores scratch every real
+	// production geometry site now streams through instead of a fixed-
+	// capacity local array]). Shared by every shader the composed dispatch
+	// issues -- a dispatch that does not use one of these bindings simply
+	// never reads it; D3D12 does not require a PSO to consume every root
+	// parameter its shared signature declares.
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
-		D3D12_ROOT_PARAMETER ps[11]{};
+		D3D12_ROOT_PARAMETER ps[13]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
 		ps[0].Constants.Num32BitValues = 10;  // 10th: num_hidden_layers (commit_site.hlsl only)
 		ps[0].Constants.ShaderRegister = 0;  // b0
@@ -207,15 +213,19 @@ struct Device {
 		ps[6].Descriptor.ShaderRegister = 5;  // t5 RopeCosTable
 		ps[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
 		ps[7].Descriptor.ShaderRegister = 6;  // t6 RopeSinTable
-		ps[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-		ps[8].Descriptor.ShaderRegister = 0;  // u0 SeqState
+		ps[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[8].Descriptor.ShaderRegister = 7;  // t7 ScratchLayout
 		ps[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-		ps[9].Descriptor.ShaderRegister = 1;  // u1 LayerScratch
+		ps[9].Descriptor.ShaderRegister = 0;  // u0 SeqState
 		ps[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
-		ps[10].Descriptor.ShaderRegister = 2;  // u2 KvCache
+		ps[10].Descriptor.ShaderRegister = 1;  // u1 LayerScratch
+		ps[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[11].Descriptor.ShaderRegister = 2;  // u2 KvCache
+		ps[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[12].Descriptor.ShaderRegister = 3;  // u3 WorkScratch
 
 		D3D12_ROOT_SIGNATURE_DESC rs{};
-		rs.NumParameters = 11;
+		rs.NumParameters = 13;
 		rs.pParameters = ps;
 		ComPtr<ID3DBlob> blob, err;
 		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);

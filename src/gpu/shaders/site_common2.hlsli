@@ -1,16 +1,17 @@
-// T-2035 (final composed checkpoint, sites 5-16 + commit): primitives site_common.hlsli
-// does not yet carry -- RoPE's own rotation (RopeApplyPair), the i-exp softmax
-// construction (IExpConstruct/IExpEvaluate/IExpScaleConstants/SoftmaxRowQ15/
-// CheckSoftmaxRowWidthDomain), the context-accumulate GEMM (GemmProbQ15Accumulate),
-// and the SiLU LUT lookup (SiluSigmoidQ15/CheckSiluCompositionScaleDomain). Every
-// function has a named C++ sibling; see src/intmath.cpp, src/matmul.cpp,
-// src/silu_lut.cpp, src/forward/checked_chain_funnel.cpp.
+// T-2039 (GPU-serial port: real-capacity shader geometry). Primitives
+// site_common.hlsli does not carry -- RoPE's own rotation (RopeApplyPair),
+// the i-exp softmax construction (IExpConstruct/IExpEvaluate/
+// IExpScaleConstants/CheckSoftmaxRowWidthDomain), a buffer-resident
+// SoftmaxRowQ15 (no per-call local array -- the row lives in a caller-
+// supplied WorkScratch window, sized at the real per-call `context_cap`,
+// never a compile-time capacity), and the SiLU LUT lookup (SiluSigmoidQ15/
+// CheckSiluCompositionScaleDomain, already array-free). Every function has a
+// named C++ sibling; see src/intmath.cpp, src/matmul.cpp, src/silu_lut.cpp,
+// src/forward/checked_chain_funnel.cpp.
 #ifndef SSLM_SITE_COMMON2_HLSLI
 #define SSLM_SITE_COMMON2_HLSLI
 
 #include "site_common.hlsli"
-
-static const int kMaxWidthGpu = 32;  // headroom over this suite's own width==1
 
 // wide128.hlsli-family helpers this file needs but B1's own family doesn't
 // carry: a zeroed U128 and a full-width (non-narrowing) right shift on
@@ -158,73 +159,88 @@ bool CheckSoftmaxRowWidthDomainGpu(int64_t q_b, int64_t q_c, int width)
     static const int64_t kSoftmaxRowMaxSafeExponent = ((int64_t)1) << 47;
     bool m_usable = SGe(SFromI64(0x7FFFFFFFFFFFFFFFLL), m128) && SGe(m128, SFromI64(1)) &&
                      SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128);
-    if (!m_usable) return false;
-    // The width*M sum-representability limb (checked_chain_funnel.cpp's own second
-    // conjunct) -- both m_usable and the M<=2^47 ceiling together already bound
-    // width*M well inside int64 for any width this design's own kMaxWidthGpu cap
-    // admits (2^47 * 32 = 2^52), so no separate wide-multiply check is needed here.
-    return true;
+    return m_usable;
 }
 
-// intmath.cpp SoftmaxRowQ15, bit-exact -- scores[width] in, probs[width] out (Q15).
-// Returns all_well_formed. Caller has already run CheckSoftmaxRowWidthDomainGpu.
-bool SoftmaxRowQ15Gpu(int64_t scores[kMaxWidthGpu], int width, int64_t q_ln2, int64_t q_b,
-                       int64_t q_c, out int64_t probs[kMaxWidthGpu])
+// intmath.cpp SoftmaxRowQ15, bit-exact, buffer-resident version: `buf` at
+// `base` holds `width` int64 scores on entry (T-2039: never a per-call local
+// array -- WorkScratch's own per-thread AttnScores slice, sized to the real
+// per-call context_cap) and `width` int64 Q15 probs on success. This is the
+// SAME sequential algorithm the original array-based primitive used --
+// attention_site.hlsl's own per-thread head ownership (one thread computes
+// one head's softmax start to finish, Sec5.4's per-output-channel
+// parallelization applied at the HEAD granularity here, since heads are
+// already independent production units) means no cross-thread cooperation is
+// needed inside this function; only the storage discipline changed.
+bool SoftmaxRowQ15BufGpu(RWByteAddressBuffer buf, uint base, int width, int64_t q_ln2, int64_t q_b,
+                          int64_t q_c)
 {
-    [unroll]
-    for (int zi = 0; zi < kMaxWidthGpu; ++zi) probs[zi] = 0;
+    int64_t peak = buf.Load<int64_t>(base + 0u);
+    for (int pi = 1; pi < width; ++pi)
+    {
+        int64_t v = buf.Load<int64_t>(base + (uint)pi * 8u);
+        if (v > peak) peak = v;
+    }
 
+    bool all_well_formed = true;
+    for (int k = 0; k < width; ++k)
+    {
+        int64_t shifted = buf.Load<int64_t>(base + (uint)k * 8u) - peak;
+        int64_t z, ebase, qc;
+        int d = IExpConstructGpu(shifted, q_ln2, q_b, q_c, z, ebase, qc);
+        int64_t value = 0;
+        if (d == 2 || d == 3 || d == 4)
+        {
+            all_well_formed = false;
+        }
+        else
+        {
+            value = IExpEvaluateGpu(z, ebase, qc);
+        }
+        buf.Store<int64_t>(base + (uint)k * 8u, value);  // exps[k], the m-bound re-check follows below
+    }
+
+    // The original array-based primitive additionally bounds each exps[k]
+    // against `m` (q_b^2+q_c, only usable when it itself fits [1, 2^47]) --
+    // reproduced here as a second pass so the well-formed determination is
+    // identical bit-for-bit (CheckSoftmaxRowWidthDomainGpu has already been
+    // called by every caller before this function runs, per its own
+    // contract, so `m` is known usable at every real call site this design
+    // reaches; the same defensive computation is repeated here rather than
+    // trusted, matching the original primitive's own unconditional re-check).
     S128 m128 = SAdd(SMul(q_b, q_b), SFromI64(q_c));
     static const int64_t kSoftmaxRowMaxSafeExponent = ((int64_t)1) << 47;
     bool m_usable = SGe(SFromI64(0x7FFFFFFFFFFFFFFFLL), m128) && SGe(m128, SFromI64(1)) &&
                      SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128);
     int64_t m = m_usable ? SLow64(m128) : 0;
-
-    int64_t peak = scores[0];
-    for (int pi = 1; pi < width; ++pi) if (scores[pi] > peak) peak = scores[pi];
-    int64_t shifted[kMaxWidthGpu];
-    [unroll]
-    for (int zj = 0; zj < kMaxWidthGpu; ++zj) shifted[zj] = 0;
-    for (int si = 0; si < width; ++si) shifted[si] = scores[si] - peak;
-
-    int64_t exps[kMaxWidthGpu];
-    [unroll]
-    for (int zk = 0; zk < kMaxWidthGpu; ++zk) exps[zk] = 0;
     int64_t total = 0;
-    bool all_well_formed = true;
-    for (int k = 0; k < width; ++k)
+    if (!m_usable)
     {
-        int64_t z, base, qc;
-        int d = IExpConstructGpu(shifted[k], q_ln2, q_b, q_c, z, base, qc);
-        if (d == 2 || d == 3 || d == 4) { all_well_formed = false; exps[k] = 0; continue; }
-        int64_t value = IExpEvaluateGpu(z, base, qc);
-        if (!m_usable || value < 0 || value > m) { all_well_formed = false; exps[k] = 0; continue; }
-        exps[k] = value;
-        total += exps[k];
+        all_well_formed = false;
     }
+    else
+    {
+        for (int k2 = 0; k2 < width; ++k2)
+        {
+            int64_t value = buf.Load<int64_t>(base + (uint)k2 * 8u);
+            if (value < 0 || value > m)
+            {
+                all_well_formed = false;
+                value = 0;
+                buf.Store<int64_t>(base + (uint)k2 * 8u, value);
+            }
+            total += value;
+        }
+    }
+
     int64_t denom = (total > 1) ? total : 1;
     static const int kProbFracBitsGpu = 15;
     for (int j = 0; j < width; ++j)
     {
-        probs[j] = (exps[j] << kProbFracBitsGpu) / denom;
+        int64_t e = buf.Load<int64_t>(base + (uint)j * 8u);
+        buf.Store<int64_t>(base + (uint)j * 8u, (e << kProbFracBitsGpu) / denom);
     }
     return all_well_formed;
-}
-
-// matmul.cpp GemmProbQ15Accumulate: out_ctx[d] = sum_k probs[k]*values[k*head_dim+d].
-void GemmProbQ15AccumulateGpu(int64_t probs[kMaxWidthGpu], int values[kMaxWidthGpu * kMaxSiteN],
-                                int width, int head_dim, out int64_t out_ctx[kMaxSiteN])
-{
-    [unroll]
-    for (int d0 = 0; d0 < kMaxSiteN; ++d0) out_ctx[d0] = 0;
-    for (int k = 0; k < width; ++k)
-    {
-        int64_t p = probs[k];
-        for (int d = 0; d < head_dim; ++d)
-        {
-            out_ctx[d] += p * (int64_t)values[k * kMaxSiteN + d];
-        }
-    }
 }
 
 // checked_chain_funnel.cpp CheckSiluCompositionScaleDomain.
