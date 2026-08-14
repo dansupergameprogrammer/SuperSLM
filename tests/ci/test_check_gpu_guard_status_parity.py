@@ -313,7 +313,7 @@ def test_check_citation_fails_for_a_malformed_citation():
 def test_run_all_checks_clean_on_the_matching_fixture_tree():
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures == []
 
 
@@ -332,7 +332,7 @@ def test_mutation_a_new_status_with_no_def_row_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "a tenth guard with a status absent from the .def must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -352,7 +352,7 @@ def test_mutation_a_reused_status_with_no_def_row_does_not_redden_the_honest_res
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures == [], "reusing an existing status is the documented residual -- must stay green"
 
 
@@ -367,7 +367,7 @@ def test_mutation_b_def_row_with_no_matching_ladder_guard_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, def_text=def_text)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "a .def row naming a status neither ladder returns must fail the check"
 
 
@@ -380,7 +380,7 @@ def test_mutation_c_guard_removed_from_gpu_ladder_only_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "a guard present in CPU/.def but removed from the GPU ladder must fail the check"
         assert any("disagree" in f for f in failures)
 
@@ -401,7 +401,7 @@ def test_mutation_d_new_status_guard_placed_after_the_old_end_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "a new-status guard placed after the old end marker must now be caught (S2)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -419,7 +419,7 @@ def test_mutation_d_variant_reused_status_after_marker_stays_green_the_widened_r
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, cpu=cpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures == [], "reusing an existing status past the marker is the (widened) documented residual"
 
 
@@ -445,7 +445,7 @@ def test_mutation_e_new_status_guard_placed_after_the_gpu_marker_reddens():
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "a new-status GPU guard placed after the old marker must now be caught (S3)"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -467,7 +467,7 @@ def test_mutation_e_control_new_status_guard_placed_before_the_gpu_marker_redden
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures, "the identical guard placed before the marker must redden, same as before this fix"
         assert any("disagree" in f for f in failures)
         assert any("KvCapacityExhausted" in f for f in failures)
@@ -485,7 +485,7 @@ def test_mutation_e_variant_reused_status_after_gpu_marker_stays_green_the_widen
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures == [], "reusing an existing status past the GPU marker is the (widened) documented residual"
 
 
@@ -501,7 +501,7 @@ def test_mutation_e_variant_reused_below_ladder_status_after_gpu_marker_stays_gr
     )
     with tempfile.TemporaryDirectory() as tmp:
         cpu_path, gpu_path, def_path = _write_fixture_tree(tmp, gpu=gpu)
-        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp)
+        failures = chk.run_all_checks(cpu_path, gpu_path, def_path, repo_root=tmp, prose_citations=())
         assert failures == [], "reusing the subtracted below-ladder status itself is also the documented residual"
 
 
@@ -544,6 +544,88 @@ def test_real_tree_gpu_full_body_raw_set_before_subtraction_matches_the_review_o
     # must NOT appear in the raw regex-derived set at all, on the real file.
     assert "GpuAllocationFailed" not in raw
     assert "GpuDeviceRemoved" not in raw
+
+
+# --- ProseCitation / check_prose_citation / check_all_prose_citations
+# (T-2075, Structural remedy) ---
+
+def test_check_prose_citation_passes_for_a_real_matching_line():
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, _, _ = _write_fixture_tree(tmp)
+        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 4, "InvalidLayerBudget")
+        assert chk.check_prose_citation(citation, repo_root=tmp) is None
+
+
+def test_check_prose_citation_fails_when_needle_absent_from_cited_line():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_fixture_tree(tmp)
+        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 4, "SomethingNotThere")
+        failure = chk.check_prose_citation(citation, repo_root=tmp)
+        assert failure is not None
+        assert "citation is stale" in failure
+
+
+def test_check_prose_citation_fails_when_line_out_of_range():
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_fixture_tree(tmp)
+        citation = chk.ProseCitation("fixture label", "src/forward/forward_sites.cpp", 9999, "x")
+        failure = chk.check_prose_citation(citation, repo_root=tmp)
+        assert failure is not None
+        assert "out of range" in failure
+
+
+def test_check_prose_citation_fails_when_file_missing():
+    citation = chk.ProseCitation("fixture label", "nonexistent/file.cpp", 1, "x")
+    failure = chk.check_prose_citation(citation, repo_root=os.getcwd())
+    assert failure is not None
+    assert "file not found" in failure
+
+
+def test_check_all_prose_citations_reddens_when_one_of_several_shifts():
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, _, _ = _write_fixture_tree(tmp)
+        good = chk.ProseCitation("good", "src/forward/forward_sites.cpp", 4, "InvalidLayerBudget")
+        bad = chk.ProseCitation("bad (shifted)", "src/forward/forward_sites.cpp", 4, "NeverThere")
+        failures = chk.check_all_prose_citations(citations=(good, bad), repo_root=tmp)
+        assert len(failures) == 1
+        assert "bad (shifted)" in failures[0]
+
+
+def test_real_tree_gpu_port_h_lwuws_citations_all_resolve_today():
+    # Every citation in gpu_port.h's own LastWeightUploadWasSkipped
+    # paragraph, re-derived fresh at T-2075, resolves against the real file
+    # today -- the exact property M1 found false for the T-2069 correction's
+    # own citations one round after they were written.
+    failures = chk.check_all_prose_citations()
+    assert failures == [], f"gpu_port.h's own citations should all resolve today: {failures}"
+
+
+def test_real_tree_prose_citation_population_is_the_named_nineteen():
+    assert len(chk.GPU_PORT_H_LWUWS_CITATIONS) == 19
+
+
+# --- Structural red proof (T-2075): shifting a cited line reddens run_all_checks. ---
+
+def test_mutation_f_shifting_a_cited_gpu_line_reddens_via_prose_citation_check():
+    with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
+        real_gpu_text = f.read()
+    with tempfile.TemporaryDirectory() as tmp:
+        cpu_path, gpu_path, def_path = _write_fixture_tree(tmp)
+        # Overwrite the fixture tree's GPU file with a shifted copy of the
+        # REAL file (one blank line inserted before the first ladder
+        # citation's own line, 640) -- proves the structural machinery
+        # against the real citation population, not only the small fixture
+        # population used elsewhere in this file.
+        real_lines = real_gpu_text.splitlines(keepends=True)
+        shifted = real_lines[:639] + ["\n"] + real_lines[639:]
+        with open(gpu_path, "w", encoding="utf-8") as f:
+            f.writelines(shifted)
+        failures = chk.check_all_prose_citations(repo_root=tmp)
+        # citations relative to repo_root resolve against tmp's OWN tree
+        # layout (src/gpu/superslm_gpu.cpp under tmp), which now holds the
+        # shifted content at the real citations' own line numbers.
+        assert failures, "a shifted cited line must redden the prose-citation check"
+        assert any("citation is stale" in f for f in failures)
 
 
 # --- End-to-end against the real tree: not vacuous, and green today. ---

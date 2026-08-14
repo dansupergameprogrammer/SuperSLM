@@ -857,19 +857,25 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// to the last-uploaded one -- the ONLY sound invalidation signal here
 	// (ResidentWeights' own header comment).
 	//
-	// T-2071 (O11's own instrument): an ARMED injection forces this to
-	// `false` regardless of content -- the weight DEFAULT-heap allocation
-	// `MaybeThrowInjectedWeightAllocFault()` guards only runs inside the
-	// `if (!weights_resident)` branch below, so a real cache HIT (the
-	// pin cell's own call 3 shape: identical content to calls 1/2) would
-	// otherwise skip the allocation entirely and never reach the injected
-	// throw. Forcing a miss here is what makes "arm the weight allocation to
-	// fail" meaningful on a call that would otherwise be a hit.
-	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes
-#ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-	                               && !g_weight_alloc_injection_armed
-#endif  // SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
-	    ;
+	// CORRECTED 2026-08-14 (T-2075, Claude/Poirot/
+	// 72a9b0d-gpu-serial-port-final-review.md, S1; D-SLM3228): T-2071's own
+	// residency-forcing term here (removed by this correction, not merely
+	// disclosed) neutralised the very pin it was built to arm. Forcing a
+	// MISS on every armed call meant the miss path's own two remedy actions
+	// -- `g_last_weight_upload_was_skipped = weights_resident;` below, and
+	// `g_resident_weights.lw_buf.Reset(); g_resident_weights.valid = false;`
+	// at the allocation site -- ran BEFORE the injected throw was ever
+	// reached, so by the time the catch ran, the observable already read
+	// `false` and the cache was already invalid: the catch's own two
+	// remedy lines had nothing left to change. Measured: deleting either or
+	// both of those two lines left the suite byte-identical at 33893/3 --
+	// only the returned-status assertion discriminated; the pin was half
+	// inert. Fixed at the root, not the surface, per the review's own
+	// finding: the instrument now arms `work_scratch_uav` (below, outside
+	// this `if` entirely -- a real allocation the HIT path also makes),
+	// not this one -- so this predicate needs no injection-aware term at
+	// all, and reads exactly as it did before T-2071 ever touched it.
+	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes;
 	if (weights_resident) {
 		lw_buf = g_resident_weights.lw_buf;
 	}
@@ -1137,13 +1143,6 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// probe (call 7: `status=KvPrecisionUnsupported`, against call 5's
 		// `status=GpuAllocationFailed` at `work_scratch_uav`, same outer
 		// catch, same call shape).
-		// T-2071 (O11's own instrument): always callable, zero overhead
-		// unarmed -- see this function's own header comment near
-		// `g_weight_alloc_injection_armed` for why this call site carries no
-		// `#ifdef`. Placed immediately before the real allocation it stands
-		// in for, so an armed injection reaches the SAME outer catch (opened
-		// above) a real `CreateCommittedResource` failure would.
-		MaybeThrowInjectedWeightAllocFault();
 		Microsoft::WRL::ComPtr<ID3D12Resource> lw_default =
 		    dev.MakeBuffer(lw_bytes.size(), D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_FLAG_NONE,
 		                    D3D12_RESOURCE_STATE_COPY_DEST);
@@ -1175,6 +1174,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// own per-primitive contract), so no host-side initial content is needed;
 	// created directly in the UAV state, matching this file's own established
 	// idiom for a device-only scratch buffer (RunDescriptorTableBind's out_uav).
+	//
+	// CORRECTED 2026-08-14 (T-2075, S1; D-SLM3228): O11's own instrument
+	// (`MaybeThrowInjectedWeightAllocFault`) now arms HERE, not at the
+	// weight DEFAULT-heap allocation above. This allocation runs
+	// UNCONDITIONALLY, on both the cache-hit and cache-miss legs (it is
+	// outside the `if (!weights_resident)` block entirely) -- so an armed
+	// call reaches the injected throw on a GENUINE cache hit, without
+	// forcing any residency-decision change to make it reachable. That is
+	// what makes `TestT2063_S1Mb_...`'s own call 3 ("same content again,
+	// another cache hit") actually a hit again: the catch's own two remedy
+	// lines (the observable write, the cache invalidation) are now the
+	// ONLY thing that can make that cell's M-b assertions pass, because
+	// nothing upstream of this call has already done their job.
+	MaybeThrowInjectedWeightAllocFault();
 	work_scratch_uav = dev.MakeBuffer(work_total, D3D12_HEAP_TYPE_DEFAULT,
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);

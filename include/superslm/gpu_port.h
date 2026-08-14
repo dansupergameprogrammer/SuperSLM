@@ -176,30 +176,82 @@ enum class GpuLayerLoopGuard : int {
 // paths reads `false`.
 //
 // CORRECTED 2026-08-14 (T-2069, Claude/Poirot/
-// b543abe-gpu-serial-port-ship-reverdict-review.md, M1): "twelve" above is
+// b543abe-gpu-serial-port-ship-reverdict-review.md, M1; line citations
+// refreshed 2026-08-14, T-2075, per that round's own M1 finding that all
+// but one had gone stale across two same-day commits -- the CLAIM below is
+// unchanged from what T-2069 wrote, only the `superslm_gpu.cpp:<line>`
+// pointers are corrected to resolve against current HEAD): "twelve" above is
 // also wrong -- the correction above counted the function's rejecting
 // RETURNS (its guard ladder), not its rejecting return PATHS, and never
 // re-derived the number from the function itself. Enumerated fresh, at
 // source, every rejecting `return superslm::SslmForwardStatus::` (or
 // return-via-ternary) `RunLayerLoopGpu` has: eleven in the nine-guard
-// ladder (`superslm_gpu.cpp:581, 582, 591, 595, 610, 614, 615, 625, 628,
-// 634, 636` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
+// ladder (`superslm_gpu.cpp:640, 641, 650, 654, 669, 673, 674, 684, 687,
+// 693, 695` -- eleven RETURN STATEMENTS realizing nine distinct guards, two
 // of them, `InvalidContextCap`/`WorkspaceTooSmall`, each with two return
-// sites); two device-capability rejections below the ladder (`:643`
-// `!dev.available`, `:655` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
+// sites); two device-capability rejections below the ladder (`:702`
+// `!dev.available`, `:714` the sub-Tier-3 `MapModelGpuResidencyTierCheck`
 // check, both `KvPrecisionUnsupported`); and the recording-window catch
-// itself (`:1276`, one return statement, a ternary choosing between
-// `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve.
-// `g_last_weight_upload_was_skipped`'s own three write sites
-// (`superslm_gpu.cpp:298` static init, `:541` function entry, `:811` the
-// residency decision, `:1266` the catch) still cover all fourteen
-// correctly -- `:811` is the only conditional write and it sits below both
-// `:643` and `:655`, so those two paths read the entry-set `false`
-// unchanged; this correction is to the COUNT, not to the code, which was
-// already right. The `!dev.available`/Tier-3 half of this claim is derived
-// by inspection of the three write sites, not executed -- forcing either
-// condition is outside what this project's own test harness can do on real
-// hardware.
+// itself (`:1368`, one return statement, a ternary choosing between
+// `GpuDeviceRemoved`/`GpuAllocationFailed`). **Fourteen**, not twelve --
+// CORRECTED AGAIN below (T-2075, S2): fourteen is also short by one.
+// `g_last_weight_upload_was_skipped`'s own FOUR write sites (corrected from
+// "three" in the same sentence that listed four citations, T-2075, M2 --
+// `superslm_gpu.cpp:298` static init, `:600` function entry, `:889` the
+// residency decision, `:1358` the catch) still cover all fourteen of THIS
+// paragraph's own paths correctly -- `:889` is the only conditional write
+// and it sits below both `:702` and `:714`, so those two paths read the
+// entry-set `false` unchanged; this correction is to the COUNT, not to the
+// code, which was already right as far as this paragraph's own scope went.
+// The `!dev.available`/Tier-3 half of this claim is derived by inspection
+// of the write sites, not executed -- forcing either condition is outside
+// what this project's own test harness can do on real hardware.
+//
+// CORRECTED 2026-08-14 (T-2075, Claude/Poirot/
+// 72a9b0d-gpu-serial-port-final-review.md, S2; D-SLM3228): "fourteen" above
+// is short by one, and -- unlike the three corrections before it -- the
+// property being counted is FALSE, not merely mis-numbered, so this
+// correction does not just renumber it. `RunLayerLoopGpu`'s own TERMINAL
+// statement, `return DecodeStickyTag(sticky_tag);` (`superslm_gpu.cpp:1419`),
+// is neither a ladder return nor the catch's ternary -- it is a FUNCTION
+// CALL whose result is returned directly, and `DecodeStickyTag` (`:521-539`)
+// maps the device's own sticky tag to fourteen statuses, THIRTEEN of them
+// rejecting (`ChainInputOutOfDomain`, `RopeTableTensorMissing`, and eleven
+// more -- only tag 0, `Ok`, is non-rejecting). That is a FIFTEENTH rejecting
+// return path, it is not hypothetical, and this suite already drives it:
+// `TestT2053_Item3_LastWeightUploadWasSkipped`'s own call 3 rejects through
+// exactly this path (`ChainInputOutOfDomain`, a real content-mutation
+// fixture, not an injected fault) -- **executed and measured, that call
+// reads `LastWeightUploadWasSkipped() == true`.**
+//
+// This falsifies the property every version of this paragraph has stated
+// since T-2055: "every rejecting path reads `false`." On the sticky-tag
+// path the upload genuinely WAS skipped (the call was a real cache hit;
+// the rejection happens deep inside the per-layer dispatch, after the
+// weight-residency decision already ran and read `true`), so `true` is the
+// HONEST answer and the accessor's own primary contract --
+// `"true iff this call's own upload was skipped"` -- is satisfied on this
+// path. Making this path read `false` would require lying about a skipped
+// upload; that is not available as a fix. What changes is the SENTENCE, to
+// the smaller promise that is actually true, per `StandardsDocument.md`
+// §5.6:
+//
+// **The true contract, stated precisely rather than as a path count:**
+// `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
+// decision. It reads `false` on every path that returns BEFORE that
+// decision runs (`:889` above) -- the nine-guard ladder, the two
+// device-capability rejections, and the recording-window catch, fourteen
+// paths in all, none of which ever reached a residency decision to report.
+// It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
+// miss) on every path that returns AFTER the decision -- the success path
+// and the sticky-tag-decoded path alike, fifteen paths' own destination in
+// total across the function, whether the decoded status is `Ok` or one of
+// `DecodeStickyTag`'s thirteen rejecting statuses. A caller that wants "did
+// THIS call's upload run" reads this accessor for exactly that, on every
+// path, correctly; a caller that reads it as "did this call SUCCEED" is
+// reading a different question than the one it answers, on the sticky-tag
+// paths specifically -- named here so a future reader does not have to
+// re-derive it from the code a fourth time.
 bool LastWeightUploadWasSkipped();
 
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):

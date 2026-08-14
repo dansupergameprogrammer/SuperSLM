@@ -471,11 +471,113 @@ def check_citation(row: DefRow, repo_root: str = _REPO_ROOT) -> str | None:
     return None
 
 
+# --- T-2075 (Claude/Poirot/72a9b0d-gpu-serial-port-final-review.md,
+# Structural remedy routed by S2/M1): prose-citation resolution, extending
+# `check_citation`'s own "a file:line citation must resolve against the
+# statement it claims to hold" discipline from the `.def`'s own citations to
+# the PROSE citations this module and `gpu_port.h` carry -- the class M1
+# found (seventeen of eighteen line citations stale, broken by a sibling
+# commit eight minutes after they were written, in the same worktree) is
+# exactly what `check_citation` already prevents for `.def` rows; nothing
+# extended that same machinery to a hand-written paragraph's own citations,
+# which is why they went stale silently while the `.def`'s never have.
+#
+# Each entry names ONE claim about CURRENT source -- a `superslm_gpu.cpp`
+# line that must still contain a given substring. Deliberately does NOT
+# cover every citation in this tree: this module's own "WHY THIS EXISTS"
+# docstring cites `gpu_port.h:91-103`/`superslm_gpu.cpp:544-553` as a
+# description of what the code looked like AT THE TIME T-2055 found the
+# guard-count "structural closure" claim false -- a historical record of a
+# past state, not a claim resolvable against HEAD, and checking it against
+# HEAD would produce a false positive on every unrelated line shift forever
+# after. The population below is `gpu_port.h`'s own `LastWeightUploadWasSkipped`
+# paragraph -- the ONE paragraph that has been re-corrected four consecutive
+# rounds (T-2055, T-2062, T-2069, T-2075) and is therefore the citation
+# surface most likely to drift again.
+class ProseCitation:
+    __slots__ = ("label", "file_relpath", "line", "needle")
+
+    def __init__(self, label: str, file_relpath: str, line: int, needle: str) -> None:
+        self.label = label
+        self.file_relpath = file_relpath
+        self.line = line
+        self.needle = needle
+
+    def __repr__(self) -> str:  # pragma: no cover -- diagnostics only
+        return f"ProseCitation({self.label!r}, {self.file_relpath!r}, {self.line!r}, {self.needle!r})"
+
+
+# `gpu_port.h`'s own `LastWeightUploadWasSkipped` paragraph, T-2075's own
+# fresh re-derivation: eleven ladder returns, two device-capability
+# rejections, the catch's own ternary, the sticky-tag terminal call, and the
+# observable's own four write sites -- nineteen citations, all fifteen
+# rejecting-return-path members plus the four write sites S2/M2 both name.
+GPU_PORT_H_LWUWS_CITATIONS = (
+    ProseCitation("ladder return 1 (InvalidLayerBudget)", "src/gpu/superslm_gpu.cpp", 640, "InvalidLayerBudget"),
+    ProseCitation("ladder return 2 (InvalidContextCap)", "src/gpu/superslm_gpu.cpp", 641, "InvalidContextCap"),
+    ProseCitation("ladder return 3 (HeadDimGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 650, "HeadDimGeometryMismatch"),
+    ProseCitation("ladder return 4 (KvHeadGeometryMismatch)", "src/gpu/superslm_gpu.cpp", 654, "KvHeadGeometryMismatch"),
+    ProseCitation("ladder return 5a (InvalidContextCap overflow)", "src/gpu/superslm_gpu.cpp", 669, "InvalidContextCap"),
+    ProseCitation("ladder return 5b (WorkspaceTooSmall null)", "src/gpu/superslm_gpu.cpp", 673, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 5c (WorkspaceTooSmall undersized)", "src/gpu/superslm_gpu.cpp", 674, "WorkspaceTooSmall"),
+    ProseCitation("ladder return 6 (InvalidHiddenCodes)", "src/gpu/superslm_gpu.cpp", 684, "InvalidHiddenCodes"),
+    ProseCitation("ladder return 7 (SequenceAlreadyComplete)", "src/gpu/superslm_gpu.cpp", 687, "SequenceAlreadyComplete"),
+    ProseCitation("ladder return 8 (PositionOverCap)", "src/gpu/superslm_gpu.cpp", 693, "PositionOverCap"),
+    ProseCitation("ladder return 9 (KvCapacityExhausted)", "src/gpu/superslm_gpu.cpp", 695, "KvCapacityExhausted"),
+    ProseCitation("device-capability 1 (!dev.available)", "src/gpu/superslm_gpu.cpp", 702, "dev.available"),
+    ProseCitation("device-capability 2 (Tier-3 check)", "src/gpu/superslm_gpu.cpp", 714, "KvPrecisionUnsupported"),
+    ProseCitation("catch's own ternary", "src/gpu/superslm_gpu.cpp", 1368, "device_removed_reason"),
+    ProseCitation("sticky-tag terminal return", "src/gpu/superslm_gpu.cpp", 1419, "DecodeStickyTag"),
+    ProseCitation("write site 1 (static init)", "src/gpu/superslm_gpu.cpp", 298, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 2 (function entry)", "src/gpu/superslm_gpu.cpp", 600, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 3 (residency decision)", "src/gpu/superslm_gpu.cpp", 889, "g_last_weight_upload_was_skipped"),
+    ProseCitation("write site 4 (the catch)", "src/gpu/superslm_gpu.cpp", 1358, "g_last_weight_upload_was_skipped"),
+)
+
+
+def check_prose_citation(citation: ProseCitation, repo_root: str = _REPO_ROOT) -> str | None:
+    """None if `citation.needle` appears on line `citation.line` of
+    `citation.file_relpath` (resolved against `repo_root`); else a one-line
+    failure description naming the citation and what is actually there --
+    the exact shape `check_citation` already gives `.def` rows, applied to a
+    hand-written paragraph's own citations instead of a generated table's."""
+    path = os.path.join(repo_root, citation.file_relpath)
+    if not os.path.isfile(path):
+        return f"{citation.label}: file not found: {citation.file_relpath}"
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    if citation.line < 1 or citation.line > len(lines):
+        return (
+            f"{citation.label}: {citation.file_relpath}:{citation.line} out of range "
+            f"({len(lines)} lines in file) -- citation is stale, refresh it"
+        )
+    actual = lines[citation.line - 1]
+    if citation.needle not in actual:
+        return (
+            f"{citation.label}: {citation.file_relpath}:{citation.line} does not contain "
+            f"{citation.needle!r} -- actual line: {actual.strip()!r} -- citation is stale, refresh it"
+        )
+    return None
+
+
+def check_all_prose_citations(
+    citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
+    repo_root: str = _REPO_ROOT,
+) -> list[str]:
+    failures: list[str] = []
+    for c in citations:
+        failure = check_prose_citation(c, repo_root)
+        if failure is not None:
+            failures.append(failure)
+    return failures
+
+
 def run_all_checks(
     forward_sites_path: str = FORWARD_SITES_CPP,
     superslm_gpu_path: str = SUPERSLM_GPU_CPP,
     guards_def_path: str = GUARDS_DEF,
     repo_root: str = _REPO_ROOT,
+    prose_citations: tuple[ProseCitation, ...] = GPU_PORT_H_LWUWS_CITATIONS,
 ) -> list[str]:
     """Every failure this module can report against the three real files, or
     an empty list if all three status sets agree and every `.def` citation
@@ -483,7 +585,17 @@ def run_all_checks(
     itself is missing -- that is an environment/drift problem this check's
     own extraction logic cannot route around, matching `check_no_forward_
     leaf_calls.py`'s own ClangUnavailable precedent of raising rather than
-    reporting a false pass."""
+    reporting a false pass.
+
+    `prose_citations` defaults to the real population (`gpu_port.h`'s own
+    `LastWeightUploadWasSkipped` paragraph, `GPU_PORT_H_LWUWS_CITATIONS`) --
+    every REAL-tree call site (`main()` included) gets this module's own
+    structural citation check for free. A caller driving a small SYNTHETIC
+    `superslm_gpu.cpp` fixture (this module's own mechanism/mutation tests)
+    passes `prose_citations=()` explicitly: the real population cites real
+    production line numbers no tiny fixture file has, and checking it
+    against a fixture would fail for a reason that has nothing to do with
+    what that test is exercising."""
     with open(forward_sites_path, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     with open(superslm_gpu_path, "r", encoding="utf-8") as f:
@@ -521,6 +633,11 @@ def run_all_checks(
         failure = check_citation(row, repo_root)
         if failure is not None:
             failures.append(failure)
+    # T-2075 (Structural): the prose-citation population is checked against
+    # `repo_root` too -- resolved relative to it exactly like the `.def`
+    # citations above, so a scratch-tree mutation test can exercise this the
+    # same way it exercises everything else in this function.
+    failures += check_all_prose_citations(citations=prose_citations, repo_root=repo_root)
     return failures
 
 
