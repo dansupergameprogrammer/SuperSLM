@@ -12,6 +12,7 @@
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/decode_digest.h"
 #include "superslm/forward_sites.h"
+#include "superslm/gpu_port.h"
 #include "superslm/intmath.h"
 #include "superslm/matmul.h"
 #include "superslm/model.h"
@@ -20616,6 +20617,865 @@ static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
 	          "any one of the five plumbing links is dropped falls back to legacy regardless of "
 	          "the artifact's own flag, which this assertion alone would not catch; the assertion "
 	          "above (must match legacy) is what catches that -- this is the converse sanity check");
+}
+
+// ---------------------------------------------------------------------------
+// T-2019 -- Curie's red suite for T-1986 (GPU-serial port: base-only single-
+// sequence forward on D3D12/HLSL). Realizes Sec10's Coverage Model and
+// Sec11's B1-B12 build decomposition (Claude/Vitruvius/t1986-gpu-serial-
+// port-design-2026-08-13.md, commit 0160876d14). Test-design record:
+// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md.
+//
+// AUTHORED RED AGAINST main@727e63e -- the GPU port does not exist yet. Same
+// two red shapes as T-1899's own section above (Claude/Curie/t1832-...-red-
+// suite-test-design-2026-08-08.md Sec3, Sec9.5; T-1839), plus a third this
+// design's own scale requires:
+//   - LINK-RED: a cell that calls a `superslm_gpu::*Gpu` symbol
+//     (superslm/gpu_port.h) -- declared, never defined. The suite compiles
+//     with 0 errors and fails to LINK on exactly these symbols until
+//     Brunel's build (B1-B12) provides them.
+//   - ASSERTION-RED (none in this section -- every cell's CPU side is
+//     already-shipped, correct production code the GPU comparison is
+//     checked against; the CPU side is expected to keep passing).
+//   - GREEN-CPU-SIDE, RED-ONLY-AT-LINK: several cells' own CPU-side fixture
+//     construction (the adversarial input, the CPU's own rejecting status)
+//     is real, executes today, and is expected to PASS -- it is the
+//     design's own B2/B11 "assert the CPU reference rejects... before any
+//     GPU shader exists to match it" discipline (Sec11 B2). Only the GPU
+//     comparison half is red, and it is red by link failure, not by a
+//     failing CHECK.
+//
+// Every CPU-side fixture below was verified by real execution against this
+// engine (main@727e63e) in a disposable scratch harness before being copied
+// into this suite (StandardsDocument.md Sec5.4: "verified at source or by
+// execution, never by construction") -- not reasoned from the header
+// comments alone. Where a cell's own construction did not converge inside
+// this session's budget, it is marked TODO-CONSTRUCTION below and named in
+// the casebook's own routed-findings section, never silently asserted as
+// proven.
+// ---------------------------------------------------------------------------
+
+// --- B1 (Sec7.1/7.2, Sec11 B1): per-primitive battery. Oracle: the real,
+// shipped CPU function. LINK-RED via the `*Gpu` comparison. ---
+
+static void TestT2019_B1_DynamicScaleReciprocal_DomainSweep_GpuMatchesCpu() {
+	// Canonical domain [2^30, 2^31) plus its own boundary (design Sec7.1
+	// bullet 1); the non-canonical region CarriedScaleReciprocal's door
+	// contract states reachable (checked_chain_funnel.h:326-337, Sec7.1
+	// G4); and a negative seed (O-3's own residual, Sec7.2) -- `dn` itself
+	// is unsigned-domain by contract (C19), so "negative" here means a
+	// value whose bit pattern drives DynamicScaleReciprocal's internal
+	// seed computation through a negative intermediate, per the header's
+	// own `>> 31` note.
+	const int64_t kFixtures[] = {
+	    INT64_C(1073741824),           // 2^30, canonical lower boundary
+	    INT64_C(1073741825),
+	    INT64_C(2147483647),           // 2^31 - 1, canonical upper boundary
+	    INT64_C(2147483648),           // 2^31, first non-canonical value
+	    INT64_C(1),                    // far non-canonical, small
+	    INT64_C(4611686018427387903),  // ~2^62, far non-canonical, large
+	    INT64_C(-1073741824),          // negative mantissa, feeds a negative seed
+	};
+	for (int64_t dn : kFixtures) {
+		const int64_t cpu = superslm::DynamicScaleReciprocal(dn);
+		const int64_t gpu = superslm_gpu::DynamicScaleReciprocalGpu(dn);  // LINK-RED
+		CHECK_MSG(gpu == cpu,
+		          "DynamicScaleReciprocalGpu(%lld) == %lld (CPU oracle), want bit-identical",
+		          (long long)dn, (long long)cpu);
+	}
+}
+
+static void TestT2019_B1_RequantTokenCodeWide_DomainSweep_GpuMatchesCpu() {
+	// (x_i, r, s) swept toward the ~2^70 domain the header states (Sec7.1
+	// bullet 2), not the ~2^56 the spike's real data reached (S-1, Sec2).
+	struct Fx { int64_t x_i; int64_t r; int s; };
+	const Fx kFixtures[] = {
+	    {0, INT64_C(2147483648), 31},
+	    {INT64_C(2147483647), INT64_C(4294967295), 62},
+	    {INT64_C(-2147483648), INT64_C(4294967295), 62},
+	    {INT64_MAX, INT64_C(4294967295), 62},  // pushes |x_i * 127 * r| toward ~2^70
+	    {INT64_MIN, INT64_C(4294967295), 62},
+	};
+	for (const auto& fx : kFixtures) {
+		const int64_t cpu = static_cast<int64_t>(superslm::RequantTokenCodeWide(fx.x_i, fx.r, fx.s));
+		const int64_t gpu =
+		    superslm_gpu::RequantTokenCodeWideGpu(fx.x_i, fx.r, fx.s);  // LINK-RED
+		CHECK_MSG(gpu == cpu,
+		          "RequantTokenCodeWideGpu(%lld,%lld,%d) == %lld (CPU oracle), want bit-identical",
+		          (long long)fx.x_i, (long long)fx.r, fx.s, (long long)cpu);
+	}
+}
+
+static void TestT2019_B1_BiasReconcileWide_DomainSweep_GpuMatchesCpu() {
+	// (b, q_b, r_a, e_a) swept past the spike's own 73-74 bit witness toward
+	// the domain ceiling Sec6's composed-exponent check bounds (Sec7.1 bullet 3).
+	struct Fx { int64_t b, q_b, r_a, e_a; };
+	const Fx kFixtures[] = {
+	    {1, 1, 1, 0},
+	    {INT64_C(1000000000), INT64_C(2000000), INT64_C(3000000), 10},
+	    {INT64_MAX / 4, INT64_C(1000000), INT64_C(1000000), 20},
+	    {INT64_MIN / 4, INT64_C(1000000), INT64_C(1000000), 20},
+	};
+	for (const auto& fx : kFixtures) {
+		int64_t cpu_out = 0;
+		const bool cpu_ok = superslm::BiasReconcileWide(fx.b, fx.q_b, fx.r_a, fx.e_a, &cpu_out);
+		int64_t gpu_out = 0;
+		const bool gpu_ok =
+		    superslm_gpu::BiasReconcileWideGpu(fx.b, fx.q_b, fx.r_a, fx.e_a, &gpu_out);  // LINK-RED
+		CHECK_MSG(gpu_ok == cpu_ok && (!cpu_ok || gpu_out == cpu_out),
+		          "BiasReconcileWideGpu(%lld,%lld,%lld,%lld) == (ok=%d,out=%lld) (CPU oracle), "
+		          "got (ok=%d,out=%lld)",
+		          (long long)fx.b, (long long)fx.q_b, (long long)fx.r_a, (long long)fx.e_a, cpu_ok,
+		          (long long)cpu_out, gpu_ok, (long long)gpu_out);
+	}
+}
+
+static void TestT2019_B1_CombineCarriedScale_ExponentSaturationBoundary_GpuMatchesCpu() {
+	// Second axis (Sec7.1 bullet 4, corrected Sec14 Fold F2): the exponent
+	// domain SaturatingAdd64(SaturatingAdd64(a.e,b.e),31) actually operates
+	// over -- pairs chosen to land the composed sum just below, at, and past
+	// the int64 saturation boundary, both signs. Mantissas kept small and
+	// in-domain (CombineCarriedScale's own precondition) so only the
+	// exponent axis is under test. Oracle: CombineCarriedScale never
+	// rejects (Sec6) -- the saturated value and Ok are both asserted.
+	using superslm::CarriedScale;
+	struct Fx { CarriedScale a, b; };
+	const Fx kFixtures[] = {
+	    {{1000, INT64_MAX / 2 - 16}, {1000, INT64_MAX / 2 - 16}},  // sums to just below INT64_MAX-31
+	    {{1000, INT64_MAX / 2}, {1000, INT64_MAX / 2}},            // sums past INT64_MAX -> saturates high
+	    {{1000, INT64_MIN / 2}, {1000, INT64_MIN / 2}},            // sums past INT64_MIN -> saturates low
+	};
+	for (const auto& fx : kFixtures) {
+		const CarriedScale cpu = superslm::CombineCarriedScale(fx.a, fx.b);
+		const CarriedScale gpu = superslm_gpu::CombineCarriedScaleGpu(fx.a, fx.b);  // LINK-RED
+		CHECK_MSG(gpu.m == cpu.m && gpu.e == cpu.e,
+		          "CombineCarriedScaleGpu({%lld,%lld},{%lld,%lld}) == {%lld,%lld} (CPU oracle, "
+		          "saturating, never rejects), got {%lld,%lld}",
+		          (long long)fx.a.m, (long long)fx.a.e, (long long)fx.b.m, (long long)fx.b.e,
+		          (long long)cpu.m, (long long)cpu.e, (long long)gpu.m, (long long)gpu.e);
+	}
+}
+
+// --- B2 (Sec6, Sec11 B2): the guard-path port, isolated tier. Fixtures 1-3
+// call the real predicate functions directly; each CPU-side assertion below
+// is real and expected to PASS today (Sec11 B2's own "assert the CPU
+// reference rejects... before any GPU shader exists" discipline). LINK-RED
+// via the `*Gpu` comparison. ---
+
+static void TestT2019_B2_ComposedExponentGuard_RejectsOutOfDomain_GpuMatchesCpu() {
+	// (a) BiasReconcileWide's RoundingDivideByPotComposedExponentInDomain
+	// check, reached through CheckRoundingDivideByPotExponentDomain
+	// (checked_chain_funnel.cpp:420-434). An out-of-[0,63]-composed exponent.
+	const int64_t q_B = INT64_C(1000000000000);
+	const int64_t e_a = 1000;  // drives the composed exponent far outside [0,63]
+	const auto cpu = superslm::CheckRoundingDivideByPotExponentDomain(q_B, e_a);
+	CHECK_MSG(cpu == superslm::SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+	          "CPU oracle: CheckRoundingDivideByPotExponentDomain(%lld,%lld) == %s, want "
+	          "RoundingDivideByPotExponentOutOfDomain (real, running, must already pass)",
+	          (long long)q_B, (long long)e_a, superslm::SslmForwardStatusName(cpu));
+	const auto gpu = superslm_gpu::CheckRoundingDivideByPotExponentDomainGpu(q_B, e_a);  // LINK-RED
+	CHECK_MSG(gpu == cpu, "GPU status word == CPU oracle's %s, got %s",
+	          superslm::SslmForwardStatusName(cpu), superslm::SslmForwardStatusName(gpu));
+}
+
+static void TestT2019_B2_MantissaGuard_Step0AndStep5_RejectsOutOfDomain_GpuMatchesCpu() {
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	const int64_t wide_row[2] = {10, -10};
+
+	// Step 0: an `incoming` factor whose OWN mantissa does not fit int32_t
+	// (checked_chain_funnel.h:240-242, step 0).
+	{
+		const CarriedScale bad_incoming[1] = {{INT64_C(4611686018427387903), 0}};  // ~2^62, out of int32
+		const CarriedScale site_constant{1000, 0};
+		int8_t out_codes[2] = {};
+		CarriedScale out_scale{};
+		const auto cpu = superslm::RequantChainChecked(
+		    wide_row, 2, std::span<const CarriedScale>(bad_incoming, 1), site_constant, out_codes,
+		    &out_scale);
+		CHECK_MSG(cpu.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+		          "CPU oracle: RequantChainChecked step-0 incoming-factor guard == %s, want "
+		          "CarriedScaleMantissaOutOfDomain (real, running, must already pass)",
+		          superslm::SslmForwardStatusName(cpu.status));
+		const auto gpu = superslm_gpu::RequantChainCheckedGpu(wide_row, 2, bad_incoming, 1,
+		                                                       site_constant);  // LINK-RED
+		CHECK_MSG(gpu.status == cpu.status, "GPU status word == CPU oracle's %s, got %s",
+		          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(gpu.status));
+	}
+
+	// Step 5: two `incoming` factors EACH individually in-domain (pass step
+	// 0), whose folded PRODUCT (CombineCarriedScale, checked after every
+	// combine per 380b75f review N1) does not fit int32_t --
+	// 100000 * 100000 == 10^10 >> INT32_MAX.
+	{
+		const CarriedScale in_domain_incoming[2] = {{100000, 0}, {100000, 0}};
+		const CarriedScale site_constant{1, 0};
+		int8_t out_codes[2] = {};
+		CarriedScale out_scale{};
+		const auto cpu = superslm::RequantChainChecked(
+		    wide_row, 2, std::span<const CarriedScale>(in_domain_incoming, 2), site_constant,
+		    out_codes, &out_scale);
+		CHECK_MSG(cpu.status == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+		          "CPU oracle: RequantChainChecked step-5 running-fold guard == %s, want "
+		          "CarriedScaleMantissaOutOfDomain (real, running, must already pass) -- each "
+		          "individual incoming factor is in-domain; only the fold's own product overflows",
+		          superslm::SslmForwardStatusName(cpu.status));
+		const auto gpu = superslm_gpu::RequantChainCheckedGpu(wide_row, 2, in_domain_incoming, 2,
+		                                                       site_constant);  // LINK-RED
+		CHECK_MSG(gpu.status == cpu.status, "GPU status word == CPU oracle's %s, got %s",
+		          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(gpu.status));
+	}
+}
+
+static void TestT2019_B2_DPrimeGuard_RejectsAbove2Pow31_GpuMatchesCpu() {
+	// (c) RequantChainChecked's ChainInputOutOfDomain check, step 3's
+	// `d_prime > 2^31` test -- a wide row whose MaxAbsReduceWide exceeds
+	// the ceiling.
+	using superslm::CarriedScale;
+	using superslm::SslmForwardStatus;
+	const int64_t wide_row[1] = {INT64_C(4294967296)};  // 2^32, > 2^31 ceiling
+	const CarriedScale incoming[1] = {{1, 0}};
+	const CarriedScale site_constant{1, 0};
+	int8_t out_codes[1] = {};
+	CarriedScale out_scale{};
+	const auto cpu = superslm::RequantChainChecked(
+	    wide_row, 1, std::span<const CarriedScale>(incoming, 1), site_constant, out_codes, &out_scale);
+	CHECK_MSG(cpu.status == SslmForwardStatus::ChainInputOutOfDomain,
+	          "CPU oracle: RequantChainChecked d_prime guard == %s, want ChainInputOutOfDomain "
+	          "(real, running, must already pass)",
+	          superslm::SslmForwardStatusName(cpu.status));
+	const auto gpu =
+	    superslm_gpu::RequantChainCheckedGpu(wide_row, 1, incoming, 1, site_constant);  // LINK-RED
+	CHECK_MSG(gpu.status == cpu.status, "GPU status word == CPU oracle's %s, got %s",
+	          superslm::SslmForwardStatusName(cpu.status), superslm::SslmForwardStatusName(gpu.status));
+}
+
+static void TestT2019_B2_ApplyBiasReconcileRow_KBiasVBias_ScalarGuard_GpuMatchesCpu() {
+	// (3) Added Sec20 Fold, D-SLM3053: ApplyBiasReconcileRow's own compound
+	// predicate (forward_sites.cpp:991-1006), for k_bias and v_bias
+	// independently. ApplyBiasReconcileRow itself has no standalone,
+	// declared entry point (grep of forward_sites.h at main@727e63e finds
+	// none -- it is file-local to forward_sites.cpp) -- realized through
+	// the real, public RunLayerLoop entry point instead, the same call
+	// shape B4/B11's own integrated-tier re-run already uses, documented
+	// here as a routed construction note rather than silently assumed
+	// (Curie casebook Sec6). Fixture verified by execution (scratch
+	// harness): k_bias/v_bias set to a large per-channel value at layer
+	// k=1 of a 4-layer NLayerFixture reject with
+	// RoundingDivideByPotExponentOutOfDomain (the scalar
+	// CheckRoundingDivideByPotExponentDomain gate), layer_index stays at 1
+	// (layer 0 already committed).
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	static int64_t kHugeBias[2] = {INT64_C(4611686018427387903), INT64_C(4611686018427387903)};
+	for (int which = 0; which < 2; ++which) {  // 0 = k_bias, 1 = v_bias
+		NLayerFixture<4> fixture;
+		if (which == 0) fixture.layers[1].k_bias = kHugeBias;
+		else fixture.layers[1].v_bias = kHugeBias;
+
+		int8_t codes[2] = {5, -5};
+		SequenceLayerState seq;
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		constexpr size_t kWs = 4 * 1 * 1 * 2 * 2;
+		uint8_t workspace[kWs] = {};
+		const auto cpu = superslm::RunLayerLoop(seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1,
+		                                          2, /*context_cap=*/1, fixture.view.rope_tables,
+		                                          workspace, sizeof(workspace));
+		CHECK_MSG(cpu == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+		          "CPU oracle: %s guard == %s, want RoundingDivideByPotExponentOutOfDomain (real, "
+		          "running, must already pass)",
+		          which == 0 ? "k_bias" : "v_bias", superslm::SslmForwardStatusName(cpu));
+		CHECK_MSG(seq.layer_index == 1,
+		          "%s guard rejects at layer 1 -- layer 0 must have already committed "
+		          "(layer_index == %u, want 1)",
+		          which == 0 ? "k_bias" : "v_bias", seq.layer_index);
+
+		SequenceLayerState gpu_seq;
+		int8_t gpu_codes[2] = {5, -5};
+		gpu_seq.hidden_codes = gpu_codes;
+		gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		gpu_seq.layer_index = 0;
+		uint8_t gpu_workspace[kWs] = {};
+		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+		    gpu_seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1, 2, /*context_cap=*/1,
+		    fixture.view.rope_tables, gpu_workspace, sizeof(gpu_workspace));
+		CHECK_MSG(gpu == cpu, "GPU status word == CPU oracle's %s, got %s",
+		          superslm::SslmForwardStatusName(cpu), superslm::SslmForwardStatusName(gpu));
+	}
+}
+
+// --- B5 (Sec5.5, Sec11 B5): the two-schedule int64 abs-max reduction.
+// Fixture domain (D-SLM2926) reaches >= 2^31, not only the real-data-only
+// domain S-1 measured (Sec2). Oracle: the real, shipped MaxAbsReduceWide. ---
+
+static void TestT2019_B5_MaxAbsReduceWide_FixtureDomainAbove2Pow31_GpuMatchesCpu() {
+	// Row sets spanning: in the C29-passing domain (<= 2^31-1), the exact
+	// boundary (2^31), and the reachable-at-mid-composition-mantissas
+	// region up to >= 2^40 (checked_chain_funnel.h's own contract, the same
+	// reachability argument G4 already established for
+	// DynamicScaleReciprocal's non-canonical domain).
+	const std::vector<std::vector<int64_t>> kRows = {
+	    {1, -1, 5, -5},
+	    {INT64_C(2147483647), 0},                  // 2^31 - 1
+	    {INT64_C(2147483648), 0},                  // 2^31 exactly (the boundary)
+	    {INT64_C(1099511627781), 0},               // > 2^40
+	    {INT64_C(-1099511627781), 0},              // > 2^40, negative
+	    {INT64_MIN, 0},                             // unsigned-magnitude edge (2^63)
+	};
+	for (const auto& row : kRows) {
+		const int64_t cpu = superslm::MaxAbsReduceWide(row.data(), row.size());
+		const int64_t gpu_s0 =
+		    superslm_gpu::MaxAbsReduceWideGpuScheme0(row.data(), row.size());  // LINK-RED
+		const int64_t gpu_s1 =
+		    superslm_gpu::MaxAbsReduceWideGpuScheme1(row.data(), row.size());  // LINK-RED
+		CHECK_MSG(gpu_s0 == cpu, "SCHEME 0 == CPU oracle MaxAbsReduceWide %lld, got %lld",
+		          (long long)cpu, (long long)gpu_s0);
+		CHECK_MSG(gpu_s1 == cpu, "SCHEME 1 == CPU oracle MaxAbsReduceWide %lld, got %lld",
+		          (long long)cpu, (long long)gpu_s1);
+	}
+}
+
+// --- B11 (Sec5.6, Sec11 B11): the composed guard-fire proof, SequenceLayerState-
+// COMPLETE. Every fixture below drives the REAL, shipped RunLayerLoop through
+// a resumed budget=1 call chain (the identical mechanism
+// TestRunLayerLoopResumedAtBudgetOneEqualsFullBudgetForwardBitForBitAtN28
+// above already proves equals a straight-through call) so that layers before
+// the target position genuinely commit before the target layer's own guard
+// fires -- verified by execution in this session's scratch harness, not
+// reasoned from source alone (StandardsDocument.md Sec5.4). The CPU oracle
+// walks the real engine's own program order; the GPU comparison is LINK-RED
+// via RunLayerLoopGpu/KeyRowGpu/ValueRowGpu. ---
+
+namespace t2019_b11 {
+
+using superslm::CarriedScale;
+using superslm::LayerWeights;
+using superslm::SequenceLayerState;
+using superslm::SslmForwardStatus;
+
+constexpr size_t kWsPerLayer = 1 /*context_cap*/ * 1 /*kv_heads*/ * 2 /*head_dim*/ * 2 /*k+v*/;
+
+// Runs `total_layers` layers via a resumed budget=1 chain, applying `mutate`
+// to the fixture's own layer[reject_at] before the run starts (so the SAME
+// mutated LayerWeights is visible on every call -- no per-call swap needed
+// for a LayerWeights-scoped guard) and, when `rope_tables_override` is
+// non-null, substituting it ONLY for the call that targets `reject_at`
+// (RoPE's own guard needs a per-CALL table swap, not a per-layer weights
+// mutation, since rope_tables is shared model-wide -- Curie casebook Sec6).
+// Returns the real post-rejection SequenceLayerState and reports K/V
+// presence per layer via `out_kv_present` (K,V pairs, `total_layers` long).
+template <uint32_t N>
+SslmForwardStatus RunResumedToRejection(NLayerFixture<N>& fixture, uint32_t reject_at,
+                                          const superslm::SslmTensorManifest* rope_tables_override,
+                                          SequenceLayerState& seq, std::vector<uint8_t>& ws,
+                                          std::vector<std::pair<bool, bool>>& out_kv_present) {
+	int8_t codes[2] = {5, -5};
+	seq = SequenceLayerState{};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	ws.assign(N * kWsPerLayer, 0);
+
+	SslmForwardStatus st = SslmForwardStatus::Ok;
+	for (uint32_t step = 0; step <= reject_at; ++step) {
+		const bool is_target = (step == reject_at);
+		const auto& rope = (is_target && rope_tables_override) ? *rope_tables_override
+		                                                        : fixture.view.rope_tables;
+		st = superslm::RunLayerLoop(seq, fixture.layers, N, /*layer_budget=*/1, 2, 2, 1, 2,
+		                             /*context_cap=*/1, rope, ws.data(), ws.size());
+		if (st != SslmForwardStatus::Ok) break;
+	}
+	out_kv_present.resize(N);
+	for (uint32_t l = 0; l < N; ++l) {
+		const int8_t* k = superslm::KeyRow(ws.data(), l, /*context_cap=*/1, 1, 2, 0, /*position=*/0);
+		const int8_t* v = superslm::ValueRow(ws.data(), l, /*context_cap=*/1, 1, 2, 0, /*position=*/0);
+		out_kv_present[l] = {k[0] != 0 || k[1] != 0, v[0] != 0 || v[1] != 0};
+	}
+	return st;
+}
+
+struct Cell {
+	const char* label;
+	uint32_t total_layers;
+	uint32_t reject_at;
+	SslmForwardStatus want_status;
+	bool is_rope;  // true: swap rope_tables at reject_at; false: mutate layers[reject_at]
+};
+
+}  // namespace t2019_b11
+
+static void TestT2019_B11_SequenceLayerStateComplete_QProj() {
+	using namespace t2019_b11;
+	// Position axis (Sec11 B11): k=0, mid, L-2, L-1 at L=8, plus L=2/k=0.
+	const uint32_t positions[] = {0, 3, 6, 7};
+	for (uint32_t k : positions) {
+		NLayerFixture<8> fixture;
+		static int32_t g[2] = {65536, 65536};  // T-1356's own executed corner: pushes q_proj's wide row past 2^31
+		fixture.layers[k].attn_norm_gain = g;
+
+		SequenceLayerState cpu_seq;
+		std::vector<uint8_t> cpu_ws;
+		std::vector<std::pair<bool, bool>> cpu_kv;
+		const auto cpu = RunResumedToRejection<8>(fixture, k, nullptr, cpu_seq, cpu_ws, cpu_kv);
+		CHECK_MSG(cpu == SslmForwardStatus::ChainInputOutOfDomain,
+		          "q_proj@k=%u: CPU oracle status == %s, want ChainInputOutOfDomain (real, "
+		          "running, must already pass)",
+		          k, superslm::SslmForwardStatusName(cpu));
+		CHECK_MSG(cpu_seq.layer_index == k,
+		          "q_proj@k=%u: CPU layer_index == %u (layers before k committed), got %u", k, k,
+		          cpu_seq.layer_index);
+
+		SequenceLayerState gpu_seq;
+		int8_t gpu_codes[2] = {5, -5};
+		gpu_seq.hidden_codes = gpu_codes;
+		gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		gpu_seq.layer_index = 0;
+		std::vector<uint8_t> gpu_ws(8 * kWsPerLayer, 0);
+		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
+		    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
+		              gpu_seq.hidden_codes[0] == cpu_seq.hidden_codes[0] &&
+		              gpu_seq.hidden_codes[1] == cpu_seq.hidden_codes[1] &&
+		              gpu_seq.hidden_scale.m == cpu_seq.hidden_scale.m &&
+		              gpu_seq.hidden_scale.e == cpu_seq.hidden_scale.e &&
+		              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count &&
+		              gpu_seq.context_length == cpu_seq.context_length,
+		          "q_proj@k=%u: GPU SequenceLayerState (all 5 fields) == CPU oracle's", k);
+	}
+}
+
+static void TestT2019_B11_SequenceLayerStateComplete_KvProj_KBiasAndVBias() {
+	using namespace t2019_b11;
+	const uint32_t positions[] = {0, 3, 6, 7};
+	static int64_t kHugeBias[2] = {INT64_C(4611686018427387903), INT64_C(4611686018427387903)};
+	for (int which = 0; which < 2; ++which) {
+		for (uint32_t k : positions) {
+			NLayerFixture<8> fixture;
+			if (which == 0) fixture.layers[k].k_bias = kHugeBias;
+			else fixture.layers[k].v_bias = kHugeBias;
+
+			SequenceLayerState cpu_seq;
+			std::vector<uint8_t> cpu_ws;
+			std::vector<std::pair<bool, bool>> cpu_kv;
+			const auto cpu = RunResumedToRejection<8>(fixture, k, nullptr, cpu_seq, cpu_ws, cpu_kv);
+			CHECK_MSG(cpu == SslmForwardStatus::RoundingDivideByPotExponentOutOfDomain,
+			          "kv_proj(%s)@k=%u: CPU oracle status == %s, want "
+			          "RoundingDivideByPotExponentOutOfDomain (real, running, must already pass)",
+			          which == 0 ? "k_bias" : "v_bias", k, superslm::SslmForwardStatusName(cpu));
+			// The design's own oracle (Sec11 B11, D-SLM2992): a kv_proj rejection
+			// leaves K AND V absent for the rejecting layer (fused dispatch, no
+			// partial landing).
+			CHECK_MSG(!cpu_kv[k].first && !cpu_kv[k].second,
+			          "kv_proj(%s)@k=%u: K/V for the rejecting layer must be ABSENT (fused "
+			          "dispatch commits neither on a guard failure) -- got K=%d V=%d",
+			          which == 0 ? "k_bias" : "v_bias", k, cpu_kv[k].first, cpu_kv[k].second);
+			for (uint32_t l = 0; l < k; ++l) {
+				CHECK_MSG(cpu_kv[l].first && cpu_kv[l].second,
+				          "kv_proj(%s)@k=%u: layer %u (strictly before the rejecting layer) must "
+				          "carry K/V",
+				          which == 0 ? "k_bias" : "v_bias", k, l);
+			}
+
+			SequenceLayerState gpu_seq;
+			int8_t gpu_codes[2] = {5, -5};
+			gpu_seq.hidden_codes = gpu_codes;
+			gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+			gpu_seq.layer_index = 0;
+			std::vector<uint8_t> gpu_ws(8 * kWsPerLayer, 0);
+			const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+			    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
+			    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+			const int8_t* gpu_k = superslm_gpu::KeyRowGpu(gpu_ws.data(), k, 1, 1, 2, 0, 0);  // LINK-RED
+			const int8_t* gpu_v = superslm_gpu::ValueRowGpu(gpu_ws.data(), k, 1, 1, 2, 0, 0);  // LINK-RED
+			CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
+			              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count &&
+			              gpu_seq.context_length == cpu_seq.context_length &&
+			              gpu_k[0] == 0 && gpu_k[1] == 0 && gpu_v[0] == 0 && gpu_v[1] == 0,
+			          "kv_proj(%s)@k=%u: GPU SequenceLayerState + K/V-absent == CPU oracle's",
+			          which == 0 ? "k_bias" : "v_bias", k);
+		}
+	}
+}
+
+// TODO-CONSTRUCTION (routed, Curie casebook Sec6): D-SLM3056's own 3rd,
+// precedence-discriminating kv_proj fixture requires k_bias and v_bias to
+// fail SIMULTANEOUSLY with DISTINGUISHABLE statuses (one via
+// CheckRoundingDivideByPotExponentDomain, the other via
+// CheckBiasAccumulateMagnitudeDomain's own BiasReconcileProductOutOfDomain).
+// This session's scratch-harness search (32+ (magnitude, kv_landing_e_t_v)
+// combinations, k_bias and v_bias independently, NLayerFixture's own
+// canonical scale) found ONLY RoundingDivideByPotExponentOutOfDomain
+// reachable at every tested cell -- BiasReconcileProductOutOfDomain was
+// never observed. The fixture below asserts the CONFIRMED, EXECUTED
+// two-guards-fire cell (both k_bias and v_bias set simultaneously, both via
+// the SAME check) and documents that it does NOT yet discriminate a
+// reversed-precedence implementation (a build reporting v_bias's status
+// where k_bias's is due would pass this cell identically) -- named as an
+// open construction question for the build seat / a follow-up session, not
+// asserted as closed. This is NOT a Coverage Model gap: the model correctly
+// demands the discriminating fixture; this session did not find its input.
+static void TestT2019_B11_SequenceLayerStateComplete_KvProj_PrecedenceFixture_TodoConstruction() {
+	using namespace t2019_b11;
+	static int64_t kBias[2] = {INT64_C(4611686018427387903), INT64_C(4611686018427387903)};
+	static int64_t vBias[2] = {INT64_C(2305843009213693951), INT64_C(2305843009213693951)};  // distinct magnitude
+	NLayerFixture<4> fixture;
+	fixture.layers[1].k_bias = kBias;
+	fixture.layers[1].v_bias = vBias;
+
+	SequenceLayerState cpu_seq;
+	std::vector<uint8_t> cpu_ws;
+	std::vector<std::pair<bool, bool>> cpu_kv;
+	const auto cpu = RunResumedToRejection<4>(fixture, 1, nullptr, cpu_seq, cpu_ws, cpu_kv);
+	// Per Sec5.6's own precedence rule: k_bias's failure status if k_bias
+	// failed, else v_bias's. Both guards are the same check family in every
+	// combination this session found, so this assertion currently pins "a
+	// rejection occurred," not "k_bias's status specifically was chosen over
+	// v_bias's" -- the discrimination the design's own D-SLM3056 finding
+	// requires is NOT yet closed by this cell (see TODO-CONSTRUCTION above).
+	CHECK_MSG(cpu != SslmForwardStatus::Ok,
+	          "kv_proj precedence fixture: CPU oracle rejects (status=%s) when both k_bias and "
+	          "v_bias fail simultaneously (real, running, must already pass)",
+	          superslm::SslmForwardStatusName(cpu));
+
+	SequenceLayerState gpu_seq;
+	int8_t gpu_codes[2] = {5, -5};
+	gpu_seq.hidden_codes = gpu_codes;
+	gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	gpu_seq.layer_index = 0;
+	std::vector<uint8_t> gpu_ws(4 * kWsPerLayer, 0);
+	const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+	    gpu_seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1, 2, /*context_cap=*/1,
+	    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+	CHECK_MSG(gpu == cpu, "kv_proj precedence fixture: GPU status == CPU oracle's %s, got %s",
+	          superslm::SslmForwardStatusName(cpu), superslm::SslmForwardStatusName(gpu));
+}
+
+static void TestT2019_B11_SequenceLayerStateComplete_Rope() {
+	using namespace t2019_b11;
+	using superslm::FixtureSection;
+	using namespace superslm_test;
+	// Verified by execution (scratch harness): a rope-table view carrying
+	// ONLY "cos" (no "sin") makes RopeApplySite's own step-2 guard return
+	// RopeTableTensorMissing, uniformly for every layer that reaches RoPE --
+	// swapped in for ONLY the call targeting `reject_at` (the resumed-call
+	// pattern gives per-layer control over an otherwise model-wide table).
+	const uint32_t positions[] = {0, 3, 6, 7};
+	for (uint32_t k : positions) {
+		NLayerFixture<8> fixture;
+
+		std::vector<ManifestTensorSpec> tensors_missing_sin = {
+		    {"cos", {static_cast<uint32_t>(NLayerFixture<8>::kContextCap), 1u}},
+		};
+		auto manifest =
+		    BuildManifest(superslm::kRopeMagic, /*element_size=*/8, tensors_missing_sin);
+		std::vector<int64_t> cos_flat(NLayerFixture<8>::kContextCap, INT64_C(1073741824));
+		for (size_t i = 0; i < cos_flat.size(); ++i) {
+			PutU64(manifest.bytes, static_cast<size_t>(manifest.tensor_data_off[0]) + i * 8,
+			       static_cast<uint64_t>(cos_flat[i]));
+		}
+		FixtureSection bad_rope = MakeSection(SslmSectionType::RopeTables, SslmDtype::Int64,
+		                                        manifest.bytes, /*alignment=*/64);
+		Cfg1Spec spec{};
+		spec.hidden_size = 2; spec.num_hidden_layers = 8; spec.num_attention_heads = 1;
+		spec.num_key_value_heads = 1; spec.head_dim = 2; spec.intermediate_size = 2;
+		spec.context_cap = NLayerFixture<8>::kContextCap; spec.kv_precision = 0;
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		auto built_bad = BuildArtifact({config, MakeSigmoidLutSection(), bad_rope});
+		superslm::SslmModelView bad_view;
+		std::string err;
+		const auto lst = superslm::SslmModel::Load(built_bad.bytes.data(), built_bad.bytes.size(),
+		                                             bad_view, &err);
+		CHECK_MSG(lst == superslm::SslmModelStatus::Ok,
+		          "RoPE fixture's own sin-missing artifact failed to load: %s (%s)",
+		          superslm::SslmModelStatusName(lst), err.c_str());
+
+		SequenceLayerState cpu_seq;
+		std::vector<uint8_t> cpu_ws;
+		std::vector<std::pair<bool, bool>> cpu_kv;
+		const auto cpu =
+		    RunResumedToRejection<8>(fixture, k, &bad_view.rope_tables, cpu_seq, cpu_ws, cpu_kv);
+		CHECK_MSG(cpu == SslmForwardStatus::RopeTableTensorMissing,
+		          "RoPE@k=%u: CPU oracle status == %s, want RopeTableTensorMissing (real, "
+		          "running, must already pass)",
+		          k, superslm::SslmForwardStatusName(cpu));
+		// Design's own corrected oracle (Sec11 B11, Sec18 Fold, D-SLM2974): a
+		// RoPE rejection leaves K present (kv_proj already committed) but
+		// UNROTATED -- distinct from kv_proj's own "absent" and from a clean
+		// layer's "present and rotated." This cell pins K PRESENT; pinning
+		// "unrotated specifically" needs a rotation that is observably
+		// different from identity, which this fixture's identity rope table
+		// does not construct (routed alongside the TODO-CONSTRUCTION note
+		// above -- Curie casebook Sec6).
+		CHECK_MSG(cpu_kv[k].first && cpu_kv[k].second,
+		          "RoPE@k=%u: K AND V must be PRESENT for the rejecting layer (kv_proj already "
+		          "committed before RoPE runs) -- got K=%d V=%d",
+		          k, cpu_kv[k].first, cpu_kv[k].second);
+
+		SequenceLayerState gpu_seq;
+		int8_t gpu_codes[2] = {5, -5};
+		gpu_seq.hidden_codes = gpu_codes;
+		gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		gpu_seq.layer_index = 0;
+		std::vector<uint8_t> gpu_ws(8 * kWsPerLayer, 0);
+		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
+		    bad_view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index,
+		          "RoPE@k=%u: GPU status/layer_index == CPU oracle's", k);
+	}
+}
+
+static void TestT2019_B11_SequenceLayerStateComplete_PostKvProjSite_DownProj() {
+	using namespace t2019_b11;
+	// A post-kv_proj/RoPE site (down_proj), the design's own minimum
+	// "one post-site" requirement (Sec11 B11). Mirrors the T-2008 probe's
+	// own construction (poison down_site_constant's mantissa out of int32
+	// range) -- verified by execution.
+	const uint32_t positions[] = {0, 3, 6, 7};
+	for (uint32_t k : positions) {
+		NLayerFixture<8> fixture;
+		fixture.layers[k].down_site_constant = CarriedScale{INT64_C(1099511627776), -30};
+
+		SequenceLayerState cpu_seq;
+		std::vector<uint8_t> cpu_ws;
+		std::vector<std::pair<bool, bool>> cpu_kv;
+		const auto cpu = RunResumedToRejection<8>(fixture, k, nullptr, cpu_seq, cpu_ws, cpu_kv);
+		CHECK_MSG(cpu == SslmForwardStatus::CarriedScaleMantissaOutOfDomain,
+		          "down_proj@k=%u: CPU oracle status == %s, want CarriedScaleMantissaOutOfDomain "
+		          "(real, running, must already pass)",
+		          k, superslm::SslmForwardStatusName(cpu));
+		CHECK_MSG(cpu_kv[k].first && cpu_kv[k].second,
+		          "down_proj@k=%u: K/V must be PRESENT for the rejecting layer -- down_proj runs "
+		          "strictly after kv_proj's own commit (got K=%d V=%d)",
+		          k, cpu_kv[k].first, cpu_kv[k].second);
+
+		SequenceLayerState gpu_seq;
+		int8_t gpu_codes[2] = {5, -5};
+		gpu_seq.hidden_codes = gpu_codes;
+		gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		gpu_seq.layer_index = 0;
+		std::vector<uint8_t> gpu_ws(8 * kWsPerLayer, 0);
+		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
+		    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index &&
+		              gpu_seq.kv_saturation_count == cpu_seq.kv_saturation_count,
+		          "down_proj@k=%u: GPU SequenceLayerState == CPU oracle's", k);
+	}
+}
+
+static void TestT2019_B11_SequenceLayerStateComplete_L2K0() {
+	using namespace t2019_b11;
+	// The smallest composition size at which the cross-layer fracture's own
+	// durable lesson (T-1996 Sec10) places the first failing case -- two
+	// layers, rejection at the first of the two.
+	NLayerFixture<2> fixture;
+	static int32_t g[2] = {65536, 65536};
+	fixture.layers[0].attn_norm_gain = g;
+
+	SequenceLayerState cpu_seq;
+	std::vector<uint8_t> cpu_ws;
+	std::vector<std::pair<bool, bool>> cpu_kv;
+	const auto cpu = RunResumedToRejection<2>(fixture, 0, nullptr, cpu_seq, cpu_ws, cpu_kv);
+	CHECK_MSG(cpu == SslmForwardStatus::ChainInputOutOfDomain,
+	          "L=2,k=0: CPU oracle status == %s, want ChainInputOutOfDomain (real, running, must "
+	          "already pass)",
+	          superslm::SslmForwardStatusName(cpu));
+	CHECK_MSG(cpu_seq.layer_index == 0, "L=2,k=0: CPU layer_index == 0 (no layer committed)");
+
+	SequenceLayerState gpu_seq;
+	int8_t gpu_codes[2] = {5, -5};
+	gpu_seq.hidden_codes = gpu_codes;
+	gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	gpu_seq.layer_index = 0;
+	std::vector<uint8_t> gpu_ws(2 * kWsPerLayer, 0);
+	const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+	    gpu_seq, fixture.layers, 2, /*layer_budget=*/2, 2, 2, 1, 2, /*context_cap=*/1,
+	    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+	CHECK_MSG(gpu == cpu && gpu_seq.layer_index == cpu_seq.layer_index,
+	          "L=2,k=0: GPU SequenceLayerState == CPU oracle's");
+}
+
+// --- B8 (Sec11 B8): device residency across a decode session. Mechanism-
+// level (Curie casebook Sec6: SuperSLM_Plan.md Sec12's sslm_seq_save/restore
+// C-ABI wrapper is not yet built on any backend). Oracle: the real,
+// shipped RunLayerLoop, called once per token. ---
+
+static void TestT2019_B8_ContextLengthSuccessPathReadback_GpuMatchesCpu() {
+	// Verified by execution (scratch harness): a single-token, clean,
+	// 4-layer call advances seq.context_length from 0 to 1 (the end-of-
+	// layer commit's fourth field, per Sec20 Fold D-SLM3055) -- read back
+	// directly, not inferred from token-output identity (kv_saturation_count
+	// and context_length are both excluded from every digest,
+	// decode_digest.h:27-32).
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	NLayerFixture<4> fixture;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	seq.context_length = 0;
+	constexpr size_t kWs = 4 * 1 * 1 * 2 * 2;
+	uint8_t ws[kWs] = {};
+
+	const int64_t kExpectedContextLength[3] = {1, 2, 3};  // N >= 2 decode steps, no rejection
+	for (int step = 0; step < 3; ++step) {
+		seq.layer_index = 0;  // start the next token
+		const auto st = superslm::RunLayerLoop(seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1, 2,
+		                                         /*context_cap=*/64, fixture.view.rope_tables, ws,
+		                                         sizeof(ws));
+		CHECK_MSG(st == SslmForwardStatus::Ok,
+		          "B8 success-path step %d: CPU oracle status == %s, want Ok (real, running, must "
+		          "already pass)",
+		          step, superslm::SslmForwardStatusName(st));
+		CHECK_MSG(seq.context_length == kExpectedContextLength[step],
+		          "B8 success-path step %d: CPU oracle seq.context_length == %lld, got %lld", step,
+		          (long long)kExpectedContextLength[step], (long long)seq.context_length);
+	}
+
+	SequenceLayerState gpu_seq;
+	int8_t gpu_codes[2] = {5, -5};
+	gpu_seq.hidden_codes = gpu_codes;
+	gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	gpu_seq.layer_index = 0;
+	gpu_seq.context_length = 0;
+	uint8_t gpu_ws[kWs] = {};
+	for (int step = 0; step < 3; ++step) {
+		gpu_seq.layer_index = 0;
+		const auto gst = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+		    gpu_seq, fixture.layers, 4, /*layer_budget=*/4, 2, 2, 1, 2, /*context_cap=*/64,
+		    fixture.view.rope_tables, gpu_ws, sizeof(gpu_ws));
+		CHECK_MSG(gst == SslmForwardStatus::Ok && gpu_seq.context_length == kExpectedContextLength[step],
+		          "B8 success-path step %d: GPU status/context_length == CPU oracle's", step);
+	}
+}
+
+static void TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu() {
+	// Device-to-host/host-to-device round-trip of the residual-stream/KV/
+	// kv_saturation_count/context_length state (Sec10 dim 9, D-SLM3034):
+	// save mid-session, restore into a fresh handle, resume -- token output
+	// (here: the readback fields directly) must be bit-identical to the
+	// same session run without a round-trip.
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+
+	NLayerFixture<4> fixture;
+	int8_t codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	seq.context_length = 0;
+	constexpr size_t kWs = 4 * 1 * 1 * 2 * 2;
+	uint8_t ws[kWs] = {};
+	superslm::RunLayerLoop(seq, fixture.layers, 4, 4, 2, 2, 1, 2, 64, fixture.view.rope_tables, ws,
+	                         sizeof(ws));  // one clean token -- real, running, must already pass
+
+	// The GPU port's own save/restore mechanism (LINK-RED).
+	uint8_t blob[512];
+	size_t blob_size = sizeof(blob);
+	const bool saved =
+	    superslm_gpu::SaveGpuSequenceState(seq, ws, sizeof(ws), blob, &blob_size);  // LINK-RED
+	SequenceLayerState restored_seq;
+	uint8_t restored_ws[kWs] = {};
+	const bool restored = superslm_gpu::RestoreGpuSequenceState(  // LINK-RED
+	    blob, blob_size, &restored_seq, restored_ws, sizeof(restored_ws));
+	CHECK_MSG(saved && restored, "B8 save/restore: both calls report success");
+	CHECK_MSG(restored_seq.layer_index == seq.layer_index &&
+	              restored_seq.kv_saturation_count == seq.kv_saturation_count &&
+	              restored_seq.context_length == seq.context_length,
+	          "B8 save/restore: restored SequenceLayerState (layer_index, kv_saturation_count, "
+	          "context_length) == the pre-save CPU oracle's own values, read back directly -- "
+	          "kv_saturation_count and context_length are excluded from every digest "
+	          "(decode_digest.h:27-32), so a token-output-only gate cannot observe either being "
+	          "silently dropped by the round-trip");
+}
+
+// --- B3 (Sec5.1, Sec11 B3): descriptor-table binding substrate. Structural
+// cells -- the D3D12 binder itself does not exist; these fixtures state the
+// shape B3's own gate requires (Sec4's 28-layer x 42-array-pointer count,
+// negative int8 sign-extension, two-handle non-collision, sequential
+// release/reuse cleanliness) so the build seat has a concrete target. ---
+
+static void TestT2019_B3_DescriptorTableBinding_KnownPatternReadback() {
+	// Sized to the larger real tier's layer count (28, 1.5B-Instruct, Sec14
+	// Fold F1) x 42-array-pointer count (Sec4) -- the concrete instance of
+	// the root-signature-exceeded defect Sec5.1 names. A shader that binds
+	// this many arrays via root descriptors alone cannot compile/link
+	// against D3D12's own root-signature size limit; the table-based binder
+	// this cell gates does not exist yet.
+	constexpr size_t kLayers = 28;
+	constexpr size_t kArraysPerLayer = 42;
+	constexpr size_t kNArrays = kLayers * kArraysPerLayer;
+	constexpr size_t kElementsPerArray = 8;
+	std::vector<std::vector<int8_t>> arrays(kNArrays, std::vector<int8_t>(kElementsPerArray));
+	std::vector<const int8_t*> ptrs(kNArrays);
+	std::vector<size_t> counts(kNArrays, kElementsPerArray);
+	for (size_t a = 0; a < kNArrays; ++a) {
+		for (size_t e = 0; e < kElementsPerArray; ++e) {
+			// A known, per-array pattern including negative values (Sec5.2's
+			// sign-extension correction) -- byte value cycles through the
+			// full int8 range.
+			arrays[a][e] = static_cast<int8_t>(((a * 7 + e * 13) % 255) - 127);
+		}
+		ptrs[a] = arrays[a].data();
+	}
+	std::vector<int8_t> readback(kNArrays * kElementsPerArray, 0);
+	const bool ok = superslm_gpu::BindDescriptorTableAndReadback(  // LINK-RED
+	    ptrs.data(), counts.data(), kNArrays, readback.data(), readback.size());
+	CHECK_MSG(ok, "descriptor-table binder: bind+readback at 28 layers x 42 arrays succeeds");
+	if (ok) {
+		for (size_t a = 0; a < kNArrays; ++a) {
+			for (size_t e = 0; e < kElementsPerArray; ++e) {
+				CHECK_MSG(readback[a * kElementsPerArray + e] == arrays[a][e],
+				          "descriptor-table binder: array %zu element %zu readback == %d "
+				          "(known pattern, includes negative int8 values), got %d",
+				          a, e, (int)arrays[a][e], (int)readback[a * kElementsPerArray + e]);
+			}
+		}
+	}
+}
+
+static void TestT2019_B3_DescriptorHeapRegionCleanAfterHandleRelease() {
+	// Added Sec14 Fold G1: a model handle is mapped, written with a
+	// distinguishing pattern, and released; a second, different model
+	// handle is mapped into the freed descriptor-heap region; a shader
+	// dispatch against the second handle must show no residue from the
+	// first.
+	const bool clean = superslm_gpu::DescriptorHeapRegionIsCleanAfterHandleRelease();  // LINK-RED
+	CHECK_MSG(clean,
+	          "descriptor heap region is clean after a handle's release and a second handle's "
+	          "map into the freed region (Sec10 dim 1, Sec11 B3)");
+}
+
+// --- B12 (Sec10 dim 5, Sec11 B12): GPU residency allocation-failure handling. ---
+
+static void TestT2019_B12_AllocationFailureReturnsDefinedStatusNoResidue() {
+	// An over-budget request, sized past any plausible real adapter's VRAM
+	// (Sec9's own envelope figures top out in single-digit GiB) -- the
+	// build seat's own IDXGIAdapter3::QueryVideoMemoryInfo-driven sizing is
+	// what makes this concretely "over budget" on the test device; this
+	// cell states the property the gate requires (a defined failure, no
+	// partial device state) rather than the exact byte count, which is a
+	// property of the test device B3/B12 run on, not of this fixture.
+	constexpr uint64_t kAbsurdlyOverBudget = UINT64_C(1) << 40;  // 1 TiB
+	const bool defined_failure =
+	    superslm_gpu::GpuResidencyMapReturnsDefinedFailureOnOverBudgetRequest(  // LINK-RED
+	        kAbsurdlyOverBudget);
+	CHECK_MSG(defined_failure,
+	          "an over-budget GPU-residency map request returns a defined failure status with no "
+	          "partial device-resident state left behind, confirmed reachable on a real "
+	          "memory-pressure configuration (Sec9/Sec10 dim 5) -- not merely coded and never hit");
 }
 
 int main(int argc, char** argv) {
