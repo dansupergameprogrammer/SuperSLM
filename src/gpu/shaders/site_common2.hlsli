@@ -167,7 +167,7 @@ bool CheckSoftmaxRowWidthDomainGpu(int64_t q_b, int64_t q_c, int width)
 // array -- WorkScratch's own per-thread AttnScores slice, sized to the real
 // per-call context_cap) and `width` int64 Q15 probs on success. This is the
 // SAME sequential algorithm the original array-based primitive used --
-// attention_site.hlsl's own per-thread head ownership (one thread computes
+// softmax_site.hlsl's own per-thread head ownership (one thread computes
 // one head's softmax start to finish, Sec5.4's per-output-channel
 // parallelization applied at the HEAD granularity here, since heads are
 // already independent production units) means no cross-thread cooperation is
@@ -175,6 +175,14 @@ bool CheckSoftmaxRowWidthDomainGpu(int64_t q_b, int64_t q_c, int width)
 bool SoftmaxRowQ15BufGpu(RWByteAddressBuffer buf, uint base, int width, int64_t q_ln2, int64_t q_b,
                           int64_t q_c)
 {
+    // T-2045 (M1, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
+    // CPU (intmath.cpp:799) returns `true` for `width == 0` before touching
+    // either pointer; this used to read `buf.Load<int64_t>(base + 0)`
+    // unconditionally first. Unreachable through the shipped caller
+    // (CheckSoftmaxRowWidthDomainGpu already rejects width == 0), fixed
+    // anyway to match the CPU sibling's own guard order exactly.
+    if (width == 0) return true;
+
     int64_t peak = buf.Load<int64_t>(base + 0u);
     for (int pi = 1; pi < width; ++pi)
     {
@@ -214,23 +222,35 @@ bool SoftmaxRowQ15BufGpu(RWByteAddressBuffer buf, uint base, int width, int64_t 
                      SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128);
     int64_t m = m_usable ? SLow64(m128) : 0;
     int64_t total = 0;
-    if (!m_usable)
+    // T-2045 (S7, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
+    // matches intmath.cpp:841-891 exactly on the `!m_usable` path -- CPU sets
+    // `exps[k] = 0` for EVERY element (not merely for a subset), so
+    // `out_probs` is all zeros; the prior GPU shape skipped the entire
+    // second pass here and left the raw i-exp values in the buffer for the
+    // final Q15 division to run over. Unreachable through the shipped
+    // caller today (`CheckSoftmaxRowWidthDomainGpu` tests the identical
+    // three conjuncts before this kernel ever runs, so `m_usable` is always
+    // true when reached) -- fixed anyway, since this function's entire
+    // contract is bit-exactness and its CPU sibling explicitly re-derives
+    // this bound rather than trusting its caller.
+    for (int k2 = 0; k2 < width; ++k2)
     {
-        all_well_formed = false;
-    }
-    else
-    {
-        for (int k2 = 0; k2 < width; ++k2)
+        int64_t value = 0;
+        if (m_usable)
         {
-            int64_t value = buf.Load<int64_t>(base + (uint)k2 * 8u);
+            value = buf.Load<int64_t>(base + (uint)k2 * 8u);
             if (value < 0 || value > m)
             {
                 all_well_formed = false;
                 value = 0;
-                buf.Store<int64_t>(base + (uint)k2 * 8u, value);
             }
-            total += value;
         }
+        else
+        {
+            all_well_formed = false;
+        }
+        buf.Store<int64_t>(base + (uint)k2 * 8u, value);
+        total += value;
     }
 
     int64_t denom = (total > 1) ? total : 1;

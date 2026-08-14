@@ -261,6 +261,36 @@ namespace {
 
 uint32_t Align8U32(uint32_t x) { return (x + 7u) & ~7u; }
 
+// T-2045 (S3, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): a
+// single-slot weight-residency cache -- see RunLayerLoopGpu's own header
+// comment at its use site for the full rationale. Process-lifetime storage,
+// matching this design's own single-execution, no-concurrent-model-handle
+// build target (T-811); a real multi-model-handle ABI surface would key this
+// per handle rather than globally, which is a residual for whichever
+// dispatch first builds that surface.
+//
+// Keyed on CONTENT (a byte-for-byte comparison of the packed row, `bytes`
+// below), never on the `layers` pointer alone. A pointer-only key is unsound:
+// this project's own test harness constructs a fresh `NLayerFixture` on each
+// loop iteration of a `for (uint32_t k : positions) { NLayerFixture<8>
+// fixture; ... }`-shaped test (every T-2019 B11 test in this suite), and a
+// short-lived stack object's own address is routinely reused across loop
+// iterations by the compiler -- confirmed by execution this ticket's own
+// build: a pointer-keyed first cut of this cache served k=0's stale, already-
+// uploaded weights back on k=3's call (an entirely different fixture
+// mutation, same `fixture.layers` address), regressing 17 previously-green
+// cells. Reusing STALE weights across genuinely different models is a
+// correctness defect, strictly worse than the re-upload cost S3 exists to
+// remove -- a content comparison is the only sound invalidation signal a
+// same-signature cache (no separate "map model" handle exists in gpu_port.h's
+// own contract) can use.
+struct ResidentWeights {
+	std::vector<uint8_t> bytes;  // the last-uploaded packed row, kept for comparison
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_buf;
+	bool valid = false;
+};
+ResidentWeights g_resident_weights;
+
 // The composed pipeline's own per-layer LayerWeights byte layout -- computed
 // ONCE per call from (hidden_size, kv_hidden_size, num_kv_heads) and uploaded
 // as the "Layout" SRV every real site shader reads offsets from (never
@@ -503,6 +533,19 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	harness::Device& dev = harness::GetDevice();
 	if (!dev.available) return superslm::SslmForwardStatus::KvPrecisionUnsupported;
 
+	// T-2045 (S2 partial, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
+	// §5.1's own Tier-3 hardware floor (D-SLM3000) is now enforced on the path
+	// that actually runs, not only on B3's own isolated test entry points --
+	// closing the half of S2 this remedy round's own scope reaches. The
+	// composed pipeline's own binding SUBSTRATE (one packed SRV buffer +
+	// host-computed offset table, rather than §5.1's literal descriptor-table
+	// architecture B3 proves generically) is unchanged here -- a full
+	// migration is a separate, larger remedy, named explicitly rather than
+	// silently left as a completed item; see this ticket's own handoff.
+	if (!MapModelGpuResidencyTierCheck()) {
+		return superslm::SslmForwardStatus::KvPrecisionUnsupported;
+	}
+
 	const uint32_t H = static_cast<uint32_t>(hidden_size);
 	const uint32_t HD = static_cast<uint32_t>(head_dim);
 	const uint32_t NH = static_cast<uint32_t>(num_key_value_heads);
@@ -518,8 +561,23 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	const uint32_t I = static_cast<uint32_t>(intermediate_size);
 	const GpuLayerLayout layout = ComputeLayerLayout(H, KV, NH, NQH, I);
 
+	// T-2045 (S3, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): §5.3's
+	// own decision is "weight buffers upload once... and stay resident for the
+	// mapped model handle's entire lifetime -- never re-uploaded per token or
+	// per sslm_decode_step_gpu call." This function has no separate "map"
+	// entry point in gpu_port.h's own contract, so the packed row is always
+	// (re)computed here -- cheap, host-local -- and then compared BYTE-FOR-BYTE
+	// against the last-uploaded row (ResidentWeights' own header comment: a
+	// pointer-only key is unsound against this project's own test harness).
+	// Only a genuine content change re-uploads; the real production call
+	// pattern (the same `layers` array driving every token of one decode
+	// session, tools/sslm_generate.cpp's own RunWholeToken closure) packs the
+	// identical bytes every call and skips the ~1.31 GiB PCIe transfer on
+	// every call after the first.
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_buf;
+
 	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
-	// own scoped subset: only what sites 1-4 read). ---
+	// own scoped subset: only what sites 1-4 read). Always runs (S3 above). ---
 	std::vector<uint8_t> lw_bytes(static_cast<size_t>(layout.stride) * N, 0);
 	for (uint32_t l = 0; l < N; ++l) {
 		const superslm::LayerWeights& lw = layers[l];
@@ -620,6 +678,14 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 			PutI64At(lw_bytes, base + layout.off[55] + i * 8,
 			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
 		}
+	}
+
+	// T-2045 (S3): true iff this call's freshly-packed row is byte-identical
+	// to the last-uploaded one -- the ONLY sound invalidation signal here
+	// (ResidentWeights' own header comment).
+	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes;
+	if (weights_resident) {
+		lw_buf = g_resident_weights.lw_buf;
 	}
 
 	std::vector<uint8_t> layout_bytes(57 * 4, 0);
@@ -752,7 +818,15 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
-	auto lw_buf = dev.Upload(lw_bytes.data(), lw_bytes.size());
+	// T-2045 (S3): upload LayerWeights only on a residency-cache miss (a real
+	// content difference from the last upload); a hit reuses `lw_buf`
+	// (already assigned from `g_resident_weights` above).
+	if (!weights_resident) {
+		lw_buf = dev.Upload(lw_bytes.data(), lw_bytes.size());
+		g_resident_weights.lw_buf = lw_buf;
+		g_resident_weights.bytes = std::move(lw_bytes);
+		g_resident_weights.valid = true;
+	}
 	auto layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
 	auto rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
 	auto model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
@@ -1092,7 +1166,48 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 	if (workspace_size > 0) {
 		if (!out_workspace) return false;
 		const uint8_t* src = static_cast<const uint8_t*>(blob) + sizeof(hdr);
-		std::memcpy(out_workspace, src, workspace_size);
+
+		// T-2045 (S6, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
+		// this function's own declared contract sites the restore-time device
+		// allocation and host-to-device upload HERE (gpu_port.h:149-154's own
+		// comment) -- a plain host memcpy would pass this gate identically
+		// with no GPU present. The workspace bytes now round-trip through a
+		// real device: upload heap -> DEFAULT-heap device buffer (the
+		// "restored-sequence device allocation" itself) -> readback heap ->
+		// `out_workspace`, one real command-list submission, fence-waited
+		// before this call returns.
+		harness::Device& dev = harness::GetDevice();
+		if (!dev.available) return false;
+		SSLM_GPU_HR(dev.alloc->Reset());
+		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+		auto upload_buf = dev.Upload(src, workspace_size);
+		auto device_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_DEFAULT,
+		                                  D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		dev.list->CopyResource(device_buf.Get(), upload_buf.Get());
+		D3D12_RESOURCE_BARRIER b{};
+		b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		b.Transition.pResource = device_buf.Get();
+		b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		dev.list->ResourceBarrier(1, &b);
+		auto readback_buf = dev.MakeBuffer(workspace_size, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+		                                    D3D12_RESOURCE_STATE_COPY_DEST);
+		dev.list->CopyResource(readback_buf.Get(), device_buf.Get());
+		SSLM_GPU_HR(dev.list->Close());
+		ID3D12CommandList* lists[] = {dev.list.Get()};
+		dev.queue->ExecuteCommandLists(1, lists);
+		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+		if (dev.fence->GetCompletedValue() < dev.fence_val) {
+			SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+			WaitForSingleObject(dev.fence_event, INFINITE);
+		}
+		void* p = nullptr;
+		D3D12_RANGE range{0, static_cast<SIZE_T>(workspace_size)};
+		SSLM_GPU_HR(readback_buf->Map(0, &range, &p));
+		std::memcpy(out_workspace, p, workspace_size);
+		D3D12_RANGE none{0, 0};
+		readback_buf->Unmap(0, &none);
 	}
 	return true;
 }
@@ -1291,33 +1406,36 @@ bool MapModelGpuResidencyTierCheck() {
 }
 
 // ===========================================================================
-// B12 (Sec11 B12): deterministic allocation-failure injection. STUB pending
-// B3/B12 -- kGpuResidencyAllocationCallCount is a real design quantity
-// (Sec5.1's read+write resource-table count) that cannot be derived correctly
-// until B3's resource list is final; set to 0 for now (0 allocation-index
-// cells run rather than a made-up count silently misreporting the real one --
-// named explicitly here, not left implicit) so TestT2019_B12_
-// InjectedFailureAtEveryAllocationIndex's own loop is a no-op until B12 names
-// the real value with its derivation stated, per this ticket's own brief.
+// B12 (Sec11 B12): deterministic allocation-failure injection. T-2045 (S1,
+// Claude/Poirot/82cfca7-gpu-serial-port-build-review.md): `N` is now Sec5.1's
+// own real read+write resource-table count, the same 12 resources the
+// composed pipeline's own root signature binds every dispatch
+// (d3d12_harness.h's MakeRootSigComposed) -- 8 read SRVs (LayerWeights,
+// Layout, RopeInfo, ModelConstants, SiluLut, RopeCosTable, RopeSinTable,
+// ScratchLayout) plus 4 write UAVs (SeqState, LayerScratch, KvCache,
+// WorkScratch). `TestT2019_B12_InjectedFailureAtEveryAllocationIndex`'s own
+// `for (k=0;k<N;++k)` sweep now runs 12 real iterations, one per resource.
 // ===========================================================================
 
-// N is still 0 -- a placeholder pending B3's own resource list becoming final
-// (Sec5.1's read+write UAV/SRV table). With N==0 the allocation loop below is
-// a real, correctly-shaped no-op (0 calls attempted, 0 live allocations),
-// not a special case: TestT2019_B12_InjectedFailureAtEveryAllocationIndex's
-// own `for (k=0;k<N;++k)` loop runs zero iterations honestly (named in the B1
-// checkpoint, Claude/Brunel/t2025-gpu-serial-build-2026-08-13.md Sec4), and
-// the preflight/injection MECHANISM below is real and independent of N's own
-// value.
-extern const uint32_t kGpuResidencyAllocationCallCount = 0;
+extern const uint32_t kGpuResidencyAllocationCallCount = 12;
 
 namespace {
 bool g_low_budget_mock_armed = false;
 uint64_t g_low_budget_mock_bytes = 0;
 bool g_alloc_fail_injection_armed = false;
 uint32_t g_alloc_fail_injection_index = 0;
-uint32_t g_live_allocation_count = 0;
 uint32_t g_allocation_calls_attempted = 0;
+// T-2045 (S1): a real per-index tracking set -- `MapModelGpuResidencyWithInjection`
+// below appends one entry per successful mock allocation and, on an injected
+// failure, ERASES every entry it appended (a real cleanup loop), so
+// `LiveAllocationCount()` reads the vector's own observed size rather than a
+// literal `= 0` assignment standing in for cleanup that did not run. This is
+// a mock allocator (Sec21 Fold D-SLM3081's own "not real VRAM exhaustion,
+// which is non-deterministic and therefore not a valid gate" ruling) -- no
+// real ID3D12Resource is created per index -- but the bookkeeping it
+// performs is real: an entry that was never appended cannot be "cleaned up"
+// by assignment, only by having never existed or by being erased.
+std::vector<uint32_t> g_live_allocations;
 }  // namespace
 
 void ArmAllocationFailureInjection(uint32_t index) {
@@ -1332,7 +1450,7 @@ void ClearAllocationInjection() {
 	g_alloc_fail_injection_armed = false;
 	g_low_budget_mock_armed = false;
 }
-uint32_t LiveAllocationCount() { return g_live_allocation_count; }
+uint32_t LiveAllocationCount() { return static_cast<uint32_t>(g_live_allocations.size()); }
 uint32_t AllocationCallsAttempted() { return g_allocation_calls_attempted; }
 
 bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
@@ -1343,7 +1461,7 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	// is released, mock live-count reads 0) -- neither depends on the test
 	// device's own real VRAM.
 	g_allocation_calls_attempted = 0;
-	g_live_allocation_count = 0;
+	g_live_allocations.clear();
 	if (g_low_budget_mock_armed && required_bytes > g_low_budget_mock_bytes) {
 		return false;  // preflight fails cheaply -- 0 allocation calls attempted, by construction above
 	}
@@ -1351,10 +1469,13 @@ bool MapModelGpuResidencyWithInjection(uint64_t required_bytes) {
 	for (uint32_t i = 0; i < N; ++i) {
 		g_allocation_calls_attempted = i + 1;
 		if (g_alloc_fail_injection_armed && i == g_alloc_fail_injection_index) {
-			g_live_allocation_count = 0;  // transactional cleanup: release every prior allocation
+			// Transactional cleanup: erase every allocation this call itself
+			// appended, one at a time -- an OBSERVED empty vector afterward,
+			// not an assumed one.
+			while (!g_live_allocations.empty()) g_live_allocations.pop_back();
 			return false;
 		}
-		++g_live_allocation_count;  // this allocation call succeeded; held live until the map completes
+		g_live_allocations.push_back(i);  // this allocation call succeeded; held live until the map completes
 	}
 	return true;  // every allocation call succeeded (including the N==0 vacuous case)
 }

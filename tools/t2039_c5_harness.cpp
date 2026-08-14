@@ -230,9 +230,22 @@ int main(int argc, char** argv) {
 		std::printf("RESULT: DIVERGENCE FOUND (see above) -- not bit-identical.\n");
 	}
 
-	// --- Downstream: final_norm + logits, from each side's own final state,
-	// as far as the design's C5 cell extends (only meaningful/attempted if
-	// the forward pass itself succeeded on both sides). ---
+	// --- Downstream: final_norm + logits, from each side's own final state.
+	// T-2045 (S4, M4, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
+	// this section is NOT an independent GPU measurement. RmsNormSite and
+	// LogitsSite are CPU functions, run here on the HOST over cpu_codes and
+	// gpu_codes -- both sides are the identical deterministic function of
+	// hidden_codes/hidden_scale, already compared bit-for-bit above. A real
+	// GPU-side final_norm+head dispatch is outside this design's ratified
+	// B-step list (Sec11 covers the 16 composed sites + commit, never the
+	// head projection), so building one is out of this remedy round's own
+	// scope -- reported here as a DERIVED CONSEQUENCE of the already-real
+	// SequenceLayerState/K-V comparison, never as a third independent line
+	// (S4's own alternative: "reported as a derived consequence, or made a
+	// real measurement by computing the head on GPU" -- this takes the
+	// first). Every return status is now checked (M4); a missing tensor or
+	// constant now prints an explicit skip note rather than silently
+	// omitting the section.
 	if (cpu_status == SslmForwardStatus::Ok && gpu_status == SslmForwardStatus::Ok) {
 		const SslmTensorView* final_gain_w = model_view.weights.Tensor("final_norm.gain");
 		const int8_t* head_weights = nullptr;
@@ -242,44 +255,67 @@ int main(int argc, char** argv) {
 			const SslmTensorView* lm_head_w = model_view.weights.Tensor("lm_head");
 			head_weights = lm_head_w ? reinterpret_cast<const int8_t*>(lm_head_w->data) : nullptr;
 		}
-		if (final_gain_w && head_weights) {
+		if (!final_gain_w || !head_weights) {
+			std::printf("LOGITS: skipped -- final_norm.gain or the head tensor is absent from this "
+			            "artifact.\n");
+		} else {
 			std::vector<int32_t> final_norm_gain = WidenGainToInt32(*final_gain_w);
 			bool ok2 = true;
 			CarriedScale final_norm_site_constant =
 			    ReadCarriedScale(model_view.composition_constants, "final_norm", &ok2);
-			if (ok2) {
+			if (!ok2) {
+				std::printf("LOGITS: skipped -- no \"final_norm\" composition constant in this artifact.\n");
+			} else {
 				const size_t vocab_size_z = static_cast<size_t>(model_view.config.vocab_size);
 				std::vector<int8_t> cpu_final(hidden_size), gpu_final(hidden_size);
 				CarriedScale cpu_final_scale{}, gpu_final_scale{};
-				RmsNormSite(cpu_codes.data(), final_norm_gain.data(), hidden_size, cpu_seq.hidden_scale,
-				            final_norm_site_constant, cpu_final.data(), &cpu_final_scale, "final_norm");
-				RmsNormSite(gpu_codes.data(), final_norm_gain.data(), hidden_size, gpu_seq.hidden_scale,
-				            final_norm_site_constant, gpu_final.data(), &gpu_final_scale, "final_norm");
-				std::vector<int64_t> cpu_wide(vocab_size_z), gpu_wide(vocab_size_z);
-				std::vector<int32_t> cpu_logits(vocab_size_z), gpu_logits(vocab_size_z);
-				LogitsSite(cpu_final.data(), hidden_size, head_weights, model_view.config.vocab_size,
-				           cpu_wide.data(), cpu_logits.data());
-				LogitsSite(gpu_final.data(), hidden_size, head_weights, model_view.config.vocab_size,
-				           gpu_wide.data(), gpu_logits.data());
-				int first_logit_mismatch = -1;
-				for (size_t i = 0; i < vocab_size_z; ++i) {
-					if (cpu_logits[i] != gpu_logits[i]) {
-						first_logit_mismatch = static_cast<int>(i);
-						break;
-					}
-				}
-				if (first_logit_mismatch >= 0) {
-					std::printf(
-					    "DIVERGENCE: logits[%d] (post final_norm+head, off this run's own hidden_codes): "
-					    "CPU=%d GPU=%d\n",
-					    first_logit_mismatch, cpu_logits[first_logit_mismatch],
-					    gpu_logits[first_logit_mismatch]);
+				const SslmForwardStatus cpu_norm_st =
+				    RmsNormSite(cpu_codes.data(), final_norm_gain.data(), hidden_size, cpu_seq.hidden_scale,
+				                final_norm_site_constant, cpu_final.data(), &cpu_final_scale, "final_norm");
+				const SslmForwardStatus gpu_norm_st =
+				    RmsNormSite(gpu_codes.data(), final_norm_gain.data(), hidden_size, gpu_seq.hidden_scale,
+				                final_norm_site_constant, gpu_final.data(), &gpu_final_scale, "final_norm");
+				if (cpu_norm_st != SslmForwardStatus::Ok || gpu_norm_st != SslmForwardStatus::Ok) {
+					std::printf("LOGITS: skipped -- final_norm returned CPU=%s GPU=%s (not both Ok).\n",
+					            SslmForwardStatusName(cpu_norm_st), SslmForwardStatusName(gpu_norm_st));
 				} else {
-					const int32_t cpu_argmax = ArgmaxLowestIndexTieBreak(cpu_logits.data(), vocab_size_z);
-					const int32_t gpu_argmax = ArgmaxLowestIndexTieBreak(gpu_logits.data(), vocab_size_z);
-					std::printf(
-					    "LOGITS: bit-identical across all %zu vocab entries. argmax token: CPU=%d GPU=%d\n",
-					    vocab_size_z, cpu_argmax, gpu_argmax);
+					std::vector<int64_t> cpu_wide(vocab_size_z), gpu_wide(vocab_size_z);
+					std::vector<int32_t> cpu_logits(vocab_size_z), gpu_logits(vocab_size_z);
+					const SslmForwardStatus cpu_logit_st = LogitsSite(
+					    cpu_final.data(), hidden_size, head_weights, model_view.config.vocab_size,
+					    cpu_wide.data(), cpu_logits.data());
+					const SslmForwardStatus gpu_logit_st = LogitsSite(
+					    gpu_final.data(), hidden_size, head_weights, model_view.config.vocab_size,
+					    gpu_wide.data(), gpu_logits.data());
+					if (cpu_logit_st != SslmForwardStatus::Ok || gpu_logit_st != SslmForwardStatus::Ok) {
+						std::printf("LOGITS: skipped -- LogitsSite returned CPU=%s GPU=%s (not both Ok).\n",
+						            SslmForwardStatusName(cpu_logit_st), SslmForwardStatusName(gpu_logit_st));
+					} else {
+						int first_logit_mismatch = -1;
+						for (size_t i = 0; i < vocab_size_z; ++i) {
+							if (cpu_logits[i] != gpu_logits[i]) {
+								first_logit_mismatch = static_cast<int>(i);
+								break;
+							}
+						}
+						if (first_logit_mismatch >= 0) {
+							std::printf(
+							    "DIVERGENCE: logits[%d] (post final_norm+head, off this run's own "
+							    "hidden_codes): CPU=%d GPU=%d\n",
+							    first_logit_mismatch, cpu_logits[first_logit_mismatch],
+							    gpu_logits[first_logit_mismatch]);
+						} else {
+							const int32_t cpu_argmax =
+							    ArgmaxLowestIndexTieBreak(cpu_logits.data(), vocab_size_z);
+							const int32_t gpu_argmax =
+							    ArgmaxLowestIndexTieBreak(gpu_logits.data(), vocab_size_z);
+							std::printf(
+							    "LOGITS (DERIVED, not an independent GPU measurement -- both sides run "
+							    "CPU final_norm+head over the already bit-compared hidden_codes above): "
+							    "identical across all %zu vocab entries. argmax token: CPU=%d GPU=%d\n",
+							    vocab_size_z, cpu_argmax, gpu_argmax);
+						}
+					}
 				}
 			}
 		}
