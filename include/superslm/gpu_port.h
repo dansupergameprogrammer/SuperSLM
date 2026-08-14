@@ -273,11 +273,15 @@ bool LastWeightUploadWasSkipped();
 // red-suite-2026-08-13.md` S16.2/S17), on purpose, as the gate's own self-check.
 //
 // Mirrors B12's own arm/inject naming (ArmAllocationFailureInjection/ClearAllocationInjection):
-// arms injection so the NEXT weight-buffer allocation call in RunLayerLoopGpu fails with a
-// synthetic allocation error; the call after clears it. `TestT2063_S1Mb_
-// WeightAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse` (tests/test_main.cpp) is gated
-// identically -- it does not compile into the default build at all, so it cannot be the thing
-// that fails the default build's own link.
+// arms injection so the NEXT armed allocation call in RunLayerLoopGpu fails with a synthetic
+// allocation error; the call after clears it. T-2076 note: the definitions built by T-2071 target
+// `work_scratch_uav`'s own allocation, not the weight DEFAULT-heap buffer this comment originally
+// specified -- T-2075's own S1 fix moved the arm site there so an armed call reaches the throw on
+// a cache HIT too, which the weight buffer's own allocation (gated behind `!weights_resident`)
+// cannot. The function names below are unchanged; only the site they arm moved. `TestT2063_S1Mb_
+// WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse` (tests/test_main.cpp) is
+// gated identically -- it does not compile into the default build at all, so it cannot be the
+// thing that fails the default build's own link.
 #ifdef SUPERSLM_O11_WEIGHT_ALLOC_INJECTION
 void ArmWeightAllocationFailureInjection();
 void ClearWeightAllocationInjection();
