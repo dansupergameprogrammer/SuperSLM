@@ -77,6 +77,18 @@ int64_t RoundingDivideByPOT(int64_t x, int exponent);
 // `RoundingDivideByPOT(SaturatingRoundingDoublingHighMul(x, m), shift)`.
 int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, int shift);
 
+// T-2021/T-2029 (design Sec4, D-SLM2915): `x << shift`, widened to int64_t before the shift
+// (never itself unsafe -- `x` is 32-bit-bounded and `shift` is checked in [0,31] by the caller's
+// own domain contract below, so the widened shift cannot overflow int64_t), then saturated into
+// int32_t range. A five-line, TOTAL function -- no precondition to violate, unlike a raw
+// `x << shift` on a 32-bit type. This is the ONE new arithmetic primitive
+// `ApplyAmplifyingWeightScaleFold` (forward_sites.h) introduces beyond the two gemmlowp
+// primitives above, which it reuses unmodified for its own `exponent >= 0` branch (bit-identical
+// to `ApplyWeightScaleFold` on that branch, design's own text). `shift <= 0` returns `x`
+// unchanged (a caller-side domain error, not a precondition this function enforces -- `shift < 0`
+// is meaningless for a left shift and `shift == 0` is the identity either way).
+int32_t SaturatingLeftShift32(int32_t x, int shift);
+
 // --- §6.2 rung-1 per-token dynamic-scale chain (C19/C20/C21/C22) --------------
 
 // C21 helper — count leading zeros over 64 bits. Defined for n in [1, 2^64 - 1]; the

@@ -20618,6 +20618,252 @@ static void TestOptionGSelectionDispatch_EndToEndProductionPath() {
 	          "above (must match legacy) is what catches that -- this is the converse sanity check");
 }
 
+// =============================================================================================
+// T-2021/T-2029 B1a/B1b/B1c (design Sec3/Sec8/Sec11 B1a/B1b/B1c, D-SLM2884/D-SLM2919): the
+// runtime-additive LoRA delta-add insertion point, its NULL-adapter path, and its
+// per-projection (not merely per-sequence) gate. Reuses TwoLayerFixture directly (hidden_size=2,
+// head_dim=2, num_key_value_heads=1, intermediate_size=2, context_cap=1 -- the exact geometry
+// TestRunLayerLoopBudgetZeroIsInvalidLayerBudgetAndLeavesSequenceUnchanged's own RunLayerLoop
+// call already uses), adapting ONLY layer 0 in every cell below -- layer 1 stays base-only in
+// every scenario, so any output difference is attributable entirely to layer 0's adapter state.
+//
+// A tiny rank-1 adapter, hand-chosen for exact-by-hand verification: A = [1,1] (rank=1,
+// in_channels=2), so u_acc[0] = x[0]+x[1]; u-fold identity=1 (exact pass-through, no rounding).
+// B1a's zero-effect construction uses B = [0,0] (delta_raw == 0 regardless of A/u-fold, but the
+// real GEMM+fold pipeline still runs -- the insertion point is exercised, not skipped by
+// construction). B1c's real-effect construction uses B = [3,5] (delta_raw = [3*u_i8, 5*u_i8]);
+// delta-fold identity=1 (exact pass-through) on both.
+namespace t2029_b1_fixtures {
+
+const int8_t kAdapterAStrong[2] = {100, 100};  // [rank=1, in_channels=2] -- diagnostic-strength A
+// [rank=1, in_channels=2]. ASYMMETRIC by construction: this fixture's own RMSNorm output lands
+// at exactly [127,-127] (measured) -- a SYMMETRIC A (e.g. {1,1}) makes u_acc[0] =
+// 127*A[0] + (-127)*A[1] cancel to EXACTLY ZERO whenever A[0]==A[1], silently defeating any
+// delta regardless of B's own magnitude. {1,2} avoids this by construction (u_acc[0] =
+// 127*1 + (-127)*2 = -127, nonzero).
+const int8_t kAdapterA[2] = {1, 2};
+const int8_t kAdapterBZero[2] = {0, 0};   // [out_channels=2, rank=1] -- zero-effect (B1a/B1b)
+// [out_channels=2, rank=1] -- real effect (B1c). Channel 0's OWN base-only output saturates at
+// the code ceiling (127, measured) -- a small POSITIVE delta there is invisible (already
+// clamped), so this is deliberately large and NEGATIVE on channel 0 (pulls it down off the
+// ceiling) and large on channel 1 (near zero in the base case, plenty of headroom either way).
+const int8_t kAdapterBReal[2] = {100, -100};
+const int32_t kFoldIdentityOne[2] = {1, 1};  // identity=1 pass-through, 2 elements (out_channels)
+const int32_t kFoldZero2[2] = {0, 0};
+const int32_t kFoldIdentityOneRank1[1] = {1};  // identity=1 pass-through, 1 element (rank)
+const int32_t kFoldZeroRank1[1] = {0};
+
+// Wires `proj` as an adapted projection with the given B weight (A, fold triples fixed above).
+inline void WireAdaptedProjection(superslm::LayerAdapterProjection& proj, const int8_t* b_weight) {
+	proj.a_weight = kAdapterA;
+	proj.b_weight = b_weight;
+	proj.delta_fold_identity = kFoldIdentityOne;
+	proj.delta_fold_mult = kFoldZero2;
+	proj.delta_fold_exponent = kFoldZero2;
+	proj.u_fold_identity = kFoldIdentityOneRank1;
+	proj.u_fold_mult = kFoldZeroRank1;
+	proj.u_fold_exponent = kFoldZeroRank1;
+}
+
+// Runs TwoLayerFixture's own two-layer, hidden_size=2 geometry for one token, with layer 0's
+// `adapter` set to `layer0_adapter` (nullptr for the NULL-adapter case). Returns the resulting
+// hidden_codes (2 bytes) and hidden_scale, and exposes the fixture's own workspace so a caller
+// can read back K/V cache rows via ValueRow/KeyRow afterward.
+struct RunResult {
+	int8_t hidden_codes[2];
+	superslm::CarriedScale hidden_scale;
+	superslm::SslmForwardStatus status;
+};
+
+inline RunResult RunOneToken(TwoLayerFixture& fixture, const superslm::LayerAdapter* layer0_adapter,
+                              uint8_t* workspace, size_t workspace_size) {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+
+	fixture.layers[0].adapter = layer0_adapter;
+	fixture.layers[1].adapter = nullptr;  // layer 1 always base-only in every scenario
+
+	RunResult r{};
+	// The same known-good initial state this tree's own full-execution TwoLayerFixture tests
+	// use (e.g. TestRunLayerLoopTwoSequentialCallsEqualsOneWholeCall, tests/test_main.cpp) --
+	// hidden_codes={5,-5}, hidden_scale={2^30, e=0} (m=2^30 canonical, e=0, NOT e=-30).
+	int8_t hidden_codes[2] = {5, -5};
+	SequenceLayerState seq;
+	seq.hidden_codes = hidden_codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+
+	r.status = superslm::RunLayerLoop(seq, fixture.layers, /*num_hidden_layers=*/2,
+	                                   /*layer_budget=*/2, /*hidden_size=*/2, /*head_dim=*/2,
+	                                   /*num_key_value_heads=*/1, /*intermediate_size=*/2,
+	                                   /*context_cap=*/1, fixture.view.rope_tables, workspace,
+	                                   workspace_size);
+	r.hidden_codes[0] = hidden_codes[0];
+	r.hidden_codes[1] = hidden_codes[1];
+	r.hidden_scale = seq.hidden_scale;
+	return r;
+}
+
+}  // namespace t2029_b1_fixtures
+
+// B1a's own red-first cell (design Sec11 B1a): a bound adapter whose delta-fold constants are
+// engineered to fold to zero for every channel must reproduce the exact base-only golden --
+// proving the insertion point is correct and inert before any nonzero-delta test is trusted.
+// The REAL GEMM+u-fold+delta-fold pipeline runs (A is nonzero, u_acc is nonzero) -- only B's own
+// all-zero weight makes delta_raw, and therefore delta_wide, exactly zero on every channel.
+static void TestB1aBoundZeroEffectAdapterInsertionPointInertBeforeNonzeroTrusted() {
+	using namespace t2029_b1_fixtures;
+	using superslm::SslmForwardStatus;
+
+	TwoLayerFixture base_fixture;
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;  // num_layers*context_cap*kv_heads*head_dim*2
+	uint8_t base_ws[kWorkspaceSize] = {};
+	const RunResult golden = RunOneToken(base_fixture, /*layer0_adapter=*/nullptr, base_ws,
+	                                      sizeof(base_ws));
+	CHECK_MSG(golden.status == SslmForwardStatus::Ok, "base-only golden run must succeed: got %s",
+	          SslmForwardStatusName(golden.status));
+
+	TwoLayerFixture zero_bound_fixture;
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.q, kAdapterBZero);
+	uint8_t zb_ws[kWorkspaceSize] = {};
+	const RunResult zero_bound = RunOneToken(zero_bound_fixture, &adapter, zb_ws, sizeof(zb_ws));
+	CHECK_MSG(zero_bound.status == SslmForwardStatus::Ok,
+	          "bound-zero-effect-adapter run must succeed: got %s",
+	          SslmForwardStatusName(zero_bound.status));
+
+	CHECK_MSG(zero_bound.hidden_codes[0] == golden.hidden_codes[0] &&
+	              zero_bound.hidden_codes[1] == golden.hidden_codes[1],
+	          "a bound adapter whose delta folds to zero for every channel must reproduce the "
+	          "exact base-only golden: got [%d,%d], want [%d,%d]",
+	          zero_bound.hidden_codes[0], zero_bound.hidden_codes[1], golden.hidden_codes[0],
+	          golden.hidden_codes[1]);
+	CHECK_MSG(zero_bound.hidden_scale.m == golden.hidden_scale.m &&
+	              zero_bound.hidden_scale.e == golden.hidden_scale.e,
+	          "the bound-zero-effect run's hidden_scale must also match the golden exactly");
+}
+
+// B1b's own red-first cell (design Sec11 B1b): a genuinely unbound sequence (layer0_adapter ==
+// nullptr, the gate's "skip" branch never entered at all) must reproduce the SAME base-only
+// golden the bound-zero-effect case (B1a, above) reaches via its own DIFFERENT branch (compute-
+// and-add-zero) -- proving the NULL case independently, since a defect specifically in the gate
+// condition (inverted, or checked at the wrong point) is invisible to a test that only ever
+// takes the "adapter bound" branch.
+static void TestB1bNullAdapterPathReachesSameGoldenViaADifferentBranchThanBoundZeroAdapter() {
+	using namespace t2029_b1_fixtures;
+	using superslm::SslmForwardStatus;
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+
+	TwoLayerFixture null_fixture;
+	uint8_t null_ws[kWorkspaceSize] = {};
+	// layer0_adapter == nullptr: AddAmplifyingLoraDelta's FIRST conjunct (adapter == nullptr) is
+	// what returns early here -- no GEMM, no fold, no add ever executes for layer 0's q/o/gate/
+	// up/down or its k/v landing block. Structurally distinct from B1a's own path, where
+	// adapter != nullptr but adapter->a_weight == nullptr is never reached (a_weight IS set,
+	// just B is zero) -- B1a exercises the SECOND conjunct's "computed, and is zero" branch;
+	// this cell exercises the FIRST conjunct's "never computed at all" branch.
+	const RunResult null_result = RunOneToken(null_fixture, /*layer0_adapter=*/nullptr, null_ws,
+	                                           sizeof(null_ws));
+	CHECK_MSG(null_result.status == SslmForwardStatus::Ok, "NULL-adapter run must succeed: got %s",
+	          SslmForwardStatusName(null_result.status));
+
+	TwoLayerFixture zero_bound_fixture;
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.q, kAdapterBZero);
+	uint8_t zb_ws[kWorkspaceSize] = {};
+	const RunResult zero_bound = RunOneToken(zero_bound_fixture, &adapter, zb_ws, sizeof(zb_ws));
+	CHECK_MSG(zero_bound.status == SslmForwardStatus::Ok,
+	          "bound-zero-effect-adapter run must succeed: got %s",
+	          SslmForwardStatusName(zero_bound.status));
+
+	CHECK_MSG(null_result.hidden_codes[0] == zero_bound.hidden_codes[0] &&
+	              null_result.hidden_codes[1] == zero_bound.hidden_codes[1],
+	          "the NULL-adapter path (gate never entered) and the bound-zero-effect path (gate "
+	          "entered, computed zero) must reach the IDENTICAL base-only golden: NULL=[%d,%d] "
+	          "bound-zero=[%d,%d]",
+	          null_result.hidden_codes[0], null_result.hidden_codes[1], zero_bound.hidden_codes[0],
+	          zero_bound.hidden_codes[1]);
+	CHECK_MSG(null_result.hidden_scale.m == zero_bound.hidden_scale.m &&
+	              null_result.hidden_scale.e == zero_bound.hidden_scale.e,
+	          "hidden_scale must also match exactly between the two branches");
+}
+
+// B1c's own red-first cell (design Sec11 B1c, D-SLM2919): a sequence with a bound adapter whose
+// target_modules covers a strict subset of the seven projections must leave every OTHER
+// projection's own output byte-identical to a base-only run, on the same token that exercises
+// the bound-adapter branch on the adapted one -- a defect that checks only bound(sequence) and
+// ignores which projection the adapter actually targets is invisible to B1a (whose fixture
+// adapts the same single projection under test) and to B1b (which never binds an adapter at
+// all).
+//
+// Adapts v_proj (not q_proj): this tree's own documented finding (D-SLM493,
+// TestTwoLayerFixtureProjectionWeightsDiscriminatedAtGemmSite's header comment) is that
+// TwoLayerFixture's own norm_gain tuning makes q/o/gate/up/down's WHOLE attention+MLP branch
+// reconcile to code 0 against the residual stream regardless of the projection weights'
+// content -- final hidden_codes is NOT a sensitive oracle for a q/o/gate/up/down change on THIS
+// fixture (confirmed by execution: a real, large delta on q_proj left hidden_codes
+// unchanged, [127,-1] both times). K/V landing has no such residual reconciliation -- it writes
+// directly into the cache -- so this cell adapts v_proj (a REAL, large delta) and reads the
+// result back via the public ValueRow accessor, independently confirming k_proj's own (UNADAPTED)
+// cache row is untouched.
+static void TestB1cAdapterBoundButKProjNotAdaptedLeavesKCacheRowByteIdenticalToBaseOnly() {
+	using namespace t2029_b1_fixtures;
+	using superslm::SslmForwardStatus;
+	using superslm::KeyRow;
+	using superslm::ValueRow;
+
+	constexpr size_t kWorkspaceSize = 2 * 1 * 1 * 2 * 2;
+
+	TwoLayerFixture base_fixture;
+	uint8_t base_ws[kWorkspaceSize] = {};
+	const RunResult golden =
+	    RunOneToken(base_fixture, /*layer0_adapter=*/nullptr, base_ws, sizeof(base_ws));
+	CHECK_MSG(golden.status == SslmForwardStatus::Ok, "base-only golden run must succeed: got %s",
+	          SslmForwardStatusName(golden.status));
+	const int8_t* golden_k_row = KeyRow(base_ws, /*layer=*/0, /*context_cap=*/1,
+	                                    /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                    /*position=*/0);
+	const int8_t golden_k0 = golden_k_row[0], golden_k1 = golden_k_row[1];
+	const int8_t* golden_v_row = ValueRow(base_ws, /*layer=*/0, /*context_cap=*/1,
+	                                      /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                      /*position=*/0);
+	const int8_t golden_v0 = golden_v_row[0], golden_v1 = golden_v_row[1];
+
+	TwoLayerFixture v_only_fixture;
+	superslm::LayerAdapter adapter;
+	adapter.rank = 1;
+	WireAdaptedProjection(adapter.v, kAdapterBReal);  // REAL, nonzero delta on v_proj ONLY
+	// adapter.k (and every other projection) is left default-constructed: a_weight == nullptr,
+	// the "adapter bound, but THIS projection is unadapted" case B1c exists to prove.
+	uint8_t v_ws[kWorkspaceSize] = {};
+	const RunResult v_only = RunOneToken(v_only_fixture, &adapter, v_ws, sizeof(v_ws));
+	CHECK_MSG(v_only.status == SslmForwardStatus::Ok, "v_proj-only-adapted run must succeed: got %s",
+	          SslmForwardStatusName(v_only.status));
+
+	const int8_t* v_only_v_row = ValueRow(v_ws, /*layer=*/0, /*context_cap=*/1,
+	                                      /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                      /*position=*/0);
+	// The adapter must have had a REAL, measurable effect on v_proj's own cache row --
+	// otherwise this cell would vacuously pass for the same reason B1a/B1b's zero-effect
+	// construction cannot distinguish a correct gate from a broken (always-no-op) one.
+	CHECK_MSG(v_only_v_row[0] != golden_v0 || v_only_v_row[1] != golden_v1,
+	          "fixture sanity: v_proj's REAL nonzero adapter must measurably change its own K/V "
+	          "cache row relative to the base-only golden -- got [%d,%d] == golden [%d,%d], which "
+	          "would make this cell's own k_proj-unchanged claim vacuous",
+	          v_only_v_row[0], v_only_v_row[1], golden_v0, golden_v1);
+
+	const int8_t* v_only_k_row = KeyRow(v_ws, /*layer=*/0, /*context_cap=*/1,
+	                                    /*num_kv_heads=*/1, /*head_dim=*/2, /*kv_head=*/0,
+	                                    /*position=*/0);
+	CHECK_MSG(v_only_k_row[0] == golden_k0 && v_only_k_row[1] == golden_k1,
+	          "k_proj's own K/V cache row must be BYTE-IDENTICAL to the base-only golden even "
+	          "though v_proj's own cache row measurably changed -- got [%d,%d], want [%d,%d] "
+	          "(a per-projection gate defect that only checks bound(sequence) would fail this)",
+	          v_only_k_row[0], v_only_k_row[1], golden_k0, golden_k1);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -21389,6 +21635,11 @@ int main(int argc, char** argv) {
 	TestOptionGFusedDomainGate_DoesNotWronglyRefuseInDomainAtSameBand();
 	TestOptionGMicrostepWholeTokenParity_CompiledEngine();
 	TestOptionGSelectionDispatch_EndToEndProductionPath();
+
+	// T-2021/T-2029 B1a/B1b/B1c (design Sec11 B1a/B1b/B1c).
+	TestB1aBoundZeroEffectAdapterInsertionPointInertBeforeNonzeroTrusted();
+	TestB1bNullAdapterPathReachesSameGoldenViaADifferentBranchThanBoundZeroAdapter();
+	TestB1cAdapterBoundButKProjNotAdaptedLeavesKCacheRowByteIdenticalToBaseOnly();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

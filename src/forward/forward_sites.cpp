@@ -456,6 +456,17 @@ int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_
 	    MultiplyByQuantizedMultiplier(static_cast<int32_t>(acc), mult, shift));
 }
 
+int64_t ApplyAmplifyingWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_t exponent) {
+	// design Sec4 (D-SLM2915)'s own construction, verbatim: identity==1 is the exact rho==1
+	// pass-through; exponent>=0 is bit-identical to ApplyWeightScaleFold's own non-identity
+	// branch (the SAME two gemmlowp primitives, called exactly the same way); only exponent<0
+	// (amplification) is new arithmetic, via SaturatingLeftShift32 (intmath.h).
+	if (identity != 0) return acc;
+	const int32_t hi = SaturatingRoundingDoublingHighMul(static_cast<int32_t>(acc), mult);
+	if (exponent >= 0) return static_cast<int64_t>(RoundingDivideByPOT(hi, exponent));
+	return static_cast<int64_t>(SaturatingLeftShift32(hi, -exponent));
+}
+
 int64_t BiasReconcile(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a) {
 	// C28 (§4.4, §6.2 step 2): round_half_away_from_zero(B * R_a /
 	// 2^(q_B + 62 + e_a)). T-1657/D-SLM621/641/645: the raw product B*R_a can
@@ -1011,19 +1022,74 @@ SslmForwardStatus ApplyBiasReconcileRow(int64_t* acc, size_t out_channels, const
 	return SslmForwardStatus::Ok;
 }
 
-// One projection: GemmInt8AccumulateRow -> the shared WSC1 fold -> C28's optional bias
+// T-2021/T-2029 B1a/B2 (design Sec3/Sec4/Sec8, D-SLM2915/D-SLM2919): computes this projection's
+// runtime-additive LoRA delta contribution and adds it into `acc[i]`, i in [0, out_channels) --
+// design Sec3's own exact insertion point ("immediately after the base's own WSC1 fold and
+// before BIA1 bias reconciliation"), called from both ProjectAndFunnel (q/o/gate/up/down) and
+// the K/V landing block (k/v) at the identical composition slot.
+//
+// Gated no-op (design Sec8's contract, "byte-identical to today" when either conjunct is
+// false): `adapter == nullptr` (no adapter bound to the sequence, B1b) OR
+// `adapter->a_weight == nullptr` (adapter bound, but this exact projection is unadapted, B1c)
+// leaves `acc[]` completely untouched -- no GEMM, no fold, no add. `in_codes`/`in_channels` are
+// the SAME activation row the base weight's own GemmInt8AccumulateRow call at this call site
+// already consumed (design Sec4's own "the same x the base weight's GEMM already consumes"
+// argument) -- this function never re-derives or re-quantizes the input.
+void AddAmplifyingLoraDelta(const int8_t* in_codes, size_t in_channels,
+                            const LayerAdapterProjection* adapter, uint32_t rank,
+                            size_t out_channels, int64_t* acc) {
+	if (adapter == nullptr || adapter->a_weight == nullptr) return;  // gated no-op (B1b/B1c)
+
+	// design Sec4 extension: GemmInt8AccumulateRow(x, A) -> u_acc[r] (raw, rank-r intermediate).
+	std::vector<int64_t> u_acc(rank);
+	GemmInt8AccumulateRow(in_codes, adapter->a_weight, in_channels, rank, u_acc.data());
+
+	// u_wide[k] = ApplyAmplifyingWeightScaleFold(u_acc[k], u-fold triple[k]); u_i8[k] =
+	// NarrowAndClamp(u_wide[k]) -- this engine's existing [-127,127] activation-code range
+	// (matching ClampRopeCode's own pinned convention, design Sec4's own citation).
+	std::vector<int8_t> u_i8(rank);
+	for (uint32_t k = 0; k < rank; ++k) {
+		const int64_t u_wide = ApplyAmplifyingWeightScaleFold(
+		    u_acc[k], adapter->u_fold_identity[k], adapter->u_fold_mult[k],
+		    adapter->u_fold_exponent[k]);
+		const int64_t clamped = u_wide > 127 ? 127 : (u_wide < -127 ? -127 : u_wide);
+		u_i8[k] = static_cast<int8_t>(clamped);
+	}
+
+	// GemmInt8AccumulateRow(u_i8, B) -> delta_raw[out_channels] (raw, adapter's own scale) --
+	// u_i8, not x, feeds B (design Sec8's own "was one opaque line; now u_i8, not x, feeds B").
+	std::vector<int64_t> delta_raw(out_channels);
+	GemmInt8AccumulateRow(u_i8.data(), adapter->b_weight, rank, out_channels, delta_raw.data());
+
+	// delta_wide[i] = ApplyAmplifyingWeightScaleFold(delta_raw[i], delta-fold triple[i]);
+	// acc[i] += delta_wide[i] -- design Sec3's own NEW insertion point, exactly here.
+	for (size_t i = 0; i < out_channels; ++i) {
+		const int64_t delta_wide = ApplyAmplifyingWeightScaleFold(
+		    delta_raw[i], adapter->delta_fold_identity[i], adapter->delta_fold_mult[i],
+		    adapter->delta_fold_exponent[i]);
+		acc[i] += delta_wide;
+	}
+}
+
+// One projection: GemmInt8AccumulateRow -> the shared WSC1 fold -> T-2021/T-2029's runtime-
+// additive LoRA delta-add (design Sec3, gated no-op when unadapted) -> C28's optional bias
 // reconciliation -> the funnel. §6.2 step 2's own shape, and q_proj/o_proj/gate_proj/
 // up_proj/down_proj all have it -- they differ only in weights, incoming scale, site
 // constant, and (T-1656) bias, never in construction. `bias` defaults to nullptr so
 // every pre-existing call (o/gate/up/down) compiles unchanged and gets no bias term,
-// matching today's behaviour exactly; the q_proj call site passes `lw.q_bias`.
+// matching today's behaviour exactly; the q_proj call site passes `lw.q_bias`. `adapter`
+// defaults to nullptr and `rank` to 0 so a base-only call site (none remain after this build's
+// own five call sites are updated, but the default keeps the signature change additive) gets
+// no delta term, byte-identical to before this build.
 SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale,
                                     const int8_t* weight, size_t in_channels, size_t out_channels,
                                     const int32_t* identity, const int32_t* mult, const int32_t* shift,
                                     CarriedScale site_constant, const int64_t* bias,
                                     int8_t* out_codes, CarriedScale* out_scale,
                                     std::string_view site, size_t token_index,
-                                    SslmTraceHookState* trace_hook_state) {
+                                    SslmTraceHookState* trace_hook_state,
+                                    const LayerAdapterProjection* adapter = nullptr,
+                                    uint32_t adapter_rank = 0) {
 	std::vector<int64_t> acc(out_channels);
 	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
 	// T-1666: identity/mult/shift are per-channel arrays -- one distinct fold
@@ -1032,6 +1098,10 @@ SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale
 	for (size_t i = 0; i < out_channels; ++i) {
 		acc[i] = ApplyWeightScaleFold(acc[i], identity[i], mult[i], shift[i]);
 	}
+	// T-2021/T-2029 B1a (design Sec3): the runtime-additive LoRA delta-add, inserted between
+	// the WSC1 fold loop above and BIA1's bias reconciliation below -- gated no-op when
+	// `adapter` is absent or this projection is unadapted (AddAmplifyingLoraDelta's own gate).
+	AddAmplifyingLoraDelta(in_codes, in_channels, adapter, adapter_rank, out_channels, acc.data());
 	// T-1656/D-SLM642, §5.3: inserted between the WSC1 fold loop above and the funnel
 	// call below -- the exact composition slot the reference's `biased_fold_row`
 	// occupies between `_fold_rows` and `_chain_record_vec`.
@@ -1396,7 +1466,9 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                      lw.q_fold_identity, lw.q_fold_mult, lw.q_fold_shift, lw.q_site_constant,
 		                      lw.q_bias, q_codes.data(), &q_scale,
 		                      LayerSite(site_prefix, l, "q_proj.requant"),
-		                      token_index, trace_hook_state);
+		                      token_index, trace_hook_state,
+		                      lw.adapter != nullptr ? &lw.adapter->q : nullptr,
+		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// k_proj / v_proj do NOT funnel: they land at the static per-head scale
@@ -1424,6 +1496,21 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[i], lw.v_fold_mult[i],
 				                               lw.v_fold_shift[i]);
 			}
+			// T-2021/T-2029 B1a (design Sec3/Sec8): the runtime-additive LoRA delta-add, at the
+			// K/V landing block's own copy of design Sec3's insertion point -- inserted between
+			// the WSC1 fold loop above and BIA1's bias reconciliation below, gated no-op when
+			// `lw.adapter` is absent or k_proj/v_proj is unadapted (AddAmplifyingLoraDelta's own
+			// gate). `kacc[]`/`vacc[]` are already fully composed by this point, before the
+			// option_g_fused_k_landing branch point below -- the plain and Option G branches
+			// diverge only downstream of here (design Sec3's own D-SLM2886 finding).
+			AddAmplifyingLoraDelta(normed.data(), hidden_size,
+			                       lw.adapter != nullptr ? &lw.adapter->k : nullptr,
+			                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
+			                       kacc.data());
+			AddAmplifyingLoraDelta(normed.data(), hidden_size,
+			                       lw.adapter != nullptr ? &lw.adapter->v : nullptr,
+			                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
+			                       vacc.data());
 			// T-1656/D-SLM642, §5.3: the identical bias insertion ProjectAndFunnel's
 			// q_proj call site carries, written a second time here -- a separate
 			// location that does not call ProjectAndFunnel, keyed on
@@ -1706,7 +1793,9 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                      lw.o_fold_identity, lw.o_fold_mult, lw.o_fold_shift, lw.o_site_constant,
 		                      /*bias=*/nullptr, o_codes.data(), &o_scale,
 		                      LayerSite(site_prefix, l, "o_proj.requant"),
-		                      token_index, trace_hook_state);
+		                      token_index, trace_hook_state,
+		                      lw.adapter != nullptr ? &lw.adapter->o : nullptr,
+		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// §9.3/Critical 4: staged into `attn_stream`, NOT committed into
@@ -1736,14 +1825,18 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                      lw.gate_fold_shift, lw.gate_site_constant, /*bias=*/nullptr,
 		                      gate_codes.data(), &gate_scale,
 		                      LayerSite(site_prefix, l, "gate_proj.requant"), token_index,
-		                      trace_hook_state);
+		                      trace_hook_state,
+		                      lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
+		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 		st = ProjectAndFunnel(normed.data(), mlp_normed_scale, lw.up_weight, hidden_size,
 		                      intermediate_size, lw.up_fold_identity, lw.up_fold_mult,
 		                      lw.up_fold_shift, lw.up_site_constant, /*bias=*/nullptr,
 		                      up_codes.data(), &up_scale,
 		                      LayerSite(site_prefix, l, "up_proj.requant"), token_index,
-		                      trace_hook_state);
+		                      trace_hook_state,
+		                      lw.adapter != nullptr ? &lw.adapter->up : nullptr,
+		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// Minor G (Poirot e4b398c review): ROP1 (`rope_tables`, above) comes
@@ -1763,7 +1856,9 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		                      lw.down_fold_shift, lw.down_site_constant, /*bias=*/nullptr,
 		                      down_codes.data(), &down_scale,
 		                      LayerSite(site_prefix, l, "down_proj.requant"), token_index,
-		                      trace_hook_state);
+		                      trace_hook_state,
+		                      lw.adapter != nullptr ? &lw.adapter->down : nullptr,
+		                      lw.adapter != nullptr ? lw.adapter->rank : 0);
 		if (st != SslmForwardStatus::Ok) return st;
 
 		// Reconciles against the STAGED attention-residual output (the

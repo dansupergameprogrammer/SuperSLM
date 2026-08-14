@@ -267,6 +267,14 @@ int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, i
 	    SaturatingRoundingDoublingHighMul(x, quantized_multiplier), shift);
 }
 
+int32_t SaturatingLeftShift32(int32_t x, int shift) {
+	if (shift <= 0) return x;
+	const int64_t wide = static_cast<int64_t>(x) << shift;
+	if (wide > static_cast<int64_t>(kInt32Max)) return kInt32Max;
+	if (wide < static_cast<int64_t>(kInt32Min)) return kInt32Min;
+	return static_cast<int32_t>(wide);
+}
+
 // --- §6.2 rung-1 per-token dynamic-scale chain (C19/C20/C21/C22) --------------
 
 int Clz64(uint64_t n) {

@@ -21,14 +21,25 @@
 // for real, against the REAL unmodified engine primitives at D:\SuperSLM\.worktrees\run @
 // 727e63e (ApplyWeightScaleFold, SaturatingRoundingDoublingHighMul, RoundingDivideByPOT,
 // RequantChainChecked, LandingRescale) -- no engine header or source file is modified by this
-// file. `ApplyAmplifyingWeightScaleFold` (design Sec4, D-SLM2915) does not exist in that engine
-// (`grep -rl "adapter\|Adapter\|LoRA\|lora" src/ include/` returns nothing, confirmed again at
-// this suite's own authoring time) and is reproduced here as a scratch copy -- this file's own,
+// file. `ScratchApplyAmplifyingWeightScaleFold` (design Sec4, D-SLM2915) did not exist in that
+// engine AT THIS SUITE'S OWN AUTHORING TIME (`grep -rl "adapter\|Adapter\|LoRA\|lora" src/
+// include/` returned nothing then) and was reproduced here as a scratch copy -- this file's own,
 // per this seat's standing discipline of never editing another seat's filed instrument.
 //
+// T-2021/T-2029 BUILD-TIME RENAME (mechanical, no arithmetic/assertion changed): the real
+// `superslm::ApplyAmplifyingWeightScaleFold`/`superslm::SaturatingLeftShift32` now exist in the
+// engine this suite links against (design Sec4, B1a/B2's own build) -- the SAME names this
+// scratch copy originally used, at global scope, `using namespace superslm;`'d into the same
+// translation unit, produce a genuine "ambiguous call to overloaded function" compile error
+// (two identical-signature candidates, one per namespace). The two scratch functions below and
+// every call site are renamed `Scratch*` to resolve the collision; every fixture, mutation
+// family, oracle, and assertion is BYTE-IDENTICAL to before this rename -- confirmed by
+// re-running this file after the rename and reproducing the identical 75/75 passing count.
+//
+
 // PROVENANCE (StandardsDocument.md Sec7 sibling-pinning discipline: the reused source is named,
 // not silently absorbed). The fixture generator, seed, quantization, DeriveTripleOld/New,
-// SaturatingLeftShift32, ApplyAmplifyingWeightScaleFold, RealizedRatio, RequiredRatioIndependent,
+// ScratchSaturatingLeftShift32, ScratchApplyAmplifyingWeightScaleFold, RealizedRatio, RequiredRatioIndependent,
 // kDerivationRelBound, and the WIRING/DERIVATION oracle shape below are reused, with attribution,
 // from Claude/Vitruvius/t2009-verify-probe/t2007_body.cpp (Wizard repo) -- itself a verbatim
 // scratch copy of Claude/Vitruvius/t2005-remedy-probe/t2005_remedy.cpp, which is itself a
@@ -116,7 +127,7 @@ static constexpr int32_t kAmpMin = -kShiftMax, kAmpMax = kShiftMax;
 static constexpr int32_t kI32Max = 2147483647;
 static constexpr int64_t kI32MinAsI64 = -2147483648LL;
 
-static int32_t SaturatingLeftShift32(int32_t x, int shift) {
+static int32_t ScratchSaturatingLeftShift32(int32_t x, int shift) {
 	if (shift <= 0) return x;
 	const int64_t wide = static_cast<int64_t>(x) << shift;
 	if (wide > static_cast<int64_t>(kI32Max)) return kI32Max;
@@ -128,14 +139,14 @@ static int32_t SaturatingLeftShift32(int32_t x, int shift) {
 // exist in the real engine (confirmed by grep, this file's own header comment). The
 // `exponent >= 0` branch calls the two REAL engine primitives (SaturatingRoundingDoublingHighMul,
 // RoundingDivideByPOT) exactly as ApplyWeightScaleFold already does; only the `exponent < 0`
-// branch (SaturatingLeftShift32 above) is new arithmetic, per the design's own text.
-static int64_t ApplyAmplifyingWeightScaleFold(int64_t acc, int32_t identity, int32_t mult,
+// branch (ScratchSaturatingLeftShift32 above) is new arithmetic, per the design's own text.
+static int64_t ScratchApplyAmplifyingWeightScaleFold(int64_t acc, int32_t identity, int32_t mult,
                                                int32_t exponent) {
 	if (identity != 0) return acc;
 	const int32_t hi =
 	    SaturatingRoundingDoublingHighMul(static_cast<int32_t>(acc), mult);
 	if (exponent >= 0) return static_cast<int64_t>(RoundingDivideByPOT(hi, exponent));
-	return static_cast<int64_t>(SaturatingLeftShift32(hi, -exponent));
+	return static_cast<int64_t>(ScratchSaturatingLeftShift32(hi, -exponent));
 }
 
 // The OLD mechanism T-1990 proved fractures: ApplyWeightScaleFold's own derivation, representable
@@ -330,7 +341,7 @@ static QuantizedBase BuildAdapter(int d, int out, int r, double gain, uint64_t b
 }
 
 // mech: 0 = OLD (T-1990 fracture, ApplyWeightScaleFold applied to an amplifying ratio)
-//       1 = NEW, correct repair (ApplyAmplifyingWeightScaleFold, honest rho)
+//       1 = NEW, correct repair (ScratchApplyAmplifyingWeightScaleFold, honest rho)
 //       2 = PARTIAL(f) -- knob = fraction of amplifying channels left on the OLD clamped triple
 //       4 = RHO_SCALE(c) -- knob = c, rho_conv'[i] = c * rho_conv[i] on every channel
 //       5 = RHO_PERM(p) -- knob = p, off-by-one index into beta[] for a fraction p of channels
@@ -389,7 +400,7 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 		} else {
 			int32_t id, mu, ex;
 			uw = DeriveTripleNew(rho_u, &id, &mu, &ex)
-			         ? ApplyAmplifyingWeightScaleFold(u_acc[k], id, mu, ex)
+			         ? ScratchApplyAmplifyingWeightScaleFold(u_acc[k], id, mu, ex)
 			         : u_acc[k];
 		}
 		u_i8[k] = (int8_t)(uw > 127 ? 127 : (uw < -127 ? -127 : uw));
@@ -460,7 +471,7 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 			dwl = ApplyWeightScaleFold(delta_raw[i], a, b, c);
 		} else {
 			if (!DeriveTripleNew(rho, &a, &b, &c)) { a = 1; b = 0; c = 0; }
-			dwl = ApplyAmplifyingWeightScaleFold(delta_raw[i], a, b, c);
+			dwl = ScratchApplyAmplifyingWeightScaleFold(delta_raw[i], a, b, c);
 		}
 
 		// WIRING -- branch-selection only (design Sec18/Sec19).
@@ -772,7 +783,7 @@ static void TestB0HandComputedNonzeroDeltaCorrectTripleMatchesMisderivedDiverges
 	// (an integer, no float involved in its own definition) while sizing it to isolate the
 	// fold's rounding from the fixture's own scale.
 	const int64_t delta_raw = 1'000'000;  // exact integer; large enough to isolate fold rounding
-	const int64_t correct = ApplyAmplifyingWeightScaleFold(delta_raw, id, mu, ex);
+	const int64_t correct = ScratchApplyAmplifyingWeightScaleFold(delta_raw, id, mu, ex);
 	const double expected = 4.5 * (double)delta_raw;
 	const double rel_err_correct = std::fabs((double)correct - expected) / expected;
 	CHECK_MSG(rel_err_correct < 1e-5, "correct triple's rel_err=%.8f, expected ~1e-6 scale (the "
@@ -782,7 +793,7 @@ static void TestB0HandComputedNonzeroDeltaCorrectTripleMatchesMisderivedDiverges
 	// file's own mech=7 WRONG_DIRECTION family, applied directly to the hand fixture.
 	int32_t wid, wmu, wex;
 	DeriveTripleNew(1.0 / 4.5, &wid, &wmu, &wex);
-	const int64_t wrong = ApplyAmplifyingWeightScaleFold(delta_raw, wid, wmu, wex);
+	const int64_t wrong = ScratchApplyAmplifyingWeightScaleFold(delta_raw, wid, wmu, wex);
 	const double rel_err_wrong = std::fabs((double)wrong - expected) / expected;
 	CHECK_MSG(rel_err_wrong > 0.5,
 	          "mis-derived (inverted-direction) triple must diverge measurably; rel_err=%.6f",
@@ -1244,7 +1255,7 @@ static double MeasureKvSaturationRate(const QuantizedBase& qb, bool composed, in
 					int32_t id, mu, ex;
 					const double rho_u = qb.alpha[k] / qb.T();
 					int64_t uw = DeriveTripleNew(rho_u, &id, &mu, &ex)
-					                 ? ApplyAmplifyingWeightScaleFold(u_acc[k], id, mu, ex)
+					                 ? ScratchApplyAmplifyingWeightScaleFold(u_acc[k], id, mu, ex)
 					                 : u_acc[k];
 					u_i8[k] = (int8_t)(uw > 127 ? 127 : (uw < -127 ? -127 : uw));
 				}
@@ -1253,7 +1264,7 @@ static double MeasureKvSaturationRate(const QuantizedBase& qb, bool composed, in
 				int32_t did, dmu, dex;
 				const double rho = qb.T() * qb.beta[i] / qb.S;
 				int64_t dwl = DeriveTripleNew(rho, &did, &dmu, &dex)
-				                  ? ApplyAmplifyingWeightScaleFold(delta_raw, did, dmu, dex)
+				                  ? ScratchApplyAmplifyingWeightScaleFold(delta_raw, did, dmu, dex)
 				                  : 0;
 				branch_code += dwl;
 			}

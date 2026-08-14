@@ -110,6 +110,26 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 // token-wide through the shared D'", SuperSLM_Plan.md:2194-2197).
 int64_t ApplyWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_t shift);
 
+// T-2021/T-2029 B2 (design Sec4, D-SLM2915): the runtime-additive LoRA delta-fold's own
+// primitive -- `ApplyWeightScaleFold`'s sibling, over the SIGNED
+// [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax] = [-31,31] domain (model.h) rather
+// than WSC1's own unsigned [0,31]. `identity == 1` is the same exact `rho == 1` pass-through;
+// `identity == 0` and `exponent >= 0` is BIT-IDENTICAL to `ApplyWeightScaleFold`'s own
+// non-identity branch (same two gemmlowp primitives, same order) -- only `exponent < 0`
+// (amplification, `rho > 1`, the ratio `ApplyWeightScaleFold` cannot represent, T-1990's own
+// fracture) is new arithmetic, via `SaturatingLeftShift32` (intmath.h). Used ONLY by the
+// delta-fold and u-fold (design Sec4/Sec8); WSC1's own base fold keeps calling
+// `ApplyWeightScaleFold` exactly as before, unmodified -- its ratio never needs amplification.
+//
+// Precondition, bounded by construction rather than asserted (design Sec4, D-SLM2983): `|acc| <
+// 2^31` at both real call sites (`delta_raw[i]`, a sum of `out_channels`-many int8x8 products
+// over `r` rank terms; `u_acc[k]`, a sum over `d` contracting terms) -- `static_cast<int32_t>`
+// on the first line silently TRUNCATES, not saturates, if this bound is exceeded. Bounded, not
+// checked: at this project's own widest rank/dimension (Qwen2.5, `SuperSLM_Plan.md` Sec11),
+// `|delta_raw[i]| <= r*127^2` and `|u_acc[k]| <= d*127^2` sit roughly two orders of magnitude
+// below 2^31 (design Sec4's own executed figures).
+int64_t ApplyAmplifyingWeightScaleFold(int64_t acc, int32_t identity, int32_t mult, int32_t exponent);
+
 // C28's bias-reconciliation compute (§4.4, §6.2 step 2): the reference's
 // `bias_reconcile(B, q_B, R_a, e_a)` — round_half_away_from_zero(B * R_a /
 // 2^(q_B + 62 + e_a)) (C3's tie rule, ties away from zero, load-bearing here
@@ -570,9 +590,64 @@ SslmForwardStatus ResidualReconcileSite(const int8_t* branch_code, CarriedScale 
 // sub-slot's own scope (Poirot e4b398c review, Significant 3); the first
 // artifact carrying a BIA1 section for a projection this loop calls is a
 // separate, later obligation this declaration does not discharge.
+// T-2021/T-2029 B1a (design Sec3/Sec4/Sec8/Sec9, D-SLM2843's `n==1` slot: base + at most ONE
+// active runtime adapter): one projection's runtime-additive LoRA adapter state, for exactly one
+// (layer, projection) pair. **Present iff `a_weight != nullptr`** -- the SAME "nullptr = absent"
+// convention this file already uses for `q_bias`/`k_bias`/`v_bias` below. Two DISTINCT absent
+// cases this design requires be exercised independently (design Sec8, D-SLM2884/D-SLM2919):
+//   - The whole sequence has NO adapter bound at all (design's NULL-adapter case, B1b): the
+//     caller sets `LayerWeights::adapter = nullptr` for EVERY layer.
+//   - A bound adapter's own `target_modules` does not cover THIS projection at THIS layer
+//     (design's third branch, B1c, the routine PEFT case -- q_proj/v_proj-only adapters are
+//     common): `LayerWeights::adapter` is non-null, but this ONE `LayerAdapterProjection`
+//     member's own `a_weight` is nullptr.
+// Either way the delta-add step (`AddAmplifyingLoraDelta`, forward_sites.cpp) is a complete
+// no-op -- `acc[]` is left byte-identical to the base-only path, design's own stated contract.
+//
+// `a_weight` is `[rank, in_channels]` row-major (PEFT's own `lora_A.weight = (r, in)`, folded
+// per `SuperSLM_Plan.md` Sec11's converter text); `b_weight` is `[out_channels, rank]`
+// (`lora_B.weight = (out, r)`) -- both already-quantized int8, PEFT scaling folded into the
+// fold triples below, per design Sec4/Sec9. `delta_fold_*`/`u_fold_*` are the two new artifact
+// arrays design Sec9 specifies (B0b's own `SslmDeltaFoldScaleView`/`SslmUFoldScaleView`, model.h)
+// -- SIGNED `[-31,31]` triples, consumed by `ApplyAmplifyingWeightScaleFold`, never
+// `ApplyWeightScaleFold`. `delta_fold_*` is one triple PER OUTPUT CHANNEL (shaped like this
+// projection's own `*_fold_identity`/`_mult`/`_shift` above); `u_fold_*` is one triple PER RANK
+// INDEX (shaped `[rank]`, design Sec4's extension). Caller-resolved, no runtime length field --
+// `LayerAdapter::rank` and this call site's own `out_channels` argument bound every read, the
+// same convention every other field in this struct already follows.
+struct LayerAdapterProjection {
+	const int8_t* a_weight = nullptr;
+	const int8_t* b_weight = nullptr;
+	const int32_t* delta_fold_identity = nullptr;  // out_channels
+	const int32_t* delta_fold_mult = nullptr;      // out_channels
+	const int32_t* delta_fold_exponent = nullptr;  // out_channels, SIGNED
+	const int32_t* u_fold_identity = nullptr;      // rank
+	const int32_t* u_fold_mult = nullptr;          // rank
+	const int32_t* u_fold_exponent = nullptr;      // rank, SIGNED
+};
+
+// T-2021/T-2029 B1a (design Sec8, D-SLM2843): the active sequence's bound adapter state for ONE
+// layer -- one `LayerAdapterProjection` per PEFT-adaptable projection (design's own seven:
+// q/o/gate/up/down/k/v). `rank` is shared by every adapted projection in this bind (this
+// design's own single-adapter, single-rank-per-module scope, D-SLM2843).
+struct LayerAdapter {
+	uint32_t rank = 0;
+	LayerAdapterProjection q, o, gate, up, down, k, v;
+};
+
 struct LayerWeights {
 	const int32_t* attn_norm_gain;  // hidden_size
 	CarriedScale attn_norm_site_constant;
+
+	// T-2021/T-2029 B1a (design Sec3/Sec8): nullptr means NO adapter is bound to the active
+	// sequence at all for this layer (design's NULL-adapter case, B1b) -- the caller sets this
+	// to nullptr on EVERY layer's LayerWeights when the sequence has no bound adapter. A
+	// non-null pointer means an adapter IS bound; which of its SEVEN per-projection members
+	// (above) are themselves populated (`a_weight != nullptr`) determines which of this layer's
+	// projections are actually adapted (design's third branch, B1c). Owned by the caller (the
+	// same lifetime convention as every other pointer field on this struct) -- RunLayerLoop
+	// never mutates it.
+	const LayerAdapter* adapter = nullptr;
 
 	// q/k/v/o projections (§6.2 step 2/6/7): GemmInt8Accumulate against the
 	// weight matrix, then the WSC1 fold, one (identity, mult, shift) triple
