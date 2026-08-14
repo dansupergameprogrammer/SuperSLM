@@ -16,6 +16,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <map>
@@ -116,6 +117,62 @@ struct Device {
 		memcpy(p, data, bytes);
 		r->Unmap(0, nullptr);
 		return r;
+	}
+
+	// Sec5.1's own binding architecture: one descriptor table (unbounded SRV
+	// range at t0, space1) plus two root SRVs (Counts, Offsets metadata) plus
+	// one root 32-bit-constant (NArrays) plus one root UAV (Out) -- B3's own
+	// generic binding-substrate shape (TestT2019_B3_DescriptorTableBinding_
+	// KnownPatternReadback's own N-arbitrary-arrays contract), the SM6.2-
+	// compatible idiom (a bound, sized-at-creation-time root parameter with an
+	// unbounded array declared in the shader), not SM6.6's ResourceDescriptorHeap[].
+	ComPtr<ID3D12RootSignature> MakeRootSigDescriptorTable() {
+		D3D12_DESCRIPTOR_RANGE range{};
+		range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+		range.NumDescriptors = UINT_MAX;  // unbounded
+		range.BaseShaderRegister = 0;     // t0
+		range.RegisterSpace = 1;          // space1
+		range.OffsetInDescriptorsFromTableStart = 0;
+
+		D3D12_ROOT_PARAMETER ps[5]{};
+		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+		ps[0].Constants.Num32BitValues = 1;
+		ps[0].Constants.ShaderRegister = 0;  // b0
+		ps[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		ps[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[1].Descriptor.ShaderRegister = 1;  // t1 Counts
+		ps[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[2].Descriptor.ShaderRegister = 2;  // t2 Offsets
+		ps[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+		ps[3].DescriptorTable.NumDescriptorRanges = 1;
+		ps[3].DescriptorTable.pDescriptorRanges = &range;
+		ps[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+		ps[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+		ps[4].Descriptor.ShaderRegister = 0;  // u0 Out
+
+		D3D12_ROOT_SIGNATURE_DESC rs{};
+		rs.NumParameters = 5;
+		rs.pParameters = ps;
+		ComPtr<ID3DBlob> blob, err;
+		HRESULT hr = D3D12SerializeRootSignature(&rs, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &err);
+		if (FAILED(hr)) {
+			if (err) std::fprintf(stderr, "%s\n", (char*)err->GetBufferPointer());
+			throw std::runtime_error("descriptor-table root signature serialization failed");
+		}
+		ComPtr<ID3D12RootSignature> r;
+		SSLM_GPU_HR(dev->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(),
+		                                      IID_PPV_ARGS(&r)));
+		return r;
+	}
+
+	// D3D12_FEATURE_DATA_D3D12_OPTIONS::ResourceBindingTier -- Sec5.1's own
+	// stated hardware floor (Tier 3, D-SLM3000). Not mocked here; the mock
+	// override lives at the call site (superslm_gpu.cpp), which is what B3's
+	// own red-suite cell arms/clears.
+	D3D12_RESOURCE_BINDING_TIER QueryResourceBindingTier() {
+		D3D12_FEATURE_DATA_D3D12_OPTIONS o{};
+		dev->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &o, sizeof(o));
+		return o.ResourceBindingTier;
 	}
 
 	ComPtr<ID3D12RootSignature> MakeRootSig1SrvUav() {

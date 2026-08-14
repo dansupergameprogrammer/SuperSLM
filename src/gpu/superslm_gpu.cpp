@@ -379,27 +379,196 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 }
 
 // ===========================================================================
-// B3 (Sec5.1/Sec11 B3): descriptor-table binding substrate. STUB pending B3.
+// B3 (Sec5.1/Sec11 B3): descriptor-table binding substrate. Real GPU
+// dispatch: one shader-visible descriptor heap sized to n_arrays, one RAW
+// buffer SRV per array, bound as a single DESCRIPTOR_TABLE root parameter
+// (the SM6.2-compatible idiom -- a bound, sized-at-creation-time table with
+// an unbounded array declared in the shader, Sec5.1), never N root
+// parameters.
 // ===========================================================================
+
+namespace {
+
+// Binds `array_pointers[0..n_arrays)` (each `array_element_counts[i]` int8
+// elements) through one descriptor table and reads every one back into
+// `*out_widened` (one int32 per element, in array order) -- the shared
+// mechanism `BindDescriptorTableAndReadback` and
+// `DescriptorHeapRegionIsCleanAfterHandleRelease` both drive.
+bool RunDescriptorTableBind(const int8_t* const* array_pointers, const size_t* array_element_counts,
+                             size_t n_arrays, std::vector<int32_t>* out_widened) {
+	harness::Device& dev = GetDevice();
+	if (!dev.available || n_arrays == 0) return false;
+
+	std::vector<uint64_t> offsets(n_arrays);
+	uint64_t total_elements = 0;
+	for (size_t i = 0; i < n_arrays; ++i) {
+		offsets[i] = total_elements;
+		total_elements += array_element_counts[i];
+	}
+	if (total_elements == 0) return false;
+
+	// Per-array data buffers (upload heap, GENERIC_READ -- valid directly as
+	// an SRV source, no default-heap copy needed for this structural test),
+	// each padded to a 4-byte multiple for a RAW buffer view's own NumElements.
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> array_bufs(n_arrays);
+	for (size_t i = 0; i < n_arrays; ++i) {
+		const size_t padded = ((array_element_counts[i] + 3) / 4) * 4;
+		std::vector<uint8_t> bytes(padded, 0);
+		std::memcpy(bytes.data(), array_pointers[i], array_element_counts[i]);
+		array_bufs[i] = dev.Upload(bytes.data(), padded);
+	}
+
+	D3D12_DESCRIPTOR_HEAP_DESC hd{};
+	hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+	hd.NumDescriptors = static_cast<UINT>(n_arrays);
+	hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+	Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap;
+	SSLM_GPU_HR(dev.dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)));
+	const UINT stride =
+	    dev.dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu_start = heap->GetCPUDescriptorHandleForHeapStart();
+	for (size_t i = 0; i < n_arrays; ++i) {
+		const size_t padded = ((array_element_counts[i] + 3) / 4) * 4;
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+		srv.Format = DXGI_FORMAT_R32_TYPELESS;
+		srv.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srv.Buffer.FirstElement = 0;
+		srv.Buffer.NumElements = static_cast<UINT>(padded / 4);
+		srv.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+		D3D12_CPU_DESCRIPTOR_HANDLE h{cpu_start.ptr + i * stride};
+		dev.dev->CreateShaderResourceView(array_bufs[i].Get(), &srv, h);
+	}
+
+	std::vector<int64_t> counts64(n_arrays), offsets64(n_arrays);
+	for (size_t i = 0; i < n_arrays; ++i) {
+		counts64[i] = static_cast<int64_t>(array_element_counts[i]);
+		offsets64[i] = static_cast<int64_t>(offsets[i]);
+	}
+	auto counts_buf = dev.Upload(counts64.data(), counts64.size() * 8);
+	auto offsets_buf = dev.Upload(offsets64.data(), offsets64.size() * 8);
+	auto out_uav = dev.MakeBuffer(total_elements * 4, D3D12_HEAP_TYPE_DEFAULT,
+	                               D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	auto readback = dev.MakeBuffer(total_elements * 4, D3D12_HEAP_TYPE_READBACK,
+	                                D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+
+	static Microsoft::WRL::ComPtr<ID3D12RootSignature> s_root_sig;
+	static Microsoft::WRL::ComPtr<ID3D12PipelineState> s_pso;
+	if (!s_root_sig) {
+		s_root_sig = dev.MakeRootSigDescriptorTable();
+		auto cso = harness::ReadFile(harness::ShaderPath("descriptor_table_readback"));
+		s_pso = dev.MakePSO(s_root_sig.Get(), cso);
+	}
+
+	SSLM_GPU_HR(dev.alloc->Reset());
+	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), s_pso.Get()));
+	ID3D12DescriptorHeap* heaps[] = {heap.Get()};
+	dev.list->SetDescriptorHeaps(1, heaps);
+	dev.list->SetComputeRootSignature(s_root_sig.Get());
+	const uint32_t n_arrays_u32 = static_cast<uint32_t>(n_arrays);
+	dev.list->SetComputeRoot32BitConstants(0, 1, &n_arrays_u32, 0);
+	dev.list->SetComputeRootShaderResourceView(1, counts_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(2, offsets_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootDescriptorTable(3, heap->GetGPUDescriptorHandleForHeapStart());
+	dev.list->SetComputeRootUnorderedAccessView(4, out_uav->GetGPUVirtualAddress());
+	dev.list->Dispatch(static_cast<UINT>((n_arrays + 63) / 64), 1, 1);
+	D3D12_RESOURCE_BARRIER b{};
+	b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	b.Transition.pResource = out_uav.Get();
+	b.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+	b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	dev.list->ResourceBarrier(1, &b);
+	dev.list->CopyResource(readback.Get(), out_uav.Get());
+	SSLM_GPU_HR(dev.list->Close());
+	ID3D12CommandList* lists[] = {dev.list.Get()};
+	dev.queue->ExecuteCommandLists(1, lists);
+	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+	if (dev.fence->GetCompletedValue() < dev.fence_val) {
+		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+		WaitForSingleObject(dev.fence_event, INFINITE);
+	}
+
+	out_widened->resize(total_elements);
+	void* p = nullptr;
+	D3D12_RANGE range{0, static_cast<SIZE_T>(total_elements * 4)};
+	SSLM_GPU_HR(readback->Map(0, &range, &p));
+	std::memcpy(out_widened->data(), p, total_elements * 4);
+	D3D12_RANGE none{0, 0};
+	readback->Unmap(0, &none);
+	return true;
+}
+
+}  // namespace
 
 bool BindDescriptorTableAndReadback(const int8_t* const* array_pointers,
                                      const size_t* array_element_counts, size_t n_arrays,
                                      int8_t* out_readback_concat, size_t out_readback_capacity) {
-	(void)array_pointers;
-	(void)array_element_counts;
-	(void)n_arrays;
-	(void)out_readback_concat;
-	(void)out_readback_capacity;
-	return false;  // STUB (B3 not yet built)
-}
-bool DescriptorHeapRegionIsCleanAfterHandleRelease() {
-	return false;  // STUB (B3 not yet built)
+	std::vector<int32_t> widened;
+	if (!RunDescriptorTableBind(array_pointers, array_element_counts, n_arrays, &widened)) {
+		return false;
+	}
+	if (widened.size() > out_readback_capacity) return false;
+	for (size_t i = 0; i < widened.size(); ++i) {
+		out_readback_concat[i] = static_cast<int8_t>(widened[i]);
+	}
+	return true;
 }
 
-void ArmResourceBindingTierMock(int tier) { (void)tier; }        // STUB (B3 not yet built)
-void ClearResourceBindingTierMock() {}                            // STUB (B3 not yet built)
+bool DescriptorHeapRegionIsCleanAfterHandleRelease() {
+	// Sec10 dim 1, Sec14 Fold G1's own sequential-release-then-remap shape,
+	// realized on this design's own binding substrate: map a first "handle"
+	// (one descriptor-table bind), release every device object it created
+	// (ComPtr scope exit below), then map a second, independently-created
+	// handle with DIFFERENT content and confirm it reads back only its own
+	// pattern -- a real property of this session's device/heap lifecycle,
+	// not a tautology (a bug that reused a stale GPU virtual address, or
+	// failed to fence-wait before releasing, would show up here).
+	const int8_t first_pattern[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+	const int8_t* first_ptrs[1] = {first_pattern};
+	const size_t first_counts[1] = {8};
+	{
+		std::vector<int32_t> widened;
+		if (!RunDescriptorTableBind(first_ptrs, first_counts, 1, &widened)) return false;
+		for (size_t i = 0; i < 8; ++i) {
+			if (widened[i] != first_pattern[i]) return false;
+		}
+	}  // every device object from the first bind releases here
+
+	const int8_t second_pattern[8] = {-1, -2, -3, -4, -5, -6, -7, -8};
+	const int8_t* second_ptrs[1] = {second_pattern};
+	const size_t second_counts[1] = {8};
+	std::vector<int32_t> widened2;
+	if (!RunDescriptorTableBind(second_ptrs, second_counts, 1, &widened2)) return false;
+	for (size_t i = 0; i < 8; ++i) {
+		if (widened2[i] != second_pattern[i]) return false;  // residue from the first bind
+	}
+	return true;
+}
+
+namespace {
+bool g_tier_mock_armed = false;
+int g_tier_mock_value = 3;
+}  // namespace
+
+void ArmResourceBindingTierMock(int tier) {
+	g_tier_mock_armed = true;
+	g_tier_mock_value = tier;
+}
+void ClearResourceBindingTierMock() { g_tier_mock_armed = false; }
+
 bool MapModelGpuResidencyTierCheck() {
-	return true;  // STUB (B3 not yet built) -- wrong on a mocked Tier 1/2 cell (must be false)
+	// Sec11 B3, D-SLM3082 (Dan's amendment 5): a preflight run before any
+	// descriptor-table/UAV-table build or device allocation is attempted --
+	// this design's binding architecture requires Tier 3 (D-SLM3000).
+	int tier;
+	if (g_tier_mock_armed) {
+		tier = g_tier_mock_value;
+	} else {
+		tier = static_cast<int>(GetDevice().QueryResourceBindingTier());
+	}
+	return tier >= static_cast<int>(D3D12_RESOURCE_BINDING_TIER_3);
 }
 
 // ===========================================================================
