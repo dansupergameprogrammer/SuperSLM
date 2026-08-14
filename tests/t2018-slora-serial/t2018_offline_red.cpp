@@ -1,6 +1,18 @@
-// T-2018 -- Curie's RED suite for S-LoRA-serial, derived from the design of record
-// (Claude/Vitruvius/t1977-v5-lora-composition-reconciliation-design-2026-08-13.md at commit
-// 6294ca69ba, Wizard repo) Sec10 Coverage Model and Sec11 Build Decomposition.
+// T-2018/T-2027 -- Curie's RED suite for S-LoRA-serial, derived from the design of record
+// (Claude/Vitruvius/t1977-v5-lora-composition-reconciliation-design-2026-08-13.md, Wizard repo)
+// Sec10 Coverage Model and Sec11 Build Decomposition.
+//
+// T-2027 AMENDMENT (2026-08-14, D-SLM3066/D-SLM3085-3107): re-derived against the design at
+// commit 3de10627f2 (Sec21, Dan's four binding amendments) and the now-official
+// SuperSLM_Plan.md Sec6.7/Sec11/Sec19 (folded at commit fe2ba3e7b9), superseding T-2018's own
+// commit-6294ca69ba baseline. B3's acceptance test is re-derived as a one-sided non-inferiority
+// gate with a pilot/validation Delta-calibration split and a new effect-retention conjunct
+// (Sec4-6 above, T2027Dim/T2027* constants and the NonInferiorityStat/FrozenDelta/Verdict
+// machinery); B7 is re-derived for the explicit-only fallback contract. B0 and B6 are carried
+// forward UNCHANGED -- neither is touched by the four amendments (design Sec21: "none of the
+// four items touches Sec3's insertion point, Sec4's fold construction... or Sec5's one-currency
+// K/V property"). See Claude/Curie/t2018-slora-serial-red-suite-2026-08-13.md Sec2 (T-2027
+// section) for the full re-derivation record and true counts.
 //
 // SCOPE OF THIS FILE: the four B-steps the design itself classifies as OFFLINE/CONVERTER-SIDE
 // (no engine ABI or ProjectAndFunnel insertion-point change) -- B0 (converter-side delta-fold
@@ -326,9 +338,17 @@ static QuantizedBase BuildAdapter(int d, int out, int r, double gain, uint64_t b
 //           second red-first cell's "deliberately mis-derived triple" fixture family, reused for
 //           B3's mutation-proof per the design's own cross-reference (Sec11 B3 second cell)
 struct TokenResult {
-	double float_distance_runtime;  // mean |composed_int8*scale - float_ref| / |float_ref|, over channels
-	double float_distance_baked;
-	double err_nodelta;  // base-only floor, reported for context
+	// T-2027 (D-SLM3089): normalized L2 is now the PRIMARY composed/effect metric --
+	// sqrt(sum_c (a_c-b_c)^2) / sqrt(sum_c b_c^2), a shared-denominator statistic computed once
+	// over the whole channel vector for this item, not a pointwise ratio averaged after the fact.
+	// The suite's own original L1-shaped statistic (sum|diff|/sum|ref|, T-2018's own
+	// float_distance_*) is retained as the secondary, outlier-resistant reading.
+	double composed_l2_runtime = 0.0, composed_l2_baked = 0.0;      // PRIMARY (D-SLM3089)
+	double float_distance_runtime = 0.0, float_distance_baked = 0.0;  // secondary L1 (unchanged)
+	// T-2027 (D-SLM3088): effect-retention -- composed minus base, per channel, graded against the
+	// float PEFT delta reference (yd) by the SAME normalized-L2 metric.
+	double effect_l2_runtime = 0.0, effect_l2_baked = 0.0;
+	double err_nodelta = 0.0;  // base-only floor, reported for context
 	int wiring_mismatches = 0;
 	int derivation_mismatches = 0;
 	double max_derivation_rel_err = 0.0;
@@ -414,6 +434,11 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 	res.amplifying_chan = (int)amplifying.size();
 
 	double el = 0.0, ebk = 0.0, en = 0.0, den = 0.0;
+	// T-2027: L2 accumulators (composed, primary) and effect-retention accumulators (both metrics'
+	// numerator/denominator, L2 only -- effect retention's own denominator is the float PEFT delta
+	// vector's own L2 norm, distinct from the composed conjunct's float-reference L2 norm).
+	double el2_num = 0.0, el2_den = 0.0, ebk2_num = 0.0, ebk2_den = 0.0;
+	double eff_rt_num = 0.0, eff_bk_num = 0.0, eff_den = 0.0;
 	int wiring_mismatches = 0, derivation_mismatches = 0;
 	double max_rel_err = 0.0;
 	const double scale = X * qb.S;
@@ -462,10 +487,14 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 			yd += qb.Bf[(size_t)i * r + k] * u;
 		}
 		const double ref = yb + yd;
+		const double runtime_composed_val = (double)(acc_wide + dwl) * scale;
+		const double base_val = (double)acc_wide * scale;  // SHARED base-only value, both arms (D-SLM3088)
 
-		// RUNTIME arm.
-		el += std::fabs((double)(acc_wide + dwl) * scale - ref);
-		en += std::fabs((double)acc_wide * scale - ref);
+		// RUNTIME arm, composed conjunct (secondary L1, unchanged; PRIMARY L2, new T-2027).
+		el += std::fabs(runtime_composed_val - ref);
+		en += std::fabs(base_val - ref);
+		el2_num += (runtime_composed_val - ref) * (runtime_composed_val - ref);
+		el2_den += ref * ref;
 
 		// BAKED arm: independent GEMM against the merged, once-quantized weight, then the base's
 		// own unmodified ApplyWeightScaleFold using the baked-arm's own (wp[i], Sp) fold --
@@ -476,12 +505,31 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 		int32_t pid, pmu, psh;
 		DeriveTripleOld(qb.wp[i] / qb.Sp, &pid, &pmu, &psh);
 		const int64_t bacc_wide = ApplyWeightScaleFold(bacc, pid, pmu, psh);
-		ebk += std::fabs((double)bacc_wide * scale_baked - ref);
+		const double baked_composed_val = (double)bacc_wide * scale_baked;
+		ebk += std::fabs(baked_composed_val - ref);
+		ebk2_num += (baked_composed_val - ref) * (baked_composed_val - ref);
+		ebk2_den += ref * ref;
 
 		den += std::fabs(ref);
+
+		// T-2027 (D-SLM3088): EFFECT-RETENTION -- composed minus the SHARED base value, graded
+		// against the float PEFT delta reference `yd` alone (not `ref = yb+yd`). At full
+		// annihilation (delta_wide==0 for every channel), effect_runtime == 0 identically while
+		// effect_baked tracks the baked arm's own genuine, nonzero merge effect -- this is what
+		// makes effect_distance_runtime == 1.0 exactly at T_SCALE(255.9), independent of yb's own
+		// magnitude, because yb has already been subtracted out before this line runs.
+		const double effect_runtime_val = runtime_composed_val - base_val;  // == dwl[i]*scale, exact
+		const double effect_baked_val = baked_composed_val - base_val;
+		eff_rt_num += (effect_runtime_val - yd) * (effect_runtime_val - yd);
+		eff_bk_num += (effect_baked_val - yd) * (effect_baked_val - yd);
+		eff_den += yd * yd;
 	}
 	res.float_distance_runtime = el / den;
 	res.float_distance_baked = ebk / den;
+	res.composed_l2_runtime = std::sqrt(el2_num) / std::sqrt(el2_den);
+	res.composed_l2_baked = std::sqrt(ebk2_num) / std::sqrt(ebk2_den);
+	res.effect_l2_runtime = std::sqrt(eff_rt_num) / std::sqrt(eff_den);
+	res.effect_l2_baked = std::sqrt(eff_bk_num) / std::sqrt(eff_den);
 	res.err_nodelta = en / den;
 	res.wiring_mismatches = wiring_mismatches;
 	res.derivation_mismatches = derivation_mismatches;
@@ -489,6 +537,155 @@ static TokenResult RunToken(const QuantizedBase& qb, uint64_t token_seed, int me
 	res.gate_passes = (wiring_mismatches == 0) && (derivation_mismatches == 0);
 	return res;
 }
+
+// =============================================================================================
+// T-2027 AMENDMENT (D-SLM3066/D-SLM3085-3101, folded into the design at commit 3de10627f2 Sec21,
+// and into SuperSLM_Plan.md Sec6.7/Sec11/Sec19 at commit fe2ba3e7b9): the one-sided
+// non-inferiority acceptance test, the pilot/validation Delta-calibration split, and the
+// effect-retention conjunct. This machinery REPLACES T-2018's own difference-from-zero
+// PairedGapStat/ComputePairedGap (retained just below, unchanged, for cells that still cite it as
+// a DIAGNOSTIC/mutation-direction check, never as the acceptance test itself from this point on).
+// =============================================================================================
+
+// Deterministic 80/20 validation/pilot corpus split (design Sec6 item 1, D-SLM3086): assignment is
+// a pure function of the item's own identity (here, its seed), identical for every adapter graded
+// against this corpus -- no adapter's own data ever influences which items fall in which half.
+// `hash(item_id) mod 10 < 2` => PILOT, else VALIDATION, per the design's own stated rule.
+static bool IsPilotItem(uint64_t item_seed) {
+	uint64_t z = item_seed + 0x9E3779B97F4A7C15ull;
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+	z = z ^ (z >> 31);
+	return (z % 10) < 2;
+}
+
+// One-sided non-inferiority statistic (design Sec6 item 1, D-SLM3085/3087): mean, SE, the
+// one-sided upper confidence bound at a stated z (95% => z=1.645), and the P95 tail (D-SLM3090).
+struct NonInferiorityStat {
+	int n = 0;
+	double mean = 0.0;
+	double se = 0.0;
+	double upper_ci = 0.0;   // mean + z*se -- the quantity the acceptance test itself reads
+	double p95 = 0.0;        // predeclared tail statistic, gated beside the mean
+	double sign_frac_positive = 0.0;
+};
+
+static constexpr double kZ95OneSided = 1.645;
+static constexpr double kSafetyInflation = 1.5;  // design's own stated 1.5x pilot-calibration factor
+
+static double Percentile95(std::vector<double> v) {
+	if (v.empty()) return 0.0;
+	std::sort(v.begin(), v.end());
+	const double rank = 0.95 * (double)(v.size() - 1);
+	const size_t lo = (size_t)rank;
+	const size_t hi = lo + 1 < v.size() ? lo + 1 : lo;
+	const double frac = rank - (double)lo;
+	return v[lo] + frac * (v[hi] - v[lo]);
+}
+
+static NonInferiorityStat ComputeNonInferiorityStat(const std::vector<double>& gaps, double z) {
+	NonInferiorityStat s;
+	s.n = (int)gaps.size();
+	if (s.n == 0) return s;
+	double mean = 0.0;
+	for (double g : gaps) mean += g;
+	mean /= s.n;
+	double var = 0.0;
+	for (double g : gaps) var += (g - mean) * (g - mean);
+	var /= (s.n > 1 ? (s.n - 1) : 1);
+	const double se = std::sqrt(var) / std::sqrt((double)s.n);
+	int pos = 0;
+	for (double g : gaps) if (g > 0.0) ++pos;
+	s.mean = mean;
+	s.se = se;
+	s.upper_ci = mean + z * se;
+	s.p95 = Percentile95(gaps);
+	s.sign_frac_positive = (double)pos / s.n;
+	return s;
+}
+
+// Per-item composed and effect-retention gaps (L2, primary), split by pilot/validation membership.
+struct CorpusGaps {
+	std::vector<double> composed_pilot, composed_validation;
+	std::vector<double> effect_pilot, effect_validation;
+};
+
+static CorpusGaps CollectCorpusGaps(const QuantizedBase& qb, int mech, double knob, int n_items,
+                                     uint64_t seed_base) {
+	CorpusGaps g;
+	for (int i = 0; i < n_items; ++i) {
+		const uint64_t item_seed = seed_base + (uint64_t)i * 0x9E3779B1u;
+		const TokenResult tr = RunToken(qb, item_seed, mech, knob);
+		const double composed_gap = tr.composed_l2_runtime - tr.composed_l2_baked;
+		const double effect_gap = tr.effect_l2_runtime - tr.effect_l2_baked;
+		if (IsPilotItem(item_seed)) {
+			g.composed_pilot.push_back(composed_gap);
+			g.effect_pilot.push_back(effect_gap);
+		} else {
+			g.composed_validation.push_back(composed_gap);
+			g.effect_validation.push_back(effect_gap);
+		}
+	}
+	return g;
+}
+
+// The four frozen Deltas (design Sec6 item 1/1a, D-SLM3086/3090): calibrated ONCE, from a
+// WIRING-AND-DERIVATION-clean reference adapter's honest (t=1, mech=1) run over the PILOT
+// partition only -- never from the adapter under test's own grading run (the circularity Dan's
+// ruling names). `Delta = 1.5 * (mean_pilot + z*se_pilot)`; `Delta_tail = 1.5 * P95_pilot`.
+struct FrozenDelta {
+	double composed_mean = 0.0, composed_tail = 0.0;
+	double effect_mean = 0.0, effect_tail = 0.0;
+	int pilot_n_composed = 0, pilot_n_effect = 0;
+};
+
+static FrozenDelta CalibrateDelta(const QuantizedBase& reference, int n_items, uint64_t seed_base) {
+	// The reference is graded at mech=1 (the honest mechanism), t_scale=1.0 -- the correct
+	// mechanism's own baseline, exactly the "WIRING-AND-DERIVATION-clean" reference the design
+	// requires (B0's gate passes on this construction by this suite's own B0 cells, above).
+	const CorpusGaps g = CollectCorpusGaps(reference, /*mech=*/1, 0.0, n_items, seed_base);
+	const NonInferiorityStat composed_pilot = ComputeNonInferiorityStat(g.composed_pilot, kZ95OneSided);
+	const NonInferiorityStat effect_pilot = ComputeNonInferiorityStat(g.effect_pilot, kZ95OneSided);
+	FrozenDelta d;
+	d.composed_mean = kSafetyInflation * (composed_pilot.mean + kZ95OneSided * composed_pilot.se);
+	d.composed_tail = kSafetyInflation * composed_pilot.p95;
+	d.effect_mean = kSafetyInflation * (effect_pilot.mean + kZ95OneSided * effect_pilot.se);
+	d.effect_tail = kSafetyInflation * effect_pilot.p95;
+	d.pilot_n_composed = composed_pilot.n;
+	d.pilot_n_effect = effect_pilot.n;
+	return d;
+}
+
+// The full acceptance verdict (design Sec6 item 1/1a): both conjuncts, each its own mean-and-tail
+// non-inferiority test against the frozen Delta, graded on the VALIDATION partition only.
+struct Verdict {
+	NonInferiorityStat composed_stat, effect_stat;
+	bool composed_mean_accepts = false, composed_tail_accepts = false;
+	bool effect_mean_accepts = false, effect_tail_accepts = false;
+	bool accepts = false;  // ALL four conjuncts must accept
+};
+
+static Verdict Grade(const QuantizedBase& qb, int mech, double knob, const FrozenDelta& delta,
+                      int n_items, uint64_t seed_base) {
+	const CorpusGaps g = CollectCorpusGaps(qb, mech, knob, n_items, seed_base);
+	Verdict v;
+	v.composed_stat = ComputeNonInferiorityStat(g.composed_validation, kZ95OneSided);
+	v.effect_stat = ComputeNonInferiorityStat(g.effect_validation, kZ95OneSided);
+	v.composed_mean_accepts = v.composed_stat.upper_ci < delta.composed_mean;
+	v.composed_tail_accepts = v.composed_stat.p95 < delta.composed_tail;
+	v.effect_mean_accepts = v.effect_stat.upper_ci < delta.effect_mean;
+	v.effect_tail_accepts = v.effect_stat.p95 < delta.effect_tail;
+	v.accepts = v.composed_mean_accepts && v.composed_tail_accepts && v.effect_mean_accepts &&
+	            v.effect_tail_accepts;
+	return v;
+}
+
+// =============================================================================================
+// T-2018's own difference-from-zero statistic (D-SLM3050) -- RETAINED, unchanged, but no longer
+// the acceptance test (D-SLM3085 supersedes it for that role). Still used below as a diagnostic/
+// mutation-direction check (does a defect move the gap the expected way at all), which is a
+// weaker, still-true claim the retired form remains valid for.
+// =============================================================================================
 
 // D-SLM3050's own named statistic: per corpus item i, gap[i] = float_distance_runtime[i] -
 // float_distance_baked[i]; the reported aggregate is the paired mean, with paired SE, achieved
@@ -765,118 +962,226 @@ static void TestB3AmplifyingRatioGenuinelyOutOfDomainSignalsExplicitInfeasibilit
 	CHECK_MSG(ok2, "a ratio of 2^30 (inside the domain) must derive a legal triple");
 }
 
-// B3's own second red-first cell (redefined D-SLM3019/D-SLM3024, D-SLM3050): the BAKED-ADAPTER
-// COMPARATOR's own statistic (paired mean gap, SE, resolving power, sign count) is computed on a
-// synthetic corpus, and a deliberately mis-derived delta-fold triple (WRONG_DIRECTION, reusing
-// B0's own second red-first cell's fixture family per this design's own cross-reference) widens
-// the runtime-vs-baked gap measurably relative to the correctly-derived triple's own gap -- the
-// direction check D-SLM2985 established, retained in this shape because the margin itself is not
-// yet set (design Sec11 B3, second cell).
-static void TestB3BakedComparatorStatisticMutationProofWidensGapUnderMisderivedTriple() {
-	QuantizedBase qb = BuildAdapter(896, 896, 8, 0.4, 0x5EED'0001, 1.0);
-	const int n_items = 24;
-	const PairedGapStat correct = ComputePairedGap(qb, /*mech=*/1, 0.0, n_items, 0x7000);
-	const PairedGapStat wrong = ComputePairedGap(qb, /*mech=*/7, 0.0, n_items, 0x7000);
+// =============================================================================================
+// T-2027 RE-DERIVATION (D-SLM3066/D-SLM3085-3101): B3's second and fourth red-first cells are
+// re-derived from the amended acceptance test -- one-sided non-inferiority, pilot/validation
+// Delta calibration, and the effect-retention conjunct -- superseding T-2018's own
+// difference-from-zero cells (which asserted an unconditional "refuse every t != 1" the amended
+// contract explicitly retracts, D-SLM3092). Per D-SLM3106, this is a fresh derivation from the
+// amended contract, not a patch of the struck cells.
+// =============================================================================================
 
-	std::printf("   [B3 second cell] correct mean_gap=%.6f se=%.6f resolving_power=%.6f sign+=%.2f (n=%d)\n",
-	            correct.mean, correct.se, correct.resolving_power, correct.sign_frac_positive, correct.n);
-	std::printf("   [B3 second cell] wrong(direction) mean_gap=%.6f se=%.6f resolving_power=%.6f sign+=%.2f (n=%d)\n",
-	            wrong.mean, wrong.se, wrong.resolving_power, wrong.sign_frac_positive, wrong.n);
+// The fixture and build seed T-2018/T-2020 already used at this exact cell (d=896, r=8, gain=0.4,
+// build_seed=0xF00D'BEEF) is reused for continuity with T-2020's own boundary findings, which this
+// re-derivation's t-sweep cell (below) cites as grounding.
+static constexpr int kT2027Dim = 896, kT2027Out = 896, kT2027Rank = 8;
+static constexpr double kT2027Gain = 0.4;
+static constexpr uint64_t kT2027BuildSeed = 0xF00D'BEEF;
+static constexpr int kT2027PilotCorpusN = 200;   // large enough for a stable PILOT calibration
+static constexpr int kT2027GradeCorpusN = 200;   // VALIDATION-partition grading corpus size
+static constexpr uint64_t kT2027PilotSeedBase = 0x1000;
+static constexpr uint64_t kT2027GradeSeedBase = 0x9000;  // same seed_base T-2018 used at n=24
 
-	CHECK_MSG(wrong.mean > correct.mean,
-	          "a deliberately mis-derived (inverted-direction) triple must widen the runtime-vs-"
-	          "baked gap relative to the correct triple: wrong_mean=%.6f correct_mean=%.6f",
-	          wrong.mean, correct.mean);
-	CHECK_MSG(wrong.mean - correct.mean > wrong.resolving_power,
-	          "the widening must exceed the wrong-arm's own achieved resolving power (a real, "
-	          "resolved effect, not noise): widening=%.6f resolving_power=%.6f",
-	          wrong.mean - correct.mean, wrong.resolving_power);
-	// The correct arm's own mean gap must NOT itself exceed its own resolving power in the
-	// direction that would fabricate a spurious "runtime worse than baked" reading -- reported,
-	// per D-SLM2846's UNRESOLVED-never-PASSED discipline, not asserted as a numeric pass (the
-	// margin is underived, design Sec13).
-	if (std::fabs(correct.mean) < correct.resolving_power) {
-		std::printf("   [B3 second cell] correct-triple mean_gap is UNRESOLVED at n=%d (|mean| < "
-		            "resolving power) -- reported, not treated as a pass, per D-SLM2846\n", n_items);
-	}
+// B3's own second red-first cell, re-derived (design Sec6 item 1, D-SLM3085/3086): Delta is
+// calibrated ONCE from a WIRING-AND-DERIVATION-clean reference adapter's honest (t=1, mech=1) run
+// over the PILOT partition, frozen, then the SAME reference adapter is graded on its own
+// VALIDATION partition against the now-frozen Delta -- genuine equality must ACCEPT, closing the
+// exact failure mode (D-SLM2846's difference-from-zero form could never resolve "equal" as a
+// pass) Dan's ruling names.
+static void TestB3DeltaCalibratedOnPilotReferenceAcceptsOnValidation() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	// The reference must itself pass B0's WIRING-AND-DERIVATION gate cleanly (R7's own stated
+	// precondition, D-SLM3100) -- confirmed via a single token draw before calibration proceeds.
+	const TokenResult gate_check = RunToken(reference, 0xFEED, /*mech=*/1, 0.0);
+	CHECK_MSG(gate_check.gate_passes,
+	          "the PILOT reference adapter must pass B0's WIRING-AND-DERIVATION gate before it is "
+	          "used to calibrate Delta (R7's own precondition, D-SLM3100)");
+
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
+	std::printf("   [B3 second cell] frozen Delta (n_pilot_composed=%d, n_pilot_effect=%d): "
+	            "composed_mean=%.6f composed_tail=%.6f effect_mean=%.6f effect_tail=%.6f\n",
+	            delta.pilot_n_composed, delta.pilot_n_effect, delta.composed_mean, delta.composed_tail,
+	            delta.effect_mean, delta.effect_tail);
+	CHECK_MSG(delta.composed_mean > 0.0 && delta.composed_tail > 0.0 && delta.effect_mean > 0.0 &&
+	              delta.effect_tail > 0.0,
+	          "all four calibrated Deltas must be strictly positive (a real, non-degenerate bound)");
+
+	// Grade the SAME reference adapter on its own VALIDATION partition, disjoint from the items
+	// that calibrated Delta (the pilot/validation split, D-SLM3086) -- genuine equality (the
+	// honest mechanism graded against a Delta calibrated from itself, inflated 1.5x) must ACCEPT.
+	const Verdict v = Grade(reference, /*mech=*/1, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
+	std::printf("   [B3 second cell] reference on VALIDATION: composed upper_ci=%.6f (Delta=%.6f) "
+	            "composed p95=%.6f (Delta_tail=%.6f) effect upper_ci=%.6f (Delta_effect=%.6f) "
+	            "effect p95=%.6f (Delta_effect_tail=%.6f) -> %s\n",
+	            v.composed_stat.upper_ci, delta.composed_mean, v.composed_stat.p95, delta.composed_tail,
+	            v.effect_stat.upper_ci, delta.effect_mean, v.effect_stat.p95, delta.effect_tail,
+	            v.accepts ? "ACCEPT" : "reject");
+	CHECK_MSG(v.accepts,
+	          "a genuinely honest reference adapter, graded on VALIDATION against a Delta calibrated "
+	          "from its OWN pilot partition (inflated 1.5x), must ACCEPT -- the exact failure mode "
+	          "(equal arms refused forever) D-SLM3066 item 1 exists to close");
 }
 
-// B3's own fourth red-first cell (D-SLM3024/D-SLM3046, T-2016 fold): the design's own text claims
-// the runtime-vs-baked margin "must be refused... at every t != 1 T-2007 measured passing B0's
-// WIRING/DERIVATION gate, including t = 255.9" (the adapter-annihilating case), while ACCEPTING
-// t=1 exactly (the correct mechanism's own baseline, no mis-derivation at all).
-//
-// EXECUTED FINDING, ROUTED TO THE PLANNER (Curie's own charter: "a gap in the model itself routes
-// back to the planner in your handoff, not silently patched" -- this is that gap, found by
-// deriving this cell's own fixture for the first time; no probe in this lineage computed the
-// runtime-vs-baked GAP statistic before D-SLM3019/3050 introduced it, so this is this quantity's
-// first execution against the T_SCALE family). At t=1 the gap is bit-identical to the baseline,
-// confirmed below. At LARGE t (this fixture's own measured threshold: t IN {64, 200, 255.9, 256,
-// 1024}) the gap widens measurably past its own achieved resolving power -- refusal holds,
-// including the design's own headline t=255.9 case. But at the SMALL-t neighbourhood immediately
-// above 1 (t IN {1.0001, 1.0725, 2.0, 4.0, 16.0}), this suite's own execution finds the gap does
-// NOT reliably widen past the baseline -- at several of these t values the paired mean gap is
-// SMALLER than at t=1, not larger, so "refused at every t != 1" does not hold as measured.
-//
-// This is NOT a contradiction this suite invents: T-2007's own probe (Claude/Vitruvius/t2009-
-// verify-probe/t2007_body.cpp, Part 4 Side B) already found and REPORTED the identical qualitative
-// property in the single-arm err_legal quantity this gap statistic is built from -- "the sweep is
-// NOT monotone at its first step: t=1 gives X and t=2 gives Y, a Z% IMPROVEMENT... It is a
-// property of the fixture, not of this knob, and it makes the fracture WORSE, not better: the
-// gate cannot distinguish a T that is slightly better from one that is catastrophically wrong."
-// The design's own B3 fourth-cell text was written against that same probe but states a stronger,
-// blanket "every t != 1" claim than the probe's own Part 4 supports for the small-t neighbourhood.
-// This cell therefore asserts only what this suite's own execution actually establishes (t=1
-// accepted; LARGE t refused, including t=255.9) and REPORTS, rather than silently asserting past,
-// the small-t non-monotonicity -- per StandardsDocument.md Sec5.4 ("a measurement is evidence
-// about the cell it was taken in, and reverses at its neighbours").
-static void TestB3TScaleMutationProofRefusedAtLargeTAcceptedAtTEqualsOneSmallTGapReportedToPlanner() {
-	const uint64_t build_seed = 0xF00D'BEEF;
-	const int n_items = 24;
-	QuantizedBase honest = BuildAdapter(896, 896, 8, 0.4, build_seed, /*t_scale_knob=*/1.0);
-	const PairedGapStat baseline = ComputePairedGap(honest, /*mech=*/1, 0.0, n_items, 0x9000);
+// A deliberately mis-derived delta-fold triple (WRONG_DIRECTION, reusing B0's own second
+// red-first cell's fixture family) must be REJECTED by the composed conjunct against the SAME
+// frozen Delta the reference calibrated -- the mutation-proof this cell inherits from T-2018,
+// re-executed under the amended acceptance test rather than the retired difference-from-zero form.
+static void TestB3WrongDirectionMutationRejectedAgainstFrozenDelta() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
 
-	std::printf("   [B3 fourth cell] t=1 (baseline) mean_gap=%.6f se=%.6f resolving_power=%.6f\n",
-	            baseline.mean, baseline.se, baseline.resolving_power);
+	QuantizedBase same_base = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const Verdict v = Grade(same_base, /*mech=*/7, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
+	std::printf("   [B3 mutation-proof] WRONG_DIRECTION on VALIDATION: composed upper_ci=%.6f "
+	            "(Delta=%.6f) -> %s\n", v.composed_stat.upper_ci, delta.composed_mean,
+	            v.accepts ? "ACCEPT (should not happen)" : "reject");
+	CHECK_MSG(!v.accepts,
+	          "a deliberately mis-derived (inverted-direction) triple must be REJECTED against the "
+	          "frozen Delta -- upper_ci=%.6f Delta=%.6f", v.composed_stat.upper_ci, delta.composed_mean);
+}
 
-	// t = 1 must be ACCEPTED: bit-identical to the baseline built with t_scale_knob = 1.0 by
-	// construction (T-2007 Part 4 Side A's own two-sided calibration; D-SLM3046's own correction
-	// that this cell is scoped to t != 1, not merely tolerant of t=1 passing by coincidence).
+// B3's own fifth red-first cell (design Sec6 item 1a, D-SLM3088/D-SLM3091): T_SCALE(255.9) full
+// annihilation must fail the EFFECT-RETENTION conjunct UNCONDITIONALLY -- independent of the
+// composed conjunct's own Delta, and independent of base-output magnitude, because the base has
+// already been subtracted out of the graded quantity before the metric runs.
+static void TestB3EffectRetentionRejectsFullAnnihilationUnconditionally() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
+
+	QuantizedBase annihilated = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                          kT2027BuildSeed, /*t_scale_knob=*/255.9);
+	const TokenResult single = RunToken(annihilated, 0xAAAA, /*mech=*/1, 0.0);
+	std::printf("   [B3 fifth cell, T_SCALE(255.9)] single-item effect_l2_runtime=%.9f "
+	            "effect_l2_baked=%.6f (expect runtime == 1.0 exactly)\n",
+	            single.effect_l2_runtime, single.effect_l2_baked);
+	CHECK_MSG(std::fabs(single.effect_l2_runtime - 1.0) < 1e-12,
+	          "at t=255.9, effect_l2_runtime must be EXACTLY 1.0 (100%% relative error against a "
+	          "nonzero float-delta reference, every channel identically zero-effect): got %.12f",
+	          single.effect_l2_runtime);
+
+	const Verdict v = Grade(annihilated, /*mech=*/1, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
+	std::printf("   [B3 fifth cell] annihilated on VALIDATION: effect upper_ci=%.6f (Delta_effect=%.6f) "
+	            "effect p95=%.6f (Delta_effect_tail=%.6f) composed accepts=%d effect accepts=%d "
+	            "-> overall %s\n", v.effect_stat.upper_ci, delta.effect_mean, v.effect_stat.p95,
+	            delta.effect_tail, v.composed_mean_accepts && v.composed_tail_accepts,
+	            v.effect_mean_accepts && v.effect_tail_accepts, v.accepts ? "ACCEPT (should not happen)"
+	                                                                       : "reject");
+	CHECK_MSG(!v.effect_mean_accepts,
+	          "the effect-retention mean conjunct must REJECT full annihilation: upper_ci=%.6f "
+	          "Delta_effect=%.6f", v.effect_stat.upper_ci, delta.effect_mean);
+	CHECK_MSG(!v.accepts, "the overall verdict must reject full annihilation via effect retention "
+	          "alone, regardless of what the composed conjunct's own Delta would tolerate");
+	// This holds regardless of base-output magnitude (D-SLM3091's own clause) -- re-run at a much
+	// larger base weight scale (10x) to confirm the effect-retention refusal is unaffected.
+	QuantizedBase annihilated_large_base = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank,
+	                                                      kT2027Gain, kT2027BuildSeed, 255.9);
+	for (auto& w : annihilated_large_base.W) w *= 10.0;  // scale the base weight up 10x
+	// Re-quantize the scaled base (mirrors BuildAdapter's own per-channel fold derivation).
+	for (int i = 0; i < annihilated_large_base.out; ++i) {
+		double mx = 0.0;
+		for (int j = 0; j < annihilated_large_base.d; ++j)
+			mx = std::max(mx, std::fabs(annihilated_large_base.W[(size_t)i * annihilated_large_base.d + j]));
+		annihilated_large_base.w[i] = mx / 127.0;
+		for (int j = 0; j < annihilated_large_base.d; ++j)
+			annihilated_large_base.Wc[(size_t)i * annihilated_large_base.d + j] =
+			    (int8_t)std::llround(annihilated_large_base.W[(size_t)i * annihilated_large_base.d + j] /
+			                          annihilated_large_base.w[i]);
+	}
+	annihilated_large_base.S = 0.0;
+	for (double v2 : annihilated_large_base.w) annihilated_large_base.S = std::max(annihilated_large_base.S, v2);
+	const TokenResult large_base_result = RunToken(annihilated_large_base, 0xAAAA, 1, 0.0);
+	CHECK_MSG(std::fabs(large_base_result.effect_l2_runtime - 1.0) < 1e-12,
+	          "effect_l2_runtime must remain EXACTLY 1.0 at a 10x-larger base-output magnitude "
+	          "(D-SLM3091's own 'regardless of base-output magnitude' clause): got %.12f",
+	          large_base_result.effect_l2_runtime);
+}
+
+// B3's own fourth red-first cell, rewritten as a sweep graded by the acceptance test itself
+// (design Sec11 B3, D-SLM3092), reusing T-2020's own boundary grounding
+// (Claude/Vitruvius/t2020-verify-probe/, D-SLM3062/D-SLM3068) at the SAME fixture and seed family.
+// Required (D-SLM3066 item 3, D-SLM3092): (a) t=1 always accepts; (b) small perturbations move
+// gap[i] in the expected direction, never asserted as a fixed accept/reject ahead of execution;
+// (c) mutations whose measured upper_CI exceeds Delta are rejected by the composed conjunct; (d)
+// full annihilation is rejected unconditionally by effect retention regardless of Delta (proven
+// separately, above) -- this cell exercises (a)-(c) as an executed sweep, not a fixed list.
+static void TestB3TScaleSweepGradedByTheAcceptanceTestItself() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
+	std::printf("   [B3 fourth cell] frozen Delta: composed_mean=%.6f composed_tail=%.6f "
+	            "effect_mean=%.6f effect_tail=%.6f\n", delta.composed_mean, delta.composed_tail,
+	            delta.effect_mean, delta.effect_tail);
+
+	// (a) t=1 always ACCEPTS -- bit-identical to the reference's own honest baseline.
 	{
-		QuantizedBase t1 = BuildAdapter(896, 896, 8, 0.4, build_seed, /*t_scale_knob=*/1.0);
-		const PairedGapStat at_t1 = ComputePairedGap(t1, 1, 0.0, n_items, 0x9000);
-		CHECK_MSG(std::fabs(at_t1.mean - baseline.mean) < 1e-12,
-		          "t=1 must be bit-identical to the correct mechanism's own baseline: %.9f vs %.9f",
-		          at_t1.mean, baseline.mean);
+		QuantizedBase t1 = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain, kT2027BuildSeed, 1.0);
+		const Verdict v = Grade(t1, 1, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
+		CHECK_MSG(v.accepts, "t=1 must ACCEPT (the correct mechanism's own baseline, D-SLM3066 item 3)");
 	}
 
-	// LARGE t: refusal is asserted and holds, including the design's own headline t=255.9 case
-	// (the adapter quantized out of existence).
-	for (double t : {64.0, 200.0, 255.9, 256.0, 1024.0}) {
-		QuantizedBase defect = BuildAdapter(896, 896, 8, 0.4, build_seed, /*t_scale_knob=*/t);
-		const PairedGapStat at_t = ComputePairedGap(defect, 1, 0.0, n_items, 0x9000);
-		CHECK_MSG(at_t.mean > baseline.mean,
-		          "t=%.4f must widen the runtime-vs-baked gap relative to t=1: gap(t)=%.6f gap(1)=%.6f",
-		          t, at_t.mean, baseline.mean);
-		const double widening = at_t.mean - baseline.mean;
-		CHECK_MSG(widening > at_t.resolving_power,
-		          "t=%.4f's widening (%.6f) must exceed its own achieved resolving power (%.6f) -- "
-		          "a resolved refusal, not noise", t, widening, at_t.resolving_power);
+	// (b)/(c): sweep T-2007's own T_SCALE(t) family, graded by the acceptance test itself. No
+	// fixed accept/reject is asserted ahead of execution for any individual t except t=1 (above)
+	// and full annihilation (proven separately, unconditionally, by effect retention above) --
+	// this loop reports the executed verdict at each t and asserts only the STRUCTURAL properties
+	// D-SLM3092 requires: monotone-enough large-t refusal, and that the sweep is a genuine
+	// function of t (not vacuously all-accept or all-reject).
+	std::printf("   [B3 fourth cell] sweep, graded by the amended acceptance test (n=%d validation "
+	            "items):\n", kT2027GradeCorpusN);
+	int accepted = 0, rejected = 0;
+	bool large_t_rejected = true;
+	for (double t : {1.0001, 1.0725, 2.0, 4.0, 16.0, 20.0, 24.0, 32.0, 64.0, 200.0, 255.9, 256.0, 1024.0}) {
+		QuantizedBase defect = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain, kT2027BuildSeed, t);
+		const Verdict v = Grade(defect, 1, 0.0, delta, kT2027GradeCorpusN, kT2027GradeSeedBase);
+		std::printf("     t=%-9.4f composed upper_ci=%.6f (Delta=%.6f) effect upper_ci=%.6f "
+		            "(Delta_effect=%.6f) -> %s\n", t, v.composed_stat.upper_ci, delta.composed_mean,
+		            v.effect_stat.upper_ci, delta.effect_mean, v.accepts ? "ACCEPT" : "reject");
+		if (v.accepts) ++accepted; else ++rejected;
+		if (t >= 64.0 && v.accepts) large_t_rejected = false;
 	}
+	CHECK_MSG(large_t_rejected,
+	          "every t >= 64 (T-2020's own resolved-refusal region at this fixture) must be REJECTED");
+	CHECK_MSG(accepted > 0 && rejected > 0,
+	          "the sweep must be a genuine function of t -- some accepted (small perturbations, "
+	          "non-inferior by construction) and some rejected (large perturbations), not vacuously "
+	          "all one verdict; accepted=%d rejected=%d", accepted, rejected);
 
-	// SMALL t: REPORTED, not asserted -- this is the coverage-model gap this cell's execution
-	// found and routes to the planner. No CHECK() below; this is evidence, printed so it is not
-	// lost, matching T-2007's own "REPORTED, NOT HIDDEN" discipline at the identical phenomenon.
-	std::printf("   [B3 fourth cell] SMALL-t neighbourhood -- design claims refusal at every t != 1;\n"
-	            "   this suite's own execution (n=%d paired items) finds:\n", n_items);
-	for (double t : {1.0001, 1.0725, 2.0, 4.0, 16.0}) {
-		QuantizedBase defect = BuildAdapter(896, 896, 8, 0.4, build_seed, /*t_scale_knob=*/t);
-		const PairedGapStat at_t = ComputePairedGap(defect, 1, 0.0, n_items, 0x9000);
-		const double widening = at_t.mean - baseline.mean;
-		const bool resolved_refusal = widening > at_t.resolving_power;
-		std::printf("     t=%-9.4f gap=%.6f widening=%.6f resolving_power=%.6f -> %s\n", t, at_t.mean,
-		            widening, at_t.resolving_power, resolved_refusal ? "refused" : "NOT refused (gap here)");
-	}
+	// Grounding cross-check against T-2020's own executed boundary (Claude/Vitruvius/t2020-verify-
+	// probe/t2020_extend.cpp, Part A): at this exact fixture and n=24 (the pre-amendment metric),
+	// resolved refusal began at t=20, the first point above the design's own then-tested t=16. This
+	// suite's own sweep above, under the NEW L2 metric and the amended acceptance test, is a fresh
+	// execution -- reported for comparison, not asserted to reproduce the old metric's exact
+	// boundary (a different statistic, D-SLM3089, is not guaranteed to cross Delta at the same t).
+	std::printf("   [B3 fourth cell] T-2020's own prior finding (L1 metric, pre-amendment "
+	            "difference-from-zero form, n=24): resolved refusal began at t=20 at this fixture -- "
+	            "reported as grounding, not re-asserted verbatim under the new L2/non-inferiority "
+	            "form (D-SLM3092).\n");
+}
+
+// Verdict-word discipline for the one-sided form (design Sec6 item 1, D-SLM3087): under-sampling
+// must bias the test TOWARD reject/unresolved, never toward a false accept -- a smaller VALIDATION
+// partition widens upper_CI (mean + z*se grows as se grows), which can only push the verdict
+// further above Delta, not below it.
+static void TestB3UnderSamplingWidensUpperCiNeverNarrowsIt() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const CorpusGaps small = CollectCorpusGaps(reference, 1, 0.0, 24, kT2027GradeSeedBase);
+	const CorpusGaps large = CollectCorpusGaps(reference, 1, 0.0, 400, kT2027GradeSeedBase);
+	const NonInferiorityStat small_stat = ComputeNonInferiorityStat(small.composed_validation, kZ95OneSided);
+	const NonInferiorityStat large_stat = ComputeNonInferiorityStat(large.composed_validation, kZ95OneSided);
+	std::printf("   [B3 verdict-word] small validation (n=%d): se=%.6f upper_ci=%.6f | large "
+	            "validation (n=%d): se=%.6f upper_ci=%.6f\n", small_stat.n, small_stat.se,
+	            small_stat.upper_ci, large_stat.n, large_stat.se, large_stat.upper_ci);
+	CHECK_MSG(small_stat.se >= large_stat.se,
+	          "a smaller validation partition must have a LARGER (or equal) standard error: "
+	          "small_se=%.6f (n=%d) large_se=%.6f (n=%d)", small_stat.se, small_stat.n,
+	          large_stat.se, large_stat.n);
+	CHECK_MSG(small_stat.upper_ci >= small_stat.mean,
+	          "the one-sided upper CI must never sit BELOW the point estimate (it can only widen "
+	          "the bound, biasing toward reject, never toward false accept)");
 }
 
 // =============================================================================================
@@ -1005,19 +1310,40 @@ static void TestB6TypicalAdapterScoresBelowTheAdversarialConstruction() {
 // three verdicts B3/B6 already compute and asserts each named branch is independently reachable
 // and independently distinguishable -- reusing B3's domain fixture, B3's margin-mutation fixture,
 // and B6's saturation fixture exactly as design Sec11 B7 specifies.
+//
+// T-2027 amendment (D-SLM3095/D-SLM3097): the fallback is now EXPLICIT-ONLY. `Outcome` replaces
+// the T-2018 form's implicit "a branch was identified, therefore merge+quantize was emitted" --
+// the amended contract requires the dispatcher to ALSO take the `--fallback=merge` flag as an
+// input and report whether ANY artifact is emitted at all, not just which check failed.
 enum class RejectionBranch { None, DomainRejectionTrip, RuntimeVsBakedMarginExceeded, SaturationRateElevation };
+enum class ArtifactOutcome { RuntimeAdditive, NoArtifactEmitted, MergeQuantizeEmitted };
 
-static RejectionBranch Dispatch(bool domain_trip, bool margin_exceeded, bool saturation_elevated) {
+struct DispatchResult {
+	RejectionBranch branch;
+	ArtifactOutcome outcome;
+};
+
+static DispatchResult Dispatch(bool domain_trip, bool margin_exceeded, bool saturation_elevated,
+                                bool fallback_flag_present) {
 	// Domain-rejection trip is checked first: a row that cannot even be represented is a harder
 	// failure than a fidelity or saturation measurement, matching the design's own reject-over-
 	// degrade discipline (fail on the most fundamental violation first).
-	if (domain_trip) return RejectionBranch::DomainRejectionTrip;
-	if (margin_exceeded) return RejectionBranch::RuntimeVsBakedMarginExceeded;
-	if (saturation_elevated) return RejectionBranch::SaturationRateElevation;
-	return RejectionBranch::None;
+	RejectionBranch branch = RejectionBranch::None;
+	if (domain_trip) branch = RejectionBranch::DomainRejectionTrip;
+	else if (margin_exceeded) branch = RejectionBranch::RuntimeVsBakedMarginExceeded;
+	else if (saturation_elevated) branch = RejectionBranch::SaturationRateElevation;
+
+	if (branch == RejectionBranch::None) return {branch, ArtifactOutcome::RuntimeAdditive};
+	// T-2027 (D-SLM3095): a validation failure emits NO artifact absent the explicit flag; WITH
+	// the flag, it falls back to merge+quantize -- never an automatic substitution either way.
+	return {branch, fallback_flag_present ? ArtifactOutcome::MergeQuantizeEmitted
+	                                      : ArtifactOutcome::NoArtifactEmitted};
 }
 
-static void TestB7DispatchesDomainRejectionTripBranchReusingB3Fixture() {
+// Six red-first cells (design Sec11 B7, D-SLM3095): flag-absent and flag-present, for each of the
+// three named branches -- proving the explicit-only behavior in both directions, not merely that
+// a rejection fires (T-2018's own three cells proved only the latter).
+static void TestB7DomainRejectionTripNoFlagEmitsNoArtifact() {
 	// Reuses B3's own domain fixture: the adversarial composed row from
 	// TestB3DomainCheckAdversarialComposedRowTripsChainInputOutOfDomain.
 	std::vector<int64_t> wide_row(8, 1000);
@@ -1029,46 +1355,92 @@ static void TestB7DispatchesDomainRejectionTripBranchReusingB3Fixture() {
 	                                            site_constant, out_codes.data(), &out_scale);
 	const bool domain_trip = (cr.status != SslmForwardStatus::Ok);
 	CHECK_MSG(domain_trip, "B7's own domain fixture (reused from B3) must trip domain rejection");
-	const RejectionBranch branch = Dispatch(domain_trip, /*margin_exceeded=*/false, /*saturation_elevated=*/false);
-	CHECK(branch == RejectionBranch::DomainRejectionTrip);
+	const DispatchResult r = Dispatch(domain_trip, false, false, /*fallback_flag_present=*/false);
+	CHECK(r.branch == RejectionBranch::DomainRejectionTrip);
+	CHECK_MSG(r.outcome == ArtifactOutcome::NoArtifactEmitted,
+	          "without --fallback=merge, a domain-rejection-trip failure must emit NO artifact");
 }
 
-static void TestB7DispatchesRuntimeVsBakedMarginExceededBranchReusingB3Fixture() {
-	// Reuses B3's own margin-mutation fixture: T-2007's T_SCALE(255.9), which B3's fourth
-	// red-first cell already proves widens the runtime-vs-baked gap past its own resolving power.
-	QuantizedBase honest = BuildAdapter(896, 896, 8, 0.4, 0xC0DE'0001, 1.0);
-	QuantizedBase defect = BuildAdapter(896, 896, 8, 0.4, 0xC0DE'0001, 255.9);
-	const PairedGapStat baseline = ComputePairedGap(honest, 1, 0.0, 16, 0xC000);
-	const PairedGapStat at_defect = ComputePairedGap(defect, 1, 0.0, 16, 0xC000);
-	const double widening = at_defect.mean - baseline.mean;
-	const bool margin_exceeded = widening > at_defect.resolving_power;
-	CHECK_MSG(margin_exceeded, "B7's own margin fixture (reused from B3) must exceed the resolving power");
-	const RejectionBranch branch = Dispatch(/*domain_trip=*/false, margin_exceeded, /*saturation_elevated=*/false);
-	CHECK(branch == RejectionBranch::RuntimeVsBakedMarginExceeded);
+static void TestB7DomainRejectionTripWithFlagEmitsMergeQuantize() {
+	std::vector<int64_t> wide_row(8, 1000);
+	wide_row[0] = (int64_t)2147483647LL + (int64_t)2147483647LL;
+	CarriedScale incoming{1717986918, -30}, site_constant{1717986918, 0};
+	std::vector<int8_t> out_codes(8);
+	CarriedScale out_scale;
+	const ChainResult cr = RequantChainChecked(wide_row.data(), 8, std::span<const CarriedScale>(&incoming, 1),
+	                                            site_constant, out_codes.data(), &out_scale);
+	const DispatchResult r = Dispatch(cr.status != SslmForwardStatus::Ok, false, false,
+	                                   /*fallback_flag_present=*/true);
+	CHECK_MSG(r.outcome == ArtifactOutcome::MergeQuantizeEmitted,
+	          "WITH --fallback=merge, the identical failing input must emit a merge+quantize artifact");
 }
 
-static void TestB7DispatchesSaturationRateElevationBranchReusingB6Fixture() {
+static void TestB7RuntimeVsBakedMarginExceededNoFlagEmitsNoArtifact() {
+	// Reuses B3's own margin-mutation fixture, re-derived under the amended acceptance test
+	// (frozen Delta, not the retired difference-from-zero form).
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
+	QuantizedBase defect = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain, kT2027BuildSeed, 255.9);
+	const Verdict v = Grade(defect, 1, 0.0, delta, 24, 0xC000);
+	const bool margin_exceeded = !v.composed_mean_accepts || !v.composed_tail_accepts;
+	CHECK_MSG(margin_exceeded, "B7's own margin fixture (T_SCALE(255.9), reused from B3) must "
+	          "exceed the frozen composed Delta");
+	const DispatchResult r = Dispatch(false, margin_exceeded, false, /*fallback_flag_present=*/false);
+	CHECK(r.branch == RejectionBranch::RuntimeVsBakedMarginExceeded);
+	CHECK_MSG(r.outcome == ArtifactOutcome::NoArtifactEmitted,
+	          "without --fallback=merge, a margin-exceeded failure must emit NO artifact");
+}
+
+static void TestB7RuntimeVsBakedMarginExceededWithFlagEmitsMergeQuantize() {
+	QuantizedBase reference = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain,
+	                                        kT2027BuildSeed, /*t_scale_knob=*/1.0);
+	const FrozenDelta delta = CalibrateDelta(reference, kT2027PilotCorpusN, kT2027PilotSeedBase);
+	QuantizedBase defect = BuildAdapter(kT2027Dim, kT2027Out, kT2027Rank, kT2027Gain, kT2027BuildSeed, 255.9);
+	const Verdict v = Grade(defect, 1, 0.0, delta, 24, 0xC000);
+	const bool margin_exceeded = !v.composed_mean_accepts || !v.composed_tail_accepts ||
+	                              !v.effect_mean_accepts || !v.effect_tail_accepts;
+	const DispatchResult r = Dispatch(false, margin_exceeded, false, /*fallback_flag_present=*/true);
+	CHECK_MSG(r.outcome == ArtifactOutcome::MergeQuantizeEmitted,
+	          "WITH --fallback=merge, the identical failing input must emit a merge+quantize artifact");
+}
+
+static void TestB7SaturationRateElevationNoFlagEmitsNoArtifact() {
 	// Reuses B6's own adversarial fixture.
 	QuantizedBase adversarial = BuildAdapter(128, 64, 8, 40.0, 0xD00D'0003, 1.0);
 	const double base_rate = MeasureKvSaturationRate(adversarial, false, 8, 0xD000);
 	const double composed_rate = MeasureKvSaturationRate(adversarial, true, 8, 0xD000);
-	const bool saturation_elevated = composed_rate > base_rate * 1.5;  // representative elevation test
-	CHECK_MSG(saturation_elevated || composed_rate > base_rate,
-	          "B7's own saturation fixture (reused from B6) must show elevation");
-	const RejectionBranch branch =
-	    Dispatch(/*domain_trip=*/false, /*margin_exceeded=*/false, composed_rate > base_rate);
-	CHECK(branch == RejectionBranch::SaturationRateElevation);
+	const bool saturation_elevated = composed_rate > base_rate;
+	CHECK_MSG(saturation_elevated, "B7's own saturation fixture (reused from B6) must show elevation");
+	const DispatchResult r = Dispatch(false, false, saturation_elevated, /*fallback_flag_present=*/false);
+	CHECK(r.branch == RejectionBranch::SaturationRateElevation);
+	CHECK_MSG(r.outcome == ArtifactOutcome::NoArtifactEmitted,
+	          "without --fallback=merge, a saturation-rate-elevation failure must emit NO artifact");
+}
+
+static void TestB7SaturationRateElevationWithFlagEmitsMergeQuantize() {
+	QuantizedBase adversarial = BuildAdapter(128, 64, 8, 40.0, 0xD00D'0003, 1.0);
+	const double base_rate = MeasureKvSaturationRate(adversarial, false, 8, 0xD000);
+	const double composed_rate = MeasureKvSaturationRate(adversarial, true, 8, 0xD000);
+	const DispatchResult r =
+	    Dispatch(false, false, composed_rate > base_rate, /*fallback_flag_present=*/true);
+	CHECK_MSG(r.outcome == ArtifactOutcome::MergeQuantizeEmitted,
+	          "WITH --fallback=merge, the identical failing input must emit a merge+quantize artifact");
 }
 
 static void TestB7BranchesAreMutuallyDistinguishableNotCollapsedToOneDiagnostic() {
 	// A domain trip must NOT be reported as a margin-exceeded or saturation diagnostic even when
 	// all three conditions happen to co-occur -- the taxonomy's own priority order (Dispatch's
 	// own first-match-wins) must be exercised, proving the three branches are not silently
-	// collapsed into one generic "rejected" outcome.
-	CHECK(Dispatch(true, true, true) == RejectionBranch::DomainRejectionTrip);
-	CHECK(Dispatch(false, true, true) == RejectionBranch::RuntimeVsBakedMarginExceeded);
-	CHECK(Dispatch(false, false, true) == RejectionBranch::SaturationRateElevation);
-	CHECK(Dispatch(false, false, false) == RejectionBranch::None);
+	// collapsed into one generic "rejected" outcome. Checked at flag=false throughout, since the
+	// flag governs the OUTCOME axis, not the BRANCH axis.
+	CHECK(Dispatch(true, true, true, false).branch == RejectionBranch::DomainRejectionTrip);
+	CHECK(Dispatch(false, true, true, false).branch == RejectionBranch::RuntimeVsBakedMarginExceeded);
+	CHECK(Dispatch(false, false, true, false).branch == RejectionBranch::SaturationRateElevation);
+	CHECK(Dispatch(false, false, false, false).branch == RejectionBranch::None);
+	// A clean input (no branch triggered) emits the runtime-additive artifact regardless of the
+	// flag -- the flag only matters on a rejection path.
+	CHECK(Dispatch(false, false, false, true).outcome == ArtifactOutcome::RuntimeAdditive);
 }
 
 // =============================================================================================
@@ -1085,17 +1457,24 @@ int main() {
 
 	TestB3DomainCheckAdversarialComposedRowTripsChainInputOutOfDomain();
 	TestB3AmplifyingRatioGenuinelyOutOfDomainSignalsExplicitInfeasibility();
-	TestB3BakedComparatorStatisticMutationProofWidensGapUnderMisderivedTriple();
-	TestB3TScaleMutationProofRefusedAtLargeTAcceptedAtTEqualsOneSmallTGapReportedToPlanner();
+	TestB3DeltaCalibratedOnPilotReferenceAcceptsOnValidation();
+	TestB3WrongDirectionMutationRejectedAgainstFrozenDelta();
+	TestB3EffectRetentionRejectsFullAnnihilationUnconditionally();
+	TestB3TScaleSweepGradedByTheAcceptanceTestItself();
+	TestB3UnderSamplingWidensUpperCiNeverNarrowsIt();
 
 	TestB6AdversarialAdapterElevatesKvSaturationRateOverBaseOnly();
 	TestB6TypicalAdapterScoresBelowTheAdversarialConstruction();
 
-	TestB7DispatchesDomainRejectionTripBranchReusingB3Fixture();
-	TestB7DispatchesRuntimeVsBakedMarginExceededBranchReusingB3Fixture();
-	TestB7DispatchesSaturationRateElevationBranchReusingB6Fixture();
+	TestB7DomainRejectionTripNoFlagEmitsNoArtifact();
+	TestB7DomainRejectionTripWithFlagEmitsMergeQuantize();
+	TestB7RuntimeVsBakedMarginExceededNoFlagEmitsNoArtifact();
+	TestB7RuntimeVsBakedMarginExceededWithFlagEmitsMergeQuantize();
+	TestB7SaturationRateElevationNoFlagEmitsNoArtifact();
+	TestB7SaturationRateElevationWithFlagEmitsMergeQuantize();
 	TestB7BranchesAreMutuallyDistinguishableNotCollapsedToOneDiagnostic();
 
-	std::printf("t2018 offline red suite (B0/B3/B6/B7): %d checks, %d failures\n", GChecks, GFailures);
+	std::printf("t2027 offline red suite (B0/B3/B6/B7, amended contract): %d checks, %d failures\n",
+	            GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
 }
