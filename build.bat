@@ -56,8 +56,29 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2113 (B1, Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec10 B1):
+rem the context-lifecycle bench proof (tools/t2113_b1_context_smoke.cpp) -- built and
+rem RUN here (unlike the C5 harness above, this needs no external .sslm artifact),
+rem so its own pass/fail folds into this script's exit code. Same full source list as
+rem the main test binary (src\gpu\superslm_gpu.cpp is still the pre-1.0 substrate this
+rem tool's own PlanDispatchBudgetGpu non-regression check calls into) plus the new
+rem src\gpu\gpu_1p0.cpp translation unit B1 adds.
+if not exist out\b1 mkdir out\b1
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2113_b1_context_smoke.cpp /Fo:out\b1\ /Fe:out\t2113_b1_context_smoke.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+out\t2113_b1_context_smoke.exe
+set b1_ec=%errorlevel%
+
 out\superslm_tests.exe
 set ec=%errorlevel%
+if not %b1_ec%==0 set ec=%b1_ec%
 
 rem T-2091 (O30's own local-half closure, Claude/Poirot/2aceac3-gpu-serial-port-ship-candidate-
 rem review.md; build log §27): this script ran no Python at all until now, so the O11 gate-flag pin
