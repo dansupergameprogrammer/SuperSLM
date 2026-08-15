@@ -22563,12 +22563,14 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	          "GPU-busy is INSIDE the submit-to-fence window, not additional to it",
 	          timing_ok.submit_wait_ms, timing_ok.gpu_busy_ms);
 
-	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): 8 layers * 17
-	// sites/layer = 136 dispatches this call issued -- one GPU-measured figure per dispatch,
-	// every one non-negative, summing to (approximately) gpu_busy_ms above.
+	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up; per-dispatch parallelism,
+	// D-SLM3313's own follow-up): 8 layers * 22 sites/layer = 176 dispatches this call issued --
+	// q_proj/o_proj/gate_proj/up_proj/down_proj each split into a GEMM dispatch plus their own
+	// requant dispatch (17 + 5 = 22; kv_proj stays fused and single-dispatch). One GPU-measured
+	// figure per dispatch, every one non-negative, summing to (approximately) gpu_busy_ms above.
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * 17,
-	          "T2101 per-dispatch timing (success call): %zu entries, want 8*17=136",
+	CHECK_MSG(per_dispatch_ok.size() == 8 * 22,
+	          "T2101 per-dispatch timing (success call): %zu entries, want 8*22=176",
 	          per_dispatch_ok.size());
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
@@ -22577,10 +22579,10 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 		if (v < 0.0) all_non_negative = false;
 	}
 	CHECK_MSG(all_non_negative,
-	          "T2101 per-dispatch timing (success call): every one of the 136 entries must be "
+	          "T2101 per-dispatch timing (success call): every one of the 176 entries must be "
 	          "non-negative");
 	CHECK_MSG(std::abs(per_dispatch_sum - timing_ok.gpu_busy_ms) < 0.01,
-	          "T2101 per-dispatch timing (success call): sum of 136 entries (%.6f) must match "
+	          "T2101 per-dispatch timing (success call): sum of 176 entries (%.6f) must match "
 	          "gpu_busy_ms (%.6f) -- both are the same boundary deltas, summed vs first-to-last",
 	          per_dispatch_sum, timing_ok.gpu_busy_ms);
 

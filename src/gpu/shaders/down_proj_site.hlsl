@@ -5,6 +5,16 @@
 // dispatch geometry (Sec5.4/Sec5.5): numthreads(256,1,1), N-per-thread
 // striding over hidden_size output channels, the wide row streamed through
 // WorkScratch.
+//
+// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step (D-SLM3313's
+// own top consumer, 28.9% of GPU-busy time, achieved bandwidth flat at ~1.7 GB/s regardless of
+// matrix size -- the signature of one 256-thread group covering the whole output row, not a
+// per-dispatch fixed cost) now runs in its OWN multi-group dispatch, `down_proj_gemm_site.hlsl`,
+// issued immediately before this one (`superslm_gpu.cpp`'s own per-layer dispatch sequence). This
+// shader is requant-only now: the wide row it reads from `WorkScratch` was written by that prior
+// dispatch, already visible here via the host's own UAV barrier between every dispatch this
+// design issues (unchanged, `bind_and_dispatch`'s own `ResourceBarrier` call) -- no new
+// synchronization was added or removed, only WHICH dispatch performs the GEMM step changed.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -32,7 +42,6 @@ void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
     int hidden_size = (int)g_hidden_size;
-    int in_channels = (int)g_intermediate_size;
     int out_channels = hidden_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
@@ -40,21 +49,11 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
-    uint act_codes_off = ScratchLayout.Load<uint>(15 * 4);
     uint act_scale_off = ScratchLayout.Load<uint>(16 * 4);
     int64_t in_scale_m = LayerScratch.Load<int64_t>(act_scale_off + 0);
     int64_t in_scale_e = LayerScratch.Load<int64_t>(act_scale_off + 8);
 
-    uint off_weight = layer_base + Layout.Load<uint>(48 * 4);
-    uint off_id = layer_base + Layout.Load<uint>(49 * 4);
-    uint off_mult = layer_base + Layout.Load<uint>(50 * 4);
-    uint off_shift = layer_base + Layout.Load<uint>(51 * 4);
     uint off_site = layer_base + Layout.Load<uint>(52 * 4);
-
-    GemmParallelGpu(t, LayerScratch, act_codes_off, LayerWeights, off_weight, LayerWeights, off_id,
-                     LayerWeights, off_mult, LayerWeights, off_shift, in_channels, out_channels,
-                     WorkScratch, 0u);
-    DeviceMemoryBarrierWithGroupSync();
 
     int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
     [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }

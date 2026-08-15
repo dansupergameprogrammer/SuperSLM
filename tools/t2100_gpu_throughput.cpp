@@ -149,17 +149,21 @@ int main(int argc, char** argv) {
 	double gpu_record_ms_sum = 0.0, gpu_submit_wait_ms_sum = 0.0, gpu_busy_ms_sum = 0.0,
 	       gpu_readback_ms_sum = 0.0;
 
-	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): the fixed,
-	// unconditional per-layer dispatch order `RunLayerLoopGpu` issues (`superslm_gpu.cpp`'s own
-	// `bind_and_dispatch` call sequence) -- dispatch `d` within a call is site `d % kSitesPerLayer`
-	// of layer `d / kSitesPerLayer`. Summed across every timed GPU step below.
-	constexpr int kSitesPerLayer = 17;
+	// T-2101 follow-up (per-site decomposition, D-SLM3312; per-dispatch parallelism, D-SLM3313's
+	// own follow-up): the fixed, unconditional per-layer dispatch order `RunLayerLoopGpu` issues
+	// (`superslm_gpu.cpp`'s own `bind_and_dispatch` call sequence) -- dispatch `d` within a call is
+	// site `d % kSitesPerLayer` of layer `d / kSitesPerLayer`. 22 sites/layer now, not 17:
+	// q_proj/o_proj/gate_proj/up_proj/down_proj each split into their own multi-group GEMM
+	// dispatch immediately followed by their own (now leaner) requant dispatch; kv_proj stays
+	// fused and single-dispatch. Summed across every timed GPU step below.
+	constexpr int kSitesPerLayer = 22;
 	const char* const kSiteNames[kSitesPerLayer] = {
-	    "attn_norm",      "q_proj",         "kv_proj",           "rope",
-	    "attention_score", "softmax",       "context_accumulate", "ctx_fold",
-	    "o_proj",          "attn_residual", "mlp_norm",           "gate_proj",
-	    "up_proj",         "mlp_act",        "down_proj",          "mlp_residual",
-	    "commit"};
+	    "attn_norm",     "q_proj_gemm",         "q_proj",        "kv_proj",
+	    "rope",          "attention_score",     "softmax",       "context_accumulate",
+	    "ctx_fold",      "o_proj_gemm",         "o_proj",        "attn_residual",
+	    "mlp_norm",      "gate_proj_gemm",      "gate_proj",     "up_proj_gemm",
+	    "up_proj",       "mlp_act",             "down_proj_gemm", "down_proj",
+	    "mlp_residual",  "commit"};
 	double site_ms_sum[kSitesPerLayer] = {0.0};
 
 	double per_token[2] = {0.0, 0.0};
@@ -274,11 +278,13 @@ int main(int argc, char** argv) {
 
 	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): mean ms/token per site,
 	// summed across all 28 layers and averaged over the same `steps` timed GPU calls as everything
-	// above, sorted descending. Achieved bandwidth is reported for the six GEMM-funneled sites
-	// whose theoretical per-layer READ traffic is dominated by one known int8 weight matrix
-	// (q/k+v/o/gate/up/down_proj) -- everything else touches only O(hidden_size) or O(context_length,
-	// still tiny this early in decode) data and is not bandwidth-interesting at this size, so no
-	// bytes figure is claimed for it.
+	// above, sorted descending. Achieved bandwidth is reported for the six GEMM weight-matrix reads
+	// -- T-2101's own per-dispatch split (D-SLM3313's own follow-up) moved that read traffic into
+	// the five `*_gemm` sites specifically (q/o/gate/up/down_proj_gemm; kv_proj stays fused, its
+	// own GEMM traffic charged to "kv_proj" as before) -- the now-leaner requant/bias-only sites of
+	// the same base name touch only the already-computed wide row (O(out_channels) int64s, already
+	// counted nowhere near bandwidth-interesting) and get no bytes figure. Everything else touches
+	// only O(hidden_size) or O(context_length, still tiny this early in decode) data.
 	struct SiteRow {
 		int idx;
 		double ms;
@@ -289,10 +295,11 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < kSitesPerLayer; ++i) {
 		double bytes_per_layer = 0.0;
 		const std::string name = kSiteNames[i];
-		if (name == "q_proj" || name == "o_proj") bytes_per_layer = static_cast<double>(H) * H;
+		if (name == "q_proj_gemm" || name == "o_proj_gemm") bytes_per_layer = static_cast<double>(H) * H;
 		else if (name == "kv_proj") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
-		else if (name == "gate_proj" || name == "up_proj") bytes_per_layer = static_cast<double>(I) * H;
-		else if (name == "down_proj") bytes_per_layer = static_cast<double>(H) * I;
+		else if (name == "gate_proj_gemm" || name == "up_proj_gemm")
+			bytes_per_layer = static_cast<double>(I) * H;
+		else if (name == "down_proj_gemm") bytes_per_layer = static_cast<double>(H) * I;
 		rows[i] = SiteRow{i, site_ms_sum[i] / steps, bytes_per_layer};
 	}
 	std::sort(rows.begin(), rows.end(), [](const SiteRow& a, const SiteRow& b) { return a.ms > b.ms; });

@@ -305,23 +305,37 @@ uint KvRowOffsetWithinHalfGpu(uint context_cap, uint head_dim, uint kv_head, uin
 
 groupshared uint64_t gFunnelMax[256];
 
-// Cooperative parallel GEMM: `out_channels` output channels spread across the
-// group via N-per-thread striding (non-uniform where out_channels does not
-// divide 256 evenly -- threads 0..(out_channels mod 256 - 1) simply get one
-// more loop iteration than the rest, the T-2014 correction's own split).
-// Each output channel's own full `in_channels`-wide int64 dot product
+// Cooperative parallel GEMM: `out_channels` output channels spread across
+// `t`'s own domain via N-per-thread striding at the caller-supplied `stride`
+// (non-uniform where out_channels does not divide the stride evenly --
+// threads whose `t < out_channels mod stride` simply get one more loop
+// iteration than the rest, the T-2014 correction's own split). Each output
+// channel's own full `in_channels`-wide int64 dot product
 // (GemmInt8AccumulateRow's own accumulation order, proven bit-identical to
 // the SSE2 production path by associativity, design Sec4) is computed by
 // exactly one thread, in full -- no cross-thread accumulation, so no
 // reduction and no barrier is needed here; the folded int64 result lands in
 // `scratch` at `wide_base + j*8`, one thread's own write, never re-read by
 // another thread in the SAME phase.
+//
+// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313):
+// `stride` used to be the literal 256 unconditionally -- every SINGLE-GROUP
+// caller below still passes 256 (`t` = `SV_GroupThreadID.x`, unchanged
+// behavior, bit-for-bit). The NEW multi-group GEMM-only dispatches
+// (`<site>_gemm_site.hlsl`) pass `t` = `SV_DispatchThreadID.x` (globally
+// unique across every group the dispatch issues) and `stride` = the total
+// thread count the dispatch launched (256 * group count, sized so
+// `stride >= out_channels`) -- which output channel(s) a physical thread
+// computes changes; HOW each channel is computed (same weight row, same
+// input codes, same left-to-right reduction over `in_channels`, same
+// ApplyWeightScaleFoldGpu call) does not, so which of the two calling shapes
+// wrote the wide row is not observable in the row's own contents.
 void GemmParallelGpu(uint t, RWByteAddressBuffer in_buf, uint in_base, ByteAddressBuffer w_buf,
                       uint w_base, ByteAddressBuffer id_buf, uint id_base, ByteAddressBuffer mult_buf,
                       uint mult_base, ByteAddressBuffer shift_buf, uint shift_base, int in_channels,
-                      int out_channels, RWByteAddressBuffer scratch, uint wide_base)
+                      int out_channels, RWByteAddressBuffer scratch, uint wide_base, int stride)
 {
-    for (int j = (int)t; j < out_channels; j += 256)
+    for (int j = (int)t; j < out_channels; j += stride)
     {
         int64_t acc = 0;
         for (int i = 0; i < in_channels; ++i)

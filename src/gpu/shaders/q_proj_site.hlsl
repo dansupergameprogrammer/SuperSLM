@@ -9,6 +9,14 @@
 // numthreads(256,1,1), the GEMM's own out_channels (hidden_size) spread
 // across the group via N-per-thread striding, the wide row streamed through
 // WorkScratch -- driven entirely by the real g_hidden_size root constant.
+//
+// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step (D-SLM3313's
+// own fourth-largest consumer, 4.9% of GPU-busy time) now runs in its OWN multi-group dispatch,
+// `q_proj_gemm_site.hlsl`, issued immediately before this one. This shader is bias+requant-only
+// now -- see `down_proj_site.hlsl`'s own header comment for the full account of the split; the
+// bias-reconcile step below (`ApplyBiasReconcileRowGpuP`) is unaffected -- it was already, and
+// remains, a single-group cooperative reduction over the whole row, run in the SAME dispatch as
+// the requant step it always ran alongside.
 #include "site_common.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -41,23 +49,13 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
-    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
     uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
     int64_t normed_scale_m = LayerScratch.Load<int64_t>(normed_scale_off + 0);
     int64_t normed_scale_e = LayerScratch.Load<int64_t>(normed_scale_off + 8);
 
-    uint off_weight = layer_base + Layout.Load<uint>(2 * 4);
-    uint off_id = layer_base + Layout.Load<uint>(3 * 4);
-    uint off_mult = layer_base + Layout.Load<uint>(4 * 4);
-    uint off_shift = layer_base + Layout.Load<uint>(5 * 4);
     uint off_site = layer_base + Layout.Load<uint>(6 * 4);
     uint off_bias_present = layer_base + Layout.Load<uint>(7 * 4);
     uint off_bias = layer_base + Layout.Load<uint>(8 * 4);
-
-    GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
-                     LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, hidden_size,
-                     WorkScratch, 0u);
-    DeviceMemoryBarrierWithGroupSync();
 
     int64_t bias_present = LayerWeights.Load<int64_t>(off_bias_present);
     if (bias_present != 0)

@@ -2,6 +2,11 @@
 // 13 of 16. ProjectAndFunnel, no bias, input=normed (mlp_norm's own output),
 // out_channels=intermediate_size, weight=up_weight (Layout[42]). Same
 // construction as gate_proj_site.hlsl.
+//
+// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step (D-SLM3313's
+// own third-largest consumer, 28.7% of GPU-busy time) now runs in its OWN multi-group dispatch,
+// `up_proj_gemm_site.hlsl`, issued immediately before this one. This shader is requant-only now --
+// see `down_proj_site.hlsl`'s own header comment for the full account.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -36,21 +41,11 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
-    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
     uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
     int64_t in_scale_m = LayerScratch.Load<int64_t>(normed_scale_off + 0);
     int64_t in_scale_e = LayerScratch.Load<int64_t>(normed_scale_off + 8);
 
-    uint off_weight = layer_base + Layout.Load<uint>(42 * 4);
-    uint off_id = layer_base + Layout.Load<uint>(43 * 4);
-    uint off_mult = layer_base + Layout.Load<uint>(44 * 4);
-    uint off_shift = layer_base + Layout.Load<uint>(45 * 4);
     uint off_site = layer_base + Layout.Load<uint>(46 * 4);
-
-    GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
-                     LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
-                     WorkScratch, 0u);
-    DeviceMemoryBarrierWithGroupSync();
 
     int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
     [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }

@@ -1474,6 +1474,16 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
 	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
 	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
+	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step of each of
+	// these five sites now runs in its OWN multi-group dispatch, immediately before the (now
+	// requant-only, for q_proj also bias) site of the same name -- see each `<site>_gemm_site.hlsl`'s
+	// own header comment for the correctness account. kv_proj stays fused and single-group
+	// (`kv_proj_site.hlsl`'s own header comment states why).
+	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
+	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
+	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
+	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
+	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
 
@@ -1493,7 +1503,12 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// EVERY `bind_and_dispatch` call, capped at the heap's own real capacity (never overrun --
 	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
 	uint32_t dispatch_query_index = 0;
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index) {
+	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): `num_groups` defaults to
+	// 1 (every pre-existing single-group site, unchanged behavior). The five `_gemm_site` pipelines
+	// above pass `ceil(out_channels/256)`, grid-sizing the dispatch to the output dimension exactly
+	// as their own `stride = ((out_channels + 255) / 256) * 256` computes it shader-side -- both
+	// sides derive the group count from the SAME `out_channels`, so they cannot drift apart.
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1) {
 		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
@@ -1513,15 +1528,30 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
 		dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
 		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(1, 1, 1);
+		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
+	// T-2101: group counts for the five split GEMM dispatches, `ceil(out_channels/256)` -- q_proj/
+	// o_proj/down_proj output hidden_size, gate_proj/up_proj output intermediate_size.
+	const uint32_t i_groups = (I + 255u) / 256u;
+	// T-2101 (second turn, same round): q/o/down_proj_gemm use 64-thread groups (see each
+	// shader's own header comment) -- 1536 output channels at 256 threads/group is only 6 groups,
+	// the first round's own measurement found that the single largest remaining GPU-busy consumer
+	// after the first split, achieving far less bandwidth than the 35-group gate/up_proj_gemm
+	// siblings at the identical 256-thread width. Fewer threads per group, proportionally more
+	// groups, same total per-thread computation.
+	const uint32_t h_groups_64 = (H + 63u) / 64u;
 
-	// T-2045 (C3): the full 16-site + commit composition, 17 real dispatches
-	// per layer, matching the ratified §5.8 quantum (D-SLM3069) and
-	// `kDispatchesPerLayer` above exactly -- attention is now four real
-	// dispatches (attention-score, softmax, context-accumulate, ctx_fold),
-	// not T-2039's own fused one.
+	// T-2045 (C3): the full 16-site + commit composition -- attention is four real dispatches
+	// (attention-score, softmax, context-accumulate, ctx_fold), not T-2039's own fused one.
+	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): 22 real dispatches per
+	// layer now, not 17 -- q_proj/o_proj/gate_proj/up_proj/down_proj each split into a multi-group
+	// GEMM dispatch plus their own (now leaner) requant dispatch; `PlanDispatchBudgetGpu`'s own
+	// `kDispatchesPerLayer = 17` (below in this file) is a SEPARATE, currently-unwired planning
+	// utility with no live caller feeding its output into this function's own `layer_budget` --
+	// left at its own prior value, named here as a known-stale residual rather than silently left
+	// for a future reader to trip over, since fixing it touches its own dedicated test population
+	// and this round's own scope is the measured throughput win, not that planner's contract.
 	// T-2045 (C2): resume from seq.layer_index, exactly as the loop in
 	// `RunLayerLoopImpl` (`forward_sites.cpp`) --
 	// `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)` --
@@ -1536,6 +1566,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, h_groups_64);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(rope_pipe.pso.Get(), l);
@@ -1543,12 +1574,16 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		bind_and_dispatch(softmax_pipe.pso.Get(), l);
 		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l);
 		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, h_groups_64);
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, i_groups);
 		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, i_groups);
 		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, h_groups_64);
 		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);

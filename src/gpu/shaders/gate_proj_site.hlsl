@@ -5,6 +5,12 @@
 // numthreads(256,1,1), N-per-thread striding over intermediate_size output
 // channels (non-uniform where it does not divide 256 evenly, the T-2014
 // correction's own split), the wide row streamed through WorkScratch.
+//
+// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step (D-SLM3313's
+// own second-largest consumer, 28.6% of GPU-busy time) now runs in its OWN multi-group dispatch,
+// `gate_proj_gemm_site.hlsl`, issued immediately before this one. This shader is requant-only now
+// -- see `down_proj_site.hlsl`'s own header comment (the same correction, same reasoning) for the
+// full account.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -39,21 +45,11 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
-    uint normed_off = ScratchLayout.Load<uint>(0 * 4);
     uint normed_scale_off = ScratchLayout.Load<uint>(1 * 4);
     int64_t in_scale_m = LayerScratch.Load<int64_t>(normed_scale_off + 0);
     int64_t in_scale_e = LayerScratch.Load<int64_t>(normed_scale_off + 8);
 
-    uint off_weight = layer_base + Layout.Load<uint>(37 * 4);
-    uint off_id = layer_base + Layout.Load<uint>(38 * 4);
-    uint off_mult = layer_base + Layout.Load<uint>(39 * 4);
-    uint off_shift = layer_base + Layout.Load<uint>(40 * 4);
     uint off_site = layer_base + Layout.Load<uint>(41 * 4);
-
-    GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
-                     LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
-                     WorkScratch, 0u);
-    DeviceMemoryBarrierWithGroupSync();
 
     int64_t incoming_m[kMaxIncoming], incoming_e[kMaxIncoming];
     [unroll] for (int z = 0; z < kMaxIncoming; ++z) { incoming_m[z] = 0; incoming_e[z] = 0; }

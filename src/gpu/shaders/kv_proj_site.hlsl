@@ -80,12 +80,21 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     uint wide_b_off = ScratchLayout.Load<uint>(23 * 4);
 
+    // T-2101 (follow-up to D-SLM3312/D-SLM3313): kv_proj stays single-group. Splitting the GEMM
+    // step alone across multiple groups is mechanical (same shape as q/o/gate/up/down_proj below),
+    // but the fused K+V bias-precedence check (gKFailed/gVFailed) and the landing-rescale clamp
+    // counter (gTotalClamps, an InterlockedAdd across every (kv_head, dim) pair this dispatch
+    // commits) are genuine cross-thread cooperative reductions over the WHOLE kv_hidden_size row,
+    // scoped to one group's own groupshared memory -- splitting those across groups without either
+    // atomics or a second dispatch would be exactly the reordered-accumulation/cross-group-
+    // reduction shape this round's own commission forbids. kv_proj is 1.7% of GPU-busy time
+    // (D-SLM3313's own table); not worth the restructuring this round's two-cycle budget affords.
     GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_kw, LayerWeights, off_kid,
                      LayerWeights, off_kmult, LayerWeights, off_kshift, hidden_size, kv_hidden_size,
-                     WorkScratch, 0u);
+                     WorkScratch, 0u, 256);
     GemmParallelGpu(t, LayerScratch, normed_off, LayerWeights, off_vw, LayerWeights, off_vid,
                      LayerWeights, off_vmult, LayerWeights, off_vshift, hidden_size, kv_hidden_size,
-                     WorkScratch, wide_b_off);
+                     WorkScratch, wide_b_off, 256);
     DeviceMemoryBarrierWithGroupSync();
 
     // Both guards evaluated unconditionally, combined with CPU's own
