@@ -304,8 +304,21 @@ struct GpuCallTiming {
 	double submit_wait_ms = 0.0;
 	double gpu_busy_ms = 0.0;
 	double readback_ms = 0.0;
+	// T-2105 (Laplace, DISPOSABLE experiment instrument -- never merges): CPU time from function
+	// entry to `t_record_start`, i.e. every guard, every host-side pack (LayerWeights, the RoPE
+	// cos/sin table memcpy, the SiLU LUT copy, the layout tables) that happens BEFORE the command
+	// list is Reset(). The T-2101 phase set had no bracket here, which is why record+submit+readback
+	// summed ~16 ms short of the measured s/token on every run.
+	double pre_record_ms = 0.0;
+	// Split of `pre_record_ms`: the RoPE cos/sin host memcpy specifically (§31.1's own named,
+	// unfixed residual -- model-wide constant data repacked on every call).
+	double rope_pack_ms = 0.0;
 };
 GpuCallTiming LastCallTiming();
+
+// T-2105 (Laplace, DISPOSABLE): the number of suspend/resume boundaries the last call actually
+// crossed. Zero on the unsliced path.
+uint64_t LastCallSliceCuts();
 
 // T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ceiling-division formula
 // `ComputeGpuGemmSiteGroupPlan` (below) uses to turn an output width into a group count --
@@ -320,12 +333,22 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // (`down_proj_gemm_site.hlsl` and the four siblings named there). `q_proj`/`o_proj`/`down_proj`
 // output `hidden_size` at 64 threads/group; `gate_proj`/`up_proj` output `intermediate_size` at
 // 256 threads/group -- see each shader's own header comment for why the two widths differ.
-enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj };
+// T-2105 (Laplace, DISPOSABLE): KvProj added -- kv_proj's own GEMM step is now its own
+// multi-group dispatch (kv_proj_gemm_site.hlsl), the second-dispatch remedy kv_proj_site.hlsl's
+// own header comment already named as the sound way to split it.
+enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj, KvProj };
 
 struct GpuGemmSiteGroupPlan {
 	uint32_t out_channels = 0;
 	uint32_t threads_per_group = 0;
 	uint32_t groups = 0;
+	// T-2105 (Laplace, DISPOSABLE): how the 256 threads of a group are split -- `lanes` threads
+	// cooperate on one output channel, so a group covers `256 / lanes` channels. lanes == 1 is the
+	// legacy one-thread-per-channel partition with no reduction; lanes == 256 is one whole group
+	// per channel. The SAME value is passed to the shader as the 11th root constant, so the group
+	// count and the shader's own channel indexing cannot drift apart.
+	uint32_t lanes = 1;
+	uint32_t channels_per_group = 256;
 };
 
 // T-2101 (S3-prime): the ONE source `RunLayerLoopGpu`'s own dispatch call for `site` reads its
@@ -338,6 +361,7 @@ struct GpuGemmSiteGroupPlan {
 // method) is therefore observable by the pinned suite, not only by a manual C5/throughput run
 // against real hardware.
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t kv_out_channels,
                                                   uint32_t intermediate_size);
 
 // T-2101 (per-site decomposition, follow-up to D-SLM3312; per-dispatch parallelism, D-SLM3313's

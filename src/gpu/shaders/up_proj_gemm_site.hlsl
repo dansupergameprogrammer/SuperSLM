@@ -10,6 +10,10 @@ cbuffer RootConstants : register(b0)
     uint g_layer_index; uint g_hidden_size; uint g_head_dim; uint g_num_kv_heads;
     uint g_context_cap; uint g_position; uint g_num_attention_heads; uint g_width;
     uint g_intermediate_size;
+    // T-2105 (Laplace, DISPOSABLE): the 10th and 11th root constants. `g_t2105_lanes`
+    // is the ONE source of this dispatch's own lane split -- the host computes the group
+    // count from the SAME value, so the two cannot drift.
+    uint g_num_hidden_layers; uint g_t2105_lanes;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -26,7 +30,7 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
     int hidden_size = (int)g_hidden_size;
     int out_channels = (int)g_intermediate_size;
@@ -43,8 +47,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint off_mult = layer_base + Layout.Load<uint>(44 * 4);
     uint off_shift = layer_base + Layout.Load<uint>(45 * 4);
 
-    int stride = ((out_channels + 255) / 256) * 256;
-    GemmParallelGpu(dtid.x, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
+    GemmCoalescedGpu(gtid.x, gid.x, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
                      LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
-                     WorkScratch, 0u, stride);
+                     WorkScratch, 0u, g_t2105_lanes);
 }

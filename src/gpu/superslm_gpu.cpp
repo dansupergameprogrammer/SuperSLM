@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -705,9 +706,64 @@ void ClearO11AllocationInjection() { g_o11_alloc_injection_armed = false; }
 // is a permanent coding-arithmetic bug, never a transient or environmental condition, and the two
 // exception hierarchies are unrelated by design in the standard library for exactly this
 // distinction.
+// T-2105 (Laplace, DISPOSABLE): the RoPE cos/sin table residency cache -- see the use site in
+// RunLayerLoopGpu for why. UPLOAD-heap, read-only, never written by any dispatch.
+struct ResidentRopeTables {
+	const void* cos_src = nullptr;
+	const void* sin_src = nullptr;
+	uint64_t cos_bytes = 0;
+	uint64_t sin_bytes = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> cos_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> sin_buf;
+	bool valid = false;
+};
+static ResidentRopeTables g_resident_rope;
+
+// T-2105 (Laplace, DISPOSABLE): how many suspend/resume cuts the last call actually took, so the
+// harness reports a MEASURED cut count rather than the one it asked for.
+static uint64_t g_t2105_slice_cuts = 0;
+
 struct GpuGemmGroupArithmeticError : std::logic_error {
 	using std::logic_error::logic_error;
 };
+
+// T-2105 (Laplace, DISPOSABLE experiment configuration -- never merges). The lane split is read
+// from the environment so a sweep is a re-run, not a rebuild: the shader geometry is entirely
+// driven by the 11th root constant and the host's own group count, both derived from THIS value.
+// Absent or unparseable -> 64, an arbitrary in-range default; any value that is not a power of two
+// in [1,256] is rejected loudly rather than silently clamped, because a silently-clamped lane count
+// would make the host's group arithmetic and the shader's own channel indexing disagree, and the
+// symptom of that disagreement is a wrong answer, not an error.
+namespace superslm_t2105 {
+inline uint32_t ReadLanesEnv(const char* name, uint32_t fallback) {
+	const char* v = std::getenv(name);
+	if (v == nullptr || *v == '\0') return fallback;
+	const long parsed = std::strtol(v, nullptr, 10);
+	const uint32_t u = static_cast<uint32_t>(parsed);
+	if (parsed < 1 || parsed > 256 || (u & (u - 1u)) != 0u) {
+		throw GpuGemmGroupArithmeticError(
+		    "T-2105: lane count environment override is not a power of two in [1,256]");
+	}
+	return u;
+}
+inline uint32_t LanesFor(GpuGemmSplitSite site) {
+	static const uint32_t q = ReadLanesEnv("SSLM_T2105_LANES_QPROJ", 64u);
+	static const uint32_t o = ReadLanesEnv("SSLM_T2105_LANES_OPROJ", 64u);
+	static const uint32_t d = ReadLanesEnv("SSLM_T2105_LANES_DOWN", 64u);
+	static const uint32_t g = ReadLanesEnv("SSLM_T2105_LANES_GATE", 64u);
+	static const uint32_t u = ReadLanesEnv("SSLM_T2105_LANES_UP", 64u);
+	static const uint32_t kv = ReadLanesEnv("SSLM_T2105_LANES_KV", 64u);
+	switch (site) {
+		case GpuGemmSplitSite::QProj: return q;
+		case GpuGemmSplitSite::OProj: return o;
+		case GpuGemmSplitSite::DownProj: return d;
+		case GpuGemmSplitSite::GateProj: return g;
+		case GpuGemmSplitSite::UpProj: return u;
+		case GpuGemmSplitSite::KvProj: return kv;
+		default: return 64u;
+	}
+}
+}  // namespace superslm_t2105
 
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
@@ -739,6 +795,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
 	g_last_call_timing = GpuCallTiming{};
 	g_last_call_per_dispatch_ms.clear();
+	g_t2105_slice_cuts = 0;
+	// T-2105 (Laplace, DISPOSABLE): entry anchor for `pre_record_ms`.
+	const auto t2105_entry = std::chrono::steady_clock::now();
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -1245,10 +1304,34 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// A 1-byte dummy when absent (RopeInfo's own presence flag is what a real
 	// site checks before ever reading these; sized nonzero only so the buffer
 	// resource itself is legal to create).
-	std::vector<uint8_t> cos_table_bytes(cos_t != nullptr ? cos_t->elem_count * 8 : 8, 0);
-	if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
-	std::vector<uint8_t> sin_table_bytes(sin_t != nullptr ? sin_t->elem_count * 8 : 8, 0);
-	if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
+	// T-2105 (Laplace, DISPOSABLE): §31.1's own named, unfixed residual, measured and closed.
+	// These two tables are MODEL-WIDE CONSTANTS -- they do not depend on the token, the position,
+	// the layer, or the sequence -- and the shipped code repacked them into a fresh host vector and
+	// then memcpy'd that vector into a fresh UPLOAD-heap buffer on EVERY call. At the real 1.5B
+	// tier they are `elem_count * 8` bytes each, proportional to context_cap, and the executed cost
+	// was 11.04 ms/token of host memcpy alone (T-2105 baseline, 32 steps) plus a second copy of the
+	// same size inside `record_ms`. Cached here, keyed on the source tensor's own address and byte
+	// count, exactly the identity shape `ResidentWeights`/`ResidentKv` already use. Read-only
+	// UPLOAD-heap contents that are never written by any dispatch, so a hit needs no state
+	// transition and no invalidation signal beyond the identity check.
+	const auto t2105_rope_pack_start = std::chrono::steady_clock::now();
+	const void* cos_src = cos_t != nullptr ? cos_t->data : nullptr;
+	const void* sin_src = sin_t != nullptr ? sin_t->data : nullptr;
+	const uint64_t cos_need = cos_t != nullptr ? static_cast<uint64_t>(cos_t->elem_count) * 8u : 8u;
+	const uint64_t sin_need = sin_t != nullptr ? static_cast<uint64_t>(sin_t->elem_count) * 8u : 8u;
+	const bool rope_fast_hit = g_resident_rope.valid && g_resident_rope.cos_src == cos_src &&
+	                           g_resident_rope.sin_src == sin_src && g_resident_rope.cos_bytes == cos_need &&
+	                           g_resident_rope.sin_bytes == sin_need;
+	std::vector<uint8_t> cos_table_bytes, sin_table_bytes;
+	if (!rope_fast_hit) {
+		cos_table_bytes.assign(static_cast<size_t>(cos_need), 0);
+		if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
+		sin_table_bytes.assign(static_cast<size_t>(sin_need), 0);
+		if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
+	}
+	g_last_call_timing.rope_pack_ms = std::chrono::duration<double, std::milli>(
+	                                      std::chrono::steady_clock::now() - t2105_rope_pack_start)
+	                                      .count();
 
 	// --- Build/upload every buffer this call needs, in ONE command list
 	// (upload-and-transition, then the composed dispatch chain, then the
@@ -1259,6 +1342,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never reaches
 	// this line at all.)
 	const auto t_record_start = std::chrono::steady_clock::now();
+	g_last_call_timing.pre_record_ms =
+	    std::chrono::duration<double, std::milli>(t_record_start - t2105_entry).count();
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
@@ -1497,8 +1582,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
 	model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
 	silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
-	cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
-	sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+	if (rope_fast_hit) {
+		cos_table_buf = g_resident_rope.cos_buf;
+		sin_table_buf = g_resident_rope.sin_buf;
+	} else {
+		cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
+		sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+		g_resident_rope.cos_buf = cos_table_buf;
+		g_resident_rope.sin_buf = sin_table_buf;
+		g_resident_rope.cos_src = cos_src;
+		g_resident_rope.sin_src = sin_src;
+		g_resident_rope.cos_bytes = cos_need;
+		g_resident_rope.sin_bytes = sin_need;
+		g_resident_rope.valid = true;
+	}
 	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
 	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
@@ -1556,8 +1653,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
+	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");  // T-2105 (DISPOSABLE)
 	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
 	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");  // T-2105 (DISPOSABLE)
 	// T-2045 (C3): the four ratified attention sites, de-fused from T-2039's
 	// own single fused dispatch (Claude/Poirot/82cfca7-gpu-serial-port-build-
 	// review.md, C3 -- Sec5.4/Sec13 place cross-site fusion outside this
@@ -1587,6 +1686,19 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
+	// T-2105 (Laplace, DISPOSABLE): set once per command list, not once per dispatch.
+	dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1604,33 +1716,79 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// EVERY `bind_and_dispatch` call, capped at the heap's own real capacity (never overrun --
 	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
 	uint32_t dispatch_query_index = 0;
+	// T-2105 (Laplace, DISPOSABLE): 0 disables slicing (the normal path, byte-for-byte the shipped
+	// submission shape). Any k > 0 cuts the chain after every k-th dispatch.
+	static const uint32_t t2105_slice_every = [] {
+		const char* v = std::getenv("SSLM_T2105_SLICE_EVERY");
+		return (v == nullptr || v[0] == 0) ? 0u : static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
+	}();
 	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): `num_groups` defaults to
 	// 1 (every pre-existing single-group site, unchanged behavior). The five `_gemm_site` pipelines
 	// above pass `ceil(out_channels/256)`, grid-sizing the dispatch to the output dimension exactly
 	// as their own `stride = ((out_channels + 255) / 256) * 256` computes it shader-side -- both
 	// sides derive the group count from the SAME `out_channels`, so they cannot drift apart.
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1) {
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
+	                              uint32_t t2105_lanes = 1) {
 		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
 		++dispatch_query_index;
-		uint32_t consts[10] = {layer_index, H, HD, NH, context_cap_u32, position_u32, NQH, width_u32, I, N};
-		dev.list->SetComputeRoot32BitConstants(0, 10, consts, 0);
-		dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+		// T-2105 (Laplace, DISPOSABLE): the twelve root SRV/UAV bindings that used to be re-issued
+		// here are hoisted to a single set immediately after SetComputeRootSignature, below. Root
+		// arguments persist on a command list across Dispatch and SetPipelineState -- only
+		// SetComputeRootSignature resets them, and this loop sets one signature for all 644
+		// dispatches (every PSO here shares it, as the existing comment at that call already
+		// states). The twelve buffer addresses are call-constant by construction: every one of them
+		// is a local resolved before the recording window opens and none is reassigned inside it.
+		// That removes 12 * 644 = 7728 API calls per token from `record_ms`.
+		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                       NQH,         width_u32, I,  N,  t2105_lanes};
+		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
+
+		// T-2105 (Laplace, DISPOSABLE): the TIME-SLICE construction. When
+		// `SSLM_T2105_SLICE_EVERY` is set to k, the dispatch chain is CUT after every k-th
+		// dispatch: the command list is closed, submitted, fenced to completion, and a fresh
+		// command list is opened and re-bound to continue the SAME token's remaining dispatches.
+		// That is a real suspend and resume across execution slices -- the GPU goes fully idle at
+		// the cut, the host regains control, and nothing survives the boundary except the contents
+		// of the UAV buffers. It is the strongest available stand-in on this substrate for the
+		// frame-budget / `sslm_decode_step_gpu`-`sslm_gpu_ready` lifecycle D-SLM3294 names, and it
+		// is deliberately stronger than that lifecycle needs to be: a fence-to-idle boundary
+		// discards more in-flight state than a suspended-and-resumed submission would.
+		//
+		// The output is then compared against the UNSLICED run by the harness's own per-step
+		// CPU-oracle bit-equality. Nothing about the cut is special-cased in any shader.
+		if (t2105_slice_every > 0u && (dispatch_query_index % t2105_slice_every) == 0u) {
+			SSLM_GPU_HR(dev.list->Close());
+			ID3D12CommandList* slice_lists[] = {dev.list.Get()};
+			dev.queue->ExecuteCommandLists(1, slice_lists);
+			SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+			if (dev.fence->GetCompletedValue() < dev.fence_val) {
+				SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			// The allocator is only reset after the fence proves the prior list has retired.
+			SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+			// A fresh command list carries NO root state -- rebind the signature and all twelve
+			// root views. The root 32-bit constants are re-set by the next bind_and_dispatch.
+			dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());
+			dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+			++g_t2105_slice_cuts;
+		}
 	};
 	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
@@ -1638,13 +1796,21 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// standing guard below can check all five before any dispatch is recorded, and each plan's own
 	// `.groups` is what the `bind_and_dispatch` calls pass, with no intermediate hand-editable local
 	// caching a copy of the value.
-	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, I);
-	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, I);
+	// T-2105 (Laplace, DISPOSABLE): 2*kv_hidden_size -- both halves in one grid.
+	const uint32_t KV2 = 2u * NH * HD;
+	// T-2105 (Laplace, DISPOSABLE): flattened work-item counts for the two attention sites.
+	const uint32_t t2105_attn_score_groups = ((NQH * width_u32) + 255u) / 256u;
+	const uint32_t t2105_ctx_accum_groups = ((NQH * HD) + 255u) / 256u;
+	const uint32_t t2105_rope_groups = ((NQH * (HD / 2u)) + 255u) / 256u;
+	const GpuGemmSiteGroupPlan kv_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan gate_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, I);
-	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, I);
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan down_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, I);
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
 
 	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md; S4, confirmation pass @
 	// f7026db): the standing guard the multi-group change was owed. Fires on EVERY call, at
@@ -1661,8 +1827,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// from"), which the confirmation pass correctly read as describing behavior the code did not
 	// have.
 	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &gate_proj_plan, &up_proj_plan,
-	                                          &down_proj_plan}) {
-		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->threads_per_group) <
+	                                          &down_proj_plan, &kv_proj_plan}) {
+		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
 		    static_cast<uint64_t>(plan->out_channels)) {
 			throw GpuGemmGroupArithmeticError(
 			    "RunLayerLoopGpu: GEMM group plan does not cover its own out_channels -- "
@@ -1694,24 +1860,29 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(rope_pipe.pso.Get(), l);
-		bind_and_dispatch(attention_score_pipe.pso.Get(), l);
+		bind_and_dispatch(rope_pipe.pso.Get(), l, t2105_rope_groups);
+		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, t2105_rope_groups);
+		// T-2105 (Laplace, DISPOSABLE): both sites are now flattened over their own real work
+		// item space and gridded. The group counts are computed from the SAME root constants the
+		// shaders read (`g_num_attention_heads`, `g_head_dim`, `g_width`).
+		bind_and_dispatch(attention_score_pipe.pso.Get(), l, t2105_attn_score_groups);
 		bind_and_dispatch(softmax_pipe.pso.Get(), l);
-		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l);
+		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, t2105_ctx_accum_groups);
 		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
 		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups);
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
 		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
 		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
@@ -1980,6 +2151,7 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // `out_channels` but leaves `threads_per_group` at 0 by a copy-paste mistake is caught by the SAME
 // guard, not only the enumerator-completeness one.
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t kv_out_channels,
                                                   uint32_t intermediate_size) {
 	GpuGemmSiteGroupPlan plan;
 	switch (site) {
@@ -1987,12 +2159,23 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 		case GpuGemmSplitSite::OProj:
 		case GpuGemmSplitSite::DownProj:
 			plan.out_channels = hidden_size;
-			plan.threads_per_group = 64u;
+			plan.threads_per_group = 256u;
+			plan.lanes = superslm_t2105::LanesFor(site);
 			break;
 		case GpuGemmSplitSite::GateProj:
 		case GpuGemmSplitSite::UpProj:
 			plan.out_channels = intermediate_size;
 			plan.threads_per_group = 256u;
+			plan.lanes = superslm_t2105::LanesFor(site);
+			break;
+		case GpuGemmSplitSite::KvProj:
+			// T-2105 (Laplace, DISPOSABLE): the dispatch covers BOTH halves -- K's own
+			// kv_hidden_size channels and V's own -- packed into one grid, so the grid is sized
+			// over 2*kv_hidden_size while the per-half `out_channels` the shader bounds-checks
+			// against stays kv_hidden_size. `kv_out_channels` is passed in already doubled.
+			plan.out_channels = kv_out_channels;
+			plan.threads_per_group = 256u;
+			plan.lanes = superslm_t2105::LanesFor(site);
 			break;
 		default:
 			throw GpuGemmGroupArithmeticError(
@@ -2004,9 +2187,16 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 		    "ComputeGpuGemmSiteGroupPlan: threads_per_group == 0 after the switch -- would divide "
 		    "by zero computing the group count");
 	}
-	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.threads_per_group);
+	// T-2105 (Laplace, DISPOSABLE): a group of 256 threads now covers `256 / lanes` OUTPUT
+	// CHANNELS, not 256 of them -- the remaining `lanes` threads per channel cooperate on that
+	// channel's own in_channels-wide reduction. The grid size is therefore the ceiling over
+	// channels-per-group, and the coverage guard in `RunLayerLoopGpu` checks that quantity.
+	plan.channels_per_group = 256u / plan.lanes;
+	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.channels_per_group);
 	return plan;
 }
+
+uint64_t LastCallSliceCuts() { return g_t2105_slice_cuts; }
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing; }
 

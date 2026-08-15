@@ -155,6 +155,9 @@ int main(int argc, char** argv) {
 	// same population the headline s/token figure is -- not one call's own possibly-atypical split.
 	double gpu_record_ms_sum = 0.0, gpu_submit_wait_ms_sum = 0.0, gpu_busy_ms_sum = 0.0,
 	       gpu_readback_ms_sum = 0.0;
+	// T-2105 (Laplace, DISPOSABLE).
+	double gpu_pre_record_ms_sum = 0.0, gpu_rope_pack_ms_sum = 0.0;
+	uint64_t gpu_slice_cuts_sum = 0;
 
 	// T-2101 follow-up (per-site decomposition, D-SLM3312; per-dispatch parallelism, D-SLM3313's
 	// own follow-up): the fixed, unconditional per-layer dispatch order `RunLayerLoopGpu` issues
@@ -163,10 +166,12 @@ int main(int argc, char** argv) {
 	// q_proj/o_proj/gate_proj/up_proj/down_proj each split into their own multi-group GEMM
 	// dispatch immediately followed by their own (now leaner) requant dispatch; kv_proj stays
 	// fused and single-dispatch. Summed across every timed GPU step below.
-	constexpr int kSitesPerLayer = 22;
+	constexpr int kSitesPerLayer = 24;  // T-2105 (Laplace, DISPOSABLE): +kv_proj_gemm, +rope_commit
 	const char* const kSiteNames[kSitesPerLayer] = {
-	    "attn_norm",     "q_proj_gemm",         "q_proj",        "kv_proj",
-	    "rope",          "attention_score",     "softmax",       "context_accumulate",
+	    "attn_norm",     "q_proj_gemm",         "q_proj",        "kv_proj_gemm",
+	    "kv_proj",
+	    "rope",          "rope_commit",         "attention_score", "softmax",
+	    "context_accumulate",
 	    "ctx_fold",      "o_proj_gemm",         "o_proj",        "attn_residual",
 	    "mlp_norm",      "gate_proj_gemm",      "gate_proj",     "up_proj_gemm",
 	    "up_proj",       "mlp_act",             "down_proj_gemm", "down_proj",
@@ -224,6 +229,9 @@ int main(int argc, char** argv) {
 				gpu_submit_wait_ms_sum += timing.submit_wait_ms;
 				gpu_busy_ms_sum += timing.gpu_busy_ms;
 				gpu_readback_ms_sum += timing.readback_ms;
+				gpu_pre_record_ms_sum += timing.pre_record_ms;
+				gpu_rope_pack_ms_sum += timing.rope_pack_ms;
+				gpu_slice_cuts_sum += superslm_gpu::LastCallSliceCuts();
 				const auto per_dispatch = superslm_gpu::LastCallPerDispatchTimingsMs();
 				for (size_t d = 0; d < per_dispatch.size(); ++d) {
 					site_ms_sum[d % kSitesPerLayer] += per_dispatch[d];
@@ -261,7 +269,19 @@ int main(int argc, char** argv) {
 	const double mean_submit_wait_ms = gpu_submit_wait_ms_sum / steps;
 	const double mean_gpu_busy_ms = gpu_busy_ms_sum / steps;
 	const double mean_readback_ms = gpu_readback_ms_sum / steps;
-	const double mean_sum_ms = mean_record_ms + mean_submit_wait_ms + mean_readback_ms;
+	const double mean_pre_record_ms = gpu_pre_record_ms_sum / steps;
+	const double mean_rope_pack_ms = gpu_rope_pack_ms_sum / steps;
+	// T-2105 (Laplace, DISPOSABLE): the MEASURED number of suspend/resume boundaries each timed
+	// step actually crossed -- not the number the environment asked for. A nonzero value means
+	// every timed step above ran as multiple command lists, each closed, submitted, and fenced to
+	// completion before the next opened, and the per-step CPU/GPU bit-equality line above is
+	// therefore a time-slice-invariance result, not only a correctness result.
+	std::printf("\nT2105 time-slice: %llu suspend/resume cuts per timed step (measured)\n",
+	            static_cast<unsigned long long>(gpu_slice_cuts_sum / static_cast<uint64_t>(steps)));
+	std::printf("\nT2105 pre-record phase: pre_record %8.3f ms  (of which rope cos/sin host pack %8.3f ms)\n",
+	            mean_pre_record_ms, mean_rope_pack_ms);
+	const double mean_sum_ms =
+	    mean_pre_record_ms + mean_record_ms + mean_submit_wait_ms + mean_readback_ms;
 	// Roofline: 1.5 GB of int8 weights read once per token against this card's own advertised
 	// 496 GB/s memory bandwidth (RESUME's own derived, not measured, figure) -- restated here in
 	// milliseconds for direct comparison against `mean_gpu_busy_ms`.
@@ -303,7 +323,7 @@ int main(int argc, char** argv) {
 		double bytes_per_layer = 0.0;
 		const std::string name = kSiteNames[i];
 		if (name == "q_proj_gemm" || name == "o_proj_gemm") bytes_per_layer = static_cast<double>(H) * H;
-		else if (name == "kv_proj") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
+		else if (name == "kv_proj_gemm") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
 		else if (name == "gate_proj_gemm" || name == "up_proj_gemm")
 			bytes_per_layer = static_cast<double>(I) * H;
 		else if (name == "down_proj_gemm") bytes_per_layer = static_cast<double>(H) * I;

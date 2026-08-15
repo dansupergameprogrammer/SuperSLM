@@ -35,6 +35,10 @@ cbuffer RootConstants : register(b0)
     uint g_layer_index; uint g_hidden_size; uint g_head_dim; uint g_num_kv_heads;
     uint g_context_cap; uint g_position; uint g_num_attention_heads; uint g_width;
     uint g_intermediate_size;
+    // T-2105 (Laplace, DISPOSABLE): the 10th and 11th root constants. `g_t2105_lanes`
+    // is the ONE source of this dispatch's own lane split -- the host computes the group
+    // count from the SAME value, so the two cannot drift.
+    uint g_num_hidden_layers; uint g_t2105_lanes;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -50,8 +54,8 @@ RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
-[numthreads(64, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+[numthreads(256, 1, 1)]
+void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
     int hidden_size = (int)g_hidden_size;
     int in_channels = (int)g_intermediate_size;
@@ -76,8 +80,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     // `superslm_gpu.cpp`'s own host-side group-count computation uses for this dispatch's grid
     // size -- both sides derive the same number from the same `out_channels`, so they cannot drift
     // independently of each other.
-    int stride = ((out_channels + 63) / 64) * 64;
-    GemmParallelGpu(dtid.x, LayerScratch, act_codes_off, LayerWeights, off_weight, LayerWeights,
+    GemmCoalescedGpu(gtid.x, gid.x, LayerScratch, act_codes_off, LayerWeights, off_weight, LayerWeights,
                      off_id, LayerWeights, off_mult, LayerWeights, off_shift, in_channels,
-                     out_channels, WorkScratch, 0u, stride);
+                     out_channels, WorkScratch, 0u, g_t2105_lanes);
 }

@@ -66,7 +66,7 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-// T-2105 (Laplace, DISPOSABLE experiment construction -- branch laplace/t2105-speed-ceiling never
+// (see rope_guard_site.hlsl for the split's own rationale) T-2105 (Laplace, DISPOSABLE) -- branch laplace/t2105-speed-ceiling never
 // merges). Two changes, both of the same class as T-2101's own multi-group GEMM split.
 //
 // (1) Flattened. Every phase below iterated `for (h = t; h < g_num_attention_heads; h += 256)` --
@@ -144,43 +144,32 @@ void main(uint3 dtid : SV_DispatchThreadID)
     // any head count.
     uint rope_stage_base = ScratchLayout.Load<uint>(26 * 4);
 
-    // Q: read this head's codes from scratch, rotate, write the rotated
-    // result to q_rot -- never committed to persistent state (Sec4: Q's own
-    // output is never landed), so Q needs no staging: every head's own
-    // q_codes/q_rot slots are disjoint, and no thread ever reads another
-    // thread's q_rot.
+    // K, phase 2 (COMMIT): rotate from the STAGED bytes -- never re-reading KvCache -- and write
+    // back. T-2105 (Laplace, DISPOSABLE): this phase used to sit below a
+    // DeviceMemoryBarrierWithGroupSync in rope_guard_site.hlsl. It is its own dispatch now, so the
+    // read-before-write ordering comes from the global UAV barrier between the two dispatches
+    // instead of a group-scoped barrier -- strictly stronger, and multi-group safe. Heads sharing a
+    // kv_head still each redundantly recompute the identical rotation from the identical staged
+    // input and converge on the identical written bytes (CPU's own "redundant but sound"
+    // construction, forward_sites.cpp), and StoreSignedByteGpu's CAS is what makes two threads
+    // owning adjacent bytes of one word safe -- unchanged from the fused version.
     uint items = g_num_attention_heads * pairs;
     if (t >= items) return;
     {
-        uint h = t / pairs;
+        uint h2 = t / pairs;
+        uint kv_head2 = h2 / max(group, 1u);
+        uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);
+        uint stage2 = rope_stage_base + h2 * (uint)g_head_dim * 4u;
         {
-            uint p = t % pairs;
-            int x = (int)LayerScratch.Load<int>(q_codes_off + (h * (uint)g_head_dim + 2u * p) * 4u);
-            int y = (int)LayerScratch.Load<int>(q_codes_off + (h * (uint)g_head_dim + 2u * p + 1u) * 4u);
-            int cos_q30 = (int)RopeCosTable.Load<int64_t>((row_offset + p) * 8u);
-            int sin_q30 = (int)RopeSinTable.Load<int64_t>((row_offset + p) * 8u);
-            int64_t rx, ry;
-            RopeApplyPairGpu(x, y, cos_q30, sin_q30, rx, ry);
-            LayerScratch.Store<int>(q_rot_off + (h * (uint)g_head_dim + 2u * p) * 4u, (int)ClampRopeCodeGpu(rx));
-            LayerScratch.Store<int>(q_rot_off + (h * (uint)g_head_dim + 2u * p + 1u) * 4u, (int)ClampRopeCodeGpu(ry));
+            uint p2 = t % pairs;
+            int kx = WorkScratch.Load<int>(stage2 + 2u * p2 * 4u);
+            int ky = WorkScratch.Load<int>(stage2 + (2u * p2 + 1u) * 4u);
+            int cos_q30b = (int)RopeCosTable.Load<int64_t>((row_offset + p2) * 8u);
+            int sin_q30b = (int)RopeSinTable.Load<int64_t>((row_offset + p2) * 8u);
+            int64_t rkx, rky;
+            RopeApplyPairGpu(kx, ky, cos_q30b, sin_q30b, rkx, rky);
+            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
+            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
         }
     }
-
-    // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
-    // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
-    // thread writes to KvCache anywhere in this phase.
-    {
-        uint h1 = t / pairs;
-        uint kv_head1 = h1 / max(group, 1u);
-        uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
-        uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
-        {
-            uint p1 = t % pairs;
-            int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
-            int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
-            WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
-            WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
-        }
-    }
-
 }

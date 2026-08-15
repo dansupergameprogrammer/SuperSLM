@@ -259,7 +259,7 @@ struct Device {
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
 		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-		ps[0].Constants.Num32BitValues = 10;  // 10th: num_hidden_layers (commit_site.hlsl only)
+		ps[0].Constants.Num32BitValues = 11;  // 10th: num_hidden_layers (commit_site.hlsl only); 11th: T-2105 (Laplace, DISPOSABLE) GEMM lanes
 		ps[0].Constants.ShaderRegister = 0;  // b0
 		ps[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 		ps[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
