@@ -343,6 +343,39 @@ struct ResidentKv {
 };
 ResidentKv g_resident_kv;
 
+// T-2113 (B4, design Sec3/Sec6.1, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2 change 1 -- "RoPE cos/sin tables made resident, keyed on source-tensor
+// identity"). NOT superseded by B2's own SslmGpuModelHandle::rope_cos_buf/rope_sin_buf
+// members in gpu_1p0.cpp: that residency is reachable only through the 1.0 handle API, and this
+// function -- `RunLayerLoopGpu`, the pre-1.0 substrate's own shared entry point every caller
+// (C5, T-2100's own throughput harness, B1/B3's own bench bridges, and until B5/B6 route
+// production calls through handles, everything else) still goes through -- had no cache for
+// these two tables at all: the shipped code repacked (host memcpy) and re-uploaded
+// (UPLOAD-heap `dev.Upload`) both tables, in full, on EVERY call. At the real 1.5B tier
+// (context_cap=32768, head_dim=128 -> pairs=64) that is 2,097,152 elements * 8 bytes = 16 MiB
+// EACH for cos and sin, 32 MiB of host memcpy plus a fresh UPLOAD-heap resource creation and
+// CPU-side copy, per call -- T-2105's own comment on this exact construction measured it at
+// ~11.04 ms/token of host memcpy alone (their own 32-step baseline). This mirrors
+// `ResidentWeights`/`ResidentKv`'s own shape exactly: process-lifetime storage, keyed on the
+// source tensor's own address and byte count (a sound, cheap invalidation signal for the
+// common case -- every token of one decode session reads the SAME model-wide-constant
+// `SslmTensorView`), never written by any dispatch (read-only SRV contents), so a hit needs
+// no state transition and no invalidation signal beyond the identity check. This is a
+// pre-1.0-substrate-scoped process-global, the same footing as `g_resident_weights`/
+// `g_resident_kv` above -- D-SLM3294's "no process-global device state in the 1.0 backend"
+// requirement (design Sec1) targets the 1.0 API's own backend objects (`SslmGpuContext` and
+// what it owns), not this pre-1.0 function, which already carries two such caches.
+struct ResidentRopeTables {
+	const void* cos_src = nullptr;
+	const void* sin_src = nullptr;
+	uint64_t cos_bytes = 0;
+	uint64_t sin_bytes = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> cos_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> sin_buf;
+	bool valid = false;
+};
+ResidentRopeTables g_resident_rope;
+
 // T-2071 (O11's own instrument, retiring the long-named gap: "no way to
 // force `CreateCommittedResource` to fail from the suite" -- Claude/Poirot/
 // db73b22-.../a3d44e7-.../b543abe-gpu-serial-port-ship-*-review.md, every
@@ -1284,14 +1317,29 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	std::memcpy(silu_lut_bytes.data(), superslm::kSiluLutCanonicalTable, silu_lut_bytes.size());
 
 	// RoPE's own real rotation data (t5/t6) -- the ROP1 "cos"/"sin" tensors'
-	// raw bytes, uploaded once per call (rope_tables is model-wide, Sec5.6).
-	// A 1-byte dummy when absent (RopeInfo's own presence flag is what a real
-	// site checks before ever reading these; sized nonzero only so the buffer
-	// resource itself is legal to create).
-	std::vector<uint8_t> cos_table_bytes(cos_t != nullptr ? cos_t->elem_count * 8 : 8, 0);
-	if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
-	std::vector<uint8_t> sin_table_bytes(sin_t != nullptr ? sin_t->elem_count * 8 : 8, 0);
-	if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
+	// raw bytes (rope_tables is model-wide, Sec5.6). A 1-byte dummy when absent (RopeInfo's own
+	// presence flag is what a real site checks before ever reading these; sized nonzero only so
+	// the buffer resource itself is legal to create).
+	// T-2113 (B4, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-2026-08-14.md Sec2
+	// change 1): `g_resident_rope` (above) -- these two tables are MODEL-WIDE CONSTANTS, so
+	// re-packing and re-uploading them every call is pure, avoidable cost on every cache hit.
+	// Packed (and later uploaded) only on a miss; `rope_fast_hit` reused at the upload site
+	// below.
+	const void* cos_src = cos_t != nullptr ? cos_t->data : nullptr;
+	const void* sin_src = sin_t != nullptr ? sin_t->data : nullptr;
+	const uint64_t cos_need = cos_t != nullptr ? static_cast<uint64_t>(cos_t->elem_count) * 8u : 8u;
+	const uint64_t sin_need = sin_t != nullptr ? static_cast<uint64_t>(sin_t->elem_count) * 8u : 8u;
+	const bool rope_fast_hit = g_resident_rope.valid && g_resident_rope.cos_src == cos_src &&
+	                           g_resident_rope.sin_src == sin_src &&
+	                           g_resident_rope.cos_bytes == cos_need &&
+	                           g_resident_rope.sin_bytes == sin_need;
+	std::vector<uint8_t> cos_table_bytes, sin_table_bytes;
+	if (!rope_fast_hit) {
+		cos_table_bytes.assign(static_cast<size_t>(cos_need), 0);
+		if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
+		sin_table_bytes.assign(static_cast<size_t>(sin_need), 0);
+		if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
+	}
 
 	// --- Build/upload every buffer this call needs, in ONE command list
 	// (upload-and-transition, then the composed dispatch chain, then the
@@ -1540,8 +1588,25 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
 	model_const_buf = dev.Upload(model_const_bytes.data(), model_const_bytes.size());
 	silu_lut_buf = dev.Upload(silu_lut_bytes.data(), silu_lut_bytes.size());
-	cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
-	sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+	// T-2113 (B4): reuse the resident buffers on a hit -- `dev.Upload()` on a miss is a
+	// synchronous Map/memcpy/Unmap (`d3d12_harness.h`), fully realized before this call
+	// returns, so a cached resource is always valid content regardless of whether the command
+	// list that references it ever executes (no invalidate-on-throw handling is needed, unlike
+	// `g_resident_weights`/`g_resident_kv`'s own DEFAULT-heap CopyResource caches).
+	if (rope_fast_hit) {
+		cos_table_buf = g_resident_rope.cos_buf;
+		sin_table_buf = g_resident_rope.sin_buf;
+	} else {
+		cos_table_buf = dev.Upload(cos_table_bytes.data(), cos_table_bytes.size());
+		sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
+		g_resident_rope.cos_buf = cos_table_buf;
+		g_resident_rope.sin_buf = sin_table_buf;
+		g_resident_rope.cos_src = cos_src;
+		g_resident_rope.sin_src = sin_src;
+		g_resident_rope.cos_bytes = cos_need;
+		g_resident_rope.sin_bytes = sin_need;
+		g_resident_rope.valid = true;
+	}
 	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
 	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
 	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
