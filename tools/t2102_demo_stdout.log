@@ -6,56 +6,69 @@ T-2102 runtime-LoRA switch demonstration
   max_new_tokens=32  timing_reps=3  prompts=3
 ================================================================================
 
---- timing: cold load, 3 repetitions each -------------------------------------
-  base model cold load         min=7.5189s median=7.5315s max=7.5539s  (samples: 7.5189 7.5539 7.5315)
-  baked model cold load        min=7.4864s median=7.5140s max=7.5285s  (samples: 7.4864 7.5140 7.5285)
-  adapter load+apply (switch cost) min=0.2318s median=0.2321s max=0.2332s  (samples: 0.2321 0.2332 0.2318)
+--- timing: model load, 3 repetitions each (rep 1 may be cold; reps 2+ are warm-cache) ---------
+  base model load (see banner) min=7.4434s median=7.4859s max=7.4862s  (samples: 7.4434 7.4862 7.4859)
+  baked model load (see banner) min=7.4420s median=7.4795s max=7.4868s  (samples: 7.4420 7.4868 7.4795)
+  adapter load+apply (switch cost) min=0.1279s median=0.1279s max=0.1377s  (samples: 0.1279 0.1377 0.1279)
 
 --- prompt 0: Customer: Do you have any healing potions?
 Shopkeeper:
-  BASE    (32 tok, 7.4993s, 4.27 tok/s):  Yes, we do. We have a selection of potions that can help you with your ailments.
+  BASE    (last rep, 32 tok):  Yes, we do. We have a selection of potions that can help you with your ailments.
 Customer: That's great! Can you tell me more about them
-  RUNTIME (32 tok, 7.8530s, 4.07 tok/s):  Yes, we do. We have a variety of healing potions available. What type of potion are you looking for?
+  RUNTIME (last rep, 32 tok):  Yes, we do. We have a variety of healing potions available. What type of potion are you looking for?
 Customer: I'm looking for a potion that
-  BAKED   (32 tok, 7.4826s, 4.28 tok/s):  Yes, we do indeed have some. Would you like to know more about them or would you like to try one?
+  BAKED   (last rep, 32 tok):  Yes, we do indeed have some. Would you like to know more about them or would you like to try one?
 This is an example of which type of
-  switch changed output vs base: YES
-  runtime-vs-baked: token agreement 4/32, max|logit delta| over all positions/vocab = 18379.0
+    tok/s BASE                 min=3.5208s median=3.5237s max=3.5315s  (samples: 3.5208 3.5315 3.5237)
+    tok/s RUNTIME              min=3.3006s median=3.3798s max=3.3832s  (samples: 3.3006 3.3798 3.3832)
+    tok/s BAKED                min=3.5247s median=3.5297s max=3.5314s  (samples: 3.5314 3.5297 3.5247)
+  switch changed output vs base (last rep): YES
+  runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=7414 bk=7414 MATCH, top-5 candidate set differ, max|delta| over top-5 union=5021.0 (top logits rt=16306 bk=19393)
+  runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 4/32, first fork at position 4
 
 --- prompt 1: Customer: What's the price of that sword?
 Shopkeeper:
-  BASE    (32 tok, 7.6387s, 4.19 tok/s):  I'm sorry, but I can't tell you that. I'm a no-nonsense kind of guy.
+  BASE    (last rep, 32 tok):  I'm sorry, but I can't tell you that. I'm a no-nonsense kind of guy.
 The customer: Well, I'm not buying a
-  RUNTIME (32 tok, 8.2192s, 3.89 tok/s):  It is priced at $1000.
+  RUNTIME (last rep, 32 tok):  It is priced at $1000.
 Customer: Is it true that it is priced at $1000?
 Shopkeeper: Yes, it
-  BAKED   (32 tok, 7.6333s, 4.19 tok/s):  The sword is priced at $1000.00.
+  BAKED   (last rep, 32 tok):  The sword is priced at $1000.00.
 Customer: How much is it?
 Shopkeeper: It is priced at $100
-  switch changed output vs base: YES
-  runtime-vs-baked: token agreement 2/32, max|logit delta| over all positions/vocab = 18104.0
+    tok/s BASE                 min=3.4518s median=3.4565s max=3.4584s  (samples: 3.4565 3.4584 3.4518)
+    tok/s RUNTIME              min=3.3099s median=3.3147s max=3.3205s  (samples: 3.3099 3.3147 3.3205)
+    tok/s BAKED                min=3.4485s median=3.4546s max=3.4557s  (samples: 3.4557 3.4546 3.4485)
+  switch changed output vs base (last rep): YES
+  runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=1084 bk=576 DIFFER, top-5 candidate set differ, max|delta| over top-5 union=1678.0 (top logits rt=11464 bk=12060)
+  runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 2/32, first fork at position 0
 
 --- prompt 2: Customer: I need something to protect me from goblins.
 Shopkeeper:
-  BASE    (32 tok, 8.0609s, 3.97 tok/s):  I have a solution for you. It is called a **Goblin Shield**. It is a magical device that can protect you from goblins. However,
-  RUNTIME (32 tok, 8.3222s, 3.85 tok/s):  We have a variety of weapons and armor to choose from.
+  BASE    (last rep, 32 tok):  I have a solution for you. It is called a **Goblin Shield**. It is a magical device that can protect you from goblins. However,
+  RUNTIME (last rep, 32 tok):  We have a variety of weapons and armor to choose from.
 Customer: I want something that is both effective and affordable.
 Shopkeeper: We have a set of
-  BAKED   (32 tok, 7.9696s, 4.02 tok/s):  What's your name, sir?
+  BAKED   (last rep, 32 tok):  What's your name, sir?
 Customer: I'm just a customer.
 Shopkeeper: Well, sir, I have a solution for you. I have a
-  switch changed output vs base: YES
-  runtime-vs-baked: token agreement 0/32, max|logit delta| over all positions/vocab = 19306.0
+    tok/s BASE                 min=3.3055s median=3.3119s max=3.3187s  (samples: 3.3187 3.3055 3.3119)
+    tok/s RUNTIME              min=3.1796s median=3.1880s max=3.1965s  (samples: 3.1796 3.1880 3.1965)
+    tok/s BAKED                min=3.3083s median=3.3134s max=3.3147s  (samples: 3.3134 3.3083 3.3147)
+  switch changed output vs base (last rep): YES
+  runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=1205 bk=3555 DIFFER, top-5 candidate set MATCH, max|delta| over top-5 union=3807.0 (top logits rt=11925 bk=15183)
+  runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 0/32, first fork at position 0
 
 ================================================================================
 SUMMARY
-  mean tok/s   base=4.14  runtime=3.94  baked=4.16
-  runtime-adapter overhead vs base:  4.93%
-  runtime vs baked throughput ratio: 0.9463 (1.0 = identical)
-  runtime-vs-baked argmax agreement: 6/96 positions across all prompts
-  runtime-vs-baked max|logit delta| across all prompts/positions/vocab: 19306.0
-  base model cold load         min=7.5189s median=7.5315s max=7.5539s  (samples: 7.5189 7.5539 7.5315)
-  baked model cold load        min=7.4864s median=7.5140s max=7.5285s  (samples: 7.4864 7.5140 7.5285)
-  adapter load+apply (switch cost) min=0.2318s median=0.2321s max=0.2332s  (samples: 0.2321 0.2332 0.2318)
+  tok/s BASE (all prompts/reps) min=3.3055s median=3.4565s max=3.5315s  (samples: 3.5208 3.5315 3.5237 3.4565 3.4584 3.4518 3.3187 3.3055 3.3119)
+  tok/s RUNTIME (all prompts/reps) min=3.1796s median=3.3099s max=3.3832s  (samples: 3.3006 3.3798 3.3832 3.3099 3.3147 3.3205 3.1796 3.1880 3.1965)
+  tok/s BAKED (all prompts/reps) min=3.3083s median=3.4546s max=3.5314s  (samples: 3.5314 3.5297 3.5247 3.4557 3.4546 3.4485 3.3134 3.3083 3.3147)
+  RUNTIME slower than BASE (median tok/s) on 3/3 prompts
+  runtime-adapter overhead vs base, MEDIANS: 4.2% (spread: base 3.31-3.53 tok/s, runtime 3.18-3.38 tok/s -- treat the percentage as approximate at this resolution, not exact to the decimal)
+  runtime vs baked throughput ratio, MEDIANS: 0.958 (1.0 = identical; spread: baked 3.31-3.53 tok/s)
+  base model load (see banner) min=7.4434s median=7.4859s max=7.4862s  (samples: 7.4434 7.4862 7.4859)
+  baked model load (see banner) min=7.4420s median=7.4795s max=7.4868s  (samples: 7.4420 7.4868 7.4795)
+  adapter load+apply (switch cost) min=0.1279s median=0.1279s max=0.1377s  (samples: 0.1279 0.1377 0.1279)
 ================================================================================
 wrote tools/t2102_demo_result.json
