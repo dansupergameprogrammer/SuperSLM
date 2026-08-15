@@ -166,107 +166,160 @@ bool CheckSoftmaxRowWidthDomainGpu(int64_t q_b, int64_t q_c, int width)
     return m_usable;
 }
 
-// intmath.cpp SoftmaxRowQ15, bit-exact, buffer-resident version: `buf` at
-// `base` holds `width` int64 scores on entry (T-2039: never a per-call local
-// array -- T-2052 M4 correction: the caller passes LayerScratch at its own
-// persistent `scores` region offset, ScratchLayout index 25, sized to the
-// real per-call `num_attention_heads * context_cap` -- not a WorkScratch
-// window; that region was retired at T-2045's own C3, which split attention
-// into four dispatches sharing this row across dispatch boundaries) and
-// `width` int64 Q15 probs on success. This is the
-// SAME sequential algorithm the original array-based primitive used --
-// softmax_site.hlsl's own per-thread head ownership (one thread computes
-// one head's softmax start to finish, Sec5.4's per-output-channel
-// parallelization applied at the HEAD granularity here, since heads are
-// already independent production units) means no cross-thread cooperation is
-// needed inside this function; only the storage discipline changed.
-bool SoftmaxRowQ15BufGpu(RWByteAddressBuffer buf, uint base, int width, int64_t q_ln2, int64_t q_b,
-                          int64_t q_c)
+// T-2113 (B10 lever 2, D-SLM3400): the group-cooperative row primitive `softmax_site.hlsl` calls
+// today. The single-thread-per-head sequential predecessor this replaced (`SoftmaxRowQ15BufGpu`,
+// ported bit-exact from `intmath.cpp`'s own `SoftmaxRowQ15`) is retired -- its last caller was
+// converted to this function in the same change, so no unreferenced scaffolding is left in HEAD
+// (StandardsDocument.md §6.6); the sequential algorithm's own contract (bit-exact to
+// `intmath.cpp:799`'s `width == 0` short-circuit, the m-bound re-check pass, the CPU sibling's
+// own `!m_usable` all-zero disposition) is preserved unchanged inside the phases below, only the
+// STRIPING and the two row-wide reductions changed shape.
+// `softmax_site.hlsl`'s own per-head loop assigns ONE thread per head (`for h = t; h <
+// num_attention_heads; h += 256`), which at the real 1.5B tier's 12 heads leaves 244 of 256
+// threads idle while the 12 active ones each run the sequential algorithm above alone, at a cost
+// that grows with context width (T-2105 §6/§8: 0.397 ms at ctx<=16 to 3.169 ms at ctx<=256) --
+// the identical low-occupancy shape D-SLM3398 found and D-SLM3399 fixed for the adapter-delta
+// stage-1 reduction, now applied to softmax's own row.
+//
+// `lanes` threads (a power of two, computed by the caller from 256/num_attention_heads, the same
+// `Stage1LanesForRank`-shaped derivation) cooperate on ONE head's own `width`-wide row, striped so
+// thread `lane` (0 <= lane < lanes) owns indices {lane, lane+lanes, lane+2*lanes, ...} in EVERY
+// phase below -- every element's own per-index computation (the i-exp construction/evaluation,
+// the m-bound check, the Q15 divide) is a pure function of that element's own score and the
+// row-wide broadcast values (`peak`, `denom`), IDENTICAL to what the sequential primitive above
+// computes for that index in any order, and because every phase re-uses the SAME striping, a
+// lane's own UAV writes are always read back by that SAME lane's own later phase -- ordinary
+// same-thread program order, no barrier needed for that. Only the two ROW-WIDE reductions (max,
+// sum) and the well-formed flag's OR-across-lanes need cross-thread coordination, each realized
+// as a fixed groupshared binary tree over, respectively, integer max, integer addition, and
+// integer min-as-AND -- all three exactly associative/commutative (the same argument
+// `GemmCoalescedGpuAt`'s and `ApplyFusedAdapterDeltaGpu`'s own header comments make, D-SLM3334),
+// so the tree returns the IDENTICAL result the sequential primitive's own left-to-right reduction
+// returns, for any width and lane count.
+//
+// `gSoftmaxReduceAcc` (below) is REUSED, barrier-separated, across this function's own three
+// sequential tree phases (max, well-formed, sum) and across every concurrently active head-group
+// in the same wave (each head-group touches only its own disjoint `[group_base, group_base+lanes)`
+// window of `t`, exactly `GemmCoalescedGpuAt`'s own multi-channel-per-dispatch precedent). `active`
+// is uniform across a head-group's own `lanes` threads (a function of the head index alone) and
+// MUST be reached unconditionally by every thread on every wave iteration regardless of its own
+// value -- a thread whose row is inactive (past `num_attention_heads`, or its head failed the
+// domain check the caller already ran) contributes a neutral identity value at every reduction
+// and performs no buffer I/O, but still executes every barrier below: skipping a barrier for an
+// inactive thread while an active sibling reaches it is undefined behavior (the identical
+// discipline `GemmCoalescedGpuAt`'s own header comment states for its own out-of-range channels).
+groupshared int64_t gSoftmaxReduceAcc[256];
+
+bool SoftmaxRowQ15BufGpuParallel(bool active, uint t, uint lane, uint lanes, RWByteAddressBuffer buf,
+                                    uint base, int width, int64_t q_ln2, int64_t q_b, int64_t q_c)
 {
-    // T-2045 (M1, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
-    // CPU (intmath.cpp:799) returns `true` for `width == 0` before touching
-    // either pointer; this used to read `buf.Load<int64_t>(base + 0)`
-    // unconditionally first. Unreachable through the shipped caller
-    // (CheckSoftmaxRowWidthDomainGpu already rejects width == 0), fixed
-    // anyway to match the CPU sibling's own guard order exactly.
-    if (width == 0) return true;
-
-    int64_t peak = buf.Load<int64_t>(base + 0u);
-    for (int pi = 1; pi < width; ++pi)
+    // Phase 1: max-reduce, striped.
+    int64_t local_max = (int64_t)0x8000000000000000ULL;  // INT64_MIN -- the additive identity for
+                                                            // max, safe both for an inactive thread
+                                                            // and for a lane whose own stripe is
+                                                            // empty (width < lanes).
+    if (active)
     {
-        int64_t v = buf.Load<int64_t>(base + (uint)pi * 8u);
-        if (v > peak) peak = v;
+        for (int i = (int)lane; i < width; i += (int)lanes)
+        {
+            int64_t v = buf.Load<int64_t>(base + (uint)i * 8u);
+            if (v > local_max) local_max = v;
+        }
+    }
+    gSoftmaxReduceAcc[t] = local_max;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = lanes >> 1; s > 0u; s >>= 1)
+    {
+        if (lane < s && gSoftmaxReduceAcc[t + s] > gSoftmaxReduceAcc[t])
+            gSoftmaxReduceAcc[t] = gSoftmaxReduceAcc[t + s];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    int64_t peak = gSoftmaxReduceAcc[t - lane];
+    GroupMemoryBarrierWithGroupSync();  // every lane has its own copy of `peak` before
+                                          // `gSoftmaxReduceAcc` is reused below.
+
+    // Phase 2: per-element i-exp compute + store, striped -- a pure map, no cross-thread
+    // coordination needed (each lane's own writes are visible to its own subsequent reads
+    // without a barrier).
+    bool well_formed_local = true;
+    if (active)
+    {
+        for (int k = (int)lane; k < width; k += (int)lanes)
+        {
+            int64_t shifted = buf.Load<int64_t>(base + (uint)k * 8u) - peak;
+            int64_t z, ebase, qc;
+            int d = IExpConstructGpu(shifted, q_ln2, q_b, q_c, z, ebase, qc);
+            int64_t value = 0;
+            if (d == 2 || d == 3 || d == 4) well_formed_local = false;
+            else value = IExpEvaluateGpu(z, ebase, qc);
+            buf.Store<int64_t>(base + (uint)k * 8u, value);
+        }
     }
 
-    bool all_well_formed = true;
-    for (int k = 0; k < width; ++k)
-    {
-        int64_t shifted = buf.Load<int64_t>(base + (uint)k * 8u) - peak;
-        int64_t z, ebase, qc;
-        int d = IExpConstructGpu(shifted, q_ln2, q_b, q_c, z, ebase, qc);
-        int64_t value = 0;
-        if (d == 2 || d == 3 || d == 4)
-        {
-            all_well_formed = false;
-        }
-        else
-        {
-            value = IExpEvaluateGpu(z, ebase, qc);
-        }
-        buf.Store<int64_t>(base + (uint)k * 8u, value);  // exps[k], the m-bound re-check follows below
-    }
-
-    // The original array-based primitive additionally bounds each exps[k]
-    // against `m` (q_b^2+q_c, only usable when it itself fits [1, 2^47]) --
-    // reproduced here as a second pass so the well-formed determination is
-    // identical bit-for-bit (CheckSoftmaxRowWidthDomainGpu has already been
-    // called by every caller before this function runs, per its own
-    // contract, so `m` is known usable at every real call site this design
-    // reaches; the same defensive computation is repeated here rather than
-    // trusted, matching the original primitive's own unconditional re-check).
+    // Phase 3: the m-bound re-check + sum-reduce, striped -- SAME indices per lane as phase 2.
+    // `m_usable` is a pure function of q_b/q_c (call-level constants), computed redundantly and
+    // identically by every lane -- matching the sequential primitive's own unconditional per-call
+    // re-derivation rather than trusting the caller.
     S128 m128 = SAdd(SMul(q_b, q_b), SFromI64(q_c));
-    static const int64_t kSoftmaxRowMaxSafeExponent = ((int64_t)1) << 47;
+    static const int64_t kSoftmaxRowMaxSafeExponentP = ((int64_t)1) << 47;
     bool m_usable = SGe(SFromI64(0x7FFFFFFFFFFFFFFFLL), m128) && SGe(m128, SFromI64(1)) &&
-                     SGe(SFromI64(kSoftmaxRowMaxSafeExponent), m128);
+                     SGe(SFromI64(kSoftmaxRowMaxSafeExponentP), m128);
     int64_t m = m_usable ? SLow64(m128) : 0;
-    int64_t total = 0;
-    // T-2045 (S7, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
-    // matches intmath.cpp:841-891 exactly on the `!m_usable` path -- CPU sets
-    // `exps[k] = 0` for EVERY element (not merely for a subset), so
-    // `out_probs` is all zeros; the prior GPU shape skipped the entire
-    // second pass here and left the raw i-exp values in the buffer for the
-    // final Q15 division to run over. Unreachable through the shipped
-    // caller today (`CheckSoftmaxRowWidthDomainGpu` tests the identical
-    // three conjuncts before this kernel ever runs, so `m_usable` is always
-    // true when reached) -- fixed anyway, since this function's entire
-    // contract is bit-exactness and its CPU sibling explicitly re-derives
-    // this bound rather than trusting its caller.
-    for (int k2 = 0; k2 < width; ++k2)
+    int64_t local_total = 0;
+    if (active)
     {
-        int64_t value = 0;
-        if (m_usable)
+        for (int k2 = (int)lane; k2 < width; k2 += (int)lanes)
         {
-            value = buf.Load<int64_t>(base + (uint)k2 * 8u);
-            if (value < 0 || value > m)
+            int64_t value = 0;
+            if (m_usable)
             {
-                all_well_formed = false;
-                value = 0;
+                value = buf.Load<int64_t>(base + (uint)k2 * 8u);
+                if (value < 0 || value > m) { well_formed_local = false; value = 0; }
             }
+            else
+            {
+                well_formed_local = false;
+            }
+            buf.Store<int64_t>(base + (uint)k2 * 8u, value);
+            local_total += value;
         }
-        else
-        {
-            all_well_formed = false;
-        }
-        buf.Store<int64_t>(base + (uint)k2 * 8u, value);
-        total += value;
     }
 
-    int64_t denom = (total > 1) ? total : 1;
-    static const int kProbFracBitsGpu = 15;
-    for (int j = 0; j < width; ++j)
+    // well-formed AND-reduce (0/1, min = AND), reusing `gSoftmaxReduceAcc`.
+    gSoftmaxReduceAcc[t] = well_formed_local ? 1 : 0;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s2 = lanes >> 1; s2 > 0u; s2 >>= 1)
     {
-        int64_t e = buf.Load<int64_t>(base + (uint)j * 8u);
-        buf.Store<int64_t>(base + (uint)j * 8u, (e << kProbFracBitsGpu) / denom);
+        if (lane < s2 && gSoftmaxReduceAcc[t + s2] < gSoftmaxReduceAcc[t])
+            gSoftmaxReduceAcc[t] = gSoftmaxReduceAcc[t + s2];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    bool all_well_formed = gSoftmaxReduceAcc[t - lane] != 0;
+    GroupMemoryBarrierWithGroupSync();  // every lane has read the group's own well-formed flag
+                                          // before `gSoftmaxReduceAcc` is reused for the sum-reduce.
+
+    // sum-reduce, reusing `gSoftmaxReduceAcc`.
+    gSoftmaxReduceAcc[t] = local_total;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s3 = lanes >> 1; s3 > 0u; s3 >>= 1)
+    {
+        if (lane < s3) gSoftmaxReduceAcc[t] += gSoftmaxReduceAcc[t + s3];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    int64_t total = gSoftmaxReduceAcc[t - lane];
+    GroupMemoryBarrierWithGroupSync();  // every lane has read `total` before `gSoftmaxReduceAcc`
+                                          // is free for the NEXT head-group's own wave iteration.
+
+    // Phase 4: normalize, striped -- SAME indices per lane as phases 2/3.
+    if (active)
+    {
+        int64_t denom = (total > 1) ? total : 1;
+        static const int kProbFracBitsGpuP = 15;
+        for (int j = (int)lane; j < width; j += (int)lanes)
+        {
+            int64_t e = buf.Load<int64_t>(base + (uint)j * 8u);
+            buf.Store<int64_t>(base + (uint)j * 8u, (e << kProbFracBitsGpuP) / denom);
+        }
     }
     return all_well_formed;
 }
