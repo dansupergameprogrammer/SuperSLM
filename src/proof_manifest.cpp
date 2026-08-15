@@ -305,14 +305,15 @@ std::string BuildProofManifestJsonImpl(const SslmArtifact& artifact) {
 	out += "  \"file_bytes\": " + std::to_string(artifact.FileBytes()) + ",\n";
 	out += "  \"artifact_hash\": \"" + artifact.FingerprintHex() + "\",\n";
 
-	// The geometry cross-check (§17.3 cell 4) -- Config is re-parsed HERE,
-	// fresh, from `artifact` (long-lived), rather than trusting a
-	// previously-populated SslmModelView (see this function's header
-	// comment: a view's pointer fields are dangling the instant
-	// SslmModel::Load returns; Config's fields are plain values, not
-	// pointers, so reading them from an already-returned view would
-	// actually be safe, but re-parsing here keeps every field this function
-	// reports sourced the same way, and costs one cheap 84-byte re-parse).
+	// The geometry cross-check (§17.3 cell 4) -- Config is re-parsed HERE, fresh, from `artifact`
+	// (long-lived). CORRECTED (T-2104, Poirot 8e07d0c7/7a0b6426 review, Significant 5): this
+	// function's own signature (above) takes only an `SslmArtifact&`, so there IS no previously-
+	// populated `SslmModelView` in scope to read Config from in the first place -- the re-parse is
+	// not routing around a lifetime hazard (see this function's own header comment for the full
+	// correction: `SslmModelView` does not dangle; nothing in `SslmModel::Load` needed routing
+	// around). It is kept for an independent, real reason: every field this function reports is
+	// sourced the same way, fresh from `artifact`, never from a second object of different
+	// provenance -- worth the one cheap 84-byte re-parse on its own.
 	const SslmSectionView* config_section = artifact.Section(SslmSectionType::Config);
 	if (config_section != nullptr) {
 		SslmModelConfig cfg;

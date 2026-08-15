@@ -22032,6 +22032,76 @@ static void TestAdapterLoaderRejectionCells() {
 		          "got %s (%s)",
 		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
 	}
+
+	// (12) T-2104 (Poirot 7a0b6426 confirmation, Minor 12): the MIRROR of cell (10) -- the direction
+	// that actually motivated Significant 1. Cell (10) declared rank=1 over a genuinely [4,2] tensor
+	// (the tensor LARGER than declared), which the pre-fix code would have read only 2 of the
+	// tensor's own 8 bytes from -- wrong values, but in bounds. THIS cell declares rank=4 (via ADP1
+	// AND a matching UFS1 row_count=4, so the pre-existing UFoldDimensionMismatch check clears
+	// first and cannot mask this one) over a genuinely [1,2] lora_A -- the tensor SMALLER than
+	// declared, the out-of-bounds direction: `GemmInt8AccumulateRow` would read
+	// `in_channels(2) * rank(4) == 8` bytes from a tensor that holds only 2. Must be REJECTED with
+	// LoraAWeightShapeMismatch.
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(/*rank=*/4, 0x1, base_hash, 8.0, false, "a-overread");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj", 2,
+		                                                {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		// UFS1 row_count=4, matching ADP1's declared rank=4 exactly -- clears UFoldDimensionMismatch
+		// so the loader reaches the WGT1 shape check this cell is pinning.
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", /*row_count=*/4,
+		                              {{1, 0, 0}, {1, 0, 0}, {1, 0, 0}, {1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		// lora_A genuinely built at rank=1 (shape [1,2]) -- smaller than ADP1's declared rank=4.
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", /*rank=*/1, /*in=*/2, /*out=*/2,
+		                                                 /*a=*/{1, 2}, /*b=*/{100, -100});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::LoraAWeightShapeMismatch,
+		          "ADP1 declaring rank=4 over a genuinely [1,2] (rank=1) lora_A tensor -- the "
+		          "OUT-OF-BOUNDS direction, tensor smaller than declared -- must be REJECTED with "
+		          "LoraAWeightShapeMismatch: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (13) T-2104 (Poirot 7a0b6426 confirmation, Minor 12): `LoraBWeightShapeMismatch` was landed
+	// alongside `LoraAWeightShapeMismatch` this same round but never itself pinned. lora_A is built
+	// correctly (rank=1, matching both ADP1 and in_channels=2) so the loader clears the lora_A check
+	// and reaches lora_B's; lora_B is built with out_channels=3 instead of q_proj's own correct 2
+	// (hidden_size), so its shape is genuinely [3,1] against an expected [2,1].
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, 0x1, base_hash, 8.0, false, "b-shape");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj", 2,
+		                                                {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", 1, {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		// lora_A correct ([1,2]); lora_B built for out_channels=3, genuinely [3,1] against the
+		// expected [2,1] (q_proj's own out_channels is hidden_size=2 at this fixture's geometry).
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", /*rank=*/1, /*in=*/2, /*out=*/3,
+		                                                 /*a=*/{1, 2}, /*b=*/{1, 2, 3});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::LoraBWeightShapeMismatch,
+		          "a lora_B tensor genuinely shaped [3,1] against q_proj's own expected [2,1] "
+		          "(out_channels=hidden_size=2) must be REJECTED with LoraBWeightShapeMismatch: "
+		          "got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
 }
 
 // --- End-to-end: a LOADER-populated adapter drives RunLayerLoop to the BIT-IDENTICAL result of

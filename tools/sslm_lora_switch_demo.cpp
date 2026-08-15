@@ -213,8 +213,17 @@ struct TimingStats {
 	std::vector<double> samples;
 };
 
+// T-2104 (Poirot 7a0b6426 review, Minor 10): `samples` was empty-unreachable before this round --
+// every prior caller was a load-timing vector, and `timing_reps` is clamped to >= 1. S4's own
+// remedy added calls on `all_base_tps`/`all_runtime_tps`/`all_baked_tps`, sized
+// `prompts.size() * timing_reps`, and `prompts.size()` is genuinely zero for `--prompts ""` (the
+// parse loop below is `while (pos < spec.size())` over an empty string). `min_element`/
+// `max_element` on an empty range is undefined; guarded here, AND `--prompts ""` is rejected
+// outright at parse time (belt and suspenders -- the empty-prompts case is a user-input mistake,
+// not a legitimate configuration this driver has anything meaningful to measure for).
 TimingStats Summarize(const std::vector<double>& samples) {
 	TimingStats t;
+	if (samples.empty()) return t;  // all fields stay at their {0,0,0,{}} defaults
 	t.samples = samples;
 	t.min_s = *std::min_element(samples.begin(), samples.end());
 	t.max_s = *std::max_element(samples.begin(), samples.end());
@@ -222,8 +231,16 @@ TimingStats Summarize(const std::vector<double>& samples) {
 	return t;
 }
 
-void PrintTiming(const char* label, const TimingStats& t) {
-	std::printf("  %-28s min=%.4fs median=%.4fs max=%.4fs  (samples:", label, t.min_s, t.median_s, t.max_s);
+// T-2104 (Poirot 7a0b6426 review, Minor 11): `TimingStats`/`PrintTiming` were written for seconds
+// (field names `min_s`/`median_s`/`max_s`, an `s` suffix hardcoded into the format string) and S4's
+// remedy reused both for throughput (tok/s) without correcting the label -- the committed evidence
+// printed "tok/s BASE ... min=3.5208s ...", a rate carrying a duration's unit. `unit` is now an
+// explicit parameter (never defaulted, so every call site states what it means) -- callers pass
+// "s" for a duration or "tok/s" for a rate; the JSON keys were already correct
+// (`base_tok_per_sec_median` etc.) and are unaffected.
+void PrintTiming(const char* label, const TimingStats& t, const char* unit) {
+	std::printf("  %-28s min=%.4f%s median=%.4f%s max=%.4f%s  (samples:", label, t.min_s, unit,
+	            t.median_s, unit, t.max_s, unit);
 	for (double s : t.samples) std::printf(" %.4f", s);
 	std::printf(")\n");
 }
@@ -359,6 +376,14 @@ int main(int argc, char** argv) {
 		}
 	}
 	if (timing_reps < 1) timing_reps = 1;
+	// T-2104 (Poirot 7a0b6426 review, Minor 10): `--prompts ""` parses to an empty prompt list --
+	// rejected outright rather than left to reach Summarize's own empty-range guard, since an empty
+	// prompt set is a user-input mistake this driver has nothing meaningful to measure for.
+	if (prompts.empty()) {
+		std::fprintf(stderr, "FAILED: --prompts produced an empty prompt list (an empty or "
+		                     "all-\"|\"-consumed --prompts value?) -- at least one prompt is required\n");
+		return 2;
+	}
 
 	std::printf("================================================================================\n");
 	std::printf("T-2102 runtime-LoRA switch demonstration\n");
@@ -467,9 +492,9 @@ int main(int argc, char** argv) {
 	const TimingStats base_load_stats = Summarize(base_load_times);
 	const TimingStats baked_load_stats = Summarize(baked_load_times);
 	const TimingStats adapter_load_stats = Summarize(adapter_load_times);
-	PrintTiming("base model load (see banner)", base_load_stats);
-	PrintTiming("baked model load (see banner)", baked_load_stats);
-	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats);
+	PrintTiming("base model load (see banner)", base_load_stats, "s");
+	PrintTiming("baked model load (see banner)", baked_load_stats, "s");
+	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats, "s");
 	std::printf("\n");
 
 	// --- Generation: base-only, runtime(base+adapter), baked-only, per prompt, REPEATED. -------
@@ -532,9 +557,9 @@ int main(int argc, char** argv) {
 		std::printf("  BASE    (last rep, %zu tok): %s\n", base_res.tokens_produced, base_text.c_str());
 		std::printf("  RUNTIME (last rep, %zu tok): %s\n", runtime_res.tokens_produced, runtime_text.c_str());
 		std::printf("  BAKED   (last rep, %zu tok): %s\n", baked_res.tokens_produced, baked_text.c_str());
-		PrintTiming("  tok/s BASE", base_tps_stats);
-		PrintTiming("  tok/s RUNTIME", runtime_tps_stats);
-		PrintTiming("  tok/s BAKED", baked_tps_stats);
+		PrintTiming("  tok/s BASE", base_tps_stats, "tok/s");
+		PrintTiming("  tok/s RUNTIME", runtime_tps_stats, "tok/s");
+		PrintTiming("  tok/s BAKED", baked_tps_stats, "tok/s");
 
 		const bool switch_did_real_work = (runtime_res.tokens_produced != base_res.tokens_produced) ||
 		                                   (runtime_res.out_tokens != base_res.out_tokens);
@@ -601,9 +626,9 @@ int main(int argc, char** argv) {
 
 	std::printf("================================================================================\n");
 	std::printf("SUMMARY\n");
-	PrintTiming("tok/s BASE (all prompts/reps)", base_gen_stats);
-	PrintTiming("tok/s RUNTIME (all prompts/reps)", runtime_gen_stats);
-	PrintTiming("tok/s BAKED (all prompts/reps)", baked_gen_stats);
+	PrintTiming("tok/s BASE (all prompts/reps)", base_gen_stats, "tok/s");
+	PrintTiming("tok/s RUNTIME (all prompts/reps)", runtime_gen_stats, "tok/s");
+	PrintTiming("tok/s BAKED (all prompts/reps)", baked_gen_stats, "tok/s");
 	// T-2104 (Poirot 8e07d0c review, Significant 4): the direction (paired per prompt, median vs
 	// median) is what n=`prompts.size()` paired samples on a shared machine actually supports --
 	// stated as a count, not smoothed into a percentage with no resolving power beside it.
@@ -622,9 +647,9 @@ int main(int argc, char** argv) {
 		            runtime_gen_stats.median_s / baked_gen_stats.median_s, baked_gen_stats.min_s,
 		            baked_gen_stats.max_s);
 	}
-	PrintTiming("base model load (see banner)", base_load_stats);
-	PrintTiming("baked model load (see banner)", baked_load_stats);
-	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats);
+	PrintTiming("base model load (see banner)", base_load_stats, "s");
+	PrintTiming("baked model load (see banner)", baked_load_stats, "s");
+	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats, "s");
 	std::printf("================================================================================\n");
 
 	auto write_samples = [&](const char* key, const TimingStats& t) {

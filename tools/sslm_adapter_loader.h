@@ -77,8 +77,12 @@ struct AdapterMeta {
 enum class AdapterLoadStatus {
 	Ok = 0,
 	FileReadFailed,           // the adapter path could not be read
-	ArtifactRejected,         // container-level SslmArtifact::OpenFromMemory rejection
-	ModelRejected,            // SslmModel::Load rejection (structural/domain: WGT1/DFS1/UFS1/CFG1/SIL1)
+	ArtifactRejected,         // SslmModel::Load's own container-level rejection
+	                          // (SslmModelStatus::ArtifactRejected -- the outer container failed
+	                          // before any section was even parsed: bad magic, unsupported
+	                          // version, truncation, integrity mismatch, etc.)
+	ModelRejected,            // SslmModel::Load rejection deeper than the container (structural/
+	                          // domain: WGT1/DFS1/UFS1/CFG1/SIL1)
 	MissingProvenanceSection, // no Provenance section at all
 	BadAdp1Size,              // Provenance section shorter than the 68-byte fixed prefix, or the
 	                          // declared name length overruns it
@@ -289,7 +293,18 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 		if (st != superslm::SslmModelStatus::Ok) {
 			if (err) *err = std::string("adapter model rejected: ") +
 			                superslm::SslmModelStatusName(st) + " -- " + model_err;
-			return AdapterLoadStatus::ModelRejected;
+			// T-2104 (Poirot 7a0b6426 review, Minor 9): SslmModel::Load's own ArtifactRejected
+			// (model.h: "the outer SslmArtifact::OpenFromMemory rejected the container") is the
+			// SAME container-level rejection AdapterLoadStatus::ArtifactRejected was declared to
+			// name, back when this loader still opened its own separate SslmArtifact. That second
+			// open is gone (Significant 2, this same round), but the distinction it was declared
+			// for -- "no such file" vs "wrong base" vs "artifact structurally broken," this enum's
+			// own header promise -- is still worth keeping, so it is re-wired here rather than left
+			// dead: a container-level rejection maps to AdapterLoadStatus::ArtifactRejected, every
+			// other SslmModelStatus rejection (a structural/domain rejection deeper than the
+			// container -- WGT1/DFS1/UFS1/CFG1/SIL1) to ModelRejected.
+			return st == superslm::SslmModelStatus::ArtifactRejected ? AdapterLoadStatus::ArtifactRejected
+			                                                          : AdapterLoadStatus::ModelRejected;
 		}
 	}
 
