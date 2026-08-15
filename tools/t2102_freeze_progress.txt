@@ -1,0 +1,37 @@
+[19:35:33] T-2102 real freeze-health-gate run starting
+[19:35:33] adapter=D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2\final
+[19:35:33] base=D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm
+[19:35:33] adapter meta: rank=16 lora_alpha=32.0 use_rslora=False target_modules=('down_proj', 'gate_proj', 'k_proj', 'o_proj', 'q_proj', 'up_proj', 'v_proj')
+[19:35:33] raw checkpoint dir (float reference): D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots\989aa7980e4cf806f80c7fef2b1adb7bc71aa306
+[19:35:33] base geometry: num_hidden_layers=28
+[19:35:33] 196 adapted pairs (28 layers x 7 target_modules)
+[19:35:33] invoking run_freeze_health_gate -- SHIPPED defaults, no override (pilot_n=200, budget_seconds=1800.0, pilot_n_ceiling=60000, escalation_factor=2)
+[19:42:08]   collected 20/196 pairs at pilot_n=200 (396s elapsed)
+[19:48:55]   collected 40/196 pairs at pilot_n=200 (803s elapsed)
+[19:55:56]   collected 60/196 pairs at pilot_n=200 (1224s elapsed)
+[20:03:17]   collected 80/196 pairs at pilot_n=200 (1665s elapsed)
+[20:10:23]   collected 100/196 pairs at pilot_n=200 (2090s elapsed)
+[20:18:01]   collected 120/196 pairs at pilot_n=200 (2548s elapsed)
+[20:25:55]   collected 140/196 pairs at pilot_n=200 (3022s elapsed)
+[20:33:50]   collected 160/196 pairs at pilot_n=200 (3497s elapsed)
+[20:42:16] T-2102 real freeze-health-gate run starting
+[20:42:16] adapter=D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2\final
+[20:42:16] base=D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm
+[20:42:16] adapter meta: rank=16 lora_alpha=32.0 use_rslora=False target_modules=('down_proj', 'gate_proj', 'k_proj', 'o_proj', 'q_proj', 'up_proj', 'v_proj')
+[20:42:16] raw checkpoint dir (float reference): D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots\989aa7980e4cf806f80c7fef2b1adb7bc71aa306
+[20:42:16] base geometry: num_hidden_layers=28
+[20:42:16] 196 adapted pairs (28 layers x 7 target_modules)
+[20:42:16] resuming: 164 (pair, pilot_n) draws already checkpointed at D:\SuperSLM\.worktrees\t2021-build\tools\_t2102_freeze_checkpoint.jsonl
+[20:42:16] invoking run_freeze_health_gate -- SHIPPED defaults, no override (pilot_n=200, budget_seconds=1800.0, pilot_n_ceiling=60000, escalation_factor=2)
+[20:42:16]   collected 20/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 40/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 60/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 80/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 100/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 120/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 140/196 pairs at pilot_n=200 (0s elapsed)
+[20:42:16]   collected 160/196 pairs at pilot_n=200 (0s elapsed)
+[20:48:12]   collected 180/196 pairs at pilot_n=200 (356s elapsed)
+[20:52:22]   collected 196/196 pairs at pilot_n=200 (605s elapsed)
+[20:52:27] DONE: overall=PASS freeze_allowed=True stop_reason=resolved escalation_steps=1 final_pilot_n=200 seconds_spent=605.1 total_wallclock=610.8s
+[20:52:27] wrote D:\SuperSLM\.worktrees\t2021-build\tools\t2102_freeze_verdict.json

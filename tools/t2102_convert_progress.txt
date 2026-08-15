@@ -1,0 +1,7 @@
+[19:45:33] T-2102 checkpointed real conversion starting
+[20:52:01] T-2102 checkpointed real conversion starting
+[21:02:13] build_runtime_additive_sections done in 613s: domain_trip=False margin_exceeded=False saturation_elevated=False
+[21:02:13] wrote D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm
+[21:02:13] fingerprint adecdbc3e1b30ca5bef369e9f23793c91601a5b27ec55d9f2ab8b7475ef997a8
+[21:02:13] sections 6: 0, 12, 1, 2, 40, 41
+[21:02:13] DONE in 613s total

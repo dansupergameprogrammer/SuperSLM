@@ -1,0 +1,18 @@
+{
+ "prompts": [
+  {"prompt": "Customer: Do you have any healing potions?\nShopkeeper:", "base_text": " Yes, we do. We have a selection of potions that can help you with your ailments.\nCustomer: That's great! Can you tell me more about them", "runtime_text": " Yes, we do. We have a variety of healing potions available. What type of potion are you looking for?\nCustomer: I'm looking for a potion that", "baked_text": " Yes, we do indeed have some. Would you like to know more about them or would you like to try one?\nThis is an example of which type of", "base_tokens": 32, "runtime_tokens": 32, "baked_tokens": 32, "base_decode_seconds": 7.49931, "runtime_decode_seconds": 7.85295, "baked_decode_seconds": 7.48261, "switch_changed_output": true, "runtime_vs_baked_argmax_agree": 4, "runtime_vs_baked_common_tokens": 32, "runtime_vs_baked_max_abs_logit_diff": 18379},
+  {"prompt": "Customer: What's the price of that sword?\nShopkeeper:", "base_text": " I'm sorry, but I can't tell you that. I'm a no-nonsense kind of guy.\nThe customer: Well, I'm not buying a", "runtime_text": " It is priced at $1000.\nCustomer: Is it true that it is priced at $1000?\nShopkeeper: Yes, it", "baked_text": " The sword is priced at $1000.00.\nCustomer: How much is it?\nShopkeeper: It is priced at $100", "base_tokens": 32, "runtime_tokens": 32, "baked_tokens": 32, "base_decode_seconds": 7.63867, "runtime_decode_seconds": 8.21915, "baked_decode_seconds": 7.63333, "switch_changed_output": true, "runtime_vs_baked_argmax_agree": 2, "runtime_vs_baked_common_tokens": 32, "runtime_vs_baked_max_abs_logit_diff": 18104},
+  {"prompt": "Customer: I need something to protect me from goblins.\nShopkeeper:", "base_text": " I have a solution for you. It is called a **Goblin Shield**. It is a magical device that can protect you from goblins. However,", "runtime_text": " We have a variety of weapons and armor to choose from.\nCustomer: I want something that is both effective and affordable.\nShopkeeper: We have a set of", "baked_text": " What's your name, sir?\nCustomer: I'm just a customer.\nShopkeeper: Well, sir, I have a solution for you. I have a", "base_tokens": 32, "runtime_tokens": 32, "baked_tokens": 32, "base_decode_seconds": 8.06085, "runtime_decode_seconds": 8.32221, "baked_decode_seconds": 7.96962, "switch_changed_output": true, "runtime_vs_baked_argmax_agree": 0, "runtime_vs_baked_common_tokens": 32, "runtime_vs_baked_max_abs_logit_diff": 19306}
+ ],
+ "summary": {
+  "mean_tok_per_sec_base": 4.14202,
+  "mean_tok_per_sec_runtime": 3.93779,
+  "mean_tok_per_sec_baked": 4.16132,
+  "argmax_agree": 6,
+  "argmax_total": 96,
+  "max_abs_logit_diff": 19306,
+  "base_load_seconds": [7.51888,7.55389,7.53147],
+  "baked_load_seconds": [7.48644,7.51399,7.52846],
+  "adapter_load_seconds": [0.232134,0.233237,0.231775]
+ }
+}

@@ -1,0 +1,61 @@
+================================================================================
+T-2102 runtime-LoRA switch demonstration
+  base:    D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm
+  adapter: D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm
+  baked:   D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2-merged-t2102.sslm
+  max_new_tokens=32  timing_reps=3  prompts=3
+================================================================================
+
+--- timing: cold load, 3 repetitions each -------------------------------------
+  base model cold load         min=7.5189s median=7.5315s max=7.5539s  (samples: 7.5189 7.5539 7.5315)
+  baked model cold load        min=7.4864s median=7.5140s max=7.5285s  (samples: 7.4864 7.5140 7.5285)
+  adapter load+apply (switch cost) min=0.2318s median=0.2321s max=0.2332s  (samples: 0.2321 0.2332 0.2318)
+
+--- prompt 0: Customer: Do you have any healing potions?
+Shopkeeper:
+  BASE    (32 tok, 7.4993s, 4.27 tok/s):  Yes, we do. We have a selection of potions that can help you with your ailments.
+Customer: That's great! Can you tell me more about them
+  RUNTIME (32 tok, 7.8530s, 4.07 tok/s):  Yes, we do. We have a variety of healing potions available. What type of potion are you looking for?
+Customer: I'm looking for a potion that
+  BAKED   (32 tok, 7.4826s, 4.28 tok/s):  Yes, we do indeed have some. Would you like to know more about them or would you like to try one?
+This is an example of which type of
+  switch changed output vs base: YES
+  runtime-vs-baked: token agreement 4/32, max|logit delta| over all positions/vocab = 18379.0
+
+--- prompt 1: Customer: What's the price of that sword?
+Shopkeeper:
+  BASE    (32 tok, 7.6387s, 4.19 tok/s):  I'm sorry, but I can't tell you that. I'm a no-nonsense kind of guy.
+The customer: Well, I'm not buying a
+  RUNTIME (32 tok, 8.2192s, 3.89 tok/s):  It is priced at $1000.
+Customer: Is it true that it is priced at $1000?
+Shopkeeper: Yes, it
+  BAKED   (32 tok, 7.6333s, 4.19 tok/s):  The sword is priced at $1000.00.
+Customer: How much is it?
+Shopkeeper: It is priced at $100
+  switch changed output vs base: YES
+  runtime-vs-baked: token agreement 2/32, max|logit delta| over all positions/vocab = 18104.0
+
+--- prompt 2: Customer: I need something to protect me from goblins.
+Shopkeeper:
+  BASE    (32 tok, 8.0609s, 3.97 tok/s):  I have a solution for you. It is called a **Goblin Shield**. It is a magical device that can protect you from goblins. However,
+  RUNTIME (32 tok, 8.3222s, 3.85 tok/s):  We have a variety of weapons and armor to choose from.
+Customer: I want something that is both effective and affordable.
+Shopkeeper: We have a set of
+  BAKED   (32 tok, 7.9696s, 4.02 tok/s):  What's your name, sir?
+Customer: I'm just a customer.
+Shopkeeper: Well, sir, I have a solution for you. I have a
+  switch changed output vs base: YES
+  runtime-vs-baked: token agreement 0/32, max|logit delta| over all positions/vocab = 19306.0
+
+================================================================================
+SUMMARY
+  mean tok/s   base=4.14  runtime=3.94  baked=4.16
+  runtime-adapter overhead vs base:  4.93%
+  runtime vs baked throughput ratio: 0.9463 (1.0 = identical)
+  runtime-vs-baked argmax agreement: 6/96 positions across all prompts
+  runtime-vs-baked max|logit delta| across all prompts/positions/vocab: 19306.0
+  base model cold load         min=7.5189s median=7.5315s max=7.5539s  (samples: 7.5189 7.5539 7.5315)
+  baked model cold load        min=7.4864s median=7.5140s max=7.5285s  (samples: 7.4864 7.5140 7.5285)
+  adapter load+apply (switch cost) min=0.2318s median=0.2321s max=0.2332s  (samples: 0.2321 0.2332 0.2318)
+================================================================================
+wrote tools/t2102_demo_result.json
