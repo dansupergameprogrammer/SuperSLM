@@ -11,6 +11,7 @@ static void TestDim9_M1_SaveMidDecodeRestoreFreshHandleBitIdentical(SslmGpuConte
                                                                      SslmGpuAdapterHandle* adapter) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	for (int step = 0; step < 8; ++step)  // decode partway -- context_length > 0
 		CHECK(sslm_decode_step_gpu(ctx, seq, adapter, 24u) == SSLM_OK);
 
@@ -47,6 +48,7 @@ static void TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps(SslmGpuContext
 	}
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 128, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	for (int step = 0; step < 16; ++step)
 		CHECK(sslm_decode_step_gpu(ctx, seq, adapter, 24u) == SSLM_OK);
 	std::vector<uint8_t> blob(4 << 20);

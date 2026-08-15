@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -140,6 +141,22 @@ struct SslmGpuModelHandle {
 	// ModelHasLiveSequences guard (design Sec9, Sec4.2's own model_unmap row): T-2113 (B3)
 	// incremented by sslm_gpu_seq_create, decremented on release, below.
 	int64_t live_sequences = 0;
+
+	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): host-side metadata
+	// sslm_gpu_seq_embed_token needs for its whole lifetime -- NOT new GPU residency (the
+	// design's own explicit "not new residency" clause, Sec5.3a): the embedding matrix
+	// itself has no dispatch site and is never bound to a command list, so it stays a
+	// plain host-side copy, taken once at map() time (mirroring the packed weight bytes'
+	// own "upload once, inside map" discipline, but never uploaded to a device buffer
+	// since nothing ever reads it from a shader). Copied rather than pointed at `base`
+	// (the SslmModelView passed to sslm_gpu_model_map) because that view's own lifetime is
+	// caller-owned and this handle must serve sslm_gpu_seq_embed_token for its OWN whole
+	// lifetime, which can outlive the caller's view -- the identical reasoning that
+	// already governs why LayerWeights/lw_bytes above are marshaled and packed at map()
+	// time rather than read from `base` lazily per call.
+	std::vector<int8_t> embed_weights;
+	superslm::CarriedScale embed_site_constant{};
+	int32_t vocab_size = 0;
 
 	bool destroyed = false;
 };
@@ -400,6 +417,26 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	std::vector<uint8_t> sin_bytes(static_cast<size_t>(sin_need), 0);
 	if (sin_t != nullptr) std::memcpy(sin_bytes.data(), sin_t->data, sin_bytes.size());
 
+	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): the embedding matrix, its
+	// site constant, and vocab_size -- read from `*base` exactly where sslm_generate.cpp's
+	// own precedent reads them (`model_view.weights.Tensor("embed")`,
+	// `ReadCarriedScale(model_view.composition_constants, "embed", &ok)`,
+	// `model_view.config.vocab_size`). A malformed artifact missing either takes the same
+	// "no more specific status than DeviceLost" disposition every other marshal failure in
+	// this function already uses (the missing-tensor case above).
+	const superslm::SslmTensorView* embed_w = base->weights.Tensor("embed");
+	if (!embed_w) {
+		return SSLM_DEVICE_LOST;
+	}
+	bool embed_scale_ok = true;
+	const superslm::CarriedScale embed_site_constant =
+	    superslm_marshal::ReadCarriedScale(base->composition_constants, "embed", &embed_scale_ok);
+	if (!embed_scale_ok) {
+		return SSLM_DEVICE_LOST;
+	}
+	const int32_t vocab_size = base->config.vocab_size;
+	const size_t embed_bytes_needed = static_cast<size_t>(vocab_size) * static_cast<size_t>(H);
+
 	std::unique_ptr<SslmGpuModelHandle> h(new SslmGpuModelHandle());
 	try {
 		h->weights_buf = UploadResidentBufferSync(ctx->device, lw_bytes.data(), lw_bytes.size());
@@ -408,6 +445,15 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	} catch (const std::exception&) {
 		return SSLM_DEVICE_LOST;
 	}
+
+	// Host-only copy (Sec5.3a: "not new residency, no additional GPU upload") -- taken
+	// after the three real device uploads above have already succeeded, so a failure here
+	// never leaves a half-uploaded device handle: this is a plain host memcpy that cannot
+	// itself throw a D3D12 exception, so it is outside the try/catch above by construction.
+	h->embed_weights.assign(reinterpret_cast<const int8_t*>(embed_w->data),
+	                         reinterpret_cast<const int8_t*>(embed_w->data) + embed_bytes_needed);
+	h->embed_site_constant = embed_site_constant;
+	h->vocab_size = vocab_size;
 
 	h->ctx = ctx;
 	h->content_hash = base->RawIntegrityHash();
@@ -776,6 +822,72 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	return SSLM_OK;
 }
 
+// T-2113 (B3.5, design Sec5.3a/Sec10 B3.5, mini-fold 2026-08-15 routing D-SLM3367): the
+// production token-feed entry point. Host-only -- no dispatch, no GPU state touched, no
+// interaction with the async lifecycle or the dispatch geometry (design's own "issues no
+// dispatch" framing is why this call needs neither B4 nor B5). Reuses the CPU path's own
+// `EmbedEntry` primitive verbatim (forward_sites.h) against this handle's own model's
+// host-retained embed_weights/embed_site_constant/vocab_size (B2's own amendment, above)
+// -- the identical arithmetic RunWholeToken's own closure calls (forward_sites.cpp),
+// called with the same trailing defaults (site="", token_index=0, no trace hook) so a
+// caller driving this call pair reproduces that closure's own output byte-for-byte.
+SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                        int32_t token_id) {
+	if (!ctx || !seq || seq->destroyed || !seq->model || seq->model->destroyed) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
+		                                           // at this call, same "no more specific
+		                                           // status" disposition every other
+		                                           // malformed-handle site in this file uses.
+	}
+	// Design Sec5.3a: "seq state Idle (never Submitted -- returns Busy, the same convention
+	// every other host-mutating call on a sequence handle already follows)."
+	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+	if (!superslm_gpu::CallProceedsOrBusy_SeqReset(is_submitted)) {
+		return SSLM_BUSY;  // CallProceedsOrBusy_SeqReset is the correct policy predicate to
+		                    // reuse here: it is the SAME "proceed iff Idle/Completed, Busy
+		                    // iff Submitted" rule design Sec5.9 assigns every host-mutating
+		                    // sequence call (seq_save/seq_reset/seq_release all reuse the
+		                    // identical predicate against their own distinct calls today).
+	}
+
+	SslmGpuModelHandle* model = seq->model;
+	// F-S3-8 (forward_sites.cpp): validate token_id against [0, vocab_size) BEFORE any row
+	// of embed_weights is read -- the identical bounds check EmbedEntry itself performs,
+	// checked HERE too (not merely relying on EmbedEntry's own internal check) so this
+	// call's own documented contract ("leaves seq's own state untouched" on rejection) is
+	// satisfied by construction: nothing below this check ever writes to `seq`.
+	if (token_id < 0 || token_id >= model->vocab_size) {
+		return SSLM_TOKEN_ID_OUT_OF_RANGE;
+	}
+
+	std::vector<int8_t> embed_codes(model->hidden_size);
+	superslm::CarriedScale embed_scale{};
+	const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+	    token_id, model->vocab_size, model->embed_weights.data(),
+	    static_cast<size_t>(model->hidden_size), model->embed_site_constant, embed_codes.data(),
+	    &embed_scale);
+	if (est != superslm::SslmForwardStatus::Ok) {
+		// EmbedEntry's own only rejection is the identical token_id bounds check already
+		// performed above (forward_sites.cpp:757) -- unreachable in practice given the
+		// guard above, handled anyway per this file's own "an unhandled path throws loudly
+		// rather than silently miscomputing" precedent (SslmGpuSequenceHandle's own
+		// SequenceKvBufferMismatch structural self-check, sslm_gpu_seq_create, above).
+		return SSLM_TOKEN_ID_OUT_OF_RANGE;
+	}
+
+	// Design Sec5.3a: "overwrites seq's own host-mirrored hidden_codes/hidden_scale ...
+	// and resets layer_index to 0" -- matching RunWholeToken's own reset before a fresh
+	// layer pass (forward_sites.cpp). `seq->live_state.hidden_codes` already aliases
+	// `seq->hidden_codes.data()` (set once at sslm_gpu_seq_create) -- writing through
+	// `seq->hidden_codes` keeps both in sync without a second copy.
+	std::copy(embed_codes.begin(), embed_codes.end(), seq->hidden_codes.begin());
+	seq->hidden_scale = embed_scale;
+	seq->layer_index = 0;
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = 0;
+	return SSLM_OK;
+}
+
 namespace {
 // T-2113 (B5): `RunLayerLoopGpuSubmit`'s own guard ladder (superslm_gpu.cpp, unchanged
 // from the pre-1.0 substrate) rejects for reasons the 1.0 API's own construction already
@@ -873,10 +985,25 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	}
 
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	// T-2113 (B3.5 reconciliation, D-SLM3367 fold-out): a real bug found at the bench, not a
+	// design/test issue -- this call was passing model->context_cap (the MODEL's own config
+	// context_cap, e.g. the artifact's real 32768) into RunLayerLoopGpuSubmit's own
+	// WorkspaceSizeOrOverflow guard, instead of seq->context_cap (design Sec5.3: "a real,
+	// dedicated DEFAULT-heap K/V buffer sized to context_cap FOR THIS SEQUENCE" -- a
+	// per-sequence value, deliberately independent of the model's own config context_cap,
+	// design Sec5.3's whole reason to take context_cap as sslm_gpu_seq_create's own parameter).
+	// seq->host_kv_mirror (passed below) is sized against seq->context_cap at create time
+	// (sslm_gpu_seq_create, above) -- passing model->context_cap here made the guard compute a
+	// kv_bytes_needed against the WRONG (model-wide) context_cap, which silently disagreed with
+	// host_kv_mirror's own real size whenever a caller created a sequence at a context_cap
+	// smaller than the model's own config value (WorkspaceTooSmall, a false rejection every
+	// caller who does not happen to pass context_cap == model->context_cap would hit). Found
+	// while reconciling the T-2112 red suite's own dim1/dim3/dim6/dim9/dim11 cells, which all
+	// create sequences at context_cap=64, far below any real artifact's own config context_cap.
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
 	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
-	    model->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
+	    seq->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
 	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
 	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr);

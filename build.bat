@@ -108,6 +108,22 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2113 (B3.5, design Sec5.3a/Sec10 B3.5, mini-fold 2026-08-15 routing D-SLM3367): the
+rem embed-token bench proof (tools\t2113_b35_embed_smoke.cpp) -- needs one real .sslm artifact,
+rem so it is built here but NOT auto-run by default (matching B2/B3's own precedent above);
+rem the build seat's own session invokes it manually against the real 1.5B artifact on disk.
+rem Same full source list as B1/B2/B3's own smoke builds.
+if not exist out\b35 mkdir out\b35
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2113_b35_embed_smoke.cpp /Fo:out\b35\ /Fe:out\t2113_b35_embed_smoke.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B5, design Sec10 B5): the async-boundary bench proof
 rem (tools\t2113_b5_async_smoke.cpp) -- needs one real .sslm artifact, so it is built here
 rem but NOT auto-run by default (matching B2/B3's own precedent above); the build seat's own

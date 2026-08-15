@@ -22,6 +22,7 @@ using namespace superslm;
 static void TestDim6_M1_PerStepBitEqualityEveryStep(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	for (int step = 0; step < 64; ++step) {
 		CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
 		// FEATURE ORACLE (StandardsDocument.md Sec5.4/catalog dim10 -- required beside dim6's own
@@ -40,6 +41,7 @@ static void TestDim6_M1_PerStepBitEqualityEveryStep(SslmGpuContext* ctx, SslmGpu
 static void TestDim6_M2_C5SingleCallBitIdentity(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
 	// The C5 comparison itself (tools/t2039_c5_harness.cpp's own precedent) reads the FULL
 	// SequenceLayerState surface -- hidden_codes, hidden_scale, every K/V row, kv_saturation_count,
@@ -55,6 +57,7 @@ static void TestDim6_M3_TimeSliceInvarianceAtAsyncBoundary(SslmGpuContext* ctx,
 	for (const uint32_t budget : {24u, 48u, 72u, 24u * 7u}) {  // down to the minimum legal budget
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 		int32_t ready = 0;
 		SslmGpuStatus decoded_status = SSLM_OK;
 		CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, budget) == SSLM_OK);
@@ -78,6 +81,7 @@ static void TestDim6_M4a_DroppedUavRebindAfterAsyncBoundaryDetected(SslmGpuConte
                                                                      SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);  // one async boundary crossed
 	// Injection point: the build seat's own deliberately-mutated build (design Sec6.2's own
 	// "unconditional at the top of every call, never conditioned" rule, MUTATED to skip the
@@ -98,6 +102,7 @@ static void TestDim6_M4b_SwappedSrvRebindCaughtByPerStepOracle(SslmGpuContext* c
                                                                 SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
 	// Injection point: the build seat's own mutated build (two SRVs swapped in the rebind block
 	// after an async boundary). Predicted outcome is SILENT divergence -- the call itself returns

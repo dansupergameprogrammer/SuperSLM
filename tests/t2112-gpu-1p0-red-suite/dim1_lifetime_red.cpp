@@ -25,6 +25,10 @@ static void TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(SslmGpuContext* ctx,
 	CHECK(model_a != nullptr);
 	SslmGpuSequenceHandle* seq_a = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_a, /*context_cap=*/64, &seq_a) == SSLM_OK);
+	// T-2113 B3.5 reconciliation (D-SLM3367): a fresh sequence's own hidden_codes/hidden_scale
+	// are zero/default until embedded -- real content via the production entry point, not the
+	// bench bridge, so the decode call below is decode-ready (design Sec5.3a).
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_a, 5) == SSLM_OK);
 	// Second, independent model handle (already mapped by the caller against a DIFFERENT
 	// artifact, content-hash-keyed per design Sec5.1) must not evict or alias model_a's own
 	// resident weights.
@@ -47,6 +51,7 @@ static void TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(
     SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq1 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq1) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq1, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	// Advance seq1's own K/V state so a stale read would be observable (not a freshly-zeroed
 	// buffer, which would hide the defect this cell exists to catch).
 	CHECK(sslm_decode_step_gpu(ctx, seq1, nullptr, 24u) == SSLM_OK);
@@ -61,6 +66,7 @@ static void TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(
 	}
 	SslmGpuSequenceHandle* seq2 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq2) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq2, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	// seq2's first decode step must be identical to a sequence created fresh with no prior
 	// history at this address -- the per-step CPU/GPU bit-equality oracle (dim6) is the
 	// instrument; this cell's own claim is narrower and structural: seq2 != seq1's own stale
@@ -81,6 +87,7 @@ static void TestDim1_P1_RealArtifactAddressReuseBitEquality(SslmGpuContext* ctx,
 	}
 	SslmGpuSequenceHandle* seq1 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq1) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq1, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	for (int step = 0; step < 16; ++step)
 		CHECK(sslm_decode_step_gpu(ctx, seq1, nullptr, 24u) == SSLM_OK);
 	CHECK(sslm_gpu_seq_release(ctx, seq1) == SSLM_OK);
@@ -91,6 +98,7 @@ static void TestDim1_P1_RealArtifactAddressReuseBitEquality(SslmGpuContext* ctx,
 	}
 	SslmGpuSequenceHandle* seq2 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq2) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq2, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	// FEATURE ORACLE (StandardsDocument.md Sec5.4 / catalog dim10): per-step CPU/GPU bit-equality
 	// against superslm::RunLayerLoop (the CPU oracle) for the FULL 64-step run on seq2, proving no
 	// residue from seq1 survived -- the oracle call itself is the build seat's own T-2100/O1
@@ -107,6 +115,7 @@ static void TestDim1_P2_TenSequenceLifecycleNoLeak(SslmGpuContext* ctx,
 	for (int i = 0; i < 10; ++i) {
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 		CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
 		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 	}

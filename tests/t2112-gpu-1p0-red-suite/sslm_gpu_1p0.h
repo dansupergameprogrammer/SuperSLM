@@ -82,7 +82,9 @@ typedef enum SslmGpuStatus {
     SSLM_ADAPTER_BASE_HASH_MISMATCH,     /* design Sec9                         */
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9                         */
     SSLM_DEVICE_LOST,                    /* design Sec9                         */
-    SSLM_BATCH_BUDGET_EXHAUSTED          /* design Sec9, ADDED at this fold     */
+    SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9, ADDED at this fold     */
+    SSLM_TOKEN_ID_OUT_OF_RANGE           /* design Sec9, ADDED at the 2026-08-15
+                                           * mini-fold (Sec18), D-SLM3367       */
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */
@@ -104,6 +106,15 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                    int64_t context_cap, SslmGpuSequenceHandle** out_seq);
 SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
+
+/* --- Sec5.3a: the production token-feed entry point, ADDED at the 2026-08-15 mini-fold
+ * (Sec18), routing D-SLM3367. Host-only -- no dispatch, no state transition to Submitted.
+ * Precondition: seq state Idle (Busy against Submitted). On success: overwrites hidden_codes/
+ * hidden_scale via the identical EmbedEntry primitive the CPU path calls, resets layer_index
+ * to 0. On a hostile token_id (outside [0, vocab_size)): TokenIdOutOfRange, seq state
+ * untouched. */
+SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                        int32_t token_id);
 
 /* --- Sec4.2: save/restore/reset --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,

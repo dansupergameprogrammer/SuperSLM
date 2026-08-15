@@ -20,6 +20,8 @@ static void TestDim3_M1_TwoThreadsDisjointSequencesMatchSerial(SslmGpuContext* c
 	SslmGpuSequenceHandle* seq_b = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq_a) == SSLM_OK);
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq_b) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_a, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_b, 5) == SSLM_OK);
 	std::thread ta([&] {
 		for (int i = 0; i < 16; ++i) CHECK(sslm_decode_step_gpu(ctx, seq_a, nullptr, 24u) == SSLM_OK);
 	});
@@ -42,6 +44,7 @@ static void TestDim3_M2_SameSequenceConcurrentAccessResidualObserved(SslmGpuCont
                                                                       SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	SslmGpuStatus r1 = SSLM_OK, r2 = SSLM_OK;
 	std::thread ta([&] { r1 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u); });
 	std::thread tb([&] { r2 = sslm_decode_step_gpu(ctx, seq, nullptr, 24u); });
@@ -72,6 +75,8 @@ static void TestDim3_P1_RealArtifactConcurrentDecode64Steps(SslmGpuContext* ctx,
 	SslmGpuSequenceHandle* seq_b = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq_a) == SSLM_OK);
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq_b) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_a, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq_b, 5) == SSLM_OK);
 	std::thread ta([&] {
 		for (int i = 0; i < 64; ++i) CHECK(sslm_decode_step_gpu(ctx, seq_a, nullptr, 24u) == SSLM_OK);
 	});
