@@ -464,81 +464,28 @@ inline void MaybeThrowInjectedO11AllocFault(uint32_t this_site) {
 // field sites 5-16 read. Index 0-24 unchanged from T-2032 (attn_norm/q_proj/
 // kv_proj); 25-55 new (o_proj, ctx_fold, attn_residual, mlp_norm, gate/up/
 // down_proj, mlp_act, mlp_residual, iexp_softmax_khead); 56 is the stride.
-struct GpuLayerLayout {
-	uint32_t off[56]{};
-	uint32_t stride = 0;
-};
-
-GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
-                                   uint32_t num_kv_heads, uint32_t num_attention_heads,
-                                   uint32_t intermediate_size) {
-	GpuLayerLayout L;
-	uint32_t cur = 0;
-	L.off[0] = cur; cur += Align8U32(hidden_size * 4);              // attn_norm_gain
-	L.off[1] = cur; cur += 16;                                      // attn_norm_site_constant
-	L.off[2] = cur; cur += Align8U32(hidden_size * hidden_size);    // q_weight (int8)
-	L.off[3] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_identity
-	L.off[4] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_mult
-	L.off[5] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_shift
-	L.off[6] = cur; cur += 16;                                      // q_site_constant
-	L.off[7] = cur; cur += 8;                                       // q_bias_present
-	L.off[8] = cur; cur += Align8U32(hidden_size * 8);              // q_bias
-	L.off[9] = cur; cur += Align8U32(kv_hidden_size * hidden_size); // k_weight (int8)
-	L.off[10] = cur; cur += Align8U32(kv_hidden_size * hidden_size);// v_weight (int8)
-	L.off[11] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_identity
-	L.off[12] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_mult
-	L.off[13] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_shift
-	L.off[14] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_identity
-	L.off[15] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_mult
-	L.off[16] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_shift
-	L.off[17] = cur; cur += 8;                                      // k_bias_present
-	L.off[18] = cur; cur += Align8U32(kv_hidden_size * 8);          // k_bias
-	L.off[19] = cur; cur += 8;                                      // v_bias_present
-	L.off[20] = cur; cur += Align8U32(kv_hidden_size * 8);          // v_bias
-	L.off[21] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_k
-	L.off[22] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_k
-	L.off[23] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_v
-	L.off[24] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_v
-	L.off[25] = cur; cur += Align8U32(hidden_size * hidden_size);   // o_weight (int8)
-	L.off[26] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_identity
-	L.off[27] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_mult
-	L.off[28] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_shift
-	L.off[29] = cur; cur += 16;                                     // o_site_constant
-	L.off[30] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_identity
-	L.off[31] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_mult
-	L.off[32] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_shift
-	L.off[33] = cur; cur += 16;                                     // ctx_fold_site_constant
-	L.off[34] = cur; cur += 16;                                     // attn_residual_site_constant
-	L.off[35] = cur; cur += Align8U32(hidden_size * 4);             // mlp_norm_gain
-	L.off[36] = cur; cur += 16;                                     // mlp_norm_site_constant
-	L.off[37] = cur; cur += Align8U32(intermediate_size * hidden_size);  // gate_weight (int8)
-	L.off[38] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_identity
-	L.off[39] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_mult
-	L.off[40] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_shift
-	L.off[41] = cur; cur += 16;                                     // gate_site_constant
-	L.off[42] = cur; cur += Align8U32(intermediate_size * hidden_size);  // up_weight (int8)
-	L.off[43] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_identity
-	L.off[44] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_mult
-	L.off[45] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_shift
-	L.off[46] = cur; cur += 16;                                     // up_site_constant
-	L.off[47] = cur; cur += 16;                                     // mlp_act_site_constant
-	L.off[48] = cur; cur += Align8U32(hidden_size * intermediate_size);  // down_weight (int8)
-	L.off[49] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_identity
-	L.off[50] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_mult
-	L.off[51] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_shift
-	L.off[52] = cur; cur += 16;                                     // down_site_constant
-	L.off[53] = cur; cur += 16;                                     // mlp_residual_site_constant
-	L.off[54] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_m
-	L.off[55] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_e
-	L.stride = cur;
-	return L;
-}
+// T-2113 (B2): GpuLayerLayout is now declared in include/superslm/gpu_port.h (promoted so
+// gpu_1p0.cpp's own model-handle upload path can share it), and ComputeLayerLayout's
+// DEFINITION moved with it -- from HERE (inside this anonymous namespace, internal linkage)
+// to just after this namespace's own closing brace below (external linkage, matching the
+// header's declaration; same reason PackLayerWeightsBytes moved too, immediately below this
+// comment's own sibling). Body unchanged; see the relocated definition, right after this
+// anonymous namespace closes.
 
 void PutBytesAt(std::vector<uint8_t>& buf, size_t off, const void* data, size_t n) {
 	std::memcpy(buf.data() + off, data, n);
 }
 void PutI32At(std::vector<uint8_t>& buf, size_t off, int32_t v) { PutBytesAt(buf, off, &v, 4); }
 void PutI64At(std::vector<uint8_t>& buf, size_t off, int64_t v) { PutBytesAt(buf, off, &v, 8); }
+
+// T-2113 (B2): PackLayerWeightsBytes's DEFINITION also moved -- to just after this
+// anonymous namespace's own closing brace below, alongside ComputeLayerLayout (same reason:
+// external linkage, matching its declaration in include/superslm/gpu_port.h, so
+// gpu_1p0.cpp's own sslm_gpu_model_map can call it too). Body unchanged; it still uses
+// PutI32At/PutI64At (immediately above, internal linkage) via ordinary unqualified lookup --
+// an anonymous namespace's members stay visible, unqualified, for the rest of this
+// translation unit after the namespace itself closes, exactly as this file's own T-2071
+// precedent (below) already relies on for a different pair of symbols.
 
 // T-2039 (real-capacity shader geometry): LayerScratch's own per-call, per-
 // real-dims byte layout -- computed ONCE per call from (hidden_size,
@@ -671,6 +618,190 @@ Microsoft::WRL::ComPtr<ID3D12Resource> MakeInitializedUav(
 }
 
 }  // namespace
+
+// T-2113 (B2): relocated from inside the anonymous namespace above (internal linkage) to
+// here (external linkage, `superslm_gpu::ComputeLayerLayout`) -- matching precedent
+// (T-2071's own pair, immediately below) and the declaration this now satisfies,
+// include/superslm/gpu_port.h. Body byte-for-byte unchanged from its original definition.
+GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
+                                   uint32_t num_kv_heads, uint32_t num_attention_heads,
+                                   uint32_t intermediate_size) {
+	GpuLayerLayout L;
+	uint32_t cur = 0;
+	L.off[0] = cur; cur += Align8U32(hidden_size * 4);              // attn_norm_gain
+	L.off[1] = cur; cur += 16;                                      // attn_norm_site_constant
+	L.off[2] = cur; cur += Align8U32(hidden_size * hidden_size);    // q_weight (int8)
+	L.off[3] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_identity
+	L.off[4] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_mult
+	L.off[5] = cur; cur += Align8U32(hidden_size * 4);              // q_fold_shift
+	L.off[6] = cur; cur += 16;                                      // q_site_constant
+	L.off[7] = cur; cur += 8;                                       // q_bias_present
+	L.off[8] = cur; cur += Align8U32(hidden_size * 8);              // q_bias
+	L.off[9] = cur; cur += Align8U32(kv_hidden_size * hidden_size); // k_weight (int8)
+	L.off[10] = cur; cur += Align8U32(kv_hidden_size * hidden_size);// v_weight (int8)
+	L.off[11] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_identity
+	L.off[12] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_mult
+	L.off[13] = cur; cur += Align8U32(kv_hidden_size * 4);          // k_fold_shift
+	L.off[14] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_identity
+	L.off[15] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_mult
+	L.off[16] = cur; cur += Align8U32(kv_hidden_size * 4);          // v_fold_shift
+	L.off[17] = cur; cur += 8;                                      // k_bias_present
+	L.off[18] = cur; cur += Align8U32(kv_hidden_size * 8);          // k_bias
+	L.off[19] = cur; cur += 8;                                      // v_bias_present
+	L.off[20] = cur; cur += Align8U32(kv_hidden_size * 8);          // v_bias
+	L.off[21] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_k
+	L.off[22] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_k
+	L.off[23] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_r_t_v
+	L.off[24] = cur; cur += Align8U32(num_kv_heads * 8);            // kv_landing_e_t_v
+	L.off[25] = cur; cur += Align8U32(hidden_size * hidden_size);   // o_weight (int8)
+	L.off[26] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_identity
+	L.off[27] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_mult
+	L.off[28] = cur; cur += Align8U32(hidden_size * 4);             // o_fold_shift
+	L.off[29] = cur; cur += 16;                                     // o_site_constant
+	L.off[30] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_identity
+	L.off[31] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_mult
+	L.off[32] = cur; cur += Align8U32(num_attention_heads * 4);     // ctx_fold_shift
+	L.off[33] = cur; cur += 16;                                     // ctx_fold_site_constant
+	L.off[34] = cur; cur += 16;                                     // attn_residual_site_constant
+	L.off[35] = cur; cur += Align8U32(hidden_size * 4);             // mlp_norm_gain
+	L.off[36] = cur; cur += 16;                                     // mlp_norm_site_constant
+	L.off[37] = cur; cur += Align8U32(intermediate_size * hidden_size);  // gate_weight (int8)
+	L.off[38] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_identity
+	L.off[39] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_mult
+	L.off[40] = cur; cur += Align8U32(intermediate_size * 4);       // gate_fold_shift
+	L.off[41] = cur; cur += 16;                                     // gate_site_constant
+	L.off[42] = cur; cur += Align8U32(intermediate_size * hidden_size);  // up_weight (int8)
+	L.off[43] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_identity
+	L.off[44] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_mult
+	L.off[45] = cur; cur += Align8U32(intermediate_size * 4);       // up_fold_shift
+	L.off[46] = cur; cur += 16;                                     // up_site_constant
+	L.off[47] = cur; cur += 16;                                     // mlp_act_site_constant
+	L.off[48] = cur; cur += Align8U32(hidden_size * intermediate_size);  // down_weight (int8)
+	L.off[49] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_identity
+	L.off[50] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_mult
+	L.off[51] = cur; cur += Align8U32(hidden_size * 4);             // down_fold_shift
+	L.off[52] = cur; cur += 16;                                     // down_site_constant
+	L.off[53] = cur; cur += 16;                                     // mlp_residual_site_constant
+	L.off[54] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_m
+	L.off[55] = cur; cur += Align8U32(num_kv_heads * 8);            // iexp_softmax_khead_e
+	L.stride = cur;
+	return L;
+}
+
+// T-2113 (B2): relocated from inside the anonymous namespace above (internal linkage) to
+// here (external linkage, `superslm_gpu::PackLayerWeightsBytes`), matching its declaration
+// in include/superslm/gpu_port.h. Body byte-for-byte unchanged -- the exact loop
+// RunLayerLoopGpu's own weight-residency miss path (`if (!lw_fast_hit) { ... }`, its own
+// call site, below) used to contain inline; extracted so it has exactly one implementation,
+// callable from both this file's own call site (unchanged behavior) and gpu_1p0.cpp's own
+// sslm_gpu_model_map (design Sec10 B2).
+std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers, uint32_t N,
+                                            const GpuLayerLayout& layout, uint32_t H, uint32_t KV,
+                                            uint32_t NH, uint32_t NQH, uint32_t I) {
+	std::vector<uint8_t> lw_bytes;
+	lw_bytes.assign(static_cast<size_t>(layout.stride) * N, 0);
+	for (uint32_t l = 0; l < N; ++l) {
+		const superslm::LayerWeights& lw = layers[l];
+		const size_t base = static_cast<size_t>(l) * layout.stride;
+		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[0] + i * 4, lw.attn_norm_gain[i]);
+		PutI64At(lw_bytes, base + layout.off[1] + 0, lw.attn_norm_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[1] + 8, lw.attn_norm_site_constant.e);
+		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[3] + i * 4, lw.q_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[4] + i * 4, lw.q_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[5] + i * 4, lw.q_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[6] + 0, lw.q_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[6] + 8, lw.q_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[7], lw.q_bias != nullptr ? 1 : 0);
+		if (lw.q_bias != nullptr) {
+			for (uint32_t i = 0; i < H; ++i) PutI64At(lw_bytes, base + layout.off[8] + i * 8, lw.q_bias[i]);
+		}
+		for (uint32_t i = 0; i < KV * H; ++i) {
+			lw_bytes[base + layout.off[9] + i] = static_cast<uint8_t>(lw.k_weight[i]);
+			lw_bytes[base + layout.off[10] + i] = static_cast<uint8_t>(lw.v_weight[i]);
+		}
+		for (uint32_t i = 0; i < KV; ++i) {
+			PutI32At(lw_bytes, base + layout.off[11] + i * 4, lw.k_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[12] + i * 4, lw.k_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[13] + i * 4, lw.k_fold_shift[i]);
+			PutI32At(lw_bytes, base + layout.off[14] + i * 4, lw.v_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[15] + i * 4, lw.v_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[16] + i * 4, lw.v_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[17], lw.k_bias != nullptr ? 1 : 0);
+		if (lw.k_bias != nullptr) {
+			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[18] + i * 8, lw.k_bias[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[19], lw.v_bias != nullptr ? 1 : 0);
+		if (lw.v_bias != nullptr) {
+			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[20] + i * 8, lw.v_bias[i]);
+		}
+		for (uint32_t i = 0; i < NH; ++i) {
+			PutI64At(lw_bytes, base + layout.off[21] + i * 8, lw.kv_landing_r_t_k[i]);
+			PutI64At(lw_bytes, base + layout.off[22] + i * 8, lw.kv_landing_e_t_k[i]);
+			PutI64At(lw_bytes, base + layout.off[23] + i * 8, lw.kv_landing_r_t_v[i]);
+			PutI64At(lw_bytes, base + layout.off[24] + i * 8, lw.kv_landing_e_t_v[i]);
+		}
+		// T-2035: sites 5-16's own read-resource list.
+		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[25] + i] = static_cast<uint8_t>(lw.o_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[26] + i * 4, lw.o_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[27] + i * 4, lw.o_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[28] + i * 4, lw.o_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[29] + 0, lw.o_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[29] + 8, lw.o_site_constant.e);
+		for (uint32_t i = 0; i < NQH; ++i) {
+			PutI32At(lw_bytes, base + layout.off[30] + i * 4, lw.ctx_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[31] + i * 4, lw.ctx_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[32] + i * 4, lw.ctx_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[33] + 0, lw.ctx_fold_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[33] + 8, lw.ctx_fold_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[34] + 0, lw.attn_residual_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[34] + 8, lw.attn_residual_site_constant.e);
+		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[35] + i * 4, lw.mlp_norm_gain[i]);
+		PutI64At(lw_bytes, base + layout.off[36] + 0, lw.mlp_norm_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[36] + 8, lw.mlp_norm_site_constant.e);
+		for (uint32_t i = 0; i < I * H; ++i) {
+			lw_bytes[base + layout.off[37] + i] = static_cast<uint8_t>(lw.gate_weight[i]);
+			lw_bytes[base + layout.off[42] + i] = static_cast<uint8_t>(lw.up_weight[i]);
+		}
+		for (uint32_t i = 0; i < I; ++i) {
+			PutI32At(lw_bytes, base + layout.off[38] + i * 4, lw.gate_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[39] + i * 4, lw.gate_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[40] + i * 4, lw.gate_fold_shift[i]);
+			PutI32At(lw_bytes, base + layout.off[43] + i * 4, lw.up_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[44] + i * 4, lw.up_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[45] + i * 4, lw.up_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[41] + 0, lw.gate_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[41] + 8, lw.gate_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[46] + 0, lw.up_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[46] + 8, lw.up_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[47] + 0, lw.mlp_act_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[47] + 8, lw.mlp_act_site_constant.e);
+		for (uint32_t i = 0; i < H * I; ++i) lw_bytes[base + layout.off[48] + i] = static_cast<uint8_t>(lw.down_weight[i]);
+		for (uint32_t i = 0; i < H; ++i) {
+			PutI32At(lw_bytes, base + layout.off[49] + i * 4, lw.down_fold_identity[i]);
+			PutI32At(lw_bytes, base + layout.off[50] + i * 4, lw.down_fold_mult[i]);
+			PutI32At(lw_bytes, base + layout.off[51] + i * 4, lw.down_fold_shift[i]);
+		}
+		PutI64At(lw_bytes, base + layout.off[52] + 0, lw.down_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[52] + 8, lw.down_site_constant.e);
+		PutI64At(lw_bytes, base + layout.off[53] + 0, lw.mlp_residual_site_constant.m);
+		PutI64At(lw_bytes, base + layout.off[53] + 8, lw.mlp_residual_site_constant.e);
+		for (uint32_t i = 0; i < NH; ++i) {
+			PutI64At(lw_bytes, base + layout.off[54] + i * 8,
+			         lw.iexp_softmax_khead_m != nullptr ? lw.iexp_softmax_khead_m[i] : 0);
+			PutI64At(lw_bytes, base + layout.off[55] + i * 8,
+			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
+		}
+	}
+	return lw_bytes;
+}
 
 // T-2071: external linkage, deliberately OUTSIDE the anonymous namespace
 // above (unlike `g_o11_alloc_injection_armed`/`MaybeThrowInjectedO11
@@ -930,109 +1061,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	                         g_resident_weights.src_layers == static_cast<const void*>(layers) &&
 	                         g_resident_weights.src_n == N &&
 	                         g_resident_weights.src_stride == layout.stride;
+	// T-2113 (B2): the pack loop this call site used to contain inline is now
+	// PackLayerWeightsBytes (extracted verbatim, above ComputeLayerLayout) -- shared with
+	// gpu_1p0.cpp's own sslm_gpu_model_map. Behavior unchanged: still only computed on a
+	// !lw_fast_hit miss.
 	std::vector<uint8_t> lw_bytes;
 	if (!lw_fast_hit) {
-	lw_bytes.assign(static_cast<size_t>(layout.stride) * N, 0);
-	for (uint32_t l = 0; l < N; ++l) {
-		const superslm::LayerWeights& lw = layers[l];
-		const size_t base = static_cast<size_t>(l) * layout.stride;
-		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[0] + i * 4, lw.attn_norm_gain[i]);
-		PutI64At(lw_bytes, base + layout.off[1] + 0, lw.attn_norm_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[1] + 8, lw.attn_norm_site_constant.e);
-		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[2] + i] = static_cast<uint8_t>(lw.q_weight[i]);
-		for (uint32_t i = 0; i < H; ++i) {
-			PutI32At(lw_bytes, base + layout.off[3] + i * 4, lw.q_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[4] + i * 4, lw.q_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[5] + i * 4, lw.q_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[6] + 0, lw.q_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[6] + 8, lw.q_site_constant.e);
-		PutI64At(lw_bytes, base + layout.off[7], lw.q_bias != nullptr ? 1 : 0);
-		if (lw.q_bias != nullptr) {
-			for (uint32_t i = 0; i < H; ++i) PutI64At(lw_bytes, base + layout.off[8] + i * 8, lw.q_bias[i]);
-		}
-		for (uint32_t i = 0; i < KV * H; ++i) {
-			lw_bytes[base + layout.off[9] + i] = static_cast<uint8_t>(lw.k_weight[i]);
-			lw_bytes[base + layout.off[10] + i] = static_cast<uint8_t>(lw.v_weight[i]);
-		}
-		for (uint32_t i = 0; i < KV; ++i) {
-			PutI32At(lw_bytes, base + layout.off[11] + i * 4, lw.k_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[12] + i * 4, lw.k_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[13] + i * 4, lw.k_fold_shift[i]);
-			PutI32At(lw_bytes, base + layout.off[14] + i * 4, lw.v_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[15] + i * 4, lw.v_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[16] + i * 4, lw.v_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[17], lw.k_bias != nullptr ? 1 : 0);
-		if (lw.k_bias != nullptr) {
-			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[18] + i * 8, lw.k_bias[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[19], lw.v_bias != nullptr ? 1 : 0);
-		if (lw.v_bias != nullptr) {
-			for (uint32_t i = 0; i < KV; ++i) PutI64At(lw_bytes, base + layout.off[20] + i * 8, lw.v_bias[i]);
-		}
-		for (uint32_t i = 0; i < NH; ++i) {
-			PutI64At(lw_bytes, base + layout.off[21] + i * 8, lw.kv_landing_r_t_k[i]);
-			PutI64At(lw_bytes, base + layout.off[22] + i * 8, lw.kv_landing_e_t_k[i]);
-			PutI64At(lw_bytes, base + layout.off[23] + i * 8, lw.kv_landing_r_t_v[i]);
-			PutI64At(lw_bytes, base + layout.off[24] + i * 8, lw.kv_landing_e_t_v[i]);
-		}
-		// T-2035: sites 5-16's own read-resource list.
-		for (uint32_t i = 0; i < H * H; ++i) lw_bytes[base + layout.off[25] + i] = static_cast<uint8_t>(lw.o_weight[i]);
-		for (uint32_t i = 0; i < H; ++i) {
-			PutI32At(lw_bytes, base + layout.off[26] + i * 4, lw.o_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[27] + i * 4, lw.o_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[28] + i * 4, lw.o_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[29] + 0, lw.o_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[29] + 8, lw.o_site_constant.e);
-		for (uint32_t i = 0; i < NQH; ++i) {
-			PutI32At(lw_bytes, base + layout.off[30] + i * 4, lw.ctx_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[31] + i * 4, lw.ctx_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[32] + i * 4, lw.ctx_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[33] + 0, lw.ctx_fold_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[33] + 8, lw.ctx_fold_site_constant.e);
-		PutI64At(lw_bytes, base + layout.off[34] + 0, lw.attn_residual_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[34] + 8, lw.attn_residual_site_constant.e);
-		for (uint32_t i = 0; i < H; ++i) PutI32At(lw_bytes, base + layout.off[35] + i * 4, lw.mlp_norm_gain[i]);
-		PutI64At(lw_bytes, base + layout.off[36] + 0, lw.mlp_norm_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[36] + 8, lw.mlp_norm_site_constant.e);
-		for (uint32_t i = 0; i < I * H; ++i) {
-			lw_bytes[base + layout.off[37] + i] = static_cast<uint8_t>(lw.gate_weight[i]);
-			lw_bytes[base + layout.off[42] + i] = static_cast<uint8_t>(lw.up_weight[i]);
-		}
-		for (uint32_t i = 0; i < I; ++i) {
-			PutI32At(lw_bytes, base + layout.off[38] + i * 4, lw.gate_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[39] + i * 4, lw.gate_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[40] + i * 4, lw.gate_fold_shift[i]);
-			PutI32At(lw_bytes, base + layout.off[43] + i * 4, lw.up_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[44] + i * 4, lw.up_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[45] + i * 4, lw.up_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[41] + 0, lw.gate_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[41] + 8, lw.gate_site_constant.e);
-		PutI64At(lw_bytes, base + layout.off[46] + 0, lw.up_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[46] + 8, lw.up_site_constant.e);
-		PutI64At(lw_bytes, base + layout.off[47] + 0, lw.mlp_act_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[47] + 8, lw.mlp_act_site_constant.e);
-		for (uint32_t i = 0; i < H * I; ++i) lw_bytes[base + layout.off[48] + i] = static_cast<uint8_t>(lw.down_weight[i]);
-		for (uint32_t i = 0; i < H; ++i) {
-			PutI32At(lw_bytes, base + layout.off[49] + i * 4, lw.down_fold_identity[i]);
-			PutI32At(lw_bytes, base + layout.off[50] + i * 4, lw.down_fold_mult[i]);
-			PutI32At(lw_bytes, base + layout.off[51] + i * 4, lw.down_fold_shift[i]);
-		}
-		PutI64At(lw_bytes, base + layout.off[52] + 0, lw.down_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[52] + 8, lw.down_site_constant.e);
-		PutI64At(lw_bytes, base + layout.off[53] + 0, lw.mlp_residual_site_constant.m);
-		PutI64At(lw_bytes, base + layout.off[53] + 8, lw.mlp_residual_site_constant.e);
-		for (uint32_t i = 0; i < NH; ++i) {
-			PutI64At(lw_bytes, base + layout.off[54] + i * 8,
-			         lw.iexp_softmax_khead_m != nullptr ? lw.iexp_softmax_khead_m[i] : 0);
-			PutI64At(lw_bytes, base + layout.off[55] + i * 8,
-			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
-		}
-	}
+		lw_bytes = PackLayerWeightsBytes(layers, N, layout, H, KV, NH, NQH, I);
 	}  // T-2100: end of the !lw_fast_hit pack guard
 
 	// T-2045 (S3): true iff this call's freshly-packed row is byte-identical

@@ -475,6 +475,39 @@ SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidde
                                      uint32_t current_layer_position,
                                      uint32_t* out_layers_to_issue);
 
+// T-2113 (B2, design Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec10 B2):
+// GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes, promoted from
+// src/gpu/superslm_gpu.cpp's own internal implementation (T-2035/T-2039, unchanged bodies)
+// to this shared header so BOTH the pre-1.0 substrate's own RunLayerLoopGpu (superslm_gpu.cpp,
+// call site unchanged by this move) and the 1.0 API's own model-handle upload path
+// (src/gpu/gpu_1p0.cpp, sslm_gpu_model_map) compute weight-packing bytes from exactly ONE
+// implementation -- never two copies that could silently drift, the same hazard
+// ResidentWeights' own header comment (superslm_gpu.cpp) already names for a pointer-only
+// cache key. Only the DECLARATION moved; every function body is byte-for-byte the loop it
+// replaces at its old call site -- see the B2 section of
+// Claude/Brunel/t2113-1p0-core-build-2026-08-15.md for the extraction's own before/after
+// citation. `off[56]`/`stride` match every `*_site.hlsl`'s own `Layout.Load<uint>(N*4)` index
+// order exactly (superslm_gpu.cpp's own original header comment on this struct, carried here
+// unchanged).
+struct GpuLayerLayout {
+	uint32_t off[56]{};
+	uint32_t stride = 0;
+};
+
+GpuLayerLayout ComputeLayerLayout(uint32_t hidden_size, uint32_t kv_hidden_size,
+                                   uint32_t num_kv_heads, uint32_t num_attention_heads,
+                                   uint32_t intermediate_size);
+
+// Packs `N` LayerWeights entries into one contiguous byte buffer at `layout`'s own
+// stride/offsets -- the exact byte-for-byte transformation RunLayerLoopGpu's own
+// weight-residency miss path has performed since T-2035, extracted verbatim (T-2113 B2) so
+// it has exactly one implementation. `H`=hidden_size, `KV`=num_kv_heads*head_dim,
+// `NH`=num_kv_heads, `NQH`=num_attention_heads, `I`=intermediate_size -- the same five
+// dimension values `ComputeLayerLayout` above must be called with to produce `layout`.
+std::vector<uint8_t> PackLayerWeightsBytes(const superslm::LayerWeights* layers, uint32_t N,
+                                            const GpuLayerLayout& layout, uint32_t H, uint32_t KV,
+                                            uint32_t NH, uint32_t NQH, uint32_t I);
+
 // --- Sec5.9 (D-SLM3076/3077/3078/3079): the asynchronous sequence lifecycle, Idle ->
 // Submitted -> Completed -> Idle. Each `CallProceedsOrBusy_*` function is the POLICY
 // half of its named ABI call -- given whether the sequence (or, for unmap, the model)

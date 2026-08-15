@@ -76,6 +76,22 @@ if errorlevel 1 (
 out\t2113_b1_context_smoke.exe
 set b1_ec=%errorlevel%
 
+rem T-2113 (B2, design Sec10 B2): the model-handle-map/unmap bench proof
+rem (tools\t2113_b2_model_smoke.cpp) -- needs two real .sslm artifacts, so it is built here
+rem but NOT auto-run by default (matching the C5 harness's own precedent above); the build
+rem seat's own session invokes it manually against the real 1.5B/0.5B artifacts on disk. Same
+rem full source list as B1's own smoke build.
+if not exist out\b2 mkdir out\b2
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2113_b2_model_smoke.cpp /Fo:out\b2\ /Fe:out\t2113_b2_model_smoke.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
