@@ -27,6 +27,25 @@ cbuffer RootConstants : register(b0)
     uint g_num_kv_heads;
     uint g_context_cap;
     uint g_position;
+    // T-2113 (B10 lever 1): positions 6-10 -- unread padding, see q_proj_site.hlsl's own
+    // identical comment.
+    uint g_unused6; uint g_unused7; uint g_unused8; uint g_unused9; uint g_unused10;
+    // T-2113 (B10 lever 1): K's own adapter-delta coverage (slot=5, positions 11-17).
+    uint g_adapter_k_rank;
+    uint g_adapter_k_a_offset;
+    uint g_adapter_k_b_offset;
+    uint g_adapter_k_fold_offset;
+    uint g_adapter_k_u_off;
+    uint g_adapter_k_in_base;
+    uint g_adapter_k_wide_base;
+    // T-2113 (B10 lever 1): V's own adapter-delta coverage (slot=6, positions 18-24).
+    uint g_adapter_v_rank;
+    uint g_adapter_v_a_offset;
+    uint g_adapter_v_b_offset;
+    uint g_adapter_v_fold_offset;
+    uint g_adapter_v_u_off;
+    uint g_adapter_v_in_base;
+    uint g_adapter_v_wide_base;
 };
 
 ByteAddressBuffer   LayerWeights  : register(t0);
@@ -37,6 +56,9 @@ RWByteAddressBuffer SeqState      : register(u0);
 RWByteAddressBuffer LayerScratch  : register(u1);
 RWByteAddressBuffer KvCache       : register(u2);
 RWByteAddressBuffer WorkScratch   : register(u3);
+// T-2113 (B10 lever 1): see q_proj_site.hlsl's own identical comment.
+ByteAddressBuffer LoraAB : register(t8);
+ByteAddressBuffer Fold   : register(t9);
 
 groupshared uint gKFailed;
 groupshared uint gVFailed;
@@ -54,6 +76,22 @@ void main(uint3 gtid : SV_GroupThreadID)
     int head_dim = (int)g_head_dim;
     int num_kv_heads = (int)g_num_kv_heads;
     int kv_hidden_size = num_kv_heads * head_dim;
+
+    // T-2113 (B10 lever 1): the fused adapter-delta -- K then V, sequentially, each call's own
+    // trailing DeviceMemoryBarrierWithGroupSync() (site_common.hlsli) publishing its accumulator
+    // write and protecting the next call's reuse of the shared ADAPTER_U scratch region before
+    // it starts (never concurrent). Both no-op when their own rank == 0. Inserted at the
+    // identical composition point the two standalone bind_and_dispatch_adapter_delta dispatches
+    // used -- strictly before this shader's own K/V bias-reconcile reads of WorkScratch below.
+    ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
+                               kv_hidden_size, (int)g_adapter_k_rank, g_adapter_k_a_offset,
+                               g_adapter_k_b_offset, g_adapter_k_fold_offset, g_adapter_k_u_off,
+                               g_adapter_k_in_base, g_adapter_k_wide_base);
+    ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
+                               kv_hidden_size, (int)g_adapter_v_rank, g_adapter_v_a_offset,
+                               g_adapter_v_b_offset, g_adapter_v_fold_offset, g_adapter_v_u_off,
+                               g_adapter_v_in_base, g_adapter_v_wide_base);
+
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
     uint normed_off = ScratchLayout.Load<uint>(0 * 4);

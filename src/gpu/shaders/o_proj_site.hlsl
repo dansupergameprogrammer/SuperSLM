@@ -17,6 +17,17 @@ cbuffer RootConstants : register(b0)
     uint g_layer_index; uint g_hidden_size; uint g_head_dim; uint g_num_kv_heads;
     uint g_context_cap; uint g_position; uint g_num_attention_heads; uint g_width;
     uint g_intermediate_size;
+    // T-2113 (B10 lever 1): positions 9-10 (num_hidden_layers, GEMM lanes) -- unread padding,
+    // see q_proj_site.hlsl's own identical comment.
+    uint g_unused9; uint g_unused10;
+    // T-2113 (B10 lever 1): o's own adapter-delta coverage (slot=1, positions 11-17).
+    uint g_adapter_rank;
+    uint g_adapter_a_offset;
+    uint g_adapter_b_offset;
+    uint g_adapter_fold_offset;
+    uint g_adapter_u_off;
+    uint g_adapter_in_base;
+    uint g_adapter_wide_base;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -31,6 +42,9 @@ RWByteAddressBuffer SeqState       : register(u0);
 RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
+// T-2113 (B10 lever 1): see q_proj_site.hlsl's own identical comment.
+ByteAddressBuffer LoraAB : register(t8);
+ByteAddressBuffer Fold   : register(t9);
 
 [numthreads(256, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
@@ -40,6 +54,13 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
     if (sticky != kTagOk) return;
+
+    // T-2113 (B10 lever 1): the fused adapter-delta -- o's own slot (o=1), inserted before this
+    // shader's own requant read of WorkScratch at g_adapter_wide_base. No-op when rank == 0.
+    ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
+                               (int)g_hidden_size, (int)g_adapter_rank, g_adapter_a_offset,
+                               g_adapter_b_offset, g_adapter_fold_offset, g_adapter_u_off,
+                               g_adapter_in_base, g_adapter_wide_base);
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 

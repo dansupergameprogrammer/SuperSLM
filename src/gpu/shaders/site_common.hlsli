@@ -288,6 +288,80 @@ bool CheckPositionOverCapGpu(int64_t position, int64_t context_cap)
     return !(position < 0 || position >= context_cap);
 }
 
+// T-2113 (B10 lever 1, design Sec10 "B10 -- Lever Detail" #1): the fused-dispatch form of
+// AddAmplifyingLoraDelta -- bit-exact to adapter_delta_site.hlsl's own two-stage body (stage 1:
+// u_acc[k] over in_channels, folded+narrowed into WorkScratch's ADAPTER_U region; stage 2:
+// delta_raw[j] over rank, folded and added into the base GEMM's own WorkScratch accumulator
+// row), called from INSIDE each covered tail shader's own dispatch instead of from a dispatch
+// of its own. `rank == 0` is the "no adapter covers this (layer, projection) slot" sentinel --
+// a real LoRA adapter's own rank is always >= 1 -- and is a true no-op: every thread in the
+// group evaluates the same root-constant-derived `rank`, so the early return is uniform control
+// flow, not per-thread divergence, and issues neither barrier when taken (matching the
+// standalone dispatch's own "never issued at all" contract for an uncovered slot exactly).
+// Callers invoke this AFTER the sticky-word check and STRICTLY BEFORE any bias-reconcile/requant
+// code in the same dispatch reads WorkScratch at `wide_base` -- the identical insertion point
+// the standalone dispatch occupied between the base GEMM's own WSC1 fold and the site's own
+// bias/requant dispatch, now collapsed into the SAME dispatch. The trailing
+// DeviceMemoryBarrierWithGroupSync() (only issued when rank > 0) publishes stage 2's WorkScratch
+// write to the whole group before the caller's own subsequent read, and also protects a SECOND
+// call to this function later in the SAME dispatch (kv_proj_site.hlsl's own K-then-V fusion) --
+// the shared ADAPTER_U scratch region is reused serially across the two calls, never
+// concurrently, exactly as it already is across separate dispatches on the standalone path.
+void ApplyFusedAdapterDeltaGpu(uint t, RWByteAddressBuffer WorkScratch, RWByteAddressBuffer LayerScratch,
+                                ByteAddressBuffer LoraAB, ByteAddressBuffer Fold, int in_channels,
+                                int out_channels, int rank, uint a_offset, uint b_offset, uint fold_offset,
+                                uint adapter_u_off, uint in_base, uint wide_base)
+{
+    if (rank == 0) return;  // no adapter covers this slot -- the standalone path's own "dispatch
+                             // never issued" contract, realized here as a true no-op instead.
+
+    uint dfs_base = fold_offset;                              // out_channels rows, 12 bytes each
+    uint ufs_base = fold_offset + (uint)out_channels * 12u;    // rank rows, 12 bytes each
+
+    // Stage 1 -- one thread per k < rank, each its own full in_channels-wide reduction.
+    for (int k = (int)t; k < rank; k += 256)
+    {
+        int64_t acc = 0;
+        for (int i = 0; i < in_channels; ++i)
+        {
+            int a = LayerScratch.Load<int>(in_base + (uint)i * 4u);
+            int w = LoadSignedByteGpu(LoraAB, a_offset + (uint)(k * in_channels + i));
+            acc += (int64_t)a * (int64_t)w;
+        }
+        int u_identity = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 0u);
+        int u_mult     = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 4u);
+        int u_exponent = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 8u);
+        int64_t u_wide = ApplyAmplifyingWeightScaleFoldGpu(acc, u_identity, u_mult, u_exponent);
+        int64_t u_clamped = ClampRopeCodeGpu(u_wide);
+        StoreSignedByteGpu(WorkScratch, adapter_u_off + (uint)k, (int)u_clamped);
+    }
+    DeviceMemoryBarrierWithGroupSync();  // publish u_i8 (a UAV write) before stage 2 reads it back
+
+    // Stage 2 -- one thread per j < out_channels, reduced over the (small) rank dimension,
+    // added directly into the base GEMM's own WorkScratch accumulator row.
+    for (int j = (int)t; j < out_channels; j += 256)
+    {
+        int64_t acc2 = 0;
+        for (int k2 = 0; k2 < rank; ++k2)
+        {
+            int u = LoadSignedByteGpu(WorkScratch, adapter_u_off + (uint)k2);
+            int w2 = LoadSignedByteGpu(LoraAB, b_offset + (uint)(j * rank + k2));
+            acc2 += (int64_t)u * (int64_t)w2;
+        }
+        int d_identity = (int)Fold.Load<int>(dfs_base + (uint)j * 12u + 0u);
+        int d_mult     = (int)Fold.Load<int>(dfs_base + (uint)j * 12u + 4u);
+        int d_exponent = (int)Fold.Load<int>(dfs_base + (uint)j * 12u + 8u);
+        int64_t delta_wide = ApplyAmplifyingWeightScaleFoldGpu(acc2, d_identity, d_mult, d_exponent);
+        int64_t base_val = WorkScratch.Load<int64_t>(wide_base + (uint)j * 8u);
+        WorkScratch.Store<int64_t>(wide_base + (uint)j * 8u, base_val + delta_wide);
+    }
+    DeviceMemoryBarrierWithGroupSync();  // publish the accumulator write before the caller's own
+                                          // bias-reconcile/requant code reads it, and before any
+                                          // second call to this function in the same dispatch
+                                          // (kv_proj_site.hlsl's own K-then-V fusion) reuses
+                                          // adapter_u_off.
+}
+
 // T-2039: SeqState's own per-call, per-real-hidden_size byte layout.
 // hidden_codes lives first (Align8(hidden_size*4) bytes, one int32 per code
 // -- T-2035's own fixed 8-slot/32-byte assumption is exactly the same UB
