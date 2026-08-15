@@ -22563,6 +22563,27 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	          "GPU-busy is INSIDE the submit-to-fence window, not additional to it",
 	          timing_ok.submit_wait_ms, timing_ok.gpu_busy_ms);
 
+	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): 8 layers * 17
+	// sites/layer = 136 dispatches this call issued -- one GPU-measured figure per dispatch,
+	// every one non-negative, summing to (approximately) gpu_busy_ms above.
+	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
+	CHECK_MSG(per_dispatch_ok.size() == 8 * 17,
+	          "T2101 per-dispatch timing (success call): %zu entries, want 8*17=136",
+	          per_dispatch_ok.size());
+	double per_dispatch_sum = 0.0;
+	bool all_non_negative = true;
+	for (double v : per_dispatch_ok) {
+		per_dispatch_sum += v;
+		if (v < 0.0) all_non_negative = false;
+	}
+	CHECK_MSG(all_non_negative,
+	          "T2101 per-dispatch timing (success call): every one of the 136 entries must be "
+	          "non-negative");
+	CHECK_MSG(std::abs(per_dispatch_sum - timing_ok.gpu_busy_ms) < 0.01,
+	          "T2101 per-dispatch timing (success call): sum of 136 entries (%.6f) must match "
+	          "gpu_busy_ms (%.6f) -- both are the same boundary deltas, summed vs first-to-last",
+	          per_dispatch_sum, timing_ok.gpu_busy_ms);
+
 	// layer_budget=0 rejects at the FIRST guard, before command-list recording ever starts.
 	SequenceLayerState seq2;
 	int8_t codes2[2] = {5, -5};
@@ -22585,6 +22606,12 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	          "read all-zero, not the PREVIOUS successful call's own stale timing",
 	          timing_rejected.record_ms, timing_rejected.submit_wait_ms, timing_rejected.gpu_busy_ms,
 	          timing_rejected.readback_ms);
+	const auto per_dispatch_rejected = superslm_gpu::LastCallPerDispatchTimingsMs();
+	CHECK_MSG(per_dispatch_rejected.empty(),
+	          "T2101 per-dispatch timing (guard-rejected call): %zu entries, want 0 -- a call "
+	          "rejected before recording starts must report no per-dispatch timings, not the "
+	          "PREVIOUS successful call's own stale 136",
+	          per_dispatch_rejected.size());
 }
 
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION

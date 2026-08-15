@@ -21,7 +21,9 @@
 //
 // Throwaway harness, same precedent as tools/t2039_c5_harness.cpp.
 // Usage: t2100_gpu_throughput <model.sslm> [steps] [token_id]
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -147,6 +149,19 @@ int main(int argc, char** argv) {
 	double gpu_record_ms_sum = 0.0, gpu_submit_wait_ms_sum = 0.0, gpu_busy_ms_sum = 0.0,
 	       gpu_readback_ms_sum = 0.0;
 
+	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): the fixed,
+	// unconditional per-layer dispatch order `RunLayerLoopGpu` issues (`superslm_gpu.cpp`'s own
+	// `bind_and_dispatch` call sequence) -- dispatch `d` within a call is site `d % kSitesPerLayer`
+	// of layer `d / kSitesPerLayer`. Summed across every timed GPU step below.
+	constexpr int kSitesPerLayer = 17;
+	const char* const kSiteNames[kSitesPerLayer] = {
+	    "attn_norm",      "q_proj",         "kv_proj",           "rope",
+	    "attention_score", "softmax",       "context_accumulate", "ctx_fold",
+	    "o_proj",          "attn_residual", "mlp_norm",           "gate_proj",
+	    "up_proj",         "mlp_act",        "down_proj",          "mlp_residual",
+	    "commit"};
+	double site_ms_sum[kSitesPerLayer] = {0.0};
+
 	double per_token[2] = {0.0, 0.0};
 	for (int s = 0; s < 2; ++s) {
 		std::vector<uint8_t> ws(kv_bytes, 0);
@@ -198,6 +213,10 @@ int main(int argc, char** argv) {
 				gpu_submit_wait_ms_sum += timing.submit_wait_ms;
 				gpu_busy_ms_sum += timing.gpu_busy_ms;
 				gpu_readback_ms_sum += timing.readback_ms;
+				const auto per_dispatch = superslm_gpu::LastCallPerDispatchTimingsMs();
+				for (size_t d = 0; d < per_dispatch.size(); ++d) {
+					site_ms_sum[d % kSitesPerLayer] += per_dispatch[d];
+				}
 			}
 		}
 		const double total = SecondsSince(t0);
@@ -252,6 +271,67 @@ int main(int argc, char** argv) {
 	    "  GPU-busy / roofline = %.2fx\n",
 	    steps, mean_record_ms, mean_submit_wait_ms, mean_gpu_busy_ms, mean_readback_ms, mean_sum_ms,
 	    per_token[1] * 1000.0, roofline_ms, mean_gpu_busy_ms / roofline_ms);
+
+	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up): mean ms/token per site,
+	// summed across all 28 layers and averaged over the same `steps` timed GPU calls as everything
+	// above, sorted descending. Achieved bandwidth is reported for the six GEMM-funneled sites
+	// whose theoretical per-layer READ traffic is dominated by one known int8 weight matrix
+	// (q/k+v/o/gate/up/down_proj) -- everything else touches only O(hidden_size) or O(context_length,
+	// still tiny this early in decode) data and is not bandwidth-interesting at this size, so no
+	// bytes figure is claimed for it.
+	struct SiteRow {
+		int idx;
+		double ms;
+		double bytes_per_layer;  // 0 if not a GEMM site with a known dominant weight matrix
+	};
+	const size_t H = hidden_size, I = intermediate_size, KV = num_kv_heads * head_dim;
+	std::vector<SiteRow> rows(kSitesPerLayer);
+	for (int i = 0; i < kSitesPerLayer; ++i) {
+		double bytes_per_layer = 0.0;
+		const std::string name = kSiteNames[i];
+		if (name == "q_proj" || name == "o_proj") bytes_per_layer = static_cast<double>(H) * H;
+		else if (name == "kv_proj") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
+		else if (name == "gate_proj" || name == "up_proj") bytes_per_layer = static_cast<double>(I) * H;
+		else if (name == "down_proj") bytes_per_layer = static_cast<double>(H) * I;
+		rows[i] = SiteRow{i, site_ms_sum[i] / steps, bytes_per_layer};
+	}
+	std::sort(rows.begin(), rows.end(), [](const SiteRow& a, const SiteRow& b) { return a.ms > b.ms; });
+	double site_ms_total = 0.0;
+	for (const auto& r : rows) site_ms_total += r.ms;
+	std::printf(
+	    "\nGPU per-site decomposition (mean ms/token, summed across %u layers, sorted descending; "
+	    "sum of all 17 sites = %.3f ms against GPU-busy %.3f ms above):\n"
+	    "  %-20s %10s %8s %14s %12s\n",
+	    num_hidden_layers, site_ms_total, mean_gpu_busy_ms, "site", "ms/token", "share", "GB read/tok",
+	    "achieved GB/s");
+	for (const auto& r : rows) {
+		const double share_pct = 100.0 * r.ms / mean_gpu_busy_ms;
+		if (r.bytes_per_layer > 0.0) {
+			const double gb_per_token = r.bytes_per_layer * num_hidden_layers / 1e9;
+			const double achieved_gbps = r.ms > 0.0 ? (gb_per_token / (r.ms / 1000.0)) : 0.0;
+			std::printf("  %-20s %10.3f %7.1f%% %14.4f %12.2f\n", kSiteNames[r.idx], r.ms, share_pct,
+			            gb_per_token, achieved_gbps);
+		} else {
+			std::printf("  %-20s %10.3f %7.1f%% %14s %12s\n", kSiteNames[r.idx], r.ms, share_pct, "--",
+			            "--");
+		}
+	}
+	// Uniformity verdict: coefficient of variation across the 17 site means. Low CoV = spread
+	// ~uniformly (per-dispatch fixed cost dominates); high CoV = concentrated in specific sites
+	// (those sites' own kernels are genuinely slow).
+	double site_mean = site_ms_total / kSitesPerLayer, site_var = 0.0;
+	for (int i = 0; i < kSitesPerLayer; ++i) {
+		const double d = (site_ms_sum[i] / steps) - site_mean;
+		site_var += d * d;
+	}
+	const double site_stdev = std::sqrt(site_var / kSitesPerLayer);
+	const double site_cov = site_mean > 0.0 ? site_stdev / site_mean : 0.0;
+	std::printf(
+	    "\nUniformity: mean %.4f ms/site/token, stdev %.4f ms, coefficient of variation %.2f -- "
+	    "%s\n",
+	    site_mean, site_stdev, site_cov,
+	    site_cov > 1.0 ? "CONCENTRATED (a small number of sites dominate; see the top rows above)"
+	                   : "roughly UNIFORM (no small subset of sites dominates)");
 	std::printf(
 	    "NOTE: RunLayerLoopGpu fence-waits and reads the complete %.2f MiB K/V workspace back to\n"
 	    "host every call. That cost is included above and is a property of this substrate's calling\n"

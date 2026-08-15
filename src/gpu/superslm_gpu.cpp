@@ -316,6 +316,10 @@ bool g_last_weight_upload_was_skipped = false;
 // T-2101 (dispatch-overhead decomposition): backs the public `LastCallTiming()` accessor
 // (`gpu_port.h`) -- see that declaration's own header comment for what each field measures.
 GpuCallTiming g_last_call_timing;
+// T-2101 (per-site decomposition, follow-up to D-SLM3312): backs the public
+// `LastCallPerDispatchTimingsMs()` accessor (`gpu_port.h`) -- one GPU-measured millisecond figure
+// per dispatch this call issued, in dispatch order.
+std::vector<double> g_last_call_per_dispatch_ms;
 
 // T-2101 (throughput, D-SLM3301/D-SLM3294): the K/V workspace's own device residency, mirroring
 // ResidentWeights' shape exactly. Before this: `superslm_gpu.cpp`'s call site copied the WHOLE
@@ -717,6 +721,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// without this line would report the PREVIOUS successful call's own stale timing rather than
 	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
 	g_last_call_timing = GpuCallTiming{};
+	g_last_call_per_dispatch_ms.clear();
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -1308,6 +1313,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `workspace`) -- read after the fence wait below, well outside the try, so hoisted here for the
 	// same reason as the ComPtr resources immediately above.
 	std::vector<size_t> kv_row_offsets;
+	// T-2101 (per-site decomposition): how many timestamp boundaries this call actually recorded --
+	// also read after the fence wait, well outside the try, hoisted for the identical reason.
+	uint32_t dispatch_count_this_call = 0;
 	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
@@ -1481,7 +1489,15 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// token's own last layer's commit).
 	const uint32_t width_u32 = static_cast<uint32_t>(seq.context_length) + 1u;
 
+	// T-2101 (per-site decomposition, follow-up to §32/D-SLM3312): one timestamp boundary before
+	// EVERY `bind_and_dispatch` call, capped at the heap's own real capacity (never overrun --
+	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
+	uint32_t dispatch_query_index = 0;
 	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index) {
+		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+		}
+		++dispatch_query_index;
 		uint32_t consts[10] = {layer_index, H, HD, NH, context_cap_u32, position_u32, NQH, width_u32, I, N};
 		dev.list->SetComputeRoot32BitConstants(0, 10, consts, 0);
 		dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
@@ -1513,10 +1529,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
-	// T-2101 (dispatch-overhead decomposition): query 0 brackets the FIRST dispatch this call
-	// issues -- everything above (weight/K-V pack-or-skip, every Upload()) is recording work the
-	// GPU has not yet been asked to do anything about, so it must not be inside the GPU-busy window.
-	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+	// T-2101 (dispatch-overhead decomposition): boundary 0, captured inside the first
+	// `bind_and_dispatch` call below, brackets the FIRST dispatch this call issues -- everything
+	// above (weight/K-V pack-or-skip, every Upload()) is recording work the GPU has not yet been
+	// asked to do anything about, so it must not be inside the GPU-busy window.
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
@@ -1537,12 +1553,15 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
 	}
-	// Query 1 brackets the LAST dispatch (the final layer's own commit_site above) -- resolved into
-	// a small readback buffer now, alongside the real readback work below, so the resolve itself
+	// One final boundary, immediately after the LAST dispatch (the final layer's own commit_site
+	// above) -- `dispatch_query_index` now equals the total dispatch count this call issued, so
+	// this is boundary N for N dispatches, giving N per-dispatch deltas below. Resolved into a
+	// small readback buffer now, alongside the real readback work below, so the resolve itself
 	// costs one more small copy rather than a whole extra submit.
-	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
-	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
-	                            dev.timestamp_readback.Get(), 0);
+	dispatch_count_this_call = std::min(dispatch_query_index, harness::Device::kMaxTimestampSlots - 1);
+	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_count_this_call);
+	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
+	                            dispatch_count_this_call + 1, dev.timestamp_readback.Get(), 0);
 
 	// --- Readback: SeqState (whole, small -- O(hidden_size)) + the K/V workspace's OWN newly
 	// written rows into `seq`/`workspace`. T-2101: not the whole 448 MiB workspace. Every dispatch
@@ -1701,18 +1720,31 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	g_last_call_timing.submit_wait_ms =
 	    std::chrono::duration<double, std::milli>(t_submit_wait_end - t_record_end).count();
 
-	// GPU-measured busy time: query 0/1 were placed around the dispatch loop above, resolved into
-	// `dev.timestamp_readback` in the SAME command list (already fenced by the wait above).
-	if (dev.timestamp_frequency > 0) {
-		UINT64 ts[2] = {0, 0};
+	// GPU-measured busy time, both as a whole AND per dispatch: `dispatch_count_this_call + 1`
+	// boundaries were placed around every individual dispatch this call issued (one before each
+	// `bind_and_dispatch`, one final boundary after the last), resolved into `dev.timestamp_readback`
+	// in the SAME command list (already fenced by the wait above). `gpu_busy_ms` is boundary[last] -
+	// boundary[0] (identical to the whole-chain figure §32's own two-query bracket measured); the
+	// per-dispatch vector is every CONSECUTIVE delta, in dispatch order -- `g_last_call_per_dispatch_ms[d]`
+	// is dispatch `d`'s own GPU time, and `d % <sites-per-layer>` names which of the 17 site shaders
+	// it is (the fixed, unconditional call order in the loop above), summed by the caller across
+	// however many layers this call processed.
+	if (dev.timestamp_frequency > 0 && dispatch_count_this_call > 0) {
+		std::vector<UINT64> ts(dispatch_count_this_call + 1, 0);
 		void* qp = nullptr;
-		D3D12_RANGE qrange{0, 2 * sizeof(UINT64)};
+		D3D12_RANGE qrange{0, ts.size() * sizeof(UINT64)};
 		if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
-			std::memcpy(ts, qp, sizeof(ts));
+			std::memcpy(ts.data(), qp, ts.size() * sizeof(UINT64));
 			D3D12_RANGE qnone{0, 0};
 			dev.timestamp_readback->Unmap(0, &qnone);
+			const double freq = static_cast<double>(dev.timestamp_frequency);
 			g_last_call_timing.gpu_busy_ms =
-			    static_cast<double>(ts[1] - ts[0]) / static_cast<double>(dev.timestamp_frequency) * 1000.0;
+			    static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
+			g_last_call_per_dispatch_ms.resize(dispatch_count_this_call);
+			for (uint32_t d = 0; d < dispatch_count_this_call; ++d) {
+				g_last_call_per_dispatch_ms[d] =
+				    static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
+			}
 		}
 	}
 
@@ -1775,6 +1807,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing; }
+
+std::vector<double> LastCallPerDispatchTimingsMs() { return g_last_call_per_dispatch_ms; }
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
