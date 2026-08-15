@@ -108,6 +108,10 @@ int main(int argc, char** argv) {
 			const SslmGpuStatus st = sslm_decode_step_gpu(ctx, seq_0p5b, adapter, 24u);
 			CHECK(st == SSLM_ADAPTER_MODEL_MISMATCH,
 			      "decode with a cross-model adapter binding did not return SSLM_ADAPTER_MODEL_MISMATCH");
+			// T-2113 (B7 reconciliation): AdapterModelMismatch is a REJECTING guard (design Sec9) --
+			// rejected before submission, seq_0p5b stays Idle, never Submitted. No drain needed here;
+			// left un-drained deliberately so the release call below exercises the Idle-release path,
+			// not because a Submitted sequence would somehow release cleanly without one.
 			CHECK(sslm_gpu_seq_release(ctx, seq_0p5b) == SSLM_OK, "seq_release (0.5B) failed");
 		}
 	}
@@ -119,8 +123,29 @@ int main(int argc, char** argv) {
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq) == SSLM_OK, "seq_create (1.5B) failed");
 		if (seq) {
+			// T-2113 (B7 reconciliation, found while re-running this tool after B3.5's own
+			// D-SLM3379 fix): this cell never embedded a real token -- a fresh sequence's own
+			// hidden_codes/hidden_scale are zero/default (design Sec5.3), and the pre-fix
+			// WorkspaceTooSmall false-positive at context_cap=64 rejected the call before the
+			// degenerate zero content ever reached a real forward pass, masking the gap. With
+			// D-SLM3379 fixed, submission genuinely proceeds and the real forward pass now
+			// correctly rejects the zero content deep inside (mapped to SSLM_DEVICE_LOST, this
+			// file's own "no more specific status" disposition) -- not a guard bug, the exact
+			// gap B3.5's own sslm_gpu_seq_embed_token exists to close. Embedded here, real
+			// content, so this cell decodes what it always meant to.
+			CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK, "seq_embed_token (1.5B) failed");
 			const SslmGpuStatus st = sslm_decode_step_gpu(ctx, seq, nullptr, 672u);
 			CHECK(st != SSLM_ADAPTER_MODEL_MISMATCH, "NULL adapter incorrectly triggered the guard");
+			CHECK(st == SSLM_OK, "NULL-adapter decode did not return SSLM_OK");
+			// design Sec4.2's own async lifecycle requires draining via sslm_gpu_ready before the
+			// next host-mutating call (release included) or that call returns SSLM_BUSY, never a
+			// silent success. Drain here, matching every B5+ call site's own established
+			// convention.
+			int32_t ready = 0;
+			SslmGpuStatus out_status = SSLM_OK;
+			SslmGpuStatus rst = SSLM_OK;
+			while (!ready) rst = sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &out_status);
+			CHECK(rst == SSLM_OK && out_status == SSLM_OK, "draining the NULL-adapter decode did not succeed");
 			CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK, "seq_release (1.5B) failed");
 		}
 	}

@@ -63,9 +63,15 @@ static void TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency(SslmGpuConte
 	// the process-global g_resident_weights.
 	SslmGpuSequenceHandle* good_seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &good_seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, good_seq, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	CHECK(sslm_decode_step_gpu(ctx, good_seq, nullptr, 24u) == SSLM_OK);
 	CHECK(sslm_gpu_seq_release(ctx, good_seq) == SSLM_OK);
 }
+
+// T-2113 (Brunel, B7 reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -81,6 +87,33 @@ int main(int argc, char** argv) {
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency; (void)addr_2;
+
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	// M1: NOT DRIVEN this session, named rather than silently skipped (StandardsDocument.md
+	// Sec5.6). Its own fixture comment ("entry 2 rigged to inject device-removal") requires a
+	// build-seat-owned fault-injection hook this session did not build -- the identical class of
+	// new instrumentation B4/B5's own violation pins were (env-var-gated corruption mechanisms),
+	// which needs its own commissioning pass (plant-and-revert, StandardsDocument.md Sec5.4)
+	// before any verdict from it could be trusted. Routed, not silently absorbed.
+	SKIP_MSG("dim5 M1 needs a device-lost mid-batch injection hook -- not built this session, routed");
+
+	std::vector<uint8_t> bytes;
+	SslmModelView view{};
+	std::string err;
+	if (!g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view, &bytes, &err)) {
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim5_M2_SequenceKvBufferMismatchGuarded(ctx, model);
+		TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency(ctx, model);
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim5 M2/P1 need --model1p5b=PATH -- not run");
+	}
+
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

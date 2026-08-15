@@ -174,6 +174,21 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2113 (B7, design Sec4.3/Sec7/Sec10 B7): the batch-decode bench proof
+rem (tools\t2113_b7_batch_smoke.cpp) -- needs the real 1.5B model and the real shopkeeper
+rem adapter, so it is built here but NOT auto-run (matching B2/B3/B5/B6/B6b's own precedent
+rem above).
+if not exist out\b7 mkdir out\b7
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2113_b7_batch_smoke.cpp /Fo:out\b7\ /Fe:out\t2113_b7_batch_smoke.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

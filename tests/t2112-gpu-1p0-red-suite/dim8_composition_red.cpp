@@ -54,6 +54,7 @@ static void TestDim8_3_AdapterSwapMidSessionPreservesKvState(SslmGpuContext* ctx
                                                               SslmGpuSequenceHandle* seq,
                                                               SslmGpuAdapterHandle* adapter_a,
                                                               SslmGpuAdapterHandle* adapter_b) {
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	CHECK(sslm_decode_step_gpu(ctx, seq, /*adapter_or_null=*/nullptr, 24u) == SSLM_OK);   // base
 	CHECK(sslm_decode_step_gpu(ctx, seq, adapter_a, 24u) == SSLM_OK);                     // -> A
 	CHECK(sslm_decode_step_gpu(ctx, seq, adapter_b, 24u) == SSLM_OK);                     // -> B
@@ -71,6 +72,7 @@ static void TestDim8_3_AdapterSwapMidSessionPreservesKvState(SslmGpuContext* ctx
 static void TestDim8_4_ContextLengthAdapterCostNotBypassed(SslmGpuContext* ctx,
                                                             SslmGpuSequenceHandle* seq,
                                                             SslmGpuAdapterHandle* adapter) {
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	for (int step = 0; step < 64; ++step)
 		CHECK(sslm_decode_step_gpu(ctx, seq, adapter, 24u) == SSLM_OK);
 	// Timing assertion (design Sec3/Sec13: softmax cost grows 0.397->3.169 ms/token over
@@ -90,6 +92,7 @@ static void TestDim8_5_HandleChurnConcurrentWithLiveDecode(SslmGpuContext* ctx,
                                                             SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* long_lived = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &long_lived) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, long_lived, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	bool thread_a_ok = true;
 	std::thread thread_a([&] {
 		for (int step = 0; step < 64; ++step) {
@@ -114,28 +117,116 @@ static void TestDim8_5_HandleChurnConcurrentWithLiveDecode(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_seq_release(ctx, long_lived) == SSLM_OK);
 }
 
+// T-2113 (Brunel, B7 reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim8_1_BatchMixedAdapterBitIdenticalToAlone; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim8_2_BatchWideBudgetCutAtThreeWholeLayers; (void)addr_1;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim8_3_AdapterSwapMidSessionPreservesKvState; (void)addr_2;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_3 = (void*)&TestDim8_4_ContextLengthAdapterCostNotBypassed; (void)addr_3;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_4 = (void*)&TestDim8_5_HandleChurnConcurrentWithLiveDecode; (void)addr_4;
+
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	std::vector<uint8_t> bytes;
+	SslmModelView view{};
+	std::vector<uint8_t> adapter_bytes;
+	SslmModelView adapter_view{};
+	std::string err;
+	const bool have_model = !g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view, &bytes, &err);
+	const bool have_adapter = !g_adapter_path.empty() &&
+	                           LoadRealModel(g_adapter_path, &adapter_view, &adapter_bytes, &err);
+	if (!have_model) {
+		SKIP_MSG("dim8 needs --model1p5b=PATH -- not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+
+	SslmGpuModelHandle* model = nullptr;
+	CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+
+	SslmGpuAdapterHandle* adapter = nullptr;
+	if (have_adapter) {
+		CHECK(sslm_gpu_adapter_map(ctx, model, &adapter_view, &adapter) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim8 cells 1/3/4 need --adapter=PATH -- not run");
+	}
+
+	// Cell 1: batch of 3, mixed adapters {none, adapter, adapter} -- ONLY ONE real adapter
+	// artifact is available this session (the shopkeeper-v2 runtime adapter); the SAME handle
+	// is bound to two DIFFERENT sequences in the batch to exercise mixed composition (two
+	// distinct sequences, one shared adapter handle) rather than two distinct adapters, named
+	// honestly here rather than silently presented as the design's own literal "adapter A,
+	// adapter B" (which would need a second real converted adapter artifact this session does
+	// not have on disk).
+	if (adapter) {
+		SslmGpuSequenceHandle* seqs3[3] = {nullptr, nullptr, nullptr};
+		for (auto& s : seqs3) {
+			CHECK(sslm_gpu_seq_create(ctx, model, 64, &s) == SSLM_OK);
+			if (s) CHECK(sslm_gpu_seq_embed_token(ctx, s, 5) == SSLM_OK);
+		}
+		const SslmGpuAdapterHandle* mixed_adapters3[3] = {nullptr, adapter, adapter};
+		TestDim8_1_BatchMixedAdapterBitIdenticalToAlone(ctx, seqs3, mixed_adapters3);
+		for (auto& s : seqs3)
+			if (s) sslm_gpu_seq_release(ctx, s);
+	}
+
+	// Cell 2: batch of 4, real model, batch-wide budget covering 3 whole layers -- the exact
+	// scenario t2113_b7_batch_smoke.cpp's own Gate 2 already proves (2 full tokens + 1 layer);
+	// this cell's own literal "72 = 3 layers total" example only produces the [Ok,Ok,Ok,
+	// Exhausted] split the cell asserts when EACH sequence is capped to at most one layer per
+	// call -- true of a tiny (single-layer) fixture, not this real 28-layer artifact. Driven
+	// here with a budget scaled to this real model (3 layers), which correctly gives seqs[0]
+	// ALL three layers (design Sec7: strict array order, greedy consumption) and seqs[1..3]
+	// SSLM_BATCH_BUDGET_EXHAUSTED -- a real, executed, DIFFERENT split than the cell's own
+	// literal assertion names, because the cell's own worked example implicitly assumes a
+	// tiny/degenerate model this suite's own fixture_common.h has no mechanism to construct
+	// (every model here comes from a real .sslm artifact on disk). Named as a genuinely
+	// mismatched cell per Brunel's own charter, not re-authored: routed to Curie/the conductor.
+	{
+		SslmGpuSequenceHandle* seqs4[4] = {nullptr, nullptr, nullptr, nullptr};
+		for (auto& s : seqs4) {
+			CHECK(sslm_gpu_seq_create(ctx, model, 64, &s) == SSLM_OK);
+			if (s) CHECK(sslm_gpu_seq_embed_token(ctx, s, 5) == SSLM_OK);
+		}
+		const SslmGpuAdapterHandle* adapters4[4] = {nullptr, nullptr, nullptr, nullptr};
+		TestDim8_2_BatchWideBudgetCutAtThreeWholeLayers(ctx, seqs4, adapters4);
+		for (auto& s : seqs4)
+			if (s) sslm_gpu_seq_release(ctx, s);
+	}
+
+	// Cell 3: adapter swap mid-session -- needs TWO adapter handles (A, B); only one real
+	// artifact available, same handle reused for both slots (named, same reasoning as Cell 1).
+	if (adapter) {
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		if (seq) TestDim8_3_AdapterSwapMidSessionPreservesKvState(ctx, seq, adapter, adapter);
+		if (seq) sslm_gpu_seq_release(ctx, seq);
+	}
+
+	// Cell 4: context-length x adapter cost.
+	if (adapter) {
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		if (seq) TestDim8_4_ContextLengthAdapterCostNotBypassed(ctx, seq, adapter);
+		if (seq) sslm_gpu_seq_release(ctx, seq);
+	}
+
+	// Cell 5: handle churn concurrent with live decode.
+	TestDim8_5_HandleChurnConcurrentWithLiveDecode(ctx, model);
+
+	if (adapter) sslm_gpu_adapter_unmap(ctx, adapter);
+	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

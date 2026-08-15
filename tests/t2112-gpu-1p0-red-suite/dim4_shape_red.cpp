@@ -45,6 +45,7 @@ static void TestDim4_M1_DispatchAndBatchExtremes(SslmGpuContext* ctx, SslmGpuMod
 
 	SslmGpuSequenceHandle* single = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &single) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, single, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	SslmGpuSequenceHandle* one_seq_array[1] = {single};
 	const SslmGpuAdapterHandle* one_adapter_array[1] = {nullptr};
 	SslmGpuStatus one_out[1];
@@ -71,6 +72,7 @@ static void TestDim4_P1_Real0p5bArtifactThroughNewApi(SslmGpuContext* ctx,
 	}
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
 	// FEATURE ORACLE: per-step CPU/GPU bit-equality for 64 steps against the CPU oracle
 	// (superslm::RunLayerLoop) at the 0.5B tier -- T-2106's own already-executed result
 	// (D-SLM3332), reproduced through this design's handle-based entry point rather than the raw
@@ -80,6 +82,11 @@ static void TestDim4_P1_Real0p5bArtifactThroughNewApi(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 	CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 }
+
+// T-2113 (Brunel, B7 reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -91,6 +98,38 @@ int main(int argc, char** argv) {
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim4_P1_Real0p5bArtifactThroughNewApi; (void)addr_1;
+
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	std::vector<uint8_t> bytes_1p5b, bytes_0p5b;
+	SslmModelView view_1p5b{}, view_0p5b{};
+	std::string err;
+	const bool have_1p5b = !g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view_1p5b, &bytes_1p5b, &err);
+	const bool have_0p5b = !g_model_0p5b_path.empty() && LoadRealModel(g_model_0p5b_path, &view_0p5b, &bytes_0p5b, &err);
+
+	if (have_1p5b) {
+		// M1's own dedicated model handle -- it neither unmaps nor otherwise consumes it.
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view_1p5b, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim4_M1_DispatchAndBatchExtremes(ctx, model);
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim4 M1 needs --model1p5b=PATH -- not run");
+	}
+
+	if (have_0p5b) {
+		// P1's own body calls sslm_gpu_model_unmap(model) itself at its tail -- a DEDICATED
+		// handle for it, per the same convention dim1_lifetime_red.cpp's own P2 uses.
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view_0p5b, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim4_P1_Real0p5bArtifactThroughNewApi(ctx, model);
+	} else {
+		SKIP_MSG("dim4 P1 needs --model0p5b=PATH -- not run");
+	}
+
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

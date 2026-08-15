@@ -73,6 +73,17 @@ int main(int argc, char** argv) {
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim10_P2_BatchedMixedAdapterServingReadForCoherence; (void)addr_1;
+
+	// T-2113 (Brunel, B7 reconciliation pass): NOT DRIVEN this session, named per
+	// StandardsDocument.md Sec5.6 rather than silently left at zero checks. Both of this file's
+	// own cells are FEATURE ORACLES by design (Sec11 dim10's own charter: "read for IN-CHARACTER
+	// DIVERGENCE"/"read... for coherence," never a bit-comparison) -- P1 needs the CPU/substrate
+	// demo's own validated-judge apparatus (T-1980) plus a text-decode path on the 1.0 handles,
+	// neither of which exists yet; P2 needs the same judge for its own coherence read. Both are
+	// real, substantial, build-seat-owned machinery this session did not build (distinct from the
+	// mechanical bit-equality oracle wiring B7's other cells needed) -- routed, not fabricated.
+	SKIP_MSG("dim10 P1 needs the T-1980 validated-judge apparatus + a text-decode path -- not built this session, routed");
+	SKIP_MSG("dim10 P2 needs the same judge apparatus for its own coherence read -- not built this session, routed");
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

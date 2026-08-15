@@ -910,6 +910,67 @@ SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus /*st*/) 
 SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st) {
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_DEVICE_LOST;
 }
+
+// T-2113 (B7, design Sec4.3/Sec7/Sec10 B7): the actual submission logic shared, byte-for-byte,
+// between the single-sequence call (`sslm_decode_step_gpu`) and every per-sequence slot of the
+// batch call (`sslm_decode_step_batch_gpu`) below -- extracted so the two entry points can never
+// silently drift on what "submit one sequence's own dispatch chain" means (StandardsDocument.md
+// Sec5.4's own "one implementation, not two copies that could drift" discipline, the identical
+// reasoning D-SLM3352 already applied to weight packing). Takes an ALREADY-DECIDED
+// `layers_to_issue` (design Sec7: "each sequence taking whole layers only... a sequence reached
+// after the budget is exhausted" is a decision the CALLER makes against whichever budget
+// (single-call: the call's own `dispatch_budget`; batch: the running batch-wide remainder) --
+// this function has no opinion on where the number came from, only on submitting exactly that
+// many layers for exactly this one sequence. Caller-ensures `ctx`/`seq`/`seq->model` are non-null,
+// non-destroyed, and `seq` is not `Submitted` (every guard above this call's own callers already
+// check, per-sequence, before reaching here) -- this function re-validates none of that, matching
+// `RunLayerLoopGpuSubmit`'s own "guards are the caller's problem below this layer" convention.
+SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                       const SslmGpuAdapterHandle* adapter_or_null,
+                                       uint32_t layers_to_issue) {
+	(void)ctx;  // not read directly -- every resource this call touches is reached through `seq`/
+	            // `seq->model`/`adapter_or_null`'s own already-resident buffers (B2/B3/B6), the
+	            // identical shape `sslm_decode_step_gpu`'s own pre-B7 body already had.
+	SslmGpuModelHandle* model = seq->model;
+
+	// Sync the handle's own canonical scalar fields into `live_state` (its own `hidden_codes`
+	// pointer was set once, at sslm_gpu_seq_create, and needs no per-call refresh).
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = seq->layer_index;
+	seq->live_state.kv_saturation_count = seq->kv_saturation_count;
+	seq->live_state.context_length = seq->context_length;
+
+	static const superslm::SslmTensorManifest kEmptyManifest;
+
+	superslm_gpu::GpuAdapterBridge adapter_bridge;
+	const superslm_gpu::GpuAdapterBridge* adapter_bridge_ptr = nullptr;
+	if (adapter_or_null != nullptr) {
+		adapter_bridge.lora_ab_resident = adapter_or_null->lora_ab_buf.Get();
+		adapter_bridge.fold_resident = adapter_or_null->fold_buf.Get();
+		adapter_bridge.rank = adapter_or_null->rank;
+		adapter_bridge.slots = &adapter_or_null->slots[0][0];
+		adapter_bridge.num_hidden_layers = model->num_hidden_layers;
+		adapter_bridge_ptr = &adapter_bridge;
+	}
+
+	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
+	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
+	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
+	    seq->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
+	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
+	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
+	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr);
+
+	if (!inflight) {
+		// Rejected before submission (a guard, or an exception) -- seq/host state untouched,
+		// still Idle, exactly RunLayerLoopGpu's own existing contract.
+		return MapSubmitRejectionToGpuStatus(submit_status);
+	}
+	seq->in_flight = inflight;
+	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+	return SSLM_OK;
+}
 }  // namespace
 
 // Design Sec4.3/Sec6.2 (T-2113 B5): "records up to dispatch_budget dispatches ... into
@@ -953,69 +1014,189 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 		return SSLM_DISPATCH_BUDGET_TOO_SMALL;
 	}
 
-	// Sync the handle's own canonical scalar fields into `live_state` (its own
-	// `hidden_codes` pointer was set once, at sslm_gpu_seq_create, and needs no
-	// per-call refresh -- it already aliases `hidden_codes.data()` directly).
-	seq->live_state.hidden_scale = seq->hidden_scale;
-	seq->live_state.layer_index = seq->layer_index;
-	seq->live_state.kv_saturation_count = seq->kv_saturation_count;
-	seq->live_state.context_length = seq->context_length;
+	// T-2113 (B7): submission itself is shared, byte-for-byte, with every per-sequence slot
+	// of sslm_decode_step_batch_gpu (below) -- see SubmitOneSequenceDecode's own header
+	// comment. This call has already decided layers_to_issue against its OWN full
+	// dispatch_budget (immediately above); the batch call decides the identical quantity
+	// against a running batch-wide remainder instead -- the only difference between the two
+	// call sites, and it lives entirely in the budget arithmetic surrounding this shared call,
+	// never inside it.
+	return SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
+}
 
-	// Never read: the external-rope bridge below supplies presence/size directly from
-	// `model`'s own cached fields (B2), so this call has no live SslmTensorManifest of
-	// its own and needs none.
-	static const superslm::SslmTensorManifest kEmptyManifest;
-
-	// T-2113 (B6b, design Sec8): `adapter_or_null` was validated (AdapterModelMismatch, above)
-	// but discarded through B6 -- now built into the flat bridge RunLayerLoopGpuSubmit reads.
-	// `adapter->slots` is `std::vector<std::array<AdapterProjSlot, 7>>` (sslm_gpu_adapter_map,
-	// above) -- already contiguous in exactly the `[layer*7+projection]` flat layout
-	// GpuAdapterBridge::slots documents (a std::vector of std::array<T,7> lays out every
-	// element of array[l] immediately before array[l+1][0]), so no copy is needed: the bridge
-	// simply points at the SAME storage the adapter handle already owns.
-	superslm_gpu::GpuAdapterBridge adapter_bridge;
-	const superslm_gpu::GpuAdapterBridge* adapter_bridge_ptr = nullptr;
-	if (adapter_or_null != nullptr) {
-		adapter_bridge.lora_ab_resident = adapter_or_null->lora_ab_buf.Get();
-		adapter_bridge.fold_resident = adapter_or_null->fold_buf.Get();
-		adapter_bridge.rank = adapter_or_null->rank;
-		adapter_bridge.slots = &adapter_or_null->slots[0][0];
-		adapter_bridge.num_hidden_layers = model->num_hidden_layers;
-		adapter_bridge_ptr = &adapter_bridge;
+// Design Sec4.3/Sec7/Sec10 B7 (T-2113 B7, repaired signature per the T-2111 fold, D-SLM3344):
+// "records n sequences' own, independent, per-sequence dispatch chains ... the batch call
+// changes submission grouping, never any sequence's own numerics." `dispatch_budget` is
+// BATCH-WIDE (design Sec7): consumed by sequences strictly in `seqs[]`'s own array order, each
+// sequence taking whole layers only from whatever remains when its own turn comes. A guard
+// rejection for `seqs[i]` (a malformed handle, an adapter/model mismatch, a `Busy` sequence)
+// does not abort the batch -- `out_statuses[i]` carries that sequence's own outcome and
+// recording continues with `seqs[i+1]`. A sequence reached once the running remainder cannot
+// cover even one whole layer records zero dispatches and reads `SSLM_BATCH_BUDGET_EXHAUSTED`
+// (never `SSLM_DISPATCH_BUDGET_TOO_SMALL`, which design Sec9's own channel table reserves for
+// the single-sequence call) -- its own state stays `Idle`, exactly as if it had never been
+// passed to this call at all. The function's own RETURN VALUE is call-level only (design
+// Sec4.3): whether the call proceeded at all (`Ok`) -- never a reduction of `out_statuses`.
+//
+// **Named limitation, stated per Brunel's own "stop at genuine limits, honest stage report"
+// discipline, not silently absorbed**: this implementation submits each recorded sequence
+// through the IDENTICAL `RunLayerLoopGpuSubmit` call the single-sequence path uses --
+// `SubmitOneSequenceDecode`, shared verbatim -- which means every sequence in the batch still
+// gets its OWN `ExecuteCommandLists`/`Signal` pair underneath, not the ONE-command-list fusion
+// design Sec7's own text describes ("records n sequences ... into ONE command list and
+// submits/fences them together"). The CORRECTNESS contract this section's own gate names
+// (design Sec10 B7: "per sequence, output bit-identical to that same sequence decoded alone")
+// is satisfied by construction -- reusing the exact same, already-proven submission call for
+// every sequence makes bit-identity to the serial case a property of the code being literally
+// the same code, not a separately-proven claim -- and the per-sequence `out_statuses`/
+// batch-wide-budget/mixed-adapter semantics are fully and correctly implemented. What is NOT
+// realized is the submission-side throughput amortization design Sec7 names as the batching
+// mechanism's OWN rationale (a real, but explicitly out-of-scope-for-this-gate, cost: design
+// Sec13 states the batch call's own throughput is "UNDERIVED... an empirical question," never
+// a design-time claim, and Sec10 B7's own gate text is itself "a correctness proof, not a
+// throughput proof"). §14's own throughput measurement, below, reports this honestly rather
+// than assuming batching helps.
+//
+// **A REAL device hang, found at the bench, is why this is not merely a missed optimization**:
+// every 1.0-API decode call -- single or batched -- ultimately submits through the process's ONE
+// shared `harness::GetDevice()` singleton (every `SslmGpuContext::device`, B1, is used only for
+// RESIDENCY uploads at map/create time, never for the decode dispatch chain itself, which the
+// pre-1.0 substrate's own `RunLayerLoopGpuSubmit` still routes through the singleton).
+// `ID3D12CommandAllocator::Reset()` is undefined behavior while a command list allocated from it
+// is still executing on the GPU -- calling `SubmitOneSequenceDecode` for `seqs[1]` before
+// `seqs[0]`'s own fence has signaled resets that SAME shared allocator out from under a submission
+// that may still be executing. A first draft of this function left every recorded sequence
+// Submitted (undrained) until the whole loop finished, matching the design's own async-batch
+// framing literally -- and hung the test process indefinitely on the very first multi-sequence
+// batch it ever ran (`t2113_b7_batch_smoke.cpp`'s own Gate 1a, reproduced by execution: 12.12
+// CPU-seconds, motionless, for several minutes -- a real device-level stall, not a slow
+// computation). Fixed below: each sequence is drained via the public `sslm_gpu_ready(block=1)`
+// the INSTANT its own submission succeeds, before the loop's next iteration can touch the shared
+// allocator again -- at most one sequence is ever Submitted against the device at once. This is
+// the same constraint that makes the "ONE command list" fusion design Sec7 describes a genuine
+// correctness requirement for a from-scratch implementation, not merely a throughput nicety --
+// this implementation avoids needing that fusion by never having two sequences in flight
+// simultaneously in the first place, at the cost named above (no cross-sequence submission
+// overlap, so no submission-side amortization either).
+SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* const* seqs,
+                                          const SslmGpuAdapterHandle* const* adapters_or_null,
+                                          uint32_t n_sequences, uint32_t dispatch_budget,
+                                          SslmGpuStatus* out_statuses) {
+	if (!ctx) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // call-level: no live object to report through,
+		                                           // same disposition every other null-ctx site
+		                                           // in this file already uses.
 	}
-
-	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
-	// T-2113 (B3.5 reconciliation, D-SLM3367 fold-out): a real bug found at the bench, not a
-	// design/test issue -- this call was passing model->context_cap (the MODEL's own config
-	// context_cap, e.g. the artifact's real 32768) into RunLayerLoopGpuSubmit's own
-	// WorkspaceSizeOrOverflow guard, instead of seq->context_cap (design Sec5.3: "a real,
-	// dedicated DEFAULT-heap K/V buffer sized to context_cap FOR THIS SEQUENCE" -- a
-	// per-sequence value, deliberately independent of the model's own config context_cap,
-	// design Sec5.3's whole reason to take context_cap as sslm_gpu_seq_create's own parameter).
-	// seq->host_kv_mirror (passed below) is sized against seq->context_cap at create time
-	// (sslm_gpu_seq_create, above) -- passing model->context_cap here made the guard compute a
-	// kv_bytes_needed against the WRONG (model-wide) context_cap, which silently disagreed with
-	// host_kv_mirror's own real size whenever a caller created a sequence at a context_cap
-	// smaller than the model's own config value (WorkspaceTooSmall, a false rejection every
-	// caller who does not happen to pass context_cap == model->context_cap would hit). Found
-	// while reconciling the T-2112 red suite's own dim1/dim3/dim6/dim9/dim11 cells, which all
-	// create sequences at context_cap=64, far below any real artifact's own config context_cap.
-	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
-	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
-	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
-	    seq->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
-	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
-	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
-	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr);
-
-	if (!inflight) {
-		// Rejected before submission (a guard, or an exception) -- seq/host state
-		// untouched, still Idle, exactly RunLayerLoopGpu's own existing contract.
-		return MapSubmitRejectionToGpuStatus(submit_status);
+	if (n_sequences > 0 && (!seqs || !out_statuses)) {
+		// A non-zero count with a null seqs/out_statuses array is a caller contract violation
+		// this call cannot record anything against -- no per-sequence channel exists to report
+		// through (out_statuses is itself null), so this is call-level, matching the "no live
+		// object to report through" disposition every other malformed-argument site uses.
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-	seq->in_flight = inflight;
-	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
-	return SSLM_OK;
+	// n_sequences == 0: a legal, vacuous call (design Sec4.3 states no floor on n_sequences) --
+	// nothing to record, nothing to report, proceeds and returns Ok.
+
+	uint32_t remaining_budget = dispatch_budget;
+	for (uint32_t i = 0; i < n_sequences; ++i) {
+		SslmGpuSequenceHandle* seq = seqs[i];
+		const SslmGpuAdapterHandle* adapter_or_null = adapters_or_null ? adapters_or_null[i] : nullptr;
+
+		// Per-sequence guard ladder -- IDENTICAL checks and IDENTICAL statuses to the
+		// single-sequence call (design Sec9: AdapterModelMismatch's own channel table entry
+		// names `out_statuses[i]` explicitly as the batch call's own per-sequence channel for
+		// exactly this check). A guard rejection for seqs[i] does NOT abort the batch (design
+		// Sec7's own "records every sequence's chain up to... that sequence's own guard
+		// failure... skips that sequence's own remaining dispatches, and continues recording
+		// the next sequence") -- `continue` to seqs[i+1], remaining_budget UNCHANGED (a
+		// rejected sequence consumes no budget, since nothing was recorded for it).
+		if (!seq || seq->destroyed || !seq->model || seq->model->destroyed) {
+			out_statuses[i] = SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+			continue;
+		}
+		if (adapter_or_null && (adapter_or_null->destroyed || adapter_or_null->model != seq->model)) {
+			out_statuses[i] = SSLM_ADAPTER_MODEL_MISMATCH;
+			continue;
+		}
+		const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+		if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
+			out_statuses[i] = SSLM_BUSY;
+			continue;
+		}
+
+		// Design Sec7: "dispatch_budget is consumed by sequences strictly in the recording
+		// order... each sequence taking whole layers only... from whatever remains" -- planned
+		// against the RUNNING remainder, never the call's own original dispatch_budget past
+		// the first sequence. Zero layers available (whether because the ORIGINAL budget never
+		// covered even seqs[0]'s own first layer, or because earlier sequences in this same
+		// call already consumed it) is uniformly SSLM_BATCH_BUDGET_EXHAUSTED at the batch call
+		// -- design Sec9's own table reserves SSLM_DISPATCH_BUDGET_TOO_SMALL for the
+		// single-sequence call alone, never naming it as a batch-call channel.
+		uint32_t layers_to_issue = 0;
+		const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
+		    remaining_budget, seq->model->num_hidden_layers, seq->layer_index, &layers_to_issue);
+		if (plan == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
+			out_statuses[i] = SSLM_BATCH_BUDGET_EXHAUSTED;  // seq->state stays Idle -- nothing
+			                                                  // recorded, nothing submitted.
+			continue;
+		}
+
+		out_statuses[i] = SubmitOneSequenceDecode(ctx, seq, adapter_or_null, layers_to_issue);
+		if (out_statuses[i] == SSLM_OK) {
+			// Design Sec7's own budget arithmetic: exactly this sequence's own consumed
+			// dispatches (layers_to_issue whole layers, 24 dispatches/layer, T-2113 B4) leave
+			// the running remainder for seqs[i+1..]. A submission REJECTED after planning
+			// succeeded (e.g. a device-lost mid-batch, design Sec9's own DeviceLost row: "every
+			// not-yet-reached out_statuses[i] reading DeviceLost") consumes no budget either --
+			// only a call that actually reached SSLM_OK genuinely used GPU dispatch slots.
+			remaining_budget -= layers_to_issue * 24u;
+
+			// T-2113 (B7): a REAL device hang found at the bench, fixed here, not merely
+			// worked around -- see this function's own header comment for the fuller account.
+			// `RunLayerLoopGpuSubmit` always operates on the process's ONE shared
+			// `harness::GetDevice()` singleton's own command allocator/list/queue (every 1.0
+			// context's own `SslmGpuContext::device` is used only for RESIDENCY uploads, B1/B2,
+			// never for the decode dispatch chain itself). `ID3D12CommandAllocator::Reset()` is
+			// undefined behavior while a command list allocated from it is still executing on
+			// the GPU (D3D12's own documented contract) -- submitting seqs[i+1]'s own dispatches
+			// (which calls `dev.alloc->Reset()` again, unconditionally, at the top of the NEXT
+			// `RunLayerLoopGpuSubmit`) BEFORE seqs[i]'s own fence has signaled is exactly that:
+			// two submissions against the SAME shared allocator with no fence boundary between
+			// them. Reproduced by execution: `t2113_b7_batch_smoke.cpp`'s own Gate 1a (a
+			// batch-of-3, back-to-back submissions with no drain between them) hung the process
+			// indefinitely (12.12 CPU-seconds, unmoving, for several minutes -- a genuine device-
+			// level stall, not a slow computation) the first time this loop left more than one
+			// sequence Submitted at once. Fixed: each sequence is drained (via the EXISTING
+			// public `sslm_gpu_ready(block=1)`, never a second, parallel implementation) the
+			// MOMENT its own submission succeeds, before the loop's next iteration ever calls
+			// `dev.alloc->Reset()` again -- at most one sequence is ever Submitted against the
+			// shared device at a time. This is also the concrete, now-necessary (not merely
+			// named-as-a-cost) form of this function's own "no one-command-list fusion" limit:
+			// the batch call is observably synchronous per sequence internally, though `seq`'s
+			// own state still transitions through `Submitted` correctly, so a caller polling via
+			// `sslm_gpu_ready` afterward always finds `ready=1` immediately -- a legal realization
+			// of the async contract (design Sec4.2 never requires a call to still be pending).
+			int32_t drained_ready = 0;
+			SslmGpuStatus drained_status = SSLM_OK;
+			const SslmGpuStatus ready_call_status =
+			    sslm_gpu_ready(ctx, seq, /*block=*/1, &drained_ready, &drained_status);
+			out_statuses[i] = (ready_call_status == SSLM_OK) ? drained_status : ready_call_status;
+		}
+		if (out_statuses[i] == SSLM_DEVICE_LOST) {
+			// Design Sec9's own DeviceLost row for the batch call: "every not-yet-reached
+			// out_statuses[i] reading DeviceLost" -- a device removal discovered mid-batch must
+			// not let the REST of the batch's own not-yet-recorded sequences silently proceed
+			// as if the device were still healthy (their own dispatches, if recorded, would
+			// execute against a lost device with undefined results). Every remaining slot is
+			// marked DeviceLost and recording stops -- this is the one case design Sec7's own
+			// per-sequence-independence text does not apply to, because the SHARED device
+			// itself, not any one sequence's own state, is what failed.
+			for (uint32_t j = i + 1; j < n_sequences; ++j) out_statuses[j] = SSLM_DEVICE_LOST;
+			break;
+		}
+	}
+	return SSLM_OK;  // call-level: recording proceeded (design Sec4.3) -- per-sequence outcomes
+	                  // are exclusively in out_statuses, never folded into this return value.
 }
 
 // Design Sec4.2 (T-2113 B5): "block(=0): a pure poll -- if the fence has not yet
