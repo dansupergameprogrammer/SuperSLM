@@ -62,6 +62,7 @@ const char* SslmForwardStatusName(SslmForwardStatus s) noexcept {
 			return "OptionGFusedLandingExponentOutOfDomain";
 		case SslmForwardStatus::GpuAllocationFailed: return "GpuAllocationFailed";
 		case SslmForwardStatus::GpuDeviceRemoved: return "GpuDeviceRemoved";
+		case SslmForwardStatus::GpuGemmGroupArithmeticInvalid: return "GpuGemmGroupArithmeticInvalid";
 	}
 	return "?";
 }

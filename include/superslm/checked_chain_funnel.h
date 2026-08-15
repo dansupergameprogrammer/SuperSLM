@@ -289,6 +289,20 @@ enum class SslmForwardStatus {
 	                                          // direction (an unneeded device-recreation costs less
 	                                          // than an unneeded retry against a device that is
 	                                          // actually gone).
+	GpuGemmGroupArithmeticInvalid,             // T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-
+	                                          // review.md, confirmation pass @ f7026db): the
+	                                          // multi-group GEMM dispatch's own standing guard
+	                                          // (`ComputeGpuGemmSiteGroupPlan`, superslm_gpu.cpp) found
+	                                          // a group count that does not cover its own output
+	                                          // dimension -- a PERMANENT coding-arithmetic defect,
+	                                          // never a transient or size-dependent one. Distinct from
+	                                          // `GpuAllocationFailed` on purpose: that status's own
+	                                          // documented recovery ("retry smaller") is actively wrong
+	                                          // advice for this condition, which no retry at any size
+	                                          // fixes -- the confirmation pass found the original guard
+	                                          // routed through the SAME generic catch as
+	                                          // `GpuAllocationFailed`, discarding the diagnostic string
+	                                          // and reporting a permanent bug as a recoverable one.
 };
 
 // Human-readable name, for diagnostics and test messages (mirrors SslmStatusName,

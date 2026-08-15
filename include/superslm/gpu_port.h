@@ -304,14 +304,37 @@ struct GpuCallTiming {
 GpuCallTiming LastCallTiming();
 
 // T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ceiling-division formula
-// `RunLayerLoopGpu`'s own multi-group GEMM dispatches use to turn an output width into a group
-// count -- `ceil(out_channels / threads_per_group)`, i.e. `(out_channels + threads_per_group - 1)
-// / threads_per_group`. Exported so both the real dispatch path and a unit test at real model
-// dimensions (no device required) call the SAME implementation rather than two independently
-// hand-written copies that could drift. The property this formula must hold, for any caller: the
-// returned group count `g` satisfies `g * threads_per_group >= out_channels` (every channel has a
-// thread) and, when `g > 0`, `(g - 1) * threads_per_group < out_channels` (no wasted group).
+// `ComputeGpuGemmSiteGroupPlan` (below) uses to turn an output width into a group count --
+// `ceil(out_channels / threads_per_group)`, i.e. `(out_channels + threads_per_group - 1) /
+// threads_per_group`. The property this formula must hold, for any caller: the returned group
+// count `g` satisfies `g * threads_per_group >= out_channels` (every channel has a thread) and,
+// when `g > 0`, `(g - 1) * threads_per_group < out_channels` (no wasted group).
 uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group);
+
+// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+// f7026db): the five sites whose GEMM step runs as its own multi-group dispatch
+// (`down_proj_gemm_site.hlsl` and the four siblings named there). `q_proj`/`o_proj`/`down_proj`
+// output `hidden_size` at 64 threads/group; `gate_proj`/`up_proj` output `intermediate_size` at
+// 256 threads/group -- see each shader's own header comment for why the two widths differ.
+enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj };
+
+struct GpuGemmSiteGroupPlan {
+	uint32_t out_channels = 0;
+	uint32_t threads_per_group = 0;
+	uint32_t groups = 0;
+};
+
+// T-2101 (S3-prime): the ONE source `RunLayerLoopGpu`'s own dispatch call for `site` reads its
+// `Dispatch(groups, 1, 1)` grid size from -- no local variable sits between this function's own
+// return value and the `bind_and_dispatch` call, so there is nothing at the call site left to
+// hand-edit independently of this function. `tests/test_main.cpp`'s own
+// `TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions` calls this SAME function directly, no
+// device required, at the real model's own dimensions (hidden_size=1536, intermediate_size=8960)
+// -- a mutation of this function's own body (the confirmation pass's own specified re-falsification
+// method) is therefore observable by the pinned suite, not only by a manual C5/throughput run
+// against real hardware.
+GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t intermediate_size);
 
 // T-2101 (per-site decomposition, follow-up to D-SLM3312; per-dispatch parallelism, D-SLM3313's
 // own follow-up): one GPU-measured millisecond figure per dispatch the most recent

@@ -27,6 +27,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -692,6 +693,22 @@ void ArmO11AllocationFailureInjection(uint32_t site) {
 void ClearO11AllocationInjection() { g_o11_alloc_injection_armed = false; }
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
 
+// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @ f7026db): a
+// distinct exception type for the multi-group GEMM standing guard below -- NOT `std::runtime_error`,
+// so it is never accidentally caught by the SAME generic `catch (const std::runtime_error&)` this
+// function's own recording window already uses for genuine D3D12 allocation/device failures. That
+// generic catch's own cache-invalidation logic (both residency caches, `LastWeightUploadWasSkipped`)
+// still applies unconditionally on ANY throw in the window regardless of cause, so this type is
+// caught by a SEPARATE, explicit clause inside the SAME try/catch (not hoisted above it, which
+// would skip that cleanup) -- the confirmation pass's own first option: "give the check its own
+// status... distinct from allocation failure." `std::logic_error`, not `std::runtime_error`: this
+// is a permanent coding-arithmetic bug, never a transient or environmental condition, and the two
+// exception hierarchies are unrelated by design in the standard library for exactly this
+// distinction.
+struct GpuGemmGroupArithmeticError : std::logic_error {
+	using std::logic_error::logic_error;
+};
+
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
                                              uint32_t num_hidden_layers, uint32_t layer_budget,
@@ -1316,6 +1333,90 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// T-2101 (per-site decomposition): how many timestamp boundaries this call actually recorded --
 	// also read after the fence wait, well outside the try, hoisted for the identical reason.
 	uint32_t dispatch_count_this_call = 0;
+	// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @ f7026db):
+	// shared by BOTH catch clauses below (the generic D3D12-failure one and the new
+	// `GpuGemmGroupArithmeticError` one) so the cache-invalidation contract is written once and
+	// cannot drift between the two paths.
+	//
+	// T-2101 (S4): consolidated here, this round, from two catch clauses' own duplicated inline
+	// code -- the reasoning below (T-2055, T-2062 M-b, T-2080 S3) is UNCHANGED and still describes
+	// exactly what these five lines do; only their location moved.
+	//
+	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
+	// review.md, P3): defensively invalidate the weight-residency cache
+	// regardless of WHERE in the window the throw happened. A throw
+	// reached AFTER `g_resident_weights` was already marked valid+resident
+	// (the `!weights_resident` branch below, once ITS OWN CopyResource is
+	// merely RECORDED) but BEFORE this command list actually executes
+	// would otherwise leave that assignment describing a DEFAULT-heap
+	// buffer whose content copy was never submitted to the GPU -- serving
+	// it back to the NEXT call as a cache hit would bind an uninitialized
+	// VRAM buffer to every site's own weight reads with no error at all,
+	// the silent-wrong-answer class this whole arc exists to close, not
+	// merely the crash class M1 already closed. Safe unconditionally: if
+	// the cache was never touched this call (a hit, or a throw before the
+	// `!weights_resident` branch ran), this is a same-state no-op.
+	//
+	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
+	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "this is
+	// a same-state no-op" is false on the CACHE-HIT path specifically --
+	// left as written above, not rewritten, per this tree's own
+	// append-only discipline. On a hit, `g_resident_weights.valid` was
+	// already `true` and `lw_buf` already held the resident DEFAULT-heap
+	// copy BEFORE this call ever ran (a prior call's own success path set
+	// it); the two lines below unconditionally reset it to invalid --
+	// forcing the NEXT call into a full re-upload of the packed row
+	// (~1.31 GiB across PCIe at the 1.5B tier) that a hit exists to
+	// avoid, which is a real state CHANGE, not a no-op, on that one path.
+	// The conservative DIRECTION the paragraph above argues for is still
+	// correct and unchanged -- reproduced by execution (the review's own
+	// probe: a cache-hit call that throws, followed by a well-formed call
+	// with identical content, reads back a forced miss) -- what was wrong
+	// is calling a real, deliberate cache-state change a no-op.
+	//
+	// T-2101: the same reasoning applies to the K/V residency cache -- a throw reached after
+	// `g_resident_kv` was marked valid (the miss branch below, once its own CopyResource is
+	// merely recorded) but before this command list actually executes would otherwise serve an
+	// uninitialized or partially-written VRAM buffer back to the NEXT call as a cache hit, with
+	// no error. Invalidated unconditionally, matching the weight cache's own unconditional reset
+	// immediately above; a hit call that throws pays a full re-upload on its next call, which is
+	// the same real state change the weight cache's own T-2062 (M-b) correction already
+	// documents as correct, not a no-op.
+	//
+	// T-2062 (M-b): beside the cache invalidation above, not left to the
+	// function-entry assignment alone -- a throw in this window is a TWELFTH
+	// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
+	// too" enumeration (T-2055, P2) did not count when it said eleven.
+	// Without this line, a cache-hit call that throws here left
+	// `LastWeightUploadWasSkipped()` reading the call's own STALE `true`
+	// (set on entry to `false`, then overwritten `true` at the residency
+	// decision earlier in this same call, before the throw) even though
+	// the two lines above have just made the cache non-resident --
+	// reproduced by the review's own probe (call 5: `skipped=1` from a
+	// call whose catch had just invalidated the cache). Setting it
+	// here makes the observable agree with the state it describes on
+	// this path.
+	//
+	// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
+	// 94ebee3-gpu-serial-port-closing-review.md, S3; D-SLM3241): the
+	// sentence this replaces claimed the observable "agrees with the
+	// state it describes on every one of this function's ... rejecting
+	// paths" -- unscoped, and false: `gpu_port.h`'s own `Last
+	// WeightUploadWasSkipped` paragraph (T-2075, S2) measured that the
+	// STICKY-TAG-decoded path (this function's own terminal `return
+	// DecodeStickyTag(sticky_tag);`) reads `true` on a rejecting call,
+	// honestly, because that call's own upload genuinely was skipped.
+	// "Agrees on every rejecting path" is not the true contract; see
+	// `gpu_port.h`'s own paragraph for the actual one (`false` before
+	// the residency decision runs, exactly `weights_resident` after
+	// it) -- not restated a second time here.
+	auto invalidate_residency_caches_on_throw = [&]() {
+		g_resident_weights.lw_buf.Reset();
+		g_resident_weights.valid = false;
+		g_resident_kv.kv_buf.Reset();
+		g_resident_kv.valid = false;
+		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
+	};
 	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
@@ -1531,36 +1632,42 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
-	// T-2101: group counts for the five split GEMM dispatches -- q_proj/o_proj/down_proj output
-	// hidden_size at 64 threads/group (T-2101's own second turn); gate_proj/up_proj output
-	// intermediate_size at 256 threads/group. `ComputeGpuGemmGroupCount` (below, exported via
-	// gpu_port.h) is the ONE place this ceiling formula is written -- both group counts below call
-	// it rather than each re-deriving `(x + T - 1) / T` inline, so a future edit to the formula
-	// cannot fix one call site and silently miss the other the way a hand-duplicated formula could.
-	const uint32_t i_groups = ComputeGpuGemmGroupCount(I, 256u);
-	// T-2101 (second turn, same round): q/o/down_proj_gemm use 64-thread groups (see each
-	// shader's own header comment) -- 1536 output channels at 256 threads/group is only 6 groups,
-	// the first round's own measurement found that the single largest remaining GPU-busy consumer
-	// after the first split, achieving far less bandwidth than the 35-group gate/up_proj_gemm
-	// siblings at the identical 256-thread width. Fewer threads per group, proportionally more
-	// groups, same total per-thread computation.
-	const uint32_t h_groups_64 = ComputeGpuGemmGroupCount(H, 64u);
+	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
+	// five split GEMM dispatches' own grid size comes from -- computed once per site here so the
+	// standing guard below can check all five before any dispatch is recorded, and each plan's own
+	// `.groups` is what the `bind_and_dispatch` calls pass, with no intermediate hand-editable local
+	// caching a copy of the value.
+	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, I);
+	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, I);
+	const GpuGemmSiteGroupPlan gate_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, I);
+	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, I);
+	const GpuGemmSiteGroupPlan down_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, I);
 
-	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the standing guard the
-	// multi-group change was owed and shipped without -- the review's own falsification (mutate
-	// either group count to a literal `1u`) leaves output channels 64..1535 (or 256..8959)
-	// uncomputed with no error at every model tier this design targets, and nothing before this
-	// guard existed would have said so. Fires on EVERY call, at whatever dimensions that call
-	// carries -- trivially satisfied by the suite's own hidden_size=2 fixtures (group count 1,
-	// 1*64 >= 2), genuinely load-bearing at the real 1.5B tier (group count 24 or 6 or 35,
-	// checked against 1536/8960) where a hardcoded or mis-derived group count would violate it.
-	// `SSLM_GPU_HR`-style: an internal invariant, not a data-dependent rejection, so it throws
-	// rather than returning a status code a caller could plausibly want to recover from.
-	if (static_cast<uint64_t>(i_groups) * 256ull < static_cast<uint64_t>(I) ||
-	    static_cast<uint64_t>(h_groups_64) * 64ull < static_cast<uint64_t>(H)) {
-		throw std::runtime_error(
-		    "RunLayerLoopGpu: GEMM group count does not cover out_channels -- "
-		    "i_groups*256 or h_groups_64*64 fell short of intermediate_size/hidden_size");
+	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md; S4, confirmation pass @
+	// f7026db): the standing guard the multi-group change was owed. Fires on EVERY call, at
+	// whatever dimensions that call carries -- trivially satisfied by the suite's own
+	// hidden_size=2 fixtures, genuinely load-bearing at the real 1.5B tier. Throws a DISTINCT type
+	// (`GpuGemmGroupArithmeticError`, above -- not `std::runtime_error`), caught by its own clause
+	// in the SAME try/catch this window already has (S4: the generic clause reported this as
+	// `GpuAllocationFailed`, "retry smaller" -- actively wrong advice for a permanent arithmetic bug
+	// no retry fixes, and discarded the diagnostic string). This function DOES return a status code
+	// for the condition (`GpuGemmGroupArithmeticInvalid`, below, distinct from `GpuAllocationFailed`
+	// and documented as permanent, never "retry smaller") -- returning a status at all matches every
+	// OTHER guard in this function's own convention; the earlier version of THIS comment claimed the
+	// opposite ("throws rather than returning a status code a caller could plausibly want to recover
+	// from"), which the confirmation pass correctly read as describing behavior the code did not
+	// have.
+	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &gate_proj_plan, &up_proj_plan,
+	                                          &down_proj_plan}) {
+		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->threads_per_group) <
+		    static_cast<uint64_t>(plan->out_channels)) {
+			throw GpuGemmGroupArithmeticError(
+			    "RunLayerLoopGpu: GEMM group plan does not cover its own out_channels -- "
+			    "groups * threads_per_group fell short of out_channels");
+		}
 	}
 
 	// T-2045 (C3): the full 16-site + commit composition -- attention is four real dispatches
@@ -1587,7 +1694,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, h_groups_64);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(rope_pipe.pso.Get(), l);
@@ -1595,16 +1702,16 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		bind_and_dispatch(softmax_pipe.pso.Get(), l);
 		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l);
 		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, h_groups_64);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups);
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, i_groups);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups);
 		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, i_groups);
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups);
 		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, h_groups_64);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups);
 		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
@@ -1660,6 +1767,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
 		                            kv_row_offsets[r], HD);
 	}
+	} catch (const GpuGemmGroupArithmeticError& e) {
+		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+		// f7026db): a permanent coding-arithmetic bug, never a transient or size-dependent one --
+		// caught by its OWN clause, ahead of the generic `catch (const std::runtime_error&)` below,
+		// so it never inherits that clause's own `GpuAllocationFailed` status, whose documented
+		// meaning ("retry smaller") is actively wrong advice here: no retry at any size fixes a
+		// group count that does not cover its own out_channels. The message is preserved (stderr,
+		// matching `SSLM_GPU_HR`'s own diagnostic convention) rather than discarded -- the
+		// confirmation pass's own finding was that the original guard's exception, its one useful
+		// payload, was constructed, thrown, and dropped by an unnamed catch clause.
+		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
+		invalidate_residency_caches_on_throw();
+		dev.list->Close();
+		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
 	} catch (const std::runtime_error&) {
 		// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 		// review.md, P3): defensively invalidate the weight-residency cache
@@ -1704,46 +1825,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		// two unrelated permanent-hardware meanings on this leg) without
 		// needing either.
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		g_resident_weights.lw_buf.Reset();
-		g_resident_weights.valid = false;
-		// T-2101: the same reasoning applies to the K/V residency cache -- a throw reached after
-		// `g_resident_kv` was marked valid (the miss branch above, once its own CopyResource is
-		// merely recorded) but before this command list actually executes would otherwise serve an
-		// uninitialized or partially-written VRAM buffer back to the NEXT call as a cache hit, with
-		// no error. Invalidated unconditionally, matching the weight cache's own unconditional reset
-		// immediately above; a hit call that throws pays a full re-upload on its next call, which is
-		// the same real state change the weight cache's own T-2062 (M-b) correction already
-		// documents as correct, not a no-op.
-		g_resident_kv.kv_buf.Reset();
-		g_resident_kv.valid = false;
-		// T-2062 (M-b): beside the cache invalidation above, not left to the
-		// function-entry assignment alone -- this catch is a TWELFTH
-		// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
-		// too" enumeration (T-2055, P2) did not count when it said eleven.
-		// Without this line, a cache-hit call that throws here left
-		// `LastWeightUploadWasSkipped()` reading the call's own STALE `true`
-		// (set on entry to `false`, then overwritten `true` at the residency
-		// decision earlier in this same call, before the throw) even though
-		// the two lines above have just made the cache non-resident --
-		// reproduced by the review's own probe (call 5: `skipped=1` from a
-		// call whose catch had just invalidated the cache). Setting it
-		// here makes the observable agree with the state it describes on
-		// this path.
-		//
-		// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
-		// 94ebee3-gpu-serial-port-closing-review.md, S3; D-SLM3241): the
-		// sentence this replaces claimed the observable "agrees with the
-		// state it describes on every one of this function's ... rejecting
-		// paths" -- unscoped, and false: `gpu_port.h`'s own `Last
-		// WeightUploadWasSkipped` paragraph (T-2075, S2) measured that the
-		// STICKY-TAG-decoded path (this function's own terminal `return
-		// DecodeStickyTag(sticky_tag);`) reads `true` on a rejecting call,
-		// honestly, because that call's own upload genuinely was skipped.
-		// "Agrees on every rejecting path" is not the true contract; see
-		// `gpu_port.h`'s own paragraph for the actual one (`false` before
-		// the residency decision runs, exactly `weights_resident` after
-		// it) -- not restated a second time here.
-		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
+		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+		// f7026db): both residency caches reset to invalid, `LastWeightUploadWasSkipped` set false --
+		// issued via the shared `invalidate_residency_caches_on_throw` lambda (declared immediately
+		// before the try block, where its own full history -- T-2055, T-2062 M-b, T-2080 S3 -- now
+		// lives), identical effect, written once so this clause and the `GpuGemmGroupArithmeticError`
+		// clause above cannot diverge.
+		invalidate_residency_caches_on_throw();
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
 		// gone right now (device recreation owed, not a retry against this
@@ -1863,15 +1951,39 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // see gpu_port.h's own declaration comment for the full contract.
 bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
 
-// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ONE place the multi-group
-// GEMM dispatches' own ceiling formula is written -- `RunLayerLoopGpu`'s own `i_groups`/
-// `h_groups_64` both call this rather than each computing `(out_channels + threads_per_group - 1)
-// / threads_per_group` inline, and `tests/test_main.cpp`'s own `TestT2101_ComputeGpuGemmGroupCount*`
-// cells call it directly (no GPU, no device, real 1536/8960 dimensions) to pin the exact values the
-// real model's own dispatches depend on -- a regression that hardcodes or otherwise breaks this
-// formula fails that test immediately, at the real dimensions, without needing a device.
+// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ceiling-division primitive
+// `ComputeGpuGemmSiteGroupPlan` (below) builds on.
 uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group) {
 	return (out_channels + threads_per_group - 1u) / threads_per_group;
+}
+
+// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+// f7026db): the ONE source of every one of the five split GEMM dispatches' own grid size --
+// `RunLayerLoopGpu`'s own `bind_and_dispatch` calls for these five sites pass this function's own
+// `.groups` directly, with no intermediate per-call-site local variable that a hand edit could
+// diverge from it. `tests/test_main.cpp`'s own `TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions`
+// calls this SAME function at the real model's own dimensions, no device required -- confirmed by
+// execution this round: mutating this function's own body (forcing `plan.groups = 1u`
+// unconditionally) reddens that pinned cell directly, at 1536/8960, which the PRIOR round's
+// falsification (mutating a downstream local variable the test never read) could not do.
+GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t intermediate_size) {
+	GpuGemmSiteGroupPlan plan;
+	switch (site) {
+		case GpuGemmSplitSite::QProj:
+		case GpuGemmSplitSite::OProj:
+		case GpuGemmSplitSite::DownProj:
+			plan.out_channels = hidden_size;
+			plan.threads_per_group = 64u;
+			break;
+		case GpuGemmSplitSite::GateProj:
+		case GpuGemmSplitSite::UpProj:
+			plan.out_channels = intermediate_size;
+			plan.threads_per_group = 256u;
+			break;
+	}
+	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.threads_per_group);
+	return plan;
 }
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing; }

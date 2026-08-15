@@ -22668,6 +22668,76 @@ static void TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale() {
 	}
 }
 
+// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
+// f7026db): `ComputeGpuGemmSiteGroupPlan` is now the ONE source `RunLayerLoopGpu`'s own five split
+// GEMM dispatches read their grid size from -- no intermediate per-call-site local variable a hand
+// edit could diverge from it (`superslm_gpu.cpp`'s own dispatch loop passes `<site>_plan.groups`
+// directly). This cell calls that SAME function, no device, no dispatch, at the real model's own
+// dimensions -- the confirmation pass's own specified re-falsification (mutate this function's own
+// body, e.g. force `plan.groups = 1u` unconditionally) reddens this cell directly, closing the gap
+// the prior round's cell (testing only the lower-level `ComputeGpuGemmGroupCount` primitive, which
+// production's own call sites no longer call without going through this function first) left open.
+static void TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions() {
+	struct Case {
+		superslm_gpu::GpuGemmSplitSite site;
+		const char* name;
+		uint32_t hidden_size;
+		uint32_t intermediate_size;
+		uint32_t want_out_channels;
+		uint32_t want_threads_per_group;
+		uint32_t want_groups;
+	};
+	// Real model (qwen2.5-1.5b-instruct, D-SLM3300's own confirmed dims) and fixture scale (every
+	// B11 fixture: hidden_size=intermediate_size=2), both at the SAME five sites.
+	const Case cases[] = {
+	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj", 1536, 8960, 1536, 64, 24},
+	    {superslm_gpu::GpuGemmSplitSite::OProj, "OProj", 1536, 8960, 1536, 64, 24},
+	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj", 1536, 8960, 8960, 256, 35},
+	    {superslm_gpu::GpuGemmSplitSite::UpProj, "UpProj", 1536, 8960, 8960, 256, 35},
+	    {superslm_gpu::GpuGemmSplitSite::DownProj, "DownProj", 1536, 8960, 1536, 64, 24},
+	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj (fixture scale)", 2, 2, 2, 64, 1},
+	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj (fixture scale)", 2, 2, 2, 256, 1},
+	};
+	for (const Case& c : cases) {
+		const auto plan =
+		    superslm_gpu::ComputeGpuGemmSiteGroupPlan(c.site, c.hidden_size, c.intermediate_size);
+		CHECK_MSG(plan.out_channels == c.want_out_channels && plan.threads_per_group == c.want_threads_per_group &&
+		              plan.groups == c.want_groups,
+		          "T2101 ComputeGpuGemmSiteGroupPlan(%s, hidden_size=%u, intermediate_size=%u): got "
+		          "out_channels=%u threads_per_group=%u groups=%u, want out_channels=%u "
+		          "threads_per_group=%u groups=%u",
+		          c.name, c.hidden_size, c.intermediate_size, plan.out_channels, plan.threads_per_group,
+		          plan.groups, c.want_out_channels, c.want_threads_per_group, c.want_groups);
+		const uint64_t covered =
+		    static_cast<uint64_t>(plan.groups) * static_cast<uint64_t>(plan.threads_per_group);
+		CHECK_MSG(covered >= plan.out_channels,
+		          "T2101 ComputeGpuGemmSiteGroupPlan(%s): %u groups * %u threads = %llu must cover "
+		          "out_channels (%u) -- the exact property the review's own 1u falsification violates",
+		          c.name, plan.groups, plan.threads_per_group, static_cast<unsigned long long>(covered),
+		          plan.out_channels);
+	}
+}
+
+// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @ f7026db):
+// pins the distinction the confirmation pass asked for -- the multi-group group-arithmetic guard's
+// own status, `GpuGemmGroupArithmeticInvalid`, must be a DIFFERENT enumerator than
+// `GpuAllocationFailed` (the status a real, unrelated D3D12 allocation failure returns from the
+// SAME recording window), and `SslmForwardStatusName` must name it distinctly rather than falling
+// through to either neighbor's string.
+static void TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed() {
+	CHECK_MSG(superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid !=
+	              superslm::SslmForwardStatus::GpuAllocationFailed,
+	          "T2101 S4: GpuGemmGroupArithmeticInvalid must be a distinct enumerator from "
+	          "GpuAllocationFailed -- a permanent arithmetic bug must not share a status with a "
+	          "transient, retry-smaller-shaped one");
+	CHECK_MSG(std::string(superslm::SslmForwardStatusName(
+	              superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid)) ==
+	              "GpuGemmGroupArithmeticInvalid",
+	          "T2101 S4: SslmForwardStatusName(GpuGemmGroupArithmeticInvalid) = \"%s\", want "
+	          "\"GpuGemmGroupArithmeticInvalid\"",
+	          superslm::SslmForwardStatusName(superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid));
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -24005,6 +24075,8 @@ int main(int argc, char** argv) {
 	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
 	TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject();
 	TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale();
+	TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions();
+	TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();

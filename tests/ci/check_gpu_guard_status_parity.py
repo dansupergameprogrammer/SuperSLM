@@ -304,6 +304,19 @@ GPU_GUARD_REGION_END_MARKER = "static_assert(static_cast<int>(superslm_gpu::GpuL
 # on both sides, independent of this constant.
 GPU_BELOW_LADDER_STATUSES = frozenset({
     "KvPrecisionUnsupported",
+    # T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md,
+    # confirmation pass @ f7026db): the multi-group GEMM dispatch's own
+    # standing group-arithmetic guard (`ComputeGpuGemmSiteGroupPlan`,
+    # `superslm_gpu.cpp`) -- a per-site arithmetic rejection checked well below
+    # the nine-guard ladder's own closing `static_assert`, on the SAME per-site
+    # dimensions every real call carries, not a tenth pre-flight guard. Returned
+    # via a literal `return superslm::SslmForwardStatus::
+    # GpuGemmGroupArithmeticInvalid;` inside a dedicated catch clause (S4), so
+    # unlike `GpuAllocationFailed`/`GpuDeviceRemoved` (returned through a
+    # ternary, invisible to `_STATUS_RETURN_RE` and needing no entry here) this
+    # ONE does match the literal-return pattern and must be named explicitly or
+    # it reads as an undocumented tenth guard.
+    "GpuGemmGroupArithmeticInvalid",
 })
 
 # T-2083 (O35, Claude/Poirot/42ecf79-gpu-serial-port-round9-review.md): the

@@ -334,17 +334,22 @@ int main(int argc, char** argv) {
 	// means. Low CoV = spread ~uniformly (per-dispatch fixed cost dominates); high CoV =
 	// concentrated in specific sites (those sites' own kernels are genuinely slow).
 	//
-	// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md): this threshold's own
-	// `site_cov > 1.0` cutoff was set (D-SLM3313) against a 17-site population. The five sites
-	// T-2101's own fix round added (the `*_gemm` dispatches) are near-zero here (their own time is
-	// now counted under the requant-only site of the same base name) -- adding five near-zero
-	// values to the population pulls the mean down without proportionally shrinking the stdev,
+	// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md; M4, confirmation pass @
+	// f7026db, correcting this paragraph's own inverted direction): this threshold's own
+	// `site_cov > 1.0` cutoff was set (D-SLM3313) against a 17-site population. T-2101's own fix
+	// round split five sites' GEMM step into its own `*_gemm` dispatch -- THOSE five carry the real
+	// GEMM cost and are the population's own HEAVY rows (down_proj_gemm alone was 36.3% of GPU-busy
+	// time in round 1, D-SLM3314's own §34.2); it is the ORIGINAL-NAME requant-only sites (q_proj,
+	// o_proj, gate_proj, up_proj, down_proj) that became near-zero, since their own GEMM work moved
+	// out from under them. Adding five near-zero values (the requant sites) to a population whose
+	// heavy rows did not shrink pulls the MEAN down without proportionally shrinking the stdev,
 	// which mechanically RAISES CoV relative to what the same underlying concentration would have
-	// read against the original 17. Marked rather than recalibrated: every run this ticket executed
-	// (D-SLM3313's own 1.82, T-2101's own 1.76 and 1.42) reads well clear of the 1.0 cutoff either
-	// way, so the verdict itself has not flipped -- but a future population change close to the
-	// threshold should re-derive the cutoff rather than trust this one across another headcount
-	// change.
+	// read against the original 17 -- the conclusion (marking rather than recalibrating) survives
+	// this correction unchanged, only the stated MECHANISM was backwards. Every run this ticket
+	// executed (D-SLM3313's own 1.82, T-2101's own 1.76 and 1.42) reads well clear of the 1.0
+	// cutoff either way, so the verdict itself has not flipped -- but a future population change
+	// close to the threshold should re-derive the cutoff rather than trust this one across another
+	// headcount change.
 	double site_mean = site_ms_total / kSitesPerLayer, site_var = 0.0;
 	for (int i = 0; i < kSitesPerLayer; ++i) {
 		const double d = (site_ms_sum[i] / steps) - site_mean;
@@ -364,14 +369,30 @@ int main(int argc, char** argv) {
 	// the readback targeted: only the rows a call actually wrote, not the whole workspace. Rewritten
 	// to state the CURRENT calling convention rather than repeat a claim one of this file's own
 	// prior commits falsified.
+	//
+	// T-2101 (S5, confirmation pass @ f7026db, correcting the FIRST rewrite of this NOTE, which
+	// itself said "the fence wait is real GPU-busy time" -- a category error `gpu_port.h`'s own
+	// `GpuCallTiming` contract and the phase print eleven lines above both go out of their way to
+	// prevent: `submit_wait_ms` is defined there as submission overhead PLUS actual GPU execution
+	// PLUS driver/OS scheduling, explicitly NOT GPU-only; `gpu_busy_ms` is the GPU-only figure. The
+	// two are not the same quantity by definition, whatever their measured relationship on any one
+	// run. What §32's own three runs actually established, stated as the measurement it is rather
+	// than a redefinition of the phase: `submit_wait_ms` tracked `gpu_busy_ms` within about 0.4 ms
+	// IN THOSE RUNS -- an empirical closeness at that measurement, not a guarantee that holds by
+	// construction. The async-lifecycle sentence is dropped rather than requalified: §34's own
+	// per-site breakdown already puts the remaining cost in the GEMM kernels themselves (achieved
+	// bandwidth still ~24x below the derived roofline even after the multi-group fix), which
+	// pipelining submission across tokens does not reduce -- that claim belongs with the per-site
+	// table's own honest accounting, not repeated here as a sequencing argument this NOTE cannot
+	// support.
 	std::printf(
 	    "NOTE: RunLayerLoopGpu fence-waits on every call (the workspace itself, %.2f MiB at this\n"
 	    "tier, is device-resident and read back only in the small targeted rows each call actually\n"
 	    "wrote -- see the phase decomposition's own record_ms/readback_ms above, both small). The\n"
-	    "fence wait is real GPU-busy time, per-site-decomposed above: this substrate's own calling\n"
-	    "convention is one synchronous dispatch chain per token, no pipelining across tokens -- an\n"
-	    "asynchronous decode lifecycle would remove THAT cost, not a marshalling cost that no longer\n"
-	    "exists.\n",
+	    "phase decomposition above measures gpu_busy_ms (GPU-only, timestamp-query-derived) and\n"
+	    "submit_wait_ms (submission + GPU execution + driver/OS scheduling, NOT GPU-only by\n"
+	    "definition) separately for exactly this reason -- read the per-site table above for where\n"
+	    "the GPU-busy time actually goes, not this NOTE.\n",
 	    kv_bytes / (1024.0 * 1024.0));
 	return 0;
 }
