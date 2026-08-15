@@ -279,7 +279,23 @@ CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
     "SoftmaxKernelRefusedAfterGateAccepted",
     "Ok",
 })
-GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpu("
+# T-2113 (B5): RunLayerLoopGpu was split into RunLayerLoopGpuSubmit (the guard ladder,
+# the residency decision, and the recording/submission window this module's guard-
+# parity and LWUWS "before" analysis both need) and RunLayerLoopGpuFinish (the fence-
+# wait, the readback, and the DecodeStickyTag-decoded terminal return this module's
+# LWUWS "after" analysis needs) -- see Claude/Brunel/t2113-1p0-core-build-2026-08-15.md
+# B5. `GPU_FUNC_SIGNATURE` now targets Submit, which is the function that actually
+# contains the nine-guard ladder, the two device-capability rejections, and the
+# residency-write statement every derivation below keys on; `RunLayerLoopGpu` itself is
+# now a two-line Submit+Finish wrapper with no guard ladder of its own, and is a
+# DELIBERATELY SUBSTRING-DISTINCT literal from `RunLayerLoopGpuSubmit(`/
+# `RunLayerLoopGpuFinish(` (the trailing `(` never follows `RunLayerLoopGpu` in either
+# longer name), so this constant cannot accidentally match either split half.
+GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpuSubmit("
+# T-2113 (B5): the FINISH half's own signature -- `derive_lwuws_after_decision_count`
+# below now reads from this function's body for the DecodeStickyTag-decoded return; see
+# that function's own updated header comment for the full account of what moved where.
+GPU_FINISH_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpuFinish("
 # T-2069 (Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md,
 # S3): retained as a citation of the real, named point in `superslm_gpu.cpp`
 # where the nine-guard ladder ends and the two device-capability rejections
@@ -321,6 +337,17 @@ GPU_BELOW_LADDER_STATUSES = frozenset({
     # ONE does match the literal-return pattern and must be named explicitly or
     # it reads as an undocumented tenth guard.
     "GpuGemmGroupArithmeticInvalid",
+    # T-2113 (B5): `RunLayerLoopGpuSubmit`'s own new terminal return on the SUCCESS path
+    # -- `return superslm::SslmForwardStatus::Ok;`, handing the caller an in-flight
+    # token once recording+submission has proceeded (design Sec4.3's own call-level
+    # "did this proceed" signal). Not a guard, not a rejection, not new to the
+    # function's real BEHAVIOR (the pre-split `RunLayerLoopGpu` always had exactly one
+    # non-rejecting path too, it just fell through to `DecodeStickyTag`'s own literal
+    # `Ok` tag instead of returning the literal name directly) -- new only to the TEXT
+    # this extraction scans, because the success path is now a real early return
+    # instead of a call whose own `Ok` value lived inside a different function
+    # (`DecodeStickyTag`) this extraction never scanned in the first place.
+    "Ok",
 })
 
 # T-2083 (O35, Claude/Poirot/42ecf79-gpu-serial-port-round9-review.md): the
@@ -1427,13 +1454,45 @@ def derive_lwuws_before_decision_count(gpu_text: str) -> int:
 
 
 def derive_lwuws_after_decision_count(gpu_text: str) -> int:
-    """ONE -- `RunLayerLoopGpu`'s own single terminal call-based return, `return DecodeStickyTag(
-    sticky_tag);`, the only path structure that returns AFTER the residency decision (the success
-    path and the sticky-tag-decoded path share this one return statement; `DecodeStickyTag`'s own
-    internal branching is a separate function, not a second return site in `RunLayerLoopGpu`
-    itself)."""
-    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
-    return len(re.findall(r"return\s+DecodeStickyTag\(", strip_comments(body)))
+    """T-2113 (B5): every return path that resolves AFTER `RunLayerLoopGpuSubmit`'s own residency
+    decision runs, now split across two functions by the async Submit/Finish boundary -- the same
+    PROPERTY `derive_lwuws_before_decision_count`'s own module comment states (a structural count
+    of the language's own returns, not a re-typed literal), extended to the new shape:
+
+    1. Every return inside `RunLayerLoopGpuSubmit`'s own body, comment-stripped, AFTER the
+       residency-write marker, EXCLUDING every catch-clause body (those are already counted once,
+       by `derive_lwuws_before_decision_count`'s own term 2 -- a catch clause sits textually AFTER
+       the marker but its own returns belong to the BEFORE population semantically, since a throw
+       reached before the residency decision ran; counting them again here would double-count the
+       identical return statements) -- today exactly one, the async-submission-succeeded return
+       (`return superslm::SslmForwardStatus::Ok;`, handing the caller an in-flight token) that
+       replaced the old single function's own "keep going toward the terminal decode" fall-
+       through. It reads exactly `weights_resident`, same as every path in this category always
+       has -- the decision already ran, nothing after it touches the flag again.
+    2. Every return inside `RunLayerLoopGpuFinish`'s own body, comment-stripped, in full -- that
+       function runs only once `RunLayerLoopGpuSubmit` has already made (and returned) its own
+       residency decision, so every one of ITS returns also reads whatever `RunLayerLoopGpuSubmit`
+       already decided, never re-deciding or re-writing the flag itself (the flag is a
+       `superslm_gpu.cpp`-file-scope `static`, read, never written, anywhere in `RunLayerLoopGpuFinish`).
+       Counted whole (no marker cut needed -- the entire function is "after" the decision by
+       construction, since it cannot run before `RunLayerLoopGpuSubmit` already has).
+    """
+    submit_body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    submit_stripped = strip_comments(submit_body)
+    residency_write_at = submit_stripped.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
+    if residency_write_at == -1:
+        raise ValueError(
+            "superslm_gpu.cpp: RunLayerLoopGpuSubmit's own residency assignment "
+            f"{_LWUWS_RESIDENCY_WRITE_STATEMENT!r} not found in its comment-stripped body -- the "
+            "after-region has no boundary to cut on"
+        )
+    after_in_submit = submit_stripped[residency_write_at:]
+    for catch_body in extract_catch_block_bodies(submit_stripped):
+        after_in_submit = after_in_submit.replace(catch_body, "", 1)
+    submit_after_count = count_any_return_statements(after_in_submit)
+    finish_body = extract_function_body(gpu_text, GPU_FINISH_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    finish_count = count_any_return_statements(strip_comments(finish_body))
+    return submit_after_count + finish_count
 
 
 def check_lwuws_path_count_claim(gpu_port_h_text: str, gpu_text: str) -> list[str]:

@@ -140,6 +140,85 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              ID3D12Resource* external_kv_resident = nullptr,
                                              bool* io_external_kv_needs_resume_barrier = nullptr);
 
+// T-2113 (B5, design Sec4.2/Sec4.3/Sec6.2/Sec10 B5): the async submission boundary.
+// `RunLayerLoopGpu` above is UNCHANGED -- every one of its existing ~40 callers still
+// gets the identical synchronous, blocking call it always did. It is now IMPLEMENTED as
+// `RunLayerLoopGpuSubmit` immediately followed by a BLOCKING `RunLayerLoopGpuFinish` --
+// the split below reorganizes WHERE the fence-wait happens without moving a single GPU
+// instruction relative to where it already ran. The 1.0 API's own `sslm_decode_step_gpu`
+// calls only Submit; `sslm_gpu_ready` calls only Finish, with `block=0` (poll) or
+// `block=1` (the one case design Sec4.2 permits a fence-wait outside this pair -- the
+// caller asked for it).
+//
+// GpuLayerLoopInFlight is opaque here (fully defined in superslm_gpu.cpp, the only TU
+// that touches its fields) -- the same handle-opacity convention gpu_1p0.cpp already
+// uses for SslmGpuContext/SslmGpuModelHandle/SslmGpuSequenceHandle. It owns exactly the
+// state the FINISH half needs that only exists once the SUBMIT half has recorded and
+// closed the command list: the two already-allocated GPU readback buffers (valid to
+// READ only once the fence this token names has signaled), the K/V row-offset table the
+// scatter reads, and the small dimension/count fields the scatter needs. A caller owns
+// the token from the moment Submit sets `*out_inflight` until the SAME caller's own
+// Finish call consumes and frees it, exactly once -- Finish always deletes it on the
+// path that actually performs the readback (fence signaled, or `block=1`); a `block=0`
+// poll against an unsignaled fence returns the token UNCHANGED (still owned by the
+// caller, pollable again).
+struct GpuLayerLoopInFlight;
+
+// SUBMIT: identical work RunLayerLoopGpu always did, through ExecuteCommandLists/Signal
+// -- NEVER a fence-wait (design Sec6.2: "records ... submits ... and returns without
+// waiting for the fence"). Two outcomes:
+//   - a guard rejects, or an exception is thrown during recording (before Signal is
+//     ever reached): the rejecting SslmForwardStatus is returned directly and
+//     `*out_inflight` is left null -- nothing was submitted, `seq`/`workspace`
+//     untouched, exactly RunLayerLoopGpu's own existing contract for the identical
+//     inputs.
+//   - recording+submission succeeds: returns `superslm::SslmForwardStatus::Ok` (the
+//     CALL-LEVEL "did this proceed" signal, design Sec4.3's own two-channel split --
+//     NOT yet the decoded per-call result, which exists only once the fence the
+//     returned `*out_inflight` names has signaled) and `*out_inflight` is set to a
+//     freshly heap-allocated token the caller passes to RunLayerLoopGpuFinish exactly
+//     once.
+//
+// The trailing six parameters are the model/RoPE analogue of the existing
+// `external_kv_resident` pair above (T-2113 B3), added here (B5) so a caller routed
+// through the 1.0 API's own model handle (design Sec5.1, `SslmGpuModelHandle`) never
+// touches the pre-1.0 `g_resident_weights`/`g_resident_rope` process-global caches at
+// all -- this is what retires `g_resident_rope` for the handle-routed path (D-SLM3362's
+// own dated deferral): when `external_weights_resident` is non-null, `layers` is NEVER
+// dereferenced (the caller's own resident buffer is bound directly, no re-pack, no
+// re-upload, no g_resident_weights lookup); when BOTH `external_rope_cos_resident`/
+// `external_rope_sin_resident` are non-null, `rope_tables` is never read for the two
+// big tables (only `external_rope_has`/`external_rope_cos_elems`/
+// `external_rope_sin_elems` decide the small per-call RopeInfo presence/size fields a
+// caller with no live `SslmTensorManifest` of its own can still supply directly) and
+// `g_resident_rope` is never touched. Every existing caller passes none of the six and
+// observes byte-for-byte pre-B5 behavior.
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+    size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+    const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
+    ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
+    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident = nullptr,
+    ID3D12Resource* external_rope_cos_resident = nullptr,
+    ID3D12Resource* external_rope_sin_resident = nullptr, bool external_rope_has = false,
+    uint64_t external_rope_cos_elems = 0, uint64_t external_rope_sin_elems = 0);
+
+// FINISH: `block == 0` and the fence has not yet signaled: `*out_ready = 0`, returns
+// `superslm::SslmForwardStatus::Ok` (design Sec4.2: "the call itself succeeded; nothing
+// is ready yet"), `inflight` is left UNCHANGED and still owned by the caller (pollable
+// again -- a poll never consumes the token). Otherwise (`block == 1`, or `block == 0`
+// and the fence has already signaled): waits on the fence if it has not signaled yet
+// and `block == 1`; then performs the identical readback + SeqState-decode +
+// `DecodeStickyTag(...)` work RunLayerLoopGpu's own synchronous tail always performed,
+// sets `*out_ready = 1`, deletes `inflight` (consumed, exactly once), and returns the
+// DECODED per-call result -- the channel design Sec4.2 names `sslm_gpu_ready`'s own
+// `out_status`.
+superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight,
+                                                    superslm::SequenceLayerState& seq,
+                                                    uint8_t* workspace, int32_t block,
+                                                    int32_t* out_ready);
+
 // T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md, M1's
 // own remedy): the structural closure for `RunLayerLoopGpu`'s own host-side
 // guard ladder -- generated from `gpu_layer_loop_guards.def`, the single
@@ -301,15 +380,35 @@ enum class GpuLayerLoopGuard : int {
 // before every one of their own returns), none of which ever reached a
 // residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
-// miss) on every path that returns AFTER the decision -- the success path
-// and the sticky-tag-decoded path alike, sixteen paths' own destination in
-// total across the function, whether the decoded status is `Ok` or one of
-// `DecodeStickyTag`'s thirteen rejecting statuses. A caller that wants "did
-// THIS call's upload run" reads this accessor for exactly that, on every
-// path, correctly; a caller that reads it as "did this call SUCCEED" is
-// reading a different question than the one it answers, on the sticky-tag
-// paths specifically -- named here so a future reader does not have to
-// re-derive it from the code a fourth time.
+// miss) on every path that returns AFTER the decision -- **re-derived at
+// T-2113 (B5), which split the single function this paragraph originally
+// described into `RunLayerLoopGpuSubmit` (the guard ladder, the residency
+// decision, and everything above) and `RunLayerLoopGpuFinish` (the fence-
+// wait and the readback) -- the "after" population now has five members
+// instead of one, not because any NEW decision-making was added, but
+// because the single old "keep going toward the terminal decode" fall-
+// through is now five separate real return statements across two
+// functions: `RunLayerLoopGpuSubmit`'s own async-submission-succeeded
+// return (`return ...::Ok;`, handing the caller an in-flight token), and
+// `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
+// return, the caller-misuse null-token rejection, the terminal
+// `return DecodeStickyTag(sticky_tag);` the sticky-tag-decoded path always
+// ended on, and `RunLayerLoopGpuFinish`'s own catch clause (added the same
+// section this paragraph documents, after a real device fault discovered
+// DURING the wait/readback -- not during Submit's own recording -- was
+// found escaping this function as an uncaught exception instead of the
+// defined `GpuDeviceRemoved`/`GpuAllocationFailed` channel design Sec9
+// promises; StandardsDocument.md Sec5.4, reproduced by execution before
+// being fixed). None of these five re-decides or re-writes the flag --
+// each reads whatever `RunLayerLoopGpuSubmit` already decided -- the four,
+// and the fifteen before them, alike, twenty paths' own destination in
+// total across the two functions, whether the decoded
+// status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
+// A caller that wants "did THIS call's upload run" reads this accessor for
+// exactly that, on every path, correctly; a caller that reads it as "did
+// this call SUCCEED" is reading a different question than the one it
+// answers, on the sticky-tag paths specifically -- named here so a future
+// reader does not have to re-derive it from the code a fourth time.
 bool LastWeightUploadWasSkipped();
 
 // T-2101 (dispatch-overhead decomposition, follow-up to D-SLM3302/D-SLM3304): a per-call timing

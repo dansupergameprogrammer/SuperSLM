@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -873,16 +874,68 @@ struct GpuGemmGroupArithmeticError : std::logic_error {
 	using std::logic_error::logic_error;
 };
 
-superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
-                                             const superslm::LayerWeights* layers,
-                                             uint32_t num_hidden_layers, uint32_t layer_budget,
-                                             size_t hidden_size, size_t head_dim,
-                                             size_t num_key_value_heads, size_t intermediate_size,
-                                             int64_t context_cap,
-                                             const superslm::SslmTensorManifest& rope_tables,
-                                             uint8_t* workspace, size_t workspace_size,
-                                             ID3D12Resource* external_kv_resident,
-                                             bool* io_external_kv_needs_resume_barrier) {
+// T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the full definition of the opaque token
+// gpu_port.h forward-declares. Every field is FINISH-phase-only state that only exists
+// once Submit has recorded and closed the command list -- see gpu_port.h's own comment
+// on `RunLayerLoopGpuSubmit`/`RunLayerLoopGpuFinish` for the ownership contract.
+struct GpuLayerLoopInFlight {
+	harness::Device* dev = nullptr;
+	uint64_t fence_val = 0;
+	uint32_t dispatch_count_this_call = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	std::vector<size_t> kv_row_offsets;
+	size_t seq_bytes_size = 0;
+	uint32_t hidden_size_h = 0;
+	uint32_t head_dim_hd = 0;
+	std::chrono::steady_clock::time_point t_record_end{};
+
+	// T-2113 (B5): EVERY per-call GPU resource the recorded command list either reads
+	// throughout the dispatch chain or copies FROM, that is not independently kept
+	// alive by a longer-lived owner (g_resident_weights/g_resident_kv/g_resident_rope's
+	// own caches, or a caller-owned external buffer), MUST survive until the fence this
+	// token names has actually signaled -- the GPU does not finish reading/copying from
+	// these merely because ExecuteCommandLists/Signal returned on the CPU side. In the
+	// pre-split synchronous RunLayerLoopGpu, this was true BY CONSTRUCTION: these were
+	// ordinary C++ locals of the one function whose stack frame did not unwind until
+	// after the fence-wait. Splitting the function moved the fence-wait to a SEPARATE
+	// call (RunLayerLoopGpuFinish) -- without these fields, each ComPtr below would be
+	// destroyed the instant Submit's own stack frame unwinds, RELEASING (potentially
+	// freeing) a D3D12 resource the GPU may still be reading from or copying out of, a
+	// real use-after-free reproduced by execution (t2039_c5_harness.exe: full 672-
+	// dispatch chain recorded correctly, fence-waited correctly, readback returned ALL
+	// ZEROS -- the exact signature of the GPU having read/copied from resources already
+	// released by the time it got to them). Captured here, released only when this
+	// token itself is freed (RunLayerLoopGpuFinish, after the fence-wait completes).
+	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> silu_lut_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+};
+
+// T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the SUBMIT half of the async split --
+// declared in gpu_port.h. This function is BYTE-FOR-BYTE what RunLayerLoopGpu's own
+// body always was, from function entry through ExecuteCommandLists/Signal, MINUS the
+// fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
+// external-weights/external-rope bridge (this section's own new work, gated entirely
+// behind the trailing parameters -- every existing behavior is reached identically
+// when they are all null/false/0, which is what every pre-B5 call site still passes).
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+    size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+    const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
+    ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
+    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems) {
+	if (out_inflight) *out_inflight = nullptr;
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
 	// rejecting return paths (the nine guards below, `!dev.available`, and
@@ -1092,16 +1145,24 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// sequence costs nothing in real decode (the first call of any sequence is already a cache miss
 	// by construction, and every later call is unaffected), and it cannot make the cache LESS sound
 	// than before T-2100 -- it can only route MORE calls to the pre-T-2100, proven-sound full compare.
-	const bool lw_fast_hit = !fresh_sequence && g_resident_weights.valid &&
+	// T-2113 (B5, design Sec5.1/Sec10 B5): when the caller supplies its own already-
+	// resident weight buffer (an SslmGpuModelHandle's own `weights_buf`, uploaded once
+	// inside `sslm_gpu_model_map`, design Sec5.1), this call never touches `layers`,
+	// never re-packs, never consults `g_resident_weights` at all -- the model handle's
+	// own residency IS the weight residency for this call, on the identical footing
+	// `external_kv_resident` (T-2113 B3) already established for K/V. `layers` may be
+	// null on this path (never dereferenced).
+	const bool external_weights = external_weights_resident != nullptr;
+	const bool lw_fast_hit = !external_weights && !fresh_sequence && g_resident_weights.valid &&
 	                         g_resident_weights.src_layers == static_cast<const void*>(layers) &&
 	                         g_resident_weights.src_n == N &&
 	                         g_resident_weights.src_stride == layout.stride;
 	// T-2113 (B2): the pack loop this call site used to contain inline is now
 	// PackLayerWeightsBytes (extracted verbatim, above ComputeLayerLayout) -- shared with
 	// gpu_1p0.cpp's own sslm_gpu_model_map. Behavior unchanged: still only computed on a
-	// !lw_fast_hit miss.
+	// !lw_fast_hit miss, and never at all on the external-weights path (B5).
 	std::vector<uint8_t> lw_bytes;
-	if (!lw_fast_hit) {
+	if (!lw_fast_hit && !external_weights) {
 		lw_bytes = PackLayerWeightsBytes(layers, N, layout, H, KV, NH, NQH, I);
 	}  // T-2100: end of the !lw_fast_hit pack guard
 
@@ -1128,8 +1189,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// not this one -- so this predicate needs no injection-aware term at
 	// all, and reads exactly as it did before T-2071 ever touched it.
 	const bool weights_resident =
-	    lw_fast_hit || (g_resident_weights.valid && g_resident_weights.bytes == lw_bytes);
-	if (weights_resident) {
+	    external_weights || lw_fast_hit || (g_resident_weights.valid && g_resident_weights.bytes == lw_bytes);
+	if (external_weights) {
+		lw_buf = external_weights_resident;  // T-2113 (B5): the model handle's own resident buffer
+	} else if (weights_resident) {
 		lw_buf = g_resident_weights.lw_buf;
 	}
 	// T-2052 (item 3): the device-observable Curie §13.2 specified --
@@ -1149,14 +1212,27 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// SslmTensorManifest::Tensor("cos")/Tensor("sin") lookup RopeApplySite
 	// itself performs on CPU (rope_tables is model-wide, shared across every
 	// layer, Sec5.6). ---
+	// T-2113 (B5, design Sec5.1/Sec10 B5): when the caller supplies its own already-
+	// resident RoPE cos/sin buffers (an SslmGpuModelHandle's own `rope_cos_buf`/
+	// `rope_sin_buf`, uploaded once inside `sslm_gpu_model_map`), `rope_tables` is
+	// never read for presence/size either -- the caller supplies those three small
+	// facts directly (`external_rope_has`/`external_rope_cos_elems`/
+	// `external_rope_sin_elems`), since a caller routed through the model handle has
+	// no live `SslmTensorManifest` of its own to query (B2's own map() does not retain
+	// the artifact's manifest past upload). `rope_tables.Tensor(...)` is still called
+	// unconditionally below (cheap, a manifest lookup, no device work) so the
+	// non-external path is byte-for-byte unchanged; its RESULT is simply unused on the
+	// external path.
+	const bool external_rope =
+	    external_rope_cos_resident != nullptr && external_rope_sin_resident != nullptr;
 	const superslm::SslmTensorView* cos_t = rope_tables.Tensor("cos");
 	const superslm::SslmTensorView* sin_t = rope_tables.Tensor("sin");
 	std::vector<uint8_t> rope_info_bytes(24, 0);
-	PutI32At(rope_info_bytes, 0, cos_t != nullptr ? 1 : 0);
-	PutI32At(rope_info_bytes, 4, sin_t != nullptr ? 1 : 0);
+	PutI32At(rope_info_bytes, 0, external_rope ? (external_rope_has ? 1 : 0) : (cos_t != nullptr ? 1 : 0));
+	PutI32At(rope_info_bytes, 4, external_rope ? (external_rope_has ? 1 : 0) : (sin_t != nullptr ? 1 : 0));
 	{
-		uint64_t cec = cos_t != nullptr ? cos_t->elem_count : 0;
-		uint64_t sec = sin_t != nullptr ? sin_t->elem_count : 0;
+		uint64_t cec = external_rope ? external_rope_cos_elems : (cos_t != nullptr ? cos_t->elem_count : 0);
+		uint64_t sec = external_rope ? external_rope_sin_elems : (sin_t != nullptr ? sin_t->elem_count : 0);
 		PutBytesAt(rope_info_bytes, 8, &cec, 8);
 		PutBytesAt(rope_info_bytes, 16, &sec, 8);
 	}
@@ -1329,12 +1405,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	const void* sin_src = sin_t != nullptr ? sin_t->data : nullptr;
 	const uint64_t cos_need = cos_t != nullptr ? static_cast<uint64_t>(cos_t->elem_count) * 8u : 8u;
 	const uint64_t sin_need = sin_t != nullptr ? static_cast<uint64_t>(sin_t->elem_count) * 8u : 8u;
-	const bool rope_fast_hit = g_resident_rope.valid && g_resident_rope.cos_src == cos_src &&
+	const bool rope_fast_hit = !external_rope && g_resident_rope.valid &&
+	                           g_resident_rope.cos_src == cos_src &&
 	                           g_resident_rope.sin_src == sin_src &&
 	                           g_resident_rope.cos_bytes == cos_need &&
 	                           g_resident_rope.sin_bytes == sin_need;
 	std::vector<uint8_t> cos_table_bytes, sin_table_bytes;
-	if (!rope_fast_hit) {
+	if (!rope_fast_hit && !external_rope) {
 		cos_table_bytes.assign(static_cast<size_t>(cos_need), 0);
 		if (cos_t != nullptr) std::memcpy(cos_table_bytes.data(), cos_t->data, cos_table_bytes.size());
 		sin_table_bytes.assign(static_cast<size_t>(sin_need), 0);
@@ -1593,7 +1670,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// returns, so a cached resource is always valid content regardless of whether the command
 	// list that references it ever executes (no invalidate-on-throw handling is needed, unlike
 	// `g_resident_weights`/`g_resident_kv`'s own DEFAULT-heap CopyResource caches).
-	if (rope_fast_hit) {
+	if (external_rope) {
+		// T-2113 (B5): the model handle's own resident RoPE buffers -- no pack, no
+		// upload, no g_resident_rope read or write, ever, on this path. This is what
+		// retires g_resident_rope for every caller that routes here (D-SLM3362).
+		cos_table_buf = external_rope_cos_resident;
+		sin_table_buf = external_rope_sin_resident;
+	} else if (rope_fast_hit) {
 		cos_table_buf = g_resident_rope.cos_buf;
 		sin_table_buf = g_resident_rope.sin_buf;
 	} else {
@@ -1738,12 +1821,46 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
 	dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
 	dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
-	dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+	// T-2113 (B5, design Sec6.2/Sec1): this IS the real async resume rebind -- every SEPARATE
+	// `sslm_decode_step_gpu` call reaches this same site fresh (its own `dev.list->Reset()`,
+	// above), unconditionally, exactly matching design Sec6.2's own "rebind never conditioned
+	// on whether this call followed a cut" rule. The two T-2106 violation-class pins retired
+	// from B4's bench-only mid-call mechanism (see `bind_and_dispatch`'s own comment below) now
+	// plant here, at the ONLY rebind site a real async resume ever crosses. Both default off (a
+	// clean rebind, every existing caller); read via `std::getenv` once per process, the same
+	// convention B4's own retired mechanism used.
+	// No lambda here (deliberately, unlike B4's own now-retired mechanism): a lambda's
+	// own `return` inside this function's body is indistinguishable, to a text-based
+	// return-path census (tests/ci/check_gpu_guard_status_parity.py's own LWUWS
+	// derivation), from a real control-flow exit of THIS function -- a plain boolean
+	// expression, evaluated once via `static const`, carries no such statement at all.
+	static const bool b5_async_drop_uav_rebind =
+	    std::getenv("SSLM_B5_ASYNC_DROP_UAV_REBIND") != nullptr &&
+	    std::getenv("SSLM_B5_ASYNC_DROP_UAV_REBIND")[0] == '1';
+	static const bool b5_async_swap_srv_rebind =
+	    std::getenv("SSLM_B5_ASYNC_SWAP_SRV_REBIND") != nullptr &&
+	    std::getenv("SSLM_B5_ASYNC_SWAP_SRV_REBIND")[0] == '1';
+	// The swapped-SRV-rebind violation pin (T-2106): cos/sin land in each other's slot.
+	if (b5_async_swap_srv_rebind) {
+		dev.list->SetComputeRootShaderResourceView(6, sin_table_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(7, cos_table_buf->GetGPUVirtualAddress());
+	} else {
+		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+	}
 	dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
 	dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
 	dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
-	dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
+	// The dropped-UAV-rebind violation pin (T-2106): kv_uav's own rebind is replaced with a bind
+	// to a DIFFERENT, still-valid, still-live resource (work_scratch_uav) rather than left fully
+	// unbound -- a raw root UAV descriptor left undefined after SetComputeRootSignature is an
+	// out-of-spec GPU virtual address (real risk: a device fault/TDR on real hardware, not a
+	// clean, repeatable divergence), so this pin realizes the class safely: the dispatch chain's
+	// own subsequent K/V reads/writes land in transient scratch instead of the persistent K/V
+	// store, a real and safely-producible wrong-answer (StandardsDocument.md Sec5.4's own
+	// must-reject construction discipline).
+	dev.list->SetComputeRootUnorderedAccessView(
+	    11, (b5_async_drop_uav_rebind ? work_scratch_uav : kv_uav)->GetGPUVirtualAddress());
 	dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
@@ -1773,48 +1890,20 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// bindings that used to be re-issued on every call are hoisted to the single set immediately
 	// after SetComputeRootSignature, above (design Sec10 B2's own deferred root-binding hoist).
 	//
-	// T-2113 (B4, design Sec10 B4's own gate + the build seat's own delegated instruction, 2026-
-	// 08-15): the TIME-SLICE INVARIANCE bench mechanism, re-derived from Claude/Laplace/
-	// t2105-gpu-speed-ceiling-2026-08-14.md Sec4's own construction -- bench-only instrumentation,
-	// off by default (every env var below defaults to inert), never part of the production
-	// dispatch-recording shape. B5 builds the REAL async submission boundary
-	// (`sslm_decode_step_gpu` records+submits without fencing, the unconditional per-call rebind,
-	// design Sec6.2); this mechanism exists only to prove B4's OWN new dispatch geometry survives
-	// a cut-and-resume at every granularity down to the every-dispatch extreme, non-regressing the
-	// property T-2105 already proved of the pre-B4 dispatch chain, before B5 builds the real thing
-	// on top of it. Retires the moment B5 lands its own real slicing and the equivalent proof runs
-	// through `sslm_decode_step_gpu`/`sslm_gpu_ready` instead.
-	//
-	// `SSLM_B4_SLICE_EVERY=k` (k>0): cut the dispatch chain after every k-th dispatch -- close,
-	// submit, fence-to-idle, reset, and (matching design Sec6.2's own "unconditional rebind" rule)
-	// rebind the root signature and all twelve views before continuing. k=1 is the every-dispatch
-	// extreme (672 cuts/token at the 1.5B tier). Read via `std::getenv` ONCE per process (a
-	// `static` local), exactly like every other bench-only env knob this file's own history uses
-	// (T-2105's own `t2105_slice_every` precedent) -- changing the variable mid-process has no
-	// effect, by design, matching the process-per-cell sweep convention this construction is
-	// measured under.
-	//
-	// The two named violation-class pins (T-2106's own debunk, `Claude/Popper/
-	// t2106-t2105-ceiling-debunk-2026-08-14.md`): `SSLM_B4_SLICE_DROP_UAV_REBIND=1` skips the
-	// resume rebind of ONE root UAV (kv_uav, root index 11) -- the class "a resume forgets to
-	// rebind a UAV the next dispatch reads/writes." `SSLM_B4_SLICE_SWAP_SRV_REBIND=1` swaps the
-	// resume rebind of two root SRVs (cos_table_buf/sin_table_buf, root indices 6/7) -- the class
-	// "a resume rebinds the wrong resource to a slot." Both default off (a clean resume); each
-	// must be proven to FIRE (the per-step oracle diverges) when planted, and proven silent
-	// (identical output) when reverted -- the plant-and-revert protocol StandardsDocument.md §5.4
-	// requires of a control that claims to detect a real defect class.
-	static const uint32_t b4_slice_every = [] {
-		const char* v = std::getenv("SSLM_B4_SLICE_EVERY");
-		return (v == nullptr || v[0] == 0) ? 0u : static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
-	}();
-	static const bool b4_slice_drop_uav_rebind = [] {
-		const char* v = std::getenv("SSLM_B4_SLICE_DROP_UAV_REBIND");
-		return v != nullptr && v[0] == '1';
-	}();
-	static const bool b4_slice_swap_srv_rebind = [] {
-		const char* v = std::getenv("SSLM_B4_SLICE_SWAP_SRV_REBIND");
-		return v != nullptr && v[0] == '1';
-	}();
+	// T-2113 (B4->B5 retirement): the TIME-SLICE INVARIANCE bench mechanism B4 built here
+	// (`SSLM_B4_SLICE_EVERY`/`SSLM_B4_SLICE_DROP_UAV_REBIND`/`SSLM_B4_SLICE_SWAP_SRV_REBIND`,
+	// a synthetic mid-call cut-and-resume inside ONE `RunLayerLoopGpu`/`RunLayerLoopGpuSubmit`
+	// call) is RETIRED, per its own documented promise ("retires the moment B5 lands its own
+	// real slicing and the equivalent proof runs through `sslm_decode_step_gpu`/
+	// `sslm_gpu_ready` instead," Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec6.1) and
+	// per the design's own Sec6.2 finding that the REAL boundary needs no per-call
+	// instrumentation at all: every separate `sslm_decode_step_gpu` call already performs its
+	// own full Reset+rebind (the twelve `SetComputeRoot*View` calls immediately above this
+	// lambda, unconditional, every call) -- that IS the resume rebind design Sec6.2 asks for,
+	// with no additional mechanism needed inside the dispatch loop. The two T-2106 violation-
+	// class pins move with it, to the top-of-call rebind site itself (this function's own
+	// `SSLM_B5_ASYNC_DROP_UAV_REBIND`/`SSLM_B5_ASYNC_SWAP_SRV_REBIND`, set immediately above),
+	// since that is now the ONLY rebind site a real async resume ever crosses.
 	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
 	                              uint32_t lanes = 1) {
 		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
@@ -1827,49 +1916,6 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
-
-		// T-2113 (B4): the bench-only slice cut, see this lambda's own header comment above.
-		if (b4_slice_every > 0u && (dispatch_query_index % b4_slice_every) == 0u) {
-			SSLM_GPU_HR(dev.list->Close());
-			ID3D12CommandList* slice_lists[] = {dev.list.Get()};
-			dev.queue->ExecuteCommandLists(1, slice_lists);
-			SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-			if (dev.fence->GetCompletedValue() < dev.fence_val) {
-				SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
-				WaitForSingleObject(dev.fence_event, INFINITE);
-			}
-			SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
-			dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());
-			dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
-			dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
-			dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
-			dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
-			dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
-			// The swapped-SRV-rebind violation pin: cos/sin land in each other's slot.
-			if (b4_slice_swap_srv_rebind) {
-				dev.list->SetComputeRootShaderResourceView(6, sin_table_buf->GetGPUVirtualAddress());
-				dev.list->SetComputeRootShaderResourceView(7, cos_table_buf->GetGPUVirtualAddress());
-			} else {
-				dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
-				dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
-			}
-			dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
-			dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
-			dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
-			// The dropped-UAV-rebind violation pin: kv_uav's own resume rebind is replaced with a
-			// bind to a DIFFERENT, still-valid, still-live resource (work_scratch_uav) rather than
-			// left fully unbound -- a raw root UAV descriptor left undefined after
-			// SetComputeRootSignature is an out-of-spec GPU virtual address (real risk: a device
-			// fault/TDR on real hardware, not a clean, repeatable divergence), so this pin
-			// realizes T-2106's own "a resume forgets to rebind the CORRECT UAV" class safely: the
-			// dispatch chain's own subsequent kv_proj_site/rope_commit_site reads/writes land in
-			// WorkScratch's own transient scratch instead of the persistent K/V store, a real and
-			// safely-producible wrong-answer, not a synthetic control the production path cannot
-			// reach (StandardsDocument.md §5.4's own must-reject construction discipline).
-			dev.list->SetComputeRootUnorderedAccessView(
-			    11, (b4_slice_drop_uav_rebind ? work_scratch_uav : kv_uav)->GetGPUVirtualAddress());
-			dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
-		}
 	};
 	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
@@ -2126,26 +2172,104 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
 	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-	if (dev.fence->GetCompletedValue() < dev.fence_val) {
-		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+	// T-2113 (B5, design Sec6.2): NO fence-wait here -- "records ... submits ... and
+	// returns without waiting for the fence." Everything below used to run
+	// synchronously at this point (the wait, the GPU-timing readback, the SeqState/KV
+	// readback, the sticky-tag decode); it now lives in RunLayerLoopGpuFinish, driven
+	// by the in-flight token this call hands back. `record_ms` is still measured here
+	// (it is host-side recording time, already complete by this point); `submit_wait_ms`/
+	// `gpu_busy_ms`/`readback_ms` are now measured inside Finish, against the SAME
+	// `g_last_call_timing` global every existing caller of the synchronous
+	// `RunLayerLoopGpu` wrapper still reads after ITS OWN Submit+Finish pair completes.
+	std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
+	inflight->dev = &dev;
+	inflight->fence_val = dev.fence_val;
+	inflight->dispatch_count_this_call = dispatch_count_this_call;
+	inflight->seq_readback = seq_readback;
+	inflight->kv_readback = kv_readback;
+	inflight->kv_row_offsets = kv_row_offsets;
+	inflight->seq_bytes_size = seq_bytes.size();
+	inflight->hidden_size_h = H;
+	inflight->head_dim_hd = HD;
+	inflight->t_record_end = t_record_end;
+	// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
+	// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
+	// the use-after-free the Submit/Finish split would otherwise open.
+	inflight->layout_buf = layout_buf;
+	inflight->rope_buf = rope_buf;
+	inflight->model_const_buf = model_const_buf;
+	inflight->silu_lut_buf = silu_lut_buf;
+	inflight->scratch_layout_buf = scratch_layout_buf;
+	inflight->seq_uav = seq_uav;
+	inflight->scratch_uav = scratch_uav;
+	inflight->work_scratch_uav = work_scratch_uav;
+	inflight->lw_upload_keep_alive = lw_upload_keep_alive;
+	inflight->upload_keep_alive = upload_keep_alive;
+	if (out_inflight) *out_inflight = inflight.release();
+	return superslm::SslmForwardStatus::Ok;
+}
+
+// T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the FINISH half of the async split --
+// declared in gpu_port.h. Byte-for-byte the tail RunLayerLoopGpu's own synchronous body
+// always ran after its fence-wait (the GPU-timing readback, the SeqState/KV readback,
+// the sticky-tag decode) -- only WHERE the fence-wait itself sits has moved: `block==1`
+// waits unconditionally (matching the old unconditional wait exactly); `block==0` polls
+// `GetCompletedValue()` and, if not yet signaled, returns immediately with `*out_ready=0`
+// and `inflight` untouched -- still owned by the caller, still pollable.
+superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight,
+                                                    superslm::SequenceLayerState& seq,
+                                                    uint8_t* workspace, int32_t block,
+                                                    int32_t* out_ready) {
+	if (out_ready) *out_ready = 0;
+	if (!inflight || !inflight->dev) {
+		return superslm::SslmForwardStatus::GpuAllocationFailed;  // caller error: no live token
+	}
+	harness::Device& dev = *inflight->dev;
+	const bool signaled = dev.fence->GetCompletedValue() >= inflight->fence_val;
+	if (!signaled && !block) {
+		// Pure poll, nothing ready yet -- design Sec4.2: "*out_ready=0, no state change."
+		// `inflight` is NOT consumed; the caller polls again later against the SAME token.
+		return superslm::SslmForwardStatus::Ok;
+	}
+	// T-2113 (B5, design Sec9's own DeviceLost row): the pre-split synchronous function
+	// left this whole tail (the wait, the readback Maps) OUTSIDE any try/catch, on the
+	// pre-1.0 substrate's own footing where an uncaught exception merely terminated a
+	// C++ test binary. `RunLayerLoopGpuFinish` is reached from `sslm_gpu_ready`, a
+	// C-ABI-shaped, status-returning 1.0 API entry point -- design Sec9's own table
+	// promises `DeviceLost` is DELIVERABLE through a defined channel when "a lost device
+	// is discovered," never as an uncaught exception escaping across that boundary and
+	// crashing the caller's whole process. Reproduced by execution (this section's own
+	// violation-pin commissioning, StandardsDocument.md Sec5.4): a REAL device fault
+	// (DXGI_ERROR_DEVICE_REMOVED) triggered by the dropped-UAV-rebind pin's own
+	// out-of-bounds write, discovered here (at the fence-wait/readback, not during
+	// Submit's own recording) with no catch present, terminated the process instead of
+	// returning `GpuDeviceRemoved` through the defined channel. Fixed here, the same
+	// `GetDeviceRemovedReason()`-queried disposition Submit's own generic catch already
+	// uses for the analogous failure discovered during recording.
+	//
+	// `owned` takes ownership of `inflight` BEFORE the try block -- not after the wait,
+	// as an earlier draft had it -- specifically so RAII covers a throw from ANYWHERE
+	// in the try, including the wait itself, with no path that could reach the catch
+	// below still holding a naked, undeleted `inflight`, and no path where the catch
+	// would need to `delete` it manually (which risked a double-free against `owned`'s
+	// own destructor, on a throw AFTER `owned` had already taken ownership -- caught by
+	// this section's own review before it was ever exercised on real hardware).
+	std::unique_ptr<GpuLayerLoopInFlight> owned(inflight);  // consumed, exactly once, from here on
+	try {
+	if (!signaled) {
+		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(inflight->fence_val, dev.fence_event));
 		WaitForSingleObject(dev.fence_event, INFINITE);
 	}
+	// From here down: BYTE-FOR-BYTE the old synchronous tail, reading from `inflight`'s
+	// own fields instead of this function's own locals (they were this function's own
+	// locals, in the pre-split RunLayerLoopGpu; Submit captured them into `inflight`
+	// immediately after recording, before this call ever ran).
 	const auto t_submit_wait_end = std::chrono::steady_clock::now();
 	g_last_call_timing.submit_wait_ms =
-	    std::chrono::duration<double, std::milli>(t_submit_wait_end - t_record_end).count();
+	    std::chrono::duration<double, std::milli>(t_submit_wait_end - owned->t_record_end).count();
 
-	// GPU-measured busy time, both as a whole AND per dispatch: `dispatch_count_this_call + 1`
-	// boundaries were placed around every individual dispatch this call issued (one before each
-	// `bind_and_dispatch`, one final boundary after the last), resolved into `dev.timestamp_readback`
-	// in the SAME command list (already fenced by the wait above). `gpu_busy_ms` is boundary[last] -
-	// boundary[0] (identical to the whole-chain figure §32's own two-query bracket measured); the
-	// per-dispatch vector is every CONSECUTIVE delta, in dispatch order -- `g_last_call_per_dispatch_ms[d]`
-	// is dispatch `d`'s own GPU time, and `d % 22` names which of the 22 dispatches per layer it is
-	// (the fixed, unconditional call order in the loop above -- `gpu_port.h`'s own
-	// `LastCallPerDispatchTimingsMs` declaration spells out the full 22-entry order), summed by the
-	// caller across however many layers this call processed.
-	if (dev.timestamp_frequency > 0 && dispatch_count_this_call > 0) {
-		std::vector<UINT64> ts(dispatch_count_this_call + 1, 0);
+	if (dev.timestamp_frequency > 0 && owned->dispatch_count_this_call > 0) {
+		std::vector<UINT64> ts(owned->dispatch_count_this_call + 1, 0);
 		void* qp = nullptr;
 		D3D12_RANGE qrange{0, ts.size() * sizeof(UINT64)};
 		if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
@@ -2155,38 +2279,37 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 			const double freq = static_cast<double>(dev.timestamp_frequency);
 			g_last_call_timing.gpu_busy_ms =
 			    static_cast<double>(ts.back() - ts.front()) / freq * 1000.0;
-			g_last_call_per_dispatch_ms.resize(dispatch_count_this_call);
-			for (uint32_t d = 0; d < dispatch_count_this_call; ++d) {
+			g_last_call_per_dispatch_ms.resize(owned->dispatch_count_this_call);
+			for (uint32_t d = 0; d < owned->dispatch_count_this_call; ++d) {
 				g_last_call_per_dispatch_ms[d] =
 				    static_cast<double>(ts[d + 1] - ts[d]) / freq * 1000.0;
 			}
 		}
 	}
 
+	const uint32_t H = owned->hidden_size_h;
+	const uint32_t HD = owned->head_dim_hd;
 	const auto t_readback_start = std::chrono::steady_clock::now();
-	std::vector<uint8_t> seq_out(seq_bytes.size());
+	std::vector<uint8_t> seq_out(owned->seq_bytes_size);
 	{
 		void* p = nullptr;
 		D3D12_RANGE range{0, seq_out.size()};
-		SSLM_GPU_HR(seq_readback->Map(0, &range, &p));
+		SSLM_GPU_HR(owned->seq_readback->Map(0, &range, &p));
 		std::memcpy(seq_out.data(), p, seq_out.size());
 		D3D12_RANGE none{0, 0};
-		seq_readback->Unmap(0, &none);
+		owned->seq_readback->Unmap(0, &none);
 	}
 	{
-		// T-2101: scatter the small readback buffer's own tightly-packed rows back to their real
-		// positions in `workspace`, at the SAME offsets `kv_row_offsets` was built from -- one
-		// `HD`-sized memcpy per row this call actually wrote, not one memcpy of the whole workspace.
-		const size_t kv_readback_size = kv_row_offsets.size() * static_cast<size_t>(HD);
+		const size_t kv_readback_size = owned->kv_row_offsets.size() * static_cast<size_t>(HD);
 		void* p = nullptr;
 		D3D12_RANGE range{0, kv_readback_size};
-		SSLM_GPU_HR(kv_readback->Map(0, &range, &p));
+		SSLM_GPU_HR(owned->kv_readback->Map(0, &range, &p));
 		const uint8_t* src = static_cast<const uint8_t*>(p);
-		for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
-			std::memcpy(workspace + kv_row_offsets[r], src + r * static_cast<size_t>(HD), HD);
+		for (size_t r = 0; r < owned->kv_row_offsets.size(); ++r) {
+			std::memcpy(workspace + owned->kv_row_offsets[r], src + r * static_cast<size_t>(HD), HD);
 		}
 		D3D12_RANGE none{0, 0};
-		kv_readback->Unmap(0, &none);
+		owned->kv_readback->Unmap(0, &none);
 	}
 	g_last_call_timing.readback_ms =
 	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start)
@@ -2213,7 +2336,50 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	seq.kv_saturation_count = (static_cast<uint64_t>(hi_u) << 32) | static_cast<uint64_t>(lo_u);
 	seq.context_length = ctxlen;
 
+	if (out_ready) *out_ready = 1;
 	return DecodeStickyTag(sticky_tag);
+	} catch (const std::exception&) {
+		// T-2101/T-2057's own disposition (superslm_gpu.cpp, Submit's own catch),
+		// applied here for the identical reason: `GpuDeviceRemoved` iff the device is
+		// confirmed gone right now, `GpuAllocationFailed` otherwise (a transient/size-
+		// dependent failure at the readback, device still alive). `owned` (declared
+		// BEFORE this try, above) frees `inflight` via its own destructor during stack
+		// unwinding, regardless of where inside the try the throw happened -- nothing
+		// here frees it a second time.
+		if (out_ready) *out_ready = 1;  // a terminal status, not a "still pending" one
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	}
+}
+
+// T-2113 (B5): RunLayerLoopGpu (gpu_port.h) is now a two-line wrapper -- Submit
+// immediately followed by a BLOCKING Finish. Every instruction either one executes is
+// unchanged from the pre-split function; only the function-call boundary between them
+// is new, and it is crossed here, in the same order, on the same thread, before this
+// wrapper ever returns -- byte-for-byte identical observable behavior for all ~40
+// existing callers (none of them pass the B5-only trailing external-weights/external-
+// rope parameters, all of which default to "off").
+superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
+                                             const superslm::LayerWeights* layers,
+                                             uint32_t num_hidden_layers, uint32_t layer_budget,
+                                             size_t hidden_size, size_t head_dim,
+                                             size_t num_key_value_heads, size_t intermediate_size,
+                                             int64_t context_cap,
+                                             const superslm::SslmTensorManifest& rope_tables,
+                                             uint8_t* workspace, size_t workspace_size,
+                                             ID3D12Resource* external_kv_resident,
+                                             bool* io_external_kv_needs_resume_barrier) {
+	GpuLayerLoopInFlight* inflight = nullptr;
+	const superslm::SslmForwardStatus submit_status = RunLayerLoopGpuSubmit(
+	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
+	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
+	    io_external_kv_needs_resume_barrier, &inflight);
+	if (!inflight) {
+		return submit_status;  // rejected (a guard, or an exception) before submission
+	}
+	int32_t ready = 0;
+	return RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
 }
 
 // T-2052 (item 3): the device-observable N3's own residency cache was

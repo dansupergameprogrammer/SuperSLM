@@ -29,6 +29,7 @@
 #include "superslm/gpu_1p0.h"
 #include "superslm/gpu_1p0_bench_bridge.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <map>
@@ -114,6 +115,13 @@ struct SslmGpuModelHandle {
 	Microsoft::WRL::ComPtr<ID3D12Resource> rope_cos_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> rope_sin_buf;
 	bool has_rope_tables = false;  // true iff the artifact's own rope_tables.Tensor("cos"/"sin") existed
+	// T-2113 (B5): the RoPE presence/element-count metadata `RunLayerLoopGpuSubmit`'s own
+	// external-rope bridge needs at every decode call -- this handle keeps no live
+	// SslmTensorManifest past map() returning (map()'s own locals, above, go out of scope),
+	// so these three small facts are captured here, once, instead of re-deriving them from a
+	// manifest sslm_decode_step_gpu has no access to.
+	uint64_t rope_cos_elem_count = 0;
+	uint64_t rope_sin_elem_count = 0;
 
 	// The layout/dimension set this handle's own weights_buf was packed at (superslm_gpu::
 	// GpuLayerLayout, T-2113 B2's own shared PackLayerWeightsBytes) -- B4 reads these to
@@ -172,6 +180,26 @@ struct SslmGpuSequenceHandle {
 	uint32_t layer_index = 0;
 	uint64_t kv_saturation_count = 0;
 	int64_t context_length = 0;
+
+	// T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the async decode lifecycle's own state.
+	// `live_state.hidden_codes` is set ONCE, in sslm_gpu_seq_create, to alias
+	// `hidden_codes.data()` directly -- `RunLayerLoopGpuSubmit`/`Finish` read/write through
+	// this pointer, so the handle's own `hidden_codes` vector is always the live content, no
+	// separate copy. The four scalar fields are synced FROM this handle's own
+	// hidden_scale/layer_index/kv_saturation_count/context_length immediately before every
+	// sslm_decode_step_gpu call, and copied back INTO them once sslm_gpu_ready's own Finish
+	// call completes (design Sec4.2: "collapses Submitted -> Completed -> Idle").
+	superslm::SequenceLayerState live_state{};
+	// The host mirror `RunLayerLoopGpuSubmit`'s external-K/V readback scatters each call's
+	// own newly-written rows into (design Sec5.3's own "still gets the identical CPU-oracle-
+	// comparable host mirror" contract) -- sized identically to `kv_bytes` (the same buffer
+	// `sslm_gpu_seq_create` already sizes `kv_buf` to), allocated once, accumulated across
+	// every decode step this handle ever runs, exactly like the pre-1.0 substrate's own
+	// per-session `workspace` vector (tools/t2100_gpu_throughput.cpp's own `ws`).
+	std::vector<uint8_t> host_kv_mirror;
+	// The in-flight token between a Submitted sslm_decode_step_gpu call and the
+	// sslm_gpu_ready call that finishes it -- null whenever this handle is Idle/Completed.
+	superslm_gpu::GpuLayerLoopInFlight* in_flight = nullptr;
 
 	bool destroyed = false;
 };
@@ -335,6 +363,8 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	h->ctx = ctx;
 	h->content_hash = base->RawIntegrityHash();
 	h->has_rope_tables = has_rope;
+	h->rope_cos_elem_count = cos_t != nullptr ? cos_t->elem_count : 0;
+	h->rope_sin_elem_count = sin_t != nullptr ? sin_t->elem_count : 0;
 	h->layout = layout;
 	h->num_hidden_layers = num_hidden_layers;
 	h->hidden_size = H;
@@ -511,6 +541,13 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 	h->kv_saturation_count = 0;
 	h->context_length = 0;
 	h->state = superslm_gpu::SslmSequenceGpuState::Idle;
+	// T-2113 (B5): `live_state.hidden_codes` aliases `hidden_codes.data()` for this handle's
+	// whole lifetime -- `hidden_codes` never reallocates after this construction (fixed size,
+	// never resized), so the pointer stays valid until sslm_gpu_seq_release destroys the
+	// handle. `host_kv_mirror` starts zeroed, identically to `zero_kv` above (a fresh
+	// sequence's own workspace mirror has never had a row written into it either).
+	h->live_state.hidden_codes = h->hidden_codes.data();
+	h->host_kv_mirror.assign(kv_bytes_needed, 0);
 
 	model->live_sequences += 1;
 	ctx->live_handles += 1;
@@ -545,8 +582,240 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	return SSLM_OK;
 }
 
-// T-2113 (B3): the bench-only accessor bodies declared in gpu_1p0_bench_bridge.h -- see
-// that header's own comment for why these exist and when they retire (B5).
+namespace {
+// T-2113 (B5): `RunLayerLoopGpuSubmit`'s own guard ladder (superslm_gpu.cpp, unchanged
+// from the pre-1.0 substrate) rejects for reasons the 1.0 API's own construction already
+// makes unreachable in ordinary use -- context_cap/hidden_size/head_dim are validated
+// once, at sslm_gpu_seq_create/sslm_gpu_model_map time, never re-supplied per decode
+// call, so a live SslmGpuSequenceHandle/SslmGpuModelHandle pair cannot in practice
+// present the substrate's own ladder with a geometry it rejects. Design Sec9's own table
+// assigns no dedicated 1.0 status to any of these substrate-level guards (they were never
+// meant to be reachable through this API), so every one takes the same "no more specific
+// 1.0-level status exists" disposition B1/B2's own null-out-parameter cases already
+// established: SSLM_DEVICE_LOST.
+SslmGpuStatus MapSubmitRejectionToGpuStatus(superslm::SslmForwardStatus /*st*/) {
+	return SSLM_DEVICE_LOST;
+}
+// T-2113 (B5): the FINAL, GPU-decoded per-call result (DecodeStickyTag's own return,
+// design Sec4.2's own `sslm_gpu_ready`'s `out_status` channel) -- `Ok` is the only
+// non-rejecting value; every rejecting sticky-tag status is, identically to the
+// submission-time guards above, a substrate-level CPU-domain violation design Sec9's
+// own table assigns no dedicated 1.0 status to. Same disposition, same reason.
+SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st) {
+	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_DEVICE_LOST;
+}
+}  // namespace
+
+// Design Sec4.3/Sec6.2 (T-2113 B5): "records up to dispatch_budget dispatches ... into
+// ONE command list, closes it, submits it, and returns without waiting for the fence."
+// Routes weights/RoPE through `model`'s own resident buffers (B2, `weights_buf`/
+// `rope_cos_buf`/`rope_sin_buf` -- the external-weights/external-rope bridge B5 adds to
+// `RunLayerLoopGpuSubmit`) and K/V through `seq`'s own dedicated buffer (B3, the existing
+// external-KV bridge) -- this is the production measurement path that retires
+// `g_resident_rope`/`g_resident_weights` for every call that reaches here (D-SLM3362):
+// neither process-global cache is ever read or written on this path.
+SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                    const SslmGpuAdapterHandle* adapter_or_null,
+                                    uint32_t dispatch_budget) {
+	// Design Sec8/Sec10 B6: per-sequence adapter binding is B6's own delivery (B6 depends
+	// on B5, not the reverse, design Sec10's own dependency table). A non-null adapter
+	// here is accepted but produces base-only behavior today -- named, not silently
+	// claimed as adapter support, per StandardsDocument.md Sec5.6.
+	(void)adapter_or_null;
+	if (!ctx || !seq || seq->destroyed || !seq->model || seq->model->destroyed) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
+		                                           // at this call besides the structural-
+		                                           // invariant status (same "no more specific
+		                                           // status" disposition as the helpers above).
+	}
+	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+	if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
+		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
+	}
+
+	SslmGpuModelHandle* model = seq->model;
+	uint32_t layers_to_issue = 0;
+	const superslm_gpu::SslmGpuStatus plan = superslm_gpu::PlanDispatchBudgetGpu(
+	    dispatch_budget, model->num_hidden_layers, seq->layer_index, &layers_to_issue);
+	if (plan == superslm_gpu::SslmGpuStatus::DispatchBudgetTooSmall) {
+		return SSLM_DISPATCH_BUDGET_TOO_SMALL;
+	}
+
+	// Sync the handle's own canonical scalar fields into `live_state` (its own
+	// `hidden_codes` pointer was set once, at sslm_gpu_seq_create, and needs no
+	// per-call refresh -- it already aliases `hidden_codes.data()` directly).
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = seq->layer_index;
+	seq->live_state.kv_saturation_count = seq->kv_saturation_count;
+	seq->live_state.context_length = seq->context_length;
+
+	// Never read: the external-rope bridge below supplies presence/size directly from
+	// `model`'s own cached fields (B2), so this call has no live SslmTensorManifest of
+	// its own and needs none.
+	static const superslm::SslmTensorManifest kEmptyManifest;
+
+	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
+	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
+	    model->hidden_size, model->head_dim, model->num_key_value_heads, model->intermediate_size,
+	    model->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
+	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
+	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
+	    model->rope_cos_elem_count, model->rope_sin_elem_count);
+
+	if (!inflight) {
+		// Rejected before submission (a guard, or an exception) -- seq/host state
+		// untouched, still Idle, exactly RunLayerLoopGpu's own existing contract.
+		return MapSubmitRejectionToGpuStatus(submit_status);
+	}
+	seq->in_flight = inflight;
+	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+	return SSLM_OK;
+}
+
+// Design Sec4.2 (T-2113 B5): "block(=0): a pure poll -- if the fence has not yet
+// signaled, *out_ready=0, no state change ... block(=1): blocks the calling thread on
+// the fence rather than returning *out_ready=0 -- the only call this design allows to
+// legitimately fence-wait." `Idle`/`Completed` (nothing outstanding): `*out_ready=1`
+// immediately, `*out_status=Ok`.
+SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, int32_t block,
+                              int32_t* out_ready, SslmGpuStatus* out_status) {
+	if (out_ready) *out_ready = 0;
+	if (out_status) *out_status = SSLM_OK;
+	if (!ctx || !seq || seq->destroyed) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
+	}
+	if (seq->state != superslm_gpu::SslmSequenceGpuState::Submitted) {
+		// design Sec4.2: "Idle/Completed: *out_ready=1 immediately, *out_status=Ok
+		// (nothing outstanding)."
+		if (out_ready) *out_ready = 1;
+		return SSLM_OK;
+	}
+
+	int32_t ready = 0;
+	const superslm::SslmForwardStatus decoded = superslm_gpu::RunLayerLoopGpuFinish(
+	    seq->in_flight, seq->live_state, seq->host_kv_mirror.data(), block, &ready);
+	if (!ready) {
+		// Still Submitted -- a non-blocking poll against an unsignaled fence, design
+		// Sec4.2's own "no state change" case. `seq->in_flight` is untouched by Finish
+		// on this path (still owned by this handle, still pollable next call).
+		return SSLM_OK;
+	}
+
+	// Fence signaled (or block=1 waited for it) -- collapse Submitted -> Idle in one
+	// call, design Sec4.2's own contract, and copy the decoded result back into this
+	// handle's own canonical fields.
+	seq->in_flight = nullptr;  // RunLayerLoopGpuFinish already freed the token on this path
+	seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+	seq->hidden_scale = seq->live_state.hidden_scale;
+	seq->layer_index = seq->live_state.layer_index;
+	seq->kv_saturation_count = seq->live_state.kv_saturation_count;
+	seq->context_length = seq->live_state.context_length;
+	if (out_ready) *out_ready = 1;
+	if (out_status) *out_status = MapDecodedStatusToGpuStatus(decoded);
+	return SSLM_OK;
+}
+
+// Design Sec4.2/Sec5.3 (T-2113 B5): the device-resident save/restore/reset trio,
+// declared for B3/B5 (gpu_1p0.h's own header comment) -- reusing
+// `SaveGpuSequenceState`/`RestoreGpuSequenceState` (gpu_port.h, the substrate's own
+// existing blob mechanism, D-SLM3080, unchanged) rather than a second implementation.
+SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
+                                 void* out_blob, size_t* out_blob_size) {
+	if (!ctx || !seq || seq->destroyed) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+	if (!superslm_gpu::CallProceedsOrBusy_SeqSave(is_submitted)) {
+		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
+	}
+	const bool ok = superslm_gpu::SaveGpuSequenceState(seq->live_state, seq->host_kv_mirror.data(),
+	                                                    seq->host_kv_mirror.size(), out_blob,
+	                                                    out_blob_size);
+	// SaveGpuSequenceState's own contract (gpu_port.h): a too-small out_blob reports the
+	// required size via *out_blob_size and returns false -- not a device/guard failure,
+	// no dedicated 1.0 status exists for it either, same disposition as the guards above.
+	return ok ? SSLM_OK : SSLM_DEVICE_LOST;
+}
+
+SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                    const void* blob, size_t blob_size,
+                                    SslmGpuSequenceHandle** out_seq) {
+	if (!out_seq) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	*out_seq = nullptr;
+	if (!ctx || !model || model->destroyed || !blob) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// Design Sec5.3: "sslm_gpu_seq_restore allocates a fresh SslmGpuSequenceHandle...
+	// never reusing an existing handle's" -- the SAME allocation sslm_gpu_seq_create
+	// performs, at the model's own context_cap (design Sec4.2: restore takes no
+	// context_cap of its own; the model handle is the caller-independent source, the
+	// same one every sequence created against this model already uses).
+	SslmGpuSequenceHandle* fresh = nullptr;
+	const SslmGpuStatus create_status = sslm_gpu_seq_create(ctx, model, model->context_cap, &fresh);
+	if (create_status != SSLM_OK || !fresh) {
+		return create_status;
+	}
+	// RestoreGpuSequenceState's own device round-trip (gpu_port.h/superslm_gpu.cpp,
+	// D-SLM3080, unchanged): decodes the blob's header fields into `live_state` and the
+	// K/V bytes into `host_kv_mirror` -- a malformed or size-mismatched blob returns
+	// false, translated here the same way every other structural rejection in this file
+	// is (SSLM_SEQUENCE_KV_BUFFER_MISMATCH, the create-time disposition this fresh
+	// handle would have carried had its own sizing been the problem).
+	const bool ok = superslm_gpu::RestoreGpuSequenceState(
+	    blob, blob_size, &fresh->live_state, fresh->host_kv_mirror.data(), fresh->host_kv_mirror.size());
+	if (!ok) {
+		sslm_gpu_seq_release(ctx, fresh);
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// Upload the restored K/V bytes into this handle's own REAL resident buffer (design
+	// Sec5.3: K/V is device-resident-only in the 1.0 API -- RestoreGpuSequenceState's own
+	// host-memory round-trip is the substrate's pre-1.0 contract, reused verbatim for the
+	// header/blob decode; the device residency itself is this call's own added step).
+	try {
+		fresh->kv_buf = UploadResidentUavBufferSync(ctx->device, fresh->host_kv_mirror.data(),
+		                                             fresh->host_kv_mirror.size());
+	} catch (const std::exception&) {
+		sslm_gpu_seq_release(ctx, fresh);
+		return SSLM_DEVICE_LOST;
+	}
+	fresh->kv_needs_resume_barrier = false;  // freshly (re)created in UNORDERED_ACCESS state
+	fresh->hidden_scale = fresh->live_state.hidden_scale;
+	fresh->layer_index = fresh->live_state.layer_index;
+	fresh->kv_saturation_count = fresh->live_state.kv_saturation_count;
+	fresh->context_length = fresh->live_state.context_length;
+	*out_seq = fresh;
+	return SSLM_OK;
+}
+
+SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
+	if (!ctx || !seq || seq->destroyed) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
+	if (!superslm_gpu::CallProceedsOrBusy_SeqReset(is_submitted)) {
+		return SSLM_BUSY;  // design Sec4.2's own state table, unchanged policy.
+	}
+	std::fill(seq->hidden_codes.begin(), seq->hidden_codes.end(), 0);
+	seq->hidden_scale = superslm::CarriedScale{};
+	seq->layer_index = 0;
+	seq->kv_saturation_count = 0;
+	seq->context_length = 0;
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = 0;
+	seq->live_state.kv_saturation_count = 0;
+	seq->live_state.context_length = 0;
+	std::fill(seq->host_kv_mirror.begin(), seq->host_kv_mirror.end(), 0);
+	return SSLM_OK;
+}
+
+// T-2113 (B3): the bench-only accessor bodies declared in gpu_1p0_bench_bridge.h -- B5
+// has now landed the real async path above; these accessors are kept only because
+// tools/t2113_b3_sequence_smoke.cpp (a B3-era bench tool, not part of Curie's suite)
+// still calls them, and retiring that tool is not part of this section's own scope.
+// Every NEW caller (the B5 smoke tool, the red suite) drives the real API instead.
 ID3D12Resource* SslmGpuSeqHandleKvBufferForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->kv_buf.Get() : nullptr;
 }
