@@ -49,6 +49,7 @@
 #include "superslm/model.h"
 #include "superslm/tokenizer.h"
 #include "sslm_marshal.h"
+#include "sslm_adapter_loader.h"
 
 using namespace superslm;
 using superslm_marshal::LayerBacking;
@@ -57,13 +58,18 @@ using superslm_marshal::PreflightScanWscFolds;
 using superslm_marshal::ReadCarriedScale;
 using superslm_marshal::ReadFile;
 using superslm_marshal::WidenGainToInt32;
+using superslm_adapter::AdapterHandle;
+using superslm_adapter::AdapterLoadStatus;
+using superslm_adapter::ApplyAdapterToLayers;
+using superslm_adapter::BaseModelGeometry;
+using superslm_adapter::LoadAdapterArtifact;
 
 namespace {
 
 void PrintUsage(const char* argv0) {
 	std::fprintf(stderr,
 	             "usage: %s <model.sslm> <tokenizer.sslm> \"<prompt>\" [--max-new N] [--stop "
-	             "a,b,c] [--dump-logits <path>]\n",
+	             "a,b,c] [--dump-logits <path>] [--adapter <adapter.sslm>]\n",
 	             argv0);
 }
 
@@ -106,9 +112,12 @@ int main(int argc, char** argv) {
 	// (<|im_end|>) and 151643 (<|endoftext|>); a different model family uses different ids.
 	std::vector<int32_t> stop_ids;
 	std::string dump_logits_path;
+	std::string adapter_path;  // T-2102: --adapter <path> -- runtime LoRA, empty means base-only
 	for (int i = 4; i < argc; ++i) {
 		if (std::strcmp(argv[i], "--dump-logits") == 0 && i + 1 < argc) {
 			dump_logits_path = argv[++i];
+		} else if (std::strcmp(argv[i], "--adapter") == 0 && i + 1 < argc) {
+			adapter_path = argv[++i];
 		} else if (std::strcmp(argv[i], "--max-new") == 0 && i + 1 < argc) {
 			const std::string val = argv[++i];
 			try {
@@ -232,6 +241,50 @@ int main(int argc, char** argv) {
 			             "attempted; RunGreedyDecodeLoop was never called.\n");
 			return 1;
 		}
+	}
+
+	// --- Stage 3b: the runtime adapter (T-2102), if --adapter was given. ---
+	// LayerWeights::adapter defaults to nullptr on every layer (LayerWeights' own field default),
+	// which is already the correct "no adapter bound" state -- this stage only runs, and only
+	// mutates that default, when the flag is present.
+	AdapterHandle adapter_handle;
+	if (!adapter_path.empty()) {
+		// The base's own RawIntegrityHash: a SECOND, independent SslmArtifact::OpenFromMemory over
+		// the SAME model_bytes the SslmModel::Load call above already validated -- this driver
+		// never keeps that call's own SslmArtifact around (Load owns and destroys its own
+		// internal one), so this is the cheapest way to get the base's own integrity hash for the
+		// adapter loader's base-hash check (design Sec9 item (d)) without re-deriving it.
+		SslmArtifact base_artifact;
+		SslmError base_open_err;
+		if (SslmArtifact::OpenFromMemory(model_bytes.data(), model_bytes.size(), base_artifact,
+		                                  &base_open_err) != SslmStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=adapter_base_rehash: status=%s diagnostic=\"%s\"\n",
+			             SslmStatusName(base_open_err.code), base_open_err.message.c_str());
+			return 1;
+		}
+		BaseModelGeometry geo;
+		geo.num_hidden_layers = num_hidden_layers;
+		geo.hidden_size = hidden_size;
+		geo.intermediate_size = model_view.config.intermediate_size;
+		geo.kv_hidden_size = static_cast<uint64_t>(num_kv_heads) * model_view.config.head_dim;
+		geo.base_artifact_hash = base_artifact.RawIntegrityHash();
+
+		const auto t_adapter_start = std::chrono::steady_clock::now();
+		std::string adapter_err;
+		const auto adapter_status =
+		    LoadAdapterArtifact(adapter_path, geo, adapter_handle, &adapter_err);
+		const auto t_adapter_end = std::chrono::steady_clock::now();
+		if (adapter_status != AdapterLoadStatus::Ok) {
+			std::fprintf(stderr, "FAILED at stage=adapter_load: status=%s diagnostic=\"%s\"\n",
+			             superslm_adapter::AdapterLoadStatusName(adapter_status), adapter_err.c_str());
+			return 1;
+		}
+		ApplyAdapterToLayers(&adapter_handle, layers.data(), num_hidden_layers);
+		std::printf("adapter loaded: path=%s rank=%u target_modules_mask=0x%x source=\"%s\" "
+		            "load_seconds=%.4f\n",
+		            adapter_path.c_str(), adapter_handle.meta.rank, adapter_handle.meta.target_modules_mask,
+		            adapter_handle.meta.source_adapter_name.c_str(),
+		            std::chrono::duration<double>(t_adapter_end - t_adapter_start).count());
 	}
 
 	// --- embed/final_norm/head marshaling, workspace sizing, and the -------

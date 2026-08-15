@@ -43,6 +43,7 @@
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
+#include "../tools/sslm_adapter_loader.h"
 
 #include <algorithm>
 #include <atomic>
@@ -21520,6 +21521,639 @@ static void TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain() {
 	}
 }
 
+// =============================================================================================
+// T-2102 (RESUME-2026-08-14-gpu-throughput.md §4, D-SLM3304): the adapter LOADER red suite.
+// model.h:409 named this out loud ("a future adapter-loader's own section-table walk") -- until
+// this unit, nothing ever set `LayerWeights::adapter` from a loaded artifact, so runtime LoRA had
+// no code path even though the converter wrote real artifacts and the forward sites already
+// applied `adapter` if a caller set it. tools/sslm_adapter_loader.h is that section-table walk;
+// this suite proves it against hostile and honest synthetic adapter artifacts built with this
+// file's own fixture helpers (sslm_fixtures.h/sslm_cfg1_hostile_fixtures.h/
+// sslm_model_hostile_fixtures.h/sslm_sil1_hostile_fixtures.h -- the SAME construction the DFS1/
+// UFS1 load-time domain-gate suite above already uses), never against a real HF checkpoint (that
+// is the separate, real-artifact demonstration T-2102's own build log covers).
+// =============================================================================================
+
+namespace t2102_adapter_loader_fixtures {
+
+using namespace superslm_test;
+using superslm::SslmDtype;
+using superslm::SslmSectionType;
+using superslm_adapter::AdapterHandle;
+using superslm_adapter::AdapterLoadStatus;
+using superslm_adapter::ApplyAdapterToLayers;
+using superslm_adapter::BaseModelGeometry;
+using superslm_adapter::LoadAdapterArtifact;
+
+// ADP1's own 68-byte fixed prefix + name (tools/sslm_convert_adapter.py write_adp1, design §24.2
+// D-SLM3158), built independently of tools/sslm_adapter_loader.h's own parse (never derived from
+// the code under test) -- little-endian throughout, matching the Python writer's `struct.pack`
+// calls field for field.
+inline std::vector<uint8_t> BuildAdp1(uint32_t rank, uint32_t target_modules_mask,
+                                       const std::array<uint8_t, superslm::kIntegrityHashBytes>& base_hash,
+                                       double lora_alpha, bool use_rslora,
+                                       const std::string& source_adapter_name,
+                                       uint32_t reserved_override = 0,
+                                       uint32_t version_override = 1,
+                                       const uint8_t magic_override[4] = nullptr) {
+	std::vector<uint8_t> b;
+	static const uint8_t kRealMagic[4] = {'A', 'D', 'P', '1'};
+	const uint8_t* magic = magic_override ? magic_override : kRealMagic;
+	b.insert(b.end(), magic, magic + 4);
+	WriteU32LE(b, version_override);
+	WriteU32LE(b, rank);
+	WriteU32LE(b, target_modules_mask);
+	b.insert(b.end(), base_hash.begin(), base_hash.end());
+	uint64_t bits;
+	std::memcpy(&bits, &lora_alpha, 8);
+	WriteU64LE(b, bits);
+	WriteU32LE(b, use_rslora ? 1u : 0u);
+	WriteU32LE(b, reserved_override);
+	WriteU32LE(b, static_cast<uint32_t>(source_adapter_name.size()));
+	WriteBytes(b, source_adapter_name);
+	return b;
+}
+
+// A minimal, structurally valid BASE artifact (Config + SigmoidLut only -- the container-level
+// v2 required set, artifact.cpp's kRequiredSectionsV2; RopeTables/Weights/etc. are not required
+// at container level and this fixture needs nothing from them). Its RawIntegrityHash is what a
+// real base .sslm's own hash would be for the base-hash check (design Sec9 item (d)).
+inline superslm::SslmArtifact BuildMinimalBaseArtifact(uint32_t hidden_size, uint32_t num_hidden_layers,
+                                                         uint32_t num_attention_heads,
+                                                         uint32_t num_key_value_heads, uint32_t head_dim,
+                                                         uint32_t intermediate_size) {
+	Cfg1Spec spec{};
+	spec.hidden_size = hidden_size;
+	spec.num_hidden_layers = num_hidden_layers;
+	spec.num_attention_heads = num_attention_heads;
+	spec.num_key_value_heads = num_key_value_heads;
+	spec.head_dim = head_dim;
+	spec.intermediate_size = intermediate_size;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+	auto built = BuildArtifact({config, MakeSigmoidLutSection()});
+	superslm::SslmArtifact artifact;
+	superslm::SslmError err;
+	const auto st = superslm::SslmArtifact::OpenFromMemory(built.bytes.data(), built.bytes.size(),
+	                                                        artifact, &err);
+	CHECK_MSG(st == superslm::SslmStatus::Ok,
+	          "test fixture bug: minimal base artifact must itself load Ok, got %s (%s)",
+	          superslm::SslmStatusName(err.code), err.message.c_str());
+	return artifact;
+}
+
+// One (layer, proj) pair's fold-manifest contribution, written the SAME way the DFS1 in-domain
+// pin above does (BuildManifest + direct byte patching for exact triple values) -- lets a cell
+// wire an exact, known (identity, mult, exponent) rather than the pattern-fill default.
+inline BuiltManifest BuildFoldManifestOneEntry(const uint8_t magic[4], const std::string& name,
+                                                uint32_t row_count,
+                                                const std::vector<std::array<int32_t, 3>>& triples) {
+	// Shape is {row_count * 3}: each row is an (identity, mult, exponent) TRIPLE, three int32
+	// elements -- matching BuildManifest's own generic "shape -> elem_count" contract (the SAME
+	// convention TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain's own
+	// build_dfs1 lambda above uses: out_channels=1 -> shape={3}, not {1}).
+	BuiltManifest m = BuildManifest(magic, 4, {{name, {row_count * 3}}});
+	auto put = [&](size_t off, int32_t v) {
+		uint32_t u = static_cast<uint32_t>(v);
+		for (int i = 0; i < 4; ++i) m.bytes[off + i] = static_cast<uint8_t>((u >> (8 * i)) & 0xFF);
+	};
+	const size_t base = m.tensor_data_off[0];
+	for (size_t r = 0; r < triples.size(); ++r) {
+		put(base + r * 12 + 0, triples[r][0]);
+		put(base + r * 12 + 4, triples[r][1]);
+		put(base + r * 12 + 8, triples[r][2]);
+	}
+	return m;
+}
+
+// A WGT1 manifest carrying exactly the two int8 tensors one adapted (layer, proj) pair needs
+// ("<name>.lora_A" shape [rank, in_channels], "<name>.lora_B" shape [out_channels, rank]),
+// with EXACT caller-supplied int8 values (never the pattern-fill default) -- so a test can drive
+// the loaded adapter through RunLayerLoop and compare it, bit-for-bit, against the SAME
+// hand-wired construction t2029_b1_fixtures already proves correct.
+inline BuiltManifest BuildAdapterWeightsManifest(const std::string& name, uint32_t rank,
+                                                  uint32_t in_channels, uint32_t out_channels,
+                                                  const std::vector<int8_t>& a_values,
+                                                  const std::vector<int8_t>& b_values) {
+	BuiltManifest m = BuildManifest(reinterpret_cast<const uint8_t*>("WGT1"), 1,
+	                                {{name + ".lora_A", {rank, in_channels}},
+	                                 {name + ".lora_B", {out_channels, rank}}});
+	CHECK(a_values.size() == static_cast<size_t>(rank) * in_channels);
+	CHECK(b_values.size() == static_cast<size_t>(out_channels) * rank);
+	for (size_t i = 0; i < a_values.size(); ++i) {
+		m.bytes[m.tensor_data_off[0] + i] = static_cast<uint8_t>(a_values[i]);
+	}
+	for (size_t i = 0; i < b_values.size(); ++i) {
+		m.bytes[m.tensor_data_off[1] + i] = static_cast<uint8_t>(b_values[i]);
+	}
+	return m;
+}
+
+}  // namespace t2102_adapter_loader_fixtures
+
+// --- Ok load: a well-formed synthetic adapter is accepted and every entry it declares is
+// reachable through the resulting AdapterHandle. -------------------------------------------
+static void TestAdapterLoaderAcceptsWellFormedSyntheticAdapterAndPopulatesEveryDeclaredEntry() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using superslm::SslmDtype;
+	using superslm::SslmSectionType;
+
+	// hidden_size=2, num_hidden_layers=2, num_attention_heads=1, num_key_value_heads=1,
+	// head_dim=2, intermediate_size=2 -- the exact TwoLayerFixture geometry (test_main.cpp's own
+	// TwoLayerFixture constructor), so this cell's adapter can be applied to that fixture directly
+	// in the end-to-end cell below without a second geometry to keep in sync.
+	superslm::SslmArtifact base = BuildMinimalBaseArtifact(2, 2, 1, 1, 2, 2);
+	const auto base_hash = base.RawIntegrityHash();
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 2;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	std::vector<uint8_t> adp1 = BuildAdp1(/*rank=*/1, /*target_modules_mask=*/0x1 /*q_proj*/, base_hash,
+	                                       /*lora_alpha=*/8.0, /*use_rslora=*/false, "test-adapter-ok");
+	FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+
+	BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj",
+	                                                /*row_count=*/2, {{1, 0, 0}, {1, 0, 0}});
+	FixtureSection dfs1_section =
+	    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+	BuiltManifest ufs1 =
+	    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", /*row_count=*/1, {{1, 0, 0}});
+	FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+
+	BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", /*rank=*/1, /*in=*/2, /*out=*/2,
+	                                                  /*a=*/{1, 2}, /*b=*/{100, -100});
+	FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+
+	auto built = BuildArtifact(
+	    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+
+	// Write the adapter bytes to a temp file: LoadAdapterArtifact's own contract is a path (it
+	// reuses sslm_marshal.h's ReadFile, matching every other production driver in this tree).
+	const std::string path = "t2102_adapter_ok_fixture.sslm.tmp";
+	{
+		std::ofstream f(path, std::ios::binary | std::ios::trunc);
+		f.write(reinterpret_cast<const char*>(built.bytes.data()),
+		        static_cast<std::streamsize>(built.bytes.size()));
+	}
+
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = 2;
+	geo.hidden_size = 2;
+	geo.intermediate_size = 2;
+	geo.kv_hidden_size = 2;  // num_key_value_heads(1) * head_dim(2)
+	geo.base_artifact_hash = base_hash;
+
+	AdapterHandle handle;
+	std::string err;
+	const auto status = LoadAdapterArtifact(path, geo, handle, &err);
+	std::remove(path.c_str());
+	CHECK_MSG(status == AdapterLoadStatus::Ok, "well-formed synthetic adapter must load Ok: got %s (%s)",
+	          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	CHECK_MSG(handle.meta.rank == 1, "loaded ADP1 rank must be 1, got %u", handle.meta.rank);
+	CHECK_MSG(handle.meta.target_modules_mask == 0x1, "loaded ADP1 target_modules_mask must be 0x1, got %u",
+	          handle.meta.target_modules_mask);
+	CHECK_MSG(handle.meta.source_adapter_name == "test-adapter-ok",
+	          "loaded ADP1 source_adapter_name must round-trip, got \"%s\"",
+	          handle.meta.source_adapter_name.c_str());
+	CHECK_MSG(handle.layer_adapters.size() == 2, "layer_adapters must have one entry per base layer (2), got %zu",
+	          handle.layer_adapters.size());
+	CHECK_MSG(handle.layer_adapters[0].q.a_weight != nullptr && handle.layer_adapters[0].q.b_weight != nullptr,
+	          "layer0.q_proj must be wired (a_weight/b_weight non-null)");
+	CHECK_MSG(handle.layer_adapters[0].q.a_weight[0] == 1 && handle.layer_adapters[0].q.a_weight[1] == 2,
+	          "layer0.q_proj's a_weight must be the exact bytes this fixture wrote ([1,2]), got [%d,%d]",
+	          handle.layer_adapters[0].q.a_weight[0], handle.layer_adapters[0].q.a_weight[1]);
+	CHECK_MSG(handle.layer_adapters[0].q.b_weight[0] == 100 && handle.layer_adapters[0].q.b_weight[1] == -100,
+	          "layer0.q_proj's b_weight must be the exact bytes this fixture wrote ([100,-100]), got [%d,%d]",
+	          handle.layer_adapters[0].q.b_weight[0], handle.layer_adapters[0].q.b_weight[1]);
+	CHECK_MSG(handle.layer_adapters[0].v.a_weight == nullptr,
+	          "layer0.v_proj was never targeted by this adapter -- must stay unwired (a_weight == nullptr), "
+	          "the documented B1c 'adapter bound, this projection unadapted' case");
+	CHECK_MSG(handle.layer_adapters[1].q.a_weight == nullptr,
+	          "layer1 was never named by this adapter's DeltaFoldScales -- must stay entirely unwired");
+}
+
+// --- Rejections: every one of the loader's own named failure modes fires on the ONE hostile
+// mutation it names, structurally isolated (BuildArtifact/BuildAdp1 produce an otherwise-valid
+// artifact; each cell below mutates exactly one field before loading). -----------------------
+static void TestAdapterLoaderRejectionCells() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using superslm::SslmDtype;
+	using superslm::SslmSectionType;
+
+	superslm::SslmArtifact base = BuildMinimalBaseArtifact(2, 1, 1, 1, 2, 2);
+	const auto base_hash = base.RawIntegrityHash();
+	std::array<uint8_t, superslm::kIntegrityHashBytes> wrong_hash = base_hash;
+	wrong_hash[0] ^= 0xFF;  // one flipped bit -- a genuinely different base
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 1;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = 1;
+	geo.hidden_size = 2;
+	geo.intermediate_size = 2;
+	geo.kv_hidden_size = 2;
+	geo.base_artifact_hash = base_hash;
+
+	auto write_and_load = [&](const std::vector<uint8_t>& bytes, AdapterHandle& handle, std::string& err) {
+		const std::string path = "t2102_adapter_reject_fixture.sslm.tmp";
+		{
+			std::ofstream f(path, std::ios::binary | std::ios::trunc);
+			f.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		}
+		const auto status = LoadAdapterArtifact(path, geo, handle, &err);
+		std::remove(path.c_str());
+		return status;
+	};
+
+	auto valid_pieces = [&](FixtureSection prov) {
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj",
+		                                                /*row_count=*/2, {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 = BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj",
+		                                                /*row_count=*/1, {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", 1, 2, 2, {1, 2}, {100, -100});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		return BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+	};
+
+	// (1) Base-hash mismatch: ADP1 declares `wrong_hash`, actually mapped base's hash is `base_hash`.
+	{
+		std::vector<uint8_t> adp1 =
+		    BuildAdp1(1, 0x1, wrong_hash, 8.0, false, "wrong-base");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::BaseHashMismatch,
+		          "ADP1 declaring a base hash that does not match the actually-mapped base must be "
+		          "REJECTED with BaseHashMismatch: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (2) No Provenance section at all.
+	{
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj", 2,
+		                                                {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", 1, {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", 1, 2, 2, {1, 2}, {100, -100});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built =
+		    BuildArtifact({config, MakeSigmoidLutSection(), wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::MissingProvenanceSection,
+		          "an adapter with no Provenance section must be REJECTED with "
+		          "MissingProvenanceSection: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (3) ADP1 magic wrong.
+	{
+		static const uint8_t kBadMagic[4] = {'X', 'X', 'X', '1'};
+		std::vector<uint8_t> adp1 =
+		    BuildAdp1(1, 0x1, base_hash, 8.0, false, "bad-magic", 0, 1, kBadMagic);
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::BadAdp1Magic,
+		          "a Provenance section not starting with \"ADP1\" must be REJECTED with "
+		          "BadAdp1Magic: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (4) ADP1 version wrong.
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, 0x1, base_hash, 8.0, false, "bad-version", 0, 2);
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::BadAdp1Version,
+		          "an ADP1 section carrying version=2 (unsupported) must be REJECTED with "
+		          "BadAdp1Version: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (5) ADP1 reserved field nonzero.
+	{
+		std::vector<uint8_t> adp1 =
+		    BuildAdp1(1, 0x1, base_hash, 8.0, false, "bad-reserved", /*reserved_override=*/7);
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::BadAdp1Reserved,
+		          "an ADP1 section carrying a nonzero reserved field must be REJECTED with "
+		          "BadAdp1Reserved: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (6) Projection not claimed by target_modules_mask: DeltaFoldScales names "layer0.q_proj" but
+	// ADP1's own mask claims only v_proj (bit 6).
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, /*target_modules_mask=*/0x40 /*v_proj only*/, base_hash,
+		                                       8.0, false, "wrong-target-modules");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::ProjectionInvalid,
+		          "a DeltaFoldScales entry for q_proj when ADP1's own target_modules_mask claims only "
+		          "v_proj must be REJECTED with ProjectionInvalid: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (7) Dimension mismatch: DeltaFoldScales row_count=3 for q_proj, whose out_channels is 2
+	// (hidden_size) per this cell's own BaseModelGeometry.
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, 0x1, base_hash, 8.0, false, "bad-dimension");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj",
+		                                                /*row_count=*/3, {{1, 0, 0}, {1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", 1, {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", 1, 2, 3, {1, 2}, {1, 2, 3});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::DeltaDimensionMismatch,
+		          "a DeltaFoldScales row_count (3) that does not match q_proj's own out_channels (2) "
+		          "must be REJECTED with DeltaDimensionMismatch: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (8) Unparsable entry name: DeltaFoldScales names an entry that is not "layer<N>.<proj>".
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, 0x1, base_hash, 8.0, false, "bad-name");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 =
+		    BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "not_a_layer_name", 2,
+		                              {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 = BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "not_a_layer_name", 1,
+		                                                {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		BuiltManifest wgt1 =
+		    BuildAdapterWeightsManifest("not_a_layer_name", 1, 2, 2, {1, 2}, {100, -100});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::UnparsableEntryName,
+		          "a DeltaFoldScales entry name not shaped \"layer<N>.<proj>\" must be REJECTED with "
+		          "UnparsableEntryName: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (9) Layer index out of range: DeltaFoldScales names "layer5.q_proj" but the base geometry
+	// this cell passes declares only 1 layer.
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(1, 0x1, base_hash, 8.0, false, "layer-out-of-range");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer5.q_proj", 2,
+		                                                {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer5.q_proj", 1, {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer5.q_proj", 1, 2, 2, {1, 2}, {100, -100});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::LayerIndexOutOfRange,
+		          "a DeltaFoldScales entry naming a layer index >= the base's own num_hidden_layers "
+		          "must be REJECTED with LayerIndexOutOfRange: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+}
+
+// --- End-to-end: a LOADER-populated adapter drives RunLayerLoop to the BIT-IDENTICAL result of
+// the SAME construction t2029_b1_fixtures' own B1c cell already proves correct (hand-wired), and
+// both diverge from the base-only (null-adapter) run -- proving the loader's marshaled pointers
+// are not merely non-null, but numerically the same real forward-path input a hand-built fixture
+// already verified. -------------------------------------------------------------------------
+static void TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmDtype;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmSectionType;
+
+	superslm::SslmArtifact base = BuildMinimalBaseArtifact(2, 2, 1, 1, 2, 2);
+	const auto base_hash = base.RawIntegrityHash();
+
+	Cfg1Spec spec{};
+	spec.hidden_size = 2;
+	spec.num_hidden_layers = 2;
+	spec.num_attention_heads = 1;
+	spec.num_key_value_heads = 1;
+	spec.head_dim = 2;
+	spec.intermediate_size = 2;
+	spec.context_cap = 1;
+	spec.kv_precision = 0;
+	spec.kv_block_size = 1;
+	FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+
+	// v_proj at layer0 ONLY -- the same single-projection, single-layer shape t2029_b1_fixtures'
+	// own B1c cell adapts, with the SAME A={1,2}/B={100,-100} weights and the SAME pass-through
+	// (identity=1, mult=0, exponent=0) fold triples `WireAdaptedProjection` wires by hand. v_proj,
+	// not q_proj: at this fixture's own context_length==1, softmax over a single key is
+	// identically 1.0 regardless of the query's own value, so a q_proj-only delta is INVISIBLE in
+	// the returned hidden_codes (attention output degenerates to exactly V[0], independent of Q) --
+	// the same reason t2029_b1_fixtures' own B1c cell targets v_proj rather than q_proj to prove a
+	// real, measurable effect (its own header comment: "REAL, nonzero delta on v_proj ONLY").
+	// v_proj's out_channels is num_key_value_heads*head_dim == 2, the SAME value as q_proj's own
+	// hidden_size==2 at this geometry, so kAdapterBReal's shape is unchanged.
+	std::vector<uint8_t> adp1 = BuildAdp1(1, /*target_modules_mask=*/0x40 /*v_proj, bit 6*/, base_hash,
+	                                       8.0, false, "e2e-adapter");
+	FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+	BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.v_proj", 2,
+	                                                {{1, 0, 0}, {1, 0, 0}});
+	FixtureSection dfs1_section = MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+	BuiltManifest ufs1 = BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.v_proj", 1, {{1, 0, 0}});
+	FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+	BuiltManifest wgt1 =
+	    BuildAdapterWeightsManifest("layer0.v_proj", 1, 2, 2, {kAdapterA[0], kAdapterA[1]},
+	                                {kAdapterBReal[0], kAdapterBReal[1]});
+	FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+	auto built =
+	    BuildArtifact({config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+
+	const std::string path = "t2102_adapter_e2e_fixture.sslm.tmp";
+	{
+		std::ofstream f(path, std::ios::binary | std::ios::trunc);
+		f.write(reinterpret_cast<const char*>(built.bytes.data()),
+		        static_cast<std::streamsize>(built.bytes.size()));
+	}
+
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = 2;
+	geo.hidden_size = 2;
+	geo.intermediate_size = 2;
+	geo.kv_hidden_size = 2;
+	geo.base_artifact_hash = base_hash;
+
+	AdapterHandle handle_a, handle_b;
+	std::string err;
+	const auto status_a = LoadAdapterArtifact(path, geo, handle_a, &err);
+	CHECK_MSG(status_a == AdapterLoadStatus::Ok, "e2e fixture's own adapter must load Ok: got %s (%s)",
+	          superslm_adapter::AdapterLoadStatusName(status_a), err.c_str());
+	// Load a SECOND, independent handle from the SAME file -- this is the "swap" proof: applying
+	// handle_b after handle_a must leave layers[] pointing ONLY at handle_b's own storage.
+	const auto status_b = LoadAdapterArtifact(path, geo, handle_b, &err);
+	CHECK(status_b == AdapterLoadStatus::Ok);
+	std::remove(path.c_str());
+
+	// --- (i) base-only (null adapter) -----------------------------------------------------
+	TwoLayerFixture base_fixture;
+	uint8_t base_ws[64] = {};
+	const RunResult base_only = RunOneToken(base_fixture, /*layer0_adapter=*/nullptr, base_ws, sizeof(base_ws));
+	CHECK_MSG(base_only.status == SslmForwardStatus::Ok, "base-only run must succeed: got %s",
+	          superslm::SslmForwardStatusName(base_only.status));
+
+	// --- (ii) hand-wired adapter (t2029_b1_fixtures' own construction, B1c's exact shape) --
+	TwoLayerFixture hand_fixture;
+	superslm::LayerAdapter hand_adapter;
+	hand_adapter.rank = 1;
+	WireAdaptedProjection(hand_adapter.v, kAdapterBReal);
+	uint8_t hand_ws[64] = {};
+	const RunResult hand_wired = RunOneToken(hand_fixture, &hand_adapter, hand_ws, sizeof(hand_ws));
+	CHECK_MSG(hand_wired.status == SslmForwardStatus::Ok, "hand-wired-adapter run must succeed: got %s",
+	          superslm::SslmForwardStatusName(hand_wired.status));
+
+	// --- (iii) LOADER-populated adapter, applied via ApplyAdapterToLayers -- the SAME production
+	// entry point sslm_generate.cpp now calls, never a direct field assignment. ---------------
+	TwoLayerFixture loaded_fixture;
+	ApplyAdapterToLayers(&handle_a, loaded_fixture.layers, /*num_hidden_layers=*/2);
+	loaded_fixture.layers[1].adapter = nullptr;  // layer 1 stays base-only, matching every scenario above
+	SequenceLayerState seq;
+	int8_t codes[2] = {5, -5};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	uint8_t loaded_ws[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	const auto loaded_status =
+	    superslm::RunLayerLoop(seq, loaded_fixture.layers, 2, 2, 2, 2, 1, 2, TwoLayerFixture::kContextCap,
+	                            loaded_fixture.view.rope_tables, loaded_ws, sizeof(loaded_ws));
+	CHECK_MSG(loaded_status == SslmForwardStatus::Ok, "loader-populated-adapter run must succeed: got %s",
+	          superslm::SslmForwardStatusName(loaded_status));
+
+	CHECK_MSG(seq.hidden_codes[0] == hand_wired.hidden_codes[0] && seq.hidden_codes[1] == hand_wired.hidden_codes[1],
+	          "the LOADER-populated adapter must drive RunLayerLoop to the BIT-IDENTICAL result of the "
+	          "hand-wired t2029_b1_fixtures construction: loader=[%d,%d] hand-wired=[%d,%d]",
+	          seq.hidden_codes[0], seq.hidden_codes[1], hand_wired.hidden_codes[0], hand_wired.hidden_codes[1]);
+	CHECK(seq.hidden_scale.m == hand_wired.hidden_scale.m && seq.hidden_scale.e == hand_wired.hidden_scale.e);
+	CHECK_MSG(seq.hidden_codes[0] != base_only.hidden_codes[0] || seq.hidden_codes[1] != base_only.hidden_codes[1],
+	          "the switch must do real work: the adapted run must diverge from the base-only run, got "
+	          "identical [%d,%d] on both", seq.hidden_codes[0], seq.hidden_codes[1]);
+
+	// --- (iv) unload: ApplyAdapterToLayers(nullptr, ...) must reproduce the base-only golden. --
+	TwoLayerFixture unload_fixture;
+	ApplyAdapterToLayers(&handle_a, unload_fixture.layers, 2);
+	unload_fixture.layers[1].adapter = nullptr;
+	ApplyAdapterToLayers(nullptr, unload_fixture.layers, 2);  // unload -- every layer back to nullptr
+	CHECK_MSG(unload_fixture.layers[0].adapter == nullptr && unload_fixture.layers[1].adapter == nullptr,
+	          "ApplyAdapterToLayers(nullptr, ...) must clear EVERY layer's adapter pointer");
+	SequenceLayerState seq_unload;
+	int8_t codes_unload[2] = {5, -5};
+	seq_unload.hidden_codes = codes_unload;
+	seq_unload.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_unload.layer_index = 0;
+	uint8_t unload_ws[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	const auto unload_status = superslm::RunLayerLoop(seq_unload, unload_fixture.layers, 2, 2, 2, 2, 1, 2,
+	                                                    TwoLayerFixture::kContextCap,
+	                                                    unload_fixture.view.rope_tables, unload_ws,
+	                                                    sizeof(unload_ws));
+	CHECK(unload_status == SslmForwardStatus::Ok);
+	CHECK_MSG(seq_unload.hidden_codes[0] == base_only.hidden_codes[0] &&
+	              seq_unload.hidden_codes[1] == base_only.hidden_codes[1],
+	          "unloading a bound adapter (Apply(nullptr,...)) must reproduce the base-only golden "
+	          "EXACTLY: got [%d,%d] vs base-only [%d,%d]", seq_unload.hidden_codes[0],
+	          seq_unload.hidden_codes[1], base_only.hidden_codes[0], base_only.hidden_codes[1]);
+
+	// --- (v) swap: applying handle_b after handle_a leaves every LayerWeights::adapter pointing
+	// at handle_b's OWN storage, not handle_a's -- fully replaced, not merged/leaked. ---------
+	TwoLayerFixture swap_fixture;
+	ApplyAdapterToLayers(&handle_a, swap_fixture.layers, 2);
+	ApplyAdapterToLayers(&handle_b, swap_fixture.layers, 2);
+	CHECK_MSG(swap_fixture.layers[0].adapter == &handle_b.layer_adapters[0],
+	          "after swapping to handle_b, layer 0's adapter pointer must point at handle_b's own "
+	          "storage, never handle_a's (stale-pointer leak)");
+	CHECK_MSG(swap_fixture.layers[0].adapter != &handle_a.layer_adapters[0],
+	          "after swapping to handle_b, layer 0's adapter pointer must NOT still be handle_a's");
+	swap_fixture.layers[1].adapter = nullptr;
+	SequenceLayerState seq_swap;
+	int8_t codes_swap[2] = {5, -5};
+	seq_swap.hidden_codes = codes_swap;
+	seq_swap.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq_swap.layer_index = 0;
+	uint8_t swap_ws[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	const auto swap_status =
+	    superslm::RunLayerLoop(seq_swap, swap_fixture.layers, 2, 2, 2, 2, 1, 2, TwoLayerFixture::kContextCap,
+	                            swap_fixture.view.rope_tables, swap_ws, sizeof(swap_ws));
+	CHECK(swap_status == SslmForwardStatus::Ok);
+	// handle_b was loaded from the identical file as handle_a, so the swapped-to run must
+	// reproduce the SAME result as (iii)'s handle_a run -- proving handle_b's own independently
+	// re-parsed storage is fully functional, not a shallow/aliased copy of handle_a's.
+	CHECK_MSG(seq_swap.hidden_codes[0] == seq.hidden_codes[0] && seq_swap.hidden_codes[1] == seq.hidden_codes[1],
+	          "swapping to an independently-loaded handle_b (same file) must reproduce handle_a's own "
+	          "result exactly: got [%d,%d] vs [%d,%d]", seq_swap.hidden_codes[0], seq_swap.hidden_codes[1],
+	          seq.hidden_codes[0], seq.hidden_codes[1]);
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -22311,6 +22945,11 @@ int main(int argc, char** argv) {
 
 	// T-2041 (Poirot c81e48c review, Significant 2 remedy pin).
 	TestLoadRejectsOutOfDomainDeltaFoldScalesSectionAcceptsInDomain();
+
+	// T-2102 (RESUME-2026-08-14-gpu-throughput.md §4, D-SLM3304): the adapter loader red suite.
+	TestAdapterLoaderAcceptsWellFormedSyntheticAdapterAndPopulatesEveryDeclaredEntry();
+	TestAdapterLoaderRejectionCells();
+	TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;
