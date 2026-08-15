@@ -1621,8 +1621,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
+	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");  // T-2113 (B4)
 	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
 	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");  // T-2113 (B4)
 	// T-2045 (C3): the four ratified attention sites, de-fused from T-2039's
 	// own single fused dispatch (Claude/Poirot/82cfca7-gpu-serial-port-build-
 	// review.md, C3 -- Sec5.4/Sec13 place cross-site fusion outside this
@@ -1643,8 +1645,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step of each of
 	// these five sites now runs in its OWN multi-group dispatch, immediately before the (now
 	// requant-only, for q_proj also bias) site of the same name -- see each `<site>_gemm_site.hlsl`'s
-	// own header comment for the correctness account. kv_proj stays fused and single-group
-	// (`kv_proj_site.hlsl`'s own header comment states why).
+	// own header comment for the correctness account. T-2113 (B4, design Sec3/Sec6.1, D-SLM3341):
+	// kv_proj's own GEMM step now gets the identical treatment (`kv_proj_gemm_pipe`, declared
+	// above alongside `kv_proj_pipe`) -- the fused-and-single-dispatch shape `kv_proj_site.hlsl`'s
+	// own header comment used to describe was correct for its OWN cooperative guard/landing pass,
+	// never for the GEMM step, which this section's own second-dispatch remedy splits out.
 	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
 	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
 	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
@@ -1652,6 +1657,29 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
+	// T-2113 (B4, design Sec10 B2/B4's own deferred root-binding hoist -- Claude/Brunel/
+	// t2113-1p0-core-build-2026-08-15.md Sec3): the twelve root SRV/UAV bindings set ONCE
+	// here, immediately after SetComputeRootSignature, instead of being re-issued inside
+	// EVERY `bind_and_dispatch` call below. Root arguments persist on a command list across
+	// Dispatch and SetPipelineState -- only SetComputeRootSignature resets them, and this
+	// loop sets one signature for every PSO in the whole per-layer chain (the existing
+	// comment above already states every PSO here shares it). The twelve buffer addresses
+	// are call-constant by construction: every one of them is a local resolved before the
+	// recording window opens and none is reassigned inside it. That removes
+	// 12 * 24 * layers_to_record API calls per call from `record_ms`, re-derived from
+	// Claude/Laplace/t2105-gpu-speed-ceiling-2026-08-14.md Sec2 change 2.
+	dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
+	dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1670,46 +1698,59 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
 	uint32_t dispatch_query_index = 0;
 	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): `num_groups` defaults to
-	// 1 (every pre-existing single-group site, unchanged behavior). The five `_gemm_site` pipelines
-	// above pass `ceil(out_channels/256)`, grid-sizing the dispatch to the output dimension exactly
-	// as their own `stride = ((out_channels + 255) / 256) * 256` computes it shader-side -- both
-	// sides derive the group count from the SAME `out_channels`, so they cannot drift apart.
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1) {
+	// 1 (every pre-existing single-group site, unchanged behavior). The six `_gemm_site` pipelines
+	// pass `ceil(out_channels/(256/lanes))`, grid-sizing the dispatch to the output dimension
+	// exactly as `ComputeGpuGemmSiteGroupPlan` (gpu_port.h) computes it host-side -- both sides
+	// derive the group count from the SAME `out_channels`/`lanes`, so they cannot drift apart.
+	// T-2113 (B4): `lanes` (default 1, every non-GEMM site's unchanged meaning) is the 11th root
+	// constant -- the ONE source of a GEMM dispatch's own lane split, read by
+	// `GemmCoalescedGpu`/`GemmCoalescedGpuAt` (site_common.hlsli). The twelve SRV/UAV root
+	// bindings that used to be re-issued on every call are hoisted to the single set immediately
+	// after SetComputeRootSignature, above (design Sec10 B2's own deferred root-binding hoist).
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
+	                              uint32_t lanes = 1) {
 		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
 		++dispatch_query_index;
-		uint32_t consts[10] = {layer_index, H, HD, NH, context_cap_u32, position_u32, NQH, width_u32, I, N};
-		dev.list->SetComputeRoot32BitConstants(0, 10, consts, 0);
-		dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(11, kv_uav->GetGPUVirtualAddress());
-		dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  lanes};
+		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
 	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
-	// five split GEMM dispatches' own grid size comes from -- computed once per site here so the
-	// standing guard below can check all five before any dispatch is recorded, and each plan's own
-	// `.groups` is what the `bind_and_dispatch` calls pass, with no intermediate hand-editable local
-	// caching a copy of the value.
-	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, I);
-	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, I);
+	// six split GEMM dispatches' own grid size comes from -- computed once per site here so the
+	// standing guard below can check all six before any dispatch is recorded, and each plan's own
+	// `.groups`/`.lanes` is what the `bind_and_dispatch` calls pass, with no intermediate
+	// hand-editable local caching a copy of the value. T-2113 (B4): `KV2` is `kv_proj_gemm`'s own
+	// doubled out_channels (K's and V's kv_hidden_size channels packed into one grid,
+	// `kv_proj_gemm_site.hlsl`'s own header comment) -- the ONLY site that reads it; every other
+	// site's own `ComputeGpuGemmSiteGroupPlan` call ignores the parameter.
+	const uint32_t KV2 = 2u * NH * HD;
+	const GpuGemmSiteGroupPlan q_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan o_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan kv_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan gate_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, I);
-	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, I);
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan up_proj_plan =
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
 	const GpuGemmSiteGroupPlan down_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, I);
+	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
+
+	// T-2113 (B4): flattened work-item counts for the two attention sites and RoPE, gridded the
+	// identical way the GEMM sites are -- `ceil(items / 256)` groups, computed from the SAME
+	// `g_num_attention_heads`/`g_width`/`g_head_dim` root constants the shaders themselves read
+	// (attention_score_site.hlsl/context_accumulate_site.hlsl/rope_guard_site.hlsl/
+	// rope_commit_site.hlsl), so host and shader cannot disagree about how many items exist.
+	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
+	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
+	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
 
 	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md; S4, confirmation pass @
 	// f7026db): the standing guard the multi-group change was owed. Fires on EVERY call, at
@@ -1725,26 +1766,30 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// opposite ("throws rather than returning a status code a caller could plausibly want to recover
 	// from"), which the confirmation pass correctly read as describing behavior the code did not
 	// have.
-	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &gate_proj_plan, &up_proj_plan,
-	                                          &down_proj_plan}) {
-		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->threads_per_group) <
+	//
+	// T-2113 (B4): the covered-quantity check is now `groups * channels_per_group` -- under the
+	// transposed partition, a group of `threads_per_group` (always 256 now) threads covers
+	// `256 / lanes` output CHANNELS, not 256 of them, so `channels_per_group` (not
+	// `threads_per_group`) is the quantity the grid size must cover.
+	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &kv_proj_plan, &gate_proj_plan,
+	                                          &up_proj_plan, &down_proj_plan}) {
+		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
 		    static_cast<uint64_t>(plan->out_channels)) {
 			throw GpuGemmGroupArithmeticError(
 			    "RunLayerLoopGpu: GEMM group plan does not cover its own out_channels -- "
-			    "groups * threads_per_group fell short of out_channels");
+			    "groups * channels_per_group fell short of out_channels");
 		}
 	}
 
-	// T-2045 (C3): the full 16-site + commit composition -- attention is four real dispatches
-	// (attention-score, softmax, context-accumulate, ctx_fold), not T-2039's own fused one.
-	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): 22 real dispatches per
-	// layer now, not 17 -- q_proj/o_proj/gate_proj/up_proj/down_proj each split into a multi-group
-	// GEMM dispatch plus their own (now leaner) requant dispatch; `PlanDispatchBudgetGpu`'s own
-	// `kDispatchesPerLayer = 17` (below in this file) is a SEPARATE, currently-unwired planning
-	// utility with no live caller feeding its output into this function's own `layer_budget` --
-	// left at its own prior value, named here as a known-stale residual rather than silently left
-	// for a future reader to trip over, since fixing it touches its own dedicated test population
-	// and this round's own scope is the measured throughput win, not that planner's contract.
+	// T-2045 (C3): attention is four real dispatches (attention-score, softmax,
+	// context-accumulate, ctx_fold), not T-2039's own fused one.
+	// T-2113 (B4, design Sec3/Sec6.1): 24 real dispatches per layer now, re-derived from
+	// T-2101's own 22 -- `kv_proj_gemm` is a NEW dispatch (kv_proj's own GEMM step, no longer
+	// fused into kv_proj_site.hlsl's single dispatch) and RoPE's own commit phase is a second,
+	// separate dispatch (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase
+	// inside `rope_guard_site.hlsl`. `PlanDispatchBudgetGpu`'s own `kDispatchesPerLayer` (below
+	// in this file) is re-derived to 24 in the SAME round (no longer the stale 17 T-2101 left
+	// unwired) -- see that function's own header comment.
 	// T-2045 (C2): resume from seq.layer_index, exactly as the loop in
 	// `RunLayerLoopImpl` (`forward_sites.cpp`) --
 	// `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)` --
@@ -1759,24 +1804,26 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
+		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(rope_pipe.pso.Get(), l);
-		bind_and_dispatch(attention_score_pipe.pso.Get(), l);
+		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
 		bind_and_dispatch(softmax_pipe.pso.Get(), l);
-		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l);
+		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
 		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
 		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups);
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
 		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
 		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
@@ -2030,14 +2077,15 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 }
 
 // T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
-// f7026db): the ONE source of every one of the five split GEMM dispatches' own grid size --
-// `RunLayerLoopGpu`'s own `bind_and_dispatch` calls for these five sites pass this function's own
-// `.groups` directly, with no intermediate per-call-site local variable that a hand edit could
-// diverge from it. `tests/test_main.cpp`'s own `TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions`
-// calls this SAME function at the real model's own dimensions, no device required -- confirmed by
-// execution this round: mutating this function's own body (forcing `plan.groups = 1u`
-// unconditionally) reddens that pinned cell directly, at 1536/8960, which the PRIOR round's
-// falsification (mutating a downstream local variable the test never read) could not do.
+// f7026db): the ONE source of every one of the (T-2113 B4: six, KvProj added) split GEMM
+// dispatches' own grid size -- `RunLayerLoopGpu`'s own `bind_and_dispatch` calls for these sites
+// pass this function's own `.groups`/`.lanes` directly, with no intermediate per-call-site local
+// variable that a hand edit could diverge from it. `tests/test_main.cpp`'s own
+// `TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions` calls this SAME function at the real
+// model's own dimensions, no device required -- confirmed by execution this round: mutating this
+// function's own body (forcing `plan.groups = 1u` unconditionally) reddens that pinned cell
+// directly, at 1536/8960, which the PRIOR round's falsification (mutating a downstream local
+// variable the test never read) could not do.
 //
 // T-2101 (N2, code review 6d9e04e-t2101-gpu-throughput-review.md, second confirmation pass): a
 // sixth `GpuGemmSplitSite` enumerator with no matching `case` used to leave `plan.threads_per_group`
@@ -2051,20 +2099,56 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // `threads_per_group != 0` regardless of how it got there -- so a future case that sets
 // `out_channels` but leaves `threads_per_group` at 0 by a copy-paste mistake is caught by the SAME
 // guard, not only the enumerator-completeness one.
+// T-2113 (B4, design Sec3/Sec6.1): re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2's own dispatch-geometry table (the measured-optimal construction the
+// section's own 58 tok/s headline was reproduced under). `threads_per_group` is now fixed
+// at 256 for every site (the transposed partition always launches a full group; `lanes`
+// decides how those 256 threads split across channels, not the group's own launch width),
+// and `lanes` is a FIXED, chosen production value per site -- not read from the environment
+// on the hot path, unlike T-2105's own experiment-only sweep knob. `kv_out_channels` is read
+// only by `KvProj` (its own dispatch covers 2*kv_hidden_size channels, K and V packed into
+// one grid, `kv_proj_gemm_site.hlsl`'s own header comment) and ignored by every other site.
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t kv_out_channels,
                                                   uint32_t intermediate_size) {
 	GpuGemmSiteGroupPlan plan;
 	switch (site) {
 		case GpuGemmSplitSite::QProj:
+			plan.out_channels = hidden_size;
+			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
+			break;
 		case GpuGemmSplitSite::OProj:
+			plan.out_channels = hidden_size;
+			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
+			break;
 		case GpuGemmSplitSite::DownProj:
 			plan.out_channels = hidden_size;
-			plan.threads_per_group = 64u;
+			plan.threads_per_group = 256u;
+			plan.lanes = 64u;  // in_channels=8960 favors more cooperating lanes/channel than the
+			                    // other five sites' in_channels=1536 (T-2105 Sec2's own table).
 			break;
 		case GpuGemmSplitSite::GateProj:
+			plan.out_channels = intermediate_size;
+			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
+			break;
 		case GpuGemmSplitSite::UpProj:
 			plan.out_channels = intermediate_size;
 			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
+			break;
+		case GpuGemmSplitSite::KvProj:
+			// T-2113 (B4, D-SLM3341): the dispatch covers BOTH halves -- K's own kv_hidden_size
+			// channels and V's own -- packed into one grid, so the grid is sized over
+			// 2*kv_hidden_size (`kv_out_channels`, already doubled by the caller) while the
+			// per-half `out_channels` the shader itself bounds-checks against stays
+			// kv_hidden_size (kv_proj_gemm_site.hlsl computes that from g_num_kv_heads*g_head_dim
+			// directly, not from this plan).
+			plan.out_channels = kv_out_channels;
+			plan.threads_per_group = 256u;
+			plan.lanes = 32u;
 			break;
 		default:
 			throw GpuGemmGroupArithmeticError(
@@ -2076,7 +2160,19 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 		    "ComputeGpuGemmSiteGroupPlan: threads_per_group == 0 after the switch -- would divide "
 		    "by zero computing the group count");
 	}
-	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.threads_per_group);
+	if (plan.lanes == 0u || plan.lanes > plan.threads_per_group ||
+	    (plan.threads_per_group % plan.lanes) != 0u) {
+		throw GpuGemmGroupArithmeticError(
+		    "ComputeGpuGemmSiteGroupPlan: lanes must be a positive divisor of threads_per_group -- "
+		    "the transposed partition requires an exact channels-per-group split");
+	}
+	// T-2113 (B4): a group of `threads_per_group` (256) threads now covers
+	// `threads_per_group / lanes` OUTPUT CHANNELS, not `threads_per_group` of them -- the
+	// remaining `lanes` threads per channel cooperate on that channel's own in_channels-wide
+	// reduction. The grid size is therefore the ceiling over channels-per-group, and the
+	// coverage guard in `RunLayerLoopGpu` checks that quantity.
+	plan.channels_per_group = plan.threads_per_group / plan.lanes;
+	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.channels_per_group);
 	return plan;
 }
 
@@ -2113,14 +2209,16 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // answer this question, only planned (gpu_port.h's own header note) -- so
 // this is a direct, executed realization of Sec5.8's own formula, matching
 // t2019_b7::ExpectedDispatchBudgetPlan (tests/test_main.cpp) exactly: floor
-// division by 17 (16 sites + 1 commit dispatch, Sec5.4/Sec5.6), capped at the
-// layers remaining in the current token, DispatchBudgetTooSmall iff the
-// capped result is zero.
+// division by 24 -- T-2113 (B4, design Sec3/Sec6.1) re-derived from the
+// 17 = 16 sites + 1 commit figure this constant carried before B4 ported
+// the per-layer dispatch chain onto its own production geometry -- capped
+// at the layers remaining in the current token, DispatchBudgetTooSmall iff
+// the capped result is zero.
 // ===========================================================================
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position, uint32_t* out_layers_to_issue) {
-	constexpr uint32_t kDispatchesPerLayer = 17;  // 16 production sites + 1 commit dispatch
+	constexpr uint32_t kDispatchesPerLayer = 24;  // T-2113 (B4): the real per-layer dispatch count
 	const uint32_t remaining = num_hidden_layers - current_layer_position;
 	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor division, never a ceiling
 	if (layers > remaining) layers = remaining;                // token-boundary cap (never spills a token)

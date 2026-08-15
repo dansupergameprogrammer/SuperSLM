@@ -37,6 +37,28 @@
 // N-per-thread striding (each thread owns a disjoint subset of heads and
 // runs that head's own head_dim/2-pair rotation loop to completion), driven
 // entirely by the real g_head_dim/g_num_attention_heads root constants.
+//
+// T-2113 (B4, design Sec3/Sec6.1, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2 change 6): two changes, both of the same class as the GEMM sites' own
+// multi-group split.
+//
+// (1) FLATTENED. Every phase below iterated `for (h = t; h < g_num_attention_heads; h +=
+//     256)` -- twelve of 256 threads doing all the work at the real 1.5B tier, in one group.
+//     The real independent work item is a (head, rotation pair): num_attention_heads *
+//     head_dim/2 of them, each rotating one disjoint (x,y) pair. Flattened over that and
+//     gridded.
+//
+// (2) The K COMMIT phase moved to its OWN dispatch (rope_commit_site.hlsl). The
+//     DeviceMemoryBarrierWithGroupSync that used to separate stage from commit is
+//     GROUP-scoped, so it orders only the 256 threads of one group -- going multi-group
+//     under it would be unsound, which is precisely why the split is a second dispatch
+//     rather than a wider one. The global UAV barrier `bind_and_dispatch` issues between the
+//     two dispatches is strictly stronger than the group barrier it replaces: it orders
+//     EVERY thread of the stage dispatch before EVERY thread of the commit dispatch, which
+//     is the read-before-write property D-SLM2993's own shape exists to establish. It is
+//     also what makes this site time-slice invariant -- the two dispatches may land in
+//     different command lists submitted in different slices with a fence between them and
+//     the bytes do not change, which was NOT true of a group barrier.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -66,9 +88,9 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-void main(uint3 gtid : SV_GroupThreadID)
+void main(uint3 dtid : SV_DispatchThreadID)
 {
-    uint t = gtid.x;
+    uint t = dtid.x;
     int hidden_size = (int)g_hidden_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
@@ -131,10 +153,12 @@ void main(uint3 gtid : SV_GroupThreadID)
     // output is never landed), so Q needs no staging: every head's own
     // q_codes/q_rot slots are disjoint, and no thread ever reads another
     // thread's q_rot.
-    for (uint h = t; h < g_num_attention_heads; h += 256u)
+    uint items = g_num_attention_heads * pairs;
+    if (t >= items) return;
     {
-        for (uint p = 0; p < pairs; ++p)
+        uint h = t / pairs;
         {
+            uint p = t % pairs;
             int x = (int)LayerScratch.Load<int>(q_codes_off + (h * (uint)g_head_dim + 2u * p) * 4u);
             int y = (int)LayerScratch.Load<int>(q_codes_off + (h * (uint)g_head_dim + 2u * p + 1u) * 4u);
             int cos_q30 = (int)RopeCosTable.Load<int64_t>((row_offset + p) * 8u);
@@ -148,50 +172,22 @@ void main(uint3 gtid : SV_GroupThreadID)
 
     // K, phase 1 (STAGE): every owned head reads its own kv_head's CURRENT
     // (pre-rotation) row into that HEAD's own ROPE_STAGE slice (N2). No
-    // thread writes to KvCache anywhere in this phase.
-    for (uint h1 = t; h1 < g_num_attention_heads; h1 += 256u)
+    // thread writes to KvCache anywhere in this phase. T-2113 (B4): the COMMIT
+    // phase that used to sit below a DeviceMemoryBarrierWithGroupSync here is its
+    // own dispatch now (rope_commit_site.hlsl) -- the read-before-write ordering
+    // comes from the global UAV barrier between the two dispatches instead of a
+    // group-scoped barrier, strictly stronger and multi-group safe.
     {
+        uint h1 = t / pairs;
         uint kv_head1 = h1 / max(group, 1u);
         uint row_off1 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head1, g_position);
         uint stage1 = rope_stage_base + h1 * (uint)g_head_dim * 4u;
-        for (uint p1 = 0; p1 < pairs; ++p1)
         {
+            uint p1 = t % pairs;
             int kx = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1);
             int ky = LoadSignedByteGpu(KvCache, kv_half_off + row_off1 + 2u * p1 + 1u);
             WorkScratch.Store<int>(stage1 + 2u * p1 * 4u, kx);
             WorkScratch.Store<int>(stage1 + (2u * p1 + 1u) * 4u, ky);
-        }
-    }
-
-    // Barrier: every thread's phase-1 KvCache reads (above) are guaranteed
-    // complete before any thread's phase-2 KvCache write (below) becomes
-    // visible -- this is the ordering property the design's own D-SLM2993
-    // shape exists to establish.
-    DeviceMemoryBarrierWithGroupSync();
-
-    // K, phase 2 (COMMIT): every owned head rotates from its OWN staged
-    // bytes (never re-reading KvCache) and writes back. Heads sharing a
-    // kv_head each redundantly recompute the identical rotation from the
-    // identical staged input and converge on the identical written bytes,
-    // matching CPU's own "redundant but sound" construction
-    // (forward_sites.cpp:1546-1585) -- but now with every read strictly
-    // ordered before every write, so no thread can ever observe or rotate an
-    // already-rotated row.
-    for (uint h2 = t; h2 < g_num_attention_heads; h2 += 256u)
-    {
-        uint kv_head2 = h2 / max(group, 1u);
-        uint row_off2 = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head2, g_position);
-        uint stage2 = rope_stage_base + h2 * (uint)g_head_dim * 4u;
-        for (uint p2 = 0; p2 < pairs; ++p2)
-        {
-            int kx = WorkScratch.Load<int>(stage2 + 2u * p2 * 4u);
-            int ky = WorkScratch.Load<int>(stage2 + (2u * p2 + 1u) * 4u);
-            int cos_q30b = (int)RopeCosTable.Load<int64_t>((row_offset + p2) * 8u);
-            int sin_q30b = (int)RopeSinTable.Load<int64_t>((row_offset + p2) * 8u);
-            int64_t rkx, rky;
-            RopeApplyPairGpu(kx, ky, cos_q30b, sin_q30b, rkx, rky);
-            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2, (int)ClampRopeCodeGpu(rkx));
-            StoreSignedByteGpu(KvCache, kv_half_off + row_off2 + 2u * p2 + 1u, (int)ClampRopeCodeGpu(rky));
         }
     }
 }

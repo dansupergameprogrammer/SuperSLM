@@ -70,16 +70,16 @@ int main() {
 	if (ctx_b) CHECK(sslm_gpu_context_destroy(ctx_b) == SSLM_OK, "context B failed to destroy");
 
 	// 5: the pre-1.0 substrate's own pure policy function is unperturbed by this
-	// TU's presence in the same binary (24-vs-17 re-derivation is B4's own job,
-	// not B1's -- this checks against the substrate's CURRENT, still-17 constant,
-	// as a non-regression pin, not a claim about the design's target geometry).
+	// TU's presence in the same binary. T-2113 (B4, design Sec3/Sec6.1): re-derived to 24,
+	// the real per-layer dispatch count B4's own geometry ships (updated from this tool's own
+	// B1-era pin at 17, which this comment named at the time as "B4's own job" to move).
 	uint32_t layers_out = 0;
 	superslm_gpu::SslmGpuStatus plan_st =
-	    superslm_gpu::PlanDispatchBudgetGpu(/*dispatch_budget=*/17, /*num_hidden_layers=*/28,
+	    superslm_gpu::PlanDispatchBudgetGpu(/*dispatch_budget=*/24, /*num_hidden_layers=*/28,
 	                                         /*current_layer_position=*/0, &layers_out);
-	CHECK(plan_st == superslm_gpu::SslmGpuStatus::Ok, "PlanDispatchBudgetGpu(17,...) did not return Ok");
-	CHECK(layers_out == 1, "PlanDispatchBudgetGpu(17,...) did not yield 1 complete layer "
-	                        "(substrate's pre-B4 dispatches-per-layer constant is still 17)");
+	CHECK(plan_st == superslm_gpu::SslmGpuStatus::Ok, "PlanDispatchBudgetGpu(24,...) did not return Ok");
+	CHECK(layers_out == 1, "PlanDispatchBudgetGpu(24,...) did not yield 1 complete layer "
+	                        "(B4's own re-derived dispatches-per-layer constant is 24)");
 
 	std::printf("T-2113 B1 context smoke: checks=%d failures=%d\n", g_checks, g_failures);
 	return g_failures == 0 ? 0 : 1;

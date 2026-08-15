@@ -350,16 +350,27 @@ GpuCallTiming LastCallTiming();
 uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group);
 
 // T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
-// f7026db): the five sites whose GEMM step runs as its own multi-group dispatch
-// (`down_proj_gemm_site.hlsl` and the four siblings named there). `q_proj`/`o_proj`/`down_proj`
-// output `hidden_size` at 64 threads/group; `gate_proj`/`up_proj` output `intermediate_size` at
-// 256 threads/group -- see each shader's own header comment for why the two widths differ.
-enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj };
+// f7026db): the sites whose GEMM step runs as its own multi-group dispatch
+// (`down_proj_gemm_site.hlsl` and the siblings named there).
+// T-2113 (B4, design Sec3/Sec6.1, D-SLM3341): `KvProj` added -- kv_proj's own GEMM step is now
+// its own multi-group dispatch (`kv_proj_gemm_site.hlsl`), re-derived from Claude/Laplace/
+// t2105-gpu-speed-ceiling-2026-08-14.md as NEW production work (this enumerator never existed
+// in the pre-1.0 substrate; `kv_proj_site.hlsl`'s own header comment named the second-dispatch
+// remedy this enumerator realizes).
+enum class GpuGemmSplitSite { QProj, OProj, GateProj, UpProj, DownProj, KvProj };
 
 struct GpuGemmSiteGroupPlan {
 	uint32_t out_channels = 0;
 	uint32_t threads_per_group = 0;
 	uint32_t groups = 0;
+	// T-2113 (B4): how the 256 threads of a group are split -- `lanes` threads cooperate on
+	// one output channel via the transposed GEMM partition (`GemmCoalescedGpu`,
+	// site_common.hlsli), so a group covers `256 / lanes` channels. lanes == 1 degenerates to
+	// the legacy one-thread-per-channel partition with no reduction. The SAME value is passed
+	// to the shader as the 11th root constant, so the group count and the shader's own
+	// channel indexing cannot drift apart.
+	uint32_t lanes = 1;
+	uint32_t channels_per_group = 256;
 };
 
 // T-2101 (S3-prime): the ONE source `RunLayerLoopGpu`'s own dispatch call for `site` reads its
@@ -371,23 +382,31 @@ struct GpuGemmSiteGroupPlan {
 // -- a mutation of this function's own body (the confirmation pass's own specified re-falsification
 // method) is therefore observable by the pinned suite, not only by a manual C5/throughput run
 // against real hardware.
+//
+// T-2113 (B4): `kv_out_channels` added -- `KvProj`'s own dispatch covers BOTH K's and V's
+// channels packed into one grid (`kv_proj_gemm_site.hlsl`'s own header comment), so its own
+// out_channels is 2*kv_hidden_size, passed in already doubled by the caller (the ONLY site
+// that reads this parameter; every other site ignores it).
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
+                                                  uint32_t kv_out_channels,
                                                   uint32_t intermediate_size);
 
 // T-2101 (per-site decomposition, follow-up to D-SLM3312; per-dispatch parallelism, D-SLM3313's
 // own follow-up): one GPU-measured millisecond figure per dispatch the most recent
 // `RunLayerLoopGpu` call issued, in dispatch order (empty if the call was rejected before
 // recording, or timed by fewer than one dispatch). Dispatch `d` within this call corresponds to
-// layer `d / 22` and that layer's own `d % 22`-th call in the fixed, unconditional per-layer order
-// `RunLayerLoopGpu` issues them: attn_norm, q_proj_gemm, q_proj, kv_proj, rope, attention_score,
-// softmax, context_accumulate, ctx_fold, o_proj_gemm, o_proj, attn_residual, mlp_norm,
-// gate_proj_gemm, gate_proj, up_proj_gemm, up_proj, mlp_act, down_proj_gemm, down_proj,
-// mlp_residual, commit (22 sites/layer -- corrected from the 16-site + commit / 17-site count
-// Sec5.4/Sec5.8 ratified before T-2101's own fix round split q/o/gate/up/down_proj's GEMM step
-// into its own multi-group dispatch immediately ahead of each; kv_proj stays fused and
-// single-dispatch, `kv_proj_site.hlsl`'s own header comment states why). Summing every `d` with the
-// same `d % 22` across however many layers a call processed gives that SITE's own total GPU time
-// for the call -- `tools/t2100_gpu_throughput.cpp`'s own per-site table is exactly this sum.
+// layer `d / 24` and that layer's own `d % 24`-th call in the fixed, unconditional per-layer order
+// `RunLayerLoopGpu` issues them: attn_norm, q_proj_gemm, q_proj, kv_proj_gemm, kv_proj,
+// rope_guard, rope_commit, attention_score, softmax, context_accumulate, ctx_fold, o_proj_gemm,
+// o_proj, attn_residual, mlp_norm, gate_proj_gemm, gate_proj, up_proj_gemm, up_proj, mlp_act,
+// down_proj_gemm, down_proj, mlp_residual, commit (24 sites/layer -- T-2113 (B4, design
+// Sec3/Sec6.1) re-derived from the 22-site count T-2101 shipped: `kv_proj_gemm` is a NEW
+// dispatch (kv_proj no longer fused-and-single-dispatch, `kv_proj_gemm_site.hlsl`'s own header
+// comment states why the split is now sound) and RoPE's own commit phase is a second, separate
+// dispatch (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase inside one).
+// Summing every `d` with the same `d % 24` across however many layers a call processed gives
+// that SITE's own total GPU time for the call -- `tools/t2100_gpu_throughput.cpp`'s own
+// per-site table is exactly this sum.
 std::vector<double> LastCallPerDispatchTimingsMs();
 
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
@@ -498,11 +517,14 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // layer quanta. This is the ARITHMETIC/policy half of `sslm_decode_step_gpu`'s own
 // contract -- how many layers a call at a given budget will record, and what status
 // it returns -- and is testable without a device (no dispatch is actually issued to
-// answer this question, only planned). `complete_layers = min(dispatch_budget / 17,
-// num_hidden_layers - current_layer_position)`, floor division, 17 = 16 sites + 1
-// commit dispatch (Sec5.4/Sec5.6). Returns SslmGpuStatus::DispatchBudgetTooSmall,
-// `*out_layers_to_issue = 0`, for any `dispatch_budget` in [0, 16] -- floor division by
-// 17 is uniformly zero there. Never records a partial layer. ---
+// answer this question, only planned). `complete_layers = min(dispatch_budget / 24,
+// num_hidden_layers - current_layer_position)`, floor division, 24 = the real per-layer
+// dispatch count this design's own geometry ships (Sec3/Sec6.1, T-2113 B4 -- re-derived
+// from the 17 = 16 sites + 1 commit figure this constant carried before B4 ported the
+// dispatch chain onto its own production geometry). Returns
+// SslmGpuStatus::DispatchBudgetTooSmall, `*out_layers_to_issue = 0`, for any
+// `dispatch_budget` in [0, 23] -- floor division by 24 is uniformly zero there. Never
+// records a partial layer. ---
 enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,

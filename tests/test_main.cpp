@@ -23294,10 +23294,13 @@ namespace t2019_b7 {
 using superslm::SslmForwardStatus;
 using superslm_gpu::SslmGpuStatus;
 
-constexpr uint32_t kDispatchesPerLayer = 17;  // 16 sites + 1 commit, Sec5.4/Sec5.6/Sec5.8
+// T-2113 (B4, design Sec3/Sec6.1): re-derived from 17 (16 sites + 1 commit) to 24, the real
+// per-layer dispatch count this design's own geometry ships -- see `superslm_gpu.cpp`'s own
+// `PlanDispatchBudgetGpu` header comment for the site list.
+constexpr uint32_t kDispatchesPerLayer = 24;
 
 // Sec5.8's own formula, computed locally: complete_layers = floor(dispatch_budget /
-// 17), capped at (num_hidden_layers - current_layer_position); status is
+// 24), capped at (num_hidden_layers - current_layer_position); status is
 // DispatchBudgetTooSmall iff the floor division yields zero layers AND the cap
 // itself is not already zero (a sequence already at the last layer with budget for
 // one more isn't "too small," it has nothing left to do -- Ok with 0 layers is a
@@ -23318,9 +23321,9 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 	using namespace t2019_b7;
 	constexpr uint32_t N = 28;  // 1.5B-Instruct tier's own layer count (Sec14 Fold F1)
 
-	// {0, ..., 16} individually -- uniform DispatchBudgetTooSmall, zero layers,
+	// {0, ..., 23} individually -- uniform DispatchBudgetTooSmall, zero layers,
 	// not merely the endpoints (Sec5.8's own explicit obligation).
-	for (uint32_t budget = 0; budget <= 16; ++budget) {
+	for (uint32_t budget = 0; budget <= 23; ++budget) {
 		uint32_t cpu_layers = 0;
 		const auto cpu_status = ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 		CHECK_MSG(cpu_status == SslmGpuStatus::DispatchBudgetTooSmall && cpu_layers == 0,
@@ -23337,25 +23340,25 @@ static void TestT2019_B7_DispatchBudget_EveryRemainderAndBoundary() {
 		          cpu_layers);
 	}
 
-	// 17: exactly one layer.
+	// 24: exactly one layer.
 	{
 		uint32_t cpu_layers = 0;
-		ExpectedDispatchBudgetPlan(17, N, 0, &cpu_layers);
-		CHECK_MSG(cpu_layers == 1, "dispatch_budget=17: reference formula gives exactly 1 layer");
+		ExpectedDispatchBudgetPlan(24, N, 0, &cpu_layers);
+		CHECK_MSG(cpu_layers == 1, "dispatch_budget=24: reference formula gives exactly 1 layer");
 		uint32_t gpu_layers = 999;
-		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(17, N, 0, &gpu_layers);  // LINK-RED
+		const auto gpu_status = superslm_gpu::PlanDispatchBudgetGpu(24, N, 0, &gpu_layers);  // LINK-RED
 		CHECK_MSG(gpu_status == SslmGpuStatus::Ok && gpu_layers == 1,
-		          "dispatch_budget=17: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
+		          "dispatch_budget=24: GPU plan gives Ok/1 layer, got layers=%u", gpu_layers);
 	}
 
-	// Non-dividing remainder 17k+r (0<r<17) at a small k and a k near N.
+	// Non-dividing remainder 24k+r (0<r<24) at a small k and a k near N.
 	for (uint32_t k : {2u, N - 2u}) {
-		for (uint32_t r : {1u, 8u, 16u}) {
-			const uint32_t budget = 17 * k + r;
+		for (uint32_t r : {1u, 8u, 23u}) {
+			const uint32_t budget = 24 * k + r;
 			uint32_t cpu_layers = 0;
 			ExpectedDispatchBudgetPlan(budget, N, 0, &cpu_layers);
 			CHECK_MSG(cpu_layers == k,
-			          "dispatch_budget=%u (17*%u+%u): reference formula gives exactly %u layers "
+			          "dispatch_budget=%u (24*%u+%u): reference formula gives exactly %u layers "
 			          "(remainder %u unused)",
 			          budget, k, r, k, r);
 			uint32_t gpu_layers = 999;
@@ -24338,13 +24341,15 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	          timing_ok.submit_wait_ms, timing_ok.gpu_busy_ms);
 
 	// T-2101 follow-up (per-site decomposition, D-SLM3312's own follow-up; per-dispatch parallelism,
-	// D-SLM3313's own follow-up): 8 layers * 22 sites/layer = 176 dispatches this call issued --
-	// q_proj/o_proj/gate_proj/up_proj/down_proj each split into a GEMM dispatch plus their own
-	// requant dispatch (17 + 5 = 22; kv_proj stays fused and single-dispatch). One GPU-measured
-	// figure per dispatch, every one non-negative, summing to (approximately) gpu_busy_ms above.
+	// D-SLM3313's own follow-up). T-2113 (B4, design Sec3/Sec6.1): 8 layers * 24 sites/layer = 192
+	// dispatches this call issued -- q/o/kv/gate/up/down_proj each split into a GEMM dispatch plus
+	// their own requant dispatch, and RoPE split into stage+commit (re-derived from the 22
+	// sites/layer T-2101 shipped: kv_proj no longer stays fused-and-single-dispatch, and RoPE's
+	// commit phase is its own dispatch). One GPU-measured figure per dispatch, every one
+	// non-negative, summing to (approximately) gpu_busy_ms above.
 	const auto per_dispatch_ok = superslm_gpu::LastCallPerDispatchTimingsMs();
-	CHECK_MSG(per_dispatch_ok.size() == 8 * 22,
-	          "T2101 per-dispatch timing (success call): %zu entries, want 8*22=176",
+	CHECK_MSG(per_dispatch_ok.size() == 8 * 24,
+	          "T2101/T2113 per-dispatch timing (success call): %zu entries, want 8*24=192",
 	          per_dispatch_ok.size());
 	double per_dispatch_sum = 0.0;
 	bool all_non_negative = true;
@@ -24353,10 +24358,10 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 		if (v < 0.0) all_non_negative = false;
 	}
 	CHECK_MSG(all_non_negative,
-	          "T2101 per-dispatch timing (success call): every one of the 176 entries must be "
+	          "T2101/T2113 per-dispatch timing (success call): every one of the 192 entries must be "
 	          "non-negative");
 	CHECK_MSG(std::abs(per_dispatch_sum - timing_ok.gpu_busy_ms) < 0.01,
-	          "T2101 per-dispatch timing (success call): sum of 176 entries (%.6f) must match "
+	          "T2101/T2113 per-dispatch timing (success call): sum of 192 entries (%.6f) must match "
 	          "gpu_busy_ms (%.6f) -- both are the same boundary deltas, summed vs first-to-last",
 	          per_dispatch_sum, timing_ok.gpu_busy_ms);
 
@@ -24386,7 +24391,7 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	CHECK_MSG(per_dispatch_rejected.empty(),
 	          "T2101 per-dispatch timing (guard-rejected call): %zu entries, want 0 -- a call "
 	          "rejected before recording starts must report no per-dispatch timings, not the "
-	          "PREVIOUS successful call's own stale 136",
+	          "PREVIOUS successful call's own stale 192",
 	          per_dispatch_rejected.size());
 }
 
@@ -24443,7 +24448,7 @@ static void TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale() {
 }
 
 // T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
-// f7026db): `ComputeGpuGemmSiteGroupPlan` is now the ONE source `RunLayerLoopGpu`'s own five split
+// f7026db): `ComputeGpuGemmSiteGroupPlan` is now the ONE source `RunLayerLoopGpu`'s own split
 // GEMM dispatches read their grid size from -- no intermediate per-call-site local variable a hand
 // edit could diverge from it (`superslm_gpu.cpp`'s own dispatch loop passes `<site>_plan.groups`
 // directly). This cell calls that SAME function, no device, no dispatch, at the real model's own
@@ -24451,43 +24456,61 @@ static void TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale() {
 // body, e.g. force `plan.groups = 1u` unconditionally) reddens this cell directly, closing the gap
 // the prior round's cell (testing only the lower-level `ComputeGpuGemmGroupCount` primitive, which
 // production's own call sites no longer call without going through this function first) left open.
+//
+// T-2113 (B4, design Sec3/Sec6.1): re-derived for the transposed-partition geometry -- every site
+// now launches 256-thread groups (`threads_per_group` is uniformly 256, not the pre-B4 64/256
+// split), `lanes` (the fixed, production per-site value: 32 for q/o/kv/gate/up_proj, 64 for
+// down_proj, Claude/Laplace/t2105-gpu-speed-ceiling-2026-08-14.md Sec2's own dispatch-geometry
+// table) is a NEW field the plan carries, and the grid size covers `channels_per_group =
+// threads_per_group/lanes` output channels per group rather than one channel per thread.
+// `KvProj` is a NEW site (D-SLM3341, never in the pre-1.0 substrate) whose own out_channels is
+// 2*kv_hidden_size (K and V packed into one grid) -- the `kv_out_channels` parameter this cell's
+// own real-dims case computes from the real model's own num_kv_heads=2, head_dim=128.
 static void TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions() {
 	struct Case {
 		superslm_gpu::GpuGemmSplitSite site;
 		const char* name;
 		uint32_t hidden_size;
+		uint32_t kv_out_channels;
 		uint32_t intermediate_size;
 		uint32_t want_out_channels;
 		uint32_t want_threads_per_group;
+		uint32_t want_lanes;
 		uint32_t want_groups;
 	};
-	// Real model (qwen2.5-1.5b-instruct, D-SLM3300's own confirmed dims) and fixture scale (every
-	// B11 fixture: hidden_size=intermediate_size=2), both at the SAME five sites.
+	// Real model (qwen2.5-1.5b-instruct, D-SLM3300's own confirmed dims: hidden_size=1536,
+	// intermediate_size=8960, num_kv_heads=2, head_dim=128 -> kv_hidden_size=256,
+	// kv_out_channels=512) and fixture scale (every B11 fixture: hidden_size=intermediate_size=2,
+	// kv_out_channels=2), across every site including the new KvProj.
 	const Case cases[] = {
-	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj", 1536, 8960, 1536, 64, 24},
-	    {superslm_gpu::GpuGemmSplitSite::OProj, "OProj", 1536, 8960, 1536, 64, 24},
-	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj", 1536, 8960, 8960, 256, 35},
-	    {superslm_gpu::GpuGemmSplitSite::UpProj, "UpProj", 1536, 8960, 8960, 256, 35},
-	    {superslm_gpu::GpuGemmSplitSite::DownProj, "DownProj", 1536, 8960, 1536, 64, 24},
-	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj (fixture scale)", 2, 2, 2, 64, 1},
-	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj (fixture scale)", 2, 2, 2, 256, 1},
+	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj", 1536, 512, 8960, 1536, 256, 32, 192},
+	    {superslm_gpu::GpuGemmSplitSite::OProj, "OProj", 1536, 512, 8960, 1536, 256, 32, 192},
+	    {superslm_gpu::GpuGemmSplitSite::KvProj, "KvProj", 1536, 512, 8960, 512, 256, 32, 64},
+	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj", 1536, 512, 8960, 8960, 256, 32, 1120},
+	    {superslm_gpu::GpuGemmSplitSite::UpProj, "UpProj", 1536, 512, 8960, 8960, 256, 32, 1120},
+	    {superslm_gpu::GpuGemmSplitSite::DownProj, "DownProj", 1536, 512, 8960, 1536, 256, 64, 384},
+	    {superslm_gpu::GpuGemmSplitSite::QProj, "QProj (fixture scale)", 2, 2, 2, 2, 256, 32, 1},
+	    {superslm_gpu::GpuGemmSplitSite::KvProj, "KvProj (fixture scale)", 2, 2, 2, 2, 256, 32, 1},
+	    {superslm_gpu::GpuGemmSplitSite::GateProj, "GateProj (fixture scale)", 2, 2, 2, 2, 256, 32, 1},
 	};
 	for (const Case& c : cases) {
-		const auto plan =
-		    superslm_gpu::ComputeGpuGemmSiteGroupPlan(c.site, c.hidden_size, c.intermediate_size);
+		const auto plan = superslm_gpu::ComputeGpuGemmSiteGroupPlan(c.site, c.hidden_size,
+		                                                             c.kv_out_channels, c.intermediate_size);
 		CHECK_MSG(plan.out_channels == c.want_out_channels && plan.threads_per_group == c.want_threads_per_group &&
-		              plan.groups == c.want_groups,
-		          "T2101 ComputeGpuGemmSiteGroupPlan(%s, hidden_size=%u, intermediate_size=%u): got "
-		          "out_channels=%u threads_per_group=%u groups=%u, want out_channels=%u "
-		          "threads_per_group=%u groups=%u",
-		          c.name, c.hidden_size, c.intermediate_size, plan.out_channels, plan.threads_per_group,
-		          plan.groups, c.want_out_channels, c.want_threads_per_group, c.want_groups);
+		              plan.lanes == c.want_lanes && plan.groups == c.want_groups,
+		          "T2101/T2113 ComputeGpuGemmSiteGroupPlan(%s, hidden_size=%u, kv_out_channels=%u, "
+		          "intermediate_size=%u): got out_channels=%u threads_per_group=%u lanes=%u "
+		          "groups=%u, want out_channels=%u threads_per_group=%u lanes=%u groups=%u",
+		          c.name, c.hidden_size, c.kv_out_channels, c.intermediate_size, plan.out_channels,
+		          plan.threads_per_group, plan.lanes, plan.groups, c.want_out_channels,
+		          c.want_threads_per_group, c.want_lanes, c.want_groups);
 		const uint64_t covered =
-		    static_cast<uint64_t>(plan.groups) * static_cast<uint64_t>(plan.threads_per_group);
+		    static_cast<uint64_t>(plan.groups) * static_cast<uint64_t>(plan.channels_per_group);
 		CHECK_MSG(covered >= plan.out_channels,
-		          "T2101 ComputeGpuGemmSiteGroupPlan(%s): %u groups * %u threads = %llu must cover "
-		          "out_channels (%u) -- the exact property the review's own 1u falsification violates",
-		          c.name, plan.groups, plan.threads_per_group, static_cast<unsigned long long>(covered),
+		          "T2101/T2113 ComputeGpuGemmSiteGroupPlan(%s): %u groups * %u channels_per_group = "
+		          "%llu must cover out_channels (%u) -- the exact property the review's own 1u "
+		          "falsification violates",
+		          c.name, plan.groups, plan.channels_per_group, static_cast<unsigned long long>(covered),
 		          plan.out_channels);
 	}
 }
@@ -24516,18 +24539,18 @@ static void TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFai
 // sixth `GpuGemmSplitSite` enumerator with no matching `case` used to leave `plan.threads_per_group`
 // default-initialized at 0 and divide by zero computing the group count -- a hardware fault with no
 // compiler warning, inside the ONE function this whole arc's own commission exists to make the
-// single source of truth. Pinned by calling with an out-of-range enum value cast past the five real
-// enumerators: the `default:` clause must fire and throw (caught here as `std::logic_error`, the
-// exception's own real base class -- `GpuGemmGroupArithmeticError` itself is private to
-// superslm_gpu.cpp, not exported via gpu_port.h, so this cell verifies the THROWING behavior
-// directly rather than the concrete type, which is exactly the SslmForwardStatus contract the guard
-// exists to keep loud).
+// single source of truth. Pinned by calling with an out-of-range enum value cast past every real
+// enumerator (T-2113 (B4): now six, KvProj added): the `default:` clause must fire and throw
+// (caught here as `std::logic_error`, the exception's own real base class -- `GpuGemmGroupArithmeticError`
+// itself is private to superslm_gpu.cpp, not exported via gpu_port.h, so this cell verifies the
+// THROWING behavior directly rather than the concrete type, which is exactly the SslmForwardStatus
+// contract the guard exists to keep loud).
 static void TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly() {
 	bool threw = false;
 	std::string message;
 	try {
 		const auto out_of_range_site = static_cast<superslm_gpu::GpuGemmSplitSite>(999);
-		const auto plan = superslm_gpu::ComputeGpuGemmSiteGroupPlan(out_of_range_site, 1536, 8960);
+		const auto plan = superslm_gpu::ComputeGpuGemmSiteGroupPlan(out_of_range_site, 1536, 512, 8960);
 		(void)plan;
 	} catch (const std::logic_error& e) {
 		threw = true;

@@ -18,11 +18,22 @@
 // WorkScratch slice, since the NEXT dispatch (softmax_site.hlsl) must read
 // exactly what this one wrote.
 //
-// numthreads(256,1,1): attention heads partitioned across the group via
-// N-per-thread striding, matching every other site's own per-output-channel
-// parallelization (Sec5.4/Sec5.5) -- heads are this design's own independent
-// production unit here, so no cross-thread cooperation is needed within one
-// head's own score row.
+// T-2113 (B4, design Sec3/Sec6.1, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2 change 6): FLATTENED and GRIDDED. This site's work used to be
+// partitioned over attention heads alone (`for (h = t; h < g_num_attention_heads; h +=
+// 256)`) in a single group -- at the real 1.5B tier num_attention_heads is 12, so twelve of
+// the group's 256 threads did every iteration and the other 244 returned immediately, and
+// the whole dispatch was one group: twelve threads of a many-thousand-core card carrying the
+// site. The real independent work item is one (head, key position) pair --
+// num_attention_heads * width of them, each an independent head_dim-long dot product -- so
+// the dispatch is now flattened over that item space and gridded across
+// ceil(num_attention_heads * width / 256) groups (superslm_gpu.cpp computes the SAME product
+// from the SAME `g_num_attention_heads`/`g_width` this shader reads, so the two cannot
+// disagree about how many items exist). Each item's own computation and its own internal
+// reduction order are UNCHANGED -- only which physical thread executes which item changes,
+// the identical correctness argument the GEMM sites' own multi-group split rests on. There
+// is no cross-thread state in this shader and no barrier, so a thread holding no item simply
+// returns.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -52,9 +63,9 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-void main(uint3 gtid : SV_GroupThreadID)
+void main(uint3 dtid : SV_DispatchThreadID)
 {
-    uint t = gtid.x;
+    uint t = dtid.x;
     int hidden_size = (int)g_hidden_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
@@ -68,12 +79,18 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint scores_base_all = ScratchLayout.Load<uint>(25 * 4);
     uint kv_half_off = KvHalfOffsetGpu(g_layer_index, g_context_cap, g_num_kv_heads, (uint)g_head_dim);
 
-    for (uint h = t; h < g_num_attention_heads; h += 256u)
+    // One work item per (head, key position): num_attention_heads * width of them, each an
+    // independent head_dim-long dot product. The host dispatches
+    // ceil(num_attention_heads * width / 256) groups from the SAME `width` root constant
+    // this shader reads, so the two cannot disagree about how many items exist.
+    uint items = g_num_attention_heads * (uint)width;
+    if (t >= items) return;
     {
+        uint h = t / (uint)width;
         uint kv_head = h / max(group, 1u);
         uint my_scores_base = scores_base_all + h * g_context_cap * 8u;
-        for (int k = 0; k < width; ++k)
         {
+            int k = (int)(t % (uint)width);
             uint k_row_off = KvRowOffsetWithinHalfGpu(g_context_cap, (uint)g_head_dim, kv_head, (uint)k);
             int64_t dot = 0;
             for (int d = 0; d < head_dim; ++d)

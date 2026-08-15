@@ -352,6 +352,113 @@ void GemmParallelGpu(uint t, RWByteAddressBuffer in_buf, uint in_base, ByteAddre
     }
 }
 
+// T-2113 (B4, design Sec3/Sec6.1; re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2 change 3/4, T-2106 debunk's confirmed endpoint): the transposed GEMM
+// partition. `GemmParallelGpu` above gives ONE thread an entire output channel, so a
+// thread's own weight reads walk `w_base + j*in_channels + i` with `i` increasing --
+// contiguous WITHIN a thread, but adjacent THREADS are `in_channels` bytes apart (1536 or
+// 8960 at the real 1.5B tier). A warp's 32 loads therefore spread across 32*in_channels
+// bytes, one memory transaction each, almost every fetched byte discarded.
+//
+// This transposes the partition: `lanes` threads cooperate on ONE output channel, thread
+// `lane` taking `i = lane, lane+lanes, ...` -- adjacent threads now read adjacent bytes, so
+// a warp's 32 reads fall inside one or two cache lines. The per-lane partial sums combine
+// via a fixed groupshared binary tree over INTEGER addition -- the identical reduction
+// shape `RmsSumSqParallelGpu` already ships in this file, whose own header comment states
+// the determinism law this construction relies on: integer addition is exactly associative
+// and commutative, so a tree reduction returns the identical int64 the sequential
+// left-to-right loop returns, regardless of evaluation order. No float, no atomic appears
+// anywhere on this path -- the reduction order is fixed and identical on every device and
+// every run, which is exactly what T-2105's own per-step CPU-oracle bit-equality (reproduced
+// by this section's own gate) verifies rather than merely argues.
+//
+// Geometry: numthreads is fixed at 256; `lanes` (a power of two, 1..256) splits those 256
+// threads into `channels_per_group = 256/lanes` output channels per group, `lanes` threads
+// each. A thread whose resolved channel `j` runs past `out_channels` (or is negative)
+// contributes zero and still executes every barrier below -- no divergent early return
+// around a GroupMemoryBarrierWithGroupSync, which is undefined behavior.
+groupshared int64_t gGemmAcc[256];
+
+// The caller-supplies-the-channel form: `j` is this thread's own output channel, already
+// resolved by the caller (a plain group_id*channels_per_group + local mapping for most
+// sites; `kv_proj_gemm_site.hlsl` packs K's and V's channels into one dispatch and needs
+// its own mapping). Every thread of the group must call this with the SAME lane/lanes
+// derivation and must reach it unconditionally -- it contains group-wide barriers.
+void GemmCoalescedGpuAt(uint t, int j, RWByteAddressBuffer in_buf, uint in_base,
+                         ByteAddressBuffer w_buf, uint w_base, ByteAddressBuffer id_buf, uint id_base,
+                         ByteAddressBuffer mult_buf, uint mult_base, ByteAddressBuffer shift_buf,
+                         uint shift_base, int in_channels, int out_channels,
+                         RWByteAddressBuffer scratch, uint wide_base, uint lanes)
+{
+    const uint lane = t % lanes;
+    int64_t acc = 0;
+    if (j < out_channels && j >= 0)
+    {
+        const uint row = w_base + (uint)j * (uint)in_channels;
+        // Four weights + four input codes per load, taken only when the row is
+        // dword-aligned and in_channels divides by four -- one packed dword per lane gives
+        // a 32-lane warp 128 CONTIGUOUS bytes of weight (one cache line) with no duplicate
+        // fetch. Otherwise the byte path below runs unchanged, so no tier or layout is
+        // required to satisfy the fast path's own preconditions. The summation is
+        // REASSOCIATED, not changed -- the same set of int64 products summed in a
+        // different order, which is bit-identical for the same associativity/commutativity
+        // reason the tree reduction below is.
+        if ((row & 3u) == 0u && (in_channels & 3) == 0)
+        {
+            const int quads = in_channels >> 2;
+            for (int q = (int)lane; q < quads; q += (int)lanes)
+            {
+                uint wp = w_buf.Load(row + (uint)q * 4u);
+                uint4 a4 = in_buf.Load4(in_base + (uint)q * 16u);
+                acc += (int64_t)(int)a4.x * (int64_t)(int(wp << 24) >> 24);
+                acc += (int64_t)(int)a4.y * (int64_t)(int(wp << 16) >> 24);
+                acc += (int64_t)(int)a4.z * (int64_t)(int(wp << 8) >> 24);
+                acc += (int64_t)(int)a4.w * (int64_t)(int(wp) >> 24);
+            }
+        }
+        else
+        {
+            for (int i = (int)lane; i < in_channels; i += (int)lanes)
+            {
+                int a = in_buf.Load<int>(in_base + (uint)i * 4u);
+                int w = LoadSignedByteGpu(w_buf, row + (uint)i);
+                acc += (int64_t)a * (int64_t)w;
+            }
+        }
+    }
+    gGemmAcc[t] = acc;
+    GroupMemoryBarrierWithGroupSync();
+    for (uint s = lanes >> 1; s > 0u; s >>= 1)
+    {
+        if (lane < s) gGemmAcc[t] += gGemmAcc[t + s];
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (lane == 0u && j < out_channels && j >= 0)
+    {
+        int64_t total = gGemmAcc[t];
+        int identity = (int)id_buf.Load<int>(id_base + (uint)j * 4u);
+        int mult = (int)mult_buf.Load<int>(mult_base + (uint)j * 4u);
+        int shift = (int)shift_buf.Load<int>(shift_base + (uint)j * 4u);
+        int64_t folded = ApplyWeightScaleFoldGpu(total, identity, mult, shift);
+        scratch.Store<int64_t>(wide_base + (uint)j * 8u, folded);
+    }
+}
+
+// The plain mapping: group `group_id` owns channels [group_id*C, group_id*C + C) where
+// C = 256/lanes. One body, shared with the caller-supplies-the-channel form above, so the
+// two cannot drift apart.
+void GemmCoalescedGpu(uint t, uint group_id, RWByteAddressBuffer in_buf, uint in_base,
+                       ByteAddressBuffer w_buf, uint w_base, ByteAddressBuffer id_buf, uint id_base,
+                       ByteAddressBuffer mult_buf, uint mult_base, ByteAddressBuffer shift_buf,
+                       uint shift_base, int in_channels, int out_channels, RWByteAddressBuffer scratch,
+                       uint wide_base, uint lanes)
+{
+    const uint channels_per_group = 256u / lanes;
+    const int j = (int)(group_id * channels_per_group + t / lanes);
+    GemmCoalescedGpuAt(t, j, in_buf, in_base, w_buf, w_base, id_buf, id_base, mult_buf, mult_base,
+                        shift_buf, shift_base, in_channels, out_channels, scratch, wide_base, lanes);
+}
+
 groupshared uint gBiasAnyOutOfDomain;
 
 // Cooperative ApplyBiasReconcileRow: the accumulator row already lives in

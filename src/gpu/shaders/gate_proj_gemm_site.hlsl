@@ -1,11 +1,9 @@
 // T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): gate_proj's own GEMM step,
-// split out of gate_proj_site.hlsl (now requant-only) into its own multi-group dispatch. See
-// `down_proj_gemm_site.hlsl`'s own header comment for the full correctness account (identical
-// shape: SV_DispatchThreadID replaces SV_GroupThreadID as GemmParallelGpu's own thread index,
-// `stride` becomes the dispatch's own total thread count instead of the literal 256 -- no change
-// to any output element's computation or its summation order).
+// split out of gate_proj_site.hlsl (now requant-only) into its own multi-group dispatch.
+// T-2113 (B4, design Sec3/Sec6.1): the partition is TRANSPOSED via `GemmCoalescedGpu`
+// (site_common.hlsli) -- see that function's own header comment for the correctness account.
 //
-// Dispatched Dispatch(ceil(intermediate_size/256), 1, 1) (superslm_gpu.cpp).
+// Dispatched Dispatch(ceil(intermediate_size/(256/g_gemm_lanes)), 1, 1) (superslm_gpu.cpp).
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -13,6 +11,10 @@ cbuffer RootConstants : register(b0)
     uint g_layer_index; uint g_hidden_size; uint g_head_dim; uint g_num_kv_heads;
     uint g_context_cap; uint g_position; uint g_num_attention_heads; uint g_width;
     uint g_intermediate_size;
+    // T-2113 (B4): the 10th and 11th root constants. `g_gemm_lanes` is the ONE source of
+    // this dispatch's own lane split -- the host computes the group count from the SAME
+    // value, so the two cannot drift.
+    uint g_num_hidden_layers; uint g_gemm_lanes;
 };
 
 ByteAddressBuffer   LayerWeights   : register(t0);
@@ -29,7 +31,7 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void main(uint3 gtid : SV_GroupThreadID, uint3 gid : SV_GroupID)
 {
     int hidden_size = (int)g_hidden_size;
     int out_channels = (int)g_intermediate_size;
@@ -46,8 +48,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint off_mult = layer_base + Layout.Load<uint>(39 * 4);
     uint off_shift = layer_base + Layout.Load<uint>(40 * 4);
 
-    int stride = ((out_channels + 255) / 256) * 256;
-    GemmParallelGpu(dtid.x, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
-                     LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
-                     WorkScratch, 0u, stride);
+    GemmCoalescedGpu(gtid.x, gid.x, LayerScratch, normed_off, LayerWeights, off_weight, LayerWeights, off_id,
+                      LayerWeights, off_mult, LayerWeights, off_shift, hidden_size, out_channels,
+                      WorkScratch, 0u, g_gemm_lanes);
 }

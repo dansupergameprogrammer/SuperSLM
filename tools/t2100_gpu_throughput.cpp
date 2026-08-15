@@ -157,20 +157,21 @@ int main(int argc, char** argv) {
 	       gpu_readback_ms_sum = 0.0;
 
 	// T-2101 follow-up (per-site decomposition, D-SLM3312; per-dispatch parallelism, D-SLM3313's
-	// own follow-up): the fixed, unconditional per-layer dispatch order `RunLayerLoopGpu` issues
-	// (`superslm_gpu.cpp`'s own `bind_and_dispatch` call sequence) -- dispatch `d` within a call is
-	// site `d % kSitesPerLayer` of layer `d / kSitesPerLayer`. 22 sites/layer now, not 17:
-	// q_proj/o_proj/gate_proj/up_proj/down_proj each split into their own multi-group GEMM
-	// dispatch immediately followed by their own (now leaner) requant dispatch; kv_proj stays
-	// fused and single-dispatch. Summed across every timed GPU step below.
-	constexpr int kSitesPerLayer = 22;
+	// own follow-up). T-2113 (B4, design Sec3/Sec6.1): the fixed, unconditional per-layer dispatch
+	// order `RunLayerLoopGpu` issues (`superslm_gpu.cpp`'s own `bind_and_dispatch` call sequence)
+	// -- dispatch `d` within a call is site `d % kSitesPerLayer` of layer `d / kSitesPerLayer`. 24
+	// sites/layer now, re-derived from the 22 T-2101 shipped: kv_proj_gemm is a NEW dispatch
+	// (kv_proj's own GEMM step, no longer fused into kv_proj's single dispatch) and RoPE's own
+	// commit phase is a second, separate dispatch (rope_commit) rather than a group-barrier-
+	// separated phase inside rope_guard. Summed across every timed GPU step below.
+	constexpr int kSitesPerLayer = 24;
 	const char* const kSiteNames[kSitesPerLayer] = {
-	    "attn_norm",     "q_proj_gemm",         "q_proj",        "kv_proj",
-	    "rope",          "attention_score",     "softmax",       "context_accumulate",
-	    "ctx_fold",      "o_proj_gemm",         "o_proj",        "attn_residual",
-	    "mlp_norm",      "gate_proj_gemm",      "gate_proj",     "up_proj_gemm",
-	    "up_proj",       "mlp_act",             "down_proj_gemm", "down_proj",
-	    "mlp_residual",  "commit"};
+	    "attn_norm",     "q_proj_gemm",     "q_proj",          "kv_proj_gemm",
+	    "kv_proj",       "rope_guard",      "rope_commit",     "attention_score",
+	    "softmax",       "context_accumulate", "ctx_fold",     "o_proj_gemm",
+	    "o_proj",        "attn_residual",   "mlp_norm",        "gate_proj_gemm",
+	    "gate_proj",     "up_proj_gemm",    "up_proj",         "mlp_act",
+	    "down_proj_gemm", "down_proj",      "mlp_residual",    "commit"};
 	double site_ms_sum[kSitesPerLayer] = {0.0};
 
 	double per_token[2] = {0.0, 0.0};
@@ -287,11 +288,12 @@ int main(int argc, char** argv) {
 	// summed across all 28 layers and averaged over the same `steps` timed GPU calls as everything
 	// above, sorted descending. Achieved bandwidth is reported for the six GEMM weight-matrix reads
 	// -- T-2101's own per-dispatch split (D-SLM3313's own follow-up) moved that read traffic into
-	// the five `*_gemm` sites specifically (q/o/gate/up/down_proj_gemm; kv_proj stays fused, its
-	// own GEMM traffic charged to "kv_proj" as before) -- the now-leaner requant/bias-only sites of
-	// the same base name touch only the already-computed wide row (O(out_channels) int64s, already
-	// counted nowhere near bandwidth-interesting) and get no bytes figure. Everything else touches
-	// only O(hidden_size) or O(context_length, still tiny this early in decode) data.
+	// six `*_gemm` sites (q/o/kv/gate/up/down_proj_gemm -- T-2113 (B4) added `kv_proj_gemm`,
+	// re-derived from T-2101's own five since kv_proj no longer stays fused-and-single-dispatch) --
+	// the now-leaner requant/bias-only sites of the same base name touch only the already-computed
+	// wide row (O(out_channels) int64s, already counted nowhere near bandwidth-interesting) and get
+	// no bytes figure. Everything else touches only O(hidden_size) or O(context_length, still tiny
+	// this early in decode) data.
 	struct SiteRow {
 		int idx;
 		double ms;
@@ -303,7 +305,7 @@ int main(int argc, char** argv) {
 		double bytes_per_layer = 0.0;
 		const std::string name = kSiteNames[i];
 		if (name == "q_proj_gemm" || name == "o_proj_gemm") bytes_per_layer = static_cast<double>(H) * H;
-		else if (name == "kv_proj") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
+		else if (name == "kv_proj_gemm") bytes_per_layer = 2.0 * static_cast<double>(KV) * H;
 		else if (name == "gate_proj_gemm" || name == "up_proj_gemm")
 			bytes_per_layer = static_cast<double>(I) * H;
 		else if (name == "down_proj_gemm") bytes_per_layer = static_cast<double>(H) * I;
@@ -330,9 +332,10 @@ int main(int argc, char** argv) {
 			            "--");
 		}
 	}
-	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (22, not 17) site
-	// means. Low CoV = spread ~uniformly (per-dispatch fixed cost dominates); high CoV =
-	// concentrated in specific sites (those sites' own kernels are genuinely slow).
+	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (T-2113 (B4): 24,
+	// re-derived from T-2101's own 22) site means. Low CoV = spread ~uniformly (per-dispatch fixed
+	// cost dominates); high CoV = concentrated in specific sites (those sites' own kernels are
+	// genuinely slow).
 	//
 	// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md; M4, confirmation pass @
 	// f7026db, correcting this paragraph's own inverted direction): this threshold's own

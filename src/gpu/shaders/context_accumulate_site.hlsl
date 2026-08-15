@@ -10,6 +10,14 @@
 // whole hidden_size row. A pure weighted sum plus a fold; neither can
 // reject, so this site carries no guard and no sticky write of its own
 // beyond the standard top-of-dispatch check.
+//
+// T-2113 (B4, design Sec3/Sec6.1, re-derived from Claude/Laplace/t2105-gpu-speed-ceiling-
+// 2026-08-14.md Sec2 change 6): FLATTENED and GRIDDED, the identical class of change as
+// attention_score_site.hlsl's own header comment describes. The real independent work item
+// is one (head, head_dim element) pair -- num_attention_heads * head_dim of them, each an
+// independent width-long reduction over its own V column. The host dispatches
+// ceil(num_attention_heads * head_dim / 256) groups. There is no cross-thread state and no
+// barrier, so a thread holding no item simply returns.
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -39,9 +47,9 @@ RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
 [numthreads(256, 1, 1)]
-void main(uint3 gtid : SV_GroupThreadID)
+void main(uint3 dtid : SV_DispatchThreadID)
 {
-    uint t = gtid.x;
+    uint t = dtid.x;
     int hidden_size = (int)g_hidden_size;
     uint sticky_off = SeqStickyOffGpu(hidden_size);
     int64_t sticky = SeqState.Load<int64_t>(sticky_off);
@@ -60,8 +68,14 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint off_ctx_mult = layer_base + Layout.Load<uint>(31 * 4);
     uint off_ctx_shift = layer_base + Layout.Load<uint>(32 * 4);
 
-    for (uint h = t; h < g_num_attention_heads; h += 256u)
+    // One work item per (head, head_dim element): num_attention_heads * head_dim of them,
+    // each an independent width-long reduction over its own V column. The host dispatches
+    // ceil(num_attention_heads * head_dim / 256) groups.
+    uint items = g_num_attention_heads * (uint)head_dim;
+    if (t >= items) return;
     {
+        uint h = t / (uint)head_dim;
+        int d = (int)(t % (uint)head_dim);
         uint kv_head = h / max(group, 1u);
         uint my_scores_base = scores_base_all + h * g_context_cap * 8u;
 
@@ -69,7 +83,6 @@ void main(uint3 gtid : SV_GroupThreadID)
         int cmult = (int)LayerWeights.Load<int>(off_ctx_mult + h * 4u);
         int cshift = (int)LayerWeights.Load<int>(off_ctx_shift + h * 4u);
 
-        for (int d = 0; d < head_dim; ++d)
         {
             int64_t ctx_acc_d = 0;
             for (int k = 0; k < width; ++k)

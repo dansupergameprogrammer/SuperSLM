@@ -4,22 +4,39 @@ shader half of the original S3 class my own prescribed remedy did not reach.
 
 T-2101's own multi-group GEMM fix (build log Sec34) made the HOST side of the group-arithmetic a
 single source of truth: `ComputeGpuGemmSiteGroupPlan` (`src/gpu/superslm_gpu.cpp`) is the ONE place
-that decides how many threads per group each of the five split GEMM sites launches, and
-`RunLayerLoopGpu`'s own dispatch call reads that value directly. But the SHADER side of the same
-fact -- each `*_gemm_site.hlsl`'s own `[numthreads(N, 1, 1)]` attribute, and its own stride formula
-`((out_channels + N - 1) / N) * N` -- is still five hand-written, independent copies of the SAME
-number, with nothing that checks them against the host's own value or against each other. A shader
-whose `numthreads` diverges from what the host computes its dispatch grid size against produces a
-silent wrong answer at real dimensions: some output channels get computed by two threads (redundant,
-survivable) or by none at all (silently wrong, exactly the class T-2101's own standing runtime guard
-exists to catch on the HOST side -- the guard cannot see a shader-side divergence at all, since it
-checks the host's own arithmetic, never what the shader actually declares).
+that decides how many threads per group each split GEMM site launches, and `RunLayerLoopGpu`'s own
+dispatch call reads that value directly. But the SHADER side of the same fact -- each
+`*_gemm_site.hlsl`'s own `[numthreads(N, 1, 1)]` attribute -- is still six hand-written,
+independent copies of the SAME number, with nothing that checks them against the host's own value.
+A shader whose `numthreads` diverges from what the host computes its dispatch grid size against
+produces a silent wrong answer at real dimensions.
+
+T-2113 (B4, design Sec3/Sec6.1): RE-DERIVED for the transposed GEMM partition
+(`GemmCoalescedGpu`/`GemmCoalescedGpuAt`, `site_common.hlsli`). The pre-B4 construction had a
+SECOND hand-duplicated invariant this module used to check -- each shader's own compile-time
+`int stride = ((out_channels + N - 1) / N) * N;` line, matched against the host's identical
+ceiling-division formula. That invariant no longer exists to check: under the transposed
+partition, `numthreads` is uniformly 256 for every GEMM site (only the group COUNT varies with
+`out_channels`, computed host-side and passed as the dispatch's own `Dispatch(groups, 1, 1)`
+argument), and the lane split (`lanes`, `256/lanes` channels per group) is DATA -- the host's own
+fixed, chosen per-site value, threaded through the 11th root constant (`g_gemm_lanes`) at runtime,
+not a compile-time formula a shader could independently re-derive and drift from. There is
+therefore nothing left for a static parity check to compare on that half.
+
+What CAN still silently diverge, and what this module checks now: (1) every GEMM site's own
+`[numthreads(N, 1, 1)]` still equals the host's own `ComputeGpuGemmSiteGroupPlan`-derived
+`threads_per_group` for that site (a hand-edit to either side, in isolation, is still possible and
+still silently wrong at real dimensions); (2) every GEMM site's own shader body actually calls
+`GemmCoalescedGpu`/`GemmCoalescedGpuAt` -- not the pre-B4 `GemmParallelGpu` -- so a reverted or
+partially-applied edit that leaves a site on the old one-thread-per-channel partition (silently
+correct at fixture scale, silently WRONG relative to the geometry `ComputeGpuGemmSiteGroupPlan`
+now computes groups for) is caught structurally rather than only by a real-hardware run.
 
 This module closes it the same way `check_gpu_guard_status_parity.py` (this directory) closes the
-CPU/GPU/`.def` three-way guard-status parity: read all THREE sources at their own real anchors (the
-five `.hlsl` files' own `numthreads` and stride constants; `superslm_gpu.cpp`'s own
-`ComputeGpuGemmSiteGroupPlan` switch), never re-derive a fourth number by hand, and fail the build on
-any disagreement.
+CPU/GPU/`.def` three-way guard-status parity: read all sources at their own real anchors (the six
+`.hlsl` files' own `numthreads` and call sites; `superslm_gpu.cpp`'s own
+`ComputeGpuGemmSiteGroupPlan` switch), never re-derive a fourth number by hand, and fail the build
+on any disagreement.
 """
 from __future__ import annotations
 
@@ -34,12 +51,14 @@ _REPO_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", ".."))
 SUPERSLM_GPU_CPP = os.path.join(_REPO_ROOT, "src", "gpu", "superslm_gpu.cpp")
 SHADERS_DIR = os.path.join(_REPO_ROOT, "src", "gpu", "shaders")
 
-# The five split GEMM sites, mapped to their own `GpuGemmSplitSite` enumerator name (as it appears
-# in `superslm_gpu.cpp`'s own switch) and their own `.hlsl` file name -- the SAME five names
+# The split GEMM sites, mapped to their own `GpuGemmSplitSite` enumerator name (as it appears
+# in `superslm_gpu.cpp`'s own switch) and their own `.hlsl` file name -- the SAME names
 # `ComputeGpuGemmSiteGroupPlan`'s own header comment and `superslm_gpu.cpp`'s dispatch loop use.
+# T-2113 (B4, D-SLM3341): `KvProj` added -- kv_proj_gemm_site.hlsl is NEW production work.
 GEMM_SPLIT_SITES: tuple[tuple[str, str], ...] = (
     ("QProj", "q_proj_gemm_site.hlsl"),
     ("OProj", "o_proj_gemm_site.hlsl"),
+    ("KvProj", "kv_proj_gemm_site.hlsl"),
     ("GateProj", "gate_proj_gemm_site.hlsl"),
     ("UpProj", "up_proj_gemm_site.hlsl"),
     ("DownProj", "down_proj_gemm_site.hlsl"),
@@ -86,31 +105,29 @@ def strip_comments(text: str) -> str:
 
 
 _NUMTHREADS_RE = re.compile(r"\[numthreads\(\s*(\d+)\s*,\s*1\s*,\s*1\s*\)\]")
-_STRIDE_RE = re.compile(
-    r"int\s+stride\s*=\s*\(\(\s*out_channels\s*\+\s*(\d+)\s*\)\s*/\s*(\d+)\s*\)\s*\*\s*(\d+)\s*;"
-)
+# T-2113 (B4): the transposed-partition call, either form (`GemmCoalescedGpu` -- the plain
+# group_id*channels_per_group mapping every site but kv_proj_gemm uses -- or
+# `GemmCoalescedGpuAt`, the caller-supplies-the-channel form kv_proj_gemm_site.hlsl needs to pack
+# K and V into one dispatch). Either one is sufficient proof the site is NOT still on the pre-B4
+# `GemmParallelGpu` one-thread-per-channel partition.
+_COALESCED_CALL_RE = re.compile(r"\bGemmCoalescedGpu(?:At)?\s*\(")
+_LEGACY_PARALLEL_CALL_RE = re.compile(r"\bGemmParallelGpu\s*\(")
 
 
-def parse_hlsl_thread_width(hlsl_text: str, *, label: str) -> tuple[int, int, int, int]:
-    """`(numthreads, stride_add, stride_div, stride_mul)` parsed directly from a `*_gemm_site.hlsl`
-    file's own text (comments stripped first) -- `numthreads` from its `[numthreads(N, 1, 1)]`
-    attribute, the other three from its own `int stride = ((out_channels + A) / D) * M;` line
-    (`stride_add`/`stride_div`/`stride_mul` respectively). Raises `ValueError` if either anchor is
-    missing -- a shader that has been restructured so this module cannot find its own thread-width
-    declaration must fail loudly, not report a stale or default number."""
+def parse_hlsl_thread_width(hlsl_text: str, *, label: str) -> tuple[int, bool]:
+    """`(numthreads, calls_coalesced_gemm)` parsed directly from a `*_gemm_site.hlsl` file's own
+    text (comments stripped first) -- `numthreads` from its `[numthreads(N, 1, 1)]` attribute,
+    `calls_coalesced_gemm` from whether the body invokes `GemmCoalescedGpu`/`GemmCoalescedGpuAt`
+    (T-2113 B4's own transposed partition) rather than the pre-B4 `GemmParallelGpu`. Raises
+    `ValueError` if the `numthreads` anchor is missing -- a shader that has been restructured so
+    this module cannot find its own thread-width declaration must fail loudly, not report a stale
+    or default number."""
     stripped = strip_comments(hlsl_text)
     nt_m = _NUMTHREADS_RE.search(stripped)
     if nt_m is None:
         raise ValueError(f"{label}: no [numthreads(N, 1, 1)] attribute found")
-    stride_m = _STRIDE_RE.search(stripped)
-    if stride_m is None:
-        raise ValueError(f"{label}: no 'int stride = ((out_channels + A) / D) * M;' line found")
-    return (
-        int(nt_m.group(1)),
-        int(stride_m.group(1)),
-        int(stride_m.group(2)),
-        int(stride_m.group(3)),
-    )
+    calls_coalesced = _COALESCED_CALL_RE.search(stripped) is not None
+    return (int(nt_m.group(1)), calls_coalesced)
 
 
 # Matches one `case GpuGemmSplitSite::<Name>:` label -- one or more of these, consecutive, share
@@ -185,12 +202,10 @@ def check_gemm_site_thread_width_parity(
     *,
     sites: tuple[tuple[str, str], ...] = GEMM_SPLIT_SITES,
 ) -> list[str]:
-    """[] iff, for every one of the five split GEMM sites: (1) the shader's own `numthreads` equals
-    the host's own `ComputeGpuGemmSiteGroupPlan`-derived `threads_per_group` for that site, and
-    (2) the shader's own stride formula is internally self-consistent with its own `numthreads`
-    (`stride_add + 1 == stride_div == stride_mul == numthreads`) -- the ceiling-division shape
-    `ComputeGpuGemmGroupCount` uses host-side, reproduced independently in HLSL since a shader
-    cannot call the host's own function."""
+    """[] iff, for every split GEMM site: (1) the shader's own `numthreads` equals the host's own
+    `ComputeGpuGemmSiteGroupPlan`-derived `threads_per_group` for that site, and (2) the shader's
+    own body calls `GemmCoalescedGpu`/`GemmCoalescedGpuAt` (T-2113 B4's own transposed partition),
+    never the pre-B4 `GemmParallelGpu`."""
     cpp_by_site = parse_cpp_threads_per_group_by_site(cpp_text)
     failures: list[str] = []
     for site_name, hlsl_filename in sites:
@@ -203,10 +218,9 @@ def check_gemm_site_thread_width_parity(
         if hlsl_filename not in hlsl_texts_by_filename:
             failures.append(f"{hlsl_filename}: not found among the scanned shader files")
             continue
+        hlsl_text = hlsl_texts_by_filename[hlsl_filename]
         try:
-            numthreads, stride_add, stride_div, stride_mul = parse_hlsl_thread_width(
-                hlsl_texts_by_filename[hlsl_filename], label=hlsl_filename
-            )
+            numthreads, calls_coalesced = parse_hlsl_thread_width(hlsl_text, label=hlsl_filename)
         except ValueError as e:
             failures.append(str(e))
             continue
@@ -218,12 +232,16 @@ def check_gemm_site_thread_width_parity(
                 f"GpuGemmSplitSite::{site_name} -- the host's own Dispatch(groups, 1, 1) grid size "
                 f"and this shader's own per-group thread count would disagree at real dimensions"
             )
-        if stride_add + 1 != numthreads or stride_div != numthreads or stride_mul != numthreads:
+        if not calls_coalesced:
             failures.append(
-                f"{hlsl_filename}: its own stride formula '((out_channels + {stride_add}) / "
-                f"{stride_div}) * {stride_mul}' is not self-consistent with its own "
-                f"[numthreads({numthreads}, 1, 1)] -- expected "
-                f"'((out_channels + {numthreads - 1}) / {numthreads}) * {numthreads}'"
+                f"{hlsl_filename}: no GemmCoalescedGpu/GemmCoalescedGpuAt call found -- T-2113 (B4) "
+                f"requires the transposed-partition primitive; this site appears to still be on (or "
+                f"reverted to) the pre-B4 one-thread-per-channel GemmParallelGpu partition"
+            )
+        elif _LEGACY_PARALLEL_CALL_RE.search(strip_comments(hlsl_text)) is not None:
+            failures.append(
+                f"{hlsl_filename}: calls BOTH GemmCoalescedGpu(At) and the legacy GemmParallelGpu -- "
+                f"a partial edit left the old partition's call site behind"
             )
     return failures
 
@@ -264,8 +282,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         "check_gemm_site_thread_width_parity.py: OK -- every split GEMM site's own [numthreads] "
-        "matches ComputeGpuGemmSiteGroupPlan's own threads_per_group, and every stride formula is "
-        "self-consistent with its own numthreads."
+        "matches ComputeGpuGemmSiteGroupPlan's own threads_per_group, and every site calls the "
+        "T-2113 (B4) transposed-partition primitive (GemmCoalescedGpu/GemmCoalescedGpuAt), never "
+        "the pre-B4 GemmParallelGpu."
     )
     return 0
 
