@@ -291,6 +291,19 @@ struct ResidentWeights {
 	std::vector<uint8_t> bytes;  // the last-uploaded packed row, kept for comparison
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_buf;
 	bool valid = false;
+	// T-2100 (throughput): the IDENTITY of the source this packed row was built from. The content
+	// comparison above is the only SOUND invalidation signal available without a model handle, and
+	// it is also ruinously expensive: it requires packing ~1.31 GiB byte-by-byte and memcmp-ing it
+	// on EVERY call, so the cache that exists to skip a 1.31 GiB PCIe transfer spends ~4 GiB of
+	// host memory traffic to decide not to do it. Measured: 3.24 s/token, of which the GPU is a
+	// small fraction. These three fields let the common case -- the same `layers` array driving
+	// every token of one decode session, which is the usage this file's own header comment
+	// describes -- skip the pack and the compare entirely. A different pointer, count, or stride
+	// falls back to the full content comparison, so the sound signal is retained rather than
+	// replaced.
+	const void* src_layers = nullptr;  // opaque: identity only, no LayerWeights visibility needed here
+	uint32_t src_n = 0;
+	uint32_t src_stride = 0;
 };
 ResidentWeights g_resident_weights;
 // T-2052 (item 3, Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md
@@ -828,7 +841,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 
 	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
 	// own scoped subset: only what sites 1-4 read). Always runs (S3 above). ---
-	std::vector<uint8_t> lw_bytes(static_cast<size_t>(layout.stride) * N, 0);
+	// T-2100: skip the pack entirely when the source is identical to what is already resident.
+	const bool lw_fast_hit = g_resident_weights.valid && g_resident_weights.src_layers == static_cast<const void*>(layers) &&
+	                         g_resident_weights.src_n == N &&
+	                         g_resident_weights.src_stride == layout.stride;
+	std::vector<uint8_t> lw_bytes;
+	if (!lw_fast_hit) {
+	lw_bytes.assign(static_cast<size_t>(layout.stride) * N, 0);
 	for (uint32_t l = 0; l < N; ++l) {
 		const superslm::LayerWeights& lw = layers[l];
 		const size_t base = static_cast<size_t>(l) * layout.stride;
@@ -929,6 +948,7 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 			         lw.iexp_softmax_khead_e != nullptr ? lw.iexp_softmax_khead_e[i] : 0);
 		}
 	}
+	}  // T-2100: end of the !lw_fast_hit pack guard
 
 	// T-2045 (S3): true iff this call's freshly-packed row is byte-identical
 	// to the last-uploaded one -- the ONLY sound invalidation signal here
@@ -952,7 +972,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// this `if` entirely -- a real allocation the HIT path also makes),
 	// not this one -- so this predicate needs no injection-aware term at
 	// all, and reads exactly as it did before T-2071 ever touched it.
-	const bool weights_resident = g_resident_weights.valid && g_resident_weights.bytes == lw_bytes;
+	const bool weights_resident =
+	    lw_fast_hit || (g_resident_weights.valid && g_resident_weights.bytes == lw_bytes);
 	if (weights_resident) {
 		lw_buf = g_resident_weights.lw_buf;
 	}
@@ -1247,6 +1268,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		g_resident_weights.lw_buf = lw_buf;
 		g_resident_weights.bytes = std::move(lw_bytes);
 		g_resident_weights.valid = true;
+		g_resident_weights.src_layers = static_cast<const void*>(layers);   // T-2100
+		g_resident_weights.src_n = N;
+		g_resident_weights.src_stride = layout.stride;
 	}
 	layout_buf = dev.Upload(layout_bytes.data(), layout_bytes.size());
 	rope_buf = dev.Upload(rope_info_bytes.data(), rope_info_bytes.size());
