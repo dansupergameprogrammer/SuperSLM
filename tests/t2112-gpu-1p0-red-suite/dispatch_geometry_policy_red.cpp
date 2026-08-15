@@ -9,6 +9,10 @@
 // red by link -- it compiles AND links today, and FAILS because the shipped constant is still 17.
 // It goes green the moment design Sec10 B4 lands (the constant becomes 24), without needing any
 // new symbol -- a real, minimal, already-executable regression pin for one piece of B4's own gate.
+//
+// GREEN as of T-2113 B4 (2026-08-15): `PlanDispatchBudgetGpu`'s own `kDispatchesPerLayer` moved
+// 17 -> 24 in the same round the dispatch chain itself did (superslm_gpu.cpp) -- checks=2
+// failures=0, confirmed by execution.
 #include <cstdio>
 #include "superslm/gpu_port.h"
 

@@ -1772,6 +1772,49 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `GemmCoalescedGpu`/`GemmCoalescedGpuAt` (site_common.hlsli). The twelve SRV/UAV root
 	// bindings that used to be re-issued on every call are hoisted to the single set immediately
 	// after SetComputeRootSignature, above (design Sec10 B2's own deferred root-binding hoist).
+	//
+	// T-2113 (B4, design Sec10 B4's own gate + the build seat's own delegated instruction, 2026-
+	// 08-15): the TIME-SLICE INVARIANCE bench mechanism, re-derived from Claude/Laplace/
+	// t2105-gpu-speed-ceiling-2026-08-14.md Sec4's own construction -- bench-only instrumentation,
+	// off by default (every env var below defaults to inert), never part of the production
+	// dispatch-recording shape. B5 builds the REAL async submission boundary
+	// (`sslm_decode_step_gpu` records+submits without fencing, the unconditional per-call rebind,
+	// design Sec6.2); this mechanism exists only to prove B4's OWN new dispatch geometry survives
+	// a cut-and-resume at every granularity down to the every-dispatch extreme, non-regressing the
+	// property T-2105 already proved of the pre-B4 dispatch chain, before B5 builds the real thing
+	// on top of it. Retires the moment B5 lands its own real slicing and the equivalent proof runs
+	// through `sslm_decode_step_gpu`/`sslm_gpu_ready` instead.
+	//
+	// `SSLM_B4_SLICE_EVERY=k` (k>0): cut the dispatch chain after every k-th dispatch -- close,
+	// submit, fence-to-idle, reset, and (matching design Sec6.2's own "unconditional rebind" rule)
+	// rebind the root signature and all twelve views before continuing. k=1 is the every-dispatch
+	// extreme (672 cuts/token at the 1.5B tier). Read via `std::getenv` ONCE per process (a
+	// `static` local), exactly like every other bench-only env knob this file's own history uses
+	// (T-2105's own `t2105_slice_every` precedent) -- changing the variable mid-process has no
+	// effect, by design, matching the process-per-cell sweep convention this construction is
+	// measured under.
+	//
+	// The two named violation-class pins (T-2106's own debunk, `Claude/Popper/
+	// t2106-t2105-ceiling-debunk-2026-08-14.md`): `SSLM_B4_SLICE_DROP_UAV_REBIND=1` skips the
+	// resume rebind of ONE root UAV (kv_uav, root index 11) -- the class "a resume forgets to
+	// rebind a UAV the next dispatch reads/writes." `SSLM_B4_SLICE_SWAP_SRV_REBIND=1` swaps the
+	// resume rebind of two root SRVs (cos_table_buf/sin_table_buf, root indices 6/7) -- the class
+	// "a resume rebinds the wrong resource to a slot." Both default off (a clean resume); each
+	// must be proven to FIRE (the per-step oracle diverges) when planted, and proven silent
+	// (identical output) when reverted -- the plant-and-revert protocol StandardsDocument.md §5.4
+	// requires of a control that claims to detect a real defect class.
+	static const uint32_t b4_slice_every = [] {
+		const char* v = std::getenv("SSLM_B4_SLICE_EVERY");
+		return (v == nullptr || v[0] == 0) ? 0u : static_cast<uint32_t>(std::strtoul(v, nullptr, 10));
+	}();
+	static const bool b4_slice_drop_uav_rebind = [] {
+		const char* v = std::getenv("SSLM_B4_SLICE_DROP_UAV_REBIND");
+		return v != nullptr && v[0] == '1';
+	}();
+	static const bool b4_slice_swap_srv_rebind = [] {
+		const char* v = std::getenv("SSLM_B4_SLICE_SWAP_SRV_REBIND");
+		return v != nullptr && v[0] == '1';
+	}();
 	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
 	                              uint32_t lanes = 1) {
 		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
@@ -1784,6 +1827,49 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
+
+		// T-2113 (B4): the bench-only slice cut, see this lambda's own header comment above.
+		if (b4_slice_every > 0u && (dispatch_query_index % b4_slice_every) == 0u) {
+			SSLM_GPU_HR(dev.list->Close());
+			ID3D12CommandList* slice_lists[] = {dev.list.Get()};
+			dev.queue->ExecuteCommandLists(1, slice_lists);
+			SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+			if (dev.fence->GetCompletedValue() < dev.fence_val) {
+				SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
+			dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());
+			dev.list->SetComputeRootShaderResourceView(1, lw_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(2, layout_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(3, rope_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(4, model_const_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootShaderResourceView(5, silu_lut_buf->GetGPUVirtualAddress());
+			// The swapped-SRV-rebind violation pin: cos/sin land in each other's slot.
+			if (b4_slice_swap_srv_rebind) {
+				dev.list->SetComputeRootShaderResourceView(6, sin_table_buf->GetGPUVirtualAddress());
+				dev.list->SetComputeRootShaderResourceView(7, cos_table_buf->GetGPUVirtualAddress());
+			} else {
+				dev.list->SetComputeRootShaderResourceView(6, cos_table_buf->GetGPUVirtualAddress());
+				dev.list->SetComputeRootShaderResourceView(7, sin_table_buf->GetGPUVirtualAddress());
+			}
+			dev.list->SetComputeRootShaderResourceView(8, scratch_layout_buf->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(9, seq_uav->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(10, scratch_uav->GetGPUVirtualAddress());
+			// The dropped-UAV-rebind violation pin: kv_uav's own resume rebind is replaced with a
+			// bind to a DIFFERENT, still-valid, still-live resource (work_scratch_uav) rather than
+			// left fully unbound -- a raw root UAV descriptor left undefined after
+			// SetComputeRootSignature is an out-of-spec GPU virtual address (real risk: a device
+			// fault/TDR on real hardware, not a clean, repeatable divergence), so this pin
+			// realizes T-2106's own "a resume forgets to rebind the CORRECT UAV" class safely: the
+			// dispatch chain's own subsequent kv_proj_site/rope_commit_site reads/writes land in
+			// WorkScratch's own transient scratch instead of the persistent K/V store, a real and
+			// safely-producible wrong-answer, not a synthetic control the production path cannot
+			// reach (StandardsDocument.md §5.4's own must-reject construction discipline).
+			dev.list->SetComputeRootUnorderedAccessView(
+			    11, (b4_slice_drop_uav_rebind ? work_scratch_uav : kv_uav)->GetGPUVirtualAddress());
+			dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+		}
 	};
 	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the

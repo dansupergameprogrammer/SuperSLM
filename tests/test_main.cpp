@@ -13831,6 +13831,137 @@ struct GqaGroupingFixture {
 	GqaGroupingFixture& operator=(GqaGroupingFixture&&) = delete;
 };
 
+// T-2113 (B4, design Sec11 dim4 M2/P2, Finding 2 D-SLM3347 -- Claude/Curie/
+// t2112-1p0-red-suite-2026-08-15.md Sec5, routed to the build seat): a RAGGED-dimension fixture,
+// modeled on GqaGroupingFixture's own shape but sized so hidden_size AND intermediate_size are
+// BOTH not multiples of 4 -- hidden_size=6 (6 & 3 == 2, nonzero), intermediate_size=6. Every one
+// of the six GEMM sites' own in_channels is either hidden_size (q/o/kv/gate/up_proj_gemm) or
+// intermediate_size (down_proj_gemm only), so this ONE fixture forces
+// `GemmCoalescedGpuAt`'s own packed-load fast-path precondition ((row & 3u)==0u && (in_channels
+// & 3)==0, site_common.hlsli) false for EVERY GEMM site -- the byte-path fallback is not merely
+// reachable, it is the ONLY path this fixture's own dispatch chain can take, by the shader's own
+// unconditional per-thread branch (a compile-independent runtime check that literally cannot
+// select the fast path when in_channels % 4 != 0). Deliberately NOT the degenerate
+// hidden_size=head_dim=2 shape every other fixture in this file uses (StandardsDocument.md
+// Sec5.4: a two-element construction is a mechanism check, not a product-scale one) -- three
+// attention heads, one KV head (a real GQA group of 3), two layers.
+struct RaggedDimFixture {
+	static constexpr int32_t kContextCap = 16;
+	static constexpr uint32_t kHidden = 6;         // NOT a multiple of 4
+	static constexpr uint32_t kIntermediate = 6;   // NOT a multiple of 4
+	static constexpr uint32_t kNumHeads = 3;
+	static constexpr uint32_t kNumKvHeads = 1;
+	static constexpr uint32_t kHeadDim = 2;  // kHidden = kNumHeads * kHeadDim
+	static constexpr uint32_t kKvHidden = kNumKvHeads * kHeadDim;  // 2
+
+	superslm::SslmModelView view;
+	superslm::LayerWeights layers[2];
+	int64_t kv_landing_r_t_arr[kNumKvHeads];
+	int64_t kv_landing_e_t_arr[kNumKvHeads] = {0};
+	int32_t ctx_fold_identity_arr[kNumHeads] = {1, 1, 1};
+	int32_t ctx_fold_mult_arr[kNumHeads] = {0, 0, 0};
+	int32_t ctx_fold_shift_arr[kNumHeads] = {0, 0, 0};
+	int32_t norm_gain[kHidden] = {16384, 16384, 16384, 16384, 16384, 16384};
+	// hidden_size=6 identity, [out_channels=6, in_channels=6] row-major -- q/o/gate/up_weight
+	// (gate/up: [intermediate=6, hidden=6], the SAME shape since kIntermediate == kHidden here)
+	// and down_weight ([hidden=6, intermediate=6], also the same shape) all reuse this one array.
+	int8_t identity6x6[36] = {
+	    1, 0, 0, 0, 0, 0,
+	    0, 1, 0, 0, 0, 0,
+	    0, 0, 1, 0, 0, 0,
+	    0, 0, 0, 1, 0, 0,
+	    0, 0, 0, 0, 1, 0,
+	    0, 0, 0, 0, 0, 1,
+	};
+	// k_weight/v_weight, [kv_hidden=2, hidden=6]: top 2 rows of the 6x6 identity -- the single KV
+	// head (rows 0-1) selects input channels {0,1}, matching GqaGroupingFixture's own
+	// one-KV-head-selects-a-leading-slice convention.
+	int8_t kv_selector2x6[12] = {
+	    1, 0, 0, 0, 0, 0,
+	    0, 1, 0, 0, 0, 0,
+	};
+	int64_t iexp_softmax_khead_m_arr[kNumKvHeads] = {INT64_C(1073741824)};
+	int64_t iexp_softmax_khead_e_arr[kNumKvHeads] = {-86};
+
+	RaggedDimFixture() {
+		using namespace superslm_test;
+		using superslm::CarriedScale;
+
+		RaggedDimFixture& f = *this;
+		Cfg1Spec spec{};
+		spec.hidden_size = kHidden;
+		spec.num_hidden_layers = 2;
+		spec.num_attention_heads = kNumHeads;
+		spec.num_key_value_heads = kNumKvHeads;
+		spec.head_dim = kHeadDim;
+		spec.intermediate_size = kIntermediate;
+		spec.context_cap = kContextCap;
+		spec.kv_precision = 0;  // Int8
+		spec.kv_block_size = 1;
+		FixtureSection config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(spec));
+		std::vector<int64_t> cos_flat(kContextCap, INT64_C(1073741824));
+		std::vector<int64_t> sin_flat(kContextCap, INT64_C(0));
+		FixtureSection rope =
+		    MakeRop1SectionMultiRow(/*context_cap=*/kContextCap, /*pairs=*/kHeadDim / 2, cos_flat.data(),
+		                             sin_flat.data());
+		auto built = BuildArtifact({config, MakeSigmoidLutSection(), rope});
+		std::string err;
+		const auto status =
+		    superslm::SslmModel::Load(built.bytes.data(), built.bytes.size(), f.view, &err);
+		CHECK_MSG(status == superslm::SslmModelStatus::Ok,
+		          "RaggedDimFixture's own minimal artifact failed to load: got %s (%s)",
+		          superslm::SslmModelStatusName(status), err.c_str());
+
+		const CarriedScale canonical{/*m=*/INT64_C(1073741824), /*e=*/-30};
+		const int64_t r_t = superslm::DynamicScaleReciprocal(canonical.m);
+		f.kv_landing_r_t_arr[0] = r_t;
+		for (int l = 0; l < 2; ++l) {
+			superslm::LayerWeights& lw = f.layers[l];
+			lw.attn_norm_gain = f.norm_gain;
+			lw.attn_norm_site_constant = canonical;
+			lw.q_weight = f.identity6x6;
+			lw.k_weight = f.kv_selector2x6;
+			lw.v_weight = f.kv_selector2x6;
+			lw.o_weight = f.identity6x6;
+			lw.q_fold_identity = kIdentityFoldArr; lw.q_fold_mult = kZeroFoldArr; lw.q_fold_shift = kZeroFoldArr;
+			lw.k_fold_identity = kIdentityFoldArr; lw.k_fold_mult = kZeroFoldArr; lw.k_fold_shift = kZeroFoldArr;
+			lw.v_fold_identity = kIdentityFoldArr; lw.v_fold_mult = kZeroFoldArr; lw.v_fold_shift = kZeroFoldArr;
+			lw.o_fold_identity = kIdentityFoldArr; lw.o_fold_mult = kZeroFoldArr; lw.o_fold_shift = kZeroFoldArr;
+			lw.gate_fold_identity = kIdentityFoldArr; lw.gate_fold_mult = kZeroFoldArr; lw.gate_fold_shift = kZeroFoldArr;
+			lw.up_fold_identity = kIdentityFoldArr; lw.up_fold_mult = kZeroFoldArr; lw.up_fold_shift = kZeroFoldArr;
+			lw.down_fold_identity = kIdentityFoldArr; lw.down_fold_mult = kZeroFoldArr; lw.down_fold_shift = kZeroFoldArr;
+			lw.q_site_constant = canonical;
+			lw.o_site_constant = canonical;
+			lw.kv_landing_r_t_k = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_k = f.kv_landing_e_t_arr;
+			lw.kv_landing_r_t_v = f.kv_landing_r_t_arr;
+			lw.kv_landing_e_t_v = f.kv_landing_e_t_arr;
+			lw.ctx_fold_identity = f.ctx_fold_identity_arr;
+			lw.ctx_fold_mult = f.ctx_fold_mult_arr;
+			lw.ctx_fold_shift = f.ctx_fold_shift_arr;
+			lw.ctx_fold_site_constant = canonical;
+			lw.attn_residual_site_constant = canonical;
+			lw.iexp_softmax_khead_m = f.iexp_softmax_khead_m_arr;
+			lw.iexp_softmax_khead_e = f.iexp_softmax_khead_e_arr;
+			lw.mlp_norm_gain = f.norm_gain;
+			lw.mlp_norm_site_constant = canonical;
+			lw.gate_weight = f.identity6x6;
+			lw.up_weight = f.identity6x6;
+			lw.down_weight = f.identity6x6;
+			lw.gate_site_constant = canonical;
+			lw.up_site_constant = canonical;
+			lw.mlp_act_site_constant = CarriedScale{INT64_C(1073741824), INT64_C(-96)};
+			lw.down_site_constant = canonical;
+			lw.mlp_residual_site_constant = canonical;
+		}
+	}
+
+	RaggedDimFixture(const RaggedDimFixture&) = delete;
+	RaggedDimFixture& operator=(const RaggedDimFixture&) = delete;
+	RaggedDimFixture(RaggedDimFixture&&) = delete;
+	RaggedDimFixture& operator=(RaggedDimFixture&&) = delete;
+};
+
 }  // namespace
 
 // Regression guard for D-SLM487/T-1403: a `TwoLayerFixture` built by
@@ -24565,6 +24696,126 @@ static void TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly() {
 	          message.c_str());
 }
 
+// T-2113 (B4, design Sec11 dim4 M2, Finding 2 / D-SLM3347 -- routed by Claude/Curie/
+// t2112-1p0-red-suite-2026-08-15.md Sec5 to the build seat, authored now that the byte-path
+// branch exists as buildable source). MECHANISM cell: the "256 % lanes == 0" ragged
+// precondition, checked directly against production's own six chosen lane values
+// (`ComputeGpuGemmSiteGroupPlan`'s own switch, superslm_gpu.cpp) -- proving every real dispatch
+// this design ships computes an EXACT `channels_per_group = 256 / lanes` with zero remainder, so
+// no group ever covers a fractional channel. No device required (pure host arithmetic, mirroring
+// TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions's own no-device convention).
+static void TestDim4_M2_RaggedPreconditions_LanesDivides256Exactly() {
+	using superslm_gpu::ComputeGpuGemmSiteGroupPlan;
+	using superslm_gpu::GpuGemmSplitSite;
+	struct Case { GpuGemmSplitSite site; const char* name; };
+	const Case cases[] = {
+	    {GpuGemmSplitSite::QProj, "QProj"},     {GpuGemmSplitSite::OProj, "OProj"},
+	    {GpuGemmSplitSite::KvProj, "KvProj"},   {GpuGemmSplitSite::GateProj, "GateProj"},
+	    {GpuGemmSplitSite::UpProj, "UpProj"},   {GpuGemmSplitSite::DownProj, "DownProj"},
+	};
+	for (const Case& c : cases) {
+		const auto plan = ComputeGpuGemmSiteGroupPlan(c.site, /*hidden_size=*/1536, /*kv_out_channels=*/512,
+		                                               /*intermediate_size=*/8960);
+		CHECK_MSG(plan.threads_per_group % plan.lanes == 0,
+		          "T2113 dim4 M2 (%s): threads_per_group=%u %% lanes=%u must be exactly 0 (the "
+		          "'256 %% lanes == 0' ragged precondition this design's own transposed partition "
+		          "requires) -- got remainder %u",
+		          c.name, plan.threads_per_group, plan.lanes, plan.threads_per_group % plan.lanes);
+		CHECK_MSG(plan.channels_per_group * plan.lanes == plan.threads_per_group,
+		          "T2113 dim4 M2 (%s): channels_per_group(%u) * lanes(%u) = %u must equal "
+		          "threads_per_group(%u) exactly -- a fractional channels_per_group would mean some "
+		          "group covers a non-integer number of output channels",
+		          c.name, plan.channels_per_group, plan.lanes,
+		          plan.channels_per_group * plan.lanes, plan.threads_per_group);
+	}
+}
+
+// T-2113 (B4, design Sec11 dim4 P2, Finding 2 / D-SLM3347). PRODUCT cell: a real decode through
+// RunLayerLoopGpu (the sslm_decode_step_gpu-shaped call this design's own decode-step API will
+// eventually front, per B1/B2/B3's own established precedent of driving a real forward pass
+// through this shared entry point ahead of B5/B6/B7 landing the public 1.0 surface) at
+// RaggedDimFixture's own dimensions -- hidden_size=6, intermediate_size=6, neither a multiple of
+// 4. Every one of the six GEMM sites' own `GemmCoalescedGpuAt` call therefore evaluates its own
+// `(row & 3u)==0u && (in_channels & 3)==0` fast-path condition to FALSE unconditionally (in_channels
+// % 4 == 2, a runtime fact independent of row alignment) -- the byte-path fallback loop is the
+// ONLY path any thread can take, not merely reachable. Real hardware, per-step CPU/GPU
+// bit-equality across several steps -- proves the byte path taken (by the shader's own
+// unconditional branch, not by inference) AND correct (bit-identical to the CPU oracle at every
+// step), which is StandardsDocument.md Sec5.4's own "prove the byte path taken, not merely
+// reachable" bar, satisfied by execution rather than by argument.
+static void TestDim4_P2_RaggedFixtureBytePathTakenAndCorrect() {
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmForwardStatus;
+
+	RaggedDimFixture fixture;
+	const uint32_t H = RaggedDimFixture::kHidden, HD = RaggedDimFixture::kHeadDim,
+	               KV = RaggedDimFixture::kNumKvHeads, I = RaggedDimFixture::kIntermediate;
+	CHECK_MSG((H & 3u) != 0u, "T2113 dim4 P2: fixture's own hidden_size=%u must NOT be a multiple "
+	                          "of 4 -- this cell's whole premise depends on it",
+	          H);
+	CHECK_MSG((I & 3u) != 0u, "T2113 dim4 P2: fixture's own intermediate_size=%u must NOT be a "
+	                          "multiple of 4",
+	          I);
+
+	const size_t ws_bytes =
+	    static_cast<size_t>(2) * RaggedDimFixture::kContextCap * KV * HD * 2;  // 2 layers
+	std::vector<uint8_t> cpu_ws(ws_bytes, 0), gpu_ws(ws_bytes, 0);
+
+	const int8_t kEmbedCodes[RaggedDimFixture::kHidden] = {5, -5, 3, -3, 1, -1};
+	int8_t cpu_codes[RaggedDimFixture::kHidden];
+	int8_t gpu_codes[RaggedDimFixture::kHidden];
+
+	SequenceLayerState cpu_seq, gpu_seq;
+	cpu_seq.hidden_codes = cpu_codes;
+	gpu_seq.hidden_codes = gpu_codes;
+	const CarriedScale embed_scale{INT64_C(1073741824), 0};
+
+	constexpr int kSteps = 4;
+	for (int step = 0; step < kSteps; ++step) {
+		// Reset per step, matching B3's own StepCpu/StepGpuThroughHandle precedent
+		// (tools/t2113_b3_sequence_smoke.cpp): the embedded token is re-set to the SAME fixed
+		// value every step (isolating this cell's own K/V-residency/dispatch-geometry claim from
+		// any autoregressive sampling decision, which this cell has no stake in) and layer_index
+		// resets to 0 -- a fresh token's forward pass always starts at layer 0, whatever
+		// layer_index the PRIOR step's completed pass left it at.
+		std::memcpy(cpu_codes, kEmbedCodes, sizeof(kEmbedCodes));
+		std::memcpy(gpu_codes, kEmbedCodes, sizeof(kEmbedCodes));
+		cpu_seq.hidden_scale = embed_scale;
+		gpu_seq.hidden_scale = embed_scale;
+		cpu_seq.layer_index = 0;
+		gpu_seq.layer_index = 0;
+		const auto cpu_st = superslm::RunLayerLoop(cpu_seq, fixture.layers, 2, 2, H, HD, KV, I,
+		                                            RaggedDimFixture::kContextCap, fixture.view.rope_tables,
+		                                            cpu_ws.data(), cpu_ws.size());
+		const auto gpu_st = superslm_gpu::RunLayerLoopGpu(gpu_seq, fixture.layers, 2, 2, H, HD, KV, I,
+		                                                   RaggedDimFixture::kContextCap,
+		                                                   fixture.view.rope_tables, gpu_ws.data(),
+		                                                   gpu_ws.size());
+		CHECK_MSG(cpu_st == SslmForwardStatus::Ok && gpu_st == SslmForwardStatus::Ok,
+		          "T2113 dim4 P2 step %d: status CPU=%s GPU=%s, want Ok/Ok", step,
+		          superslm::SslmForwardStatusName(cpu_st), superslm::SslmForwardStatusName(gpu_st));
+		bool codes_match = true;
+		for (uint32_t i = 0; i < H; ++i) {
+			if (cpu_codes[i] != gpu_codes[i]) { codes_match = false; break; }
+		}
+		CHECK_MSG(codes_match,
+		          "T2113 dim4 P2 step %d: hidden_codes DIVERGED between the CPU oracle and "
+		          "RunLayerLoopGpu at ragged dims (hidden_size=%u, intermediate_size=%u, neither a "
+		          "multiple of 4) -- the byte-path fallback this fixture forces on every GEMM site "
+		          "computed a different answer than the CPU reference",
+		          step, H, I);
+		CHECK_MSG(cpu_seq.layer_index == gpu_seq.layer_index &&
+		              cpu_seq.hidden_scale.m == gpu_seq.hidden_scale.m &&
+		              cpu_seq.hidden_scale.e == gpu_seq.hidden_scale.e &&
+		              cpu_seq.kv_saturation_count == gpu_seq.kv_saturation_count &&
+		              cpu_seq.context_length == gpu_seq.context_length,
+		          "T2113 dim4 P2 step %d: SequenceLayerState (layer_index/hidden_scale/"
+		          "kv_saturation_count/context_length) DIVERGED between CPU and GPU at ragged dims",
+		          step);
+	}
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -25931,6 +26182,8 @@ int main(int argc, char** argv) {
 	TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions();
 	TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed();
 	TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly();
+	TestDim4_M2_RaggedPreconditions_LanesDivides256Exactly();
+	TestDim4_P2_RaggedFixtureBytePathTakenAndCorrect();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();

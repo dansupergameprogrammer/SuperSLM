@@ -1,27 +1,24 @@
 // T-2112 (Curie) -- Dim 4 (Shape and platform matrices), design Sec11 dim4. 4 cells total in the
-// design; 2 authored here (RED BY LINK), 2 marked NOT-AUTHORABLE-UNTIL-BUILD below with the
-// reason (routed back per this seat's own Sec5 discipline -- a Coverage Model gap this suite
-// cannot close is a finding, not silently patched).
+// design; 2 authored here (RED BY LINK, need B5's sslm_decode_step_gpu/sslm_decode_step_batch_gpu
+// to link), 2 (M2/P2, the ragged-precondition pair) routed at T-2112 authoring time
+// (D-SLM3347, Finding 2) and AUTHORED at T-2113 B4 -- see below.
 //
-// NOT AUTHORED (routed to the conductor, see Claude/Curie/t2112-1p0-red-suite-2026-08-15.md
-// Sec5): the ragged-precondition mechanism cell ("256 % lanes == 0" etc, written-but-never-
-// executed) and its paired product cell (a synthetic hidden_size/intermediate_size fixture that
-// is NOT a multiple of 32/64/4). The design's own Sec13 deferral table assigns fixture
-// CONSTRUCTION to this suite-authoring pass ("authored alongside the red suite... a planning
-// document does not construct test fixtures -- that is Curie's craft"), but the precondition this
-// cell exercises lives in the HLSL dispatch-geometry construction (design Sec6.1/Sec10 B4) --
-// the packed-load fast path and the transposed-GEMM group mapping -- which does not exist as
-// buildable source in this tree yet (B4 has not landed; the shader files this cell would need to
-// take a byte-path branch inside do not contain that branch yet, per the design's own Sec3/Sec6.1
-// citation of the T-2105 branch as the sole prior art, never merged). A synthetic ARTIFACT
-// (weights sized to a non-conforming hidden_size) is constructible today and is NOT the gap --
-// the gap is that no dispatch path exists yet to route that artifact's shapes through the
-// byte-path branch this cell must prove was actually TAKEN, not merely reachable (design's own
-// Sec11 dim4 text: "prove the byte path taken, not merely reachable"). Constructing the fixture
-// now, with nothing downstream to exercise it, would produce a cell that cannot fail for its own
-// reason -- the red-first discipline this suite is held to (StandardsDocument.md Sec5.4,
-// "a test targets its cell and fails for its reason"). This is filed as owed to B4, not invented
-// as a weaker mechanism-only stand-in.
+// AUTHORED AT T-2113 B4, NOT IN THIS FILE (Finding 2 / D-SLM3347, resolved): the ragged-
+// precondition mechanism cell ("256 % lanes == 0") and its paired product cell (a synthetic
+// hidden_size/intermediate_size fixture NOT a multiple of 4, forcing GemmCoalescedGpuAt's own
+// packed-load fast path unconditionally false) now exist as `TestDim4_M2_RaggedPreconditions_
+// LanesDivides256Exactly`/`TestDim4_P2_RaggedFixtureBytePathTakenAndCorrect`
+// (tests/test_main.cpp, RaggedDimFixture) -- both green, real hardware, part of the 34154-check
+// baseline. NOT placed in THIS file: this TU's own M1/P1 cells (below) call
+// `sslm_decode_step_gpu`/`sslm_decode_step_batch_gpu`, undefined until B5 lands, so this whole
+// translation unit cannot link regardless of what else is added to it -- adding M2/P2 here would
+// bury two real, currently-passing cells inside a binary that cannot build, which is a worse
+// outcome than a canonical-location mismatch. M2/P2's own real logic lives in test_main.cpp,
+// against `RunLayerLoopGpu` directly (the same "drive the shared entry point ahead of the public
+// API landing" precedent B1/B2/B3's own bench tools already established) rather than through
+// `sslm_decode_step_gpu`. When B5 lands and this file's own M1/P1 cells go green, M2/P2's own
+// logic should be folded back into this file (or this file's own header updated to point at
+// test_main.cpp permanently) rather than left stranded — noted here so the fold is not missed.
 #include "fixture_common.h"
 
 using namespace superslm;
