@@ -115,7 +115,15 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
                                     SslmGpuSequenceHandle** out_seq);
 SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq);
 
-/* --- Sec4.3: the two decode calls. Declared for B5/B7. --- */
+/* --- Sec4.3: the two decode calls. Declared for B5/B7.
+ * Thread-safety (design Sec5.4, T-2113 B8): safe to call concurrently from different threads
+ * against DIFFERENT SslmGpuSequenceHandle values ("thread-safe execution over disjoint
+ * sequences," D-SLM3294) -- BUT every call that submits GPU work (sslm_decode_step_gpu,
+ * sslm_decode_step_batch_gpu, and sslm_gpu_ready(block=1) draining one) must be externally
+ * serialized by the caller: this design does not build an internal queue-level lock (see
+ * src/gpu/gpu_1p0.cpp's own SslmGpuContext comment for the full contract and the grounded,
+ * currently-process-wide reason). Two threads driving the SAME sequence handle concurrently is
+ * an unguarded caller error, not a supported use (see the same comment). */
 SslmGpuStatus sslm_decode_step_gpu(
     SslmGpuContext* ctx,
     SslmGpuSequenceHandle* seq,

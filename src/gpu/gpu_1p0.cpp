@@ -51,6 +51,54 @@
 // pre-1.0 singleton caches were (by shader base name) so the later B-sections that
 // port dispatch-recording code onto this object can reuse that code's own lookup
 // shape unchanged -- only the cache's OWNER moves.
+// T-2113 (B8, design Sec5.4/Sec10 B8): thread-safety contract, stated here because this is
+// where every thread-shared object this design names actually lives.
+//
+//   - The PSO/root-signature caches above and `device` are immutable-after-populate for the
+//     RESIDENCY half of this object's life (map/create time) and are never touched by the
+//     decode dispatch path at all (see the next bullet) -- reading them concurrently is safe.
+//   - `SslmGpuModelHandle`/`SslmGpuAdapterHandle`: read-only for the whole of their lifetime
+//     after `map` returns (design Sec5.4) -- safe for any number of threads to read (bind,
+//     dispatch against, or call `sslm_gpu_seq_embed_token` through) concurrently, by
+//     construction, since nothing ever writes to resident weight/adapter/embed buffers again.
+//   - `SslmGpuSequenceHandle`: owns state private to itself. Two threads each driving a
+//     DIFFERENT sequence handle through `sslm_decode_step_gpu`/`sslm_gpu_ready`/
+//     `sslm_gpu_seq_embed_token` touch disjoint per-sequence memory -- this is "thread-safe
+//     execution over disjoint sequences" (D-SLM3294), true by construction once the handle's
+//     own ownership split holds. Two threads driving the SAME sequence handle concurrently is
+//     a caller error this design does not guard against structurally (proven, not assumed: the
+//     T-2112 suite's own dim3 M2 cell reproduces a real D3D12 device fault doing exactly this,
+//     `Claude/Brunel/t2113-1p0-core-build-2026-08-15.md` Sec11.4) -- named as a residual, never
+//     silently treated as safe.
+//   - **The one thing this design deliberately does NOT make safe without caller help**: the
+//     actual GPU submission every `sslm_decode_step_gpu`/`_batch_gpu`/`sslm_gpu_ready(block=1)`
+//     call performs. Design Sec5.4: "the command queue and descriptor-heap allocator are not
+//     safe to submit-from or allocate-from concurrently without external synchronization; this
+//     design does not build an internal queue-level lock (Sec13's own deferral: 'speculative
+//     concurrency infrastructure the product does not yet need') -- a caller driving two
+//     threads' decode calls through one context's queue concurrently must serialize the submit
+//     call itself." **Grounded, not merely quoted from the design**: as of B5-B7, the decode
+//     dispatch path (`RunLayerLoopGpuSubmit`/`RunLayerLoopGpuFinish`, superslm_gpu.cpp) does not
+//     even route through THIS context's own `device` above -- it still calls the pre-1.0
+//     substrate's process-WIDE `harness::GetDevice()` singleton (`SubmitOneSequenceDecode`'s own
+//     `(void)ctx;` -- ctx is not read for dispatch purposes at all, only for residency lookups
+//     upstream of it). So the serialization requirement is, today, PROCESS-wide, not merely
+//     per-context: any two threads anywhere in the process that call a decode-touching function
+//     concurrently, on any context, must be externally serialized at that call boundary, or the
+//     shared allocator's `Reset()` races exactly the way the undrained-batch hang (D-SLM3384,
+//     `Claude/Brunel/t2113-1p0-core-build-2026-08-15.md` Sec12.2) already proved by execution --
+//     that hang is this same hazard's sequential-but-undrained shape; two genuinely concurrent
+//     threads racing the identical `Reset()` is the stronger, race-condition form of it. B8's own
+//     bench tool (`tools/t2113_b8_thread_smoke.cpp`) is built to this documented discipline: a
+//     mutex external to this API wraps exactly the decode-submit-and-drain call pair, nothing
+//     more -- proving the design's own "disjoint sequences, externally serialized only at the
+//     queue-submit boundary" claim holds, without this file adding the internal lock the design
+//     explicitly declines to build (Sec13's own deferral row, dated, routed: "if evidence arrives
+//     that a caller needs concurrent submission through one shared queue... add the lock... as
+//     its own scoped follow-on, not retrofitted here"). Migrating the decode dispatch path onto
+//     this context's OWN `device` (making the requirement genuinely per-context rather than
+//     process-wide) is out of B8's own scope -- named here, dated, the same class of routed item
+//     `g_resident_rope`'s own retirement note already established (Sec6.3 of the build log).
 struct SslmGpuContext {
 	superslm_gpu::harness::Device device;
 
