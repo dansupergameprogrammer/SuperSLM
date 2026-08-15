@@ -7,9 +7,9 @@ T-2102 runtime-LoRA switch demonstration
 ================================================================================
 
 --- timing: model load, 3 repetitions each (rep 1 may be cold; reps 2+ are warm-cache) ---------
-  base model load (see banner) min=7.4434s median=7.4859s max=7.4862s  (samples: 7.4434 7.4862 7.4859)
-  baked model load (see banner) min=7.4420s median=7.4795s max=7.4868s  (samples: 7.4420 7.4868 7.4795)
-  adapter load+apply (switch cost) min=0.1279s median=0.1279s max=0.1377s  (samples: 0.1279 0.1377 0.1279)
+  base model load (see banner) min=7.5788s median=7.6675s max=7.7195s  (samples: 7.6675 7.7195 7.5788)
+  baked model load (see banner) min=7.5850s median=7.8305s max=8.0379s  (samples: 7.5850 8.0379 7.8305)
+  adapter load+apply (switch cost) min=0.1317s median=0.1319s max=0.1337s  (samples: 0.1337 0.1317 0.1319)
 
 --- prompt 0: Customer: Do you have any healing potions?
 Shopkeeper:
@@ -19,9 +19,9 @@ Customer: That's great! Can you tell me more about them
 Customer: I'm looking for a potion that
   BAKED   (last rep, 32 tok):  Yes, we do indeed have some. Would you like to know more about them or would you like to try one?
 This is an example of which type of
-    tok/s BASE                 min=3.5208s median=3.5237s max=3.5315s  (samples: 3.5208 3.5315 3.5237)
-    tok/s RUNTIME              min=3.3006s median=3.3798s max=3.3832s  (samples: 3.3006 3.3798 3.3832)
-    tok/s BAKED                min=3.5247s median=3.5297s max=3.5314s  (samples: 3.5314 3.5297 3.5247)
+    tok/s BASE                 min=3.1922tok/s median=3.4444tok/s max=3.4497tok/s  (samples: 3.1922 3.4497 3.4444)
+    tok/s RUNTIME              min=3.2956tok/s median=3.3190tok/s max=3.3360tok/s  (samples: 3.2956 3.3360 3.3190)
+    tok/s BAKED                min=3.4429tok/s median=3.4479tok/s max=3.4620tok/s  (samples: 3.4479 3.4620 3.4429)
   switch changed output vs base (last rep): YES
   runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=7414 bk=7414 MATCH, top-5 candidate set differ, max|delta| over top-5 union=5021.0 (top logits rt=16306 bk=19393)
   runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 4/32, first fork at position 4
@@ -36,9 +36,9 @@ Shopkeeper: Yes, it
   BAKED   (last rep, 32 tok):  The sword is priced at $1000.00.
 Customer: How much is it?
 Shopkeeper: It is priced at $100
-    tok/s BASE                 min=3.4518s median=3.4565s max=3.4584s  (samples: 3.4565 3.4584 3.4518)
-    tok/s RUNTIME              min=3.3099s median=3.3147s max=3.3205s  (samples: 3.3099 3.3147 3.3205)
-    tok/s BAKED                min=3.4485s median=3.4546s max=3.4557s  (samples: 3.4557 3.4546 3.4485)
+    tok/s BASE                 min=3.3254tok/s median=3.3741tok/s max=3.3826tok/s  (samples: 3.3741 3.3826 3.3254)
+    tok/s RUNTIME              min=3.2079tok/s median=3.2347tok/s max=3.2366tok/s  (samples: 3.2347 3.2366 3.2079)
+    tok/s BAKED                min=3.3427tok/s median=3.3580tok/s max=3.3877tok/s  (samples: 3.3877 3.3427 3.3580)
   switch changed output vs base (last rep): YES
   runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=1084 bk=576 DIFFER, top-5 candidate set differ, max|delta| over top-5 union=1678.0 (top logits rt=11464 bk=12060)
   runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 2/32, first fork at position 0
@@ -52,23 +52,23 @@ Shopkeeper: We have a set of
   BAKED   (last rep, 32 tok):  What's your name, sir?
 Customer: I'm just a customer.
 Shopkeeper: Well, sir, I have a solution for you. I have a
-    tok/s BASE                 min=3.3055s median=3.3119s max=3.3187s  (samples: 3.3187 3.3055 3.3119)
-    tok/s RUNTIME              min=3.1796s median=3.1880s max=3.1965s  (samples: 3.1796 3.1880 3.1965)
-    tok/s BAKED                min=3.3083s median=3.3134s max=3.3147s  (samples: 3.3134 3.3083 3.3147)
+    tok/s BASE                 min=3.1169tok/s median=3.2018tok/s max=3.2452tok/s  (samples: 3.1169 3.2452 3.2018)
+    tok/s RUNTIME              min=3.0558tok/s median=3.1143tok/s max=3.1268tok/s  (samples: 3.0558 3.1268 3.1143)
+    tok/s BAKED                min=3.2447tok/s median=3.2448tok/s max=3.2577tok/s  (samples: 3.2448 3.2577 3.2447)
   switch changed output vs base (last rep): YES
   runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=1205 bk=3555 DIFFER, top-5 candidate set MATCH, max|delta| over top-5 union=3807.0 (top logits rt=11925 bk=15183)
   runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition error past the first fork): token-id match 0/32, first fork at position 0
 
 ================================================================================
 SUMMARY
-  tok/s BASE (all prompts/reps) min=3.3055s median=3.4565s max=3.5315s  (samples: 3.5208 3.5315 3.5237 3.4565 3.4584 3.4518 3.3187 3.3055 3.3119)
-  tok/s RUNTIME (all prompts/reps) min=3.1796s median=3.3099s max=3.3832s  (samples: 3.3006 3.3798 3.3832 3.3099 3.3147 3.3205 3.1796 3.1880 3.1965)
-  tok/s BAKED (all prompts/reps) min=3.3083s median=3.4546s max=3.5314s  (samples: 3.5314 3.5297 3.5247 3.4557 3.4546 3.4485 3.3134 3.3083 3.3147)
+  tok/s BASE (all prompts/reps) min=3.1169tok/s median=3.3254tok/s max=3.4497tok/s  (samples: 3.1922 3.4497 3.4444 3.3741 3.3826 3.3254 3.1169 3.2452 3.2018)
+  tok/s RUNTIME (all prompts/reps) min=3.0558tok/s median=3.2347tok/s max=3.3360tok/s  (samples: 3.2956 3.3360 3.3190 3.2347 3.2366 3.2079 3.0558 3.1268 3.1143)
+  tok/s BAKED (all prompts/reps) min=3.2447tok/s median=3.3580tok/s max=3.4620tok/s  (samples: 3.4479 3.4620 3.4429 3.3877 3.3427 3.3580 3.2448 3.2577 3.2447)
   RUNTIME slower than BASE (median tok/s) on 3/3 prompts
-  runtime-adapter overhead vs base, MEDIANS: 4.2% (spread: base 3.31-3.53 tok/s, runtime 3.18-3.38 tok/s -- treat the percentage as approximate at this resolution, not exact to the decimal)
-  runtime vs baked throughput ratio, MEDIANS: 0.958 (1.0 = identical; spread: baked 3.31-3.53 tok/s)
-  base model load (see banner) min=7.4434s median=7.4859s max=7.4862s  (samples: 7.4434 7.4862 7.4859)
-  baked model load (see banner) min=7.4420s median=7.4795s max=7.4868s  (samples: 7.4420 7.4868 7.4795)
-  adapter load+apply (switch cost) min=0.1279s median=0.1279s max=0.1377s  (samples: 0.1279 0.1377 0.1279)
+  runtime-adapter overhead vs base, MEDIANS: 2.7% (spread: base 3.12-3.45 tok/s, runtime 3.06-3.34 tok/s -- treat the percentage as approximate at this resolution, not exact to the decimal)
+  runtime vs baked throughput ratio, MEDIANS: 0.963 (1.0 = identical; spread: baked 3.24-3.46 tok/s)
+  base model load (see banner) min=7.5788s median=7.6675s max=7.7195s  (samples: 7.6675 7.7195 7.5788)
+  baked model load (see banner) min=7.5850s median=7.8305s max=8.0379s  (samples: 7.5850 8.0379 7.8305)
+  adapter load+apply (switch cost) min=0.1317s median=0.1319s max=0.1337s  (samples: 0.1337 0.1317 0.1319)
 ================================================================================
 wrote tools/t2102_demo_result.json
