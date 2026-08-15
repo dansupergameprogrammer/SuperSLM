@@ -312,6 +312,27 @@ ResidentWeights g_resident_weights;
 // it returns.
 bool g_last_weight_upload_was_skipped = false;
 
+// T-2101 (throughput, D-SLM3301/D-SLM3294): the K/V workspace's own device residency, mirroring
+// ResidentWeights' shape exactly. Before this: `superslm_gpu.cpp`'s call site copied the WHOLE
+// workspace (448 MiB at the 1.5B tier) into a fresh host vector, uploaded it, and read the whole
+// thing back, EVERY call -- ~1.8 GiB of host<->device traffic to land one new K/V row per layer.
+// Keyed on the `workspace` pointer identity, exactly like ResidentWeights is keyed on `layers`:
+// this design's own real call pattern (`tools/sslm_generate.cpp`'s decode loop, this ticket's own
+// `tools/t2100_gpu_throughput.cpp`) drives every token of one decode session through the SAME
+// caller-owned workspace buffer, so a pointer+size identity is a sound, cheap invalidation signal
+// for the common case; a different pointer or size (a different sequence's workspace) falls back
+// to a full re-upload, exactly as ResidentWeights falls back to its full content comparison on a
+// `layers` mismatch. Process-lifetime storage -- the same single-execution, no-concurrent-model-
+// handle residual ResidentWeights' own header comment already names for D-SLM3294's future model-
+// owned residency to key per handle instead of globally.
+struct ResidentKv {
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_buf;
+	bool valid = false;
+	const uint8_t* src_workspace = nullptr;  // opaque identity: the caller's own workspace pointer
+	size_t src_size = 0;
+};
+ResidentKv g_resident_kv;
+
 // T-2071 (O11's own instrument, retiring the long-named gap: "no way to
 // force `CreateCommittedResource` to fail from the suite" -- Claude/Poirot/
 // db73b22-.../a3d44e7-.../b543abe-gpu-serial-port-ship-*-review.md, every
@@ -839,10 +860,42 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// block for exactly that reason.
 	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
 
+	// T-2101: shared by both residency caches below (weights and, further down, K/V). `seq` is the
+	// caller's own proof of continuity for the SEQUENCE this call belongs to -- `context_length == 0`
+	// means no position has ever been committed, `layer_index == 0` means no layer of the in-flight
+	// token has committed either (`SequenceLayerState`'s own header comment, `forward_sites.h`).
+	// Reproduced by execution during this ticket's own build: gating a pointer-identity fast path on
+	// this signal is what closes a regression this build discovered in T-2100's own bottleneck-1 fix
+	// (see `lw_fast_hit`'s own comment immediately below) -- the suite's own per-test fixtures
+	// construct one fresh, independently-built `NLayerFixture`/workspace PER TEST, at whatever
+	// address the allocator's free list hands back, and every one of those calls is a fresh sequence
+	// by construction (`layer_index = 0`, `context_length` default-initialized to 0). A genuine
+	// continuation (`layer_index` or `context_length` nonzero) can only be reached by a PRIOR commit
+	// having already run against THIS SAME call's own arguments, which is the caller-continuity
+	// guarantee a pointer-identity fast path is sound to trust; a fresh sequence carries no such
+	// guarantee and always pays the real check.
+	const bool fresh_sequence = seq.layer_index == 0 && seq.context_length == 0;
+
 	// --- Pack LayerWeights (Sec5.1's own read-resource list, this checkpoint's
 	// own scoped subset: only what sites 1-4 read). Always runs (S3 above). ---
 	// T-2100: skip the pack entirely when the source is identical to what is already resident.
-	const bool lw_fast_hit = g_resident_weights.valid && g_resident_weights.src_layers == static_cast<const void*>(layers) &&
+	//
+	// CORRECTED 2026-08-14 (T-2101): the identity check above (pointer + layer count + stride,
+	// with no `fresh_sequence` term) is exactly the "pointer-only key is unsound" hazard
+	// `ResidentWeights`' own header comment already documents and reproduced once, for `layers` --
+	// T-2100 reintroduced it as a fast-path BYPASS of the content compare, and this build's own full
+	// suite run reproduced it a second time: 22 real failures (`TestT2019_B11_SequenceLayerState
+	// Complete_QProj`/`KvProj_KBiasAndVBias`/`RoPE`/`DownProj`, `T2053`, `T2083`), every one a fresh
+	// `NLayerFixture` whose address the allocator handed back from a just-freed, unrelated prior
+	// fixture -- `lw_fast_hit` served that prior fixture's STALE resident weights across the fixture
+	// boundary with no error. T-2100's own build log (`Claude/Brunel/t2025-gpu-serial-build-2026-08-
+	// 13.md` Sec30) never re-ran the full suite after adding this bypass, so the regression shipped
+	// undetected. `fresh_sequence` closes it: gating the bypass so it never fires for a fresh
+	// sequence costs nothing in real decode (the first call of any sequence is already a cache miss
+	// by construction, and every later call is unaffected), and it cannot make the cache LESS sound
+	// than before T-2100 -- it can only route MORE calls to the pre-T-2100, proven-sound full compare.
+	const bool lw_fast_hit = !fresh_sequence && g_resident_weights.valid &&
+	                         g_resident_weights.src_layers == static_cast<const void*>(layers) &&
 	                         g_resident_weights.src_n == N &&
 	                         g_resident_weights.src_stride == layout.stride;
 	std::vector<uint8_t> lw_bytes;
@@ -1029,8 +1082,47 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// sites need.
 	const GpuScratchLayout scratch_layout =
 	    ComputeScratchLayout(H, I, NQH, static_cast<uint32_t>(context_cap));
-	std::vector<uint8_t> scratch_bytes(scratch_layout.total, 0);
-	std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+	// T-2101: LayerScratch (below, `scratch_uav`) needs no host-supplied initial content -- every
+	// byte any site shader reads from it (the codes blocks, the persistent `scores` region) was
+	// written earlier in the SAME call, by the SAME 17-dispatch-per-layer sequence (T-2045's own C3
+	// comment on the `scores` field above states this for attention's own four dispatches; the same
+	// write-before-read property holds for every other block by construction of the site order).
+	// The old zeroed `scratch_bytes` vector plus its upload/copy/transition cost O(context_cap)
+	// bytes of host->device traffic on EVERY call for content that was always about to be
+	// overwritten and never read before being written -- the same class of wasted per-token
+	// marshalling as the K/V workspace below, at smaller scale. `scratch_uav` is now created
+	// directly in the UAV state with no upload, matching `work_scratch_uav`'s own established idiom
+	// two allocations below.
+
+	// T-2101 (D-SLM3301/D-SLM3294): the K/V workspace's own device residency (`ResidentKv` above).
+	// A full `workspace_size` host copy is built only on a cache miss (first call, or a different
+	// sequence's workspace) -- not on every call, which is what made the old unconditional
+	// `std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);` here ~1.8 GiB of
+	// per-token traffic (a full copy INTO host memory, a full upload, a full readback, and a full
+	// copy back OUT of host memory, every call, to write one new K/V row per layer).
+	// A `workspace` POINTER match is not, on its own, a sound identity signal here -- the suite's
+	// per-test fixtures each construct a fresh, independently zeroed `ws` vector of the identical
+	// size, one per test function/loop iteration, and the allocator can hand the freed one's address
+	// to the next one (the exact hazard `ResidentWeights`' own header comment already documents for
+	// `layers`, and `fresh_sequence`'s own comment above documents reproducing for `layers` a second
+	// time in this build). A pointer-only match here would just as readily serve a PRIOR call's
+	// stale resident K/V content to a brand-new, unrelated, all-zero workspace with no error.
+	//
+	// `fresh_sequence` (declared above, shared with `lw_fast_hit`) is the sound discriminator, for
+	// the identical reason it is sound for weights: `context_length == 0` means NO position has ever
+	// been committed for this sequence (`SequenceLayerState`'s own header comment, `forward_sites.h`),
+	// and `layer_index == 0` means no layer of whatever token is in flight has committed either --
+	// together they are the caller's own proof that nothing in `workspace` can matter yet, regardless
+	// of what stale bytes a reused address might carry. A fresh sequence always forces a real upload;
+	// any other state can only be reached by a PRIOR commit having already run against THIS SAME
+	// call's own workspace (nothing else advances either field), which is the caller-continuity
+	// guarantee the pointer+size identity below is sound to trust. Real decode pays this once per
+	// sequence (already the harness's own "one warmup step, discarded" convention) and gets the fast
+	// path from the second token on, since `layer_index` resets to 0 every token but `context_length`
+	// does not.
+	const bool kv_fast_hit = !fresh_sequence && g_resident_kv.valid &&
+	                          g_resident_kv.src_workspace == workspace &&
+	                          g_resident_kv.src_size == workspace_size;
 
 	// T-2039/T-2049 (N6, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-
 	// review.md, correcting T-2049's own left-behind paragraph per M4,
@@ -1196,6 +1288,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	// T-2101: which K/V rows this call's dispatches wrote (src offset in `kv_uav` == dst offset in
+	// `workspace`) -- read after the fence wait below, well outside the try, so hoisted here for the
+	// same reason as the ComPtr resources immediately above.
+	std::vector<size_t> kv_row_offsets;
 	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
@@ -1280,8 +1376,33 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	sin_table_buf = dev.Upload(sin_table_bytes.data(), sin_table_bytes.size());
 	scratch_layout_buf = dev.Upload(scratch_layout_bytes.data(), scratch_layout_bytes.size());
 	seq_uav = MakeInitializedUav(dev, seq_bytes, upload_keep_alive);
-	scratch_uav = MakeInitializedUav(dev, scratch_bytes, upload_keep_alive);
-	kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
+	// T-2101: no host content -- see the header comment at `kv_fast_hit`'s own declaration above.
+	scratch_uav = dev.MakeBuffer(scratch_layout.total, D3D12_HEAP_TYPE_DEFAULT,
+	                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+	                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	// T-2101 (D-SLM3301/D-SLM3294): device-resident K/V. A cache hit reuses the SAME DEFAULT-heap
+	// buffer every call -- no pack, no upload -- and only needs a state transition back to
+	// UNORDERED_ACCESS, since the previous call's own targeted readback (below) left it in
+	// COPY_SOURCE. A miss (first call, or a different workspace) uploads the full buffer once, same
+	// shape as `ResidentWeights`' own miss path, and the result is kept resident rather than
+	// released at this function's own return.
+	if (kv_fast_hit) {
+		kv_uav = g_resident_kv.kv_buf;
+		D3D12_RESOURCE_BARRIER kv_resume_barrier{};
+		kv_resume_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		kv_resume_barrier.Transition.pResource = kv_uav.Get();
+		kv_resume_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+		kv_resume_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		kv_resume_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		dev.list->ResourceBarrier(1, &kv_resume_barrier);
+	} else {
+		std::vector<uint8_t> kv_bytes(workspace, workspace + workspace_size);
+		kv_uav = MakeInitializedUav(dev, kv_bytes, upload_keep_alive);
+		g_resident_kv.kv_buf = kv_uav;
+		g_resident_kv.valid = true;
+		g_resident_kv.src_workspace = workspace;
+		g_resident_kv.src_size = workspace_size;
+	}
 	// T-2039: WorkScratch is transient, per-dispatch scratch -- every byte is
 	// written before it is read within the SAME dispatch (site_common.hlsli's
 	// own per-primitive contract), so no host-side initial content is needed;
@@ -1397,10 +1518,32 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
 	}
 
-	// --- Readback: SeqState + the KV cache twin, into `seq`/`workspace`. ---
+	// --- Readback: SeqState (whole, small -- O(hidden_size)) + the K/V workspace's OWN newly
+	// written rows into `seq`/`workspace`. T-2101: not the whole 448 MiB workspace. Every dispatch
+	// this call issued wrote at most one new K row and one new V row per (layer, kv_head) it
+	// processed, at `position_u32` (`kv_proj_site.hlsl`'s own write; `rope_guard_site.hlsl`'s own
+	// in-place K rotation touches the SAME row, never a different one) -- the identical
+	// `KvHalfOffsetGpu`/`KvRowOffsetWithinHalfGpu` addressing `KeyRowGpu`/`ValueRowGpu` below use
+	// host-side, so every offset computed here is exact, not an approximation of what changed. ---
 	seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                    D3D12_RESOURCE_STATE_COPY_DEST);
-	kv_readback = dev.MakeBuffer(kv_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	kv_row_offsets.reserve(static_cast<size_t>(layers_to_record) * NH * 2u);
+	for (uint32_t i = 0; i < layers_to_record; ++i) {
+		const uint32_t l = start_layer + i;
+		const size_t half_off = static_cast<size_t>(l) * static_cast<size_t>(context_cap) *
+		                         static_cast<size_t>(NH) * static_cast<size_t>(HD) * 2u;
+		const size_t k_store_size =
+		    static_cast<size_t>(context_cap) * static_cast<size_t>(NH) * static_cast<size_t>(HD);
+		for (uint32_t h = 0; h < NH; ++h) {
+			const size_t row_off = static_cast<size_t>(h) * static_cast<size_t>(context_cap) *
+			                            static_cast<size_t>(HD) +
+			                        static_cast<size_t>(position_u32) * static_cast<size_t>(HD);
+			kv_row_offsets.push_back(half_off + row_off);                 // K row
+			kv_row_offsets.push_back(half_off + k_store_size + row_off);  // V row
+		}
+	}
+	const size_t kv_readback_bytes = kv_row_offsets.size() * static_cast<size_t>(HD);
+	kv_readback = dev.MakeBuffer(kv_readback_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                   D3D12_RESOURCE_STATE_COPY_DEST);
 	D3D12_RESOURCE_BARRIER pre_copy[2]{};
 	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1412,7 +1555,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	pre_copy[1].Transition.pResource = kv_uav.Get();
 	dev.list->ResourceBarrier(2, pre_copy);
 	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
-	dev.list->CopyResource(kv_readback.Get(), kv_uav.Get());
+	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
+		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
+		                            kv_row_offsets[r], HD);
+	}
 	} catch (const std::runtime_error&) {
 		// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 		// review.md, P3): defensively invalidate the weight-residency cache
@@ -1459,6 +1605,16 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		g_resident_weights.lw_buf.Reset();
 		g_resident_weights.valid = false;
+		// T-2101: the same reasoning applies to the K/V residency cache -- a throw reached after
+		// `g_resident_kv` was marked valid (the miss branch above, once its own CopyResource is
+		// merely recorded) but before this command list actually executes would otherwise serve an
+		// uninitialized or partially-written VRAM buffer back to the NEXT call as a cache hit, with
+		// no error. Invalidated unconditionally, matching the weight cache's own unconditional reset
+		// immediately above; a hit call that throws pays a full re-upload on its next call, which is
+		// the same real state change the weight cache's own T-2062 (M-b) correction already
+		// documents as correct, not a no-op.
+		g_resident_kv.kv_buf.Reset();
+		g_resident_kv.valid = false;
 		// T-2062 (M-b): beside the cache invalidation above, not left to the
 		// function-entry assignment alone -- this catch is a TWELFTH
 		// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
@@ -1518,10 +1674,17 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		seq_readback->Unmap(0, &none);
 	}
 	{
+		// T-2101: scatter the small readback buffer's own tightly-packed rows back to their real
+		// positions in `workspace`, at the SAME offsets `kv_row_offsets` was built from -- one
+		// `HD`-sized memcpy per row this call actually wrote, not one memcpy of the whole workspace.
+		const size_t kv_readback_size = kv_row_offsets.size() * static_cast<size_t>(HD);
 		void* p = nullptr;
-		D3D12_RANGE range{0, kv_bytes.size()};
+		D3D12_RANGE range{0, kv_readback_size};
 		SSLM_GPU_HR(kv_readback->Map(0, &range, &p));
-		std::memcpy(workspace, p, kv_bytes.size());
+		const uint8_t* src = static_cast<const uint8_t*>(p);
+		for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
+			std::memcpy(workspace + kv_row_offsets[r], src + r * static_cast<size_t>(HD), HD);
+		}
 		D3D12_RANGE none{0, 0};
 		kv_readback->Unmap(0, &none);
 	}

@@ -22461,6 +22461,77 @@ static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCache
 	          "LastWeightUploadWasSkipped() must read false on this rejecting path");
 }
 
+// T-2101 (D-SLM3301/D-SLM3302): the K/V workspace's own device residency -- pins the fast path a
+// single-call harness structurally cannot exercise (the first call is always the miss that
+// populates it, `StandardsDocument.md` Sec5.4's real-workload rule; C5 and every existing B11
+// cell above call `RunLayerLoopGpu` exactly ONCE). Two real, non-rejecting, CONTINUING calls
+// through the SAME `workspace`/`seq` (context_cap=2, so a second position exists to land) --
+// call 2 lands with `context_length == 1` (non-fresh), so the residency fast path in both
+// `RunLayerLoopGpu`'s K/V cache and its weight cache must engage. Graded two ways: (1) the final
+// GPU `SequenceLayerState` matches a CPU oracle run through the identical two-call sequence on its
+// own separate workspace, via the same X-macro census every other B11 cell uses; (2) the two
+// workspaces are compared BYTE-FOR-BYTE, not just the newest row -- this is the direct pin for
+// T-2101's own targeted (not full-workspace) readback: call 1's row (position 0) must still be
+// correct in `workspace` after call 2's readback touches only position 1's row, proving the
+// partial readback does not silently lose an older, already-landed position.
+static void TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu() {
+	using namespace t2019_b11;
+	NLayerFixture<8> fixture;
+	constexpr int64_t kContextCap = 2;
+	constexpr size_t kWsPerLayerTwoStep = static_cast<size_t>(kContextCap) * 1 /*kv_heads*/ *
+	                                       2 /*head_dim*/ * 2 /*k+v*/;
+
+	auto run_two_steps = [&](std::vector<uint8_t>& ws, bool gpu) {
+		SequenceLayerState seq;
+		int8_t codes[2] = {5, -5};
+		seq.hidden_codes = codes;
+		seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+		seq.layer_index = 0;
+		ws.assign(8 * kWsPerLayerTwoStep, 0);
+		auto call = [&]() {
+			seq.layer_index = 0;  // every real decode step re-enters at layer 0 (T-2100's own harness)
+			if (gpu) {
+				return superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, kContextCap,
+				                                       fixture.view.rope_tables, ws.data(), ws.size());
+			}
+			return RunLayerLoop(seq, fixture.layers, 8, 8, 2, 2, 1, 2, kContextCap,
+			                     fixture.view.rope_tables, ws.data(), ws.size());
+		};
+		const auto st1 = call();  // fresh sequence -- a real upload/full-content path on both sides
+		const auto st2 = call();  // continuing -- the residency fast path engages on the GPU side
+		return std::make_tuple(st1, st2, seq);
+	};
+
+	std::vector<uint8_t> gpu_ws, cpu_ws;
+	const auto [gpu_st1, gpu_st2, gpu_seq] = run_two_steps(gpu_ws, /*gpu=*/true);
+	const auto [cpu_st1, cpu_st2, cpu_seq] = run_two_steps(cpu_ws, /*gpu=*/false);
+
+	CHECK_MSG(cpu_st1 == SslmForwardStatus::Ok && cpu_st2 == SslmForwardStatus::Ok,
+	          "T2101 two-step: CPU oracle status call1=%s call2=%s, want Ok/Ok",
+	          superslm::SslmForwardStatusName(cpu_st1), superslm::SslmForwardStatusName(cpu_st2));
+	CHECK_MSG(gpu_st1 == SslmForwardStatus::Ok && gpu_st2 == SslmForwardStatus::Ok,
+	          "T2101 two-step: GPU port status call1=%s call2=%s, want Ok/Ok",
+	          superslm::SslmForwardStatusName(gpu_st1), superslm::SslmForwardStatusName(gpu_st2));
+	CHECK_MSG(cpu_seq.context_length == 2,
+	          "T2101 two-step: CPU oracle context_length == 2 after two real steps, got %lld",
+	          static_cast<long long>(cpu_seq.context_length));
+
+	int fields_compared = 0;
+	const bool state_ok = CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);
+	CHECK_MSG(fields_compared == kSequenceLayerStateFieldCount,
+	          "T2101 two-step: SequenceLayerState comparison covers %d fields, want %d (X-macro "
+	          "census, D-SLM3083)",
+	          fields_compared, kSequenceLayerStateFieldCount);
+	CHECK_MSG(state_ok,
+	          "T2101 two-step: GPU SequenceLayerState (device-resident K/V, %d-field census) == CPU "
+	          "oracle's after two continuing calls through the SAME workspace",
+	          kSequenceLayerStateFieldCount);
+	CHECK_MSG(gpu_ws == cpu_ws,
+	          "T2101 two-step: GPU workspace == CPU workspace, byte-for-byte, after two continuing "
+	          "calls -- position 0's row (landed by call 1) must survive call 2's own TARGETED "
+	          "readback of position 1's row alone");
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -23795,6 +23866,7 @@ int main(int argc, char** argv) {
 	TestT2053_M1_TableWalkAgainstGuardsDef();
 	TestT2053_Item3_LastWeightUploadWasSkipped();
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
+	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
