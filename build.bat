@@ -92,6 +92,22 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2113 (B3, design Sec10 B3): the sequence-handle bench proof
+rem (tools\t2113_b3_sequence_smoke.cpp) -- needs one real .sslm artifact, so it is built here
+rem but NOT auto-run by default (matching B2's own precedent above); the build seat's own
+rem session invokes it manually against the real 1.5B artifact on disk. Same full source list
+rem as B1/B2's own smoke builds.
+if not exist out\b3 mkdir out\b3
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2113_b3_sequence_smoke.cpp /Fo:out\b3\ /Fe:out\t2113_b3_sequence_smoke.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%

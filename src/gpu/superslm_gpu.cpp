@@ -847,7 +847,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              size_t num_key_value_heads, size_t intermediate_size,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
-                                             uint8_t* workspace, size_t workspace_size) {
+                                             uint8_t* workspace, size_t workspace_size,
+                                             ID3D12Resource* external_kv_resident,
+                                             bool* io_external_kv_needs_resume_barrier) {
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
 	// rejecting return paths (the nine guards below, `!dev.available`, and
@@ -1187,7 +1189,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// sequence (already the harness's own "one warmup step, discarded" convention) and gets the fast
 	// path from the second token on, since `layer_index` resets to 0 every token but `context_length`
 	// does not.
-	const bool kv_fast_hit = !fresh_sequence && g_resident_kv.valid &&
+	// T-2113 (B3, design Sec5.3): when the caller supplies its own dedicated, already-
+	// resident K/V buffer (an SslmGpuSequenceHandle's own buffer, design Sec5.3), this
+	// call never touches g_resident_kv at all -- the per-handle buffer IS this sequence's
+	// own residency, so there is no "hit"/"miss" decision to make against a shared slot;
+	// `kv_fast_hit` stays meaningful only for the pre-1.0 process-global-cache path below.
+	const bool external_kv = external_kv_resident != nullptr;
+	const bool kv_fast_hit = !external_kv && !fresh_sequence && g_resident_kv.valid &&
 	                          g_resident_kv.src_workspace == workspace &&
 	                          g_resident_kv.src_size == workspace_size;
 
@@ -1546,7 +1554,29 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// COPY_SOURCE. A miss (first call, or a different workspace) uploads the full buffer once, same
 	// shape as `ResidentWeights`' own miss path, and the result is kept resident rather than
 	// released at this function's own return.
-	if (kv_fast_hit) {
+	if (external_kv) {
+		// T-2113 (B3, design Sec5.3/Sec10 B3): bind the caller's own dedicated buffer
+		// directly -- no pack, no upload, ever, on this path (the handle's own
+		// sslm_gpu_seq_create already uploaded its initial zeroed content once). The
+		// buffer is created in UNORDERED_ACCESS state (gpu_1p0.cpp), so the FIRST call
+		// on a fresh handle needs no resume barrier; every call after the first left it
+		// in COPY_SOURCE (the targeted readback below, unconditional on this flag), so
+		// this call's own resume barrier is gated on the caller-owned latch, mirroring
+		// kv_fast_hit's own resume shape but scoped to one handle instead of one
+		// process-global slot.
+		kv_uav = external_kv_resident;
+		const bool needs_resume =
+		    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
+		if (needs_resume) {
+			D3D12_RESOURCE_BARRIER kv_resume_barrier{};
+			kv_resume_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+			kv_resume_barrier.Transition.pResource = kv_uav.Get();
+			kv_resume_barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+			kv_resume_barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+			kv_resume_barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+			dev.list->ResourceBarrier(1, &kv_resume_barrier);
+		}
+	} else if (kv_fast_hit) {
 		kv_uav = g_resident_kv.kv_buf;
 		D3D12_RESOURCE_BARRIER kv_resume_barrier{};
 		kv_resume_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1797,6 +1827,13 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	pre_copy[1] = pre_copy[0];
 	pre_copy[1].Transition.pResource = kv_uav.Get();
 	dev.list->ResourceBarrier(2, pre_copy);
+	// T-2113 (B3): kv_uav (whichever buffer it names) is now COPY_SOURCE, same as the
+	// pre-existing g_resident_kv path already left it for kv_fast_hit's own resume
+	// barrier to find on the NEXT call -- latch that fact into the caller-owned flag on
+	// the external-buffer path too, so THIS handle's own next call knows to resume it.
+	if (external_kv && io_external_kv_needs_resume_barrier != nullptr) {
+		*io_external_kv_needs_resume_barrier = true;
+	}
 	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
 	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
 		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),

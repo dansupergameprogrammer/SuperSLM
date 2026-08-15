@@ -45,6 +45,14 @@
 #include "superslm/checked_chain_funnel.h"
 #include "superslm/forward_sites.h"
 
+// T-2113 (B3): forward-declared at GLOBAL scope (matching where d3d12.h itself declares
+// the real COM interface) rather than pulling <d3d12.h> into every translation unit that
+// includes this header (many are CPU-only test/tool files) -- an incomplete COM interface
+// type is sufficient for a pointer parameter; the .cpp definitions that actually
+// dereference it already include d3d12_harness.h, which itself includes <d3d12.h> before
+// this header, so this forward declaration and the real one refer to the identical type.
+struct ID3D12Resource;
+
 namespace superslm_gpu {
 
 // --- B1 (Sec7.1, Sec11 B1): per-primitive int64/128-bit battery. One GPU dispatch
@@ -97,6 +105,30 @@ superslm::ChainResult RequantChainCheckedGpu(const int64_t* wide_row, size_t n,
 // back the identical struct shape. This is also B8's own per-token driver (a decode
 // session is N calls at layer_budget == num_hidden_layers) and B4's per-site proof
 // composes through it once every site lands. ---
+// T-2113 (B3, design Sec5.3/Sec10 B3): the trailing pair below is ADDITIVE -- every
+// existing caller (enumerated at the B3 section of Claude/Brunel/t2113-1p0-core-build-
+// 2026-08-15.md: ~40 call sites across tests/test_main.cpp, tools/t2039_c5_harness.cpp,
+// tools/t2100_gpu_throughput.cpp) passes neither argument and defaults them to nullptr,
+// which reproduces this function's PRE-B3 behavior byte-for-byte (the process-global
+// g_resident_kv single-slot cache, unchanged). `external_kv_resident`, when non-null,
+// is a caller-owned, ALREADY-ALLOCATED DEFAULT-heap UAV buffer (an SslmGpuSequenceHandle's
+// own dedicated K/V residency, design Sec5.3) this call binds directly as kv_uav --
+// bypassing g_resident_kv and its pointer/size fast-hit check entirely for this call, so
+// two sequences each passing their OWN buffer here never share, alias, or evict each
+// other's K/V state, closing D-SLM3311's own class for the K/V cache by construction
+// (the same closure B2 already gave weight residency). `io_external_kv_needs_resume_barrier`
+// is the caller-owned per-sequence latch this function reads/writes to track whether ITS
+// buffer was left in COPY_SOURCE by the PRIOR call on this same handle (mirroring
+// kv_fast_hit's own resume-barrier shape below, now scoped to one handle instead of one
+// global slot): false on a sequence's first call (the buffer was created directly in
+// UNORDERED_ACCESS state, design Sec5.3/Sec10 B3, no resume needed), set true at the end
+// of every call that used this path (this call's own targeted readback always leaves the
+// buffer in COPY_SOURCE), read (and consumed) at the top of the NEXT call on the same
+// handle. `workspace`/`workspace_size` remain required in the external-buffer path too --
+// still validated by this function's own existing size guard, and the targeted per-call
+// readback still scatters into `workspace` exactly as it does today, so a caller in this
+// mode gets the identical CPU-oracle-comparable host mirror the pre-existing path always
+// produced (never merely a GPU self-consistency proof).
 superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              const superslm::LayerWeights* layers,
                                              uint32_t num_hidden_layers, uint32_t layer_budget,
@@ -104,7 +136,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
                                              size_t num_key_value_heads, size_t intermediate_size,
                                              int64_t context_cap,
                                              const superslm::SslmTensorManifest& rope_tables,
-                                             uint8_t* workspace, size_t workspace_size);
+                                             uint8_t* workspace, size_t workspace_size,
+                                             ID3D12Resource* external_kv_resident = nullptr,
+                                             bool* io_external_kv_needs_resume_barrier = nullptr);
 
 // T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md, M1's
 // own remedy): the structural closure for `RunLayerLoopGpu`'s own host-side
