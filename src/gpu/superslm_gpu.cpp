@@ -934,7 +934,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
     GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
-    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems) {
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge) {
 	if (out_inflight) *out_inflight = nullptr;
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
@@ -1344,7 +1345,16 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	const uint64_t work_wide_a_off = 0;
 	const uint64_t work_wide_b_off = static_cast<uint64_t>(max_width) * 8u;
 	const uint64_t work_rope_stage_off = work_wide_b_off + static_cast<uint64_t>(max_width) * 8u;
-	const uint64_t work_total = work_rope_stage_off + static_cast<uint64_t>(NQH) * static_cast<uint64_t>(HD) * 4u;
+	// T-2113 (B6b, design Sec8): ADAPTER_U -- the adapter-delta dispatch's own transient
+	// scratch for the narrowed, folded rank-wide intermediate (`u_i8`, forward_sites.cpp's
+	// own `AddAmplifyingLoraDelta`), one signed byte per rank element (never a fixed-capacity
+	// local array, matching this region's own sibling comments' stated discipline). Sized to
+	// the BOUND ADAPTER's own rank (0 when no adapter is bound this call -- `adapter_bridge`
+	// is null at every pre-B6b caller and every base-only decode call, so this region costs
+	// nothing beyond the 4-byte floor `MakeBuffer` already needs to be a legal resource).
+	const uint64_t work_adapter_u_off = work_rope_stage_off + static_cast<uint64_t>(NQH) * static_cast<uint64_t>(HD) * 4u;
+	const uint32_t adapter_rank = adapter_bridge ? adapter_bridge->rank : 0;
+	const uint64_t work_total = work_adapter_u_off + std::max<uint64_t>(4u, adapter_rank);
 
 	// T-2049 (N6): index 24 (formerly `work_attn_scores_off`) is retired --
 	// left unwritten (reads back 0, never consulted by any shader) rather
@@ -1803,6 +1813,13 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
 	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
 	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
+	// T-2113 (B6b, design Sec8): the GEMM-site adapter delta-application dispatch -- one
+	// generic shader, dispatched once per COVERED (layer, projection) slot (see the per-layer
+	// loop below); a single 256-thread group, never issued at all when no adapter is bound or
+	// a given slot is uncovered (design Sec8's own "records the identical dispatch chain a
+	// base-only sequence always did" -- realized here as zero extra dispatches, not a
+	// guarded no-op branch inside one).
+	auto& adapter_delta_pipe = harness::GetOrBuildComposedPipeline("adapter_delta_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
 	// T-2113 (B4, design Sec10 B2/B4's own deferred root-binding hoist -- Claude/Brunel/
@@ -1862,6 +1879,20 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	dev.list->SetComputeRootUnorderedAccessView(
 	    11, (b5_async_drop_uav_rebind ? work_scratch_uav : kv_uav)->GetGPUVirtualAddress());
 	dev.list->SetComputeRootUnorderedAccessView(12, work_scratch_uav->GetGPUVirtualAddress());
+	// T-2113 (B6b, design Sec8): the adapter-delta dispatch's own two read-only inputs (t8
+	// LoraAB, t9 Fold), bound in the SAME once-per-call hoist as every other root SRV/UAV
+	// above -- every composed-pipeline root signature carries these two params now (B6b's own
+	// d3d12_harness.h extension), so EVERY dispatch this call records, adapter-delta or not,
+	// must have them set to a valid GPU VA before Dispatch (D3D12 root-signature validation).
+	// No adapter bound this call (`adapter_bridge == nullptr`, every pre-B6b caller and every
+	// base-only decode): bound to `model_const_buf`, already a valid resident SRV this call
+	// binds anyway -- never read by any PSO that does not itself declare t8/t9, i.e. never
+	// read at all when no adapter-delta dispatch is ever issued (see the per-layer loop
+	// below), so this fallback binding is inert, not merely unread-in-practice.
+	dev.list->SetComputeRootShaderResourceView(
+	    13, (adapter_bridge ? adapter_bridge->lora_ab_resident : model_const_buf.Get())->GetGPUVirtualAddress());
+	dev.list->SetComputeRootShaderResourceView(
+	    14, (adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get())->GetGPUVirtualAddress());
 
 	D3D12_RESOURCE_BARRIER global_uav_barrier{};
 	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1916,6 +1947,61 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+	// T-2113 (B6b, design Sec8): the GEMM-site adapter delta-application dispatch. Recorded
+	// immediately after the base GEMM's own dispatch for the same site (same insertion point
+	// forward_sites.cpp's AddAmplifyingLoraDelta occupies on the CPU path -- between the
+	// WSC1 fold, already committed to WorkScratch by the just-recorded base-GEMM dispatch,
+	// and the bias/requant dispatch that follows), never issued when `adapter_bridge` is
+	// null OR the (layer, projection) slot is uncovered -- design Sec8's own "zero-cost,
+	// identical dispatch chain" contract for the unadapted case, realized as an absent
+	// dispatch rather than a guarded no-op inside a present one. `slot_p` matches
+	// `sslm_gpu_adapter_map`'s own by-position index (gpu_1p0.cpp: q=0, o=1, gate=2, up=3,
+	// down=4, k=5, v=6). `in_base`/`wide_base` are the SAME byte offsets (ScratchLayout's
+	// `normed`/`ctx_codes`/`act_codes`, WorkScratch's WIDE_A/WIDE_B) the corresponding
+	// `<site>_gemm_site.hlsl` dispatch just read/wrote -- this dispatch reads the identical
+	// activation row and adds into the identical accumulator row, root-constant-addressed
+	// rather than derived from the ScratchLayout/Layout SRVs this shader does not bind.
+	// T-2113 (B6b): no `return` statement in this lambda's own body -- a lambda `return` is
+	// textually indistinguishable, to check_gpu_guard_status_parity.py's own text-based LWUWS
+	// return-path census, from a real control-flow exit of RunLayerLoopGpuSubmit itself (B5's
+	// own `SSLM_B5_ASYNC_*` violation-pin lambdas were retired for exactly this reason, §7.5).
+	// Nested `if` in place of early return keeps this lambda's own conditional skip invisible
+	// to that census, matching every other conditional in this function's own body.
+	auto bind_and_dispatch_adapter_delta = [&](uint32_t layer_index, int slot_p, uint32_t in_channels,
+	                                            uint32_t out_channels, uint32_t in_base, uint32_t wide_base) {
+		if (adapter_bridge) {
+			const superslm_gpu::AdapterProjSlot& slot =
+			    adapter_bridge->slots[static_cast<size_t>(layer_index) * 7u + static_cast<size_t>(slot_p)];
+			if (slot.present) {
+				if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+					dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP,
+					                    dispatch_query_index);
+				}
+				++dispatch_query_index;
+				// Adapter weight/fold-table byte offsets are host `uint64_t` (gpu_port.h's own
+				// AdapterProjSlot) but every real LoRA adapter's own residency is orders of
+				// magnitude under 4 GiB (rank-sized matrices) -- narrowed to uint32_t root
+				// constants, matching this function's own established convention for every other
+				// byte-offset root constant (layer_base, ScratchLayout's own offsets, all
+				// uint32_t already).
+				uint32_t consts[11] = {H,
+				                       in_channels,
+				                       out_channels,
+				                       slot.rank,
+				                       static_cast<uint32_t>(slot.a_offset),
+				                       static_cast<uint32_t>(slot.b_offset),
+				                       static_cast<uint32_t>(slot.fold_offset),
+				                       wide_base,
+				                       static_cast<uint32_t>(work_adapter_u_off),
+				                       in_base,
+				                       0u};
+				dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
+				dev.list->SetPipelineState(adapter_delta_pipe.pso.Get());
+				dev.list->Dispatch(1, 1, 1);
+				dev.list->ResourceBarrier(1, &global_uav_barrier);
+			}
+		}
 	};
 	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
@@ -2002,8 +2088,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
 		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*q=*/0, H, H, scratch_layout.normed,
+		                                 static_cast<uint32_t>(work_wide_a_off));
 		bind_and_dispatch(q_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*k=*/5, H, NH * HD, scratch_layout.normed,
+		                                 static_cast<uint32_t>(work_wide_a_off));
+		bind_and_dispatch_adapter_delta(l, /*v=*/6, H, NH * HD, scratch_layout.normed,
+		                                 static_cast<uint32_t>(work_wide_b_off));
 		bind_and_dispatch(kv_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
 		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
@@ -2012,15 +2104,23 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
 		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
 		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*o=*/1, H, H, scratch_layout.ctx_codes,
+		                                 static_cast<uint32_t>(work_wide_a_off));
 		bind_and_dispatch(o_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
 		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*gate=*/2, H, I, scratch_layout.normed,
+		                                 static_cast<uint32_t>(work_wide_a_off));
 		bind_and_dispatch(gate_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*up=*/3, H, I, scratch_layout.normed,
+		                                 static_cast<uint32_t>(work_wide_a_off));
 		bind_and_dispatch(up_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
 		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
+		bind_and_dispatch_adapter_delta(l, /*down=*/4, I, H, scratch_layout.act_codes,
+		                                 static_cast<uint32_t>(work_wide_a_off));
 		bind_and_dispatch(down_proj_pipe.pso.Get(), l);
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);

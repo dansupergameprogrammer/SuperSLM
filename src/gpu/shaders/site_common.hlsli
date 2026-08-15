@@ -105,6 +105,34 @@ int64_t ApplyWeightScaleFoldGpu(int64_t acc, int identity, int mult, int shift)
     return (int64_t)RoundingDivideByPotI32Gpu(hm, shift);
 }
 
+// intmath.cpp SaturatingLeftShift32 -- T-2113 (B6b): the amplification-side sibling
+// RoundingDivideByPotI32Gpu never needed (WSC1's own shift is always non-negative);
+// ApplyAmplifyingWeightScaleFoldGpu's own exponent<0 branch below is the first GPU
+// caller.
+int SaturatingLeftShift32Gpu(int x, int shift)
+{
+    if (shift <= 0) return x;
+    int64_t wide = ((int64_t)x) << shift;
+    if (wide > (int64_t)2147483647) return 2147483647;
+    if (wide < -(int64_t)2147483647 - 1) return -2147483647 - 1;
+    return (int)wide;
+}
+
+// forward_sites.cpp ApplyAmplifyingWeightScaleFold -- T-2113 (B6b, design Sec8): the
+// GEMM-site adapter delta-application dispatch's own fold primitive, for both the
+// u-fold (rank-wide) and delta-fold (out_channels-wide) stages of
+// AddAmplifyingLoraDelta. identity==1 is the exact rho==1 pass-through; exponent>=0 is
+// bit-identical to ApplyWeightScaleFoldGpu's own non-identity branch (the SAME two
+// gemmlowp-style primitives, called exactly the same way); only exponent<0
+// (amplification) is new arithmetic, via SaturatingLeftShift32Gpu above.
+int64_t ApplyAmplifyingWeightScaleFoldGpu(int64_t acc, int identity, int mult, int exponent)
+{
+    if (identity != 0) return acc;
+    int hi = SaturatingRoundingDoublingHighMulGpu_((int)acc, mult);
+    if (exponent >= 0) return (int64_t)RoundingDivideByPotI32Gpu(hi, exponent);
+    return (int64_t)SaturatingLeftShift32Gpu(hi, -exponent);
+}
+
 // Sign-extended single-byte load from a ByteAddressBuffer -- HLSL has no int8
 // scalar type at this compile target (cs_6_2), so every int8 weight/code read
 // goes through this word-load-then-extract idiom, matching B3's own already-

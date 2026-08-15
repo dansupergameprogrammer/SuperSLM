@@ -193,6 +193,55 @@ struct GpuLayerLoopInFlight;
 // caller with no live `SslmTensorManifest` of its own can still supply directly) and
 // `g_resident_rope` is never touched. Every existing caller passes none of the six and
 // observes byte-for-byte pre-B5 behavior.
+// T-2113 (B6b, design Sec5.2/Sec8/Sec10 B6): one covered (layer, projection) slot of a
+// mapped adapter's own device residency -- byte offsets into the adapter handle's
+// `lora_ab_buf` (a_offset: lora_A bytes, rank*in_channels int8; b_offset: lora_B bytes,
+// out_channels*rank int8) and `fold_buf` (fold_offset: DeltaFoldScales rows
+// (out_channels*12 bytes: identity/mult/exponent int32 triples) immediately followed by
+// UFoldScales rows (rank*12 bytes, same triple shape) -- `SslmDeltaFoldScaleView`/
+// `SslmUFoldScaleView`'s own on-disk row layout, `model.cpp`'s
+// `SslmAmplifyingFoldScaleView<Kind>::Identity/Mult/Exponent`). `present=false` is the
+// identical NULL-per-projection shape `LayerAdapterProjection::a_weight==nullptr`
+// already documents on the CPU path (forward_sites.h) -- the (layer, projection) this
+// adapter does not cover. Defined here (not gpu_1p0.cpp, where `sslm_gpu_adapter_map`
+// builds it) so `RunLayerLoopGpuSubmit`'s own dispatch-recording code
+// (superslm_gpu.cpp) can read it through `GpuAdapterBridge` below without either TU
+// depending on the other's opaque handle type -- the same handle-opacity convention
+// `external_kv_resident`/`external_weights_resident` above already established.
+struct AdapterProjSlot {
+	bool present = false;
+	uint64_t a_offset = 0;
+	uint64_t b_offset = 0;
+	uint64_t a_bytes = 0;
+	uint64_t b_bytes = 0;
+	uint64_t fold_offset = 0;
+	uint32_t rank = 0;
+	uint32_t out_channels = 0;
+};
+
+// T-2113 (B6b, design Sec8): the adapter-delta dispatch bridge. `gpu_1p0.cpp`'s own
+// `SslmGpuAdapterHandle` is opaque to this TU (mirroring B3/B5's `external_kv_resident`/
+// `external_weights_resident` bridges above) -- this POD struct is what
+// `RunLayerLoopGpuSubmit` actually reads, per (layer, projection), to record the
+// GEMM-site delta-application dispatches design Sec8 specifies. `slots` is a flat
+// `[layer * 7 + projection]` array (q=0, o=1, gate=2, up=3, down=4, k=5, v=6 -- the
+// SAME `LayerAdapter` field-order-by-position `sslm_gpu_adapter_map` already uses),
+// sized `num_hidden_layers * 7`, owned by the caller (the adapter handle's own `slots`
+// vector, whose `std::vector<std::array<AdapterProjSlot, 7>>` shape is already
+// contiguous in exactly this flat layout) for at least the duration of this call.
+// Null (`adapter_bridge == nullptr`, the default at every pre-B6b caller) records the
+// IDENTICAL base-only dispatch chain B5 always recorded -- zero adapter-delta
+// dispatches issued, not a guarded no-op branch inside one (design Sec8: "a sequence
+// with adapter_or_null == nullptr records the identical dispatch chain a base-only
+// sequence always did").
+struct GpuAdapterBridge {
+	ID3D12Resource* lora_ab_resident = nullptr;
+	ID3D12Resource* fold_resident = nullptr;
+	uint32_t rank = 0;
+	const AdapterProjSlot* slots = nullptr;  // flat [layer*7+projection], see above
+	uint32_t num_hidden_layers = 0;
+};
+
 superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
@@ -202,7 +251,8 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
     GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident = nullptr,
     ID3D12Resource* external_rope_cos_resident = nullptr,
     ID3D12Resource* external_rope_sin_resident = nullptr, bool external_rope_has = false,
-    uint64_t external_rope_cos_elems = 0, uint64_t external_rope_sin_elems = 0);
+    uint64_t external_rope_cos_elems = 0, uint64_t external_rope_sin_elems = 0,
+    const GpuAdapterBridge* adapter_bridge = nullptr);
 
 // FINISH: `block == 0` and the fence has not yet signaled: `*out_ready = 0`, returns
 // `superslm::SslmForwardStatus::Ok` (design Sec4.2: "the call itself succeeded; nothing

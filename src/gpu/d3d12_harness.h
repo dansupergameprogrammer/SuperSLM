@@ -254,7 +254,16 @@ struct Device {
 	// honestly the CURRENT substrate's own count, not a §5.1 count, and is
 	// named as such everywhere it is used -- it must be re-derived, not
 	// reused, when S2's own binding-architecture migration lands.
-	static constexpr UINT kComposedResourceBindingCount = 12;  // 8 SRV + 4 UAV
+	// T-2113 (B6b, design Sec8): 12 -> 14 (10 SRV + 4 UAV). The two new SRVs (t8 LoraAB, t9
+	// Fold) are the adapter-delta dispatch's own read-only inputs -- design Sec8's own
+	// "addressed via a root-constant/root-descriptor the recording code sets per sequence,
+	// per call." Every existing composed-pipeline shader (attn_norm_site through
+	// commit_site, every *_gemm_site/*_site) declares no t8/t9 register and is unaffected --
+	// D3D12 does not require a PSO's shader to reference every root parameter its shared
+	// root signature carries, the same "subset usage" already proven by every GEMM-only
+	// dispatch shader that skips t3-t6 (ModelConstants/SiluLut/RopeCosTable/RopeSinTable)
+	// while sharing this identical signature.
+	static constexpr UINT kComposedResourceBindingCount = 14;  // 10 SRV + 4 UAV
 
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
 		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
@@ -288,6 +297,11 @@ struct Device {
 		ps[11].Descriptor.ShaderRegister = 2;  // u2 KvCache
 		ps[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
 		ps[12].Descriptor.ShaderRegister = 3;  // u3 WorkScratch
+		// T-2113 (B6b, design Sec8): the adapter-delta dispatch's own two read-only inputs.
+		ps[13].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[13].Descriptor.ShaderRegister = 8;  // t8 LoraAB (adapter lora_A+lora_B bytes)
+		ps[14].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+		ps[14].Descriptor.ShaderRegister = 9;  // t9 Fold (adapter DeltaFoldScales+UFoldScales)
 
 		D3D12_ROOT_SIGNATURE_DESC rs{};
 		rs.NumParameters = 1 + kComposedResourceBindingCount;

@@ -167,16 +167,13 @@ struct SslmGpuModelHandle {
 // HLSL applies the delta this handle makes resident. `sslm_decode_step_gpu` accepts a bound
 // adapter, validates it, and records the identical base-only dispatch chain regardless. See
 // Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec9 for the full scope statement.
-struct AdapterProjSlot {
-	bool present = false;
-	uint64_t a_offset = 0;   // byte offset into lora_ab_buf, this projection's own lora_A bytes
-	uint64_t b_offset = 0;   // byte offset into lora_ab_buf, this projection's own lora_B bytes
-	uint64_t a_bytes = 0;
-	uint64_t b_bytes = 0;
-	uint64_t fold_offset = 0;  // byte offset into fold_buf: out_channels*12 (DFS) then rank*12 (UFS) bytes
-	uint32_t rank = 0;
-	uint32_t out_channels = 0;
-};
+// T-2113 (B6b): AdapterProjSlot now lives in gpu_port.h (superslm_gpu::AdapterProjSlot)
+// so RunLayerLoopGpuSubmit's own dispatch-recording code (superslm_gpu.cpp) can read it
+// through GpuAdapterBridge without depending on this TU's opaque handle types -- the
+// same relocation shape D-SLM3351/D-SLM3368 already used for the marshal headers.
+// Aliased here so every existing reference in this file (`AdapterProjSlot`, unqualified)
+// keeps compiling unchanged.
+using AdapterProjSlot = superslm_gpu::AdapterProjSlot;
 
 struct SslmGpuAdapterHandle {
 	SslmGpuContext* ctx = nullptr;
@@ -817,10 +814,10 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	// Design Sec8/Sec10 B6: per-sequence adapter binding is a call argument, checked at every
 	// call (design Sec5.2: "checked at every sslm_decode_step_gpu/_batch_gpu call... a
 	// pointer-equality check against the handle each side already carries, not a re-hash").
-	// T-2113 (B6): the residency and guard checks below are real; the GPU dispatch-recording
-	// path this call submits through (RunLayerLoopGpuSubmit) does not yet read the adapter's
-	// own resident buffers -- named, not silently claimed as adapter support, per
-	// StandardsDocument.md Sec5.6, see Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec9.
+	// T-2113 (B6b, design Sec8): the residency and guard checks below are real, AND the GPU
+	// dispatch-recording path this call submits through (RunLayerLoopGpuSubmit) now reads the
+	// adapter's own resident buffers when `adapter_or_null` validates -- the GEMM-site
+	// delta-application dispatches, via the GpuAdapterBridge built below.
 	if (!ctx || !seq || seq->destroyed || !seq->model || seq->model->destroyed) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 		                                           // at this call besides the structural-
@@ -857,6 +854,24 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	// its own and needs none.
 	static const superslm::SslmTensorManifest kEmptyManifest;
 
+	// T-2113 (B6b, design Sec8): `adapter_or_null` was validated (AdapterModelMismatch, above)
+	// but discarded through B6 -- now built into the flat bridge RunLayerLoopGpuSubmit reads.
+	// `adapter->slots` is `std::vector<std::array<AdapterProjSlot, 7>>` (sslm_gpu_adapter_map,
+	// above) -- already contiguous in exactly the `[layer*7+projection]` flat layout
+	// GpuAdapterBridge::slots documents (a std::vector of std::array<T,7> lays out every
+	// element of array[l] immediately before array[l+1][0]), so no copy is needed: the bridge
+	// simply points at the SAME storage the adapter handle already owns.
+	superslm_gpu::GpuAdapterBridge adapter_bridge;
+	const superslm_gpu::GpuAdapterBridge* adapter_bridge_ptr = nullptr;
+	if (adapter_or_null != nullptr) {
+		adapter_bridge.lora_ab_resident = adapter_or_null->lora_ab_buf.Get();
+		adapter_bridge.fold_resident = adapter_or_null->fold_buf.Get();
+		adapter_bridge.rank = adapter_or_null->rank;
+		adapter_bridge.slots = &adapter_or_null->slots[0][0];
+		adapter_bridge.num_hidden_layers = model->num_hidden_layers;
+		adapter_bridge_ptr = &adapter_bridge;
+	}
+
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::RunLayerLoopGpuSubmit(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, layers_to_issue,
@@ -864,7 +879,7 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	    model->context_cap, kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(),
 	    seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, &inflight, model->weights_buf.Get(),
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
-	    model->rope_cos_elem_count, model->rope_sin_elem_count);
+	    model->rope_cos_elem_count, model->rope_sin_elem_count, adapter_bridge_ptr);
 
 	if (!inflight) {
 		// Rejected before submission (a guard, or an exception) -- seq/host state
