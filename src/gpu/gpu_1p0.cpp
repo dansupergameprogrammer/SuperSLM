@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "d3d12_harness.h"
+#include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
 #include "superslm/layer_marshal.h"  // T-2113 B2: MarshalLayer/LayerBacking (relocated, tools/sslm_marshal.h)
 #include "superslm/model.h"          // T-2113 B2: the REAL superslm::SslmModelView this TU needs by value
@@ -139,6 +140,57 @@ struct SslmGpuModelHandle {
 	// ModelHasLiveSequences guard (design Sec9, Sec4.2's own model_unmap row): T-2113 (B3)
 	// incremented by sslm_gpu_seq_create, decremented on release, below.
 	int64_t live_sequences = 0;
+
+	bool destroyed = false;
+};
+
+// T-2113 (B6, design Sec5.2/Sec10 B6): the real SslmGpuAdapterHandle. Owns the adapter's own
+// device residency, independent of any sequence (design Sec5.2: "resident and shared read-only
+// by every sequence that later binds this handle"). Mirrors the CPU-side `LoadAdapterArtifact`/
+// `AdapterHandle` shape (include/superslm/adapter_marshal.h, relocated from tools/
+// sslm_adapter_loader.h this section, D-SLM3368) exactly, on the device side, per design Sec5.2's
+// own instruction. `model` is retained (not merely its content hash) so `sslm_decode_step_gpu`'s
+// own AdapterModelMismatch check (design Sec5.2: "a pointer-equality check against the handle
+// each side already carries, not a re-hash") is a real pointer compare, never a re-hash.
+//
+// Residency shape this section builds: every (layer, projection) pair the adapter's own
+// DeltaFoldScales section covers gets its lora_A/lora_B bytes and DeltaFoldScales/UFoldScales
+// (identity, mult, shift) triples packed into three DEFAULT-heap resident buffers (mirroring the
+// model handle's own three-buffer split, weights/rope_cos/rope_sin) -- uploaded ONCE, here, never
+// per decode call. `AdapterProjSlot` records each covered slot's own byte offset into those
+// buffers plus its rank, indexed [layer][projection] host-side, so a later section's dispatch-
+// recording code can bind the right sub-range without re-deriving the packing.
+//
+// NOT built this section, named per StandardsDocument.md Sec5.6 (a deferral surfaced loudly, not
+// silently folded into "adapter support"): nothing in the dispatch-recording path
+// (RunLayerLoopGpuSubmit, src/gpu/superslm_gpu.cpp) reads these buffers yet -- no GEMM site's own
+// HLSL applies the delta this handle makes resident. `sslm_decode_step_gpu` accepts a bound
+// adapter, validates it, and records the identical base-only dispatch chain regardless. See
+// Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec9 for the full scope statement.
+struct AdapterProjSlot {
+	bool present = false;
+	uint64_t a_offset = 0;   // byte offset into lora_ab_buf, this projection's own lora_A bytes
+	uint64_t b_offset = 0;   // byte offset into lora_ab_buf, this projection's own lora_B bytes
+	uint64_t a_bytes = 0;
+	uint64_t b_bytes = 0;
+	uint64_t fold_offset = 0;  // byte offset into fold_buf: out_channels*12 (DFS) then rank*12 (UFS) bytes
+	uint32_t rank = 0;
+	uint32_t out_channels = 0;
+};
+
+struct SslmGpuAdapterHandle {
+	SslmGpuContext* ctx = nullptr;
+	SslmGpuModelHandle* model = nullptr;  // AdapterModelMismatch check, design Sec5.2: pointer-equality
+
+	Microsoft::WRL::ComPtr<ID3D12Resource> lora_ab_buf;  // every covered slot's lora_A+lora_B bytes
+	Microsoft::WRL::ComPtr<ID3D12Resource> fold_buf;     // every covered slot's DFS+UFS (identity,mult,shift) triples
+
+	// [layer][7 projections: q,o,gate,up,down,k,v] -- AdapterProjSlot::present false for a
+	// (layer, projection) this adapter does not cover, the identical NULL-adapter-per-projection
+	// shape LayerAdapterProjection::a_weight==nullptr already documents on the CPU path
+	// (forward_sites.h).
+	std::vector<std::array<AdapterProjSlot, 7>> slots;
+	uint32_t rank = 0;
 
 	bool destroyed = false;
 };
@@ -399,6 +451,151 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	return SSLM_OK;
 }
 
+// Design Sec5.2/Sec10 B6: "mirrors the CPU-side LoadAdapterArtifact/AdapterHandle shape exactly,
+// on the device side: validates the adapter's base-hash against model's own content hash ...
+// and uploads the per-layer, per-projection lora_A/lora_B weights plus DeltaFoldScales/
+// UFoldScales tables into their own DEFAULT-heap buffers." Reuses
+// superslm_adapter::PopulateAdapterFromView (include/superslm/adapter_marshal.h -- the body of
+// LoadAdapterArtifact that runs after SslmModel::Load, extracted this section, D-SLM3368, since
+// this call already holds a parsed view and must not re-read/re-parse the artifact's own bytes
+// from a path a view does not retain) for the parse/validate half -- the identical B0b checks
+// (ValidateAmplifyingFoldBaseHash/Dimension/Projection) the CPU path already runs, run here for
+// real against a real converted artifact for the first time on the GPU path.
+SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                    const SslmModelView* adapter_artifact,
+                                    SslmGpuAdapterHandle** out_adapter) {
+	if (!out_adapter) {
+		return SSLM_DEVICE_LOST;  // same "no live object to report through" reasoning as
+		                          // sslm_gpu_model_map's own null-out-parameter case.
+	}
+	*out_adapter = nullptr;
+	if (!ctx || !model || model->destroyed || !adapter_artifact) {
+		return SSLM_DEVICE_LOST;
+	}
+
+	superslm_adapter::BaseModelGeometry base_geom;
+	base_geom.num_hidden_layers = model->num_hidden_layers;
+	base_geom.hidden_size = model->hidden_size;
+	base_geom.intermediate_size = model->intermediate_size;
+	base_geom.kv_hidden_size = static_cast<uint64_t>(model->num_key_value_heads) * model->head_dim;
+	base_geom.base_artifact_hash = model->content_hash;
+
+	// T-2113 (B6, D-SLM3368): PopulateAdapterFromView is the extracted body of
+	// LoadAdapterArtifact (include/superslm/adapter_marshal.h) that runs AFTER SslmModel::Load --
+	// this call site already HAS a parsed view (`*adapter_artifact`, design Sec5.2's own
+	// parameter), so it validates/populates against that view directly rather than re-reading
+	// and re-parsing the artifact's own bytes from a file path a view does not retain.
+	superslm_adapter::AdapterMeta meta;
+	std::vector<superslm::LayerAdapter> layer_adapters;
+	std::string load_err;
+	const superslm_adapter::AdapterLoadStatus load_st = superslm_adapter::PopulateAdapterFromView(
+	    *adapter_artifact, base_geom, meta, layer_adapters, &load_err);
+	if (load_st == superslm_adapter::AdapterLoadStatus::BaseHashMismatch) {
+		return SSLM_ADAPTER_BASE_HASH_MISMATCH;
+	}
+	if (load_st != superslm_adapter::AdapterLoadStatus::Ok) {
+		// Every other rejection (malformed ADP1, missing sections, a dimension/shape
+		// mismatch) is a structurally-broken-artifact class design Sec9's own table assigns
+		// no dedicated status to -- same "no more specific status" disposition B2/B3 already
+		// use for the analogous marshal-failure case (sslm_gpu_model_map's own comment above).
+		return SSLM_DEVICE_LOST;
+	}
+
+	// q,o,gate,up,down,k,v -- LayerAdapter's own field order (forward_sites.h), matched to
+	// AdapterProjSlot's own [7] index by position.
+	auto proj_at = [](const superslm::LayerAdapter& la, int p) -> const superslm::LayerAdapterProjection& {
+		switch (p) {
+			case 0: return la.q;
+			case 1: return la.o;
+			case 2: return la.gate;
+			case 3: return la.up;
+			case 4: return la.down;
+			case 5: return la.k;
+			default: return la.v;
+		}
+	};
+
+	std::vector<uint8_t> ab_bytes;
+	std::vector<uint8_t> fold_bytes;
+	std::vector<std::array<AdapterProjSlot, 7>> slots(model->num_hidden_layers);
+
+	for (uint32_t l = 0; l < model->num_hidden_layers; ++l) {
+		const superslm::LayerAdapter& la = layer_adapters[l];
+		for (int p = 0; p < 7; ++p) {
+			const superslm::LayerAdapterProjection& proj = proj_at(la, p);
+			if (!proj.a_weight || !proj.b_weight || !proj.delta_fold_entry || !proj.u_fold_entry) {
+				continue;  // this (layer, projection) is not covered by this adapter -- present
+				           // stays false, the identical NULL-per-projection shape LayerWeights'
+				           // own B1c documents on the CPU path (forward_sites.h).
+			}
+			AdapterProjSlot& slot = slots[l][static_cast<size_t>(p)];
+			slot.present = true;
+			slot.rank = la.rank;
+			slot.out_channels = static_cast<uint32_t>(proj.delta_fold_entry->row_count);
+			// a_weight is [rank, in_channels]: in_channels isn't independently recorded on
+			// LayerAdapterProjection (AdapterInChannelsFor derives it from the projection kind
+			// at load time, include/superslm/adapter_marshal.h) -- reconstructed here from the
+			// SAME rule, keyed on the slot index this loop assigns (down_proj, index 4, is the
+			// one projection whose in_channels is intermediate_size rather than hidden_size).
+			const uint64_t in_channels = (p == 4) ? model->intermediate_size : model->hidden_size;
+			slot.a_bytes = static_cast<uint64_t>(la.rank) * in_channels;
+			slot.b_bytes = static_cast<uint64_t>(slot.out_channels) * la.rank;
+
+			slot.a_offset = ab_bytes.size();
+			ab_bytes.insert(ab_bytes.end(), proj.a_weight, proj.a_weight + slot.a_bytes);
+			slot.b_offset = ab_bytes.size();
+			ab_bytes.insert(ab_bytes.end(), proj.b_weight, proj.b_weight + slot.b_bytes);
+
+			slot.fold_offset = fold_bytes.size();
+			const uint64_t dfs_bytes = static_cast<uint64_t>(proj.delta_fold_entry->row_count) * 12u;
+			const uint64_t ufs_bytes = static_cast<uint64_t>(proj.u_fold_entry->row_count) * 12u;
+			fold_bytes.insert(fold_bytes.end(), proj.delta_fold_entry->data,
+			                   proj.delta_fold_entry->data + dfs_bytes);
+			fold_bytes.insert(fold_bytes.end(), proj.u_fold_entry->data,
+			                   proj.u_fold_entry->data + ufs_bytes);
+		}
+	}
+	// A degenerate adapter (every slot uncovered -- e.g. a target_modules_mask of zero) still
+	// maps cleanly; MakeBuffer/Upload need at least one byte, matching sslm_gpu_model_map's own
+	// cos_need/sin_need "no rope tables" fallback (>= 8 bytes) above.
+	if (ab_bytes.empty()) ab_bytes.resize(1, 0);
+	if (fold_bytes.empty()) fold_bytes.resize(1, 0);
+
+	std::unique_ptr<SslmGpuAdapterHandle> h(new SslmGpuAdapterHandle());
+	try {
+		h->lora_ab_buf = UploadResidentBufferSync(ctx->device, ab_bytes.data(), ab_bytes.size());
+		h->fold_buf = UploadResidentBufferSync(ctx->device, fold_bytes.data(), fold_bytes.size());
+	} catch (const std::exception&) {
+		return SSLM_DEVICE_LOST;
+	}
+
+	h->ctx = ctx;
+	h->model = model;
+	h->slots = std::move(slots);
+	h->rank = meta.rank;
+
+	ctx->live_handles += 1;
+	*out_adapter = h.release();
+	return SSLM_OK;
+}
+
+// Design Sec5.2: "releases the adapter's own residency and returns Ok. ... carries no Busy
+// precondition of its own (unlike model/sequence release) because an adapter handle holds no
+// in-flight GPU work." A sequence still bound to `adapter` continues decoding against whatever
+// its own buffers still contain until that sequence's next call rebinds or releases -- the
+// documented residual design Sec5.2 names explicitly, not a guarded case this call adds one for.
+SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) {
+	if (!adapter) {
+		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_model_unmap(nullptr).
+	}
+	if (ctx && ctx->live_handles > 0) {
+		ctx->live_handles -= 1;
+	}
+	adapter->destroyed = true;
+	delete adapter;
+	return SSLM_OK;
+}
+
 // Design Sec4.1.1: "on device-acquisition failure, *out_ctx is set to nullptr and
 // the call returns DeviceLost (Sec9) -- the same status a later mid-decode
 // device-removal produces". harness::Device::Init() never throws past its own
@@ -617,16 +814,22 @@ SslmGpuStatus MapDecodedStatusToGpuStatus(superslm::SslmForwardStatus st) {
 SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                     const SslmGpuAdapterHandle* adapter_or_null,
                                     uint32_t dispatch_budget) {
-	// Design Sec8/Sec10 B6: per-sequence adapter binding is B6's own delivery (B6 depends
-	// on B5, not the reverse, design Sec10's own dependency table). A non-null adapter
-	// here is accepted but produces base-only behavior today -- named, not silently
-	// claimed as adapter support, per StandardsDocument.md Sec5.6.
-	(void)adapter_or_null;
+	// Design Sec8/Sec10 B6: per-sequence adapter binding is a call argument, checked at every
+	// call (design Sec5.2: "checked at every sslm_decode_step_gpu/_batch_gpu call... a
+	// pointer-equality check against the handle each side already carries, not a re-hash").
+	// T-2113 (B6): the residency and guard checks below are real; the GPU dispatch-recording
+	// path this call submits through (RunLayerLoopGpuSubmit) does not yet read the adapter's
+	// own resident buffers -- named, not silently claimed as adapter support, per
+	// StandardsDocument.md Sec5.6, see Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec9.
 	if (!ctx || !seq || seq->destroyed || !seq->model || seq->model->destroyed) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 		                                           // at this call besides the structural-
 		                                           // invariant status (same "no more specific
 		                                           // status" disposition as the helpers above).
+	}
+	if (adapter_or_null && (adapter_or_null->destroyed || adapter_or_null->model != seq->model)) {
+		return SSLM_ADAPTER_MODEL_MISMATCH;  // design Sec5.2/Sec9: pointer-equality against the
+		                                      // model handle each side already carries.
 	}
 	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
 	if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
