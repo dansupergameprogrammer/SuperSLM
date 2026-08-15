@@ -58,20 +58,76 @@ static void TestDim11_P1_OrdinaryMisuseReachesGuardAtProductionScale(SslmGpuCont
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
+// T-2113 (Brunel, reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim11_M1_EveryGuardAbleToFireShippingConfig; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim11_M2_ContextDestroyGuardFiresInReleaseConfig; (void)addr_1;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim11_P1_OrdinaryMisuseReachesGuardAtProductionScale; (void)addr_2;
+
+	std::vector<uint8_t> bytes;
+	SslmModelView view{};
+	std::string err;
+	const bool have_model = !g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view, &bytes, &err);
+	if (!have_model) {
+		SKIP_MSG("dim11 needs --model1p5b=PATH -- not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+
+	// M1 (two model handles, only model_a used by the cell's own body).
+	{
+		SslmGpuContext* ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+		SslmGpuModelHandle* model_a = nullptr;
+		SslmGpuModelHandle* model_b = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model_a) == SSLM_OK);
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model_b) == SSLM_OK);
+		TestDim11_M1_EveryGuardAbleToFireShippingConfig(ctx, model_a, model_b);
+		CHECK(sslm_gpu_model_unmap(ctx, model_a) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// M2 needs a model with a LIVE sequence still bound when unmap/destroy are attempted (the
+	// cell's own comment: "sequences still bound"/"handles still live") -- a DEDICATED
+	// ctx/model/sequence, since both guarded calls are expected to REJECT (return an error
+	// status, not actually free anything), so real cleanup happens after the cell returns.
+	{
+		SslmGpuContext* ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		SslmGpuSequenceHandle* seq = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+		TestDim11_M2_ContextDestroyGuardFiresInReleaseConfig(ctx, model);
+		// Both guarded calls inside M2 must have been rejected (per its own assertions) --
+		// ctx/model/seq are still live; do real cleanup now, in the guard-satisfying order.
+		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// P1 (real 1.5B, ordinary misuse).
+	{
+		SslmGpuContext* ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim11_P1_OrdinaryMisuseReachesGuardAtProductionScale(ctx, model);
+		// P1's own body releases its sequence but (per design) never unmaps model_1p5b -- the
+		// cell's own claim is that ModelHasLiveSequences fires on ordinary misuse, exercised while
+		// a live sequence was still bound; after P1 returns, the sequence it created has been
+		// released (P1's own tail call), so a clean unmap now is real cleanup, not a repeat of
+		// the guarded call P1 itself already exercised.
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

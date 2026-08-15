@@ -118,31 +118,67 @@ static void TestDim1_P2_TenSequenceLifecycleNoLeak(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_model_unmap(ctx, model) != SSLM_MODEL_HAS_LIVE_SEQUENCES);
 }
 
+// T-2113 (Brunel, reconciliation pass): GpuContextConfig/GpuResidencyConfig are now REAL,
+// complete types in production (include/superslm/gpu_1p0.h, B1/B2) -- this suite's own local
+// header intentionally still forward-declares them incomplete (never edited here, per Brunel's
+// own charter: no test-content edits). This driver completes them LOCALLY, matching production's
+// definition byte-for-byte (StandardsDocument.md Sec5.4: verified at source -- both are a single
+// reserved int, include/superslm/gpu_1p0.h), which is legal C++ (a forward declaration completed
+// by a later definition in the same translation unit) and produces an identical calling
+// convention to production's own struct, since layout -- not which TU wrote it -- is what ABI
+// compatibility depends on.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim1_M1_TwoLiveModelHandlesContentHashKeyed; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent; (void)addr_1;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim1_P1_RealArtifactAddressReuseBitEquality; (void)addr_2;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_3 = (void*)&TestDim1_P2_TenSequenceLifecycleNoLeak; (void)addr_3;
-	// This translation unit's own job today is to compile clean (proving the declared surface,
-	// dim-7) and fail at LINK (proving no implementation exists yet, see build_link_red.bat's own
-	// captured transcript) -- ctx/model/sequence construction (which needs a REAL, complete
-	// GpuContextConfig/GpuResidencyConfig the build seat defines alongside B1/B2, design Sec10)
-	// is the driver's job once those types and sslm_gpu_context_create/sslm_gpu_model_map are
-	// implemented; the cell functions above take already-constructed handles as parameters for
-	// exactly that reason.
+
+	// T-2113 driver (B1-B5 landed): construct real ctx/model handles through the production API
+	// and invoke every cell above -- the wiring named as "the driver's job" in this file's own
+	// prior comment, now that sslm_gpu_context_create/sslm_gpu_model_map exist.
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	std::vector<uint8_t> bytes_a, bytes_b;
+	SslmModelView view_a{}, view_b{};
+	std::string err;
+	SslmGpuModelHandle* model_a = nullptr;  // primary (1.5B), kept live across M2/P1/P2
+	bool have_1p5b = !g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view_a, &bytes_a, &err);
+	bool have_0p5b = !g_model_0p5b_path.empty() && LoadRealModel(g_model_0p5b_path, &view_b, &bytes_b, &err);
+
+	if (have_1p5b && have_0p5b) {
+		// M1 unmaps both handles internally -- map two DEDICATED handles for it so the primary
+		// handle used by M2/P1/P2 below is unaffected.
+		SslmGpuModelHandle* m1_a = nullptr;
+		SslmGpuModelHandle* m1_b = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view_a, GpuResidencyConfig{}, &m1_a) == SSLM_OK);
+		CHECK(sslm_gpu_model_map(ctx, &view_b, GpuResidencyConfig{}, &m1_b) == SSLM_OK);
+		TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(ctx, m1_a, m1_b);
+	} else {
+		SKIP_MSG("dim1 M1 needs both --model1p5b=PATH and --model0p5b=PATH -- not run");
+	}
+
+	if (have_1p5b) {
+		CHECK(sslm_gpu_model_map(ctx, &view_a, GpuResidencyConfig{}, &model_a) == SSLM_OK);
+		TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(ctx, model_a);
+		TestDim1_P1_RealArtifactAddressReuseBitEquality(ctx, model_a);
+		// P2's own body calls sslm_gpu_model_unmap(model_a) itself at its tail (its own cell
+		// asserts the unmap succeeds once every sequence it created is released) -- run last,
+		// no further unmap call on model_a after this returns (the handle is gone).
+		TestDim1_P2_TenSequenceLifecycleNoLeak(ctx, model_a);
+	} else {
+		SKIP_MSG("dim1 M2/P1/P2 need --model1p5b=PATH -- not run");
+	}
+
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

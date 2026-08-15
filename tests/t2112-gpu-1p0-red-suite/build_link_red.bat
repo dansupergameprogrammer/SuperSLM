@@ -25,6 +25,7 @@ for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp 
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
         %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+        %ENG%\src\gpu\gpu_1p0.cpp ^
         "%%f" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link d3d12.lib dxgi.lib dxguid.lib > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul

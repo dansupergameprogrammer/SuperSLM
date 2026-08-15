@@ -89,20 +89,36 @@ static void TestDim3_P1_RealArtifactConcurrentDecode64Steps(SslmGpuContext* ctx,
 	// target -- named here as a residual, per design Sec11 dim3, not silently assumed covered.
 }
 
+// T-2113 (Brunel, reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim3_M1_TwoThreadsDisjointSequencesMatchSerial; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim3_M2_SameSequenceConcurrentAccessResidualObserved; (void)addr_1;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim3_P1_RealArtifactConcurrentDecode64Steps; (void)addr_2;
+
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	std::vector<uint8_t> bytes;
+	SslmModelView view{};
+	std::string err;
+	if (!g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view, &bytes, &err)) {
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim3_M1_TwoThreadsDisjointSequencesMatchSerial(ctx, model);
+		TestDim3_M2_SameSequenceConcurrentAccessResidualObserved(ctx, model);
+		TestDim3_P1_RealArtifactConcurrentDecode64Steps(ctx, model);
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim3 needs --model1p5b=PATH -- not run");
+	}
+
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

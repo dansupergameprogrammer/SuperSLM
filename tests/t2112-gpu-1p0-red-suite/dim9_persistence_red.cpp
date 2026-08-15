@@ -64,16 +64,40 @@ static void TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps(SslmGpuContext
 	CHECK(sslm_gpu_seq_release(ctx, restored) == SSLM_OK);
 }
 
+// T-2113 (Brunel, reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
+// these are completed locally rather than edited in the suite's own canonical header.
+struct GpuContextConfig { int reserved; };
+struct GpuResidencyConfig { int reserved; };
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim9_M1_SaveMidDecodeRestoreFreshHandleBitIdentical; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps; (void)addr_1;
+
+	SslmGpuContext* ctx = nullptr;
+	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+	if (!ctx) { std::printf("FATAL: sslm_gpu_context_create returned null\n"); return 2; }
+
+	// NOTE (B6 not yet landed on this branch, per Claude/Brunel/t2113-1p0-core-build-2026-08-15.md
+	// Sec7's own handoff): sslm_gpu_adapter_map does not exist as of B1-B5, so no real
+	// SslmGpuAdapterHandle can be constructed here. Both cells are invoked with adapter=nullptr,
+	// which is a valid "no adapter bound" call per design Sec8 -- this exercises the save/restore
+	// round-trip mechanism itself but NOT the adapter-bound half of each cell's own stated claim.
+	// Named honestly in the reconciliation report, not silently passed off as full coverage.
+	std::vector<uint8_t> bytes;
+	SslmModelView view{};
+	std::string err;
+	if (!g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view, &bytes, &err)) {
+		SslmGpuModelHandle* model = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
+		TestDim9_M1_SaveMidDecodeRestoreFreshHandleBitIdentical(ctx, model, nullptr);
+		TestDim9_P1_RealArtifactSaveRestoreThen64FurtherSteps(ctx, model, nullptr);
+		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim9 needs --model1p5b=PATH -- not run");
+	}
+
+	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
