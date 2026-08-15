@@ -22,3 +22,19 @@ for %%f in (cell_control_decode_step.c cell_dim5_device_lost_midbatch.c cell_dim
     cl /nologo /c /TP /W3 /WX /Iprefold "%%f" /Fo:"obj\prefold_%%~nf.obj"
     echo    exit: %errorlevel%
 )
+
+rem T-2113 (B9): the real-engine-headers leg's own must-reject commissioning
+rem (design Sec11 dim 7, "confirmed at fold" -- re-run here against THIS
+rem cell now that it is a standing build-gate fixture, not merely re-cited
+rem from the design's own one-off T-2112 mini-fold transcript). Must-reject:
+rem the PRE-fold prefold\sslm_gpu_1p0.h (its own global-scope SslmModelView
+rem stub) combined with the real superslm/model.h -- must fail with C2872
+rem (ambiguous symbol), reproducing the real T-2112 Finding 1 defect. Must-
+rem accept: the identical cell against the real, post-fold header (one level
+rem up) -- must compile clean.
+echo === cell_dim7_real_engine_headers.c ^(pre-fold header, MUST FAIL C2872^) ===
+cl /nologo /c /TP /std:c++20 /W3 /WX /Iprefold /I..\..\..\include cell_dim7_real_engine_headers.c /Fo:"obj\prefold_cell_dim7_real_engine_headers.obj"
+echo    exit: %errorlevel%
+echo === cell_dim7_real_engine_headers.c ^(post-fold header, MUST COMPILE CLEAN^) ===
+cl /nologo /c /TP /std:c++20 /W3 /WX /I.. /I..\..\..\include cell_dim7_real_engine_headers.c /Fo:"obj\postfold_cell_dim7_real_engine_headers.obj"
+echo    exit: %errorlevel%

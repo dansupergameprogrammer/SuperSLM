@@ -203,6 +203,24 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
+rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
+rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
+rem build-time gate -- a hand-mutated guard or a broken declaration in gpu_1p0.h fails THIS
+rem build, not merely a separately-run script nobody invokes. Non-fatal-if-absent would defeat
+rem the point (unlike the Python CI checkers below, which degrade gracefully because they are
+rem genuinely optional tooling); the probe's own toolchain (cl, already required above) is not
+rem optional, so a failure here fails the whole build. build_probe.bat's own `cd /d %HEREDIR%`
+rem persists into THIS script (batch `call` shares the process, not a subshell) -- wrapped in
+rem its own pushd/popd so this script's own relative paths below still resolve from repo root.
+pushd .
+call tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat
+set probe_ec=%errorlevel%
+popd
+if not %probe_ec%==0 (
+	popd & exit /b 1
+)
+
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
