@@ -1531,16 +1531,37 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		dev.list->Dispatch(num_groups, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);
 	};
-	// T-2101: group counts for the five split GEMM dispatches, `ceil(out_channels/256)` -- q_proj/
-	// o_proj/down_proj output hidden_size, gate_proj/up_proj output intermediate_size.
-	const uint32_t i_groups = (I + 255u) / 256u;
+	// T-2101: group counts for the five split GEMM dispatches -- q_proj/o_proj/down_proj output
+	// hidden_size at 64 threads/group (T-2101's own second turn); gate_proj/up_proj output
+	// intermediate_size at 256 threads/group. `ComputeGpuGemmGroupCount` (below, exported via
+	// gpu_port.h) is the ONE place this ceiling formula is written -- both group counts below call
+	// it rather than each re-deriving `(x + T - 1) / T` inline, so a future edit to the formula
+	// cannot fix one call site and silently miss the other the way a hand-duplicated formula could.
+	const uint32_t i_groups = ComputeGpuGemmGroupCount(I, 256u);
 	// T-2101 (second turn, same round): q/o/down_proj_gemm use 64-thread groups (see each
 	// shader's own header comment) -- 1536 output channels at 256 threads/group is only 6 groups,
 	// the first round's own measurement found that the single largest remaining GPU-busy consumer
 	// after the first split, achieving far less bandwidth than the 35-group gate/up_proj_gemm
 	// siblings at the identical 256-thread width. Fewer threads per group, proportionally more
 	// groups, same total per-thread computation.
-	const uint32_t h_groups_64 = (H + 63u) / 64u;
+	const uint32_t h_groups_64 = ComputeGpuGemmGroupCount(H, 64u);
+
+	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the standing guard the
+	// multi-group change was owed and shipped without -- the review's own falsification (mutate
+	// either group count to a literal `1u`) leaves output channels 64..1535 (or 256..8959)
+	// uncomputed with no error at every model tier this design targets, and nothing before this
+	// guard existed would have said so. Fires on EVERY call, at whatever dimensions that call
+	// carries -- trivially satisfied by the suite's own hidden_size=2 fixtures (group count 1,
+	// 1*64 >= 2), genuinely load-bearing at the real 1.5B tier (group count 24 or 6 or 35,
+	// checked against 1536/8960) where a hardcoded or mis-derived group count would violate it.
+	// `SSLM_GPU_HR`-style: an internal invariant, not a data-dependent rejection, so it throws
+	// rather than returning a status code a caller could plausibly want to recover from.
+	if (static_cast<uint64_t>(i_groups) * 256ull < static_cast<uint64_t>(I) ||
+	    static_cast<uint64_t>(h_groups_64) * 64ull < static_cast<uint64_t>(H)) {
+		throw std::runtime_error(
+		    "RunLayerLoopGpu: GEMM group count does not cover out_channels -- "
+		    "i_groups*256 or h_groups_64*64 fell short of intermediate_size/hidden_size");
+	}
 
 	// T-2045 (C3): the full 16-site + commit composition -- attention is four real dispatches
 	// (attention-score, softmax, context-accumulate, ctx_fold), not T-2039's own fused one.
@@ -1761,9 +1782,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// in the SAME command list (already fenced by the wait above). `gpu_busy_ms` is boundary[last] -
 	// boundary[0] (identical to the whole-chain figure §32's own two-query bracket measured); the
 	// per-dispatch vector is every CONSECUTIVE delta, in dispatch order -- `g_last_call_per_dispatch_ms[d]`
-	// is dispatch `d`'s own GPU time, and `d % <sites-per-layer>` names which of the 17 site shaders
-	// it is (the fixed, unconditional call order in the loop above), summed by the caller across
-	// however many layers this call processed.
+	// is dispatch `d`'s own GPU time, and `d % 22` names which of the 22 dispatches per layer it is
+	// (the fixed, unconditional call order in the loop above -- `gpu_port.h`'s own
+	// `LastCallPerDispatchTimingsMs` declaration spells out the full 22-entry order), summed by the
+	// caller across however many layers this call processed.
 	if (dev.timestamp_frequency > 0 && dispatch_count_this_call > 0) {
 		std::vector<UINT64> ts(dispatch_count_this_call + 1, 0);
 		void* qp = nullptr;
@@ -1840,6 +1862,17 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // missing (Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2) --
 // see gpu_port.h's own declaration comment for the full contract.
 bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
+
+// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ONE place the multi-group
+// GEMM dispatches' own ceiling formula is written -- `RunLayerLoopGpu`'s own `i_groups`/
+// `h_groups_64` both call this rather than each computing `(out_channels + threads_per_group - 1)
+// / threads_per_group` inline, and `tests/test_main.cpp`'s own `TestT2101_ComputeGpuGemmGroupCount*`
+// cells call it directly (no GPU, no device, real 1536/8960 dimensions) to pin the exact values the
+// real model's own dispatches depend on -- a regression that hardcodes or otherwise breaks this
+// formula fails that test immediately, at the real dimensions, without needing a device.
+uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group) {
+	return (out_channels + threads_per_group - 1u) / threads_per_group;
+}
 
 GpuCallTiming LastCallTiming() { return g_last_call_timing; }
 

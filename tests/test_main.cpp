@@ -22616,6 +22616,58 @@ static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
 	          per_dispatch_rejected.size());
 }
 
+// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the standing guard the
+// multi-group GEMM change was owed and shipped without. `ComputeGpuGemmGroupCount` (`gpu_port.h`)
+// is the ONE place `RunLayerLoopGpu`'s own group-count formula lives; this cell calls it directly,
+// no device, no dispatch, at the REAL model's own dimensions -- the ones the review's own
+// falsification (both group counts hardcoded to `1u`) would silently under-cover. Pins the exact
+// values D-SLM3314/D-SLM3315 state as executed (24 groups at 64 threads for hidden_size=1536;
+// 6 groups at 256 threads for the same; 35 groups at 256 threads for intermediate_size=8960), the
+// coverage property for each (`groups * threads_per_group >= out_channels`), the no-waste property
+// (`(groups - 1) * threads_per_group < out_channels`), and the suite's own hidden_size=2 fixture
+// scale (where the property holds trivially at group count 1) -- so the SAME cell exercises the
+// tiny scale every existing B11 fixture runs at and the real scale the split sites actually need,
+// without building a new large synthetic fixture.
+static void TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale() {
+	struct Case {
+		uint32_t out_channels;
+		uint32_t threads_per_group;
+		uint32_t want_groups;
+	};
+	// Real model (qwen2.5-1.5b-instruct, D-SLM3300's own confirmed dims): hidden_size=1536,
+	// intermediate_size=8960. Fixture scale: hidden_size=intermediate_size=2 (every B11 fixture).
+	const Case cases[] = {
+	    {1536, 64, 24},   // q/o/down_proj_gemm, T-2101 round 2 (D-SLM3315)
+	    {1536, 256, 6},   // q/o/down_proj_gemm, T-2101 round 1 (D-SLM3314), pre-round-2 width
+	    {8960, 256, 35},  // gate/up_proj_gemm, unchanged since round 1
+	    {2, 64, 1},        // fixture scale, 64-thread sites
+	    {2, 256, 1},       // fixture scale, 256-thread sites
+	};
+	for (const Case& c : cases) {
+		const uint32_t got = superslm_gpu::ComputeGpuGemmGroupCount(c.out_channels, c.threads_per_group);
+		CHECK_MSG(got == c.want_groups,
+		          "T2101 ComputeGpuGemmGroupCount(out_channels=%u, threads_per_group=%u): got %u, "
+		          "want %u",
+		          c.out_channels, c.threads_per_group, got, c.want_groups);
+		const uint64_t covered = static_cast<uint64_t>(got) * static_cast<uint64_t>(c.threads_per_group);
+		CHECK_MSG(covered >= c.out_channels,
+		          "T2101 ComputeGpuGemmGroupCount(out_channels=%u, threads_per_group=%u): %u groups "
+		          "* %u threads = %llu, must cover out_channels (>= %u) -- this is the exact "
+		          "property the review's own 1u falsification violates",
+		          c.out_channels, c.threads_per_group, got, c.threads_per_group,
+		          static_cast<unsigned long long>(covered), c.out_channels);
+		if (got > 0) {
+			const uint64_t under = static_cast<uint64_t>(got - 1) * static_cast<uint64_t>(c.threads_per_group);
+			CHECK_MSG(under < c.out_channels,
+			          "T2101 ComputeGpuGemmGroupCount(out_channels=%u, threads_per_group=%u): (%u-1) "
+			          "groups * %u threads = %llu already covers out_channels -- %u groups is not "
+			          "the minimal ceiling",
+			          c.out_channels, c.threads_per_group, got, c.threads_per_group,
+			          static_cast<unsigned long long>(under), got);
+		}
+	}
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -23952,6 +24004,7 @@ int main(int argc, char** argv) {
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
 	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
 	TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject();
+	TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();

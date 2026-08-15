@@ -13,11 +13,18 @@
 // touch page faults); the reported figure is the mean over the timed steps.
 //
 // WHAT IT DOES NOT MEASURE, stated so no one reads more into the number than it carries: this
-// times `RunLayerLoopGpu` AS IT EXISTS, which fence-waits and reads the complete K/V workspace
-// back to host on every call. That readback is part of the measured cost and is a property of
-// this substrate's calling convention rather than of the kernels. A backend with an asynchronous
-// decode lifecycle would not pay it per step. The number below is therefore a floor on what the
-// kernels can do, not a ceiling.
+// times `RunLayerLoopGpu` AS IT EXISTS, which fence-waits on every call (a real, measured cost --
+// see the phase decomposition below, `submit_wait_ms`). The K/V readback itself is NOT a
+// significant contributor to that wait as of T-2101 (commit `d79f6b7`): the workspace is
+// device-resident and each call reads back only the rows it actually wrote (~14 KiB at the 1.5B
+// tier, not the whole 448 MiB workspace) -- a prior version of this comment claimed the opposite
+// and was wrong from that commit forward, inside this same arc (code review
+// `6d9e04e-t2101-gpu-throughput-review.md`, S2). The real remaining cost, decomposed and named by
+// D-SLM3312/D-SLM3313, is GPU-busy time concentrated in the GEMM sites -- not host<->device
+// marshalling, and not per-call submission overhead (`record_ms`/`readback_ms` are both small; see
+// the phase table). The number below is a floor on what THIS calling convention (one synchronous
+// dispatch chain per token, no pipelining across tokens) can do, not a ceiling on the kernels
+// themselves -- D-SLM3314/D-SLM3315's own multi-group fix already moved that floor once.
 //
 // Throwaway harness, same precedent as tools/t2039_c5_harness.cpp.
 // Usage: t2100_gpu_throughput <model.sslm> [steps] [token_id]
@@ -307,10 +314,10 @@ int main(int argc, char** argv) {
 	for (const auto& r : rows) site_ms_total += r.ms;
 	std::printf(
 	    "\nGPU per-site decomposition (mean ms/token, summed across %u layers, sorted descending; "
-	    "sum of all 17 sites = %.3f ms against GPU-busy %.3f ms above):\n"
+	    "sum of all %d sites = %.3f ms against GPU-busy %.3f ms above):\n"
 	    "  %-20s %10s %8s %14s %12s\n",
-	    num_hidden_layers, site_ms_total, mean_gpu_busy_ms, "site", "ms/token", "share", "GB read/tok",
-	    "achieved GB/s");
+	    num_hidden_layers, kSitesPerLayer, site_ms_total, mean_gpu_busy_ms, "site", "ms/token", "share",
+	    "GB read/tok", "achieved GB/s");
 	for (const auto& r : rows) {
 		const double share_pct = 100.0 * r.ms / mean_gpu_busy_ms;
 		if (r.bytes_per_layer > 0.0) {
@@ -323,9 +330,21 @@ int main(int argc, char** argv) {
 			            "--");
 		}
 	}
-	// Uniformity verdict: coefficient of variation across the 17 site means. Low CoV = spread
-	// ~uniformly (per-dispatch fixed cost dominates); high CoV = concentrated in specific sites
-	// (those sites' own kernels are genuinely slow).
+	// Uniformity verdict: coefficient of variation across the `kSitesPerLayer` (22, not 17) site
+	// means. Low CoV = spread ~uniformly (per-dispatch fixed cost dominates); high CoV =
+	// concentrated in specific sites (those sites' own kernels are genuinely slow).
+	//
+	// T-2101 (O1, code review 6d9e04e-t2101-gpu-throughput-review.md): this threshold's own
+	// `site_cov > 1.0` cutoff was set (D-SLM3313) against a 17-site population. The five sites
+	// T-2101's own fix round added (the `*_gemm` dispatches) are near-zero here (their own time is
+	// now counted under the requant-only site of the same base name) -- adding five near-zero
+	// values to the population pulls the mean down without proportionally shrinking the stdev,
+	// which mechanically RAISES CoV relative to what the same underlying concentration would have
+	// read against the original 17. Marked rather than recalibrated: every run this ticket executed
+	// (D-SLM3313's own 1.82, T-2101's own 1.76 and 1.42) reads well clear of the 1.0 cutoff either
+	// way, so the verdict itself has not flipped -- but a future population change close to the
+	// threshold should re-derive the cutoff rather than trust this one across another headcount
+	// change.
 	double site_mean = site_ms_total / kSitesPerLayer, site_var = 0.0;
 	for (int i = 0; i < kSitesPerLayer; ++i) {
 		const double d = (site_ms_sum[i] / steps) - site_mean;
@@ -339,10 +358,20 @@ int main(int argc, char** argv) {
 	    site_mean, site_stdev, site_cov,
 	    site_cov > 1.0 ? "CONCENTRATED (a small number of sites dominate; see the top rows above)"
 	                   : "roughly UNIFORM (no small subset of sites dominates)");
+	// T-2101 (S2, code review 6d9e04e-t2101-gpu-throughput-review.md): this NOTE used to claim
+	// RunLayerLoopGpu reads the complete K/V workspace back every call -- true when T-2100 wrote it,
+	// false since commit d79f6b7 (this same arc, T-2101's own device-resident K/V fix), which made
+	// the readback targeted: only the rows a call actually wrote, not the whole workspace. Rewritten
+	// to state the CURRENT calling convention rather than repeat a claim one of this file's own
+	// prior commits falsified.
 	std::printf(
-	    "NOTE: RunLayerLoopGpu fence-waits and reads the complete %.2f MiB K/V workspace back to\n"
-	    "host every call. That cost is included above and is a property of this substrate's calling\n"
-	    "convention, not of the kernels -- an asynchronous decode lifecycle would not pay it per step.\n",
+	    "NOTE: RunLayerLoopGpu fence-waits on every call (the workspace itself, %.2f MiB at this\n"
+	    "tier, is device-resident and read back only in the small targeted rows each call actually\n"
+	    "wrote -- see the phase decomposition's own record_ms/readback_ms above, both small). The\n"
+	    "fence wait is real GPU-busy time, per-site-decomposed above: this substrate's own calling\n"
+	    "convention is one synchronous dispatch chain per token, no pipelining across tokens -- an\n"
+	    "asynchronous decode lifecycle would remove THAT cost, not a marshalling cost that no longer\n"
+	    "exists.\n",
 	    kv_bytes / (1024.0 * 1024.0));
 	return 0;
 }

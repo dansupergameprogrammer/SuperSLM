@@ -63,9 +63,10 @@ struct Device {
 	// them would already have failed `dev.available` well upstream of this heap ever being read.
 	//
 	// Sized for `kMaxTimestampSlots` boundaries -- generous headroom over the real 1.5B tier's own
-	// 28 layers * 17 sites/layer + 1 = 477 boundaries this ticket's own measurement round actually
-	// uses (`RunLayerLoopGpu` clamps to this capacity rather than overrunning the heap on a larger
-	// `num_hidden_layers * layer_budget`).
+	// 28 layers * 22 sites/layer + 1 = 617 boundaries this ticket's own measurement round actually
+	// uses (22, not 17, since T-2101's own fix round split five sites' GEMM step into its own
+	// dispatch; `RunLayerLoopGpu` clamps to this capacity rather than overrunning the heap on a
+	// larger `num_hidden_layers * layer_budget`).
 	static constexpr UINT kMaxTimestampSlots = 8192;
 	ComPtr<ID3D12QueryHeap> timestamp_heap;
 	ComPtr<ID3D12Resource> timestamp_readback;

@@ -303,15 +303,30 @@ struct GpuCallTiming {
 };
 GpuCallTiming LastCallTiming();
 
-// T-2101 (per-site decomposition, follow-up to D-SLM3312): one GPU-measured millisecond figure
-// per dispatch the most recent `RunLayerLoopGpu` call issued, in dispatch order (empty if the
-// call was rejected before recording, or timed by fewer than one dispatch). Dispatch `d` within
-// this call corresponds to layer `d / 17` and site `d / 17`'s own `d % 17`-th call in the fixed,
-// unconditional per-layer order `RunLayerLoopGpu` issues them: attn_norm, q_proj, kv_proj, rope,
-// attention_score, softmax, context_accumulate, ctx_fold, o_proj, attn_residual, mlp_norm,
-// gate_proj, up_proj, mlp_act, down_proj, mlp_residual, commit (17 sites/layer, Sec5.4/Sec5.8's
-// own ratified per-layer quantum). Summing every `d` with the same `d % 17` across however many
-// layers a call processed gives that SITE's own total GPU time for the call.
+// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md): the ceiling-division formula
+// `RunLayerLoopGpu`'s own multi-group GEMM dispatches use to turn an output width into a group
+// count -- `ceil(out_channels / threads_per_group)`, i.e. `(out_channels + threads_per_group - 1)
+// / threads_per_group`. Exported so both the real dispatch path and a unit test at real model
+// dimensions (no device required) call the SAME implementation rather than two independently
+// hand-written copies that could drift. The property this formula must hold, for any caller: the
+// returned group count `g` satisfies `g * threads_per_group >= out_channels` (every channel has a
+// thread) and, when `g > 0`, `(g - 1) * threads_per_group < out_channels` (no wasted group).
+uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_group);
+
+// T-2101 (per-site decomposition, follow-up to D-SLM3312; per-dispatch parallelism, D-SLM3313's
+// own follow-up): one GPU-measured millisecond figure per dispatch the most recent
+// `RunLayerLoopGpu` call issued, in dispatch order (empty if the call was rejected before
+// recording, or timed by fewer than one dispatch). Dispatch `d` within this call corresponds to
+// layer `d / 22` and that layer's own `d % 22`-th call in the fixed, unconditional per-layer order
+// `RunLayerLoopGpu` issues them: attn_norm, q_proj_gemm, q_proj, kv_proj, rope, attention_score,
+// softmax, context_accumulate, ctx_fold, o_proj_gemm, o_proj, attn_residual, mlp_norm,
+// gate_proj_gemm, gate_proj, up_proj_gemm, up_proj, mlp_act, down_proj_gemm, down_proj,
+// mlp_residual, commit (22 sites/layer -- corrected from the 16-site + commit / 17-site count
+// Sec5.4/Sec5.8 ratified before T-2101's own fix round split q/o/gate/up/down_proj's GEMM step
+// into its own multi-group dispatch immediately ahead of each; kv_proj stays fused and
+// single-dispatch, `kv_proj_site.hlsl`'s own header comment states why). Summing every `d` with the
+// same `d % 22` across however many layers a call processed gives that SITE's own total GPU time
+// for the call -- `tools/t2100_gpu_throughput.cpp`'s own per-site table is exactly this sum.
 std::vector<double> LastCallPerDispatchTimingsMs();
 
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
