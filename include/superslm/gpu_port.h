@@ -260,11 +260,15 @@ enum class GpuLayerLoopGuard : int {
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
 // decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
-// device-capability rejections, and the recording-window catch, fourteen
-// paths in all, none of which ever reached a residency decision to report.
+// device-capability rejections, and the recording-window catch, fifteen
+// paths in all (T-2101: the recording window now carries TWO catch clauses --
+// `GpuGemmGroupArithmeticError`'s own, and the generic `std::runtime_error`
+// one -- both counted, since both call the shared cache-invalidation lambda
+// before every one of their own returns), none of which ever reached a
+// residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
 // miss) on every path that returns AFTER the decision -- the success path
-// and the sticky-tag-decoded path alike, fifteen paths' own destination in
+// and the sticky-tag-decoded path alike, sixteen paths' own destination in
 // total across the function, whether the decoded status is `Ok` or one of
 // `DecodeStickyTag`'s thirteen rejecting statuses. A caller that wants "did
 // THIS call's upload run" reads this accessor for exactly that, on every

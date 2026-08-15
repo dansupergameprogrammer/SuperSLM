@@ -1312,7 +1312,7 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, fourteen\n", "catch, nineteen\n", 1)
+        corrupted = real_text.replace("catch, fifteen\n", "catch, nineteen\n", 1)
         assert corrupted != real_text, "sanity: the exact wrapped phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1337,7 +1337,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, fifteen", "alike, twenty", 1)
+        corrupted = real_text.replace("alike, sixteen", "alike, twenty", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1476,46 +1476,111 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent():
         assert "no boundary to cut on" in str(e)
 
 
-# --- M1: catch ternaries are COUNTED, not detected ---
+# --- N1 (code review 6d9e04e-t2101-gpu-throughput-review.md, second confirmation pass): the
+# derivation ranges over the PROPERTY -- every return inside a catch clause, whatever its own
+# exception type or return-expression shape -- not an enumeration of shapes. `count_status_return_
+# ternaries`/`_STATUS_RETURN_TERNARY_RE` are RETIRED (the fifth staleness they were not built to
+# survive); `count_any_return_statements` and `extract_catch_block_bodies` replace them. ---
 
-def test_count_status_return_ternaries_counts_each_occurrence():
-    one = "return device_removed_reason != S_OK ? A::X : A::Y;"
-    assert chk.count_status_return_ternaries(one) == 1
-    assert chk.count_status_return_ternaries(one + "\n" + one) == 2
-    assert chk.count_status_return_ternaries("// " + one) == 0
+_GPU_FIXTURE_WITH_CATCHES = _GPU_FIXTURE.replace(
+    "\tconst bool weights_resident = g_resident_weights.valid;\n"
+    "\tg_last_weight_upload_was_skipped = weights_resident;\n",
+    "\ttry {\n"
+    "\t\tconst bool weights_resident = g_resident_weights.valid;\n"
+    "\t\tg_last_weight_upload_was_skipped = weights_resident;\n"
+    "\t} catch (const GpuGemmGroupArithmeticError&) {\n"
+    "\t\tg_last_weight_upload_was_skipped = false;\n"
+    "\t\treturn superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;\n"
+    "\t} catch (const std::runtime_error&) {\n"
+    "\t\tg_last_weight_upload_was_skipped = false;\n"
+    "\t\treturn device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved\n"
+    "\t\t                                      : superslm::SslmForwardStatus::GpuAllocationFailed;\n"
+    "\t}\n",
+)
+assert _GPU_FIXTURE_WITH_CATCHES != _GPU_FIXTURE, "sanity: the replace target must exist in _GPU_FIXTURE"
 
 
-def test_a_second_catch_ternary_moves_the_derived_count():
-    # Round 15 asked whether `device_removed_reason` appeared anywhere and added exactly 1, so a
-    # SECOND ternary-returned rejection -- the shape T-2059 added once already -- was free.
-    with_one = _GPU_FIXTURE.replace(
-        "\treturn DecodeStickyTag(sticky_tag);",
-        "\tif (x == 7) { return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved\n"
-        "\t                                                   : superslm::SslmForwardStatus::GpuAllocationFailed; }\n"
-        "\treturn DecodeStickyTag(sticky_tag);",
+def test_count_any_return_statements_counts_literal_and_ternary_alike():
+    # `count_any_return_statements` expects ALREADY comment-stripped input (its own docstring
+    # states this) -- callers strip once and reuse the stripped text for both derivation terms,
+    # rather than re-stripping per call. Comment-sensitivity itself is `strip_comments`'s own job,
+    # already covered by `test_strip_comments_removes_line_and_block_comments`.
+    literal = "return A::X;"
+    ternary = "return device_removed_reason != S_OK ? A::X : A::Y;"
+    assert chk.count_any_return_statements(literal) == 1
+    assert chk.count_any_return_statements(ternary) == 1
+    assert chk.count_any_return_statements(literal + "\n" + ternary) == 2
+    assert chk.count_any_return_statements(chk.strip_comments("// " + literal)) == 0
+
+
+def test_extract_catch_block_bodies_finds_each_clause_in_source_order():
+    body = chk.strip_comments(
+        chk.extract_function_body(_GPU_FIXTURE_WITH_CATCHES, chk.GPU_FUNC_SIGNATURE, label="fixture")
     )
-    with_two = with_one.replace(
-        "\treturn DecodeStickyTag(sticky_tag);",
-        "\tif (x == 8) { return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved\n"
-        "\t                                                   : superslm::SslmForwardStatus::GpuAllocationFailed; }\n"
-        "\treturn DecodeStickyTag(sticky_tag);",
+    bodies = chk.extract_catch_block_bodies(body)
+    assert len(bodies) == 2
+    assert "GpuGemmGroupArithmeticInvalid" in bodies[0]
+    assert "GpuDeviceRemoved" in bodies[1]
+
+
+def test_extract_catch_block_bodies_is_empty_when_no_catch_exists():
+    body = chk.strip_comments(
+        chk.extract_function_body(_GPU_FIXTURE, chk.GPU_FUNC_SIGNATURE, label="fixture")
     )
-    assert chk.derive_lwuws_before_decision_count(with_two) == \
-        chk.derive_lwuws_before_decision_count(with_one) + 1
+    assert chk.extract_catch_block_bodies(body) == []
 
 
-def test_the_real_tree_catch_ternary_is_counted_from_the_whole_body():
-    # The one asymmetry in the derivation, pinned so it cannot be "tidied" into a positional cut:
-    # `gpu_port.h`'s own fourteen enumerates the ladder, the two device-capability rejections AND
-    # the recording-window catch, whose ternary sits BELOW the residency write. Cutting both terms
-    # at the same index reads 13 against a prose 14.
+def test_derive_before_count_sums_returns_from_every_catch_clause():
+    # _GPU_FIXTURE (no catches): 4 (ladder + device-capability), + 0 catch returns = 4.
+    # _GPU_FIXTURE_WITH_CATCHES: the SAME 4, + one return per catch clause (a literal, a ternary) = 6.
+    assert chk.derive_lwuws_before_decision_count(_GPU_FIXTURE) == 4
+    assert chk.derive_lwuws_before_decision_count(_GPU_FIXTURE_WITH_CATCHES) == 6
+
+
+def test_a_new_catch_clause_of_a_new_exception_type_is_counted_with_no_shape_update():
+    # The N1 defect class, reproduced directly: a THIRD catch clause, a NEW exception type this
+    # module has never seen a name for, with a literal (non-ternary) return -- exactly the shape
+    # T-2101's own S4 remedy added and the OLD shape-enumerating derivation could not see. The
+    # property-based derivation needs no update to count it: it is inside A catch clause, full stop.
+    with_third_catch = _GPU_FIXTURE_WITH_CATCHES.replace(
+        "\t} catch (const std::runtime_error&) {",
+        "\t} catch (const SomeBrandNewExceptionTypeNeverSeenBefore&) {\n"
+        "\t\tg_last_weight_upload_was_skipped = false;\n"
+        "\t\treturn superslm::SslmForwardStatus::WorkspaceTooSmall;\n"
+        "\t} catch (const std::runtime_error&) {",
+    )
+    assert with_third_catch != _GPU_FIXTURE_WITH_CATCHES, "sanity: the replace target must exist"
+    baseline = chk.derive_lwuws_before_decision_count(_GPU_FIXTURE_WITH_CATCHES)
+    assert chk.derive_lwuws_before_decision_count(with_third_catch) == baseline + 1
+
+
+def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_catches():
+    # The catch term is optional (a function with none contributes zero); the residency-write
+    # marker is not, even when catches exist -- confirmed on the WITH-CATCHES fixture too, not only
+    # the plain one `test_derive_before_count_raises_when_the_residency_statement_is_absent` covers.
+    without = _GPU_FIXTURE_WITH_CATCHES.replace(
+        "\t\tg_last_weight_upload_was_skipped = weights_resident;\n", ""
+    )
+    try:
+        chk.derive_lwuws_before_decision_count(without)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "no boundary to cut on" in str(e)
+
+
+def test_the_real_tree_lwuws_before_count_is_fifteen():
+    # T-2101's own two real catch clauses (GpuGemmGroupArithmeticError's, one literal return; the
+    # generic std::runtime_error's, one ternary return) both counted now, on top of the thirteen
+    # ladder/device-capability returns: 13 + 2 = 15, matching gpu_port.h's own corrected prose.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="x"))
     before = body[:body.find(chk._LWUWS_RESIDENCY_WRITE_STATEMENT)]
-    assert chk.count_status_return_ternaries(before) == 0
-    assert chk.count_status_return_ternaries(body) == 1
-    assert chk.derive_lwuws_before_decision_count(gpu_text) == 14
+    catch_bodies = chk.extract_catch_block_bodies(body)
+    assert len(catch_bodies) == 2
+    assert chk.count_any_return_statements(before) == 13
+    assert sum(chk.count_any_return_statements(b) for b in catch_bodies) == 2
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 15
 
 
 # --- M2: O34's successor residual is a MEASURED property, not a claim about one ---

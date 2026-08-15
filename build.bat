@@ -75,8 +75,18 @@ if not errorlevel 1 (
 		echo check_gpu_guard_status_parity.py FAILED -- see output above
 		set ec=1
 	)
+	rem T-2101 (the reviewer's own named residual, code review 6d9e04e-t2101-gpu-throughput-review.md,
+	rem second confirmation pass): the shader half of the original S3 class -- each split GEMM site's
+	rem own [numthreads(N,1,1)] and stride formula, cross-checked against ComputeGpuGemmSiteGroupPlan's
+	rem own threads_per_group for that site, so a host/shader thread-width divergence fails the build
+	rem instead of producing a silent wrong answer at real dimensions.
+	python tests\ci\check_gemm_site_thread_width_parity.py
+	if errorlevel 1 (
+		echo check_gemm_site_thread_width_parity.py FAILED -- see output above
+		set ec=1
+	)
 ) else (
-	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py ^(non-fatal^)
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py and check_gemm_site_thread_width_parity.py ^(non-fatal^)
 )
 
 popd

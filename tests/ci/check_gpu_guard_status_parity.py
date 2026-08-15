@@ -109,8 +109,12 @@ new status is the natural next addition, and the marker-truncated check
 could not see it. **Fixed, the symmetric twin of the CPU-side remedy**:
 `gpu_ladder_status_set` (below) replaces the marker cut with the same real,
 brace-matched full-body extraction `cpu_guard_status_set` already uses,
-subtracting `GPU_BELOW_LADDER_STATUSES` (one member today,
-`KvPrecisionUnsupported`) back out. Verified at source: unchanged on the
+subtracting `GPU_BELOW_LADDER_STATUSES` (`KvPrecisionUnsupported` originally;
+T-2101 added a second member, `GpuGemmGroupArithmeticInvalid` -- the set's
+own real size is `len(GPU_BELOW_LADDER_STATUSES)`, read from the set
+itself rather than restated as a literal here, since this exact sentence
+went stale once already the moment a second member was added) back out.
+Verified at source: unchanged on the
 unmutated tree. Verified by execution, both directions, against the real
 files: the falsifying mutation now reddens; the same guard placed above the
 old marker (already caught before this fix, and still caught after it)
@@ -123,8 +127,8 @@ review to rediscover the shape of (the failure this finding is about is the
 overclaim, not the apparatus, and restating that overclaim about THIS check
 would be the same mistake with a seventh author): **a tenth CPU guard, or a
 new GPU-side rejection, that returns a status ALREADY in the derived set --
-including any of the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names or the
-one `GPU_BELOW_LADDER_STATUSES` name, now that both are subtracted rather
+including any of the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names or
+either `GPU_BELOW_LADDER_STATUSES` name, now that both are subtracted rather
 than out of scan range entirely -- would not change the set, and this check
 would stay green.** The set-equality comparison this module performs cannot
 distinguish "this function's own real body has exactly these returns" from
@@ -1259,12 +1263,13 @@ _LWUWS_TOTAL_COUNT_RE = re.compile(r"alike, (\w+) paths' own destination in\s*to
 
 def parse_lwuws_path_counts(gpu_port_h_text: str) -> tuple[int, int]:
     """The two number-words `gpu_port.h`'s own `LastWeightUploadWasSkipped` paragraph states in
-    English -- "...catch, **fourteen** paths in all" (before the residency decision) and "...alike,
-    **fifteen** paths' own destination in total" (the grand total, before + after) -- parsed
-    directly from the prose via `_NUMBER_WORDS`, never a hardcoded constant re-typing what the
-    sentence already says. Raises `ValueError` if either anchor phrase is missing or its number
-    word is not recognized -- the same loud-failure discipline this module has used since T-2080's
-    own marker-based parsing: a check that cannot find the sentence it verifies must not pass
+    English -- "...catch, **fifteen** paths in all" (before the residency decision) and "...alike,
+    **sixteen** paths' own destination in total" (the grand total, before + after, as of T-2101's
+    own second catch clause) -- parsed directly from the prose via `_NUMBER_WORDS`, never a
+    hardcoded constant re-typing what the sentence already says. Raises `ValueError` if either
+    anchor phrase is missing or its number word is not recognized -- the same loud-failure
+    discipline this module has used since T-2080's own marker-based parsing: a check that cannot
+    find the sentence it verifies must not pass
     silently."""
     joined = re.sub(r"\n[ \t]*//[ \t]?", " ", gpu_port_h_text)
     before_m = _LWUWS_BEFORE_COUNT_RE.search(joined)
@@ -1309,62 +1314,103 @@ def count_status_return_statements(region_text: str) -> int:
 # than about nesting. What the repair buys is exactness of the marker (a complete statement, in
 # code, not in a comment) -- not immunity to a future edit that moves the statement itself.
 _LWUWS_RESIDENCY_WRITE_STATEMENT = "g_last_weight_upload_was_skipped = weights_resident;"
-# The CATCH TERNARY. Counted by matching the ternary's own return SHAPE, once per occurrence --
-# round 15 asked whether the string `device_removed_reason` existed anywhere in the body and added
-# exactly 1, so a SECOND ternary-returned rejection (the shape T-2059 added once already, and the
-# shape `_STATUS_RETURN_RE` is documented as blind to) was free: derived count 14, real count 15.
-# An existence flag standing in for a count is only ever right at a count of one.
-_STATUS_RETURN_TERNARY_RE = re.compile(
-    r"return\s+[A-Za-z_][A-Za-z0-9_]*\s*!=\s*S_OK\s*\?", re.DOTALL
-)
+
+# T-2101 (N1, code review 6d9e04e-t2101-gpu-throughput-review.md, second confirmation pass; the
+# fifth recurrence of this same header's own path-count claim going stale -- "twelve" (T-2055),
+# corrected wrong again, "fourteen" (T-2069), "fifteen" (T-2075/T-2094), then T-2098's own repair
+# above fixed the MARKER but not the SHAPE-ENUMERATION this comment now replaces).
+#
+# T-2098's own fix (the two constants directly above) replaced a text-marker bug with a SOUND
+# marker, but the derivation it repaired still enumerated the two return SHAPES that existed when
+# it was written: a literal `return SslmForwardStatus::X;` above the residency write, and a
+# `!= S_OK ?` ternary anywhere in the body. T-2101's own S4 remedy then added a THIRD shape -- a
+# literal return, but inside a NEW catch clause, positioned BELOW the residency write -- and it
+# matched neither term: not the literal-return term (wrong side of the positional cut) and not the
+# ternary term (wrong shape). Derivation stayed at 13/14; the real count became 15/16. Invisible to
+# the checker that exists specifically to keep this sentence honest.
+#
+# THE CLASS FIX: this derivation now ranges over the PROPERTY the prose sentence is actually about
+# -- every return path that resolves the call while `g_last_weight_upload_was_skipped` has already
+# been set to `false` -- rather than an enumeration of the return-statement SHAPES known at
+# authoring time. The property has exactly two structural members, and neither is defined by what
+# a return statement looks like:
+#
+# 1. Every return BEFORE the residency decision ever runs. The flag is still whatever the
+#    function-entry reset left it (`false`, `lwuws_write_function_entry`), by construction, for
+#    every one of these -- regardless of the return's own expression shape. Cut positionally on
+#    `_LWUWS_RESIDENCY_WRITE_STATEMENT`, same marker as before; counted with a GENERAL return
+#    regex (`count_any_return_statements`, below) rather than the literal-only
+#    `count_status_return_statements`, so a future shape appearing ABOVE the write (a ternary, or
+#    anything else) is no longer free either.
+# 2. Every return INSIDE a catch clause. `RunLayerLoopGpu`'s own catch clauses -- however many
+#    exist, of whatever exception type -- each call the shared `invalidate_residency_caches_on_
+#    throw()` lambda (`superslm_gpu.cpp`) before every one of their own returns, so EVERY return
+#    inside ANY catch body sets the flag `false` immediately before returning, whatever that
+#    return's own expression shape is. Found by REAL brace-depth counting from each catch header's
+#    own opening brace (`extract_catch_block_bodies`, below, built on the SAME `find_matching_close_
+#    brace` this module already uses for language-enforced boundaries) -- a catch clause is not
+#    identified by a shape marker at all, so a NEW catch clause of a NEW exception type is found
+#    the same way an existing one is, with no per-shape update owed to this function ever again.
+#
+# Catches are OPTIONAL structurally (a function with none contributes zero from this term, not an
+# error) -- only the residency-write marker is a hard requirement, because it alone establishes the
+# region boundary the "before" half of the property needs; "zero catch clauses" is simply a fact
+# about a function's structure, not a sign the derivation lost its anchor.
+_CATCH_HEADER_RE = re.compile(r"\}\s*catch\s*\([^)]*\)\s*\{")
+_ANY_RETURN_STATEMENT_RE = re.compile(r"return\b[^;]*;", re.DOTALL)
 
 
-def count_status_return_ternaries(region_text: str) -> int:
-    """Every `return <expr> != S_OK ? ... : ...;` OCCURRENCE in `region_text`, comments stripped
-    first -- the one return shape this arc's own guards use that `_STATUS_RETURN_RE` cannot see,
-    counted rather than merely detected (T-2098, M1)."""
-    return len(_STATUS_RETURN_TERNARY_RE.findall(strip_comments(region_text)))
+def count_any_return_statements(region_text: str) -> int:
+    """Every `return ...;` statement OCCURRENCE in `region_text` (expected already comment-
+    stripped), of ANY shape -- a literal `return SslmForwardStatus::X;`, a ternary
+    `return ... ? ... : ...;`, or any future shape neither of those. `RunLayerLoopGpu` returns only
+    `SslmForwardStatus`, so every `return` inside its own body is a member of the status-path
+    population by construction -- counting requires no per-shape pattern, unlike
+    `count_status_return_statements` (literal-only) and the retired `count_status_return_ternaries`
+    (ternary-only) this function replaces for the property derivation below."""
+    return len(_ANY_RETURN_STATEMENT_RE.findall(region_text))
+
+
+def extract_catch_block_bodies(function_body_stripped: str) -> list[str]:
+    """Every `catch (...) { ... }` clause's own body within `function_body_stripped` (comment-
+    stripped text expected), found by REAL brace-depth counting from each catch header's own
+    opening brace (`find_matching_close_brace`) -- never a text marker, so a catch clause is
+    identified by the language's own syntax, not by matching a particular exception type's name or
+    a particular return shape inside it. Returns one string per catch clause found, in source
+    order; an empty list if the function has no catch clause at all (a valid structural fact, not
+    an error -- see `derive_lwuws_before_decision_count`'s own header comment)."""
+    bodies: list[str] = []
+    for m in _CATCH_HEADER_RE.finditer(function_body_stripped):
+        open_brace = m.end() - 1
+        close_brace = find_matching_close_brace(function_body_stripped, open_brace)
+        bodies.append(function_body_stripped[open_brace + 1:close_brace])
+    return bodies
 
 
 def derive_lwuws_before_decision_count(gpu_text: str) -> int:
-    """The real, structural count of `RunLayerLoopGpu`'s own rejecting return paths that return
-    BEFORE the weight-residency decision runs -- the nine-guard ladder's own eleven literal return
-    statements plus the two device-capability rejections' own two literal return statements, plus
-    one per recording-window catch ternary (a `device_removed_reason` `?:` expression, invisible to
-    `_STATUS_RETURN_RE` since it is not a literal `return SslmForwardStatus::X;` -- counted by
-    `count_status_return_ternaries`, per occurrence, not by asking whether one exists).
+    """The real, structural count of `RunLayerLoopGpu`'s own rejecting return paths that resolve
+    the call while `g_last_weight_upload_was_skipped` has already been set to `false` -- the
+    PROPERTY `gpu_port.h`'s own prose is about, not an enumeration of return-statement shapes (see
+    the module-level comment immediately above this function for the full account of why the prior
+    shape-enumeration went stale a fifth time, and what replaced it).
 
-    THE TWO TERMS HAVE DIFFERENT REGIONS, and that is a property of the claim rather than an
-    oversight -- stated here because it is the one thing about this derivation a reader would
-    otherwise have to re-derive from `gpu_port.h`'s own paragraph.
+    Two terms, by the property's own two structural members:
 
-    The LITERAL-RETURN term is cut positionally: everything in the function's own COMMENT-STRIPPED
-    body above the complete residency assignment statement `_LWUWS_RESIDENCY_WRITE_STATEMENT` -- a
-    text marker, named as one here rather than described as "the write", and exact in the two ways
-    round 15's was not (see that constant's own note). Thirteen today: the nine-guard ladder's own
-    eleven, plus the two device-capability rejections.
+    1. `count_any_return_statements` over everything in the function's own COMMENT-STRIPPED body
+       ABOVE the complete residency assignment statement `_LWUWS_RESIDENCY_WRITE_STATEMENT` -- the
+       nine-guard ladder's own eleven returns plus the two device-capability rejections' own two,
+       thirteen today, counted by a GENERAL return pattern so a future shape above the write is
+       covered too, not only the literal one every guard happens to use today.
+    2. `count_any_return_statements` summed over every `extract_catch_block_bodies` result -- every
+       return inside every catch clause, whatever the clause's own exception type or the return's
+       own expression shape. Two catch clauses exist today (`GpuGemmGroupArithmeticError`, one
+       literal return; the generic `std::runtime_error`, one ternary return), each contributing
+       exactly one, for two -- but the count is derived from however many catch clauses and returns
+       actually exist, not from a number hardcoded here.
 
-    The TERNARY term is counted over the WHOLE body, and must be. The number this derivation
-    verifies is `gpu_port.h`'s own "fourteen paths in all," and that sentence enumerates
-    "the nine-guard ladder, the two device-capability rejections, AND THE RECORDING-WINDOW CATCH."
-    The catch's own ternary return sits textually BELOW the residency write, so a purely positional
-    cut excludes it and the derivation reads 13 against a prose 14 -- executed, and the reason this
-    function does not simply cut both terms at the same index. The catch belongs to the counted set
-    on the property the paragraph is actually about: it writes the observable back to `false`
-    (`lwuws_write_catch` (`superslm_gpu.cpp`)) before returning, so it reads `false` exactly like
-    the thirteen above it, despite having run past the decision. "Before the decision" is the
-    paragraph's shorthand for that class, not a claim about statement order, and the derivation
-    matches the class.
-
-    Round 15's whole-body scope for this term was therefore RIGHT and its arithmetic was wrong: it
-    asked whether `device_removed_reason` appeared anywhere and added exactly 1, so a second
-    ternary-returned rejection would have been free. `count_status_return_ternaries` keeps the
-    scope and counts the occurrences.
-
-    Raises `ValueError` if the residency marker is absent: a derivation whose region silently
-    collapses to the whole body would report a number computed over the wrong region, and this
-    module's standing discipline is that a check which cannot find the anchor it verifies must not
-    pass silently."""
+    Raises `ValueError` if the residency marker is absent -- the region boundary term 1 needs.
+    Catches are NOT required to exist (term 2 is legitimately zero for a function with none); only
+    the residency-write anchor is load-bearing enough to fail loudly on absence."""
     body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
     stripped_body = strip_comments(body)
     residency_write_at = stripped_body.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
@@ -1375,7 +1421,9 @@ def derive_lwuws_before_decision_count(gpu_text: str) -> int:
             "before/after path-count region has no boundary to cut on"
         )
     before_region = stripped_body[:residency_write_at]
-    return count_status_return_statements(before_region) + count_status_return_ternaries(stripped_body)
+    catch_bodies = extract_catch_block_bodies(stripped_body)
+    catch_return_count = sum(count_any_return_statements(b) for b in catch_bodies)
+    return count_any_return_statements(before_region) + catch_return_count
 
 
 def derive_lwuws_after_decision_count(gpu_text: str) -> int:

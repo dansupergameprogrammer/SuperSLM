@@ -1966,6 +1966,19 @@ uint32_t ComputeGpuGemmGroupCount(uint32_t out_channels, uint32_t threads_per_gr
 // execution this round: mutating this function's own body (forcing `plan.groups = 1u`
 // unconditionally) reddens that pinned cell directly, at 1536/8960, which the PRIOR round's
 // falsification (mutating a downstream local variable the test never read) could not do.
+//
+// T-2101 (N2, code review 6d9e04e-t2101-gpu-throughput-review.md, second confirmation pass): a
+// sixth `GpuGemmSplitSite` enumerator with no matching `case` used to leave `plan.threads_per_group`
+// at its default-initialized 0, and the line below then computed
+// `ComputeGpuGemmGroupCount(0, 0)` -- `(0 + 0 - 1u) / 0u`, an integer division by zero, a hardware
+// fault with no compiler warning (`/W4`, no `/WX`, and MSVC's unhandled-enumerator diagnostics
+// C4061/C4062 are off by default) inside the ONE function this whole round's own commission exists
+// to make the single source of truth. Closed two ways: an explicit `default:` that fails LOUDLY
+// (the same `GpuGemmGroupArithmeticError`/status pair S4 already built, rather than a silent
+// fallback or an assert compiled out of a release build), and a post-switch check that
+// `threads_per_group != 0` regardless of how it got there -- so a future case that sets
+// `out_channels` but leaves `threads_per_group` at 0 by a copy-paste mistake is caught by the SAME
+// guard, not only the enumerator-completeness one.
 GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t hidden_size,
                                                   uint32_t intermediate_size) {
 	GpuGemmSiteGroupPlan plan;
@@ -1981,6 +1994,15 @@ GpuGemmSiteGroupPlan ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite site, uint32_t
 			plan.out_channels = intermediate_size;
 			plan.threads_per_group = 256u;
 			break;
+		default:
+			throw GpuGemmGroupArithmeticError(
+			    "ComputeGpuGemmSiteGroupPlan: unhandled GpuGemmSplitSite enumerator -- no "
+			    "out_channels/threads_per_group case exists for this site");
+	}
+	if (plan.threads_per_group == 0u) {
+		throw GpuGemmGroupArithmeticError(
+		    "ComputeGpuGemmSiteGroupPlan: threads_per_group == 0 after the switch -- would divide "
+		    "by zero computing the group count");
 	}
 	plan.groups = ComputeGpuGemmGroupCount(plan.out_channels, plan.threads_per_group);
 	return plan;

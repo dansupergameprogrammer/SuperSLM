@@ -22738,6 +22738,36 @@ static void TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFai
 	          superslm::SslmForwardStatusName(superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid));
 }
 
+// T-2101 (N2, code review 6d9e04e-t2101-gpu-throughput-review.md, second confirmation pass): a
+// sixth `GpuGemmSplitSite` enumerator with no matching `case` used to leave `plan.threads_per_group`
+// default-initialized at 0 and divide by zero computing the group count -- a hardware fault with no
+// compiler warning, inside the ONE function this whole arc's own commission exists to make the
+// single source of truth. Pinned by calling with an out-of-range enum value cast past the five real
+// enumerators: the `default:` clause must fire and throw (caught here as `std::logic_error`, the
+// exception's own real base class -- `GpuGemmGroupArithmeticError` itself is private to
+// superslm_gpu.cpp, not exported via gpu_port.h, so this cell verifies the THROWING behavior
+// directly rather than the concrete type, which is exactly the SslmForwardStatus contract the guard
+// exists to keep loud).
+static void TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly() {
+	bool threw = false;
+	std::string message;
+	try {
+		const auto out_of_range_site = static_cast<superslm_gpu::GpuGemmSplitSite>(999);
+		const auto plan = superslm_gpu::ComputeGpuGemmSiteGroupPlan(out_of_range_site, 1536, 8960);
+		(void)plan;
+	} catch (const std::logic_error& e) {
+		threw = true;
+		message = e.what();
+	}
+	CHECK_MSG(threw,
+	          "T2101 N2: ComputeGpuGemmSiteGroupPlan with an unhandled GpuGemmSplitSite value must "
+	          "throw (loudly, as a std::logic_error), not silently divide by zero computing the "
+	          "group count");
+	CHECK_MSG(message.find("unhandled") != std::string::npos,
+	          "T2101 N2: exception message should name the unhandled-enumerator condition -- got: %s",
+	          message.c_str());
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -24077,6 +24107,7 @@ int main(int argc, char** argv) {
 	TestT2101_ComputeGpuGemmGroupCount_RealDimensionsAndFixtureScale();
 	TestT2101_ComputeGpuGemmSiteGroupPlan_RealDimensions();
 	TestT2101_GpuGemmGroupArithmeticInvalid_DistinctFromGpuAllocationFailed();
+	TestT2101_ComputeGpuGemmSiteGroupPlan_UnhandledSiteThrowsLoudly();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
