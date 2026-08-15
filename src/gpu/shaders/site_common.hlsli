@@ -307,10 +307,16 @@ bool CheckPositionOverCapGpu(int64_t position, int64_t context_cap)
 // call to this function later in the SAME dispatch (kv_proj_site.hlsl's own K-then-V fusion) --
 // the shared ADAPTER_U scratch region is reused serially across the two calls, never
 // concurrently, exactly as it already is across separate dispatches on the standalone path.
+// T-2113 (B10 lever 1b): stage 1's own groupshared accumulator, one int64 slot per thread --
+// the identical shape `gGemmAcc` (above) uses for the base GEMM's own coalesced reduction,
+// declared separately so the two never alias across a dispatch that (in principle) could use
+// both. Unused, and therefore free, in any compiled shader that never calls this function.
+groupshared int64_t gAdapterStage1Acc[256];
+
 void ApplyFusedAdapterDeltaGpu(uint t, RWByteAddressBuffer WorkScratch, RWByteAddressBuffer LayerScratch,
                                 ByteAddressBuffer LoraAB, ByteAddressBuffer Fold, int in_channels,
                                 int out_channels, int rank, uint a_offset, uint b_offset, uint fold_offset,
-                                uint adapter_u_off, uint in_base, uint wide_base)
+                                uint adapter_u_off, uint in_base, uint wide_base, int stage1_lanes)
 {
     if (rank == 0) return;  // no adapter covers this slot -- the standalone path's own "dispatch
                              // never issued" contract, realized here as a true no-op instead.
@@ -318,22 +324,59 @@ void ApplyFusedAdapterDeltaGpu(uint t, RWByteAddressBuffer WorkScratch, RWByteAd
     uint dfs_base = fold_offset;                              // out_channels rows, 12 bytes each
     uint ufs_base = fold_offset + (uint)out_channels * 12u;    // rank rows, 12 bytes each
 
-    // Stage 1 -- one thread per k < rank, each its own full in_channels-wide reduction.
-    for (int k = (int)t; k < rank; k += 256)
+    // Stage 1 -- T-2113 (B10 lever 1b, replacing lever 1's own one-thread-per-k form, which left
+    // 256-rank of the group's 256 threads idle while the active `rank` threads each ran a full
+    // in_channels-wide SERIAL reduction alone -- named as the likely dominant adapter-bound cost
+    // driver at §16.5 (Claude/Brunel/t2113-1p0-core-build-2026-08-15.md) and confirmed by this
+    // section's own per-site execution decomposition (down_proj's stage-1, in_channels=8960,
+    // measured as the single largest adapter-bound delta of any site). `stage1_lanes` threads
+    // now cooperate on EACH k, via the identical fixed groupshared binary tree
+    // `GemmCoalescedGpuAt` (above) already uses for the base GEMM's own coalesced reduction --
+    // integer addition is exactly associative and commutative (that function's own header
+    // comment, D-SLM3334), so this returns the identical int64 the old one-thread serial loop
+    // returned, for any rank and in_channels this adapter format admits. `stage1_lanes` is a
+    // host-computed power of two (`stage1_lanes_for_rank`, superslm_gpu.cpp) sized so
+    // `256 / stage1_lanes` k-values are covered per wave; the outer `k0` loop below covers the
+    // (never expected in practice, but not excluded) case `rank > 256 / stage1_lanes` by running
+    // additional waves, each barrier-separated from the last so `gAdapterStage1Acc` is never
+    // read by one wave before the previous wave's own writers have retired it.
+    const uint lane1 = t % (uint)stage1_lanes;
+    const int channels_per_wave = 256 / stage1_lanes;
+    for (int k0 = 0; k0 < rank; k0 += channels_per_wave)
     {
+        const int k = k0 + (int)(t / (uint)stage1_lanes);
         int64_t acc = 0;
-        for (int i = 0; i < in_channels; ++i)
+        if (k < rank)
         {
-            int a = LayerScratch.Load<int>(in_base + (uint)i * 4u);
-            int w = LoadSignedByteGpu(LoraAB, a_offset + (uint)(k * in_channels + i));
-            acc += (int64_t)a * (int64_t)w;
+            for (int i = (int)lane1; i < in_channels; i += stage1_lanes)
+            {
+                int a = LayerScratch.Load<int>(in_base + (uint)i * 4u);
+                int w = LoadSignedByteGpu(LoraAB, a_offset + (uint)(k * in_channels + i));
+                acc += (int64_t)a * (int64_t)w;
+            }
         }
-        int u_identity = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 0u);
-        int u_mult     = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 4u);
-        int u_exponent = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 8u);
-        int64_t u_wide = ApplyAmplifyingWeightScaleFoldGpu(acc, u_identity, u_mult, u_exponent);
-        int64_t u_clamped = ClampRopeCodeGpu(u_wide);
-        StoreSignedByteGpu(WorkScratch, adapter_u_off + (uint)k, (int)u_clamped);
+        gAdapterStage1Acc[t] = acc;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint s = (uint)stage1_lanes >> 1; s > 0u; s >>= 1)
+        {
+            if (lane1 < s) gAdapterStage1Acc[t] += gAdapterStage1Acc[t + s];
+            GroupMemoryBarrierWithGroupSync();
+        }
+        if (lane1 == 0u && k < rank)
+        {
+            int64_t total = gAdapterStage1Acc[t];
+            int u_identity = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 0u);
+            int u_mult     = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 4u);
+            int u_exponent = (int)Fold.Load<int>(ufs_base + (uint)k * 12u + 8u);
+            int64_t u_wide = ApplyAmplifyingWeightScaleFoldGpu(total, u_identity, u_mult, u_exponent);
+            int64_t u_clamped = ClampRopeCodeGpu(u_wide);
+            StoreSignedByteGpu(WorkScratch, adapter_u_off + (uint)k, (int)u_clamped);
+        }
+        GroupMemoryBarrierWithGroupSync();  // gAdapterStage1Acc is safe for the next wave (or,
+                                             // on the last wave, this is redundant with the
+                                             // DeviceMemoryBarrierWithGroupSync() below -- kept
+                                             // unconditional so every thread's own control flow
+                                             // is uniform across every iteration of this loop).
     }
     DeviceMemoryBarrierWithGroupSync();  // publish u_i8 (a UAV write) before stage 2 reads it back
 

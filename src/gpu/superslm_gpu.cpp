@@ -919,6 +919,33 @@ struct GpuLayerLoopInFlight {
 	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
 };
 
+// T-2113 (B10 lever 1b): the group-cooperative lane count for the fused stage-1 reduction
+// (site_common.hlsli's ApplyFusedAdapterDeltaGpu) -- largest power of two <= 256/rank, so `rank`
+// k-values each get `stage1_lanes` threads cooperating on one in_channels-wide int64 reduction
+// via a fixed groupshared tree (GemmCoalescedGpuAt's own construction, D-SLM3334's own blessed
+// shape: integer addition is exactly associative/commutative, so a tree reduction returns the
+// identical int64 a single-thread serial sum returns, regardless of order) instead of one thread
+// alone doing the whole in_channels-wide reduction serially -- the low-occupancy driver §16.5
+// (Claude/Brunel/t2113-1p0-core-build-2026-08-15.md) named and this section's own per-site
+// decomposition confirmed by execution. Safe for any rank >= 1 -- the shader's own wave loop
+// covers rank > 256/stage1_lanes by iterating multiple waves; rank == 0 (uncovered slot) never
+// reaches the shader's reduction body, ApplyFusedAdapterDeltaGpu's own no-op sentinel
+// short-circuits first. A free function, NOT a lambda local to RunLayerLoopGpuSubmit -- its own
+// two `return` statements would otherwise be swept into
+// tests/ci/check_gpu_guard_status_parity.py's own full-brace-matched scan of that function's
+// body (that checker's own docstring: a text-level return-statement count, not a real C++
+// parse), miscounting two ordinary uint32_t returns as new LastWeightUploadWasSkipped decision
+// paths -- reproduced by execution during this section's own build (22 real vs 20 documented,
+// the exact +2 this lambda's own two returns predict) before being moved here.
+uint32_t Stage1LanesForRank(uint32_t rank) {
+	if (rank == 0) return 1u;
+	uint32_t want = 256u / rank;
+	if (want == 0) want = 1u;
+	uint32_t lanes = 1u;
+	while (lanes * 2u <= want) lanes *= 2u;
+	return lanes;
+}
+
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the SUBMIT half of the async split --
 // declared in gpu_port.h. This function is BYTE-FOR-BYTE what RunLayerLoopGpu's own
 // body always was, from function entry through ExecuteCommandLists/Signal, MINUS the
@@ -1981,7 +2008,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
 		}
 		++dispatch_query_index;
-		uint32_t consts[25] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
 		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
 		size_t base = 11;
 		for (const TailAdapterSlot& s : slots) {
@@ -2003,9 +2030,10 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 			consts[base + 4] = static_cast<uint32_t>(work_adapter_u_off);
 			consts[base + 5] = s.in_base;
 			consts[base + 6] = s.wide_base;
-			base += 7;
+			consts[base + 7] = Stage1LanesForRank(rank);
+			base += 8;
 		}
-		dev.list->SetComputeRoot32BitConstants(0, 25, consts, 0);
+		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
 		dev.list->SetPipelineState(pso);
 		dev.list->Dispatch(1, 1, 1);
 		dev.list->ResourceBarrier(1, &global_uav_barrier);

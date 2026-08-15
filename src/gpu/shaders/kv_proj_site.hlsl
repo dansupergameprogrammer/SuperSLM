@@ -38,7 +38,10 @@ cbuffer RootConstants : register(b0)
     uint g_adapter_k_u_off;
     uint g_adapter_k_in_base;
     uint g_adapter_k_wide_base;
-    // T-2113 (B10 lever 1): V's own adapter-delta coverage (slot=6, positions 18-24).
+    // T-2113 (B10 lever 1b): K's own stage-1 lane count, see q_proj_site.hlsl's own comment.
+    uint g_adapter_k_stage1_lanes;
+    // T-2113 (B10 lever 1): V's own adapter-delta coverage (slot=6, positions 19-26 post lever
+    // 1b's 8th field).
     uint g_adapter_v_rank;
     uint g_adapter_v_a_offset;
     uint g_adapter_v_b_offset;
@@ -46,6 +49,8 @@ cbuffer RootConstants : register(b0)
     uint g_adapter_v_u_off;
     uint g_adapter_v_in_base;
     uint g_adapter_v_wide_base;
+    // T-2113 (B10 lever 1b): V's own stage-1 lane count.
+    uint g_adapter_v_stage1_lanes;
 };
 
 ByteAddressBuffer   LayerWeights  : register(t0);
@@ -86,11 +91,13 @@ void main(uint3 gtid : SV_GroupThreadID)
     ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
                                kv_hidden_size, (int)g_adapter_k_rank, g_adapter_k_a_offset,
                                g_adapter_k_b_offset, g_adapter_k_fold_offset, g_adapter_k_u_off,
-                               g_adapter_k_in_base, g_adapter_k_wide_base);
+                               g_adapter_k_in_base, g_adapter_k_wide_base,
+                               (int)g_adapter_k_stage1_lanes);
     ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
                                kv_hidden_size, (int)g_adapter_v_rank, g_adapter_v_a_offset,
                                g_adapter_v_b_offset, g_adapter_v_fold_offset, g_adapter_v_u_off,
-                               g_adapter_v_in_base, g_adapter_v_wide_base);
+                               g_adapter_v_in_base, g_adapter_v_wide_base,
+                               (int)g_adapter_v_stage1_lanes);
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 

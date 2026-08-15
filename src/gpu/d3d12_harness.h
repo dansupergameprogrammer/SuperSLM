@@ -268,19 +268,25 @@ struct Device {
 	ComPtr<ID3D12RootSignature> MakeRootSigComposed() {
 		D3D12_ROOT_PARAMETER ps[1 + kComposedResourceBindingCount]{};
 		ps[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-		ps[0].Constants.Num32BitValues = 25;  // 10th: num_hidden_layers (commit_site.hlsl only);
+		ps[0].Constants.Num32BitValues = 27;  // 10th: num_hidden_layers (commit_site.hlsl only);
 		                                      // 11th: T-2113 (B4) GEMM lanes (the six
 		                                      // <site>_gemm_site.hlsl dispatches only);
-		                                      // 12th-18th/19th-25th: T-2113 (B10 lever 1) two
+		                                      // 12th-19th/20th-27th: T-2113 (B10 lever 1b) two
 		                                      // adapter-delta slots (rank, a_offset, b_offset,
-		                                      // fold_offset, adapter_u_off, in_base, wide_base
-		                                      // each) -- the fused tail dispatch's own extension
-		                                      // (site_common.hlsli's ApplyFusedAdapterDeltaGpu),
-		                                      // set only by `bind_and_dispatch_tail`
-		                                      // (superslm_gpu.cpp); every other `bind_and_dispatch`
-		                                      // call still writes only the first 11 and leaves
-		                                      // these unread, since no non-tail shader declares a
-		                                      // cbuffer field past position 10.
+		                                      // fold_offset, adapter_u_off, in_base, wide_base,
+		                                      // stage1_lanes each) -- the fused tail dispatch's own
+		                                      // extension (site_common.hlsli's
+		                                      // ApplyFusedAdapterDeltaGpu), set only by
+		                                      // `bind_and_dispatch_tail` (superslm_gpu.cpp); every
+		                                      // other `bind_and_dispatch` call still writes only the
+		                                      // first 11 and leaves these unread, since no non-tail
+		                                      // shader declares a cbuffer field past position 10.
+		                                      // T-2113 (B10 lever 1b): 8th field per slot
+		                                      // (stage1_lanes) added when lever 1's own 7-field
+		                                      // slot (25 total) grew to 8 (27 total) -- the fused
+		                                      // stage-1 reduction's own group-cooperative lane
+		                                      // count, host-computed per slot from that slot's real
+		                                      // rank (see `bind_and_dispatch_tail`).
 		ps[0].Constants.ShaderRegister = 0;  // b0
 		ps[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 		ps[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;

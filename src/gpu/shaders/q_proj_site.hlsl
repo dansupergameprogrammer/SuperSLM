@@ -41,6 +41,9 @@ cbuffer RootConstants : register(b0)
     uint g_adapter_u_off;
     uint g_adapter_in_base;
     uint g_adapter_wide_base;
+    // T-2113 (B10 lever 1b): the fused stage-1 reduction's own group-cooperative lane count,
+    // host-computed from this slot's real rank (superslm_gpu.cpp's stage1_lanes_for_rank).
+    uint g_adapter_stage1_lanes;
 };
 
 ByteAddressBuffer   LayerWeights  : register(t0);
@@ -73,7 +76,7 @@ void main(uint3 gtid : SV_GroupThreadID)
     ApplyFusedAdapterDeltaGpu(t, WorkScratch, LayerScratch, LoraAB, Fold, (int)g_hidden_size,
                                (int)g_hidden_size, (int)g_adapter_rank, g_adapter_a_offset,
                                g_adapter_b_offset, g_adapter_fold_offset, g_adapter_u_off,
-                               g_adapter_in_base, g_adapter_wide_base);
+                               g_adapter_in_base, g_adapter_wide_base, (int)g_adapter_stage1_lanes);
 
     uint layer_base = g_layer_index * Layout.Load<uint>(56 * 4);
 
