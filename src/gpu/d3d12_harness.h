@@ -52,6 +52,18 @@ struct Device {
 	bool available = false;
 	std::string init_error;
 
+	// T-2101 (dispatch-overhead decomposition, D-SLM3302/D-SLM3304's own follow-up): a 2-slot
+	// GPU timestamp query heap, created once and reused every call -- `RunLayerLoopGpu` ends query
+	// 0 immediately before its first dispatch and query 1 immediately after its last, so the
+	// resolved ticks measure GPU-BUSY time for the composed dispatch chain alone, excluding command
+	// list recording, submission, and readback (all measured CPU-side, `GpuCallTiming` below).
+	// COMPUTE command lists support timestamp queries on every D3D12 Tier-3-capable device this
+	// design targets (D-SLM3000); a device that cannot resolve them would already have failed
+	// `dev.available` well upstream of this heap ever being read.
+	ComPtr<ID3D12QueryHeap> timestamp_heap;
+	ComPtr<ID3D12Resource> timestamp_readback;
+	UINT64 timestamp_frequency = 0;  // ticks per second, from the command queue
+
 	void Init() {
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
@@ -85,6 +97,15 @@ struct Device {
 		SSLM_GPU_HR(list->Close());
 		SSLM_GPU_HR(dev->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
 		fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
+		D3D12_QUERY_HEAP_DESC qhd{};
+		qhd.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+		qhd.Count = 2;
+		SSLM_GPU_HR(dev->CreateQueryHeap(&qhd, IID_PPV_ARGS(&timestamp_heap)));
+		timestamp_readback = MakeBuffer(2 * sizeof(UINT64), D3D12_HEAP_TYPE_READBACK,
+		                                 D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST);
+		if (FAILED(queue->GetTimestampFrequency(&timestamp_frequency))) timestamp_frequency = 0;
+
 		available = true;
 	}
 

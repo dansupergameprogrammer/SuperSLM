@@ -141,6 +141,12 @@ int main(int argc, char** argv) {
 	std::vector<std::vector<int8_t>> step_codes[2];
 	std::vector<int64_t> step_ctx[2];
 
+	// T-2101 (dispatch-overhead decomposition, D-SLM3302/D-SLM3304's own follow-up): accumulated
+	// per-phase GPU-side timing across every timed step, so the report below is a MEAN over the
+	// same population the headline s/token figure is -- not one call's own possibly-atypical split.
+	double gpu_record_ms_sum = 0.0, gpu_submit_wait_ms_sum = 0.0, gpu_busy_ms_sum = 0.0,
+	       gpu_readback_ms_sum = 0.0;
+
 	double per_token[2] = {0.0, 0.0};
 	for (int s = 0; s < 2; ++s) {
 		std::vector<uint8_t> ws(kv_bytes, 0);
@@ -186,6 +192,13 @@ int main(int argc, char** argv) {
 			if (dt < best) best = dt;
 			step_codes[s].push_back(codes);
 			step_ctx[s].push_back(seq.context_length);
+			if (sides[s].gpu) {
+				const auto timing = superslm_gpu::LastCallTiming();
+				gpu_record_ms_sum += timing.record_ms;
+				gpu_submit_wait_ms_sum += timing.submit_wait_ms;
+				gpu_busy_ms_sum += timing.gpu_busy_ms;
+				gpu_readback_ms_sum += timing.readback_ms;
+			}
 		}
 		const double total = SecondsSince(t0);
 		per_token[s] = total / steps;
@@ -207,6 +220,38 @@ int main(int argc, char** argv) {
 
 	std::printf("\nGPU vs CPU: %.2fx %s\n", per_token[0] / per_token[1],
 	            per_token[1] < per_token[0] ? "FASTER" : "SLOWER");
+
+	// T-2101 (dispatch-overhead decomposition): mean per-phase split over the SAME `steps` timed
+	// GPU calls the headline figure above is computed from. `gpu_busy_ms` is the ONLY GPU-only
+	// number here (a timestamp-query bracket around the call's own first/last dispatch); the other
+	// three are CPU wall-clock splits of the surrounding work. The four should sum to
+	// approximately the GPU side's own mean s/token above -- reported so the reader can check that,
+	// not asserted.
+	const double mean_record_ms = gpu_record_ms_sum / steps;
+	const double mean_submit_wait_ms = gpu_submit_wait_ms_sum / steps;
+	const double mean_gpu_busy_ms = gpu_busy_ms_sum / steps;
+	const double mean_readback_ms = gpu_readback_ms_sum / steps;
+	const double mean_sum_ms = mean_record_ms + mean_submit_wait_ms + mean_readback_ms;
+	// Roofline: 1.5 GB of int8 weights read once per token against this card's own advertised
+	// 496 GB/s memory bandwidth (RESUME's own derived, not measured, figure) -- restated here in
+	// milliseconds for direct comparison against `mean_gpu_busy_ms`.
+	const double roofline_ms = (1.5e9 / 496e9) * 1000.0;
+	std::printf(
+	    "\nGPU per-token phase decomposition (mean over %d timed steps):\n"
+	    "  record       %8.3f ms  (CPU: build the command list -- pack-or-skip, every Upload/"
+	    "MakeBuffer, every Dispatch's own recording)\n"
+	    "  submit+wait  %8.3f ms  (CPU: ExecuteCommandLists -> fence signaled -- submission + "
+	    "actual GPU execution + driver/OS scheduling, NOT GPU-only)\n"
+	    "  GPU-busy     %8.3f ms  (GPU timestamp query, first dispatch -> last dispatch -- THE "
+	    "number the roofline verdict below is judged against)\n"
+	    "  readback     %8.3f ms  (CPU: map + memcpy the small readback buffers into seq/"
+	    "workspace)\n"
+	    "  sum (record+submit_wait+readback, GPU-busy excluded -- it is INSIDE submit+wait, not "
+	    "additional) = %.3f ms, against the measured %.3f ms/token above\n"
+	    "  roofline (1.5 GB weights / 496 GB/s, DERIVED not measured) = %.3f ms\n"
+	    "  GPU-busy / roofline = %.2fx\n",
+	    steps, mean_record_ms, mean_submit_wait_ms, mean_gpu_busy_ms, mean_readback_ms, mean_sum_ms,
+	    per_token[1] * 1000.0, roofline_ms, mean_gpu_busy_ms / roofline_ms);
 	std::printf(
 	    "NOTE: RunLayerLoopGpu fence-waits and reads the complete %.2f MiB K/V workspace back to\n"
 	    "host every call. That cost is included above and is a property of this substrate's calling\n"

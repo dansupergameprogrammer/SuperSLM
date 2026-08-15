@@ -273,6 +273,35 @@ enum class GpuLayerLoopGuard : int {
 // re-derive it from the code a fourth time.
 bool LastWeightUploadWasSkipped();
 
+// T-2101 (dispatch-overhead decomposition, follow-up to D-SLM3302/D-SLM3304): a per-call timing
+// breakdown for the most recent `RunLayerLoopGpu` call that reached command-list recording (a call
+// rejected by the guard ladder before that point leaves every field at 0.0 -- there is nothing to
+// time). Four numbers, each in milliseconds, each covering a DISJOINT phase of the call so they sum
+// to (approximately) the call's own wall-clock cost:
+//
+// - `record_ms`      -- CPU time building the command list (weight/K-V pack-or-skip decision,
+//                        every Upload()/MakeBuffer() call, every bind_and_dispatch()'s own
+//                        SetComputeRoot*/Dispatch/ResourceBarrier recording): from the command
+//                        list's own Reset() to its Close().
+// - `submit_wait_ms` -- CPU time from ExecuteCommandLists to the fence signaling complete. This is
+//                        submission overhead PLUS actual GPU execution PLUS driver/OS scheduling --
+//                        it is not a GPU-only number; `gpu_busy_ms` below is.
+// - `gpu_busy_ms`    -- GPU-measured time between a timestamp query placed immediately before the
+//                        call's own first dispatch and one placed immediately after its last,
+//                        resolved via the command queue's own timestamp frequency. This is the
+//                        number the roofline comparison is judged against -- it excludes recording,
+//                        submission, and readback entirely, on the GPU's own clock, not a CPU
+//                        estimate of it.
+// - `readback_ms`    -- CPU time mapping the small readback buffers and copying their contents into
+//                        the caller's own `seq`/`workspace` arguments.
+struct GpuCallTiming {
+	double record_ms = 0.0;
+	double submit_wait_ms = 0.0;
+	double gpu_busy_ms = 0.0;
+	double readback_ms = 0.0;
+};
+GpuCallTiming LastCallTiming();
+
 // T-2070 (D-SLM3215, S4, Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md):
 // T-2063's own always-declared LINK-RED form of this instrument (`ArmO11AllocationFailure
 // Injection`/`ClearO11AllocationInjection`, undefined) is UNGATED, so merging it broke the

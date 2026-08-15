@@ -22532,6 +22532,61 @@ static void TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu() {
 	          "readback of position 1's row alone");
 }
 
+// T-2101 (dispatch-overhead decomposition, follow-up to D-SLM3302/D-SLM3304): pins
+// `LastCallTiming()`'s own documented contract (`gpu_port.h`) -- a call that reaches command-list
+// recording reports positive, plausibly-ordered numbers; a call rejected by the guard ladder
+// before recording ever starts leaves every field at 0.0, not the previous call's own stale
+// reading (the exact class of bug `LastWeightUploadWasSkipped()` was already corrected for once,
+// T-2055/T-2080 above).
+static void TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject() {
+	NLayerFixture<8> fixture;
+	SequenceLayerState seq;
+	int8_t codes[2] = {5, -5};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	std::vector<uint8_t> ws(8 * t2019_b11::kWsPerLayer, 0);
+	const auto st = superslm_gpu::RunLayerLoopGpu(seq, fixture.layers, 8, 8, 2, 2, 1, 2, 1,
+	                                                fixture.view.rope_tables, ws.data(), ws.size());
+	CHECK_MSG(st == SslmForwardStatus::Ok, "T2101 timing (success call): status=%s, want Ok",
+	          superslm::SslmForwardStatusName(st));
+	const auto timing_ok = superslm_gpu::LastCallTiming();
+	CHECK_MSG(timing_ok.record_ms > 0.0 && timing_ok.submit_wait_ms > 0.0 &&
+	              timing_ok.gpu_busy_ms >= 0.0 && timing_ok.readback_ms >= 0.0,
+	          "T2101 timing (success call): record_ms=%.6f submit_wait_ms=%.6f gpu_busy_ms=%.6f "
+	          "readback_ms=%.6f -- record_ms/submit_wait_ms must be positive, gpu_busy_ms/"
+	          "readback_ms non-negative",
+	          timing_ok.record_ms, timing_ok.submit_wait_ms, timing_ok.gpu_busy_ms,
+	          timing_ok.readback_ms);
+	CHECK_MSG(timing_ok.submit_wait_ms >= timing_ok.gpu_busy_ms,
+	          "T2101 timing (success call): submit_wait_ms (%.6f) must be >= gpu_busy_ms (%.6f) -- "
+	          "GPU-busy is INSIDE the submit-to-fence window, not additional to it",
+	          timing_ok.submit_wait_ms, timing_ok.gpu_busy_ms);
+
+	// layer_budget=0 rejects at the FIRST guard, before command-list recording ever starts.
+	SequenceLayerState seq2;
+	int8_t codes2[2] = {5, -5};
+	seq2.hidden_codes = codes2;
+	seq2.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq2.layer_index = 0;
+	std::vector<uint8_t> ws2(8 * t2019_b11::kWsPerLayer, 0);
+	const auto st2 = superslm_gpu::RunLayerLoopGpu(seq2, fixture.layers, 8, /*layer_budget=*/0, 2, 2,
+	                                                 1, 2, 1, fixture.view.rope_tables, ws2.data(),
+	                                                 ws2.size());
+	CHECK_MSG(st2 == SslmForwardStatus::InvalidLayerBudget,
+	          "T2101 timing (guard-rejected call): status=%s, want InvalidLayerBudget -- this "
+	          "cell's own guard-rejection premise failed",
+	          superslm::SslmForwardStatusName(st2));
+	const auto timing_rejected = superslm_gpu::LastCallTiming();
+	CHECK_MSG(timing_rejected.record_ms == 0.0 && timing_rejected.submit_wait_ms == 0.0 &&
+	              timing_rejected.gpu_busy_ms == 0.0 && timing_rejected.readback_ms == 0.0,
+	          "T2101 timing (guard-rejected call): record_ms=%.6f submit_wait_ms=%.6f "
+	          "gpu_busy_ms=%.6f readback_ms=%.6f -- a call rejected before recording starts must "
+	          "read all-zero, not the PREVIOUS successful call's own stale timing",
+	          timing_rejected.record_ms, timing_rejected.submit_wait_ms, timing_rejected.gpu_busy_ms,
+	          timing_rejected.readback_ms);
+}
+
 // T-2070 (D-SLM3215, S4): this cell is held behind the SAME SUPERSLM_O11_ALLOC_INJECTION
 // gate as its own two symbols (gpu_port.h) -- T-2063's own ungated version compiled a reference
 // to an undefined symbol straight into tests/test_main.cpp's single translation unit and took
@@ -23867,6 +23922,7 @@ int main(int argc, char** argv) {
 	TestT2053_Item3_LastWeightUploadWasSkipped();
 	TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit();
 	TestT2101_KvDeviceResidency_TwoStepBitMatchesCpu();
+	TestT2101_LastCallTiming_PlausibleOnSuccess_ZeroOnGuardReject();
 #ifdef SUPERSLM_O11_ALLOC_INJECTION
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();

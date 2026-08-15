@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
@@ -311,6 +312,10 @@ ResidentWeights g_resident_weights;
 // (gpu_port.h) -- set every `RunLayerLoopGpu` call, read by the caller after
 // it returns.
 bool g_last_weight_upload_was_skipped = false;
+
+// T-2101 (dispatch-overhead decomposition): backs the public `LastCallTiming()` accessor
+// (`gpu_port.h`) -- see that declaration's own header comment for what each field measures.
+GpuCallTiming g_last_call_timing;
 
 // T-2101 (throughput, D-SLM3301/D-SLM3294): the K/V workspace's own device residency, mirroring
 // ResidentWeights' shape exactly. Before this: `superslm_gpu.cpp`'s call site copied the WHOLE
@@ -707,6 +712,11 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// answer for one, matching the reject-over-silently-degrade shape every
 	// other guard in this function already follows.
 	g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_function_entry
+	// T-2101: reset at function entry, for the identical reason the line above is -- a call
+	// rejected by any guard below never reaches the recording-window reset further down, and
+	// without this line would report the PREVIOUS successful call's own stale timing rather than
+	// the honest "nothing was timed" answer `LastCallTiming()`'s own header comment documents.
+	g_last_call_timing = GpuCallTiming{};
 	// T-2052 (Claude/Poirot/36b9327-gpu-serial-port-reconfirmation-review.md,
 	// M1, correcting T-2049's own N1): CPU parity, corrected a SECOND time.
 	// T-2049's own comment here claimed "All eight [guards] now run here" --
@@ -1221,6 +1231,12 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// --- Build/upload every buffer this call needs, in ONE command list
 	// (upload-and-transition, then the composed dispatch chain, then the
 	// readback copies -- one submit, one fence wait). ---
+	// T-2101 (dispatch-overhead decomposition): `record_ms` covers this whole window, Reset()
+	// through Close() -- every Upload()/MakeBuffer() call and every dispatch's own recording. (The
+	// zero-reset for a REJECTED call lives at this function's own entry, above, alongside
+	// `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never reaches
+	// this line at all.)
+	const auto t_record_start = std::chrono::steady_clock::now();
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
@@ -1497,6 +1513,10 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
+	// T-2101 (dispatch-overhead decomposition): query 0 brackets the FIRST dispatch this call
+	// issues -- everything above (weight/K-V pack-or-skip, every Upload()) is recording work the
+	// GPU has not yet been asked to do anything about, so it must not be inside the GPU-busy window.
+	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
 		const uint32_t l = start_layer + i;
 		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
@@ -1517,6 +1537,12 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
 		bind_and_dispatch(commit_pipe.pso.Get(), l);
 	}
+	// Query 1 brackets the LAST dispatch (the final layer's own commit_site above) -- resolved into
+	// a small readback buffer now, alongside the real readback work below, so the resolve itself
+	// costs one more small copy rather than a whole extra submit.
+	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0, 2,
+	                            dev.timestamp_readback.Get(), 0);
 
 	// --- Readback: SeqState (whole, small -- O(hidden_size)) + the K/V workspace's OWN newly
 	// written rows into `seq`/`workspace`. T-2101: not the whole 448 MiB workspace. Every dispatch
@@ -1656,6 +1682,14 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	}
 	SSLM_GPU_HR(dev.list->Close());
+	const auto t_record_end = std::chrono::steady_clock::now();
+	g_last_call_timing.record_ms =
+	    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+
+	// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
+	// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
+	// number. `gpu_busy_ms` (below, from the timestamp queries §31's own bracket placed around this
+	// call's first/last dispatch) is the GPU-only figure the roofline comparison is judged against.
 	ID3D12CommandList* lists[] = {dev.list.Get()};
 	dev.queue->ExecuteCommandLists(1, lists);
 	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
@@ -1663,7 +1697,26 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		SSLM_GPU_HR(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event));
 		WaitForSingleObject(dev.fence_event, INFINITE);
 	}
+	const auto t_submit_wait_end = std::chrono::steady_clock::now();
+	g_last_call_timing.submit_wait_ms =
+	    std::chrono::duration<double, std::milli>(t_submit_wait_end - t_record_end).count();
 
+	// GPU-measured busy time: query 0/1 were placed around the dispatch loop above, resolved into
+	// `dev.timestamp_readback` in the SAME command list (already fenced by the wait above).
+	if (dev.timestamp_frequency > 0) {
+		UINT64 ts[2] = {0, 0};
+		void* qp = nullptr;
+		D3D12_RANGE qrange{0, 2 * sizeof(UINT64)};
+		if (SUCCEEDED(dev.timestamp_readback->Map(0, &qrange, &qp))) {
+			std::memcpy(ts, qp, sizeof(ts));
+			D3D12_RANGE qnone{0, 0};
+			dev.timestamp_readback->Unmap(0, &qnone);
+			g_last_call_timing.gpu_busy_ms =
+			    static_cast<double>(ts[1] - ts[0]) / static_cast<double>(dev.timestamp_frequency) * 1000.0;
+		}
+	}
+
+	const auto t_readback_start = std::chrono::steady_clock::now();
 	std::vector<uint8_t> seq_out(seq_bytes.size());
 	{
 		void* p = nullptr;
@@ -1688,6 +1741,9 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 		D3D12_RANGE none{0, 0};
 		kv_readback->Unmap(0, &none);
 	}
+	g_last_call_timing.readback_ms =
+	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_readback_start)
+	        .count();
 
 	for (uint32_t i = 0; i < H; ++i) {
 		int32_t v = 0;
@@ -1717,6 +1773,8 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq,
 // missing (Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md §13.2) --
 // see gpu_port.h's own declaration comment for the full contract.
 bool LastWeightUploadWasSkipped() { return g_last_weight_upload_was_skipped; }
+
+GpuCallTiming LastCallTiming() { return g_last_call_timing; }
 
 const int8_t* KeyRowGpu(const uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          size_t num_kv_heads, size_t head_dim, size_t kv_head, int64_t position) {
