@@ -127,17 +127,12 @@ static void TestDim1_P2_TenSequenceLifecycleNoLeak(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_model_unmap(ctx, model) != SSLM_MODEL_HAS_LIVE_SEQUENCES);
 }
 
-// T-2113 (Brunel, reconciliation pass): GpuContextConfig/GpuResidencyConfig are now REAL,
-// complete types in production (include/superslm/gpu_1p0.h, B1/B2) -- this suite's own local
-// header intentionally still forward-declares them incomplete (never edited here, per Brunel's
-// own charter: no test-content edits). This driver completes them LOCALLY, matching production's
-// definition byte-for-byte (StandardsDocument.md Sec5.4: verified at source -- both are a single
-// reserved int, include/superslm/gpu_1p0.h), which is legal C++ (a forward declaration completed
-// by a later definition in the same translation unit) and produces an identical calling
-// convention to production's own struct, since layout -- not which TU wrote it -- is what ABI
-// compatibility depends on.
-struct GpuContextConfig { int reserved; };
-struct GpuResidencyConfig { int reserved; };
+// T-2114 (M2, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): the local
+// re-declaration this comment used to complete here is retired -- sslm_gpu_1p0.h (this
+// directory) now defines GpuContextConfig/GpuResidencyConfig as complete struct bodies
+// itself, matching gpu_1p0.h field-for-field (both were incomplete forward declarations
+// there before this fix, the real declaration-shape divergence M2 found). A second complete
+// definition in this TU would now be a duplicate-definition error, not merely redundant.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);

@@ -618,6 +618,12 @@ std::vector<double> LastCallPerDispatchTimingsMs();
 // independently, by arming the site it lives at.
 constexpr uint32_t kO11AllocInjectionSiteWeightDefaultHeap = 0;
 constexpr uint32_t kO11AllocInjectionSiteWorkScratchUav = 1;
+// T-2114 (S4, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): a third site, inside
+// `RestoreGpuSequenceState`'s own device round-trip (superslm_gpu.cpp) -- pins that
+// `sslm_gpu_seq_restore`, defined in gpu_1p0.cpp, now catches an exception thrown from that
+// call and returns SSLM_DEVICE_LOST instead of letting it escape the status-returning API
+// boundary (the same boundary B5 already closed for `sslm_gpu_ready`/`RunLayerLoopGpuFinish`).
+constexpr uint32_t kO11AllocInjectionSiteSeqRestore = 2;
 //
 // T-2076 note (Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md): the definitions built by
 // T-2071 targeted `work_scratch_uav`'s own allocation, not the weight DEFAULT-heap buffer this
@@ -675,6 +681,16 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 // `dispatch_budget` in [0, 23] -- floor division by 24 is uniformly zero there. Never
 // records a partial layer. ---
 enum class SslmGpuStatus { Ok, DispatchBudgetTooSmall, Busy };
+
+// T-2114 (M1, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): the ONE source for
+// the real per-layer dispatch count -- `PlanDispatchBudgetGpu`'s own body (superslm_gpu.cpp)
+// and `sslm_decode_step_batch_gpu`'s own budget-spend line (gpu_1p0.cpp,
+// `remaining_budget -= layers_to_issue * kDispatchesPerLayer`) both read this constant rather
+// than each carrying its own `24u` literal. Before this fix the two agreed only because no one
+// had changed either copy since B4; a future change to one and not the other would have made
+// the batch call's own unsigned subtraction wrap (an effectively unlimited budget for every
+// later sequence in the same call), silently.
+constexpr uint32_t kDispatchesPerLayer = 24;  // T-2113 (B4): the real per-layer dispatch count
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position,
@@ -752,10 +768,19 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // level call** -- `out_seq`/`out_workspace` are caller-owned, sized identically to
 // the save call's own `seq`/`workspace`, and this function's own definition is where
 // the build seat's restored-sequence device allocation is sited. ---
-bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, const uint8_t* workspace,
-                           size_t workspace_size, void* out_blob, size_t* out_blob_size);
+// T-2114 (C1, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): `hidden_codes_size`
+// gates whether the residual stream round-trips through the blob, exactly like
+// `workspace_size` already gates the K/V bytes -- 0 means the caller does not want
+// hidden_codes carried (the pre-1.0 test_main.cpp cells that predate the 1.0 handle owning
+// hidden_codes pass 0 and keep their own established contract); the 1.0
+// `sslm_gpu_seq_restore` path passes the model's real hidden_size and gets the full
+// round-trip. Save reads from `seq.hidden_codes`; Restore writes into `out_seq->hidden_codes`
+// (both already-set pointers, never allocated here).
+bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
+                           const uint8_t* workspace, size_t workspace_size, void* out_blob,
+                           size_t* out_blob_size);
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
-                              uint8_t* out_workspace, size_t workspace_size);
+                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size);
 
 // --- B3 (Sec5.1, Sec11 B3): descriptor-table binding substrate + int8-native
 // packing. Maps a synthetic multi-array fixture (sized to a real tier's layer count

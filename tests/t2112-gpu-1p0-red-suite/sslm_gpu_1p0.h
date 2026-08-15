@@ -58,11 +58,22 @@ typedef struct SslmGpuSequenceHandle SslmGpuSequenceHandle;
 namespace superslm { struct SslmModelView; }
 using superslm::SslmModelView;
 
-/* Config types the design names but does not declare; stubbed so the probe compiles as far as
- * the design's own surface allows. SslmModelView is declared above (superslm::SslmModelView,
- * imported by using-declaration) -- not re-declared here, per the fix above. */
-typedef struct GpuContextConfig   GpuContextConfig;
-typedef struct GpuResidencyConfig GpuResidencyConfig;
+/* T-2114 (M2, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): these were incomplete
+ * forward declarations here while gpu_1p0.h (production) defines both as complete, by-value
+ * types (design Sec4.1.1/Sec5.1 name them as call parameters, and an incomplete type cannot be
+ * passed by value) -- a real divergence `diff` against gpu_1p0.h would show, not merely a stale
+ * comment, and the exact reason every dim*_red.cpp file in this suite had to define its own
+ * local, redundant `struct GpuContextConfig { int reserved; };` stand-in rather than using this
+ * header's own type directly. Completed here to match gpu_1p0.h's own struct bodies field-for-
+ * field -- the every-cell-file local stand-ins are now genuinely redundant and are removed in
+ * the same fix round (each file's own struct declaration would otherwise conflict with this
+ * header's now-complete one, a duplicate-definition error, not merely dead code). */
+typedef struct GpuContextConfig {
+	int reserved;  /* design Sec4.1.1 assigns no fields yet; zero-initialize */
+} GpuContextConfig;
+typedef struct GpuResidencyConfig {
+	int reserved;  /* design Sec5.1 assigns no fields yet; zero-initialize */
+} GpuResidencyConfig;
 
 /* --- status enum ---
  * Substrate at D:\SuperSLM main@495fbb4, include/superslm/gpu_port.h:472:
@@ -83,8 +94,14 @@ typedef enum SslmGpuStatus {
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9                         */
     SSLM_DEVICE_LOST,                    /* design Sec9                         */
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9, ADDED at this fold     */
-    SSLM_TOKEN_ID_OUT_OF_RANGE           /* design Sec9, ADDED at the 2026-08-15
+    SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9, ADDED at the 2026-08-15
                                            * mini-fold (Sec18), D-SLM3367       */
+    SSLM_SEQUENCE_REJECTED               /* design Sec9, ADDED T-2114 (S1, review
+                                           * 50f3d5d): a per-sequence CPU-domain
+                                           * guard/decode rejection, distinct from
+                                           * SSLM_DEVICE_LOST -- see gpu_1p0.h's
+                                           * own header comment on this enumerator
+                                           * for the full account.               */
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */

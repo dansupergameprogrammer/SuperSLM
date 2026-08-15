@@ -2,17 +2,28 @@
 #define SSLM_GPU_1P0_H
 // T-2113 (B1): the production 1.0 GPU API surface.
 //
-// This header is a byte-for-byte declaration match against the red suite's own
-// canonical copy (D:\SuperSLM\.worktrees\t2112-red-suite\tests\t2112-gpu-1p0-red-suite\
-// sslm_gpu_1p0.h, promoted from the T-2111 strike probe, transcribed verbatim from
-// Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec4/Sec5, post-fold). The
-// suite includes ITS OWN copy, never this one -- the two must stay declaration-identical
-// (checked at every B-section checkpoint: `diff` against the suite's copy) so that the
-// object files this header's own .cpp produces link cleanly against the suite's call
-// sites. Every function below is declared at GLOBAL scope with ordinary C++ linkage
-// (not extern "C", not inside `namespace superslm_gpu`) because that is what the suite's
-// own header declares, and C++ link-name matching requires the definition to share the
-// caller's exact scope, not merely an equivalent signature in a different namespace.
+// This header's own DECLARATIONS -- opaque handle typedefs, the SslmGpuStatus enum (every
+// enumerator, same order, same values), the GpuContextConfig/GpuResidencyConfig struct
+// bodies, and every function signature -- match the red suite's own canonical copy
+// (D:\SuperSLM\.worktrees\t2112-red-suite\tests\t2112-gpu-1p0-red-suite\sslm_gpu_1p0.h,
+// promoted from the T-2111 strike probe, transcribed verbatim from
+// Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec4/Sec5, post-fold). The suite
+// includes ITS OWN copy, never this one -- the two must stay declaration-identical (checked at
+// every B-section checkpoint) so that the object files this header's own .cpp produces link
+// cleanly against the suite's call sites. **This is a declaration-shape parity, not a literal
+// whole-file `diff`**: each copy carries its own explanatory prose (this file narrates the
+// production build's own provenance per declaration; the suite's copy narrates the design
+// section and promotion history), so a raw `diff` between the two files shows comment lines
+// differing throughout by design -- corrected here (T-2114, M2,
+// Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md) after that comment's own literal
+// "checked... via diff" claim was found false: the suite's copy had GpuContextConfig/
+// GpuResidencyConfig as INCOMPLETE forward declarations while this header defines them
+// complete (by-value call parameters cannot be incomplete types), a real declaration-shape
+// divergence a real `diff` would have caught, not merely a stale sentence -- both now define
+// the same complete struct bodies. Every function below is declared at GLOBAL scope with
+// ordinary C++ linkage (not extern "C", not inside `namespace superslm_gpu`) because that is
+// what the suite's own header declares, and C++ link-name matching requires the definition to
+// share the caller's exact scope, not merely an equivalent signature in a different namespace.
 //
 // Every fallible call returns SslmGpuStatus; every value it produces (a handle, a ready
 // flag, a decoded status, a batch's per-sequence outcomes) is delivered through an
@@ -74,7 +85,26 @@ typedef enum SslmGpuStatus {
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9 -- B3                   */
     SSLM_DEVICE_LOST,                    /* design Sec9 -- B1/B2                */
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
-    SSLM_TOKEN_ID_OUT_OF_RANGE           /* design Sec9 -- B3.5 (D-SLM3367)     */
+    SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5 (D-SLM3367)     */
+    /* T-2114 (S1, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): a per-sequence
+     * decode-time rejection that the CPU-domain guard ladder (RunLayerLoopGpuSubmit's own
+     * pre-submission checks, or DecodeStickyTag's own post-dispatch decode) produced --
+     * InvalidLayerBudget, ChainInputOutOfDomain, SoftmaxRowWidthOutOfDomain, and every other
+     * superslm::SslmForwardStatus value that is neither Ok nor a real device-level failure
+     * (GpuDeviceRemoved/GpuAllocationFailed, which map to SSLM_DEVICE_LOST below instead).
+     * Design Sec9 deliberately assigns no dedicated 1.0 status per individual guard reason
+     * (this enum does not grow one enumerator per CPU-domain check); this ONE status is the
+     * real distinction that matters to a caller -- THIS sequence's own decode step was
+     * rejected on a numeric/structural ground, the shared device is healthy, and (design
+     * Sec7's own per-sequence independence) no other sequence in the same batch call is
+     * affected. Before this status existed, both mapping functions
+     * (MapSubmitRejectionToGpuStatus/MapDecodedStatusToGpuStatus, gpu_1p0.cpp) collapsed
+     * every one of these into SSLM_DEVICE_LOST, which made sslm_decode_step_batch_gpu's own
+     * "one sequence's guard rejection does not abort the batch" contract (Sec7) impossible to
+     * honor -- the batch loop's own DeviceLost-poisons-the-rest logic (gpu_1p0.cpp) cannot
+     * tell a real device loss apart from a healthy device's per-sequence rejection when both
+     * arrive through the same value. */
+    SSLM_SEQUENCE_REJECTED
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */

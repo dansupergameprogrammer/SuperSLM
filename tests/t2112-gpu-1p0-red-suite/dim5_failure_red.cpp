@@ -68,10 +68,8 @@ static void TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency(SslmGpuConte
 	CHECK(sslm_gpu_seq_release(ctx, good_seq) == SSLM_OK);
 }
 
-// T-2113 (Brunel, B7 reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
-// these are completed locally rather than edited in the suite's own canonical header.
-struct GpuContextConfig { int reserved; };
-struct GpuResidencyConfig { int reserved; };
+// T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
+// this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);

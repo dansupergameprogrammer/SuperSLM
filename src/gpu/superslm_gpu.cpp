@@ -2664,7 +2664,9 @@ const int8_t* ValueRowGpu(const uint8_t* workspace, uint32_t layer, int64_t cont
 
 SslmGpuStatus PlanDispatchBudgetGpu(uint32_t dispatch_budget, uint32_t num_hidden_layers,
                                      uint32_t current_layer_position, uint32_t* out_layers_to_issue) {
-	constexpr uint32_t kDispatchesPerLayer = 24;  // T-2113 (B4): the real per-layer dispatch count
+	// T-2114 (M1): kDispatchesPerLayer now lives at namespace scope (gpu_port.h), the one
+	// source this function and sslm_decode_step_batch_gpu's own budget arithmetic (gpu_1p0.cpp)
+	// both read.
 	const uint32_t remaining = num_hidden_layers - current_layer_position;
 	uint32_t layers = dispatch_budget / kDispatchesPerLayer;  // floor division, never a ceiling
 	if (layers > remaining) layers = remaining;                // token-boundary cap (never spills a token)
@@ -2726,31 +2728,51 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // design names (Sec10 dim 9: layer_index, kv_saturation_count,
 // context_length; hidden_scale carried for completeness though this
 // suite's own oracle does not check it) plus the caller's workspace bytes
-// (the K/V cache, S3.7's own addressable unit) -- never hidden_codes'
-// pointee, since neither this function's own signature nor the design names
-// a hidden_size this call can use to bound that copy (Save/Restore take no
-// hidden_size parameter; hidden_codes stays the caller's own responsibility,
-// matching the "residual lives in seq's own state" contract of
-// `RunLayerLoop` (`forward_sites.h`) -- the pointER round-trips by the caller's own
-// reuse of the same buffer across save/restore, never by this blob).
+// (the K/V cache, S3.7's own addressable unit).
+//
+// T-2114 (C1, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md):
+// this function's own header comment used to say hidden_codes' pointee never
+// round-trips through this blob, "the caller's own responsibility" -- true
+// under the pre-1.0 convention where hidden_codes was a caller-owned
+// pointer. T-2113's 1.0 API moved ownership of hidden_codes INTO the
+// SslmGpuSequenceHandle (design Sec5.3), and sslm_gpu_seq_restore rebuilds
+// its fresh handle through sslm_gpu_seq_create, which zeroes hidden_codes --
+// so under the 1.0 contract, "the caller's own responsibility" is nobody's
+// responsibility, and a mid-token restore silently resumed decode from an
+// all-zero residual stream paired with a restored non-zero hidden_scale,
+// returning Ok. This function now carries hidden_codes through the blob,
+// gated by a caller-supplied `hidden_codes_size` exactly like `workspace`
+// already is (0 = the caller does not want it round-tripped -- the pre-1.0
+// callers in test_main.cpp pass 0 and keep their own established contract;
+// the 1.0 `sslm_gpu_seq_restore` path (gpu_1p0.cpp) passes the model's real
+// hidden_size and gets the full round-trip). The blob format is versioned
+// honestly: the magic changed from the pre-fix 'SSLM' to 'SLM2' so an
+// old-format blob is rejected cleanly at the first check below, never
+// misread against the new (larger) header layout.
 // ===========================================================================
 
 namespace {
 struct GpuSeqBlobHeader {
-	uint32_t magic;  // 'SSLM' little-endian, distinguishes a real blob from garbage
+	uint32_t magic;  // 'SLM2' little-endian -- v2 format (T-2114 C1: +hidden_codes_size/bytes).
+	                  // The pre-fix v1 magic ('SSLM') is a DIFFERENT value on purpose: a v1 blob
+	                  // fails the magic check below rather than being misread against this
+	                  // larger header.
 	uint32_t layer_index;
 	int64_t hidden_scale_m;
 	int64_t hidden_scale_e;
 	uint64_t kv_saturation_count;
 	int64_t context_length;
+	uint64_t hidden_codes_size;  // T-2114 C1: byte count of the residual stream that follows
+	                              // this header in the blob body, before the workspace bytes.
 	uint64_t workspace_size;
 };
-constexpr uint32_t kGpuSeqBlobMagic = 0x4D4C5353u;  // "SSLM" as a little-endian u32
+constexpr uint32_t kGpuSeqBlobMagic = 0x324D4C53u;  // "SLM2" little-endian u32 (v2: +hidden_codes)
 }  // namespace
 
-bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, const uint8_t* workspace,
-                           size_t workspace_size, void* out_blob, size_t* out_blob_size) {
-	const size_t required = sizeof(GpuSeqBlobHeader) + workspace_size;
+bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
+                           const uint8_t* workspace, size_t workspace_size, void* out_blob,
+                           size_t* out_blob_size) {
+	const size_t required = sizeof(GpuSeqBlobHeader) + hidden_codes_size + workspace_size;
 	if (!out_blob_size) return false;
 	if (!out_blob || *out_blob_size < required) {
 		*out_blob_size = required;  // report the size a real call needs, not silently truncate
@@ -2763,35 +2785,53 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, const uint8_t
 	hdr.hidden_scale_e = seq.hidden_scale.e;
 	hdr.kv_saturation_count = seq.kv_saturation_count;
 	hdr.context_length = seq.context_length;
+	hdr.hidden_codes_size = static_cast<uint64_t>(hidden_codes_size);
 	hdr.workspace_size = static_cast<uint64_t>(workspace_size);
 	uint8_t* dst = static_cast<uint8_t*>(out_blob);
 	std::memcpy(dst, &hdr, sizeof(hdr));
+	size_t off = sizeof(hdr);
+	if (hidden_codes_size > 0) {
+		if (!seq.hidden_codes) return false;
+		std::memcpy(dst + off, seq.hidden_codes, hidden_codes_size);
+	}
+	off += hidden_codes_size;
 	if (workspace_size > 0) {
 		if (!workspace) return false;
-		std::memcpy(dst + sizeof(hdr), workspace, workspace_size);
+		std::memcpy(dst + off, workspace, workspace_size);
 	}
 	*out_blob_size = required;
 	return true;
 }
 
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
-                              uint8_t* out_workspace, size_t workspace_size) {
+                              size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size) {
 	if (!blob || !out_seq || blob_size < sizeof(GpuSeqBlobHeader)) return false;
 	GpuSeqBlobHeader hdr{};
 	std::memcpy(&hdr, blob, sizeof(hdr));
 	if (hdr.magic != kGpuSeqBlobMagic) return false;
+	if (hdr.hidden_codes_size != static_cast<uint64_t>(hidden_codes_size)) return false;  // size mismatch, refuse
 	if (hdr.workspace_size != static_cast<uint64_t>(workspace_size)) return false;  // size mismatch, refuse
-	if (blob_size < sizeof(hdr) + hdr.workspace_size) return false;
+	if (blob_size < sizeof(hdr) + hdr.hidden_codes_size + hdr.workspace_size) return false;
 	out_seq->layer_index = hdr.layer_index;
 	out_seq->hidden_scale.m = hdr.hidden_scale_m;
 	out_seq->hidden_scale.e = hdr.hidden_scale_e;
 	out_seq->kv_saturation_count = hdr.kv_saturation_count;
 	out_seq->context_length = hdr.context_length;
-	// out_seq->hidden_codes is left untouched -- caller-owned pointer, never
-	// this blob's to allocate or overwrite (see header note above).
+	// T-2114 (C1): hidden_codes now round-trips through the blob body, immediately after the
+	// header and before the workspace bytes -- gated on hidden_codes_size exactly like
+	// workspace below is gated on workspace_size. `out_seq->hidden_codes` must already be a
+	// valid, correctly-sized pointer when hidden_codes_size > 0 (the 1.0 caller,
+	// sslm_gpu_seq_restore, guarantees this: it builds `fresh` through sslm_gpu_seq_create
+	// first, which sets `fresh->live_state.hidden_codes = fresh->hidden_codes.data()` before
+	// this function is ever called).
+	const uint8_t* hidden_codes_src = static_cast<const uint8_t*>(blob) + sizeof(hdr);
+	if (hidden_codes_size > 0) {
+		if (!out_seq->hidden_codes) return false;
+		std::memcpy(out_seq->hidden_codes, hidden_codes_src, hidden_codes_size);
+	}
 	if (workspace_size > 0) {
 		if (!out_workspace) return false;
-		const uint8_t* src = static_cast<const uint8_t*>(blob) + sizeof(hdr);
+		const uint8_t* src = hidden_codes_src + hidden_codes_size;
 
 		// T-2045 (S6, Claude/Poirot/82cfca7-gpu-serial-port-build-review.md):
 		// this function's own declared contract sites the restore-time device
@@ -2804,6 +2844,11 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 		// before this call returns.
 		harness::Device& dev = harness::GetDevice();
 		if (!dev.available) return false;
+		// T-2114 (S4): fault-injection hook, zero-overhead unarmed (MaybeThrowInjectedO11AllocFault's
+		// own header comment) -- lets a test arm kO11AllocInjectionSiteSeqRestore (gpu_port.h) and
+		// confirm the exception this throws is caught by sslm_gpu_seq_restore's own try (gpu_1p0.cpp)
+		// rather than escaping the status-returning API boundary.
+		MaybeThrowInjectedO11AllocFault(superslm_gpu::kO11AllocInjectionSiteSeqRestore);
 		SSLM_GPU_HR(dev.alloc->Reset());
 		SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 		auto upload_buf = dev.Upload(src, workspace_size);

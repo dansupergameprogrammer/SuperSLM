@@ -23873,14 +23873,21 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 
 	std::vector<uint8_t> blob(ws.size() + 256);  // generous over the header + workspace
 	size_t blob_size = blob.size();
-	const bool saved =
-	    superslm_gpu::SaveGpuSequenceState(seq, ws.data(), ws.size(), blob.data(), &blob_size);
+	// T-2114 (C1): hidden_codes_size=0 -- this cell predates the 1.0 handle owning
+	// hidden_codes (it constructs `seq` by hand, caller-owned pointer, the pre-1.0
+	// convention) and its own oracle below does not check hidden_codes round-tripping;
+	// 0 keeps this cell's own established contract unchanged, exactly like `workspace_size`
+	// already gates the K/V bytes.
+	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws.data(),
+	                                                       ws.size(), blob.data(), &blob_size);
 	CHECK_MSG(saved, "S6 save: SaveGpuSequenceState succeeds at a realistic workspace size");
 
 	SequenceLayerState restored{};
 	std::vector<uint8_t> restored_ws(ws.size(), 0);
-	const bool restored_ok = superslm_gpu::RestoreGpuSequenceState(
-	    blob.data(), blob_size, &restored, restored_ws.data(), restored_ws.size());
+	const bool restored_ok =
+	    superslm_gpu::RestoreGpuSequenceState(blob.data(), blob_size, &restored,
+	                                           /*hidden_codes_size=*/0, restored_ws.data(),
+	                                           restored_ws.size());
 	CHECK_MSG(restored_ok,
 	          "S6 restore: RestoreGpuSequenceState succeeds at a realistic workspace size -- "
 	          "this call now depends on a present, working device (D-SLM3177 S6); a plain host "
@@ -25131,14 +25138,19 @@ static void TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu() {
 	                         sizeof(ws));  // one clean token -- real, running, must already pass
 
 	// The GPU port's own save/restore mechanism (LINK-RED).
+	// T-2114 (C1): hidden_codes_size=0 -- this cell's own oracle (below) checks only
+	// layer_index/kv_saturation_count/context_length, not hidden_codes round-tripping, and
+	// `restored_seq` is default-constructed with a null hidden_codes pointer, so 0 keeps
+	// this cell's own established contract unchanged (see the S6 cell above for the same
+	// disposition).
 	uint8_t blob[512];
 	size_t blob_size = sizeof(blob);
-	const bool saved =
-	    superslm_gpu::SaveGpuSequenceState(seq, ws, sizeof(ws), blob, &blob_size);  // LINK-RED
+	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws,
+	                                                       sizeof(ws), blob, &blob_size);  // LINK-RED
 	SequenceLayerState restored_seq;
 	uint8_t restored_ws[kWs] = {};
 	const bool restored = superslm_gpu::RestoreGpuSequenceState(  // LINK-RED
-	    blob, blob_size, &restored_seq, restored_ws, sizeof(restored_ws));
+	    blob, blob_size, &restored_seq, /*hidden_codes_size=*/0, restored_ws, sizeof(restored_ws));
 	CHECK_MSG(saved && restored, "B8 save/restore: both calls report success");
 	CHECK_MSG(restored_seq.layer_index == seq.layer_index &&
 	              restored_seq.kv_saturation_count == seq.kv_saturation_count &&

@@ -20,7 +20,12 @@ if not exist obj mkdir obj
 set OVERALL_LINK_OK=1
 for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp) do (
     echo ===== %%f =====
-    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include /I. ^
+    rem T-2114 (S4): the two allocation-fault-injection macros build.bat's own test-binary line
+    rem already defines (superslm_tests.exe) -- needed here so dim9's own SeqRestore injection
+    rem site (gpu_port.h's kO11AllocInjectionSiteSeqRestore) compiles into this suite's binaries
+    rem too; zero-overhead unarmed everywhere else (MaybeThrowInjectedO11AllocFault's own header
+    rem comment), so defining them does not change any OTHER cell's behavior.
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION /I%ENG%\include /I%ENG%\tests /I. ^
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^

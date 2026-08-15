@@ -94,10 +94,8 @@ static void TestDim3_P1_RealArtifactConcurrentDecode64Steps(SslmGpuContext* ctx,
 	// target -- named here as a residual, per design Sec11 dim3, not silently assumed covered.
 }
 
-// T-2113 (Brunel, reconciliation pass): see dim1_lifetime_red.cpp's own header comment for why
-// these are completed locally rather than edited in the suite's own canonical header.
-struct GpuContextConfig { int reserved; };
-struct GpuResidencyConfig { int reserved; };
+// T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
+// this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);

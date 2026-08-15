@@ -1,6 +1,9 @@
-// T-2112 (Curie) -- Dim 2 (Trust boundaries and hostile inputs), design Sec11 dim2. 3 cells.
+// T-2112 (Curie) -- Dim 2 (Trust boundaries and hostile inputs), design Sec11 dim2. 3 cells,
+// +1 (T-2114, S3) -- see that cell's own header comment.
 // RED BY LINK (see dim1_lifetime_red.cpp's own header for the shared explanation).
 #include "fixture_common.h"
+#include "../sslm_model_hostile_fixtures.h"
+#include "../sslm_kvc1_hostile_fixtures.h"
 
 using namespace superslm;
 
@@ -64,10 +67,62 @@ static void TestDim2_P1_OversizedRankAdapterRejectedNeverReadPastTensor(
 	CHECK(out_adapter == nullptr);
 }
 
-// T-2113 (Brunel, B6b reconciliation): see dim1_lifetime_red.cpp's own header comment for why
-// these are completed locally rather than edited in the suite's own canonical header.
-struct GpuContextConfig { int reserved; };
-struct GpuResidencyConfig { int reserved; };
+// --- Product cell (T-2114, S3, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md):
+// sslm_gpu_model_map used to copy `vocab_size * hidden_size` bytes out of the "embed" tensor's
+// own data with no check against that tensor's own declared `elem_count` -- a short `embed`
+// section (a parser-legal artifact whose CFG1.vocab_size disagrees with WGT1's own "embed"
+// tensor shape, the exact gap model.cpp:1192's own cross-check does not close, per the review)
+// read megabytes past the mapped buffer on every load. Built directly from the CPU-side
+// manifest/keyed-constant builders (sslm_model_hostile_fixtures.h/sslm_kvc1_hostile_fixtures.h)
+// rather than a full on-disk artifact -- num_hidden_layers=0 in the hand-built config means
+// sslm_gpu_model_map's own per-layer MarshalLayer loop is zero iterations, so no per-layer
+// weight tensors are needed at all; the "embed" tensor and its composition_constants entry are
+// the whole fixture. ---
+static void TestDim2_S3_ShortEmbedTensorRejectedAtMapTime(SslmGpuContext* ctx) {
+	using namespace superslm_test;
+
+	// "embed" tensor: 4 int8 bytes, genuinely that small and internally consistent (a
+	// well-formed WGT1 manifest the parser accepts) -- config below declares vocab_size=10,
+	// hidden_size=10 (embed_bytes_needed=100), so the tensor is 96 bytes short of what
+	// sslm_gpu_model_map's own (pre-S3) unchecked copy would have read.
+	const BuiltManifest wgt = BuildManifest(superslm::kWeightsMagic, /*element_size=*/1,
+	                                         {{"embed", {4}}});
+	SslmSectionView wgt_view = MakeManifestSectionView(SslmSectionType::Weights, SslmDtype::Int8, wgt.bytes);
+	SslmTensorManifest weights;
+	std::string werr;
+	CHECK_MSG(SslmTensorManifest::Parse(wgt_view, weights, &werr) == SslmModelStatus::Ok,
+	          "S3 fixture: the hand-built WGT1 manifest itself must parse Ok (spec-faithful, not "
+	          "the defect under test) -- %s",
+	          werr.c_str());
+
+	const BuiltKvc1 kvc = BuildKvc1(/*declared_value_words=*/2, {{"embed", {1073741824LL, 0LL}}});
+	SslmSectionView kvc_view = MakeConstantsSectionView(SslmSectionType::CompositionConstants, kvc.bytes);
+	SslmKeyedConstants composition_constants;
+	std::string kerr;
+	CHECK_MSG(SslmKeyedConstants::Parse(kvc_view, composition_constants, &kerr) == SslmModelStatus::Ok,
+	          "S3 fixture: the hand-built composition-constants section itself must parse Ok -- %s",
+	          kerr.c_str());
+
+	SslmModelView view{};
+	view.config.hidden_size = 10;
+	view.config.vocab_size = 10;
+	view.config.num_hidden_layers = 0;  // zero-iteration MarshalLayer loop -- no layer tensors needed
+	view.config.context_cap = 64;
+	view.has_config = true;
+	view.weights = std::move(weights);
+	view.has_weights = true;
+	view.composition_constants = std::move(composition_constants);
+	view.has_composition_constants = true;
+
+	SslmGpuModelHandle* model = nullptr;
+	const SslmGpuStatus st = sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model);
+	CHECK_MSG(st != SSLM_OK, "S3: sslm_gpu_model_map must reject a short embed tensor "
+	          "(elem_count=4, vocab_size*hidden_size=100), not read past it -- got status %d", (int)st);
+	CHECK_MSG(model == nullptr, "S3: a rejected map must not deliver a live handle");
+}
+
+// T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
+// this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -83,6 +138,18 @@ int main(int argc, char** argv) {
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_2 = (void*)&TestDim2_P1_OversizedRankAdapterRejectedNeverReadPastTensor; (void)addr_2;
+	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
+	volatile void* addr_3 = (void*)&TestDim2_S3_ShortEmbedTensorRejectedAtMapTime; (void)addr_3;
+
+	// S3's own cell is fully synthetic (no real artifact needed) -- run it unconditionally,
+	// including when no --model*/--adapter args are supplied, rather than gating it behind the
+	// same real-artifact requirement the OTHER cells in this file need.
+	{
+		SslmGpuContext* s3_ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &s3_ctx) == SSLM_OK);
+		TestDim2_S3_ShortEmbedTensorRejectedAtMapTime(s3_ctx);
+		CHECK(sslm_gpu_context_destroy(s3_ctx) == SSLM_OK);
+	}
 
 	if (g_model_1p5b_path.empty() || g_model_0p5b_path.empty() || g_adapter_path.empty()) {
 		SKIP_MSG("dim2 needs --model1p5b=PATH --model0p5b=PATH --adapter=PATH -- not run");
