@@ -9,6 +9,7 @@ just never exposes it. This wrapper calls the SAME function the CLI calls, with 
 and reproduces the CLI's own dispatch/write logic afterward -- no algorithm, threshold, or gate is
 changed; only the resumability the function already supported is turned on.
 """
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,14 @@ import sslm_convert_adapter as A  # noqa: E402
 ADAPTER_DIR = Path(r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2\final")
 BASE_SSLM = Path(r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm")
 OUT_PATH = Path(r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v2-t2102-runtime.sslm")
+# T-2104 (Poirot 8e07d0c review, Minor 5): write to a temp path and rename on success -- the
+# ORIGINAL script unlinked OUT_PATH before an hour of compute that had already been killed twice by
+# the harness's own background-task limit, which meant a THIRD kill mid-write could have left the
+# destination worse than it found it (a deleted-but-not-yet-replaced artifact). Nothing was actually
+# lost by this build (the name was new), but the ordering was backwards regardless. `os.replace` is
+# atomic on the same filesystem, so the destination is either the old file (untouched) or the
+# complete new one, never a partial write or a gap.
+OUT_TMP_PATH = OUT_PATH.with_name(OUT_PATH.name + ".tmp")
 CHECKPOINT_PATH = Path(__file__).parent / "_t2102_convert_checkpoint.jsonl"
 PROGRESS_PATH = Path(__file__).parent / "t2102_convert_progress.txt"
 
@@ -34,8 +43,6 @@ def log(msg: str) -> None:
 def main():
     t0 = time.time()
     log("T-2102 checkpointed real conversion starting")
-    if OUT_PATH.exists():
-        OUT_PATH.unlink()
 
     sections, verdict, _round_trip = A.build_runtime_additive_sections(
         ADAPTER_DIR, BASE_SSLM, checkpoint_path=CHECKPOINT_PATH, verbose=True)
@@ -49,7 +56,10 @@ def main():
         saturation_elevated=verdict["saturation_elevated"], fallback_flag_present=False)
 
     if outcome == A.ArtifactOutcome.RUNTIME_ADDITIVE:
-        fingerprint = A.sf.write_artifact(str(OUT_PATH), sections)
+        if OUT_TMP_PATH.exists():
+            OUT_TMP_PATH.unlink()
+        fingerprint = A.sf.write_artifact(str(OUT_TMP_PATH), sections)
+        os.replace(OUT_TMP_PATH, OUT_PATH)  # atomic same-filesystem rename -- no partial destination
         log(f"wrote {OUT_PATH}")
         log(f"fingerprint {fingerprint}")
         log(f"sections {len(sections)}: " + ", ".join(str(s.type) for s in sections))

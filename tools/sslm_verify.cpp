@@ -16,15 +16,18 @@
 // never sees the calibration pipeline's float arrays -- it reads only the bytes
 // that were actually written, which is the whole point of the independence.
 //
-// Load's returned SslmModelView is used ONLY for its Ok/rejected STATUS below,
-// never for a pointer-bearing field (SslmTensorView::data, SslmConstantEntry::
-// values, etc.) -- Load constructs and destroys its own internal SslmArtifact
-// before returning, so a view's pointer fields are dangling the instant Load
-// returns, regardless of how soon they are read afterward (discovered while
-// building this tool; flagged in this slot's handoff as a pre-existing defect
-// in SslmModel::Load itself, out of scope to fix here). Every manifest field
-// below is derived by BuildProofManifestJson re-parsing directly from THIS
-// function's own long-lived `artifact` object instead.
+// Load's returned SslmModelView is used ONLY for its Ok/rejected STATUS below, never for a
+// pointer-bearing field (SslmTensorView::data, SslmConstantEntry::values, etc.). CORRECTED (T-2104,
+// Poirot 8e07d0c review, Significant 2): the claim this comment used to make here -- that Load's own
+// view dangles the instant Load returns because it "constructs and destroys its own internal
+// SslmArtifact" -- is false at source. `SslmModelView`'s own `backing_` member OWNS the file bytes
+// every pointer in the view points into (include/superslm/model.h); the view stays valid for its
+// own lifetime, exactly as long as any other owning object. This tool still re-parses from its own
+// long-lived `artifact` object below, but the reason is simply that `SslmModel::Load` takes raw
+// bytes rather than an existing `SslmArtifact` and this tool wants ONE artifact object serving both
+// `BuildProofManifestJson` and the config-geometry cross-check above -- never "the view would
+// dangle." Every manifest field below is derived by BuildProofManifestJson reading from THIS
+// function's own long-lived `artifact` object, a structural choice, not a lifetime requirement.
 #include <cstdio>
 #include <fstream>
 #include <string>

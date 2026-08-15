@@ -21975,6 +21975,63 @@ static void TestAdapterLoaderRejectionCells() {
 		          "must be REJECTED with LayerIndexOutOfRange: got %s (%s)",
 		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
 	}
+
+	// (10) T-2104 (Poirot 8e07d0c review, Significant 1): a malformed adapter whose ADP1 declares
+	// rank=1 while its own "layer0.q_proj.lora_A" tensor is genuinely shaped [4, 2] (rank=4) --
+	// every OTHER check this loader performs (container integrity, DFS1 row_count == out_channels,
+	// UFS1 row_count == the DECLARED rank 1, magic/version/reserved/projection/name/layer-index)
+	// passes, exactly the review's own "passes every check this loader performs" construction. Must
+	// be REJECTED with LoraAWeightShapeMismatch -- never silently accepted with a_weight pointing at
+	// a tensor 4x the size AddAmplifyingLoraDelta will actually read (in_channels=2 * rank=1 == 2
+	// int8s expected; the tensor genuinely holds 4*2==8).
+	{
+		std::vector<uint8_t> adp1 = BuildAdp1(/*rank=*/1, 0x1, base_hash, 8.0, false, "bad-a-shape");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.q_proj", 2,
+		                                                {{1, 0, 0}, {1, 0, 0}});
+		FixtureSection dfs1_section =
+		    MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+		BuiltManifest ufs1 =
+		    BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.q_proj", /*row_count=*/1,
+		                              {{1, 0, 0}});
+		FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+		// lora_A built with rank=4 (shape [4,2]) while ADP1 above declares rank=1 -- the loader's
+		// OWN shape check is the only thing that can catch this; UFS1's row_count (1) still matches
+		// ADP1's declared rank (1), so the pre-existing UFoldDimensionMismatch check does NOT fire.
+		BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.q_proj", /*rank=*/4, /*in=*/2, /*out=*/2,
+		                                                 /*a=*/{1, 2, 3, 4, 5, 6, 7, 8},
+		                                                 /*b=*/{1, 2, 3, 4, 5, 6, 7, 8});
+		FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+		auto built = BuildArtifact(
+		    {config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::LoraAWeightShapeMismatch,
+		          "a lora_A tensor shaped [4,2] (rank=4) when ADP1 declares rank=1 must be REJECTED "
+		          "with LoraAWeightShapeMismatch, never silently accepted with a wrongly-sized "
+		          "pointer: got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
+
+	// (11) T-2104 (Poirot 8e07d0c review, Minor 2): ADP1's target_modules_mask sets a bit at or
+	// past kPeftAdaptableProjections' own length (bit 7, unused -- only bits 0-6 name a known
+	// projection). Must be REJECTED with InvalidTargetModulesMask -- silently discarding the
+	// unknown bit would load this adapter exactly as though it had declared only q_proj.
+	{
+		std::vector<uint8_t> adp1 =
+		    BuildAdp1(1, /*target_modules_mask=*/0x1 | (1u << 7), base_hash, 8.0, false, "unknown-bit");
+		FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+		auto built = valid_pieces(prov);
+		AdapterHandle handle;
+		std::string err;
+		const auto status = write_and_load(built.bytes, handle, err);
+		CHECK_MSG(status == AdapterLoadStatus::InvalidTargetModulesMask,
+		          "an ADP1 target_modules_mask setting an unknown bit (bit 7) must be REJECTED with "
+		          "InvalidTargetModulesMask, never silently treated as though the bit were absent: "
+		          "got %s (%s)",
+		          superslm_adapter::AdapterLoadStatusName(status), err.c_str());
+	}
 }
 
 // --- End-to-end: a LOADER-populated adapter drives RunLayerLoop to the BIT-IDENTICAL result of
@@ -22152,6 +22209,117 @@ static void TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHand
 	          "swapping to an independently-loaded handle_b (same file) must reproduce handle_a's own "
 	          "result exactly: got [%d,%d] vs [%d,%d]", seq_swap.hidden_codes[0], seq_swap.hidden_codes[1],
 	          seq.hidden_codes[0], seq.hidden_codes[1]);
+}
+
+// T-2104 (Poirot 8e07d0c review, Observation 4): the `--adapter` flag's only prior evidence was the
+// manual run recorded in the build log -- no automated cell exercised `sslm_generate.cpp`'s own
+// Stage 3b sequence. `sslm_generate.cpp`'s logic lives in `main()` (not a reusable function), so
+// this cell reproduces that EXACT sequence against the real, PUBLIC production API instead of
+// linking the tool binary: `SslmModel::Load` the base, read its hash through the model.h accessor
+// `sslm_generate.cpp` itself now calls (`SslmModelView::RawIntegrityHash()`, added this round),
+// `LoadAdapterArtifact`, `ApplyAdapterToLayers` -- the identical four calls Stage 3b makes, in the
+// identical order, proving the `--adapter` code path end to end rather than resting on a manual run.
+static void TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly() {
+	using namespace t2102_adapter_loader_fixtures;
+	using namespace superslm_test;
+	using namespace t2029_b1_fixtures;
+	using superslm::CarriedScale;
+	using superslm::SequenceLayerState;
+	using superslm::SslmDtype;
+	using superslm::SslmForwardStatus;
+	using superslm::SslmSectionType;
+
+	// --- Step 1 (Stage 1/2 of sslm_generate.cpp): load the base through the real production entry
+	// point, exactly as main() does. -----------------------------------------------------------
+	Cfg1Spec base_spec{};
+	base_spec.hidden_size = 2;
+	base_spec.num_hidden_layers = 2;
+	base_spec.num_attention_heads = 1;
+	base_spec.num_key_value_heads = 1;
+	base_spec.head_dim = 2;
+	base_spec.intermediate_size = 2;
+	base_spec.context_cap = 1;
+	base_spec.kv_precision = 0;
+	base_spec.kv_block_size = 1;
+	FixtureSection base_config = MakeSection(SslmSectionType::Config, SslmDtype::Raw, BuildCfg1(base_spec));
+	auto base_built = BuildArtifact({base_config, MakeSigmoidLutSection()});
+	superslm::SslmModelView base_view;
+	std::string base_load_err;
+	const auto base_load_status = superslm::SslmModel::Load(base_built.bytes.data(), base_built.bytes.size(),
+	                                                          base_view, &base_load_err);
+	CHECK_MSG(base_load_status == superslm::SslmModelStatus::Ok,
+	          "test fixture bug: the synthetic base must itself load Ok, got %s (%s)",
+	          superslm::SslmModelStatusName(base_load_status), base_load_err.c_str());
+
+	// --- Step 2 (Stage 3b's own first line): the base hash via the NEW accessor, never a second
+	// SslmArtifact::OpenFromMemory. --------------------------------------------------------------
+	const auto base_hash = base_view.RawIntegrityHash();
+
+	// --- Build the adapter artifact (v_proj -- the same context_length==1 softmax-degeneracy
+	// reasoning as the e2e bit-identity cell above applies here too). ---------------------------
+	std::vector<uint8_t> adp1 = BuildAdp1(1, /*target_modules_mask=*/0x40, base_hash, 8.0, false,
+	                                       "sslm-generate-e2e");
+	FixtureSection prov = MakeSection(SslmSectionType::Provenance, SslmDtype::Raw, adp1);
+	BuiltManifest dfs1 = BuildFoldManifestOneEntry(superslm::kDeltaFoldScalesMagic, "layer0.v_proj", 2,
+	                                                {{1, 0, 0}, {1, 0, 0}});
+	FixtureSection dfs1_section = MakeSection(SslmSectionType::DeltaFoldScales, SslmDtype::Int32, dfs1.bytes);
+	BuiltManifest ufs1 = BuildFoldManifestOneEntry(superslm::kUFoldScalesMagic, "layer0.v_proj", 1, {{1, 0, 0}});
+	FixtureSection ufs1_section = MakeSection(SslmSectionType::UFoldScales, SslmDtype::Int32, ufs1.bytes);
+	BuiltManifest wgt1 = BuildAdapterWeightsManifest("layer0.v_proj", 1, 2, 2, {kAdapterA[0], kAdapterA[1]},
+	                                                 {kAdapterBReal[0], kAdapterBReal[1]});
+	FixtureSection wgt1_section = MakeSection(SslmSectionType::Weights, SslmDtype::Int8, wgt1.bytes);
+	auto adapter_built = BuildArtifact(
+	    {base_config, MakeSigmoidLutSection(), prov, wgt1_section, dfs1_section, ufs1_section});
+	const std::string path = "t2102_sslm_generate_e2e_fixture.sslm.tmp";
+	{
+		std::ofstream f(path, std::ios::binary | std::ios::trunc);
+		f.write(reinterpret_cast<const char*>(adapter_built.bytes.data()),
+		        static_cast<std::streamsize>(adapter_built.bytes.size()));
+	}
+
+	// --- Step 3 (Stage 3b): LoadAdapterArtifact, exactly as sslm_generate.cpp's own Stage 3b calls
+	// it -- geometry read off base_view's own config, never a separately-threaded struct. --------
+	BaseModelGeometry geo;
+	geo.num_hidden_layers = base_view.config.num_hidden_layers;
+	geo.hidden_size = base_view.config.hidden_size;
+	geo.intermediate_size = base_view.config.intermediate_size;
+	geo.kv_hidden_size =
+	    static_cast<uint64_t>(base_view.config.num_key_value_heads) * base_view.config.head_dim;
+	geo.base_artifact_hash = base_hash;
+
+	AdapterHandle handle;
+	std::string adapter_err;
+	const auto adapter_status = LoadAdapterArtifact(path, geo, handle, &adapter_err);
+	std::remove(path.c_str());
+	CHECK_MSG(adapter_status == AdapterLoadStatus::Ok,
+	          "the --adapter code path's own LoadAdapterArtifact call must succeed: got %s (%s)",
+	          superslm_adapter::AdapterLoadStatusName(adapter_status), adapter_err.c_str());
+
+	// --- Step 4 (Stage 3b): ApplyAdapterToLayers, then decode -- base-only vs adapter-bound, on
+	// the SAME TwoLayerFixture geometry this adapter targets. -----------------------------------
+	TwoLayerFixture base_fixture;
+	uint8_t base_ws[64] = {};
+	const RunResult base_only = RunOneToken(base_fixture, /*layer0_adapter=*/nullptr, base_ws, sizeof(base_ws));
+	CHECK(base_only.status == SslmForwardStatus::Ok);
+
+	TwoLayerFixture adapted_fixture;
+	ApplyAdapterToLayers(&handle, adapted_fixture.layers, base_view.config.num_hidden_layers);
+	adapted_fixture.layers[1].adapter = nullptr;
+	SequenceLayerState seq;
+	int8_t codes[2] = {5, -5};
+	seq.hidden_codes = codes;
+	seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
+	seq.layer_index = 0;
+	uint8_t adapted_ws[2 * TwoLayerFixture::kContextCap * 1 * 2 * 2] = {};
+	const auto adapted_status =
+	    superslm::RunLayerLoop(seq, adapted_fixture.layers, 2, 2, 2, 2, 1, 2, TwoLayerFixture::kContextCap,
+	                            adapted_fixture.view.rope_tables, adapted_ws, sizeof(adapted_ws));
+	CHECK_MSG(adapted_status == SslmForwardStatus::Ok,
+	          "the --adapter code path's own decode must succeed: got %s",
+	          superslm::SslmForwardStatusName(adapted_status));
+	CHECK_MSG(seq.hidden_codes[0] != base_only.hidden_codes[0] || seq.hidden_codes[1] != base_only.hidden_codes[1],
+	          "the --adapter flag's own end-to-end sequence must produce output that differs from "
+	          "base-only -- got identical [%d,%d] on both", seq.hidden_codes[0], seq.hidden_codes[1]);
 }
 
 int main(int argc, char** argv) {
@@ -22950,6 +23118,7 @@ int main(int argc, char** argv) {
 	TestAdapterLoaderAcceptsWellFormedSyntheticAdapterAndPopulatesEveryDeclaredEntry();
 	TestAdapterLoaderRejectionCells();
 	TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture();
+	TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

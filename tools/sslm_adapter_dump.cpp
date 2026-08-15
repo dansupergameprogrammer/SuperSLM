@@ -10,12 +10,16 @@
 //
 // Usage: sslm_adapter_dump <artifact.sslm> <out.json>
 //
-// Follows sslm_verify.cpp's own documented, discovered-the-hard-way discipline: SslmModel::Load's
-// returned SslmModelView has pointer fields that dangle the instant Load returns (Load
-// constructs and destroys its own internal SslmArtifact) -- Load is invoked here ONLY to prove/
-// report its Ok status, in its own scoped block, and every section this tool actually dumps is
-// re-parsed directly from a separate, long-lived SslmArtifact object (SslmArtifact::OpenFromFile),
-// exactly as sslm_verify.cpp's own BuildProofManifestJson does.
+// Follows sslm_verify.cpp's own structural convention: Load is invoked here ONLY to prove/report
+// its Ok status, in its own scoped block, and every section this tool actually dumps is re-parsed
+// directly from a separate, long-lived SslmArtifact object (SslmArtifact::OpenFromFile). CORRECTED
+// (T-2104, Poirot 8e07d0c review, Significant 2): the ORIGINAL text here claimed this was required
+// because "SslmModel::Load's returned SslmModelView has pointer fields that dangle the instant Load
+// returns" -- inherited from sslm_verify.cpp's own now-corrected comment, and false at source:
+// `SslmModelView::backing_` (include/superslm/model.h) owns the file bytes every pointer in the
+// view points into, and the view stays valid for its own lifetime. The re-parse below is a
+// structural choice (this tool wants ONE long-lived artifact object, opened via OpenFromFile, for
+// every section it dumps), never a lifetime requirement Load's own view would violate.
 
 #include <cstdio>
 #include <fstream>

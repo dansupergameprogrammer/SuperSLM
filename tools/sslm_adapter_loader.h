@@ -6,16 +6,18 @@
 // (design Sec8/Sec11 B1a-B1c, T-2021/T-2029); nothing before this file ever set it from a loaded
 // artifact. This is that section-table walk.
 //
-// Contract, mirrored from tools/sslm_adapter_dump.cpp's own documented discipline: SslmModel::Load
-// returns a view whose pointers dangle the instant Load returns (it owns and destroys its own
-// internal SslmArtifact). Load is invoked here ONLY to discharge the "the container and its WGT1/
-// DFS1/UFS1 sub-parses/domain checks all pass" contract -- the SAME structural + domain gate
-// SslmModel::LoadImpl already applies to a base model (AmplifyingFoldSectionTypeMismatch,
-// AmplifyingFoldTripleCountInvalid, AmplifyingFoldIdentityNotBool,
-// AmplifyingFoldExponentOutOfDomain -- model.h's SslmModelStatus). Every pointer this loader
-// hands back into LayerAdapter/LayerAdapterProjection is re-parsed from a second, long-lived
-// SslmArtifact (AdapterHandle::artifact_) that outlives the handle, exactly as sslm_adapter_dump.cpp
-// re-parses from its own long-lived object rather than trusting Load's transient view.
+// Contract (T-2104, Poirot 8e07d0c review, Significant 2 -- corrected; the ORIGINAL text here
+// claimed "SslmModel::Load returns a view whose pointers dangle the instant Load returns," which is
+// false at source: SslmModelView's last member, `backing_`, OWNS the file bytes every pointer in the
+// view points into (model.h), and the view stays valid for its own lifetime -- both this file's own
+// production callers, sslm_generate.cpp and sslm_lora_switch_demo.cpp, read tensors off a model view
+// long after Load returns and generate from them, which is only sound because the claim was wrong.
+// The claim was inherited from tools/sslm_adapter_dump.cpp, corrected there too). `LoadAdapterArtifact`
+// calls `SslmModel::Load` exactly ONCE and KEEPS the resulting view (`AdapterHandle::view_`) for the
+// handle's own lifetime -- every pointer this loader hands back into LayerAdapter/LayerAdapterProjection
+// is read directly from that one already-parsed view (its `weights`/`delta_fold_scales`/
+// `u_fold_scales` members, and its own `Section()`/`RawIntegrityHash()` forwarders for the raw
+// Provenance section and the base-hash check) rather than a second, independent re-parse.
 //
 // What this file adds beyond SslmModel::Load's existing gate -- design Sec9's four explicit B0b
 // validations model.h declares and documents as "the checks the [as yet unbuilt] adapter-loading
@@ -36,6 +38,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -97,6 +100,16 @@ enum class AdapterLoadStatus {
 	UFoldDimensionMismatch,   // a UFoldScales entry's row_count != ADP1's own declared rank
 	MissingWeightTensor,      // a DeltaFoldScales-named pair has no matching "<name>.lora_A"/".lora_B"
 	                          // Weights tensor
+	InvalidTargetModulesMask, // ADP1's target_modules_mask sets a bit at or past
+	                          // kPeftAdaptableProjections' own length -- an unknown target module
+	                          // (T-2104 M2: silently discarding it would load an adapter as though
+	                          // the unknown module had never been declared)
+	LoraAWeightShapeMismatch, // T-2104 S1: a "<name>.lora_A" tensor's own rank/shape does not match
+	                          // [ADP1's declared rank, this projection's in_channels] -- the FIRST
+	                          // of the two pointers AddAmplifyingLoraDelta actually walks that this
+	                          // loader had never checked
+	LoraBWeightShapeMismatch, // T-2104 S1: a "<name>.lora_B" tensor's own rank/shape does not match
+	                          // [this projection's out_channels, ADP1's declared rank] -- the SECOND
 };
 
 inline const char* AdapterLoadStatusName(AdapterLoadStatus s) noexcept {
@@ -121,20 +134,36 @@ inline const char* AdapterLoadStatusName(AdapterLoadStatus s) noexcept {
 		case AdapterLoadStatus::MissingUFoldEntry: return "MissingUFoldEntry";
 		case AdapterLoadStatus::UFoldDimensionMismatch: return "UFoldDimensionMismatch";
 		case AdapterLoadStatus::MissingWeightTensor: return "MissingWeightTensor";
+		case AdapterLoadStatus::InvalidTargetModulesMask: return "InvalidTargetModulesMask";
+		case AdapterLoadStatus::LoraAWeightShapeMismatch: return "LoraAWeightShapeMismatch";
+		case AdapterLoadStatus::LoraBWeightShapeMismatch: return "LoraBWeightShapeMismatch";
 	}
 	return "Unknown";
 }
 
 // model.h:433's kPeftAdaptableProjections, in ADP1's OWN bit order (tools/sslm_convert_adapter.py
 // PEFT_ADAPTABLE_PROJECTIONS, "the ONLY source of ADP1's target_modules_mask bit order") -- a
-// second, independent copy would risk drifting from model.h's; this file reads model.h's own
-// array directly rather than restating it, so there is exactly one source.
+// second, independent copy of the ARRAY would risk drifting from model.h's, so this file reads
+// model.h's own array directly. T-2104 (Poirot 8e07d0c review, Minor 2): the array's own LENGTH is
+// still read via `std::size`, never restated as a literal -- the original `for (i < 7)` was exactly
+// the restatement the header comment above claimed to avoid.
 inline std::vector<std::string_view> TargetModulesFromMask(uint32_t mask) {
 	std::vector<std::string_view> out;
-	for (size_t i = 0; i < 7; ++i) {
+	for (size_t i = 0; i < std::size(superslm::kPeftAdaptableProjections); ++i) {
 		if (mask & (1u << i)) out.push_back(superslm::kPeftAdaptableProjections[i]);
 	}
 	return out;
+}
+
+// T-2104 (Poirot 8e07d0c review, Minor 2): true iff `mask` sets any bit at or past
+// kPeftAdaptableProjections' own length -- an ADP1 declaring a target module this build does not
+// know about. `TargetModulesFromMask` above silently drops such a bit (it can only ever push a
+// name for a bit it recognizes), which -- unchecked -- would load an adapter exactly as though the
+// unknown module had never been declared, rather than refusing it.
+inline bool TargetModulesMaskHasUnknownBit(uint32_t mask) noexcept {
+	constexpr size_t kKnown = std::size(superslm::kPeftAdaptableProjections);
+	const uint32_t known_mask = kKnown >= 32 ? 0xFFFFFFFFu : ((1u << kKnown) - 1u);
+	return (mask & ~known_mask) != 0;
 }
 
 // Parses "layer<N>.<proj>" (the converter's own naming convention, tools/sslm_convert_adapter.py
@@ -175,18 +204,38 @@ inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_s
 	return 0;  // unreachable once ValidateAmplifyingFoldProjection has already accepted `proj`
 }
 
-// Owns everything a bound adapter needs to stay alive: the raw artifact bytes/section table
-// (`artifact_`), the typed views re-parsed from it (`weights_`/`delta_fold_`/`u_fold_` --
-// SslmTensorView/SslmAmplifyingFoldEntry pointers into these are what LayerAdapterProjection
-// exposes), and one `LayerAdapter` per BASE-MODEL layer (`layer_adapters`, index l == base
-// layer l's adapter state; default-constructed -- every LayerAdapterProjection::a_weight ==
+// T-2104 (Poirot 8e07d0c review, Significant 1): this projection's own IN-channels -- the sibling
+// `AdapterOutChannelsFor` above never had. Read from the SAME call sites `AddAmplifyingLoraDelta`
+// itself is invoked from (src/forward/forward_sites.cpp): `hidden_size` feeds q/o/gate/up/k/v_proj's
+// own delta-add (the q/o/gate/up calls each pass `hidden_size` as `in_channels`; the k/v calls pass
+// `normed.data(), hidden_size`), `intermediate_size` feeds down_proj's own (the down_proj call passes
+// `act_codes.data(), intermediate_size`). This is what `lora_A`'s own declared shape must match --
+// `GemmInt8AccumulateRow(in_codes, adapter->a_weight, in_channels, rank, ...)` reads
+// `in_channels * rank` bytes from `a_weight` with a length that comes from THIS function's own
+// return value and `LayerAdapter::rank`, never from the tensor actually indexed.
+inline uint64_t AdapterInChannelsFor(const std::string& proj, uint64_t hidden_size,
+                                      uint64_t intermediate_size) {
+	if (proj == "down_proj") return intermediate_size;
+	if (proj == "q_proj" || proj == "o_proj" || proj == "gate_proj" || proj == "up_proj" ||
+	    proj == "k_proj" || proj == "v_proj") {
+		return hidden_size;
+	}
+	return 0;  // unreachable once ValidateAmplifyingFoldProjection has already accepted `proj`
+}
+
+// Owns everything a bound adapter needs to stay alive: the ONE loaded, kept-alive model view
+// (`view_` -- T-2104 S2: no second, redundant parse; every typed field this loader reads,
+// `weights`/`delta_fold_scales`/`u_fold_scales`, plus the raw Provenance section and the base hash
+// via `view_`'s own `Section()`/`RawIntegrityHash()` forwarders, comes from this ONE call to
+// `SslmModel::Load`), and one `LayerAdapter` per BASE-MODEL layer (`layer_adapters`, index l ==
+// base layer l's adapter state; default-constructed -- every LayerAdapterProjection::a_weight ==
 // nullptr -- for a layer/projection this adapter does not cover, exactly LayerWeights' own
 // documented B1c "adapter bound, but this projection is unadapted" case).
 //
 // Movable, non-copyable: every pointer this handle exposes (through layer_adapters) points into
-// artifact_'s owned byte buffer, which only a move (not a copy) preserves the address of --
-// the SAME ownership convention SslmArtifact/SslmModelView already document and rely on
-// elsewhere in this tree.
+// view_'s own owned byte buffer (its `backing_`), which only a move (not a copy) preserves the
+// address of -- the SAME ownership convention SslmArtifact/SslmModelView already document and rely
+// on elsewhere in this tree.
 class AdapterHandle {
 public:
 	AdapterHandle() = default;
@@ -198,10 +247,7 @@ public:
 	AdapterMeta meta;
 	std::vector<superslm::LayerAdapter> layer_adapters;  // size == base num_hidden_layers
 
-	superslm::SslmArtifact artifact_;
-	superslm::SslmTensorManifest weights_;
-	superslm::SslmDeltaFoldScaleView delta_fold_;
-	superslm::SslmUFoldScaleView u_fold_;
+	superslm::SslmModelView view_;
 };
 
 // The base model's geometry, exactly what AdapterOutChannelsFor/dimension validation and the
@@ -227,52 +273,45 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
                                               AdapterHandle& out, std::string* err) {
 	std::vector<uint8_t> bytes;
 	if (!ReadFile(path.c_str(), bytes)) {
-		*err = "could not read adapter file: " + path;
+		if (err) *err = "could not read adapter file: " + path;
 		return AdapterLoadStatus::FileReadFailed;
 	}
 
-	superslm::SslmError aerr;
-	if (superslm::SslmArtifact::OpenFromMemory(bytes.data(), bytes.size(), out.artifact_, &aerr) !=
-	    superslm::SslmStatus::Ok) {
-		*err = std::string("adapter artifact rejected: ") + superslm::SslmStatusName(aerr.code) +
-		       " -- " + aerr.message;
-		return AdapterLoadStatus::ArtifactRejected;
-	}
-
-	// Discharge "the container and its WGT1/DFS1/UFS1 sub-parses and domain checks all pass"
-	// through the real production entry point -- status only, exactly sslm_adapter_dump.cpp's own
-	// documented pattern (Load's view dangles the instant Load returns; it owns and destroys its
-	// own internal SslmArtifact).
+	// T-2104 (Poirot 8e07d0c review, Significant 2): ONE parse. `SslmModel::Load` opens the
+	// container, validates it, and parses every present section (Config/SigmoidLut/Weights/
+	// DeltaFoldScales/UFoldScales) into `out.view_`, which this handle keeps for its own lifetime --
+	// there is no second `SslmArtifact::OpenFromMemory` and no re-parse of any section this loader
+	// already gets typed access to through the view's own public members.
 	{
-		superslm::SslmModelView transient;
 		std::string model_err;
 		const superslm::SslmModelStatus st =
-		    superslm::SslmModel::Load(bytes.data(), bytes.size(), transient, &model_err);
+		    superslm::SslmModel::Load(bytes.data(), bytes.size(), out.view_, &model_err);
 		if (st != superslm::SslmModelStatus::Ok) {
-			*err = std::string("adapter model rejected: ") + superslm::SslmModelStatusName(st) + " -- " +
-			       model_err;
+			if (err) *err = std::string("adapter model rejected: ") +
+			                superslm::SslmModelStatusName(st) + " -- " + model_err;
 			return AdapterLoadStatus::ModelRejected;
 		}
 	}
 
-	// --- ADP1 (Provenance) --------------------------------------------------
-	const superslm::SslmSectionView* prov = out.artifact_.Section(superslm::SslmSectionType::Provenance);
+	// --- ADP1 (Provenance) -- via view_'s own Section() forwarder, the SAME long-lived artifact
+	// Load already opened (no second open). ---------------------------------
+	const superslm::SslmSectionView* prov = out.view_.Section(superslm::SslmSectionType::Provenance);
 	if (!prov) {
-		*err = "adapter carries no Provenance section";
+		if (err) *err = "adapter carries no Provenance section";
 		return AdapterLoadStatus::MissingProvenanceSection;
 	}
 	if (prov->byte_size < kAdp1FixedBytes) {
-		*err = "Provenance section (" + std::to_string(prov->byte_size) +
-		       " bytes) is shorter than ADP1's 68-byte fixed prefix";
+		if (err) *err = "Provenance section (" + std::to_string(prov->byte_size) +
+		                 " bytes) is shorter than ADP1's 68-byte fixed prefix";
 		return AdapterLoadStatus::BadAdp1Size;
 	}
 	if (std::memcmp(prov->data, kAdp1Magic, 4) != 0) {
-		*err = "Provenance section's first 4 bytes are not \"ADP1\"";
+		if (err) *err = "Provenance section's first 4 bytes are not \"ADP1\"";
 		return AdapterLoadStatus::BadAdp1Magic;
 	}
 	const uint32_t adp1_version = static_cast<uint32_t>(superslm_marshal::RdI32(prov->data + 4));
 	if (adp1_version != kAdp1Version) {
-		*err = "unsupported ADP1 version " + std::to_string(adp1_version);
+		if (err) *err = "unsupported ADP1 version " + std::to_string(adp1_version);
 		return AdapterLoadStatus::BadAdp1Version;
 	}
 	out.meta.rank = static_cast<uint32_t>(superslm_marshal::RdI32(prov->data + 8));
@@ -287,55 +326,46 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 	}
 	out.meta.use_rslora = superslm_marshal::RdI32(prov->data + 56) != 0;
 	if (superslm_marshal::RdI32(prov->data + 60) != 0) {
-		*err = "ADP1 reserved field != 0";
+		if (err) *err = "ADP1 reserved field != 0";
 		return AdapterLoadStatus::BadAdp1Reserved;
 	}
 	const uint32_t name_len = static_cast<uint32_t>(superslm_marshal::RdI32(prov->data + 64));
 	if (prov->byte_size < static_cast<uint64_t>(kAdp1FixedBytes) + name_len) {
-		*err = "ADP1's declared source_adapter_name_len overruns the Provenance section";
+		if (err) *err = "ADP1's declared source_adapter_name_len overruns the Provenance section";
 		return AdapterLoadStatus::BadAdp1Size;
 	}
 	out.meta.source_adapter_name.assign(reinterpret_cast<const char*>(prov->data + kAdp1FixedBytes),
 	                                     name_len);
 
+	// T-2104 (Poirot 8e07d0c review, Minor 2): reject a mask with any bit at or past
+	// kPeftAdaptableProjections' own length -- an unknown target module must never load clean and
+	// be silently treated as though it had not been declared.
+	if (TargetModulesMaskHasUnknownBit(out.meta.target_modules_mask)) {
+		if (err) *err = "ADP1 target_modules_mask " + std::to_string(out.meta.target_modules_mask) +
+		                 " sets a bit at or past the known projection count (" +
+		                 std::to_string(std::size(superslm::kPeftAdaptableProjections)) + ")";
+		return AdapterLoadStatus::InvalidTargetModulesMask;
+	}
+
 	// --- base-hash (design Sec9 item (d), ValidateAmplifyingFoldBaseHash) --
 	std::string hash_err;
 	if (superslm::ValidateAmplifyingFoldBaseHash(out.meta.base_artifact_hash, base.base_artifact_hash,
 	                                              &hash_err) != superslm::SslmModelStatus::Ok) {
-		*err = "adapter base-hash mismatch: " + hash_err;
+		if (err) *err = "adapter base-hash mismatch: " + hash_err;
 		return AdapterLoadStatus::BaseHashMismatch;
 	}
 
-	// --- weights / DFS1 / UFS1, re-parsed from the long-lived out.artifact_ (sslm_adapter_dump.cpp's
-	// own pattern -- Load's own transient view above is never read past its status). -----
-	const superslm::SslmSectionView* wsec = out.artifact_.Section(superslm::SslmSectionType::Weights);
-	if (!wsec) {
-		*err = "adapter carries no Weights section";
+	// --- weights / DFS1 / UFS1 -- read directly from out.view_'s own already-parsed members. ---
+	if (!out.view_.has_weights) {
+		if (err) *err = "adapter carries no Weights section";
 		return AdapterLoadStatus::MissingWeightsSection;
 	}
-	std::string perr;
-	if (superslm::SslmTensorManifest::Parse(*wsec, out.weights_, &perr) != superslm::SslmModelStatus::Ok) {
-		*err = "adapter Weights section rejected: " + perr;
-		return AdapterLoadStatus::MissingWeightsSection;
-	}
-	const superslm::SslmSectionView* dsec =
-	    out.artifact_.Section(superslm::SslmSectionType::DeltaFoldScales);
-	if (!dsec) {
-		*err = "adapter carries no DeltaFoldScales section";
+	if (!out.view_.has_delta_fold_scales) {
+		if (err) *err = "adapter carries no DeltaFoldScales section";
 		return AdapterLoadStatus::MissingDeltaFoldSection;
 	}
-	if (superslm::SslmDeltaFoldScaleView::Parse(*dsec, out.delta_fold_, &perr) !=
-	    superslm::SslmModelStatus::Ok) {
-		*err = "adapter DeltaFoldScales section rejected: " + perr;
-		return AdapterLoadStatus::MissingDeltaFoldSection;
-	}
-	const superslm::SslmSectionView* usec = out.artifact_.Section(superslm::SslmSectionType::UFoldScales);
-	if (!usec) {
-		*err = "adapter carries no UFoldScales section";
-		return AdapterLoadStatus::MissingUFoldSection;
-	}
-	if (superslm::SslmUFoldScaleView::Parse(*usec, out.u_fold_, &perr) != superslm::SslmModelStatus::Ok) {
-		*err = "adapter UFoldScales section rejected: " + perr;
+	if (!out.view_.has_u_fold_scales) {
+		if (err) *err = "adapter carries no UFoldScales section";
 		return AdapterLoadStatus::MissingUFoldSection;
 	}
 
@@ -344,24 +374,25 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 
 	const std::vector<std::string_view> claimed = TargetModulesFromMask(out.meta.target_modules_mask);
 
-	for (const auto& dentry : out.delta_fold_.Entries()) {
+	for (const auto& dentry : out.view_.delta_fold_scales.Entries()) {
 		uint32_t layer = 0;
 		std::string proj;
 		if (!ParseLayerProjName(dentry.name, layer, proj)) {
-			*err = "unparsable DeltaFoldScales entry name: " + std::string(dentry.name);
+			if (err) *err = "unparsable DeltaFoldScales entry name: " + std::string(dentry.name);
 			return AdapterLoadStatus::UnparsableEntryName;
 		}
 		if (layer >= base.num_hidden_layers) {
-			*err = "DeltaFoldScales entry \"" + std::string(dentry.name) + "\" names layer " +
-			       std::to_string(layer) + " >= base model's own " +
-			       std::to_string(base.num_hidden_layers) + " layers";
+			if (err) *err = "DeltaFoldScales entry \"" + std::string(dentry.name) + "\" names layer " +
+			                 std::to_string(layer) + " >= base model's own " +
+			                 std::to_string(base.num_hidden_layers) + " layers";
 			return AdapterLoadStatus::LayerIndexOutOfRange;
 		}
 
 		std::string proj_err;
 		if (superslm::ValidateAmplifyingFoldProjection(proj, claimed, &proj_err) !=
 		    superslm::SslmModelStatus::Ok) {
-			*err = "adapter projection invalid for \"" + std::string(dentry.name) + "\": " + proj_err;
+			if (err) *err = "adapter projection invalid for \"" + std::string(dentry.name) +
+			                 "\": " + proj_err;
 			return AdapterLoadStatus::ProjectionInvalid;
 		}
 
@@ -370,36 +401,71 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 		std::string dim_err;
 		if (superslm::ValidateAmplifyingFoldDimension(dentry, expected_out, &dim_err) !=
 		    superslm::SslmModelStatus::Ok) {
-			*err = "DeltaFoldScales dimension mismatch for \"" + std::string(dentry.name) +
-			       "\": " + dim_err;
+			if (err) *err = "DeltaFoldScales dimension mismatch for \"" + std::string(dentry.name) +
+			                 "\": " + dim_err;
 			return AdapterLoadStatus::DeltaDimensionMismatch;
 		}
 
-		const superslm::SslmAmplifyingFoldEntry* uentry = out.u_fold_.Entry(dentry.name);
+		const superslm::SslmAmplifyingFoldEntry* uentry = out.view_.u_fold_scales.Entry(dentry.name);
 		if (!uentry) {
-			*err = "UFoldScales carries no entry matching DeltaFoldScales' own \"" +
-			       std::string(dentry.name) + "\"";
+			if (err) *err = "UFoldScales carries no entry matching DeltaFoldScales' own \"" +
+			                 std::string(dentry.name) + "\"";
 			return AdapterLoadStatus::MissingUFoldEntry;
 		}
 		std::string udim_err;
 		if (superslm::ValidateAmplifyingFoldDimension(*uentry, out.meta.rank, &udim_err) !=
 		    superslm::SslmModelStatus::Ok) {
-			*err = "UFoldScales dimension mismatch for \"" + std::string(dentry.name) + "\": " + udim_err;
+			if (err) *err = "UFoldScales dimension mismatch for \"" + std::string(dentry.name) +
+			                 "\": " + udim_err;
 			return AdapterLoadStatus::UFoldDimensionMismatch;
 		}
 
-		const superslm::SslmTensorView* a_t = out.weights_.Tensor(std::string(dentry.name) + ".lora_A");
-		const superslm::SslmTensorView* b_t = out.weights_.Tensor(std::string(dentry.name) + ".lora_B");
+		const superslm::SslmTensorView* a_t =
+		    out.view_.weights.Tensor(std::string(dentry.name) + ".lora_A");
+		const superslm::SslmTensorView* b_t =
+		    out.view_.weights.Tensor(std::string(dentry.name) + ".lora_B");
 		if (!a_t || !b_t) {
-			*err = "adapter Weights section carries no lora_A/lora_B tensor for \"" +
-			       std::string(dentry.name) + "\"";
+			if (err) *err = "adapter Weights section carries no lora_A/lora_B tensor for \"" +
+			                 std::string(dentry.name) + "\"";
 			return AdapterLoadStatus::MissingWeightTensor;
+		}
+
+		// T-2104 (Poirot 8e07d0c review, Significant 1): the two pointers `AddAmplifyingLoraDelta`
+		// actually walks (forward_sites.cpp) -- `a_weight` read for `in_channels * rank` bytes,
+		// `b_weight` for `rank * out_channels` -- validated against the SAME [rank, in_channels] /
+		// [out_channels, rank] shape PEFT's own orientation declares (forward_sites.h's own
+		// LayerAdapterProjection comment: "a_weight is [rank, in_channels]... b_weight is
+		// [out_channels, rank]"), for the FIRST time. Everything else about this pair was already
+		// checked by name (rejected magic, version, reserved, projection, entry name, layer index,
+		// DFS1/UFS1 dimension) -- these two were taken on trust and become raw pointers the engine
+		// dereferences at a length neither tensor's own declared shape had ever been read against.
+		const uint64_t in_channels =
+		    AdapterInChannelsFor(proj, base.hidden_size, base.intermediate_size);
+		if (a_t->rank != 2 || a_t->shape[0] != out.meta.rank || a_t->shape[1] != in_channels) {
+			if (err) {
+				*err = "\"" + std::string(dentry.name) + ".lora_A\" shape mismatch: expected rank=2 "
+				       "shape=[" + std::to_string(out.meta.rank) + "," + std::to_string(in_channels) +
+				       "], got rank=" + std::to_string(a_t->rank) + " shape=[" +
+				       (a_t->rank >= 1 ? std::to_string(a_t->shape[0]) : "?") + "," +
+				       (a_t->rank >= 2 ? std::to_string(a_t->shape[1]) : "?") + "]";
+			}
+			return AdapterLoadStatus::LoraAWeightShapeMismatch;
+		}
+		if (b_t->rank != 2 || b_t->shape[0] != expected_out || b_t->shape[1] != out.meta.rank) {
+			if (err) {
+				*err = "\"" + std::string(dentry.name) + ".lora_B\" shape mismatch: expected rank=2 "
+				       "shape=[" + std::to_string(expected_out) + "," + std::to_string(out.meta.rank) +
+				       "], got rank=" + std::to_string(b_t->rank) + " shape=[" +
+				       (b_t->rank >= 1 ? std::to_string(b_t->shape[0]) : "?") + "," +
+				       (b_t->rank >= 2 ? std::to_string(b_t->shape[1]) : "?") + "]";
+			}
+			return AdapterLoadStatus::LoraBWeightShapeMismatch;
 		}
 
 		superslm::LayerAdapterProjection lap;
 		lap.a_weight = reinterpret_cast<const int8_t*>(a_t->data);
 		lap.b_weight = reinterpret_cast<const int8_t*>(b_t->data);
-		lap.delta_fold_entry = out.delta_fold_.Entry(dentry.name);
+		lap.delta_fold_entry = out.view_.delta_fold_scales.Entry(dentry.name);
 		lap.u_fold_entry = uentry;
 
 		superslm::LayerAdapter& la = out.layer_adapters[layer];

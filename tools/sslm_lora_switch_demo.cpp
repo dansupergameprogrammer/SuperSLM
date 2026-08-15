@@ -17,17 +17,25 @@
 // what an operator actually experiences per call, and is reported alongside the token count so a
 // reader can see it is not being hidden).
 //
-// RUNTIME's own logits are additionally compared against BAKED's, token position by token
-// position, against the SAME prompt -- max|delta| and the fraction of positions where the argmax
-// token disagrees, which is what "agreement, and whether any divergence is within int8 rounding
-// expectations" (T-2102's own brief) asks for. This is a comparison of two INDEPENDENTLY COMPUTED
-// quantities (runtime's own composed int8 accumulator path vs baked's own merged-then-quantized
-// path) -- neither is derived from the other, so the comparison is not circular.
+// RUNTIME's own logits are compared against BAKED's TWO ways (T-2104, Poirot 8e07d0c review,
+// Significant 3 -- corrected in-tool rather than left to an ad hoc offline script):
+//   (a) SAME-CONTEXT, position 0 of the shared prompt -- the one position both sides are provably
+//       the same quantity (same input, same context, two independently-computed compositions:
+//       runtime's own composed int8 accumulator path vs baked's own merged-then-quantized path,
+//       neither derived from the other). Argmax match, top-5 candidate-set match, and max|delta|
+//       over the union of the two top-5s. THIS is what "agreement, and whether any divergence is
+//       within int8 rounding expectations" (T-2102's own brief) actually asks, and answers.
+//   (b) TRAJECTORY divergence, informational only -- printed and serialized under its own clearly
+//       labeled key, never as "agreement." Past the first position where RUNTIME's and BAKED's own
+//       argmax choices differ, greedy decode means each side is conditioned on a DIFFERENT token
+//       history, so comparing later positions compares two different quantities, not composition
+//       error (StandardsDocument.md §5.4).
 //
-// Timing: model load (BASE, BAKED) and adapter load+apply (RUNTIME's own extra step) are each
-// repeated >=3 times (--timing-reps, default 3) and reported as min/median/max -- this machine may
-// be shared with unrelated CPU/GPU load tonight (RESUME-2026-08-14 §6), so the spread is the
-// honest unit, not a single point figure.
+// Timing: model load (BASE, BAKED), adapter load+apply (RUNTIME's own extra step), AND the
+// generation cells themselves (three configurations x three prompts) are ALL repeated >=3 times
+// (--timing-reps, default 3) and reported as min/median/max -- this machine may be shared with
+// unrelated CPU/GPU load tonight (RESUME-2026-08-14 §6), so the spread is the honest unit, never a
+// single point figure at more precision than the sample supports.
 //
 // Usage: sslm_lora_switch_demo <base.sslm> <tokenizer.sslm> <adapter.sslm> <baked.sslm>
 //          [--max-new N] [--timing-reps N] [--prompts "a|b|c"] [--json <out.json>]
@@ -220,12 +228,83 @@ void PrintTiming(const char* label, const TimingStats& t) {
 	std::printf(")\n");
 }
 
+// T-2104 (Poirot 8e07d0c review, Significant 3): the CORRECTED runtime-vs-baked comparison, built
+// into the tool itself rather than left to an ad hoc offline script. Position 0 of `out_logit_rows`
+// is the logit row produced from the SHARED prompt context, before either side has emitted a token
+// of its own -- the one position where RUNTIME and BAKED are provably the same quantity (same
+// input, same context, two independently-computed compositions). Any position past 0 in a greedy
+// decode is conditioned on whichever token THAT side already chose, which can differ between the
+// two sides the instant they first disagree -- comparing those positions compares two different
+// conditioning contexts, not the same quantity (StandardsDocument.md Sec5.4).
+struct SingleTokenComparison {
+	int32_t argmax_runtime = -1;
+	int32_t argmax_baked = -1;
+	bool argmax_match = false;
+	bool top5_set_match = false;
+	double max_abs_delta_over_top5_union = 0.0;
+	int32_t runtime_top_logit = 0;
+	int32_t baked_top_logit = 0;
+};
+
+// Indices of the `k` largest elements of `row[0..n)`, descending. `n`/`k` are small enough (k=5)
+// that a linear partial-selection is simpler and plenty fast against a single row.
+std::vector<uint32_t> TopKIndices(const int32_t* row, uint32_t n, uint32_t k) {
+	std::vector<uint32_t> idx(n);
+	for (uint32_t i = 0; i < n; ++i) idx[i] = i;
+	std::partial_sort(idx.begin(), idx.begin() + std::min<uint32_t>(k, n), idx.end(),
+	                   [&](uint32_t a, uint32_t b) { return row[a] > row[b]; });
+	idx.resize(std::min<uint32_t>(k, n));
+	return idx;
+}
+
+SingleTokenComparison CompareSingleToken(const int32_t* runtime_row0, const int32_t* baked_row0,
+                                          uint32_t vocab_size) {
+	SingleTokenComparison c;
+	const auto rt_top5 = TopKIndices(runtime_row0, vocab_size, 5);
+	const auto bk_top5 = TopKIndices(baked_row0, vocab_size, 5);
+	c.argmax_runtime = static_cast<int32_t>(rt_top5[0]);
+	c.argmax_baked = static_cast<int32_t>(bk_top5[0]);
+	c.argmax_match = (c.argmax_runtime == c.argmax_baked);
+	c.runtime_top_logit = runtime_row0[rt_top5[0]];
+	c.baked_top_logit = baked_row0[bk_top5[0]];
+	std::vector<uint32_t> rt_sorted(rt_top5), bk_sorted(bk_top5);
+	std::sort(rt_sorted.begin(), rt_sorted.end());
+	std::sort(bk_sorted.begin(), bk_sorted.end());
+	c.top5_set_match = (rt_sorted == bk_sorted);
+	std::vector<uint32_t> u = rt_top5;
+	u.insert(u.end(), bk_top5.begin(), bk_top5.end());
+	std::sort(u.begin(), u.end());
+	u.erase(std::unique(u.begin(), u.end()), u.end());
+	for (uint32_t i : u) {
+		const double d = std::fabs(static_cast<double>(runtime_row0[i]) - static_cast<double>(baked_row0[i]));
+		if (d > c.max_abs_delta_over_top5_union) c.max_abs_delta_over_top5_union = d;
+	}
+	return c;
+}
+
+// T-2104 (Poirot 8e07d0c review, Minor 4): every control byte is escaped, not just `"`/`\`/`\n` --
+// prompts are user-supplied (`--prompts`), and an unescaped `\r`/`\t`/other control byte produces a
+// `--json` file that is not valid JSON.
 std::string JsonEscape(const std::string& s) {
 	std::string out;
-	for (char c : s) {
-		if (c == '"' || c == '\\') out += '\\';
-		if (c == '\n') { out += "\\n"; continue; }
-		out += c;
+	for (unsigned char c : s) {
+		switch (c) {
+			case '"': out += "\\\""; break;
+			case '\\': out += "\\\\"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			case '\b': out += "\\b"; break;
+			case '\f': out += "\\f"; break;
+			default:
+				if (c < 0x20) {
+					char buf[8];
+					std::snprintf(buf, sizeof(buf), "\\u%04x", c);
+					out += buf;
+				} else {
+					out += static_cast<char>(c);
+				}
+		}
 	}
 	return out;
 }
@@ -315,7 +394,11 @@ int main(int argc, char** argv) {
 	LoadedModel base_model, baked_model;
 	AdapterHandle adapter_handle;
 
-	std::printf("--- timing: cold load, %d repetitions each -------------------------------------\n",
+	// T-2104 (Poirot 8e07d0c review, Minor 6): "cold load" is wrong for reps 2+, which run against
+	// the OS's own warm file cache once rep 1 has read the file -- labeled plainly below rather than
+	// claimed cold.
+	std::printf("--- timing: model load, %d repetitions each (rep 1 may be cold; reps 2+ are "
+	            "warm-cache) ---------\n",
 	            timing_reps);
 	for (int rep = 0; rep < timing_reps; ++rep) {
 		LoadedModel m;
@@ -343,21 +426,29 @@ int main(int argc, char** argv) {
 		baked_load_times.push_back(std::chrono::duration<double>(t1 - t0).count());
 		if (rep == timing_reps - 1) baked_model = std::move(m);
 	}
+
+	// T-2104 (Poirot 8e07d0c review, Minor 3): the runtime-vs-baked logit comparison below indexes
+	// BAKED's row by `baked_res.vocab_size` and iterates `v < runtime_res.vocab_size` -- sound only
+	// if the two agree. Checked once, here, rather than trusted per-prompt.
+	if (base_model.view.config.vocab_size != baked_model.view.config.vocab_size) {
+		std::fprintf(stderr,
+		             "FAILED at stage=geometry_check: base vocab_size=%u != baked vocab_size=%u -- "
+		             "the runtime-vs-baked logit comparison assumes a shared vocabulary and geometry\n",
+		             base_model.view.config.vocab_size, baked_model.view.config.vocab_size);
+		return 1;
+	}
+
 	for (int rep = 0; rep < timing_reps; ++rep) {
-		SslmArtifact base_artifact;
-		SslmError aerr;
-		if (SslmArtifact::OpenFromMemory(base_model.bytes.data(), base_model.bytes.size(), base_artifact,
-		                                  &aerr) != SslmStatus::Ok) {
-			std::fprintf(stderr, "FAILED re-opening base artifact for base-hash: %s\n",
-			             SslmStatusName(aerr.code));
-			return 1;
-		}
+		// T-2104 (Poirot 8e07d0c review, Significant 2): the base's own hash, read directly off
+		// `base_model.view` -- no second `SslmArtifact::OpenFromMemory`. This was already outside
+		// the timed t0/t1 region below even before this fix; corrected here for the same reason
+		// sslm_generate.cpp's own Stage 3b was (SslmModelView::RawIntegrityHash(), added this round).
 		BaseModelGeometry geo;
 		geo.num_hidden_layers = base_model.num_hidden_layers;
 		geo.hidden_size = base_model.hidden_size;
 		geo.intermediate_size = base_model.view.config.intermediate_size;
 		geo.kv_hidden_size = static_cast<uint64_t>(base_model.num_kv_heads) * base_model.view.config.head_dim;
-		geo.base_artifact_hash = base_artifact.RawIntegrityHash();
+		geo.base_artifact_hash = base_model.view.RawIntegrityHash();
 
 		AdapterHandle h;
 		std::string err;
@@ -376,21 +467,20 @@ int main(int argc, char** argv) {
 	const TimingStats base_load_stats = Summarize(base_load_times);
 	const TimingStats baked_load_stats = Summarize(baked_load_times);
 	const TimingStats adapter_load_stats = Summarize(adapter_load_times);
-	PrintTiming("base model cold load", base_load_stats);
-	PrintTiming("baked model cold load", baked_load_stats);
+	PrintTiming("base model load (see banner)", base_load_stats);
+	PrintTiming("baked model load (see banner)", baked_load_stats);
 	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats);
 	std::printf("\n");
 
-	// --- Generation: base-only, runtime(base+adapter), baked-only, per prompt. ----------------
-	// Runtime generation reuses `base_model`'s own layers[] directly (bind the adapter
-	// immediately before the runtime call, unbind immediately after) rather than a second,
-	// separately-loaded model object -- this IS the switch: the same in-memory base, the adapter
-	// pointer swapped in and out, never a second model load. `LoadedModel` is intentionally not
-	// copied for this (its pointer fields point into its own `bytes` buffer; a struct copy would
-	// leave them dangling into the wrong buffer).
-	std::vector<double> base_tok_per_sec, runtime_tok_per_sec, baked_tok_per_sec;
-	std::vector<double> logit_max_abs_diffs;
-	std::vector<int> argmax_agree_counts, argmax_total_counts;
+	// --- Generation: base-only, runtime(base+adapter), baked-only, per prompt, REPEATED. -------
+	// T-2104 (Poirot 8e07d0c review, Significant 4): the generation cell now repeats under the
+	// SAME `--timing-reps` protocol the loads already used, rather than being measured once and
+	// reported to two decimals. Runtime generation reuses `base_model`'s own layers[] directly
+	// (bind the adapter immediately before the runtime call, unbind immediately after) rather than
+	// a second, separately-loaded model object -- this IS the switch: the same in-memory base, the
+	// adapter pointer swapped in and out, never a second model load.
+	std::vector<double> all_base_tps, all_runtime_tps, all_baked_tps;  // every (prompt, rep) sample
+	int runtime_slower_than_base_prompts = 0;  // paired-direction count (median vs median, per prompt)
 
 	std::ostringstream json;
 	json << "{\n \"prompts\": [\n";
@@ -399,27 +489,37 @@ int main(int argc, char** argv) {
 		const std::string& prompt = prompts[pi];
 		std::printf("--- prompt %zu: %s\n", pi, prompt.c_str());
 
-		GenResult base_res, runtime_res, baked_res;
+		std::vector<double> base_tps, runtime_tps, baked_tps;
+		GenResult base_res, runtime_res, baked_res;  // kept: the LAST rep (text/logits reported from it)
 		std::string err;
-
-		if (!GenerateOne(base_model, tokenizer, prompt, max_new_tokens, base_res, &err)) {
-			std::fprintf(stderr, "FAILED base generation: %s\n", err.c_str());
-			return 1;
+		for (int rep = 0; rep < timing_reps; ++rep) {
+			if (!GenerateOne(base_model, tokenizer, prompt, max_new_tokens, base_res, &err)) {
+				std::fprintf(stderr, "FAILED base generation (rep %d): %s\n", rep, err.c_str());
+				return 1;
+			}
+			// base_res above is genuinely base-only: the adapter is bound immediately before the
+			// runtime call and cleared immediately after, every rep.
+			ApplyAdapterToLayers(&adapter_handle, base_model.layers.data(), base_model.num_hidden_layers);
+			if (!GenerateOne(base_model, tokenizer, prompt, max_new_tokens, runtime_res, &err)) {
+				std::fprintf(stderr, "FAILED runtime generation (rep %d): %s\n", rep, err.c_str());
+				return 1;
+			}
+			ApplyAdapterToLayers(nullptr, base_model.layers.data(), base_model.num_hidden_layers);
+			if (!GenerateOne(baked_model, tokenizer, prompt, max_new_tokens, baked_res, &err)) {
+				std::fprintf(stderr, "FAILED baked generation (rep %d): %s\n", rep, err.c_str());
+				return 1;
+			}
+			base_tps.push_back(base_res.tokens_produced / std::max(1e-9, base_res.decode_seconds));
+			runtime_tps.push_back(runtime_res.tokens_produced / std::max(1e-9, runtime_res.decode_seconds));
+			baked_tps.push_back(baked_res.tokens_produced / std::max(1e-9, baked_res.decode_seconds));
 		}
-		// Runtime: base_model's layers[], with adapter bound (base_model.layers[l].adapter is set
-		// by ApplyAdapterToLayers below immediately before this call; cleared immediately after,
-		// so `base_res` above was genuinely base-only, not accidentally adapter-bound).
-		ApplyAdapterToLayers(&adapter_handle, base_model.layers.data(), base_model.num_hidden_layers);
-		if (!GenerateOne(base_model, tokenizer, prompt, max_new_tokens, runtime_res, &err)) {
-			std::fprintf(stderr, "FAILED runtime generation: %s\n", err.c_str());
-			return 1;
-		}
-		ApplyAdapterToLayers(nullptr, base_model.layers.data(), base_model.num_hidden_layers);  // unbind
-
-		if (!GenerateOne(baked_model, tokenizer, prompt, max_new_tokens, baked_res, &err)) {
-			std::fprintf(stderr, "FAILED baked generation: %s\n", err.c_str());
-			return 1;
-		}
+		const TimingStats base_tps_stats = Summarize(base_tps);
+		const TimingStats runtime_tps_stats = Summarize(runtime_tps);
+		const TimingStats baked_tps_stats = Summarize(baked_tps);
+		all_base_tps.insert(all_base_tps.end(), base_tps.begin(), base_tps.end());
+		all_runtime_tps.insert(all_runtime_tps.end(), runtime_tps.begin(), runtime_tps.end());
+		all_baked_tps.insert(all_baked_tps.end(), baked_tps.begin(), baked_tps.end());
+		if (runtime_tps_stats.median_s < base_tps_stats.median_s) ++runtime_slower_than_base_prompts;
 
 		const std::string base_text = tokenizer.Decode(
 		    std::vector<int32_t>(base_res.out_tokens.begin(), base_res.out_tokens.begin() +
@@ -429,112 +529,125 @@ int main(int argc, char** argv) {
 		const std::string baked_text = tokenizer.Decode(std::vector<int32_t>(
 		    baked_res.out_tokens.begin(), baked_res.out_tokens.begin() + static_cast<long>(baked_res.tokens_produced)));
 
-		std::printf("  BASE    (%zu tok, %.4fs, %.2f tok/s): %s\n", base_res.tokens_produced,
-		            base_res.decode_seconds, base_res.tokens_produced / std::max(1e-9, base_res.decode_seconds),
-		            base_text.c_str());
-		std::printf("  RUNTIME (%zu tok, %.4fs, %.2f tok/s): %s\n", runtime_res.tokens_produced,
-		            runtime_res.decode_seconds,
-		            runtime_res.tokens_produced / std::max(1e-9, runtime_res.decode_seconds), runtime_text.c_str());
-		std::printf("  BAKED   (%zu tok, %.4fs, %.2f tok/s): %s\n", baked_res.tokens_produced,
-		            baked_res.decode_seconds,
-		            baked_res.tokens_produced / std::max(1e-9, baked_res.decode_seconds), baked_text.c_str());
+		std::printf("  BASE    (last rep, %zu tok): %s\n", base_res.tokens_produced, base_text.c_str());
+		std::printf("  RUNTIME (last rep, %zu tok): %s\n", runtime_res.tokens_produced, runtime_text.c_str());
+		std::printf("  BAKED   (last rep, %zu tok): %s\n", baked_res.tokens_produced, baked_text.c_str());
+		PrintTiming("  tok/s BASE", base_tps_stats);
+		PrintTiming("  tok/s RUNTIME", runtime_tps_stats);
+		PrintTiming("  tok/s BAKED", baked_tps_stats);
 
 		const bool switch_did_real_work = (runtime_res.tokens_produced != base_res.tokens_produced) ||
 		                                   (runtime_res.out_tokens != base_res.out_tokens);
-		std::printf("  switch changed output vs base: %s\n", switch_did_real_work ? "YES" : "NO");
+		std::printf("  switch changed output vs base (last rep): %s\n", switch_did_real_work ? "YES" : "NO");
 
-		base_tok_per_sec.push_back(base_res.tokens_produced / std::max(1e-9, base_res.decode_seconds));
-		runtime_tok_per_sec.push_back(runtime_res.tokens_produced / std::max(1e-9, runtime_res.decode_seconds));
-		baked_tok_per_sec.push_back(baked_res.tokens_produced / std::max(1e-9, baked_res.decode_seconds));
+		// --- CORRECTED (T-2104 S3): position-0 same-context comparison -- the valid apples-to-apples
+		// test, computed by the tool itself so it is a committed, reproducible artifact rather than
+		// an ad hoc offline script's untracked output. -------------------------------------------
+		const SingleTokenComparison stc = CompareSingleToken(
+		    runtime_res.out_logit_rows.data(), baked_res.out_logit_rows.data(), runtime_res.vocab_size);
+		std::printf("  runtime-vs-baked SAME-CONTEXT position 0 (the valid comparison): argmax rt=%d "
+		            "bk=%d %s, top-5 candidate set %s, max|delta| over top-5 union=%.1f "
+		            "(top logits rt=%d bk=%d)\n",
+		            stc.argmax_runtime, stc.argmax_baked, stc.argmax_match ? "MATCH" : "DIFFER",
+		            stc.top5_set_match ? "MATCH" : "differ", stc.max_abs_delta_over_top5_union,
+		            stc.runtime_top_logit, stc.baked_top_logit);
 
-		// --- runtime vs baked: token-level agreement + logit-level divergence. -----------------
+		// --- Trajectory divergence (last rep) -- NOT a composition-error measurement past the
+		// first argmax fork (StandardsDocument.md Sec5.4: RUNTIME position t and BAKED position t
+		// stop sharing a context the instant either side's own argmax has diverged from the
+		// other's, so comparing later positions compares two different quantities). Reported for
+		// context only, explicitly labeled, never folded into an "agreement" headline. ----------
 		const size_t common_n = std::min(runtime_res.tokens_produced, baked_res.tokens_produced);
-		int agree = 0;
-		double max_abs_logit_diff = 0.0;
+		size_t first_fork = common_n;
+		int trajectory_agree = 0;
 		for (size_t t = 0; t < common_n; ++t) {
-			if (runtime_res.out_tokens[t] == baked_res.out_tokens[t]) ++agree;
-			const int32_t* rt_row = runtime_res.out_logit_rows.data() + t * runtime_res.vocab_size;
-			const int32_t* bk_row = baked_res.out_logit_rows.data() + t * baked_res.vocab_size;
-			for (uint32_t v = 0; v < runtime_res.vocab_size; ++v) {
-				const double d = std::fabs(static_cast<double>(rt_row[v]) - static_cast<double>(bk_row[v]));
-				if (d > max_abs_logit_diff) max_abs_logit_diff = d;
+			if (runtime_res.out_tokens[t] == baked_res.out_tokens[t]) {
+				++trajectory_agree;
+			} else if (first_fork == common_n) {
+				first_fork = t;
 			}
 		}
-		argmax_agree_counts.push_back(agree);
-		argmax_total_counts.push_back(static_cast<int>(common_n));
-		logit_max_abs_diffs.push_back(max_abs_logit_diff);
-		std::printf("  runtime-vs-baked: token agreement %d/%zu, max|logit delta| over all positions/vocab = %.1f\n\n",
-		            agree, common_n, max_abs_logit_diff);
+		std::printf("  runtime-vs-baked TRAJECTORY divergence (last rep, informational -- NOT composition "
+		            "error past the first fork): token-id match %d/%zu, first fork at position %zu\n\n",
+		            trajectory_agree, common_n, first_fork);
 
 		json << "  {\"prompt\": \"" << JsonEscape(prompt) << "\", "
 		     << "\"base_text\": \"" << JsonEscape(base_text) << "\", "
 		     << "\"runtime_text\": \"" << JsonEscape(runtime_text) << "\", "
 		     << "\"baked_text\": \"" << JsonEscape(baked_text) << "\", "
-		     << "\"base_tokens\": " << base_res.tokens_produced << ", "
-		     << "\"runtime_tokens\": " << runtime_res.tokens_produced << ", "
-		     << "\"baked_tokens\": " << baked_res.tokens_produced << ", "
-		     << "\"base_decode_seconds\": " << base_res.decode_seconds << ", "
-		     << "\"runtime_decode_seconds\": " << runtime_res.decode_seconds << ", "
-		     << "\"baked_decode_seconds\": " << baked_res.decode_seconds << ", "
+		     << "\"base_tok_per_sec_median\": " << base_tps_stats.median_s << ", "
+		     << "\"runtime_tok_per_sec_median\": " << runtime_tps_stats.median_s << ", "
+		     << "\"baked_tok_per_sec_median\": " << baked_tps_stats.median_s << ", "
 		     << "\"switch_changed_output\": " << (switch_did_real_work ? "true" : "false") << ", "
-		     << "\"runtime_vs_baked_argmax_agree\": " << agree << ", "
-		     << "\"runtime_vs_baked_common_tokens\": " << common_n << ", "
-		     << "\"runtime_vs_baked_max_abs_logit_diff\": " << max_abs_logit_diff << "}"
+		     << "\"single_token_same_context\": {"
+		     << "\"argmax_runtime\": " << stc.argmax_runtime << ", "
+		     << "\"argmax_baked\": " << stc.argmax_baked << ", "
+		     << "\"argmax_match\": " << (stc.argmax_match ? "true" : "false") << ", "
+		     << "\"top5_set_match\": " << (stc.top5_set_match ? "true" : "false") << ", "
+		     << "\"max_abs_delta_over_top5_union\": " << stc.max_abs_delta_over_top5_union << ", "
+		     << "\"runtime_top_logit\": " << stc.runtime_top_logit << ", "
+		     << "\"baked_top_logit\": " << stc.baked_top_logit << "}, "
+		     << "\"trajectory_divergence_informational_only\": {"
+		     << "\"token_id_match\": " << trajectory_agree << ", "
+		     << "\"common_tokens\": " << common_n << ", "
+		     << "\"first_fork_position\": " << first_fork << "}}"
 		     << (pi + 1 < prompts.size() ? ",\n" : "\n");
 	}
 	json << " ],\n";
 
-	auto avg = [](const std::vector<double>& v) {
-		double s = 0;
-		for (double x : v) s += x;
-		return v.empty() ? 0.0 : s / v.size();
-	};
+	const TimingStats base_gen_stats = Summarize(all_base_tps);
+	const TimingStats runtime_gen_stats = Summarize(all_runtime_tps);
+	const TimingStats baked_gen_stats = Summarize(all_baked_tps);
 
 	std::printf("================================================================================\n");
 	std::printf("SUMMARY\n");
-	std::printf("  mean tok/s   base=%.2f  runtime=%.2f  baked=%.2f\n", avg(base_tok_per_sec),
-	            avg(runtime_tok_per_sec), avg(baked_tok_per_sec));
-	if (avg(base_tok_per_sec) > 0.0) {
-		std::printf("  runtime-adapter overhead vs base:  %.2f%%\n",
-		            100.0 * (avg(base_tok_per_sec) - avg(runtime_tok_per_sec)) / avg(base_tok_per_sec));
+	PrintTiming("tok/s BASE (all prompts/reps)", base_gen_stats);
+	PrintTiming("tok/s RUNTIME (all prompts/reps)", runtime_gen_stats);
+	PrintTiming("tok/s BAKED (all prompts/reps)", baked_gen_stats);
+	// T-2104 (Poirot 8e07d0c review, Significant 4): the direction (paired per prompt, median vs
+	// median) is what n=`prompts.size()` paired samples on a shared machine actually supports --
+	// stated as a count, not smoothed into a percentage with no resolving power beside it.
+	std::printf("  RUNTIME slower than BASE (median tok/s) on %d/%zu prompts\n",
+	            runtime_slower_than_base_prompts, prompts.size());
+	if (base_gen_stats.median_s > 0.0) {
+		std::printf("  runtime-adapter overhead vs base, MEDIANS: %.1f%% (spread: base %.2f-%.2f "
+		            "tok/s, runtime %.2f-%.2f tok/s -- treat the percentage as approximate at this "
+		            "resolution, not exact to the decimal)\n",
+		            100.0 * (base_gen_stats.median_s - runtime_gen_stats.median_s) / base_gen_stats.median_s,
+		            base_gen_stats.min_s, base_gen_stats.max_s, runtime_gen_stats.min_s, runtime_gen_stats.max_s);
 	}
-	if (avg(baked_tok_per_sec) > 0.0) {
-		std::printf("  runtime vs baked throughput ratio: %.4f (1.0 = identical)\n",
-		            avg(runtime_tok_per_sec) / avg(baked_tok_per_sec));
+	if (baked_gen_stats.median_s > 0.0) {
+		std::printf("  runtime vs baked throughput ratio, MEDIANS: %.3f (1.0 = identical; spread: "
+		            "baked %.2f-%.2f tok/s)\n",
+		            runtime_gen_stats.median_s / baked_gen_stats.median_s, baked_gen_stats.min_s,
+		            baked_gen_stats.max_s);
 	}
-	int total_agree = 0, total_common = 0;
-	for (size_t i = 0; i < argmax_agree_counts.size(); ++i) {
-		total_agree += argmax_agree_counts[i];
-		total_common += argmax_total_counts[i];
-	}
-	std::printf("  runtime-vs-baked argmax agreement: %d/%d positions across all prompts\n", total_agree,
-	            total_common);
-	double overall_max_logit_diff = 0.0;
-	for (double d : logit_max_abs_diffs) overall_max_logit_diff = std::max(overall_max_logit_diff, d);
-	std::printf("  runtime-vs-baked max|logit delta| across all prompts/positions/vocab: %.1f\n",
-	            overall_max_logit_diff);
-	PrintTiming("base model cold load", base_load_stats);
-	PrintTiming("baked model cold load", baked_load_stats);
+	PrintTiming("base model load (see banner)", base_load_stats);
+	PrintTiming("baked model load (see banner)", baked_load_stats);
 	PrintTiming("adapter load+apply (switch cost)", adapter_load_stats);
 	std::printf("================================================================================\n");
 
+	auto write_samples = [&](const char* key, const TimingStats& t) {
+		json << "  \"" << key << "\": [";
+		for (size_t i = 0; i < t.samples.size(); ++i)
+			json << t.samples[i] << (i + 1 < t.samples.size() ? "," : "");
+		json << "]";
+	};
 	json << " \"summary\": {\n"
-	     << "  \"mean_tok_per_sec_base\": " << avg(base_tok_per_sec) << ",\n"
-	     << "  \"mean_tok_per_sec_runtime\": " << avg(runtime_tok_per_sec) << ",\n"
-	     << "  \"mean_tok_per_sec_baked\": " << avg(baked_tok_per_sec) << ",\n"
-	     << "  \"argmax_agree\": " << total_agree << ",\n"
-	     << "  \"argmax_total\": " << total_common << ",\n"
-	     << "  \"max_abs_logit_diff\": " << overall_max_logit_diff << ",\n"
-	     << "  \"base_load_seconds\": [";
-	for (size_t i = 0; i < base_load_stats.samples.size(); ++i)
-		json << base_load_stats.samples[i] << (i + 1 < base_load_stats.samples.size() ? "," : "");
-	json << "],\n  \"baked_load_seconds\": [";
-	for (size_t i = 0; i < baked_load_stats.samples.size(); ++i)
-		json << baked_load_stats.samples[i] << (i + 1 < baked_load_stats.samples.size() ? "," : "");
-	json << "],\n  \"adapter_load_seconds\": [";
-	for (size_t i = 0; i < adapter_load_stats.samples.size(); ++i)
-		json << adapter_load_stats.samples[i] << (i + 1 < adapter_load_stats.samples.size() ? "," : "");
-	json << "]\n }\n}\n";
+	     << "  \"runtime_slower_than_base_prompts\": " << runtime_slower_than_base_prompts << ",\n"
+	     << "  \"prompts_total\": " << prompts.size() << ",\n  ";
+	write_samples("base_tok_per_sec_all_prompts_reps", base_gen_stats);
+	json << ",\n  ";
+	write_samples("runtime_tok_per_sec_all_prompts_reps", runtime_gen_stats);
+	json << ",\n  ";
+	write_samples("baked_tok_per_sec_all_prompts_reps", baked_gen_stats);
+	json << ",\n  ";
+	write_samples("base_load_seconds", base_load_stats);
+	json << ",\n  ";
+	write_samples("baked_load_seconds", baked_load_stats);
+	json << ",\n  ";
+	write_samples("adapter_load_seconds", adapter_load_stats);
+	json << "\n }\n}\n";
 
 	if (!json_out_path.empty()) {
 		std::ofstream jf(json_out_path, std::ios::trunc);

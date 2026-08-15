@@ -249,25 +249,20 @@ int main(int argc, char** argv) {
 	// mutates that default, when the flag is present.
 	AdapterHandle adapter_handle;
 	if (!adapter_path.empty()) {
-		// The base's own RawIntegrityHash: a SECOND, independent SslmArtifact::OpenFromMemory over
-		// the SAME model_bytes the SslmModel::Load call above already validated -- this driver
-		// never keeps that call's own SslmArtifact around (Load owns and destroys its own
-		// internal one), so this is the cheapest way to get the base's own integrity hash for the
-		// adapter loader's base-hash check (design Sec9 item (d)) without re-deriving it.
-		SslmArtifact base_artifact;
-		SslmError base_open_err;
-		if (SslmArtifact::OpenFromMemory(model_bytes.data(), model_bytes.size(), base_artifact,
-		                                  &base_open_err) != SslmStatus::Ok) {
-			std::fprintf(stderr, "FAILED at stage=adapter_base_rehash: status=%s diagnostic=\"%s\"\n",
-			             SslmStatusName(base_open_err.code), base_open_err.message.c_str());
-			return 1;
-		}
+		// T-2104 (Poirot 8e07d0c review, Significant 2): the base's own RawIntegrityHash, read
+		// directly off `model_view` -- no second `SslmArtifact::OpenFromMemory` over model_bytes.
+		// The ORIGINAL comment here justified that second open by claiming SslmModel::Load's view
+		// dangles once Load returns; that claim was false at source (SslmModelView::backing_ owns
+		// the bytes, model.h) and the real reason a second open was needed was simply that
+		// SslmModelView exposed no hash accessor of its own. It now does
+		// (SslmModelView::RawIntegrityHash(), added this round) -- the SAME "lifted out rather than
+		// reaching into backing_" precedent option_g_fused_k_landing already set.
 		BaseModelGeometry geo;
 		geo.num_hidden_layers = num_hidden_layers;
 		geo.hidden_size = hidden_size;
 		geo.intermediate_size = model_view.config.intermediate_size;
 		geo.kv_hidden_size = static_cast<uint64_t>(num_kv_heads) * model_view.config.head_dim;
-		geo.base_artifact_hash = base_artifact.RawIntegrityHash();
+		geo.base_artifact_hash = model_view.RawIntegrityHash();
 
 		const auto t_adapter_start = std::chrono::steady_clock::now();
 		std::string adapter_err;

@@ -624,6 +624,27 @@ struct SslmModelView {
 	SslmModelView(const SslmModelView&) = delete;
 	SslmModelView& operator=(const SslmModelView&) = delete;
 
+	// T-2104 (Poirot 8e07d0c review, Significant 2): trivial forwarders onto `backing_`, added so a
+	// caller already holding a `SslmModelView` (a converted artifact's own loaded view) never needs
+	// a SECOND `SslmArtifact::OpenFromMemory` over the same bytes just to reach a raw section or the
+	// integrity hash -- the exact "lifted out rather than reaching into `backing_`" precedent
+	// `option_g_fused_k_landing` above already sets. Both simply call an already-public method on
+	// this object's OWN private member, which needs no friend access (a member function may always
+	// read its own class's private members) -- unlike `LoadImpl`'s *Impl body (S-HARDEN-7 above),
+	// these are not construction and carry no reason to live outside the header.
+	//
+	// `Section(type)`: the raw section view for any section type `SslmModelView` itself does not
+	// model as a typed member (e.g. Provenance/ADP1, which no `has_*`/typed field above carries) --
+	// returns nullptr if absent, exactly `SslmArtifact::Section`'s own contract.
+	const SslmSectionView* Section(SslmSectionType type) const noexcept { return backing_.Section(type); }
+
+	// `RawIntegrityHash()`: this view's own artifact's integrity hash -- what a second, independent
+	// `SslmArtifact::OpenFromMemory` over the identical bytes would also compute, without paying for
+	// the second parse/SHA-256 pass to get it.
+	std::array<uint8_t, kIntegrityHashBytes> RawIntegrityHash() const noexcept {
+		return backing_.RawIntegrityHash();
+	}
+
 private:
 	// S-HARDEN-7 (design Sec3.1): SslmModel::Load's *Impl body (which needs
 	// backing_) lives in src/model.cpp's SslmModelAccess, not as a private
