@@ -7,6 +7,20 @@
 // design's own production dispatch geometry (Sec5.4/Sec5.5):
 // numthreads(256,1,1), N-per-thread striding over intermediate_size, the
 // wide row streamed through WorkScratch.
+//
+// T-2113 (B10 lever 3, D-SLM3401): widened 256 -> 1024 threads. This is the
+// single largest remaining non-GEMM, non-already-split site measured base-
+// only (1.2541 ms/token of 12.9310 ms/token GPU-busy total, decomposed by
+// execution -- Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec21) -- the
+// single dispatch runs with intermediate_size=8960 elements striped across
+// only 256 threads (one D3D12 threadgroup, one SM), ~35 serial iterations per
+// thread across three O(n/threads) passes (SiLU compute, max-reduce, store).
+// Quadrupling the thread count to 1024 (D3D12's own per-threadgroup maximum)
+// cuts every one of those three passes to ~9 iterations/thread without adding
+// a dispatch, changing kDispatchesPerLayer, or touching any other site's own
+// shared RequantChainCheckedFullGpuP/gFunnelMax (site_common.hlsli's own
+// dedicated 1024-wide RequantChainCheckedFullGpuP1024/gFunnelMax1024 pair
+// serves this file alone).
 #include "site_common2.hlsli"
 
 cbuffer RootConstants : register(b0)
@@ -29,7 +43,7 @@ RWByteAddressBuffer LayerScratch   : register(u1);
 RWByteAddressBuffer KvCache        : register(u2);
 RWByteAddressBuffer WorkScratch    : register(u3);
 
-[numthreads(256, 1, 1)]
+[numthreads(1024, 1, 1)]
 void main(uint3 gtid : SV_GroupThreadID)
 {
     uint t = gtid.x;
@@ -56,7 +70,7 @@ void main(uint3 gtid : SV_GroupThreadID)
     int64_t up_m = LayerScratch.Load<int64_t>(up_scale_off + 0);
     int64_t up_e = LayerScratch.Load<int64_t>(up_scale_off + 8);
 
-    for (int i = (int)t; i < n; i += 256)
+    for (int i = (int)t; i < n; i += 1024)
     {
         int gate_code = (int)LayerScratch.Load<int>(gate_codes_off + (uint)i * 4u);
         int up_code = (int)LayerScratch.Load<int>(up_codes_off + (uint)i * 4u);
@@ -77,8 +91,8 @@ void main(uint3 gtid : SV_GroupThreadID)
     uint act_codes_off = ScratchLayout.Load<uint>(15 * 4);
     uint act_scale_off = ScratchLayout.Load<uint>(16 * 4);
     int64_t status_tag;
-    RequantChainCheckedFullGpuP(t, WorkScratch, 0u, n, incoming_m, incoming_e, 2, site_m, site_e,
-                                 LayerScratch, act_codes_off, act_scale_off, status_tag);
+    RequantChainCheckedFullGpuP1024(t, WorkScratch, 0u, n, incoming_m, incoming_e, 2, site_m, site_e,
+                                     LayerScratch, act_codes_off, act_scale_off, status_tag);
     if (status_tag != kTagOk)
     {
         if (t == 0) SeqState.Store<int64_t>(sticky_off, status_tag);

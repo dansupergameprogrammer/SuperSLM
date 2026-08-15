@@ -804,6 +804,158 @@ void RequantChainCheckedFullGpuP(uint t, RWByteAddressBuffer scratch, uint wide_
     status_tag = kTagOk;
 }
 
+// T-2113 (B10 lever 3, D-SLM3401): a 1024-thread-wide copy of
+// RequantChainCheckedFullGpuP above, dedicated to mlp_act_site.hlsl -- the one
+// caller whose own row width (intermediate_size, 8960 at the real 1.5B tier)
+// is wide enough that quadrupling thread count measurably cuts the per-thread
+// serial iteration count (~35 -> ~9 per pass). Bit-exact to the 256-wide
+// function: every step is unchanged (Step 0 domain checks, steps 1-2 the same
+// SCHEME-1 groupshared binary-tree max-reduce over a striped read, steps 3-5
+// the same uniform scalar derivation every thread repeats identically, step 6
+// the same cooperative striped store) -- only the stride (1024, not 256), the
+// tree's own starting halving width (512, not 128), and the dedicated
+// `gFunnelMax1024` groupshared array (not the shared 256-wide `gFunnelMax`,
+// which the other ten RequantChainCheckedFullGpuP callers still use unchanged)
+// differ. Integer max is exactly associative and commutative regardless of
+// tree width (the same argument D-SLM3334/D-SLM3399/D-SLM3400 already
+// commissioned) -- a 1024-wide tree returns the IDENTICAL d_prime a 256-wide
+// tree or a fully sequential scan would, for any row. This is a duplicate
+// function, not a parameterized generalization of the shared one, because
+// generalizing the shared function would touch all eleven of its callers
+// (attn_norm/attn_residual/ctx_fold/mlp_norm/mlp_residual and all six
+// _proj_site tail shaders) for a change only mlp_act needs.
+groupshared uint64_t gFunnelMax1024[1024];
+
+void RequantChainCheckedFullGpuP1024(uint t, RWByteAddressBuffer scratch, uint wide_base, int n,
+                                      int64_t incoming_m[kMaxIncoming], int64_t incoming_e[kMaxIncoming],
+                                      int n_incoming, int64_t site_m, int64_t site_e,
+                                      RWByteAddressBuffer out_buf, uint out_codes_base, uint out_scale_base,
+                                      out int64_t status_tag)
+{
+    bool rejected = false;
+    int64_t tag = kTagOk;
+
+    // Step 0.
+    for (int i0 = 0; i0 < n_incoming; ++i0)
+    {
+        if (!CarriedScaleMantissaFitsInt32Gpu(incoming_m[i0]))
+        {
+            tag = kTagCarriedScaleMantissaOutOfDomain;
+            rejected = true;
+        }
+    }
+    if (!rejected && !CarriedScaleMantissaFitsInt32Gpu(site_m))
+    {
+        tag = kTagCarriedScaleMantissaOutOfDomain;
+        rejected = true;
+    }
+
+    // Steps 1-2: cooperative MaxAbsReduceWide, 1024-wide stride and tree.
+    int64_t d_prime = 0;
+    if (!rejected)
+    {
+        uint64_t local = 0;
+        for (int i1 = (int)t; i1 < n; i1 += 1024)
+        {
+            int64_t xi = scratch.Load<int64_t>(wide_base + (uint)i1 * 8u);
+            uint64_t a = (xi < 0) ? (~(uint64_t)xi + 1ULL) : (uint64_t)xi;
+            if (a > local) local = a;
+        }
+        gFunnelMax1024[t] = local;
+        GroupMemoryBarrierWithGroupSync();
+        for (uint s = 512; s > 0; s >>= 1)
+        {
+            if (t < s) gFunnelMax1024[t] = max(gFunnelMax1024[t], gFunnelMax1024[t + s]);
+            GroupMemoryBarrierWithGroupSync();
+        }
+        uint64_t d = gFunnelMax1024[0];
+        if (d < 1ULL) d = 1ULL;
+        d_prime = (d > 0x7FFFFFFFFFFFFFFFULL) ? 0x7FFFFFFFFFFFFFFFLL : (int64_t)d;
+        if (d_prime > ((int64_t)1 << 31))
+        {
+            tag = kTagChainInputOutOfDomain;
+            rejected = true;
+        }
+    }
+
+    // Step 4: NormalizeScale -> DynamicScaleReciprocal (uniform scalar work,
+    // every thread repeats it identically once d_prime is known).
+    int64_t ns_dn = 0;
+    int ns_s = 0;
+    int64_t r = 0;
+    if (!rejected)
+    {
+        NormalizeScaleGpu(d_prime, ns_dn, ns_s);
+        r = DynamicScaleReciprocalSharedGpu(ns_dn);
+    }
+
+    // Step 5: left-associated fold, incoming[...] then site_constant then the
+    // d_prime factor, checked after every fold step (uniform scalar work).
+    int64_t run_m = 0, run_e = 0;
+    if (!rejected)
+    {
+        bool have_running = false;
+        for (int i2 = 0; i2 < n_incoming && !rejected; ++i2)
+        {
+            if (have_running)
+            {
+                int64_t new_m, new_e;
+                CombineCarriedScaleGpu_(run_m, run_e, incoming_m[i2], incoming_e[i2], new_m, new_e);
+                run_m = new_m; run_e = new_e;
+            }
+            else
+            {
+                run_m = incoming_m[i2]; run_e = incoming_e[i2]; have_running = true;
+            }
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m)) { tag = kTagCarriedScaleMantissaOutOfDomain; rejected = true; }
+        }
+        if (!rejected)
+        {
+            if (have_running)
+            {
+                int64_t new_m, new_e;
+                CombineCarriedScaleGpu_(run_m, run_e, site_m, site_e, new_m, new_e);
+                run_m = new_m; run_e = new_e;
+            }
+            else
+            {
+                run_m = site_m; run_e = site_e; have_running = true;
+            }
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m)) { tag = kTagCarriedScaleMantissaOutOfDomain; rejected = true; }
+        }
+        if (!rejected)
+        {
+            int64_t dpf_m = ns_dn;
+            int64_t dpf_e = -(int64_t)ns_s;
+            int64_t new_m, new_e;
+            CombineCarriedScaleGpu_(run_m, run_e, dpf_m, dpf_e, new_m, new_e);
+            run_m = new_m; run_e = new_e;
+            if (!CarriedScaleMantissaFitsInt32Gpu(run_m)) { tag = kTagCarriedScaleMantissaOutOfDomain; rejected = true; }
+        }
+    }
+
+    if (rejected)
+    {
+        status_tag = tag;
+        return;
+    }
+
+    // Step 6: cooperative write-out -- same striding as steps 1-2, so every
+    // thread only ever re-reads its own prior write.
+    for (int i3 = (int)t; i3 < n; i3 += 1024)
+    {
+        int64_t xi = scratch.Load<int64_t>(wide_base + (uint)i3 * 8u);
+        int64_t code = RequantTokenCodeWideSharedGpu(xi, r, ns_s);
+        out_buf.Store<int>(out_codes_base + (uint)i3 * 4u, (int)code);
+    }
+    if (t == 0)
+    {
+        out_buf.Store<int64_t>(out_scale_base + 0, run_m);
+        out_buf.Store<int64_t>(out_scale_base + 8, run_e);
+    }
+    status_tag = kTagOk;
+}
+
 // Cooperative RmsNormSite's own sumsq reduction (sumsq = sum(h[i]^2),
 // forward_sites.cpp:410-446). Integer addition is exactly associative and
 // commutative with no intermediate-overflow risk at this design's own int8-
