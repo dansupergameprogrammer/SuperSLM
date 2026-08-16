@@ -1,0 +1,19 @@
+# T-2116 cross-vendor certification package -- reference pins.
+# Established on NVIDIA RTX 2080 SUPER (Turing), the project's CPU-oracle reference card,
+# 2026-08-15, at SuperSLM main @ ce3e47c (branch brunel/t2116-crossvendor).
+# Format: one line per battery cell, ASCII only, KEY=VALUE pairs separated by single spaces.
+# CHECKS/FAILURES/EXIT are hard pins (must match exactly on every target adapter).
+# ARGMAX/EQUALITY are hard pins (must match exactly -- these ARE the determinism claim).
+# Throughput (tok/s) is measured and reported per adapter but is NEVER pinned -- it is
+# expected to differ across vendors; run_crossvendor.ps1 captures it, labeled, unglated.
+TOOL=c5 EXIT=0 RESULT=BIT-IDENTICAL ARGMAX_CPU=45845 ARGMAX_GPU=45845
+TOOL=b1 EXIT=0 CHECKS=11 FAILURES=0
+TOOL=b2 EXIT=0 CHECKS=17 FAILURES=0
+TOOL=b3 EXIT=0 CHECKS=37 FAILURES=0
+TOOL=b35 EXIT=0 CHECKS=15 FAILURES=0
+TOOL=b5 EXIT=0 CHECKS=19 FAILURES=0
+TOOL=b6 EXIT=0 CHECKS=24 FAILURES=0
+TOOL=b6b EXIT=0 CHECKS=29 FAILURES=0
+TOOL=b7 EXIT=0 CHECKS=1020 FAILURES=0
+TOOL=b8 EXIT=0 CHECKS=14 FAILURES=0
+TOOL=t2100 EXIT=0 EQUALITY=IDENTICAL

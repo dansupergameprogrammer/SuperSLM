@@ -45,6 +45,7 @@
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
 #include "../tools/sslm_adapter_loader.h"
+#include "../src/gpu/d3d12_harness.h"
 
 #include <algorithm>
 #include <atomic>
@@ -56,6 +57,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -63,6 +65,7 @@
 
 #ifdef _WIN32
 #include <process.h>  // _getpid
+#include <io.h>       // _dup, _dup2, _fileno -- T-2116 stdout-capture test only
 #else
 #include <unistd.h>  // getpid
 #endif
@@ -25332,6 +25335,208 @@ static void TestT2019_B12_LowBudgetPreflightSkipsAllAllocationCalls() {
 // this suite does not run it. Named here so its absence from this file reads as
 // a deliberate disposition, not an oversight.
 
+// ---------------------------------------------------------------------------
+// T-2116 fix round (Claude/Poirot/d3cf252-t2116-adapter-selection.md, S2/S4/S6):
+// SSLM_GPU_ADAPTER_INDEX (src/gpu/d3d12_harness.h Device::Init()) had no test pin at
+// all before this section -- every branch it added could be deleted without turning
+// any suite red. These cells need no compute-capable GPU: CreateDXGIFactory2 and
+// EnumAdapters1 exist on any Windows machine with DXGI, even one with only a
+// software (WARP) adapter, and every path pinned below returns before
+// D3D12CreateDevice is reached except the software-adapter cell's own probe of which
+// index WARP lives at (a bare device-creation attempt against WARP always succeeds).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Sets an environment variable for the duration of one scope and restores whatever
+// was there before (including "unset") on destruction -- so a test that sets
+// SSLM_GPU_ADAPTER_INDEX cannot leak that value into a later, unrelated test.
+struct ScopedEnvVar {
+	std::string name;
+	bool had_prev = false;
+	std::string prev;
+
+	ScopedEnvVar(const char* n, const char* value) : name(n) {
+		char buf[256]{};
+		DWORD got = GetEnvironmentVariableA(name.c_str(), buf, sizeof(buf));
+		had_prev = (got > 0 && got < sizeof(buf));
+		if (had_prev) prev = buf;
+		SetEnvironmentVariableA(name.c_str(), value);
+	}
+	~ScopedEnvVar() {
+		SetEnvironmentVariableA(name.c_str(), had_prev ? prev.c_str() : nullptr);
+	}
+};
+
+// RAII stdout redirect to a temp file, restored on scope exit via the saved
+// duplicate file descriptor -- including if the guarded code throws
+// (Device::Init() can throw via SSLM_GPU_HR on a real device-creation failure), so a
+// test that hits that path never leaves the whole binary's stdout pointed at a
+// deleted temp file for the rest of the run.
+struct ScopedStdoutCapture {
+	int saved_fd = -1;
+	std::string path;
+	bool active = false;
+
+	ScopedStdoutCapture() {
+		char dir[MAX_PATH]{};
+		char file[MAX_PATH]{};
+		if (GetTempPathA(MAX_PATH, dir) == 0) return;
+		if (GetTempFileNameA(dir, "sslmcap", 0, file) == 0) return;
+		path = file;
+		std::fflush(stdout);
+		saved_fd = _dup(_fileno(stdout));
+		if (saved_fd == -1) return;
+		if (!std::freopen(path.c_str(), "w", stdout)) {
+			_close(saved_fd);
+			saved_fd = -1;
+			return;
+		}
+		active = true;
+	}
+	~ScopedStdoutCapture() {
+		if (!active) return;
+		std::fflush(stdout);
+		_dup2(saved_fd, _fileno(stdout));
+		_close(saved_fd);
+		std::remove(path.c_str());
+	}
+	std::string ReadCaptured() {
+		if (!active) return "";
+		std::fflush(stdout);
+		std::ifstream f(path, std::ios::binary);
+		std::stringstream ss;
+		ss << f.rdbuf();
+		return ss.str();
+	}
+};
+
+// Raw-enumerates adapters (independent of Device::Init(), same shape as
+// tools/t2116_list_adapters.cpp) to find the first software (WARP) adapter's own raw
+// index -- varies by machine, never assumed.
+bool FindSoftwareAdapterIndex(int* out_index) {
+	Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+	if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) return false;
+	for (UINT i = 0;; ++i) {
+		Microsoft::WRL::ComPtr<IDXGIAdapter1> a;
+		if (factory->EnumAdapters1(i, &a) == DXGI_ERROR_NOT_FOUND) break;
+		DXGI_ADAPTER_DESC1 d;
+		a->GetDesc1(&d);
+		if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+			*out_index = static_cast<int>(i);
+			return true;
+		}
+	}
+	return false;
+}
+
+}  // namespace
+
+static void TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing() {
+	// The unset path (every consumer of the public 1.0 API except run_crossvendor.ps1
+	// itself) must be byte-identical to before T-2116: no "# adapter:" line at all.
+	ScopedEnvVar unset("SSLM_GPU_ADAPTER_INDEX", nullptr);
+	ScopedStdoutCapture cap;
+	superslm_gpu::harness::Device d;
+	d.Init();
+	const std::string out = cap.ReadCaptured();
+	CHECK_MSG(out.find("# adapter:") == std::string::npos,
+	          "unset SSLM_GPU_ADAPTER_INDEX must print nothing; captured: %s", out.c_str());
+}
+
+static void TestAdapterIndexValidOverridePrintsLabel() {
+	// S2's positive path: WHEN the override is requested, the label still prints
+	// (this is the only channel a certification run has to confirm which GPU ran).
+	// Skipped, named, if this machine has no usable D3D12 hardware adapter at all --
+	// every other cell in this section is hardware-independent by construction, but
+	// this one needs a real index 0 to exist and be usable to observe the print.
+	if (!superslm_gpu::harness::GetDevice().available) {
+		std::printf(
+		    "TestAdapterIndexValidOverridePrintsLabel: SKIPPED, named -- no usable D3D12 "
+		    "hardware adapter on this machine (GetDevice().available == false)\n");
+		return;
+	}
+	ScopedEnvVar set0("SSLM_GPU_ADAPTER_INDEX", "0");
+	ScopedStdoutCapture cap;
+	superslm_gpu::harness::Device d;
+	d.Init();
+	const std::string out = cap.ReadCaptured();
+	CHECK(d.available);
+	CHECK_MSG(out.find("# adapter:") != std::string::npos,
+	          "SSLM_GPU_ADAPTER_INDEX=0 on a usable adapter must print the label; captured: %s",
+	          out.c_str());
+}
+
+static void TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex() {
+	// A raw index far past any real enumeration -- refused, never a fallback to the
+	// default-preference adapter.
+	ScopedEnvVar idx("SSLM_GPU_ADAPTER_INDEX", "999999");
+	superslm_gpu::harness::Device d;
+	d.Init();
+	CHECK(!d.available);
+	CHECK(d.dev == nullptr);
+	CHECK_MSG(d.init_error.find("999999") != std::string::npos &&
+	              d.init_error.find("does not exist") != std::string::npos,
+	          "init_error did not name the index or say 'does not exist': %s",
+	          d.init_error.c_str());
+}
+
+static void TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero() {
+	// The regression this cell exists to pin: std::atoi("abc") == 0, which used to be
+	// silently honored as "adapter 0" with no diagnostic. It must now be refused.
+	ScopedEnvVar idx("SSLM_GPU_ADAPTER_INDEX", "abc");
+	superslm_gpu::harness::Device d;
+	d.Init();
+	CHECK(!d.available);
+	CHECK(d.dev == nullptr);
+	CHECK_MSG(d.init_error.find("not a well-formed") != std::string::npos,
+	          "malformed value must be refused with a diagnostic naming it: %s",
+	          d.init_error.c_str());
+}
+
+static void TestAdapterIndexNegativeRefusesSilentFallback() {
+	ScopedEnvVar idx("SSLM_GPU_ADAPTER_INDEX", "-1");
+	superslm_gpu::harness::Device d;
+	d.Init();
+	CHECK(!d.available);
+	CHECK(d.dev == nullptr);
+	CHECK_MSG(d.init_error.find("not a well-formed") != std::string::npos,
+	          "negative value must be refused with a diagnostic naming it: %s",
+	          d.init_error.c_str());
+}
+
+static void TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue() {
+	// 33 characters: GetEnvironmentVariableA truncates into the 32-byte buffer, and a
+	// truncated numeric string can read as a different, shorter, entirely
+	// plausible-looking index -- refused outright rather than parsed.
+	ScopedEnvVar idx("SSLM_GPU_ADAPTER_INDEX", "000000000000000000000000000000001");
+	superslm_gpu::harness::Device d;
+	d.Init();
+	CHECK(!d.available);
+	CHECK(d.dev == nullptr);
+	CHECK_MSG(d.init_error.find("longer than this parser accepts") != std::string::npos,
+	          "too-long value must be refused with a diagnostic naming why: %s",
+	          d.init_error.c_str());
+}
+
+static void TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected() {
+	int warp_index = -1;
+	if (!FindSoftwareAdapterIndex(&warp_index)) {
+		std::printf(
+		    "TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected: SKIPPED, named -- "
+		    "no software (WARP) adapter enumerated on this machine\n");
+		return;
+	}
+	ScopedEnvVar idx("SSLM_GPU_ADAPTER_INDEX", std::to_string(warp_index).c_str());
+	superslm_gpu::harness::Device d;
+	d.Init();
+	CHECK(!d.available);
+	CHECK(d.dev == nullptr);
+	CHECK_MSG(d.init_error.find("software adapter") != std::string::npos,
+	          "a software-adapter index must be refused, naming it as software: %s",
+	          d.init_error.c_str());
+}
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -26207,6 +26412,17 @@ int main(int argc, char** argv) {
 	TestT2063_S1Mb_WorkScratchUavAllocationThrow_ReturnsGpuAllocationFailed_SkippedFalse();
 	TestT2083_S1_WeightDefaultHeapAllocationThrow_ReturnsGpuAllocationFailed();
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
+
+	// T-2116 fix round -- pins for SSLM_GPU_ADAPTER_INDEX (Claude/Poirot/
+	// d3cf252-t2116-adapter-selection.md S2/S4/S6). See this file's own T-2116
+	// section above.
+	TestAdapterIndexUnsetLeavesDefaultBehaviorAndPrintsNothing();
+	TestAdapterIndexValidOverridePrintsLabel();
+	TestAdapterIndexNonexistentFailsLoudlyNamingTheIndex();
+	TestAdapterIndexMalformedNonIntegerRefusesSilentFallbackToZero();
+	TestAdapterIndexNegativeRefusesSilentFallback();
+	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
+	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

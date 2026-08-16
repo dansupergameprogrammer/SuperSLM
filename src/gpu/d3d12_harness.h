@@ -19,6 +19,8 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cwchar>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -79,11 +81,21 @@ struct Device {
 	// to name a different one. SSLM_GPU_ADAPTER_INDEX, when set to a non-negative integer,
 	// overrides that default and selects by RAW EnumAdapters1 index instead (the same
 	// enumeration order `run_crossvendor.ps1` uses to label results per adapter) -- a
-	// requested index that does not exist, is software, or fails device creation is a loud
-	// init failure (init_error names the index), never a silent fallback to adapter 0.
-	// Every successful selection -- override or default -- prints "# adapter: <name>" once,
-	// so a caller comparing results across adapters can label each run's output without
-	// re-deriving which physical GPU it ran on.
+	// requested index that does not exist, is software, fails device creation, OR IS NOT A
+	// WELL-FORMED NON-NEGATIVE INTEGER (T-2116 fix round, Claude/Poirot's own S6: `std::atoi`
+	// has no failure signal and silently read a malformed value as 0, selecting adapter 0
+	// with no diagnostic -- the exact silent fallback this comment already promised never to
+	// do) is a loud init failure (init_error names the index or the malformed value), never a
+	// silent fallback to adapter 0 or to the default-preference path.
+	//
+	// The "# adapter: <name>" print (below, on a successful selection) is gated on the
+	// override actually being requested -- i.e. SSLM_GPU_ADAPTER_INDEX was set at all, valid
+	// or not -- per the same fix round's S2: this function is also reached from the public
+	// 1.0 C API (`sslm_gpu_context_create`, gpu_1p0.cpp), once per context, on every
+	// caller's own stdout, unconditionally, with no way to suppress it and no query to ask
+	// which adapter a context landed on. `run_crossvendor.ps1` sets the env var for every
+	// cell it runs, so certification output is unaffected; every other consumer of the 1.0
+	// API (unset env var) gets byte-identical stdout to before this ticket.
 	void Init() {
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
@@ -92,12 +104,32 @@ struct Device {
 		}
 
 		int override_index = -1;
+		bool override_requested = false;
 		{
 			char buf[32] = {0};
 			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ADAPTER_INDEX", buf, sizeof(buf));
-			if (n > 0 && n < sizeof(buf)) {
-				override_index = std::atoi(buf);
-				if (override_index < 0) override_index = -1;
+			if (n > 0) {
+				override_requested = true;
+				if (n >= sizeof(buf)) {
+					// Too long to have fit -- GetEnvironmentVariableA truncates silently on a
+					// too-small buffer, so a truncated value must never be parsed: it could
+					// read as a different, shorter, entirely valid-looking index.
+					init_error =
+					    "SSLM_GPU_ADAPTER_INDEX is set but longer than this parser accepts (" +
+					    std::to_string(sizeof(buf) - 1) +
+					    " chars) -- refusing rather than parsing a truncated value";
+					return;
+				}
+				char* endp = nullptr;
+				long v = std::strtol(buf, &endp, 10);
+				const bool well_formed = (endp != buf) && (*endp == '\0');
+				if (!well_formed || v < 0 || v > static_cast<long>(INT_MAX)) {
+					init_error = "SSLM_GPU_ADAPTER_INDEX=\"" + std::string(buf) +
+					              "\" is not a well-formed non-negative integer -- refusing "
+					              "rather than guessing which adapter was meant";
+					return;
+				}
+				override_index = static_cast<int>(v);
 			}
 		}
 
@@ -147,7 +179,8 @@ struct Device {
 			if (init_error.empty()) init_error = "no D3D12 hardware compute adapter found";
 			return;
 		}
-		{
+		if (override_requested) {
+			// Only when SSLM_GPU_ADAPTER_INDEX was set -- see the Init() header comment (S2).
 			DXGI_ADAPTER_DESC1 d;
 			adapter->GetDesc1(&d);
 			std::wprintf(L"# adapter: %s\n", d.Description);

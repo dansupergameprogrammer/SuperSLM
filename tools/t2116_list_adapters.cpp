@@ -11,10 +11,13 @@
 //
 // This tool sidesteps that entirely: raw DXGI enumeration only, no superslm_gpu
 // dependency, no model/artifact loading, no D3D12 device creation beyond the minimum
-// needed to confirm an adapter is usable. Prints one line per HARDWARE (non-WARP,
-// non-software) adapter, in the identical raw EnumAdapters1 order SSLM_GPU_ADAPTER_INDEX
-// selects by, then exits 0. run_crossvendor.ps1 parses this tool's own output to build
-// its adapter list -- it never re-derives adapter count from a battery tool's exit code.
+// needed to confirm an adapter is usable. Prints one line per adapter EnumAdapters1
+// reports -- hardware and software (WARP) alike, each tagged SOFTWARE=0/1 -- in the
+// identical raw index order SSLM_GPU_ADAPTER_INDEX selects by, then exits 0.
+// run_crossvendor.ps1 parses this tool's own output to build its adapter list (a
+// hardware adapter that failed device creation is USABLE=0, not omitted -- see that
+// script's own header comment for why a hardware adapter is never silently dropped)
+// -- it never re-derives adapter count from a battery tool's exit code.
 //
 // Usage: t2116_list_adapters   (no arguments; always exits 0)
 #define WIN32_LEAN_AND_MEAN
