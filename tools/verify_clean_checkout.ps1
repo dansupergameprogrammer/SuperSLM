@@ -206,8 +206,10 @@ $AdapterArtifact = Join-Path $Artifacts "clean-checkout-adapter.sslm"
 Push-Location (Join-Path $Clean "tools")
 try {
     if ($AdapterLayerLimit -gt 0) {
-        $env:SSLM_ADAPTER_LAYER_LIMIT = "$AdapterLayerLimit"
-        python -u -c @"
+        # Written to a temp .py file rather than piped through `python -c` -- a PowerShell
+        # here-string does not reliably round-trip embedded escaped quotes to the child
+        # process, and this block's f-strings need them.
+        $reducedScript = @'
 import os, sys, dataclasses
 sys.path.insert(0, '.')
 import sslm_convert_adapter as A
@@ -216,26 +218,38 @@ import sslm_convert_manifest as scm
 from reference_pipeline import pipeline as pl
 
 n = int(os.environ['SSLM_ADAPTER_LAYER_LIMIT'])
+adapter_dir = os.environ['SSLM_ADAPTER_DIR']
+base_path = os.environ['SSLM_BASE_MODEL_PATH']
+out_path = os.environ['SSLM_ADAPTER_OUT_PATH']
+
 orig_load_config = pl.load_config
 pl.load_config = lambda path: dataclasses.replace(orig_load_config(path), num_hidden_layers=n)
 
-sections, verdict, round_trip = A.build_runtime_additive_sections(r'$Adapter', r'$ModelArtifact')
-print(f'domain_trip={verdict[\"domain_trip\"]} margin_exceeded={verdict[\"margin_exceeded\"]} saturation_elevated={verdict[\"saturation_elevated\"]}')
+sections, verdict, round_trip = A.build_runtime_additive_sections(adapter_dir, base_path)
+print('domain_trip={} margin_exceeded={} saturation_elevated={}'.format(
+    verdict['domain_trip'], verdict['margin_exceeded'], verdict['saturation_elevated']))
 branch, outcome = A.dispatch_conversion_outcome(
     domain_trip=verdict['domain_trip'], margin_exceeded=verdict['margin_exceeded'],
     saturation_elevated=verdict['saturation_elevated'], fallback_flag_present=False)
-print(f'branch={branch.name} outcome={outcome.name}')
+print('branch={} outcome={}'.format(branch.name, outcome.name))
 if outcome == A.ArtifactOutcome.RUNTIME_ADDITIVE:
-    fingerprint = sf.write_artifact(r'$AdapterArtifact', sections)
-    print(f'wrote {fingerprint}')
-    import os as _os
-    repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath('convert_model.py')))
-    scm.verify_and_merge(repo_root, r'$AdapterArtifact', r'$Adapter', verifier_cmd=None, manifest_out_path=None)
+    fingerprint = sf.write_artifact(out_path, sections)
+    print('wrote {}'.format(fingerprint))
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath('convert_model.py')))
+    scm.verify_and_merge(repo_root, out_path, adapter_dir, verifier_cmd=None, manifest_out_path=None)
     print('verified: independent loader accepted the artifact')
 else:
-    raise SystemExit(f'REJECTED: {branch.name}')
-"@ *> (Join-Path $Artifacts "07_step9_convert_adapter.log")
-        Remove-Item Env:\SSLM_ADAPTER_LAYER_LIMIT
+    raise SystemExit('REJECTED: {}'.format(branch.name))
+'@
+        $reducedScriptPath = Join-Path $Artifacts "_step9_reduced_cell.py"
+        Set-Content -Path $reducedScriptPath -Value $reducedScript -Encoding UTF8
+
+        $env:SSLM_ADAPTER_LAYER_LIMIT = "$AdapterLayerLimit"
+        $env:SSLM_ADAPTER_DIR = "$Adapter"
+        $env:SSLM_BASE_MODEL_PATH = "$ModelArtifact"
+        $env:SSLM_ADAPTER_OUT_PATH = "$AdapterArtifact"
+        python -u $reducedScriptPath *> (Join-Path $Artifacts "07_step9_convert_adapter.log")
+        Remove-Item Env:\SSLM_ADAPTER_LAYER_LIMIT, Env:\SSLM_ADAPTER_DIR, Env:\SSLM_BASE_MODEL_PATH, Env:\SSLM_ADAPTER_OUT_PATH
     } else {
         python -u sslm_convert_adapter.py --adapter "$Adapter" --base "$ModelArtifact" `
             --out "$AdapterArtifact" *> (Join-Path $Artifacts "07_step9_convert_adapter.log")
