@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "superslm/adapter_marshal.h"
 #include "superslm/forward_sites.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
@@ -80,6 +81,22 @@ struct sslm_model_s {
 	superslm::SslmModelView view;
 	std::atomic<uint32_t> live_refs{0};
 	sslm_model_engine_cache engine;
+};
+
+// C6. A mapped LoRA adapter (design Sec9 C6, S-LoRA-serial's own outstanding ABI debt): wraps
+// the already-proven V5 delta kernel and converter adapter mode via
+// include/superslm/adapter_marshal.h's own AdapterHandle/PopulateAdapterFromView/
+// ApplyAdapterToLayers -- reused, not re-derived, the same one-real-implementation discipline
+// this file's own engine cache already follows for layer_marshal.h. `live_refs` is the
+// SSLM_ADAPTER_HAS_LIVE_SEQUENCES guard's own bookkeeping (design Sec6), incremented/decremented
+// by sslm_seq_set_adapter's own bind/unbind. `artifact_bytes` is this handle's own reported
+// residency (sslm_adapter_residency) -- the mapped artifact's own byte size, a real footprint
+// answer rather than an estimate.
+struct sslm_adapter_s {
+	sslm_model_s* base = nullptr;
+	superslm_adapter::AdapterHandle handle;
+	size_t artifact_bytes = 0;
+	std::atomic<uint32_t> live_refs{0};
 };
 
 // C1. A caller-owned batch-orchestration scratch region (design Sec7.1, RULED design commit
@@ -625,6 +642,23 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 
+// C6: resolves the LayerWeights[] array a real RunLayerLoop call should use -- the model's own
+// cached BASE array directly when no adapter is bound (the common, zero-copy case; Sec8.3's
+// "sslm_model read-only concurrent" contract means this shared array is never mutated in
+// place), or a per-call COPY with every layer's own `.adapter` field patched via
+// adapter_marshal.h's ApplyAdapterToLayers when one is (`*scratch` is the copy's own backing
+// storage, owned by the caller for the call's duration). Two sequences decoding concurrently
+// against different adapters (or one adapter, one none) never see each other's `.adapter`
+// patch, because each gets its own `*scratch` -- the shared cache itself is never touched.
+const superslm::LayerWeights* ResolveLayers(sslm_model_s* model, sslm_adapter_s* adapter,
+                                             std::vector<superslm::LayerWeights>* scratch) {
+	if (!adapter) return model->engine.layers.data();
+	*scratch = model->engine.layers;
+	superslm_adapter::ApplyAdapterToLayers(&adapter->handle, scratch->data(),
+	                                        model->view.config.num_hidden_layers);
+	return scratch->data();
+}
+
 // Shared whole-token prefill loop -- design Sec8.1's "every layer" prefill semantics, the SAME
 // EmbedEntry+RunLayerLoop composition RunGreedyDecodeLoop's own RunWholeToken lambda uses for
 // its own prefill phase (forward_sites.cpp), reused here as ONE implementation rather than two
@@ -632,14 +666,18 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 // Sec6.6's own one-real-implementation discipline -- the shape both callers need is identical:
 // a state/kv-block pair, a token array, a chunk_budget). Processes up to min(count,
 // chunk_budget) tokens, stopping early (leaving state/*consumed resumable) on the first
-// rejection, exactly as sslm_prefix_prefill's own already-tested contract does.
+// rejection, exactly as sslm_prefix_prefill's own already-tested contract does. `adapter` is
+// nullptr for every sslm_prefix_prefill call (adapters bind to sequences, never prefixes,
+// design Sec12) and the sequence's own bound adapter (possibly nullptr) for sslm_prefill.
 sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
                                 uint8_t* kv_block, size_t block_size, const int32_t* tokens,
                                 int32_t count, int32_t chunk_budget, int32_t* consumed,
-                                int32_t* out_last_token) {
+                                int32_t* out_last_token, sslm_adapter_s* adapter) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
 	std::vector<int8_t> embed_codes(c.hidden_size);
+	std::vector<superslm::LayerWeights> layers_scratch;
+	const superslm::LayerWeights* layers = ResolveLayers(model, adapter, &layers_scratch);
 	for (int32_t i = 0; i < n; ++i) {
 		const int32_t token = tokens[i];
 		if (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size) {
@@ -659,7 +697,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 		state.layer_index = 0;
 
 		const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
-		    state, model->engine.layers.data(), c.num_hidden_layers,
+		    state, layers, c.num_hidden_layers,
 		    /*layer_budget=*/c.num_hidden_layers, c.hidden_size, c.head_dim,
 		    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
 		    kv_block, block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
@@ -717,7 +755,7 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 
 	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
-	                           count, chunk_budget, consumed, &prefix->current_token);
+	                           count, chunk_budget, consumed, &prefix->current_token, nullptr);
 }
 
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
@@ -762,6 +800,11 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 
 extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (seq->adapter_handle) {
+		// A still-bound adapter's own live_refs must drop too, or sslm_adapter_release would
+		// wrongly see a live reference from a sequence that no longer exists.
+		seq->adapter_handle->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	}
 	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
 	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
 	seq->released = true;
@@ -844,7 +887,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 
 	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->kv_block, seq->block_size,
 	                                           tokens, count, chunk_budget, consumed,
-	                                           &seq->current_token);
+	                                           &seq->current_token, seq->adapter_handle);
 	if (*consumed > 0) {
 		// The last token this call processed already ran every layer (PrefillWholeTokens'
 		// own full-layer_budget convention) -- its final hidden state is ready for logits with
@@ -920,8 +963,11 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 				seq->state.layer_index = 0;
 			}
 
+			std::vector<superslm::LayerWeights> layers_scratch;
+			const superslm::LayerWeights* layers =
+			    ResolveLayers(model, seq->adapter_handle, &layers_scratch);
 			const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
-			    seq->state, model->engine.layers.data(), c.num_hidden_layers,
+			    seq->state, layers, c.num_hidden_layers,
 			    static_cast<uint32_t>(params->layer_budget), c.hidden_size, c.head_dim,
 			    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
 			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
@@ -1167,5 +1213,98 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	h->ready_for_logits = (layer_index == 0 && context_length > 0);
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// C6 -- adapter lifecycle (design Sec9 C6, Sec4: "S-LoRA-serial's own outstanding ABI debt"):
+// wraps the already-proven V5 delta kernel and converter adapter mode via
+// include/superslm/adapter_marshal.h, never reimplements it.
+// -----------------------------------------------------------------------------------------
+
+extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_model base,
+                                         sslm_adapter* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!data || !base) return SSLM_INVALID_ARGUMENT;
+
+	superslm::SslmModelView adapter_view;
+	std::string err;
+	const superslm::SslmModelStatus load_st = superslm::SslmModel::Load(
+	    static_cast<const uint8_t*>(data), size, adapter_view, &err);
+	if (load_st != superslm::SslmModelStatus::Ok) return SSLM_ARTIFACT_REJECTED;
+
+	superslm_adapter::BaseModelGeometry base_geom;
+	const superslm::SslmModelConfig& bc = base->view.config;
+	base_geom.num_hidden_layers = bc.num_hidden_layers;
+	base_geom.hidden_size = bc.hidden_size;
+	base_geom.intermediate_size = bc.intermediate_size;
+	base_geom.kv_hidden_size = static_cast<uint64_t>(bc.num_key_value_heads) * bc.head_dim;
+	base_geom.base_artifact_hash = base->view.RawIntegrityHash();
+
+	auto* h = new (std::nothrow) sslm_adapter_s();
+	if (!h) throw std::bad_alloc();
+	h->base = base;
+	h->artifact_bytes = size;
+	// AdapterHandle::view_ is the long-lived owner of the adapter's own tensor bytes --
+	// populated BEFORE PopulateAdapterFromView runs against it, so layer_adapters' own pointers
+	// (adapter_marshal.h) point into this handle's own member, never the temporary local
+	// `adapter_view` above (which would leave them dangling the instant this function returns).
+	h->handle.view_ = std::move(adapter_view);
+	std::vector<superslm::LayerAdapter> layer_adapters;
+	const superslm_adapter::AdapterLoadStatus populate_st = superslm_adapter::PopulateAdapterFromView(
+	    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
+	if (populate_st == superslm_adapter::AdapterLoadStatus::BaseHashMismatch) {
+		delete h;
+		return SSLM_ADAPTER_MODEL_MISMATCH;
+	}
+	if (populate_st != superslm_adapter::AdapterLoadStatus::Ok) {
+		// Every other rejection (malformed ADP1, missing DeltaFoldScales/UFoldScales, a
+		// dimension/shape mismatch) is a structurally-broken-artifact class this design's own
+		// Sec6 taxonomy assigns no dedicated status to -- the same "no more specific status"
+		// disposition sslm_gpu_adapter_map already uses for the identical rejection family
+		// (src/gpu/gpu_1p0.cpp), substituting this ABI's own closest artifact/content rejection.
+		delete h;
+		return SSLM_ARTIFACT_REJECTED;
+	}
+
+	base->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	*out = h;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_adapter_release(sslm_adapter adapter) {
+	if (!adapter) return SSLM_INVALID_ARGUMENT;
+	if (adapter->live_refs.load(std::memory_order_acquire) != 0) {
+		return SSLM_ADAPTER_HAS_LIVE_SEQUENCES;
+	}
+	adapter->base->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	delete adapter;
+	return SSLM_OK;
+}
+
+extern "C" size_t sslm_adapter_residency(sslm_adapter adapter) {
+	if (!adapter) return 0;
+	return adapter->artifact_bytes;
+}
+
+// design Sec6: sslm_seq_set_adapter against a non-zero mid-token residual marker is
+// SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED -- swapping the delta kernel mid-layer-loop would compose
+// two different adapters' deltas across one token's own layer range, an undefined mixture this
+// design forecloses by rejecting outright rather than defining. `adapter == nullptr` unbinds
+// (LayerWeights::adapter's own existing NULL-adapter convention, forward_sites.h).
+extern "C" sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter) {
+	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (seq->state.layer_index != 0) return SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED;
+	if (adapter && adapter->base != seq->model) return SSLM_ADAPTER_MODEL_MISMATCH;
+
+	if (seq->adapter_handle == adapter) return SSLM_OK;  // idempotent no-op
+	if (seq->adapter_handle) {
+		seq->adapter_handle->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	}
+	if (adapter) {
+		adapter->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	}
+	seq->adapter_handle = adapter;
 	return SSLM_OK;
 }

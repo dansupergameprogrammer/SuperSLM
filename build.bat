@@ -372,6 +372,21 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem C6's own Gate B smoke: maps a real adapter, binds it to a decoding sequence, decodes,
+rem releases (design's own stated C6 smoke shape) -- plus foreign-base mismatch, mid-token swap
+rem rejection, and the product-scale lifecycle-guard cell (design Sec10 dim11) reached through
+rem this smoke's own ordinary call order. NOT auto-run here (same precedent as C2/C3/C5's
+rem smokes above). Usage: out\t2139_c6_smoke.exe ^<base.sslm^> ^<adapter.sslm^>
+rem [foreign-base.sslm].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c6_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c6_smoke.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
