@@ -25,12 +25,18 @@
 // Sec7.1 states this internal layout is free to do.
 #include "superslm/sslm_abi.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <memory>
+#include <mutex>
 #include <new>
 #include <string>
+#include <vector>
 
+#include "superslm/forward_sites.h"
+#include "superslm/layer_marshal.h"
 #include "superslm/model.h"
 
 // -----------------------------------------------------------------------------------------
@@ -42,37 +48,104 @@
 // sslm_model_s and therefore need it complete, not merely declared.
 // -----------------------------------------------------------------------------------------
 
-// C2. Owns the loaded model view. `live_refs` is the D-SLM32 lifecycle-guard bookkeeping design
-// Sec9's own C2 gate names ("unmap-while-live is rejected") -- nothing built in C1/C2 ever
-// increments it (no sslm_seq/sslm_prefix/sslm_adapter exists yet), so the guard cannot yet be
-// exercised end-to-end; stated here rather than left implicit, matching design Sec10 dim11's own
-// "shown able to fire" standard, which this arc does not yet meet for this guard. C3 (sequences/
-// prefixes) and C6 (adapters) are the callers that will increment/decrement it.
+// C4's own resolved-once engine surface (design Sec9 C4: "resolving a loaded SslmModelView's
+// WGT1/BIA1/ROP1/WSC1 sections into the LayerWeights[] array RunLayerLoop/RunGreedyDecodeLoop
+// already consume" -- reuses include/superslm/layer_marshal.h, already production code since
+// T-1684/T-2113, rather than re-deriving it (Claude/Brunel/t2139-abi-build-2026-08-16.md Sec3's
+// own de-risking finding). Built ONCE, eagerly, at sslm_model_map time (matching
+// sslm_gpu_model_map's own convention, src/gpu/gpu_1p0.cpp) rather than lazily on first use --
+// lazy-on-first-use under Sec8.3's "sslm_model read-only concurrent" contract would be a real
+// data race between two threads' first calls; building it once, before the handle is ever
+// returned to a caller, has no such window. `layers[l]` is the BASE (no-adapter) LayerWeights
+// for layer l; a per-sequence adapter (C6, not built) is composed by copying this base array and
+// patching each layer's own `.adapter` field per call, never by rebuilding the marshaled arrays.
+struct sslm_model_engine_cache {
+	bool ok = false;
+	std::string err;
+	std::vector<superslm_marshal::LayerBacking> backings;
+	std::vector<superslm::LayerWeights> layers;
+	const int8_t* embed_weights = nullptr;
+	superslm::CarriedScale embed_site_constant{};
+	std::vector<int32_t> final_norm_gain;
+	superslm::CarriedScale final_norm_site_constant{};
+	const int8_t* head_weights = nullptr;
+};
+
+// C2. Owns the loaded model view and (C4) the resolved engine cache. `live_refs` is the D-SLM32
+// lifecycle-guard bookkeeping design Sec9's own C2 gate names ("unmap-while-live is rejected") --
+// incremented/decremented by C3's sslm_seq_create/_release, sslm_prefix_begin/_release, and (C6,
+// not built) sslm_adapter_map.
 struct sslm_model_s {
 	superslm::SslmModelView view;
 	std::atomic<uint32_t> live_refs{0};
+	sslm_model_engine_cache engine;
 };
 
-// C1. A caller-owned compute-scratch region, wrapped for construct/destroy symmetry and
-// buffer-size/alignment validation. `buf`/`buf_size` are the caller's own memory (never freed by
-// sslm_workspace_destroy, design Sec7.1) -- this handle's own heap allocation is bookkeeping
-// only, matching sslm_model_s's own "the handle is heap-owned, the artifact bytes/caller buffer
-// are not" split.
+// C1. A caller-owned batch-orchestration scratch region (design Sec7.1, RULED design commit
+// fab235c1c6 -- see this file's own top-of-file comment): a per-sequence status array across
+// sslm_decode_step's own seqs[]/out_tokens, sized by max_batch, plus chunk-staging state for
+// sslm_prefill's own chunk_budget-bounded internal loop. `buf`/`buf_size` are the caller's own
+// memory (never freed by sslm_workspace_destroy, design Sec7.1) -- this handle's own heap
+// allocation is bookkeeping only, matching sslm_model_s's own "the handle is heap-owned, the
+// artifact bytes/caller buffer are not" split. `config` is cached from construction time so C4's
+// own use of this workspace can re-derive the same layout sslm_workspace_size computed, without
+// threading `sslm_config` through every call that takes a workspace.
 struct sslm_workspace_s {
 	void* buf = nullptr;
 	size_t buf_size = 0;
+	sslm_config config{};
 };
 
-// C1. A caller-owned KV region, sized for `block_count` blocks (design Sec7.2). `live_refs` is
-// the SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping (design Sec6) -- like
-// sslm_model_s::live_refs, unexercised until C3 (sslm_seq_create/sslm_prefix_begin) exists to
-// increment it; C1's own obligation is that the field exists and destroy checks it, not that a
-// real caller can yet drive it nonzero.
+// C1/C3. A caller-owned KV region, sized for `block_count` SEQUENCES (design Sec7.2, RULED --
+// a block is one whole sequence's entire KV footprint, never a sub-sequence page). `free_list`
+// holds the indices of currently-unclaimed blocks; `mutex` protects it against the concurrent
+// sslm_seq_create/_release race design Sec10 dim3/dim8 names explicitly. `live_refs` is the
+// SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping (design Sec6), incremented/decremented by
+// C3's own draw/return.
 struct sslm_kv_pool_s {
 	void* buf = nullptr;
 	size_t buf_size = 0;
 	uint32_t block_count = 0;
+	size_t block_size = 0;
+	std::mutex mutex;
+	std::vector<uint32_t> free_list;
 	std::atomic<uint32_t> live_refs{0};
+};
+
+// C3. One prefix-under-construction / frozen prefix (design Sec7.2/Sec8). Owns its own
+// hidden_codes scratch (SequenceLayerState's own residual buffer, ABI-internal bookkeeping
+// allocated once at sslm_prefix_begin time -- not a hot-path allocation, matching
+// sslm_model_engine_cache's own "built once, not per call" convention) and points its
+// SequenceLayerState at that scratch and at its own drawn block.
+struct sslm_prefix_s {
+	sslm_model_s* model = nullptr;  // owning model -- SSLM_MODEL_HAS_LIVE_SEQUENCES guard (Sec6)
+	sslm_kv_pool_s* pool = nullptr;
+	uint32_t block_index = 0;
+	uint8_t* kv_block = nullptr;
+	size_t block_size = 0;
+	std::vector<int8_t> hidden_codes_storage;
+	superslm::SequenceLayerState state;
+	bool frozen = false;
+	bool released = false;
+};
+
+// C3. One live decode sequence. `current_token` is the ABI's own tracked "last embedded or
+// produced token id" (design's sslm_decode_step signature carries no token-input parameter --
+// C4 reads/writes this field to resume generation across calls, since the token to embed next
+// is otherwise unrecoverable from SequenceLayerState alone, which carries only the IN-PROGRESS
+// residual, never the token id that produced it). `adapter` is C6's own field, unbuilt here --
+// nullptr means "no adapter bound," the same convention LayerWeights::adapter already uses.
+struct sslm_seq_s {
+	sslm_model_s* model = nullptr;  // owning model -- SSLM_MODEL_HAS_LIVE_SEQUENCES guard (Sec6)
+	sslm_kv_pool_s* pool = nullptr;
+	uint32_t block_index = 0;
+	uint8_t* kv_block = nullptr;
+	size_t block_size = 0;
+	std::vector<int8_t> hidden_codes_storage;
+	superslm::SequenceLayerState state;
+	int32_t current_token = -1;
+	sslm_adapter adapter_handle = nullptr;
+	bool released = false;
 };
 
 namespace {
@@ -156,6 +229,114 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 	return p == superslm::SslmKvPrecision::Int16 ? 2 : 1;
 }
 
+// C4's own artifact-resolution obligation (design Sec9 C3/Sec3's grounding), discharged by
+// reusing include/superslm/layer_marshal.h -- MarshalLayer per layer, then the embed/final_norm/
+// head resolution tools/sslm_generate.cpp's own "embed/final_norm/head marshaling" block already
+// establishes (mirrored here verbatim rather than re-derived, per StandardsDocument Sec6.6's own
+// one-real-implementation discipline -- this is a second call site of an already-proven pattern,
+// not a second, independently-authored copy of its logic). Called once, at sslm_model_map time.
+bool BuildEngineCache(sslm_model_s* h) {
+	auto& view = h->view;
+	auto& cache = h->engine;
+	const uint32_t num_layers = view.config.num_hidden_layers;
+	cache.backings.resize(num_layers);
+	cache.layers.resize(num_layers);
+	for (uint32_t l = 0; l < num_layers; ++l) {
+		std::string layer_err;
+		if (!superslm_marshal::MarshalLayer(view, l, view.config.num_attention_heads,
+		                                     view.config.num_key_value_heads, cache.backings[l],
+		                                     cache.layers[l], &layer_err)) {
+			cache.err = layer_err;
+			return false;
+		}
+	}
+	const superslm::SslmTensorView* embed_w = view.weights.Tensor("embed");
+	const superslm::SslmTensorView* final_gain_w = view.weights.Tensor("final_norm.gain");
+	if (!embed_w || !final_gain_w) {
+		cache.err = "missing embed or final_norm.gain WGT1 tensor";
+		return false;
+	}
+	cache.final_norm_gain = superslm_marshal::WidenGainToInt32(*final_gain_w);
+	bool ok = true;
+	cache.embed_site_constant =
+	    superslm_marshal::ReadCarriedScale(view.composition_constants, "embed", &ok);
+	cache.final_norm_site_constant =
+	    superslm_marshal::ReadCarriedScale(view.composition_constants, "final_norm", &ok);
+	if (!ok) {
+		cache.err = "missing embed/final_norm composition_constants site entry";
+		return false;
+	}
+	cache.embed_weights = reinterpret_cast<const int8_t*>(embed_w->data);
+	if (view.config.tie_word_embeddings) {
+		cache.head_weights = cache.embed_weights;
+	} else {
+		const superslm::SslmTensorView* lm_head_w = view.weights.Tensor("lm_head");
+		if (!lm_head_w) {
+			cache.err = "tie_word_embeddings=0 but no \"lm_head\" WGT1 tensor is present";
+			return false;
+		}
+		cache.head_weights = reinterpret_cast<const int8_t*>(lm_head_w->data);
+	}
+	cache.ok = true;
+	return true;
+}
+
+// -----------------------------------------------------------------------------------------
+// sslm_workspace's REAL layout (design Sec7.1, RULED design commit fab235c1c6): ABI-level
+// batch-orchestration scratch, not per-layer engine scratch (RunLayerLoop/RunGreedyDecodeLoop
+// take no second caller-owned buffer at all -- see the ruling). C4 is the real consumer;
+// computed here, in the same anonymous namespace both sslm_workspace_size and C4's own
+// implementation share, so the two can never independently drift.
+// -----------------------------------------------------------------------------------------
+
+// One entry per sslm_decode_step batch slot -- design Sec7.1's own "a per-sequence status/
+// completion array across the n sequences one sslm_decode_step call drives".
+struct DecodeSeqStatus {
+	int32_t produced_token;  // -1 = pending (partial layer_budget this call), matching
+	                          // SslmDecodeStepStatus's own sentinel convention (model.h)
+	int32_t status;          // this sequence's own sslm_status for this call, as int32_t
+};
+
+struct WorkspaceLayout {
+	size_t header_bytes = 0;
+	size_t status_array_offset = 0;
+	size_t status_array_bytes = 0;
+	size_t staged_tokens_offset = 0;
+	size_t staged_tokens_bytes = 0;
+	size_t total_bytes = 0;
+	bool overflowed = false;
+};
+
+WorkspaceLayout ComputeWorkspaceLayout(const sslm_config& config) {
+	WorkspaceLayout L;
+	L.header_bytes = 64;
+	L.status_array_offset = L.header_bytes;
+	bool of = false;
+	size_t status_bytes = 0;
+	if (!CheckedMulSizeT(static_cast<size_t>(config.max_batch), sizeof(DecodeSeqStatus),
+	                      &status_bytes)) {
+		of = true;
+	}
+	L.status_array_bytes = status_bytes;
+	size_t after_status = 0;
+	if (!CheckedAddSizeT(L.status_array_offset, L.status_array_bytes, &after_status)) of = true;
+	L.staged_tokens_offset = after_status;
+	// sslm_prefill's own chunk_budget-bounded internal loop stages up to max_chunk_budget token
+	// ids at a time (design Sec7.1's own "staged output-token bookkeeping across a sslm_prefill
+	// call's own chunk_budget-bounded internal loop").
+	size_t staged_bytes = 0;
+	if (!CheckedMulSizeT(static_cast<size_t>(config.max_chunk_budget), sizeof(int32_t),
+	                      &staged_bytes)) {
+		of = true;
+	}
+	L.staged_tokens_bytes = staged_bytes;
+	size_t total = 0;
+	if (!CheckedAddSizeT(L.staged_tokens_offset, L.staged_tokens_bytes, &total)) of = true;
+	L.total_bytes = of ? kSizeMax : total;
+	L.overflowed = of;
+	return L;
+}
+
 }  // namespace
 
 // -----------------------------------------------------------------------------------------
@@ -168,54 +349,38 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 
 extern "C" size_t sslm_workspace_size(sslm_model model, const sslm_config* config) {
 	if (!ConfigDomainOk(model, config)) return 0;
-
-	// Provisional layout (this file's own header comment): per-call scratch sized from the
-	// call-shape declaration alone, monotonic in every sslm_config field and in the model's own
-	// geometry, saturating rather than wrapping on an adversarial (but domain-valid) combination.
-	const superslm::SslmModelConfig& c = model->view.config;
-	SaturatingAccumulator acc;
-	// Attention-interior + matmul accumulator scratch: one wide (int64) row per token in the
-	// widest single call this workspace must serve, sized to the widest of hidden_size/
-	// intermediate_size/vocab_size (the three row widths any one funnel call in this tree
-	// composes over, forward_sites.h) so a single conservative term covers all three rather than
-	// summing three independently-justified guesses.
-	uint64_t widest_row = c.hidden_size;
-	if (c.intermediate_size > widest_row) widest_row = c.intermediate_size;
-	if (c.vocab_size > widest_row) widest_row = c.vocab_size;
-	size_t call_shape = 0;
-	CheckedMulSizeT(static_cast<size_t>(config->max_batch),
-	                 static_cast<size_t>(config->max_chunk_budget), &call_shape);
-	acc.AddProduct(call_shape, static_cast<size_t>(widest_row));
-	acc.AddProduct(acc.value, sizeof(int64_t));
-	// Per-head softmax-row scratch for the widest layer_budget this workspace must serve.
-	SaturatingAccumulator heads;
-	heads.AddProduct(static_cast<size_t>(config->max_layer_budget),
-	                  static_cast<size_t>(c.num_attention_heads));
-	heads.AddProduct(heads.value, static_cast<size_t>(c.context_cap));
-	heads.AddProduct(heads.value, sizeof(int32_t));
-	size_t total = 0;
-	CheckedAddSizeT(acc.value, heads.value, &total);
-	// A fixed internal bookkeeping header (the version-pinned offset table design Sec7.1 names).
-	size_t final_size = 0;
-	CheckedAddSizeT(total, 64, &final_size);
-	return final_size;
+	const WorkspaceLayout L = ComputeWorkspaceLayout(*config);
+	return L.overflowed ? 0 : L.total_bytes;
 }
 
+// CORRECTED to the ruled unit (design Sec7.2, Brunel T-2139 Sec4, design commit fab235c1c6): a
+// "block" is one WHOLE sequence's entire KV footprint across every layer -- exactly the byte
+// count RunLayerLoop's own workspace/workspace_size parameter needs for one sequence -- never a
+// sub-sequence PagedAttention page. CFG1's own `kv_block_size` field (SslmModelConfig, a
+// tokens-per-page count) plays NO role in this formula under the ruling; this function's own
+// name is now a slight misnomer relative to that unrelated CFG1 field, which the ruling itself
+// notes is model metadata this ABI's block unit does not consume.
 extern "C" size_t sslm_kv_block_size(sslm_model model) {
 	if (!model) return 0;
 	const superslm::SslmModelConfig& c = model->view.config;
-	if (c.kv_block_size == 0) return 0;
-	// One block's bytes = (tokens per block) * num_hidden_layers * num_key_value_heads *
-	// head_dim * 2 (K and V halves) * per-element width (design Sec7.2/Sec7.3; the K/V store
-	// layout this composes from is forward_sites.h's own KeyRow/ValueRow addressing,
-	// per-(layer,head)-major, position-minor).
-	SaturatingAccumulator acc;
-	acc.AddProduct(static_cast<size_t>(c.kv_block_size), static_cast<size_t>(c.num_hidden_layers));
-	acc.AddProduct(acc.value, static_cast<size_t>(c.num_key_value_heads));
-	acc.AddProduct(acc.value, static_cast<size_t>(c.head_dim));
-	acc.AddProduct(acc.value, 2);
-	acc.AddProduct(acc.value, KvElementBytes(c.kv_precision));
-	return acc.value;
+	// num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2 (K+V) *
+	// kv_precision_width -- the exact formula the KeyRow/ValueRow accessor comment
+	// (forward_sites.h) states for one sequence's own contiguous KV span. A pure product chain
+	// (not a sum-of-products), so chained CheckedMulSizeT rather than SaturatingAccumulator
+	// (which composes sum-of-products, not a running product).
+	size_t v = static_cast<size_t>(c.num_hidden_layers);
+	bool overflowed = false;
+	auto Mul = [&](size_t factor) {
+		size_t out = 0;
+		if (!CheckedMulSizeT(v, factor, &out)) overflowed = true;
+		v = overflowed ? kSizeMax : out;
+	};
+	Mul(static_cast<size_t>(c.context_cap));
+	Mul(static_cast<size_t>(c.num_key_value_heads));
+	Mul(static_cast<size_t>(c.head_dim));
+	Mul(2);
+	Mul(KvElementBytes(c.kv_precision));
+	return v;
 }
 
 extern "C" size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count) {
@@ -240,20 +405,18 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	if (block_size == 0) return 0;
 	// Design Sec7.3's field list: fixed-size header fields, the residual (hidden_size *
 	// activation_bytes, worst case -- a mid-token residual, layer_index != 0), then the whole
-	// KV store a single sequence can carry at its own context_cap. Fixed fields:
-	// magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
-	// adapter_binding_id(8) + context_length(8) + layer_index(4) + hidden_scale(16, CarriedScale
-	// as two int64) + kv_saturation_count(8) + kv_block_count(4) = 100 bytes.
+	// KV store a single sequence carries -- CORRECTED to the ruled block unit (Sec4 above): a
+	// sequence draws exactly ONE block (its own whole-sequence KV footprint), so
+	// kv_block_count is always 1 for a real saved sequence, not a ceil(context_cap/page) count
+	// under the now-retired PagedAttention reading. Fixed fields: magic(4) + model_hash(32) +
+	// kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) +
+	// context_length(8) + layer_index(4) + hidden_scale(16, CarriedScale as two int64) +
+	// kv_saturation_count(8) + kv_block_count(4) = 100 bytes.
 	constexpr size_t kFixedHeaderBytes = 100;
 	SaturatingAccumulator acc;
 	acc.value = kFixedHeaderBytes;
 	acc.AddProduct(1, static_cast<size_t>(c.hidden_size));  // residual_bytes, int8 codes
-	// Worst-case KV block count for one sequence at its own context_cap: ceil(context_cap /
-	// tokens_per_block).
-	const uint32_t tokens_per_block = c.kv_block_size;
-	uint64_t worst_blocks = (static_cast<uint64_t>(c.context_cap) + tokens_per_block - 1) /
-	                         tokens_per_block;
-	acc.AddProduct(static_cast<size_t>(worst_blocks), block_size);
+	acc.AddProduct(1, block_size);  // kv_blocks: exactly one block (Sec7.2's ruled unit)
 	return acc.value;
 }
 
@@ -289,6 +452,11 @@ extern "C" sslm_status sslm_workspace_create(sslm_model model, const sslm_config
 	if (!h) throw std::bad_alloc();  // house convention: propagates unchanged, bad_alloc_wrap.h
 	h->buf = buf;
 	h->buf_size = buf_size;
+	h->config = *config;
+	// Zero the status/staged-token region so a workspace's first real use (C4) never reads
+	// uninitialized bytes -- construction is not on the hot path (design Sec7.1), so this one
+	// memset here is sound.
+	std::memset(buf, 0, required);
 	*out = h;
 	return SSLM_OK;
 }
@@ -324,6 +492,9 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	h->buf = buf;
 	h->buf_size = buf_size;
 	h->block_count = block_count;
+	h->block_size = block_size;
+	h->free_list.reserve(block_count);
+	for (uint32_t i = 0; i < block_count; ++i) h->free_list.push_back(i);
 	*out = h;
 	return SSLM_OK;
 }
@@ -366,6 +537,19 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 
 	sslm_model_s* h = new (std::nothrow) sslm_model_s{std::move(view)};
 	if (!h) throw std::bad_alloc();
+	// C3/C4's own dependency: resolve every layer's LayerWeights[] plus embed/final_norm/head
+	// once, now, while the handle is not yet visible to any caller (Sec8.3's "sslm_model
+	// read-only concurrent" contract, honored by building this BEFORE *out is set, never lazily
+	// on first use under concurrent access). An artifact that loads structurally and passes
+	// every value-domain check (SslmModel::Load, above) but is missing a WGT1 tensor this ABI
+	// needs to actually run it (embed/final_norm.gain/lm_head, or a per-layer projection) is
+	// correspondingly SSLM_ARTIFACT_REJECTED here too -- the same "this artifact cannot be used"
+	// class SslmModel::Load's own rejection already maps to, extended to this ABI's own
+	// resolution step rather than left to fail unrecoverably at first real use.
+	if (!BuildEngineCache(h)) {
+		delete h;
+		return SSLM_ARTIFACT_REJECTED;
+	}
 	*out = h;
 	return SSLM_OK;
 }
@@ -376,5 +560,218 @@ extern "C" sslm_status sslm_model_unmap(sslm_model model) {
 		return SSLM_MODEL_HAS_LIVE_SEQUENCES;
 	}
 	delete model;
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// C3 -- prefix and sequence lifecycle over a real pool (design Sec7.2/Sec8/Sec9 C3): the
+// block-allocation/free-list machinery against a real sslm_kv_pool (C1), plus the real engine
+// call for sslm_prefix_prefill (reusing C4's own resolved-once engine cache, sslm_model_
+// engine_cache, built at sslm_model_map time -- see this file's own top-of-file comment on why
+// C3 and C4 share this infrastructure: sslm_prefix_prefill cannot be built for real without it).
+// -----------------------------------------------------------------------------------------
+
+namespace {
+
+// Draws one free block from `pool`. SSLM_KV_POOL_EXHAUSTED if none remain -- design Sec7.2's
+// ruled exhaustion timing: fires at draw time (sslm_seq_create/sslm_prefix_begin), never
+// mid-prefill (a block, once drawn, is never re-drawn mid-construction).
+sslm_status DrawBlock(sslm_kv_pool_s* pool, uint32_t* out_block_index) {
+	std::lock_guard<std::mutex> lock(pool->mutex);
+	if (pool->free_list.empty()) return SSLM_KV_POOL_EXHAUSTED;
+	*out_block_index = pool->free_list.back();
+	pool->free_list.pop_back();
+	pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	return SSLM_OK;
+}
+
+// Poison-fills and returns `block_index` to `pool`'s free list -- design Sec7.2's own
+// "poison-filled" leak-check obligation (Sec17 dim 1: no leaked content crosses a
+// release/create boundary).
+void ReturnBlock(sslm_kv_pool_s* pool, uint32_t block_index, uint8_t* kv_block, size_t block_size) {
+	std::memset(kv_block, 0xCD, block_size);
+	std::lock_guard<std::mutex> lock(pool->mutex);
+	pool->free_list.push_back(block_index);
+	pool->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+// EmbedEntry+RunLayerLoop's own real, distinguishable domain rejections (checked_chain_funnel.h/
+// forward_sites.h) have no counterpart in this ABI's own closed, 17-member Sec6 taxonomy -- none
+// is named for this call shape, since a well-formed, load-time-value-domain-checked artifact
+// (S-HARDEN-1's own schema-value gate, already run by SslmModel::Load) is not expected to
+// produce one on any real, in-domain call. Mapped to SSLM_ARTIFACT_REJECTED here (the closest
+// existing "this artifact's own content cannot be used as requested" family, Sec6) rather than
+// invented a new status this design never named -- flagged as a modeling choice, not a design
+// citation, since Sec6's own text does not name this mapping. Never observed on any real
+// artifact this build tested against (see this ticket's own build log).
+sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
+	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
+}
+
+}  // namespace
+
+extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, sslm_prefix* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!model || !pool || !*pool) return SSLM_INVALID_ARGUMENT;
+	sslm_kv_pool_s* p = *pool;
+	uint32_t block_index = 0;
+	const sslm_status draw_st = DrawBlock(p, &block_index);
+	if (draw_st != SSLM_OK) return draw_st;
+
+	auto* h = new (std::nothrow) sslm_prefix_s();
+	if (!h) throw std::bad_alloc();
+	h->model = model;
+	h->pool = p;
+	h->block_index = block_index;
+	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
+	h->block_size = p->block_size;
+	h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+	h->state.hidden_codes = h->hidden_codes_storage.data();
+	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	*out = h;
+	return SSLM_OK;
+}
+
+// `kind` (design Sec4/Sec12): behaviorally inert on this base-only, SSLM_SPAN_PROMPT-throughout
+// build -- G5's schema-content differentiation is not built (declared-but-deferred, this
+// design's own Sec12 scope statement); every call is driven identically regardless of `kind`.
+extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
+                                            const int32_t* tokens, int32_t count,
+                                            int32_t chunk_budget, sslm_span_kind kind,
+                                            sslm_workspace ws, int32_t* consumed) {
+	(void)kind;
+	(void)ws;  // this ABI's own batch-orchestration scratch has no per-prefill content (Sec7.1);
+	           // accepted for call-shape parity with sslm_prefill only.
+	if (!consumed) return SSLM_INVALID_ARGUMENT;
+	*consumed = 0;
+	if (!model || !prefix) return SSLM_INVALID_ARGUMENT;
+	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
+	if (prefix->frozen || prefix->released) return SSLM_PREFIX_FROZEN_REJECTED;
+	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+
+	const superslm::SslmModelConfig& c = model->view.config;
+	const int32_t n = count < chunk_budget ? count : chunk_budget;
+	std::vector<int8_t> embed_codes(c.hidden_size);
+	for (int32_t i = 0; i < n; ++i) {
+		const int32_t token = tokens[i];
+		if (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size) {
+			return SSLM_TOKEN_ID_OUT_OF_RANGE;
+		}
+		if (prefix->state.context_length >= static_cast<int64_t>(c.context_cap)) {
+			return SSLM_CONTEXT_CAP_EXCEEDED;
+		}
+
+		superslm::CarriedScale embed_scale{};
+		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
+		    model->engine.embed_site_constant, embed_codes.data(), &embed_scale);
+		if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+		for (uint32_t k = 0; k < c.hidden_size; ++k) prefix->state.hidden_codes[k] = embed_codes[k];
+		prefix->state.hidden_scale = embed_scale;
+		prefix->state.layer_index = 0;
+
+		const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
+		    prefix->state, model->engine.layers.data(), c.num_hidden_layers,
+		    /*layer_budget=*/c.num_hidden_layers, c.hidden_size, c.head_dim,
+		    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
+		    prefix->kv_block, prefix->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
+		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
+		// 0" -- RunLayerLoop, given the full layer_budget above, leaves layer_index at
+		// num_hidden_layers on success; reset to the resting convention before the next token.
+		prefix->state.layer_index = 0;
+		++(*consumed);
+	}
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	if (prefix->released) return SSLM_INVALID_ARGUMENT;
+	prefix->frozen = true;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_prefix_release(sslm_prefix prefix) {
+	if (!prefix || prefix->released) return SSLM_INVALID_ARGUMENT;
+	ReturnBlock(prefix->pool, prefix->block_index, prefix->kv_block, prefix->block_size);
+	prefix->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	prefix->released = true;
+	delete prefix;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, sslm_seq* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!model || !pool || !*pool) return SSLM_INVALID_ARGUMENT;
+	sslm_kv_pool_s* p = *pool;
+	uint32_t block_index = 0;
+	const sslm_status draw_st = DrawBlock(p, &block_index);
+	if (draw_st != SSLM_OK) return draw_st;
+
+	auto* h = new (std::nothrow) sslm_seq_s();
+	if (!h) throw std::bad_alloc();
+	h->model = model;
+	h->pool = p;
+	h->block_index = block_index;
+	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
+	h->block_size = p->block_size;
+	h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+	h->state.hidden_codes = h->hidden_codes_storage.data();
+	h->current_token = -1;
+	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	*out = h;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
+	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
+	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
+	seq->released = true;
+	delete seq;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
+	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
+	std::memset(seq->kv_block, 0xCD, seq->block_size);
+	seq->state.context_length = 0;
+	seq->state.kv_saturation_count = 0;
+	seq->state.layer_index = 0;
+	seq->state.hidden_scale = superslm::CarriedScale{};
+	std::fill(seq->hidden_codes_storage.begin(), seq->hidden_codes_storage.end(), int8_t{0});
+	seq->current_token = -1;
+	return SSLM_OK;
+}
+
+// RULED, copy-on-adopt (design Sec7.2, design commit fab235c1c6): an eager, whole-block copy of
+// the frozen prefix's own occupied bytes into the adopting sequence's own already-drawn block,
+// never physical sharing (the real block-table indirection true sharing needs is committed
+// post-1.0 engine work, D-SLM3457). Copies the WHOLE block (not merely the first
+// context_length-worth of bytes): KeyRow/ValueRow's own per-(layer,head)-major layout means
+// occupied positions are interleaved across the whole block, one span per layer, not a single
+// contiguous prefix of the buffer -- copying the entire block is the simplest construction that
+// is unconditionally correct (every layer's own occupied span lands intact; the few bytes past
+// context_length within each layer's own span are copied too, but nothing ever reads them,
+// since context_length gates what RunLayerLoop treats as valid history).
+extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
+	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!prefix || prefix->released) return SSLM_INVALID_ARGUMENT;
+	if (!prefix->frozen) return SSLM_PREFIX_FROZEN_REJECTED;
+	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;  // different models
+	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
+	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
+	          seq->hidden_codes_storage.begin());
+	seq->state.hidden_scale = prefix->state.hidden_scale;
+	seq->state.layer_index = prefix->state.layer_index;
+	seq->state.kv_saturation_count = prefix->state.kv_saturation_count;
+	seq->state.context_length = prefix->state.context_length;
+	seq->current_token = -1;  // the prefix carries no "last token" of its own (Sec7.2) -- the
+	                          // adopting sequence's own first sslm_prefill/decode call supplies
+	                          // whichever token continues from here.
 	return SSLM_OK;
 }

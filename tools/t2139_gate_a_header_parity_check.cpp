@@ -2,21 +2,27 @@
 // t2133-layer1-c-abi-design-2026-08-16.md Sec9): declaration-compatibility, checked by the
 // compiler with both declarations in one translation unit. MUST-ACCEPT construction: never
 // linked, compile-only. Covers the whole of include/superslm/sslm_abi_functions_g5_comparable.inc
-// -- every C1/C2 verb this design's own header shares a name with tests/t2130-g5-red-suite/
-// sslm_g5.h@760b12b -- from C1 forward (design Sec9: "Gate A has no reason to exempt any slot").
+// -- every C1/C2/C3 verb this design's own header shares a name with tests/t2130-g5-red-suite/
+// sslm_g5.h -- from C1 forward (design Sec9: "Gate A has no reason to exempt any slot").
 //
-// Construction (design Sec9, literal): include tools/t2139_sslm_g5_ref.h (the promoted copy of
-// sslm_g5.h) ONCE, unmodified, at its real names -- the one definition of every shared opaque
-// handle and sslm_status in this TU. Then, for each verb, macro-rename this library's own
-// declaration to a distinct identifier before including a functions-only extract (no type
-// redefinitions -- reuses the types t2139_sslm_g5_ref.h already made visible), then
-// static_assert(is_same_v<decltype(&real_name), decltype(&renamed_impl)>) per verb. The
-// "functions-only extract" is include/superslm/sslm_abi_functions_g5_comparable.inc itself --
-// the SAME file sslm_abi.h includes to declare its own real surface, not a hand-copied stand-in
-// (see that file's own header comment).
+// Reads the SUITE'S OWN real sslm_g5.h directly (tests/t2130-g5-red-suite/, merged into this
+// branch from curie/t2130-g5-red-suite) -- this file previously included a promoted copy,
+// tools/t2139_sslm_g5_ref.h, authored when that suite was not yet part of this branch's own
+// history; retired once the real file arrived, per StandardsDocument Sec6.6's one-real-copy
+// discipline (a promoted copy kept alongside its own now-available original is exactly the
+// drift hazard that discipline exists to prevent).
+//
+// Construction (design Sec9, literal): include sslm_g5.h ONCE, unmodified, at its real names --
+// the one definition of every shared opaque handle and sslm_status in this TU. Then, for each
+// verb, macro-rename this library's own declaration to a distinct identifier before including a
+// functions-only extract (no type redefinitions -- reuses the types sslm_g5.h already made
+// visible), then static_assert(is_same_v<decltype(&real_name), decltype(&renamed_impl)>) per
+// verb. The "functions-only extract" is include/superslm/sslm_abi_functions_g5_comparable.inc
+// itself -- the SAME file sslm_abi.h includes to declare its own real surface, not a hand-copied
+// stand-in (see that file's own header comment).
 #include <type_traits>
 
-#include "t2139_sslm_g5_ref.h"
+#include "t2130-g5-red-suite/sslm_g5.h"
 
 #define sslm_model_map          t2139_gate_a_lib_sslm_model_map
 #define sslm_model_unmap        t2139_gate_a_lib_sslm_model_unmap
@@ -36,11 +42,11 @@
 #define sslm_stats              t2139_gate_a_lib_sslm_stats
 // Every other verb in the g5-comparable .inc (sslm_kv_block_size, sslm_kv_pool_overhead_size,
 // sslm_kv_pool_create/_destroy, sslm_workspace_destroy, sslm_adapter_map/_release/_residency,
-// sslm_prefill, sslm_tokenize) has NO counterpart in t2139_sslm_g5_ref.h by this design's own
+// sslm_prefill, sslm_tokenize) has NO counterpart in tests/t2130-g5-red-suite/sslm_g5.h by this design's own
 // invention (Sec4/Sec7) -- renaming them too is harmless (nothing to collide with) but adds no
 // checkable assertion, so they are left un-renamed and simply declared as this library's own
-// symbols alongside t2139_sslm_g5_ref.h's real ones (no name collision, since none of those
-// names appear in t2139_sslm_g5_ref.h at all).
+// symbols alongside tests/t2130-g5-red-suite/sslm_g5.h's real ones (no name collision, since none of those
+// names appear in tests/t2130-g5-red-suite/sslm_g5.h at all).
 
 extern "C" {
 #include "superslm/sslm_abi_functions_g5_comparable.inc"

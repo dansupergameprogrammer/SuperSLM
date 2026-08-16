@@ -63,24 +63,17 @@ typedef struct sslm_detok_state {
  * reconciled count: 1 + 3 + 4 + 7 + 2 = 17). SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one
  * of these (design Sec10 dim5, Sec7.3) -- it is G5's own status, reserved-but-unbuilt here.
  *
- * KNOWN, EXECUTED DIVERGENCE FROM sslm_g5.h (T-2139 build finding, filed in
- * Claude/Brunel/t2139-abi-build-2026-08-16.md Sec5 -- not silently resolved here): three
- * enumerator NAMES this design's own Sec6 taxonomy shares with tests/t2130-g5-red-suite/
- * sslm_g5.h@760b12b -- SSLM_ADAPTER_MODEL_MISMATCH, SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED,
- * SSLM_RESTORE_MODEL_MISMATCH -- carry DIFFERENT ordinal values in the two headers (sslm_g5.h:
- * 3, 4, 5 respectively; this header: 5, 11, 6), because sslm_g5.h's own enum is the G5-scoped
- * pre-G5-subset-plus-G5-additions taxonomy (design Sec3), not this design's own 17-member
- * family, and the two were never reconciled value-for-value at either header's own authoring
- * time. Gate C's must-accept construction (tools/t2139_gate_c_type_identity_check.cpp) checks
- * per-shared-enumerator-name value equality as the design's own Sec9 construction specifies,
- * and -- executed -- FAILS to compile on exactly these three names, which is Gate C correctly
- * detecting a real divergence, not a gate defect. Gate C's shipped must-accept construction
- * therefore excludes sslm_status from its own comparison (scoped down, stated in that file's own
- * header comment) until the design authority rules whether this divergence is acceptable
- * (the two ABIs are independently linked, so no single caller mixes both headers' status values
- * against one library return) or requires reconciliation; sslm_span_kind/sslm_decode_params/
- * sslm_stats_out (the three OTHER Gate C obligations design Sec9 names for C1) carry no such
- * divergence and are checked in full, per the design's own construction, unmodified. */
+ * RECONCILED against tests/t2130-g5-red-suite/sslm_g5.h (Claude/Brunel/
+ * t2139-abi-build-2026-08-16.md Sec4/Sec5's own executed finding, since resolved). Executing
+ * Gate C's own per-shared-enumerator-value construction once found three names --
+ * SSLM_ADAPTER_MODEL_MISMATCH, SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, SSLM_RESTORE_MODEL_MISMATCH
+ * -- carrying different ordinal values between this header and sslm_g5.h's own then-current
+ * enum (a G5-scoped pre-G5-subset-plus-G5-additions taxonomy the two were never reconciled
+ * against). sslm_g5.h has since been reconciled (curie/t2130-g5-red-suite@a7655dd): it now
+ * carries this design's own 0-16 base verbatim, with G5's own seven additions appended at
+ * 17-23. Gate C's must-accept construction (tools/t2139_gate_c_type_identity_check.cpp) checks
+ * every one of these 17 enumerators against sslm_g5.h's own real body, in full, with no
+ * exclusion. */
 typedef enum sslm_status {
     SSLM_OK = 0,
 

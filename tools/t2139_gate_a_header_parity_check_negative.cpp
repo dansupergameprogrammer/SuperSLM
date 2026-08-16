@@ -16,7 +16,7 @@
 // stay a real corruption of the current real declaration rather than a stale one.
 #include <type_traits>
 
-#include "t2139_sslm_g5_ref.h"
+#include "t2130-g5-red-suite/sslm_g5.h"
 
 // The corrupted declaration (a spurious extra parameter), standing in for
 // sslm_abi_functions_g5_comparable.inc's own sslm_model_map -- NOT included from that file, so

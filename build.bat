@@ -260,7 +260,7 @@ if errorlevel 1 (
 )
 
 rem Gate A must-accept: compiles, links, runs to exit 0.
-cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools tools\t2139_gate_a_header_parity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check.exe
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools /Itests tools\t2139_gate_a_header_parity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check.exe
 if errorlevel 1 (
 	echo Gate A must-accept construction FAILED TO COMPILE -- this is a real regression, not expected
 	popd & exit /b 1
@@ -271,7 +271,7 @@ if errorlevel 1 (
 )
 
 rem Gate A must-reject: MUST fail to compile. errorlevel 0 here is the regression.
-cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools tools\t2139_gate_a_header_parity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check_negative.exe >out\t2139\gate_a_negative.log 2>&1
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools /Itests tools\t2139_gate_a_header_parity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check_negative.exe >out\t2139\gate_a_negative.log 2>&1
 if not errorlevel 1 (
 	echo Gate A must-reject construction COMPILED CLEAN -- Gate A has regressed, see out\t2139\gate_a_negative.log
 	popd & exit /b 1
@@ -327,6 +327,19 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
 	src\sslm_abi.cpp ^
 	tools\t2139_c2_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem C3's own Gate B smoke: begins a prefix, prefills, freezes, creates a sequence, adopts the
+rem prefix, releases both (design Sec9's own stated C3 smoke shape), plus pool-exhaustion and
+rem free-count-exactness paths. NOT auto-run here (same precedent as C2's smoke above). Usage:
+rem out\t2139_c3_smoke.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c3_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c3_smoke.exe
 if errorlevel 1 (
 	popd & exit /b 1
 )

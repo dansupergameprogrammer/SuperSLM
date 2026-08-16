@@ -23,10 +23,18 @@
 sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out);
 sslm_status sslm_model_unmap(sslm_model model);
 
+/* sslm_kv_block_size (design Sec7.2, RULED design commit fab235c1c6): one WHOLE sequence's
+ * entire KV footprint across every layer, never a sub-sequence PagedAttention page (that
+ * indirection is committed post-1.0 work, D-SLM3457) -- num_hidden_layers * context_cap *
+ * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. */
 size_t sslm_kv_block_size(sslm_model model);
 size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
 size_t sslm_seq_state_size(sslm_model model);
 
+/* sslm_kv_pool_create's block_count (design Sec7.2, RULED): how many concurrent SEQUENCES this
+ * pool can back, one whole block each -- for N sequences concurrently resident, block_count = N
+ * (the single-sequence case, N = 1, is what the S-FREEZE example uses, design Sec9). No token-
+ * count arithmetic: a block is no longer sub-divided. */
 sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t buf_size,
                                  uint32_t block_count, sslm_kv_pool* out);
 sslm_status sslm_kv_pool_destroy(sslm_kv_pool pool);
