@@ -415,6 +415,19 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem Design commit 9e2995f4e7's own same-round pin (Sec10 dim 9): a sequence saved resting
+rem BETWEEN decode steps, restored, live and restored both driven one further step -- produced
+rem tokens must be bit-identical. NOT auto-run here (same precedent as this file's other
+rem real-artifact tools). Usage: out\t2139_dim9_current_token_pin.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_dim9_current_token_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_dim9_current_token_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem S-FREEZE-EXAMPLE (design Sec9's own gate, D-SLM13): builds with NO internal include path --
 rem /Iinclude ONLY, the frozen public header, no /Itests, no /Isrc-internal, no Unreal, no
 rem test-harness affordance. Uses every verb C1-C7 ship, real text I/O (D-SLM3452), explicit

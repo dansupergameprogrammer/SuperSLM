@@ -444,9 +444,10 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	// kv_block_count is always 1 for a real saved sequence, not a ceil(context_cap/page) count
 	// under the now-retired PagedAttention reading. Fixed fields: magic(4) + model_hash(32) +
 	// kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) +
-	// context_length(8) + layer_index(4) + hidden_scale(16, CarriedScale as two int64) +
-	// kv_saturation_count(8) + kv_block_count(4) = 100 bytes.
-	constexpr size_t kFixedHeaderBytes = 100;
+	// context_length(8) + layer_index(4) + current_token(4, design commit 9e2995f4e7's own
+	// amendment -- see the C5 block's own top comment) + hidden_scale(16, CarriedScale as two
+	// int64) + kv_saturation_count(8) + kv_block_count(4) = 104 bytes.
+	constexpr size_t kFixedHeaderBytes = 104;
 	SaturatingAccumulator acc;
 	acc.value = kFixedHeaderBytes;
 	acc.AddProduct(1, static_cast<size_t>(c.hidden_size));  // residual_bytes, int8 codes
@@ -1037,17 +1038,35 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 // magic-per-version hard-reject (design Sec7.3's own corrected version-evolution strategy,
 // GpuSeqBlobHeader's precedent). kv_block_count is always 1 (Sec7.2's ruled one-block-per-
 // sequence unit) -- no per-blob variability there, unlike the pre-ruling page-count reading.
-// No `current_token`/`ready_for_logits` field in the blob: both are this ABI's own internal
-// bookkeeping, not part of SequenceLayerState (the design's own §7.3 field list), and both are
-// re-derivable on restore from the restored layer_index/context_length alone (see
-// sslm_seq_restore's own comment) -- carrying them in the blob would duplicate state the
-// restored fields already determine.
+//
+// `current_token` -- AMENDED IN (design commit 9e2995f4e7, the blob-amendment ruling). This
+// build's own S-FREEZE run measured, by execution, that a sequence resting BETWEEN
+// sslm_decode_step calls (produced a token, not yet embedded the next one) cannot have its
+// pending-embed token id re-derived from layer_index/context_length alone -- restore's own
+// ready_for_logits path recomputed the SAME prediction already produced before saving instead
+// of the live sequence's true one-token-further continuation (measured: live continues with
+// 315, the pre-amendment restore produced 0). One field closes it: `current_token` (int32_t,
+// `-1` sentinel = not applicable -- every OTHER resting state, fresh-post-prefill or mid-token,
+// is still correctly determined from layer_index/context_length alone, so no second field is
+// needed). See sslm_seq_save/sslm_seq_restore below for the exact field position and
+// sslm_seq_restore's own comment for how the sentinel and the ready_for_logits fallback compose.
+//
+// MAGIC NOTE (design commit 9e2995f4e7's own one-time exception, cited here so the exception is
+// visible at the point it is taken, not only in the design doc): 'SSB1' is amended IN PLACE for
+// this one field, not bumped to a new magic. This is a stated, one-time, pre-first-ship
+// exception to the standing magic-per-version law immediately below -- no 'SSB1' blob has ever
+// been committed or persisted anywhere in this tree (every one produced so far is a same-run,
+// uncommitted smoke/example artifact, T-2139's own build log §15), so there is no already-
+// shipped consumer's stored bytes this amendment could misread. The standing law resumes with
+// no further exceptions the instant this corrected 'SSB1' ships -- every subsequent field-layout
+// change, including one this small, gets a new, distinct magic.
 // -----------------------------------------------------------------------------------------
 
 namespace {
 
 constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '1'};
 constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
+constexpr int32_t kSeqBlobNoCurrentToken = -1;
 
 void WriteLE32(uint8_t* p, uint32_t v) {
 	p[0] = static_cast<uint8_t>(v);
@@ -1068,12 +1087,13 @@ uint64_t ReadLE64(const uint8_t* p) {
 	return v;
 }
 
-// Fixed-size prefix, magic through kv_saturation_count -- design Sec7.3's own field order:
+// Fixed-size prefix, magic through kv_saturation_count -- design Sec7.3's own field order
+// (current_token AMENDED IN, design commit 9e2995f4e7 -- see this block's own top comment):
 // magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
-// adapter_binding_id(8) + context_length(8) + layer_index(4) + hidden_scale(16) +
-// kv_saturation_count(8) = 96 bytes, followed by the variable-length residual, kv_block_count
-// (4), then kv_blocks.
-constexpr size_t kSeqBlobFixedHeaderBytes = 96;
+// adapter_binding_id(8) + context_length(8) + layer_index(4) + current_token(4) +
+// hidden_scale(16) + kv_saturation_count(8) = 100 bytes, followed by the variable-length
+// residual, kv_block_count(4), then kv_blocks.
+constexpr size_t kSeqBlobFixedHeaderBytes = 100;
 
 }  // namespace
 
@@ -1112,6 +1132,17 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	WriteLE64(p + off, static_cast<uint64_t>(seq->state.context_length));
 	off += 8;
 	WriteLE32(p + off, seq->state.layer_index);
+	off += 4;
+	// current_token (design commit 9e2995f4e7): the pending-embed token id, written ONLY for the
+	// one resting shape that actually needs it -- resting BETWEEN sslm_decode_step calls
+	// (layer_index == 0, ready_for_logits == false, current_token >= 0: the exact state a live
+	// sequence carries right after producing a token and before embedding the next one). The
+	// sentinel (-1) is written for every other case, per the ruling's own list: fresh-post-
+	// prefill/adopt (layer_index == 0, ready_for_logits == true -- no pending-embed id exists
+	// yet) and mid-token (layer_index != 0 -- current_token plays no role in that path at all,
+	// so its live value is not this field's concern).
+	const bool has_pending_embed = (seq->state.layer_index == 0) && !seq->ready_for_logits;
+	WriteLE32(p + off, has_pending_embed ? seq->current_token : kSeqBlobNoCurrentToken);
 	off += 4;
 	WriteLE64(p + off, static_cast<uint64_t>(seq->state.hidden_scale.m));
 	off += 8;
@@ -1160,9 +1191,11 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 
 	const int64_t context_length = static_cast<int64_t>(ReadLE64(p + 60));
 	const uint32_t layer_index = ReadLE32(p + 68);
-	const int64_t hidden_scale_m = static_cast<int64_t>(ReadLE64(p + 72));
-	const int64_t hidden_scale_e = static_cast<int64_t>(ReadLE64(p + 80));
-	const uint64_t kv_saturation_count = ReadLE64(p + 88);
+	const int32_t saved_current_token = static_cast<int32_t>(ReadLE32(p + 72));  // design commit
+	                                                                              // 9e2995f4e7
+	const int64_t hidden_scale_m = static_cast<int64_t>(ReadLE64(p + 76));
+	const int64_t hidden_scale_e = static_cast<int64_t>(ReadLE64(p + 84));
+	const uint64_t kv_saturation_count = ReadLE64(p + 92);
 
 	const superslm::SslmModelConfig& c = model->view.config;
 	const bool mid_token = layer_index != 0;
@@ -1205,30 +1238,32 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	h->state.layer_index = layer_index;
 	h->state.kv_saturation_count = kv_saturation_count;
 	h->state.context_length = context_length;
-	// current_token/ready_for_logits are this ABI's own internal bookkeeping, not part of the
-	// blob (see this section's own top-of-block comment) -- approximately re-derived from the
-	// restored fields: a layer_index == 0 restore with real prior content (context_length > 0)
-	// has SOME token's fully-computed final hidden state sitting in the residual just restored,
-	// so decode can go straight to logits (ready_for_logits = true) with no re-embed.
-	//
-	// KNOWN SEMANTIC GAP, found by execution (S-FREEZE-EXAMPLE's own restore-then-decode step,
-	// Claude/Brunel/t2139-abi-build-2026-08-16.md), not fully resolved here -- reported, not
-	// silently papered over. This re-derivation is EXACT when the saved state is fresh off a
-	// completed sslm_prefill/sslm_seq_adopt_prefix (the residual has never yet been used for
-	// logits -- ready_for_logits genuinely means "unconsumed"). It is NOT exact when the saved
-	// state is resting between sslm_decode_step calls: there, the residual was ALREADY consumed
-	// once (to produce the sequence's own `current_token`, the next id a live, never-restored
-	// handle would embed) -- but WHICH token that was is not part of SequenceLayerState and is
-	// not carried in the blob (design Sec7.3's own field list has no such field), so it cannot
-	// be restored. Computing logits from the restored residual again is well-defined and
-	// deterministic, but reproduces the SAME prediction the live sequence already emitted before
-	// saving, rather than the live sequence's own true next output one token further on -- a
-	// restored, decode-resting sequence's own continuation can diverge from a live sequence's
-	// own continuation by one duplicated token. Closing this exactly would add a `current_token`
-	// field to the save blob, a design Sec7.3 change outside this round's own ruled scope
-	// (design commit 212de7742c) -- named here as the concrete fix, not applied unilaterally.
-	h->current_token = -1;
-	h->ready_for_logits = (layer_index == 0 && context_length > 0);
+	// current_token/ready_for_logits reconstruction -- CLOSED (design commit 9e2995f4e7, the
+	// blob-amendment ruling; see this whole C5 block's own top comment for the finding this
+	// resolves). `saved_current_token` (read above, `-1` sentinel = not applicable) is now the
+	// blob's own explicit source of truth, not a re-derivation:
+	//   - saved_current_token >= 0 (the resting-BETWEEN-decode-steps case): the residual was
+	//     ALREADY consumed once by the live sequence to produce this exact id -- restore it
+	//     verbatim as current_token, ready_for_logits = false, so the next sslm_decode_step call
+	//     takes the ordinary layer_index == 0 embed-current_token path, exactly matching what
+	//     the live sequence itself would do next. This is the case that used to diverge (measured:
+	//     live continues with 315, the pre-amendment restore produced 0) and is what design
+	//     Sec10 dim 9's new cell (tools/t2139_dim9_current_token_pin.cpp) proves closed.
+	//   - saved_current_token == -1, layer_index == 0, context_length > 0 (fresh-post-prefill/
+	//     adopt): the residual has never been consumed -- ready_for_logits = true, unchanged
+	//     from before this fold.
+	//   - saved_current_token == -1 otherwise (mid-token, or a genuinely fresh/empty sequence):
+	//     current_token stays -1, ready_for_logits stays false -- unchanged from before this
+	//     fold (mid-token resumes via layer_index alone; a fresh/empty sequence has nothing to
+	//     decode from until prefilled, exactly as sslm_decode_step's own validation already
+	//     requires).
+	if (saved_current_token >= 0) {
+		h->current_token = saved_current_token;
+		h->ready_for_logits = false;
+	} else {
+		h->current_token = -1;
+		h->ready_for_logits = (layer_index == 0 && context_length > 0);
+	}
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
 	return SSLM_OK;
