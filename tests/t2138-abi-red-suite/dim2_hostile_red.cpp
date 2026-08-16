@@ -19,35 +19,47 @@
 using namespace superslm;
 
 // --- Mechanism cell 1 (design Sec7.1/Sec9 C1 gate): sslm_workspace_create with a caller buffer
-// smaller than sslm_workspace_size's own reported requirement rejects SSLM_BUFFER_TOO_SMALL. ---
-static void TestDim2_M1_WorkspaceCreateTooSmallBufferRejected(sslm_model model) {
-	const size_t required = sslm_workspace_size(model, /*config=*/nullptr);
+// smaller than sslm_workspace_size's own reported requirement rejects SSLM_BUFFER_TOO_SMALL.
+// Uses a REAL, valid sslm_config (design Sec7.1, revised buffer model, commit fab235c1c6) --
+// an all-zero/null config is itself hostile input now, so this cell's own "otherwise valid
+// call, only the buffer is wrong" isolation needs a real config or it would be indistinguishable
+// from the hostile-config cells below (M8a-M8e). ---
+static void TestDim2_M1_WorkspaceCreateTooSmallBufferRejected(sslm_model model,
+                                                               int32_t num_hidden_layers) {
+	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t required = sslm_workspace_size(model, &config);
+	CHECK_MSG(required > 0, "a valid sslm_config must report a positive workspace size");
 	std::vector<uint8_t> buf(required > 0 ? required - 1 : 0);
 	sslm_workspace ws = nullptr;
-	CHECK(sslm_workspace_create(model, nullptr, buf.data(), buf.size(), &ws) ==
+	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) ==
 	      SSLM_BUFFER_TOO_SMALL);
 	CHECK(ws == nullptr);
 }
 
 // --- Mechanism cell 2 (design Sec7.1/Sec9 C1 gate): sslm_workspace_create with a
 // misaligned caller buffer address rejects SSLM_MISALIGNED_BUFFER, never a later kernel fault.
-// ---
-static void TestDim2_M2_WorkspaceCreateMisalignedBufferRejected(sslm_model model) {
-	const size_t required = sslm_workspace_size(model, nullptr);
+// Real config, same reason as M1. ---
+static void TestDim2_M2_WorkspaceCreateMisalignedBufferRejected(sslm_model model,
+                                                                 int32_t num_hidden_layers) {
+	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t required = sslm_workspace_size(model, &config);
 	// Over-allocate by a cache line and hand back an address offset by exactly one byte from a
 	// naturally-aligned base -- guaranteed misaligned against any alignment requirement the
 	// artifact could plausibly declare (1-, 2-, 4-, 8-, 16-, 32-, 64-byte).
 	std::vector<uint8_t> buf(required + 64);
 	uint8_t* misaligned = buf.data() + 1;
 	sslm_workspace ws = nullptr;
-	CHECK(sslm_workspace_create(model, nullptr, misaligned, required + 63, &ws) ==
+	CHECK(sslm_workspace_create(model, &config, misaligned, required + 63, &ws) ==
 	      SSLM_MISALIGNED_BUFFER);
 	CHECK(ws == nullptr);
 }
 
 // --- Mechanism cell 3 (design Sec7.2/Sec9 C1 gate): sslm_kv_pool_create with a caller buffer
 // smaller than block_count*sslm_kv_block_size(model) plus overhead rejects SSLM_BUFFER_TOO_SMALL.
-// ---
+// `block_count` here is a COUNT OF CONCURRENT SEQUENCES the pool backs, and
+// `sslm_kv_block_size(model)` is one whole sequence's entire KV footprint (design Sec7.2,
+// revised buffer model, commit fab235c1c6) -- the formula itself (block_count * block_size +
+// overhead) is unchanged, only the unit block_size measures changed. ---
 static void TestDim2_M3_KvPoolCreateTooSmallBufferRejected(sslm_model model) {
 	const uint32_t block_count = 4;
 	const size_t required =
@@ -160,17 +172,11 @@ static void TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(sslm_model model,
 
 // --- Cells 8a-8e (design Sec7.1/Sec10 dim2, five independent sub-cells -- "each driven
 // independently against sslm_workspace_size (== 0) and sslm_workspace_create
-// (SSLM_INVALID_ARGUMENT)"). A shared helper builds a KNOWN-VALID baseline config
-// (max_batch=4, max_chunk_budget=64, max_layer_budget=num_hidden_layers, reserved=0) so each
-// sub-cell can mutate exactly one field and still assert the baseline half independently --
-// isolating the mutated field, not testing "everything hostile at once". ---
+// (SSLM_INVALID_ARGUMENT)"). Each sub-cell mutates exactly one field of the shared
+// fixture_common.h ValidWorkspaceConfig() baseline and still asserts the baseline half
+// independently -- isolating the mutated field, not testing "everything hostile at once". ---
 static sslm_config ValidBaselineConfig(int32_t num_hidden_layers) {
-	sslm_config c{};
-	c.max_batch = 4;
-	c.max_chunk_budget = 64;
-	c.max_layer_budget = num_hidden_layers;
-	c.reserved = 0;
-	return c;
+	return ValidWorkspaceConfig(num_hidden_layers);
 }
 
 // Asserts the FULL contrast for one config: baseline (valid) succeeds on both functions, then

@@ -15,30 +15,40 @@ using namespace superslm;
 // workspace buffer-size boundary swept exact/one-byte-short/oversized. The exact-size case is
 // this cell's own new claim (M1/M2 of dim2 already cover one-byte-short and misaligned as
 // REJECTIONS); this cell instead confirms exact-size and oversized are BOTH accepted -- the
-// positive half of the same boundary. ---
-static void TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(sslm_model model) {
-	const size_t exact = sslm_workspace_size(model, nullptr);
+// positive half of the same boundary. Uses a REAL, valid sslm_config (design Sec7.1, revised
+// buffer model, commit fab235c1c6) -- an all-zero/null config is hostile input now. ---
+static void TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(
+    sslm_model model, int32_t num_hidden_layers) {
+	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t exact = sslm_workspace_size(model, &config);
+	CHECK_MSG(exact > 0, "a valid sslm_config must report a positive workspace size");
 	{
 		std::vector<uint8_t> buf(exact);
 		sslm_workspace ws = nullptr;
-		CHECK(sslm_workspace_create(model, nullptr, buf.data(), buf.size(), &ws) == SSLM_OK);
+		CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) == SSLM_OK);
 		CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
 	}
 	{
 		std::vector<uint8_t> buf(exact + 4096);  // oversized -- must still be accepted, never
 		                                          // rejected for being "too large".
 		sslm_workspace ws = nullptr;
-		CHECK(sslm_workspace_create(model, nullptr, buf.data(), buf.size(), &ws) == SSLM_OK);
+		CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) == SSLM_OK);
 		CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
 	}
 }
 
 // --- Mechanism cell 2 (design Sec7.2/Sec10 dim4): kv pool block_count swept 1 / typical / a
-// large-but-legitimate value, each correctly sized against sslm_kv_pool_overhead_size's own
-// reported requirement for THAT block_count (the overhead is O(block_count), design Sec7.2, so
-// a buffer sized for one block_count is not automatically sufficient for another). ---
+// large-but-legitimate CONCURRENT-SEQUENCE count, each correctly sized against
+// sslm_kv_pool_overhead_size's own reported requirement for THAT block_count (the overhead is
+// O(block_count), design Sec7.2, so a buffer sized for one block_count is not automatically
+// sufficient for another). Sweep values revised against the whole-block buffer model (commit
+// fab235c1c6): `block_count` is now a count of CONCURRENT SEQUENCES, each backed by one whole
+// sequence's own KV footprint (potentially tens of MB, design Sec7.2's own cost cell) -- 1/8/64
+// is the realistic small/typical/plausible-many-agent-cohort sweep (design Sec7.2's own N=50
+// example), not 1/64/4096, which would size a buffer for 4096 whole sequences and make this
+// cell unrunnable once built rather than merely slow. ---
 static void TestDim4_M2_KvPoolBlockCountSweptOneTypicalLarge(sslm_model model) {
-	const uint32_t sweep[3] = {1, 64, 4096};
+	const uint32_t sweep[3] = {1, 8, 64};
 	for (uint32_t block_count : sweep) {
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
@@ -64,14 +74,30 @@ static void TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape() {
 		         "both required -- product cell not run");
 		return;
 	}
+	// Loaded twice, deliberately: LoadRealModelView (the internal SslmModelView parse) supplies
+	// each artifact's own num_hidden_layers -- the one field a valid sslm_config needs and that
+	// no sslm_* ABI verb exposes from an opaque sslm_model handle directly (design Sec7.1, revised
+	// buffer model, commit fab235c1c6: all-zero/null config is hostile input, so this cell cannot
+	// pass nullptr and still expect a real, comparable size back). sslm_model_map (the ABI call
+	// actually under test) is separate and RED BY LINK on its own.
+	SslmModelView view_a, view_b;
+	std::vector<uint8_t> parse_bytes_a, parse_bytes_b;
+	std::string err;
+	CHECK(LoadRealModelView(g_model_path, &view_a, &parse_bytes_a, &err));
+	CHECK(LoadRealModelView(g_foreign_model_path, &view_b, &parse_bytes_b, &err));
+
 	std::vector<uint8_t> a_bytes, b_bytes;
 	CHECK(ReadFileBytes(g_model_path, &a_bytes));
 	CHECK(ReadFileBytes(g_foreign_model_path, &b_bytes));
 	sslm_model model_a = nullptr, model_b = nullptr;
 	CHECK(sslm_model_map(a_bytes.data(), a_bytes.size(), &model_a) == SSLM_OK);
 	CHECK(sslm_model_map(b_bytes.data(), b_bytes.size(), &model_b) == SSLM_OK);
-	const size_t ws_a = sslm_workspace_size(model_a, nullptr);
-	const size_t ws_b = sslm_workspace_size(model_b, nullptr);
+	const sslm_config config_a =
+	    ValidWorkspaceConfig(static_cast<int32_t>(view_a.config.num_hidden_layers));
+	const sslm_config config_b =
+	    ValidWorkspaceConfig(static_cast<int32_t>(view_b.config.num_hidden_layers));
+	const size_t ws_a = sslm_workspace_size(model_a, &config_a);
+	const size_t ws_b = sslm_workspace_size(model_b, &config_b);
 	const size_t kv_a = sslm_kv_block_size(model_a);
 	const size_t kv_b = sslm_kv_block_size(model_b);
 	// FEATURE ORACLE: at least one of the two sizing outputs differs between two genuinely

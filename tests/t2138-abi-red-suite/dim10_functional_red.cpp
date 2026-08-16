@@ -186,28 +186,33 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	CHECK(token_count > 0);
 
 	// 3. Size and create a pool-backed sequence with an EXPLICITLY COMPUTED block_count,
-	// following Sec7.2's own sizing recipe verbatim (D-SLM3454 -- no default exists):
-	// block_count = ceil((N * L) / kv_block_size), N=1, L=context_cap (the single-sequence
-	// reduction the recipe itself names).
+	// following Sec7.2's own sizing recipe, REVISED against the whole-block buffer model
+	// (commit fab235c1c6): block_count = N, the number of concurrently resident SEQUENCES the
+	// caller wants (not a token-derived ceil division against kv_block_size -- kv_block_size(model)
+	// now reports one whole sequence's own entire KV footprint already, so a single sequence is
+	// simply block_count = 1, D-SLM3454's own single-sequence reduction, corrected).
 	SslmModelView view;
 	std::vector<uint8_t> parse_bytes;
 	std::string err;
 	CHECK(LoadRealModelView(g_model_path, &view, &parse_bytes, &err));
 	const size_t kv_block_bytes = sslm_kv_block_size(model);
-	CHECK_MSG(kv_block_bytes > 0, "sslm_kv_block_size must be positive to compute block_count");
-	const uint64_t context_cap = view.config.context_cap;
-	const uint32_t block_count = kv_block_bytes > 0
-	                                  ? (uint32_t)((context_cap + kv_block_bytes - 1) / kv_block_bytes)
-	                                  : 0;
+	CHECK_MSG(kv_block_bytes > 0, "sslm_kv_block_size must be positive");
+	const uint32_t block_count = 1;  // N=1, single sequence (design Sec7.2's own reduction).
 	const size_t pool_overhead = sslm_kv_pool_overhead_size(model, block_count);
 	std::vector<uint8_t> pool_buf(block_count * kv_block_bytes + pool_overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), block_count, &pool) ==
 	      SSLM_OK);
-	const size_t ws_size = sslm_workspace_size(model, nullptr);
+	// sslm_config is now REQUIRED sizing input for sslm_workspace_size/_create (design Sec7.1,
+	// revised buffer model, commit fab235c1c6) -- an all-zero/null config is hostile input, so
+	// this real-workflow cell builds a real, valid one from the artifact's own num_hidden_layers.
+	const sslm_config config =
+	    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
+	const size_t ws_size = sslm_workspace_size(model, &config);
+	CHECK_MSG(ws_size > 0, "a valid sslm_config must report a positive workspace size");
 	std::vector<uint8_t> ws_buf(ws_size);
 	sslm_workspace ws = nullptr;
-	CHECK(sslm_workspace_create(model, nullptr, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
+	CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
 	sslm_seq seq = nullptr;
 	CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
 

@@ -8,19 +8,20 @@ using namespace superslm;
 // --- Mechanism cell 1 (design Sec9 C1 gate / Sec10 dim1): workspace create->destroy->re-create
 // at the SAME caller buffer address reuses cleanly -- the construction verb's own bookkeeping
 // (any header it writes into buf's first bytes, design Sec7.1) must not leave state a second
-// create call trips on, and the second handle must be as usable as the first. ---
+// create call trips on, and the second handle must be as usable as the first. Uses a REAL,
+// valid sslm_config (design Sec7.1, revised buffer model, commit fab235c1c6) -- all-zero/null
+// config is hostile input now, so a cell that expects SSLM_OK cannot pass nullptr. ---
 static void TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
-    sslm_model model) {
-	std::vector<uint8_t> buf(1u << 20);  // 1 MiB, oversized against any real artifact's
-	                                      // sslm_workspace_size -- the exact size is C1's own
-	                                      // sizing-sufficiency gate, not this cell's subject.
+    sslm_model model, int32_t num_hidden_layers) {
+	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+	const size_t required = sslm_workspace_size(model, &config);
+	CHECK_MSG(required > 0, "a valid sslm_config must report a positive workspace size");
+	std::vector<uint8_t> buf(required);
 	sslm_workspace ws1 = nullptr;
-	CHECK(sslm_workspace_create(model, /*config=*/nullptr, buf.data(), buf.size(), &ws1) ==
-	      SSLM_OK);
+	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws1) == SSLM_OK);
 	CHECK(sslm_workspace_destroy(ws1) == SSLM_OK);
 	sslm_workspace ws2 = nullptr;
-	CHECK(sslm_workspace_create(model, /*config=*/nullptr, buf.data(), buf.size(), &ws2) ==
-	      SSLM_OK);
+	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws2) == SSLM_OK);
 	// FEATURE ORACLE: the re-created workspace is usable for a real prefill call at the same
 	// buffer address the destroyed one occupied -- proven by dim8's own workspace-reuse
 	// composition cell (cross-cited, not duplicated); this cell's own subject is the
@@ -32,36 +33,53 @@ static void TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
 	CHECK(sslm_workspace_destroy(ws2) == SSLM_OK);
 }
 
-// --- Mechanism cell 2 (design Sec9 C3 gate / Sec10 dim1): pool block free-count is exact after
-// a sequence create/release cycle -- "sslm_seq_release returns every block to the pool (assert
-// free-count restored exactly)". Uses sslm_kv_pool_overhead_size's own reported byte count so
-// the free-list bookkeeping this cell inspects is sized the way a real caller would size it. ---
+// --- Mechanism cell 2 (design Sec9 C3 gate / Sec10 dim1, RE-DERIVED against the whole-block
+// buffer model, commit fab235c1c6): pool block free-count is exact after a FULL create/release
+// cycle of every block the pool holds -- "sslm_seq_release returns its block to the pool
+// (assert free-count restored exactly)". A "block" is now one whole sequence's own KV footprint
+// (design Sec7.2), so "free-count exact" is no longer about token capacity within one block; it
+// is about how many CONCURRENT sslm_seq handles the pool can back before SSLM_KV_POOL_EXHAUSTED
+// fires, and whether that number is fully restored after release. Fails against a leaky
+// free-list two ways: exhausting early on the SECOND fill (a leaked block), or over-admitting on
+// either fill (a free-list that never tracked capacity at all). ---
 static void TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(sslm_model model) {
-	const uint32_t block_count = 8;
+	const uint32_t block_count = 4;
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 
-	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
-	int32_t tokens[4] = {0, 1, 2, 3};
-	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq, tokens, 4, /*chunk_budget=*/8, SSLM_SPAN_PROMPT,
-	                    /*ws=*/nullptr, &consumed) == SSLM_OK);
-	CHECK(sslm_seq_release(seq) == SSLM_OK);
-	// FEATURE ORACLE: a pool that had every block returned admits a second sequence able to
-	// consume the FULL block_count again (proving the free-list is exactly restored, not merely
-	// non-empty) -- a leaked block would make this second sequence exhaust before consuming as
-	// many prompt tokens as the first did.
-	sslm_seq seq2 = nullptr;
-	CHECK(sslm_seq_create(model, &pool, &seq2) == SSLM_OK);
-	int32_t consumed2 = 0;
-	CHECK(sslm_prefill(model, seq2, tokens, 4, /*chunk_budget=*/8, SSLM_SPAN_PROMPT,
-	                    /*ws=*/nullptr, &consumed2) == SSLM_OK);
-	CHECK(consumed2 == consumed);
-	CHECK(sslm_seq_release(seq2) == SSLM_OK);
+	// First fill: exactly block_count sequences succeed; the (block_count+1)-th is exhausted.
+	sslm_seq first_round[block_count];
+	for (uint32_t i = 0; i < block_count; ++i) {
+		first_round[i] = nullptr;
+		CHECK_MSG(sslm_seq_create(model, &pool, &first_round[i]) == SSLM_OK,
+		          "sequence %u of %u should still fit in the pool", i, block_count);
+	}
+	sslm_seq over_capacity = nullptr;
+	CHECK(sslm_seq_create(model, &pool, &over_capacity) == SSLM_KV_POOL_EXHAUSTED);
+	CHECK(over_capacity == nullptr);
+
+	// Release every block back to the pool.
+	for (uint32_t i = 0; i < block_count; ++i) {
+		CHECK(sslm_seq_release(first_round[i]) == SSLM_OK);
+	}
+
+	// FEATURE ORACLE: a SECOND full fill of block_count sequences succeeds identically -- proving
+	// the free-list is exactly restored, not merely non-empty. A leaked block would make this
+	// second round exhaust one sequence early; a free-list that never enforced capacity at all
+	// would have let the FIRST round's (block_count+1)-th sequence through above.
+	sslm_seq second_round[block_count];
+	for (uint32_t i = 0; i < block_count; ++i) {
+		second_round[i] = nullptr;
+		CHECK_MSG(sslm_seq_create(model, &pool, &second_round[i]) == SSLM_OK,
+		          "sequence %u of %u should fit again after every block was released", i,
+		          block_count);
+	}
+	for (uint32_t i = 0; i < block_count; ++i) {
+		CHECK(sslm_seq_release(second_round[i]) == SSLM_OK);
+	}
 	CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
 }
 

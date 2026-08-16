@@ -127,30 +127,39 @@ static void TestDim5_C7_PrefixPrefillAfterFreezeOrReleaseRejected(sslm_model mod
 	                           &more_consumed) == SSLM_PREFIX_FROZEN_REJECTED);
 }
 
-// --- Cell 8 (SSLM_KV_POOL_EXHAUSTED, sequence side -- design Sec6/Sec7's own "defined,
-// resumable failure"): a pool exhausted mid-sslm_prefill leaves the SEQUENCE valid and
-// resumable once blocks free -- exercised against a pool sized deliberately below what the
-// prefill call needs. ---
+// --- Cell 8 (SSLM_KV_POOL_EXHAUSTED, sequence side -- RE-DERIVED against the whole-block
+// buffer model, commit fab235c1c6: "SSLM_KV_POOL_EXHAUSTED now fires at
+// sslm_prefix_begin/sslm_seq_create (no free block in the pool), never mid-sslm_prefix_prefill"
+// -- a block is drawn ONCE, at construction, never re-drawn mid-call, so exhaustion is
+// structurally impossible mid-sslm_prefill now (content exceeding a block's own capacity
+// mid-call is SSLM_CONTEXT_CAP_EXCEEDED instead, C11 below, unchanged by this fold). This cell
+// exhausts the pool at sslm_seq_create itself and proves the rejected call leaves the SEQUENCE
+// handle unallocated (never a torn/half-built handle) and the pool resumable once a block
+// frees. ---
 static void TestDim5_C8_KvPoolExhaustedSequenceResumable(sslm_model model) {
-	const uint32_t block_count = 1;  // deliberately tiny.
+	const uint32_t block_count = 1;  // deliberately tiny -- one concurrent sequence only.
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
-	// A prompt long enough that its own block requirement exceeds the pool's single block.
-	int32_t long_prompt[256];
-	for (int i = 0; i < 256; ++i) long_prompt[i] = i % 32;
-	int32_t consumed = 0;
-	const sslm_status exhausted_status =
-	    sslm_prefill(model, seq, long_prompt, 256, 256, SSLM_SPAN_PROMPT, nullptr, &consumed);
+	CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);  // draws the pool's only block.
+
+	// The pool's only block is already held -- a SECOND sslm_seq_create exhausts it.
+	sslm_seq over_capacity = nullptr;
+	const sslm_status exhausted_status = sslm_seq_create(model, &pool, &over_capacity);
 	CHECK(exhausted_status == SSLM_KV_POOL_EXHAUSTED);
-	// FEATURE ORACLE: the sequence is neither torn down nor corrupted -- releasing it (which
-	// frees its own held blocks back to the pool) and then creating a FRESH sequence against
-	// the now-relieved pool still succeeds, proving the exhausted call left the pool's own
-	// bookkeeping in a defined state.
+	CHECK(over_capacity == nullptr);
+	// FEATURE ORACLE: the FIRST sequence is completely unaffected by the second, rejected
+	// sslm_seq_create -- it still decodes correctly, proving the exhausted call never touched
+	// an already-allocated handle.
+	int32_t prompt[1] = {0};
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(model, seq, prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
+	// Releasing the first sequence frees its block -- a subsequent sslm_seq_create against the
+	// now-relieved pool succeeds, proving the exhausted call left the pool's own bookkeeping in
+	// a defined, resumable state rather than a torn one.
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	sslm_seq seq2 = nullptr;
 	CHECK(sslm_seq_create(model, &pool, &seq2) == SSLM_OK);
@@ -158,9 +167,12 @@ static void TestDim5_C8_KvPoolExhaustedSequenceResumable(sslm_model model) {
 	CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
 }
 
-// --- Cell 9 (SSLM_KV_POOL_EXHAUSTED, prefix side -- design Sec7.2, Mendeleev audit §8.3
-// folded, "now stated for both handle kinds this pool serves"): the identical exhaustion
-// against a PREFIX-under-construction leaves it valid, still unfrozen, and resumable. ---
+// --- Cell 9 (SSLM_KV_POOL_EXHAUSTED, prefix side -- RE-DERIVED against the whole-block buffer
+// model, commit fab235c1c6, "now stated for both handle kinds this pool serves"): the identical
+// construction-time exhaustion against sslm_prefix_begin, distinct from a sequence exhausting
+// the SAME pool -- a prefix and a sequence draw from the same free list, so a pool exhausted by
+// one live sequence also rejects a prefix_begin attempt, proving the two handle kinds genuinely
+// share one pool's own accounting rather than each having a private, un-enforced allotment. ---
 static void TestDim5_C9_KvPoolExhaustedPrefixResumable(sslm_model model) {
 	const uint32_t block_count = 1;
 	const size_t block_bytes = sslm_kv_block_size(model);
@@ -168,25 +180,28 @@ static void TestDim5_C9_KvPoolExhaustedPrefixResumable(sslm_model model) {
 	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
+
+	// Exhaust the pool's only block with a live SEQUENCE first (the cross-handle-kind half of
+	// this cell's own claim), then attempt sslm_prefix_begin against the same exhausted pool.
+	sslm_seq holder = nullptr;
+	CHECK(sslm_seq_create(model, &pool, &holder) == SSLM_OK);
+	sslm_prefix over_capacity = nullptr;
+	CHECK(sslm_prefix_begin(model, &pool, &over_capacity) == SSLM_KV_POOL_EXHAUSTED);
+	CHECK(over_capacity == nullptr);
+
+	// FEATURE ORACLE: releasing the sequence's block makes the pool resumable for a prefix --
+	// sslm_prefix_begin succeeds once a block genuinely frees, and the fresh prefix is usable
+	// (prefill, freeze, release all succeed) rather than permanently wedged by the earlier
+	// exhaustion.
+	CHECK(sslm_seq_release(holder) == SSLM_OK);
 	sslm_prefix prefix = nullptr;
 	CHECK(sslm_prefix_begin(model, &pool, &prefix) == SSLM_OK);
-	int32_t long_prompt[256];
-	for (int i = 0; i < 256; ++i) long_prompt[i] = i % 32;
-	int32_t consumed = 0;
-	CHECK(sslm_prefix_prefill(model, prefix, long_prompt, 256, 256, SSLM_SPAN_PROMPT, nullptr,
-	                           &consumed) == SSLM_KV_POOL_EXHAUSTED);
-	// FEATURE ORACLE: the prefix-under-construction is still unfrozen and resumable -- a
-	// subsequent (small, block-fitting) prefill on the SAME handle succeeds rather than being
-	// permanently wedged by the earlier exhaustion.
 	int32_t small_tokens[1] = {0};
 	int32_t small_consumed = 0;
-	CHECK(sslm_prefix_release(prefix) == SSLM_OK);  // release to free the block first (pool has
-	                                                  // only 1 block total in this cell).
-	sslm_prefix prefix2 = nullptr;
-	CHECK(sslm_prefix_begin(model, &pool, &prefix2) == SSLM_OK);
-	CHECK(sslm_prefix_prefill(model, prefix2, small_tokens, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+	CHECK(sslm_prefix_prefill(model, prefix, small_tokens, 1, 8, SSLM_SPAN_PROMPT, nullptr,
 	                           &small_consumed) == SSLM_OK);
-	CHECK(sslm_prefix_release(prefix2) == SSLM_OK);
+	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
+	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
 	CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
 }
 

@@ -35,43 +35,70 @@ static void TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContaminati
 	CHECK(sslm_seq_release(seq_b) == SSLM_OK);
 }
 
-// --- Mechanism cell 2 (design Sec10 dim8: "adapter x prefix-sharing -- the (prefix, adapter)
-// keying exercised for the first time through a real ABI call path"). sslm_seq_set_adapter
-// composed with sslm_seq_adopt_prefix on the SAME sequence -- an adapter bound to a sequence
-// that then adopts a shared prefix, and the reverse order (adopt then bind), both succeed and
-// are independently observable via sslm_stats. ---
-static void TestDim8_M2_AdapterAndPrefixShareComposeOnOneSequence(sslm_model model,
-                                                                   sslm_kv_pool* pool,
-                                                                   sslm_adapter adapter) {
+// --- Mechanism cell 2 (design Sec10 dim8, RE-DERIVED against copy-on-adopt, commit
+// fab235c1c6 -- the plan's own (prefix, adapter)-keyed physical-block-sharing framing does not
+// survive Sec7.2's ruling; this is the design's own replacement cell, not a patch of the prior
+// one). `sslm_prefix_prefill` carries no adapter parameter (base-only construction, always), so
+// a copied prefix's own bytes are exactly its own base-only computation; an adapter bound via
+// `sslm_seq_set_adapter` AFTER `sslm_seq_adopt_prefix` shapes generation from the copy point
+// forward only -- structurally the SAME shape as the already-proven mid-sequence adapter-swap
+// semantic (D-SLM28: forward-only, history preserved). THE CELL (design's own text): a sequence
+// that adopts a prefix then binds an adapter reproduces, bit-for-bit, the SAME sequence built by
+// PREFILLING THE PREFIX'S OWN CONTENT DIRECTLY (base-only, matching what copy-on-adopt would
+// have copied -- C3's own gate: "sslm_seq_adopt_prefix's own copy reproduces a fresh independent
+// prefill's output bit-for-bit at the copied positions") and then binding the SAME adapter
+// immediately afterward -- proving copy-on-adopt-then-bind and prefill-then-swap are the one
+// mechanism, not two. ---
+static void TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
+    sslm_model model, sslm_kv_pool* pool, sslm_adapter adapter) {
+	int32_t shared_content[3] = {0, 1, 2};
+
+	// The prefix, built and frozen the ordinary way -- its own content is base-only by
+	// construction (sslm_prefix_prefill takes no adapter parameter).
 	sslm_prefix prefix = nullptr;
 	CHECK(sslm_prefix_begin(model, pool, &prefix) == SSLM_OK);
-	int32_t prefix_tokens[2] = {0, 1};
-	int32_t consumed = 0;
-	CHECK(sslm_prefix_prefill(model, prefix, prefix_tokens, 2, 8, SSLM_SPAN_PROMPT, nullptr,
-	                           &consumed) == SSLM_OK);
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, prefix, shared_content, 3, 8, SSLM_SPAN_PROMPT, nullptr,
+	                           &prefix_consumed) == SSLM_OK);
 	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
 
-	// Order 1: bind adapter, THEN adopt prefix.
-	sslm_seq seq1 = nullptr;
-	CHECK(sslm_seq_create(model, pool, &seq1) == SSLM_OK);
-	CHECK(sslm_seq_set_adapter(seq1, adapter) == SSLM_OK);
-	CHECK(sslm_seq_adopt_prefix(seq1, prefix) == SSLM_OK);
-	sslm_stats_out stats1{};
-	CHECK(sslm_stats(model, seq1, &stats1) == SSLM_OK);
-	CHECK(sslm_seq_set_adapter(seq1, nullptr) == SSLM_OK);
-	CHECK(sslm_seq_release(seq1) == SSLM_OK);
+	// Sequence A: adopt the frozen prefix (copy-on-adopt copies shared_content's own bytes into
+	// A's own block), THEN bind the adapter, THEN decode one step.
+	sslm_seq seq_adopted = nullptr;
+	CHECK(sslm_seq_create(model, pool, &seq_adopted) == SSLM_OK);
+	CHECK(sslm_seq_adopt_prefix(seq_adopted, prefix) == SSLM_OK);
+	CHECK(sslm_seq_set_adapter(seq_adopted, adapter) == SSLM_OK);
+	sslm_decode_params params{};
+	int32_t token_adopted = 0;
+	sslm_seq batch_adopted[1] = {seq_adopted};
+	CHECK(sslm_decode_step(model, batch_adopted, 1, &params, nullptr, &token_adopted) == SSLM_OK);
 
-	// Order 2: adopt prefix, THEN bind adapter -- both orderings compose, since neither
-	// operation's own precondition depends on the other (design Sec12's own no-foreclosure
-	// contract).
-	sslm_seq seq2 = nullptr;
-	CHECK(sslm_seq_create(model, pool, &seq2) == SSLM_OK);
-	CHECK(sslm_seq_adopt_prefix(seq2, prefix) == SSLM_OK);
-	CHECK(sslm_seq_set_adapter(seq2, adapter) == SSLM_OK);
-	sslm_stats_out stats2{};
-	CHECK(sslm_stats(model, seq2, &stats2) == SSLM_OK);
-	CHECK(sslm_seq_set_adapter(seq2, nullptr) == SSLM_OK);
-	CHECK(sslm_seq_release(seq2) == SSLM_OK);
+	// Sequence B: prefill the IDENTICAL content directly (base-only, no adapter bound yet --
+	// exactly what copy-on-adopt's own bytes are, per C3's own gate), THEN bind the SAME
+	// adapter immediately (the "swap immediately post-adoption" framing), THEN decode.
+	sslm_seq seq_prefilled = nullptr;
+	CHECK(sslm_seq_create(model, pool, &seq_prefilled) == SSLM_OK);
+	int32_t seq_consumed = 0;
+	CHECK(sslm_prefill(model, seq_prefilled, shared_content, 3, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &seq_consumed) == SSLM_OK);
+	CHECK(sslm_seq_set_adapter(seq_prefilled, adapter) == SSLM_OK);
+	int32_t token_prefilled = 0;
+	sslm_seq batch_prefilled[1] = {seq_prefilled};
+	CHECK(sslm_decode_step(model, batch_prefilled, 1, &params, nullptr, &token_prefilled) ==
+	      SSLM_OK);
+
+	// FEATURE ORACLE: the two decoded tokens are bit-identical -- proving copy-on-adopt-then-
+	// bind and prefill-then-swap are the ONE mechanism this design's own re-derivation claims,
+	// not two implementations that could silently diverge (e.g. an adapter applied only to
+	// positions written AFTER adoption on one path but not the other).
+	CHECK_MSG(token_adopted == token_prefilled,
+	          "adopt-then-bind (%d) diverged from prefill-then-swap (%d)", token_adopted,
+	          token_prefilled);
+
+	CHECK(sslm_seq_set_adapter(seq_adopted, nullptr) == SSLM_OK);
+	CHECK(sslm_seq_release(seq_adopted) == SSLM_OK);
+	CHECK(sslm_seq_set_adapter(seq_prefilled, nullptr) == SSLM_OK);
+	CHECK(sslm_seq_release(seq_prefilled) == SSLM_OK);
 	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
 }
 
@@ -221,7 +248,7 @@ int main(int argc, char** argv) {
 	volatile void* addr_0 =
 	    (void*)&TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContamination;
 	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim8_M2_AdapterAndPrefixShareComposeOnOneSequence;
+	volatile void* addr_1 = (void*)&TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap;
 	(void)addr_1;
 	volatile void* addr_2 = (void*)&TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes;
 	(void)addr_2;
