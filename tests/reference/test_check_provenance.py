@@ -94,3 +94,48 @@ def test_missing_provenance_entry_is_reported(tmp_path, monkeypatch):
     code, output = _run_main()
     assert code == 1
     assert "does_not_exist.py" in output
+
+
+# --- B7 (T-2123/T-2137, design SS3.5 ruling item 1, SS6): cross-repo reach ------------------
+#
+# tools/reference_pipeline/{intmath,rope}.py (the live, product copy) and
+# tests/reference/superslm_spike/{intmath,rope}.py (this directory's frozen golden-fixture
+# copy) are SUPPOSED to be able to diverge -- the frozen copy stays frozen until someone
+# deliberately re-vendors it. What must not happen is a divergence nobody decided and nobody
+# can see. These cells prove the new cross-repo check passes on byte-identity OR an explicit,
+# dated PROVENANCE.md entry recording an intentional decoupling, and fails on neither.
+
+
+def test_cross_repo_reach_clean_tree_passes():
+    code, _ = _run_main()
+    assert code == 0
+
+
+def test_undocumented_cross_repo_divergence_is_caught_and_named(tmp_path, monkeypatch):
+    """A live tools/reference_pipeline/ file edited to diverge from the frozen copy, with no
+    PROVENANCE.md entry recording the divergence as intentional, must fail loudly."""
+    import os
+
+    live_path = os.path.join(cp._THIS_DIR, "..", "..", "tools", "reference_pipeline", "intmath.py")
+    live_path = os.path.normpath(live_path)
+    original = open(live_path, "rb").read()
+    try:
+        with open(live_path, "r+b") as f:
+            data = f.read()
+            f.seek(0)
+            f.write(data + b"\n# undocumented drift\n")
+        code, output = _run_main()
+        assert code == 1
+        assert "intmath.py" in output
+    finally:
+        with open(live_path, "wb") as f:
+            f.write(original)
+
+
+def test_documented_decoupling_entry_makes_a_real_divergence_pass():
+    """rope.py's live copy legitimately diverges from the frozen copy by exactly its
+    import-line rename (T-2123/T-2137 B0: `from superslm_spike.intmath import` ->
+    `from reference_pipeline.intmath import`). PROVENANCE.md records this as an explicit,
+    dated, intentional decoupling, and the check passes rather than failing on it."""
+    code, output = _run_main()
+    assert code == 0, output

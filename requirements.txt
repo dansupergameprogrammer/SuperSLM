@@ -1,0 +1,12 @@
+# tools/ and tests/ dependency declaration (T-2123/T-2137, design §5/§6 B1). Before this file,
+# no requirements.txt or pyproject.toml existed anywhere in this repository; every CI job
+# declared its own ad hoc `pip install numpy` / `pip install pytest` line
+# (.github/workflows/tests.yml). This file supersedes those scattered declarations and gives
+# the clean-checkout gate's own `pip install -r requirements.txt` step (design §5 step 2) a
+# real target.
+numpy
+pytest
+# reference_pipeline's Closure-B addition (design §2.2): AutoTokenizer only, for
+# calibrate_checkpoint.py's chat-template tokenization. torch is never imported by the
+# vendored reference pipeline.
+transformers

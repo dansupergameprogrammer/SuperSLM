@@ -50,3 +50,23 @@ values recorded above, exiting non-zero and naming the mismatched file if any
 disagrees. A re-vendor is a deliberate commit: copy the updated source files,
 re-run `precompute_pinned.py` (for the full vendors), record the new source
 commit(s) above, and recompute and update these hashes together.
+
+## Cross-repo reach — `tools/reference_pipeline/` vs this directory's frozen copy
+
+T-2123/T-2137 (converter vendoring, design SS3.5 ruling item 1) vendors a second,
+**live**, product copy of `intmath.py`/`rope.py` at `tools/reference_pipeline/`
+(the converter's own runtime dependency), separate from this directory's frozen
+golden-fixture copy above. The two copies are supposed to be able to diverge — a
+live copy gets a bug fix; the frozen copy stays frozen until someone deliberately
+re-vendors it — but a divergence nobody decided and nobody can see is not
+acceptable. `check_provenance.py`'s cross-repo reach check passes a file on either
+byte-identity between the two locations, or an explicit, dated row below recording
+the two as intentionally decoupled.
+
+| File | Date | Reason |
+|---|---|---|
+| `rope.py` | 2026-08-16 | T-2123/T-2137 B0 rewrote `tools/reference_pipeline/rope.py`'s internal import from `from superslm_spike.intmath import rounding_divide_by_pot` to `from reference_pipeline.intmath import rounding_divide_by_pot` as part of vendoring the module out of the cross-tree `D:\Wizard` dependency (§3.2). This directory's frozen copy under `superslm_spike/rope.py` is untouched by that rename (S-HARDEN-5's own frozen-copy discipline: it stays pinned to its recorded source commit above). The two files therefore differ by exactly this one import line; every other line is byte-identical. |
+
+`intmath.py` carries no row here because it has no internal `superslm_spike`-prefixed
+import to rewrite (checked at source, T-2123/T-2137 design §2.1) — its two copies
+remain byte-identical and the cross-repo check enforces that directly.
