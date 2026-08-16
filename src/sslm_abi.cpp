@@ -26,6 +26,7 @@
 #include "superslm/sslm_abi.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -978,5 +979,193 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 	out->decode_step_actual = static_cast<int64_t>(model->view.config.num_hidden_layers);
 	out->forced_token_count = 0;
 	out->kv_blocks_resident = 1;  // this sequence's own single, whole-sequence block (Sec7.2)
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// C5 -- save/restore (design Sec7.3): the blob format at that section's own field order,
+// magic-per-version hard-reject (design Sec7.3's own corrected version-evolution strategy,
+// GpuSeqBlobHeader's precedent). kv_block_count is always 1 (Sec7.2's ruled one-block-per-
+// sequence unit) -- no per-blob variability there, unlike the pre-ruling page-count reading.
+// No `current_token`/`ready_for_logits` field in the blob: both are this ABI's own internal
+// bookkeeping, not part of SequenceLayerState (the design's own §7.3 field list), and both are
+// re-derivable on restore from the restored layer_index/context_length alone (see
+// sslm_seq_restore's own comment) -- carrying them in the blob would duplicate state the
+// restored fields already determine.
+// -----------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '1'};
+constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
+
+void WriteLE32(uint8_t* p, uint32_t v) {
+	p[0] = static_cast<uint8_t>(v);
+	p[1] = static_cast<uint8_t>(v >> 8);
+	p[2] = static_cast<uint8_t>(v >> 16);
+	p[3] = static_cast<uint8_t>(v >> 24);
+}
+void WriteLE64(uint8_t* p, uint64_t v) {
+	for (int i = 0; i < 8; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
+}
+uint32_t ReadLE32(const uint8_t* p) {
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+uint64_t ReadLE64(const uint8_t* p) {
+	uint64_t v = 0;
+	for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (8 * i);
+	return v;
+}
+
+// Fixed-size prefix, magic through kv_saturation_count -- design Sec7.3's own field order:
+// magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
+// adapter_binding_id(8) + context_length(8) + layer_index(4) + hidden_scale(16) +
+// kv_saturation_count(8) = 96 bytes, followed by the variable-length residual, kv_block_count
+// (4), then kv_blocks.
+constexpr size_t kSeqBlobFixedHeaderBytes = 96;
+
+}  // namespace
+
+extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
+	if (!n) return SSLM_INVALID_ARGUMENT;
+	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	sslm_model_s* model = seq->model;
+	const superslm::SslmModelConfig& c = model->view.config;
+	// design Sec7.3: "residual_bytes ... zero-length when layer_index == 0" (§7's own "a
+	// sequence resting between whole tokens carries a zero-length residual").
+	const bool mid_token = seq->state.layer_index != 0;
+	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
+	const size_t required = kSeqBlobFixedHeaderBytes + residual_len + 4 + seq->block_size;
+	if (!buf || *n < required) {
+		// design Sec7.3: "the same two-call sizing convention sslm_seq_state_size already
+		// establishes" -- *n set to the required size on this specific rejection.
+		*n = required;
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+
+	uint8_t* p = static_cast<uint8_t*>(buf);
+	size_t off = 0;
+	std::memcpy(p + off, kSeqBlobMagic, 4);
+	off += 4;
+	const std::array<uint8_t, 32> hash = model->view.RawIntegrityHash();
+	std::memcpy(p + off, hash.data(), 32);
+	off += 32;
+	WriteLE32(p + off, static_cast<uint32_t>(c.kv_precision));
+	off += 4;
+	WriteLE64(p + off, 0);  // schema_name_hash -- G5 scope, not built
+	off += 8;
+	WriteLE32(p + off, kDfaWalkStateUnused);  // dfa_walk_state -- G5 scope, not built
+	off += 4;
+	WriteLE64(p + off, 0);  // adapter_binding_id -- C6 scope, not built (no adapter can be bound)
+	off += 8;
+	WriteLE64(p + off, static_cast<uint64_t>(seq->state.context_length));
+	off += 8;
+	WriteLE32(p + off, seq->state.layer_index);
+	off += 4;
+	WriteLE64(p + off, static_cast<uint64_t>(seq->state.hidden_scale.m));
+	off += 8;
+	WriteLE64(p + off, static_cast<uint64_t>(seq->state.hidden_scale.e));
+	off += 8;
+	WriteLE64(p + off, seq->state.kv_saturation_count);
+	off += 8;
+	if (residual_len > 0) {
+		std::memcpy(p + off, seq->hidden_codes_storage.data(), residual_len);
+	}
+	off += residual_len;
+	WriteLE32(p + off, 1);  // kv_block_count -- always 1 (Sec7.2's ruled unit)
+	off += 4;
+	std::memcpy(p + off, seq->kv_block, seq->block_size);
+	off += seq->block_size;
+
+	*n = off;
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* buf,
+                                         size_t n, sslm_seq* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!model || !pool || !*pool || !buf) return SSLM_INVALID_ARGUMENT;
+	if (n < kSeqBlobFixedHeaderBytes + 4) return SSLM_INVALID_ARGUMENT;  // too small to hold even
+	                                                                    // the fixed header + block
+	                                                                    // count
+
+	const uint8_t* p = static_cast<const uint8_t*>(buf);
+	// design Sec7.3, corrected (Mendeleev audit 4.5): magic-per-version HARD REJECT -- checked
+	// first, before any other field is trusted, exactly GpuSeqBlobHeader's own precedent
+	// (superslm_gpu.cpp). A well-formed GPU-format ('SLM3') blob is rejected here on the magic
+	// check alone, never mis-parsed as a CPU blob (design Sec10 dim7/dim9).
+	if (std::memcmp(p, kSeqBlobMagic, 4) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
+
+	std::array<uint8_t, 32> saved_hash{};
+	std::memcpy(saved_hash.data(), p + 4, 32);
+	const std::array<uint8_t, 32> current_hash = model->view.RawIntegrityHash();
+	if (saved_hash != current_hash) return SSLM_RESTORE_MODEL_MISMATCH;
+
+	const uint32_t saved_kv_precision = ReadLE32(p + 36);
+	if (saved_kv_precision != static_cast<uint32_t>(model->view.config.kv_precision)) {
+		return SSLM_RESTORE_KV_MISMATCH;
+	}
+
+	const int64_t context_length = static_cast<int64_t>(ReadLE64(p + 60));
+	const uint32_t layer_index = ReadLE32(p + 68);
+	const int64_t hidden_scale_m = static_cast<int64_t>(ReadLE64(p + 72));
+	const int64_t hidden_scale_e = static_cast<int64_t>(ReadLE64(p + 80));
+	const uint64_t kv_saturation_count = ReadLE64(p + 88);
+
+	const superslm::SslmModelConfig& c = model->view.config;
+	const bool mid_token = layer_index != 0;
+	const size_t residual_len = mid_token ? static_cast<size_t>(c.hidden_size) : 0;
+	if (n < kSeqBlobFixedHeaderBytes + residual_len + 4) return SSLM_INVALID_ARGUMENT;
+	const uint8_t* residual_ptr = p + kSeqBlobFixedHeaderBytes;
+	const uint32_t kv_block_count = ReadLE32(residual_ptr + residual_len);
+	if (kv_block_count != 1) {
+		// design Sec7.2's ruled unit: a saved sequence always carries exactly one block. A
+		// value other than 1 is a structurally malformed (or pre-ruling-format) blob.
+		return SSLM_INVALID_ARGUMENT;
+	}
+	const size_t block_size = sslm_kv_block_size(model);
+	if (block_size == 0) return SSLM_ARTIFACT_REJECTED;
+	if (n < kSeqBlobFixedHeaderBytes + residual_len + 4 + block_size) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	const uint8_t* kv_blocks_ptr = residual_ptr + residual_len + 4;
+
+	sslm_kv_pool_s* pool_ptr = *pool;
+	uint32_t block_index = 0;
+	const sslm_status draw_st = DrawBlock(pool_ptr, &block_index);
+	if (draw_st != SSLM_OK) return draw_st;
+
+	auto* h = new (std::nothrow) sslm_seq_s();
+	if (!h) throw std::bad_alloc();
+	h->model = model;
+	h->pool = pool_ptr;
+	h->block_index = block_index;
+	h->kv_block =
+	    static_cast<uint8_t*>(pool_ptr->buf) + static_cast<size_t>(block_index) * pool_ptr->block_size;
+	h->block_size = pool_ptr->block_size;
+	std::memcpy(h->kv_block, kv_blocks_ptr, block_size);
+	h->hidden_codes_storage.assign(c.hidden_size, 0);
+	if (residual_len > 0) {
+		std::memcpy(h->hidden_codes_storage.data(), residual_ptr, residual_len);
+	}
+	h->state.hidden_codes = h->hidden_codes_storage.data();
+	h->state.hidden_scale = superslm::CarriedScale{hidden_scale_m, hidden_scale_e};
+	h->state.layer_index = layer_index;
+	h->state.kv_saturation_count = kv_saturation_count;
+	h->state.context_length = context_length;
+	// current_token/ready_for_logits are this ABI's own internal bookkeeping, not part of the
+	// blob (see this section's own top-of-block comment) -- re-derived from the restored fields
+	// alone: a layer_index == 0 restore with real prior content (context_length > 0) has its
+	// last token's fully-computed final hidden state sitting in the residual just restored,
+	// identical in shape to sslm_prefill's own post-prefill state, so decode can go straight to
+	// logits (ready_for_logits = true) with no re-embed and no `current_token` needed at all --
+	// current_token is only ever consulted on the layer_index == 0 branch, which
+	// ready_for_logits short-circuits entirely on its first (and only) use.
+	h->current_token = -1;
+	h->ready_for_logits = (layer_index == 0 && context_length > 0);
+	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	*out = h;
 	return SSLM_OK;
 }
