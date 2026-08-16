@@ -30,78 +30,14 @@
 
 using namespace superslm;
 
-namespace {
-
-// Submits one decode step and polls sslm_gpu_ready(block=1) to completion before returning --
-// the same submit-then-block-poll idiom tools/t2113_b5_async_smoke.cpp's own decode helper uses
-// (`sslm_decode_step_gpu` returns without fencing per design Sec4.3; a second call against a
-// still-Submitted sequence returns SSLM_BUSY, which is exactly the shape this suite's own
-// dim9 cells were missing before this rewrite).
-bool RunStepBlocking(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                      const SslmGpuAdapterHandle* adapter, uint32_t budget) {
-	if (sslm_decode_step_gpu(ctx, seq, adapter, budget) != SSLM_OK) return false;
-	int32_t out_ready = 0;
-	SslmGpuStatus out_status = SSLM_OK;
-	SslmGpuStatus st = SSLM_OK;
-	do {
-		st = sslm_gpu_ready(ctx, seq, /*block=*/1, &out_ready, &out_status);
-	} while (st == SSLM_OK && !out_ready);
-	return st == SSLM_OK && out_status == SSLM_OK;
-}
-
-// The SequenceLayerState-complete surface exposed via the bench accessors -- the identical field
-// set C1's own defect (a restored non-zero hidden_scale paired with an all-zero hidden_codes)
-// lives in, so this is what "bit-equal to the unbroken run" is checked against, independently of
-// sslm_gpu_seq_save's own blob (using Save's own output as the comparator here would make the
-// oracle circular against the exact function C1 fixed).
-struct SeqSnapshot {
-	std::vector<int8_t> hidden_codes;
-	int64_t hidden_scale_m = 0, hidden_scale_e = 0;
-	uint32_t layer_index = 0;
-	uint64_t kv_saturation_count = 0;
-	int64_t context_length = 0;
-};
-
-}  // namespace
-
-// T-2114: these forward-declare the bench accessors gpu_1p0.cpp defines at GLOBAL scope. Declared
-// here at file scope, OUTSIDE any anonymous namespace -- an `extern` declaration textually inside
-// an anonymous namespace binds to THAT namespace's own (per-TU-unique) linkage, not the real
-// global symbol, and fails to link (found by execution: the first version of this file declared
-// them inside the anonymous-namespace-scoped CaptureSnapshot and every one came back LNK2019
-// against gpu_1p0.cpp's own global-scope definitions).
-extern int8_t* SslmGpuSeqHandleHiddenCodesForBench(SslmGpuSequenceHandle*);
-extern superslm::CarriedScale* SslmGpuSeqHandleHiddenScaleForBench(SslmGpuSequenceHandle*);
-extern uint32_t* SslmGpuSeqHandleLayerIndexForBench(SslmGpuSequenceHandle*);
-extern uint64_t* SslmGpuSeqHandleKvSaturationForBench(SslmGpuSequenceHandle*);
-extern int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle*);
-extern size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle*);
-// T-2113 (N1, design Sec4.2/Sec21): exposes the handle's own context_cap -- the new dim9 product
-// cell's own oracle reads this to confirm sslm_gpu_seq_restore sized the FRESH handle to the
-// blob's own recorded context_cap, not the model's.
+// D-SLM3412 REPAIR (Curie, 2026-08-15): RunStepBlocking/SeqSnapshot/CaptureSnapshot/
+// SnapshotsBitEqual and the bench-accessor `extern` declarations this file used to define locally
+// now live in fixture_common.h (shared, StandardsDocument.md Sec6.6 -- one real implementation,
+// not a second drifting copy per file), reused verbatim by every dim file that needs them.
+// `SslmGpuSeqHandleContextCapForBench` (N1's own accessor) is dim9-specific and stays declared here.
 extern int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle*);
 
 namespace {
-
-bool CaptureSnapshot(SslmGpuSequenceHandle* seq, SeqSnapshot* out) {
-	const size_t hidden_size = SslmGpuSeqHandleHiddenSizeForBench(seq);
-	const int8_t* codes = SslmGpuSeqHandleHiddenCodesForBench(seq);
-	if (!codes) return false;
-	out->hidden_codes.assign(codes, codes + hidden_size);
-	const superslm::CarriedScale* scale = SslmGpuSeqHandleHiddenScaleForBench(seq);
-	out->hidden_scale_m = scale->m;
-	out->hidden_scale_e = scale->e;
-	out->layer_index = *SslmGpuSeqHandleLayerIndexForBench(seq);
-	out->kv_saturation_count = *SslmGpuSeqHandleKvSaturationForBench(seq);
-	out->context_length = *SslmGpuSeqHandleContextLengthForBench(seq);
-	return true;
-}
-
-bool SnapshotsBitEqual(const SeqSnapshot& a, const SeqSnapshot& b) {
-	return a.hidden_codes == b.hidden_codes && a.hidden_scale_m == b.hidden_scale_m &&
-	       a.hidden_scale_e == b.hidden_scale_e && a.layer_index == b.layer_index &&
-	       a.kv_saturation_count == b.kv_saturation_count && a.context_length == b.context_length;
-}
 
 // N2 (`Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md` Sec8): a decode session's own
 // `layer_index` reaching `num_hidden_layers` means the CURRENT TOKEN is complete

@@ -1,4 +1,33 @@
-// T-2112 (Curie) -- Dim 5 (Failure and rejection paths), design Sec11 dim5. 3 cells. RED BY LINK.
+// T-2112 (Curie) -- Dim 5 (Failure and rejection paths), design Sec11 dim5. 3 cells + 1 (M3, see
+// below).
+//
+// D-SLM3380/D-SLM3412 REPAIR (Curie, 2026-08-15): the casebook's own N3 re-run (Claude/Poirot/
+// 50f3d5d-t2113-1p0-gpu-core-build-review.md Sec14.1) diagnosed this file's own three failures
+// (pre-repair: :68, :109, :114) as the SAME cascade the undrained-`Submitted` gap produces
+// everywhere else in this suite, one guard deeper: `sslm_gpu_seq_release` against a still-
+// `Submitted` sequence returns `Busy` (design Sec9); the RELEASE having failed, the sequence is
+// still bound, so the caller's own next `sslm_gpu_model_unmap` returns `ModelHasLiveSequences`;
+// that having failed too, `sslm_gpu_context_destroy` returns `ContextHasLiveHandles` -- three
+// failures from one missing drain. `TestDim5_P1` now drains before release, per every other
+// repaired file in this suite.
+//
+// M3 (NEW, this repair): design Sec9's own error-taxonomy table states `sslm_gpu_model_unmap`
+// returns `Busy` -- not `ModelHasLiveSequences` -- "against a model with any Submitted sequence
+// bound (Sec4.2, unchanged policy)," taking precedence over the ModelHasLiveSequences row's own
+// "any state, not only Submitted" caveat. Read at source (`src/gpu/gpu_1p0.cpp`,
+// `sslm_gpu_model_unmap`): the implementation checks only `model->live_sequences > 0` and never
+// inspects any bound sequence's own `state` -- it cannot distinguish a model with a Submitted
+// sequence from one with an Idle sequence, and returns `ModelHasLiveSequences` in both cases. This
+// is a genuine divergence between design Sec9's own documented channel and the shipped guard, not
+// a documentation staleness this suite's own charter can silently paper over (StandardsDocument.md
+// Sec5.6: "a document claiming what the code does not deliver is a code bug" -- fixing the code is
+// production scope, out of this seat's charter, routed rather than invented around). Per this
+// repair's own brief ("keep one deliberate cell that asserts the API's actual behavior for
+// teardown-while-submitted"), M3 pins the REAL, currently-shipping cascade
+// (`Busy` -> `ModelHasLiveSequences` -> `ContextHasLiveHandles`) as a genuine regression detector
+// -- not the design's own aspirational Busy-precedence for the unmap/destroy legs, which the
+// current build does not implement. The divergence itself is filed as a decision (D-SLM entry,
+// this repair's own artifact) and routed, not fixed here.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -48,6 +77,50 @@ static void TestDim5_M2_SequenceKvBufferMismatchGuarded(SslmGpuContext* ctx,
 	CHECK(out_seq == nullptr);
 }
 
+// --- Mechanism cell 3 (NEW, D-SLM3412 repair): design Sec9's own real, pinned teardown-while-
+// Submitted cascade -- a sequence left Submitted (no drain), release/unmap/destroy attempted in
+// order against it. Pins the ACTUAL shipping behavior (see this file's own header comment): the
+// release call correctly returns Busy (design Sec9, implemented); the unmap and destroy calls
+// that follow it do NOT implement Sec9's own documented Busy-precedence for a model/context with
+// an Submitted (not merely live) sequence bound -- they return ModelHasLiveSequences/
+// ContextHasLiveHandles instead, because the current guards check only a live-count, never a
+// bound sequence's own state. This is a real, executed regression pin against what ships today;
+// the design/implementation divergence itself is routed (decision log), not invented around. ---
+static void TestDim5_M3_TeardownWhileSubmittedPinsActualCascade(SslmGpuContext* ctx,
+                                                                 SslmGpuModelHandle* model) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);
+	// Submit ONE decode call and deliberately do NOT drain it -- `seq` is now Submitted.
+	CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
+
+	// Leg 1 (design Sec9, correctly implemented): release against a Submitted sequence -> Busy.
+	CHECK_MSG(sslm_gpu_seq_release(ctx, seq) == SSLM_BUSY,
+	          "M3 leg 1: sslm_gpu_seq_release against a Submitted sequence must return Busy "
+	          "(design Sec9) -- the release having failed, seq is still bound for legs 2/3 below");
+
+	// Leg 2 (real, pinned): the release above rejected, so `seq` is still bound to `model`.
+	// Design Sec9's own Busy row claims `sslm_gpu_model_unmap` ALSO returns Busy here ("against a
+	// model with any Submitted sequence bound") -- the shipping guard checks only
+	// `model->live_sequences > 0` and cannot see that the one live sequence is Submitted, so it
+	// returns ModelHasLiveSequences instead. Pinned as the real behavior, not the documented one.
+	CHECK_MSG(sslm_gpu_model_unmap(ctx, model) == SSLM_MODEL_HAS_LIVE_SEQUENCES,
+	          "M3 leg 2: sslm_gpu_model_unmap against a model with a Submitted (undrained) "
+	          "sequence returns ModelHasLiveSequences, not design Sec9's own documented Busy -- "
+	          "if this cell now reads Busy, the guard was corrected to match Sec9 and this "
+	          "assertion (and its routed decision entry) should be updated to match");
+
+	// Leg 3 (real, pinned): the unmap above rejected too, so `ctx` still has a live handle.
+	CHECK_MSG(sslm_gpu_context_destroy(ctx) == SSLM_CONTEXT_HAS_LIVE_HANDLES,
+	          "M3 leg 3: sslm_gpu_context_destroy with the still-live model/sequence handles "
+	          "must return ContextHasLiveHandles");
+
+	// Real cleanup, in the guard-satisfying order: drain the sequence, then release/unmap.
+	// `ctx` itself is NOT destroyed again here -- this cell's own caller owns ctx's lifetime.
+	CHECK(Drain(ctx, seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+}
+
 // --- Product cell: the recording-window catch's own cache-invalidation behavior reproduced
 // against the new model-handle-owned residency -- a real rejecting call followed immediately by
 // a real successful call on the same model handle, proving the handle's own residency state was
@@ -64,12 +137,9 @@ static void TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency(SslmGpuConte
 	SslmGpuSequenceHandle* good_seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &good_seq) == SSLM_OK);
 	CHECK(sslm_gpu_seq_embed_token(ctx, good_seq, 5) == SSLM_OK);  // T-2113 B7 (D-SLM3367 closed)
-	CHECK(sslm_decode_step_gpu(ctx, good_seq, nullptr, 24u) == SSLM_OK);
+	CHECK(RunStepBlocking(ctx, good_seq, nullptr, 24u));  // D-SLM3380: drain before release
 	CHECK(sslm_gpu_seq_release(ctx, good_seq) == SSLM_OK);
 }
-
-// T-2114 (M2): see dim1_lifetime_red.cpp's own header comment -- the local re-declaration
-// this file used to complete here is retired; sslm_gpu_1p0.h now defines both types complete.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -77,14 +147,9 @@ int main(int argc, char** argv) {
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_0 = (void*)&TestDim5_M1_DeviceLostMidBatchPerSequenceOutcomes; (void)addr_0;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
 	volatile void* addr_1 = (void*)&TestDim5_M2_SequenceKvBufferMismatchGuarded; (void)addr_1;
-	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
-	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
-	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
-	volatile void* addr_2 = (void*)&TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency; (void)addr_2;
+	volatile void* addr_2 = (void*)&TestDim5_M3_TeardownWhileSubmittedPinsActualCascade; (void)addr_2;
+	volatile void* addr_3 = (void*)&TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency; (void)addr_3;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -95,8 +160,11 @@ int main(int argc, char** argv) {
 	// build-seat-owned fault-injection hook this session did not build -- the identical class of
 	// new instrumentation B4/B5's own violation pins were (env-var-gated corruption mechanisms),
 	// which needs its own commissioning pass (plant-and-revert, StandardsDocument.md Sec5.4)
-	// before any verdict from it could be trusted. Routed, not silently absorbed.
-	SKIP_MSG("dim5 M1 needs a device-lost mid-batch injection hook -- not built this session, routed");
+	// before any verdict from it could be trusted. Building the hook is a PRODUCTION change
+	// (a new injection site in src/gpu/), out of this seat's charter (Curie realizes tests, she
+	// does not author production instrumentation) -- routed, not silently absorbed.
+	SKIP_MSG("dim5 M1 needs a device-lost mid-batch injection hook -- production-side "
+	         "instrumentation, out of this seat's charter, routed");
 
 	std::vector<uint8_t> bytes;
 	SslmModelView view{};
@@ -109,6 +177,23 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		SKIP_MSG("dim5 M2/P1 need --model1p5b=PATH -- not run");
+	}
+
+	// M3 gets its OWN dedicated ctx/model -- it deliberately drives ctx_m3 into a state where
+	// unmap/destroy are expected to REJECT, and does its own real cleanup afterward (see the
+	// cell's own body); running it against the shared ctx above would leave that ctx's own
+	// guard-satisfying teardown order entangled with M3's own deliberate one.
+	if (!g_model_1p5b_path.empty()) {
+		SslmGpuContext* ctx_m3 = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx_m3) == SSLM_OK);
+		SslmGpuModelHandle* model_m3 = nullptr;
+		CHECK(sslm_gpu_model_map(ctx_m3, &view, GpuResidencyConfig{}, &model_m3) == SSLM_OK);
+		TestDim5_M3_TeardownWhileSubmittedPinsActualCascade(ctx_m3, model_m3);
+		// Real cleanup: M3's own body already drained/released its sequence.
+		CHECK(sslm_gpu_model_unmap(ctx_m3, model_m3) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx_m3) == SSLM_OK);
+	} else {
+		SKIP_MSG("dim5 M3 needs --model1p5b=PATH -- not run");
 	}
 
 	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);

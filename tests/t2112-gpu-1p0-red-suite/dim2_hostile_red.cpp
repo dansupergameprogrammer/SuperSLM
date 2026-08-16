@@ -32,16 +32,21 @@ static void TestDim2_M1_NewGuardsForcedByHostileInputs(SslmGpuContext* ctx,
 	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_CONTEXT_HAS_LIVE_HANDLES);
 }
 
-// --- Mechanism cell 2: the existing nine-guard ladder reproduced against the new call shape --
-// every guard the substrate's RunLayerLoopGpu enforces must still reject the identical malformed
-// input reached through sslm_decode_step_gpu (design Sec10 B4). The nine guards themselves are
-// gpu_layer_loop_guards.def's own population (include/superslm/); this cell asserts the CARRY-
-// FORWARD property (same rejection, new entry point), not the guards' own internal correctness,
-// which tests/test_main.cpp already covers against RunLayerLoopGpu directly.
-static void TestDim2_M2_NineGuardLadderReachedThroughDecodeStepGpu(
+// --- Mechanism cell 2 (N2 repair, 2026-08-15: renamed -- the prior name, "NineGuardLadder...",
+// claimed all nine gpu_layer_loop_guards.def guards were reproduced through the new entry point;
+// the body only ever forced ONE (DispatchBudgetTooSmall). Renamed to what the body actually
+// delivers; the other eight guards' own carry-forward through sslm_decode_step_gpu specifically
+// (as opposed to their EXISTENCE, which check_gpu_guard_status_parity.py's own structural
+// derivation already confirms, and their internal correctness, which tests/test_main.cpp already
+// covers against RunLayerLoopGpu directly) is a genuine, un-swept gap -- named here rather than
+// silently claimed covered by a name promising more than nine cases' worth of assertion.) ---
+static void TestDim2_M2_OneRepresentativeGuardCarriedForwardThroughDecodeStepGpu(
     SslmGpuContext* ctx, SslmGpuSequenceHandle* seq_with_oversized_context) {
 	// A malformed budget below the whole-layer floor is the cheapest carried-forward guard to
 	// force through the new entry point (DispatchBudgetTooSmall, unchanged from the substrate).
+	// ROUTED, not fixed here: the other eight of gpu_layer_loop_guards.def's own nine guards each
+	// need their own hostile fixture to force through sslm_decode_step_gpu specifically -- larger
+	// scope than this repair pass, a follow-up coverage task for whoever next extends this file.
 	CHECK(sslm_decode_step_gpu(ctx, seq_with_oversized_context, nullptr, /*dispatch_budget=*/1u) ==
 	      SSLM_DISPATCH_BUDGET_TOO_SMALL);
 }
@@ -133,7 +138,7 @@ int main(int argc, char** argv) {
 	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
-	volatile void* addr_1 = (void*)&TestDim2_M2_NineGuardLadderReachedThroughDecodeStepGpu; (void)addr_1;
+	volatile void* addr_1 = (void*)&TestDim2_M2_OneRepresentativeGuardCarriedForwardThroughDecodeStepGpu; (void)addr_1;
 	// Force emission (StandardsDocument.md Sec5.4: a red cell must fail for its OWN
 	// reason, LNK2019 on the 1.0 API calls inside, never be silently dead-code-eliminated
 	// because nothing in this TU calls it yet -- taking its address is a genuine `use`).
@@ -210,7 +215,7 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_model_map(ctx, &view_1p5b, GpuResidencyConfig{}, &model) == SSLM_OK);
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
-		TestDim2_M2_NineGuardLadderReachedThroughDecodeStepGpu(ctx, seq);
+		TestDim2_M2_OneRepresentativeGuardCarriedForwardThroughDecodeStepGpu(ctx, seq);
 		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);

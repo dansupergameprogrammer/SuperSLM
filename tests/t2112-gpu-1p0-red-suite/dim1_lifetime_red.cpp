@@ -1,11 +1,21 @@
 // T-2112 (Curie) -- Dim 1 (Lifetime and reuse), design Sec11 dim1. 4 cells: 2 mechanism, 2
-// product. Every cell calls the declared 1.0 API (sslm_gpu_1p0.h) -- RED BY LINK: no .cpp
-// anywhere in this tree defines sslm_gpu_context_create/sslm_gpu_model_map/sslm_gpu_seq_create/
-// etc (grep of src/ at this suite's own authoring commit finds none), so this file COMPILES
-// clean (the declared surface exists, dim-7's own interface_probe already proves that) and FAILS
-// TO LINK (LNK2019 unresolved external symbol, one per call site) until the build seat (T-2113,
-// design Sec10 B1-B3) lands. See Claude/Curie/t2112-1p0-red-suite-2026-08-15.md (Wizard repo)
-// Sec3 for the full cell derivation and the link transcript this file's own build produced.
+// product. Every cell calls the declared 1.0 API (sslm_gpu_1p0.h).
+//
+// D-SLM3380/D-SLM3412 REPAIR (Curie, 2026-08-15): the T-2114 fix round (build log Sec22.1) found
+// and fixed the "decode call against a still-Submitted sequence returns SSLM_BUSY" gap in dim9
+// alone; the casebook's own N3 re-run (Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md
+// Sec14.1) diagnosed the identical gap here (dim1's own dominant failure lines, pre-repair:
+// :107 x63, :92 x15, :120 x10 -- every one a tight decode loop, or a decode immediately followed
+// by release/another decode, with no `sslm_gpu_ready` poll between calls). Every raw
+// `sslm_decode_step_gpu(...) == SSLM_OK` check in this file is now `RunStepBlocking(...)`
+// (fixture_common.h, submit-then-drain-to-completion) -- the real async contract (design
+// Sec4.3/Sec9's own `Busy` row: a decode call, a save/restore/reset/release, or a model_unmap
+// against a `Submitted` sequence all return `Busy` until drained). The prose "FEATURE ORACLE ...
+// wired here once the build seat's harness exposes it" stand-ins (build log Sec22.10's own named
+// sweep) are replaced with the real, executed per-step CPU/GPU bit-equality comparison
+// tools/t2113_b7_batch_smoke.cpp/tools/t2113_b8_thread_smoke.cpp/dim9's own C1 rewrite already
+// established (StepCpu/CpuOracleModel, fixture_common.h) -- each cell's own claim is now checked
+// by execution, not asserted in a comment.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -21,7 +31,8 @@ using namespace superslm;
 // (build-seat-owned, once GpuResidencyConfig has a real definition) supplies.
 static void TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(SslmGpuContext* ctx,
                                                               SslmGpuModelHandle* model_a,
-                                                              SslmGpuModelHandle* model_b) {
+                                                              SslmGpuModelHandle* model_b,
+                                                              const CpuOracleModel* oracle_a) {
 	CHECK(model_a != nullptr);
 	SslmGpuSequenceHandle* seq_a = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_a, /*context_cap=*/64, &seq_a) == SSLM_OK);
@@ -33,11 +44,24 @@ static void TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(SslmGpuContext* ctx,
 	// artifact, content-hash-keyed per design Sec5.1) must not evict or alias model_a's own
 	// resident weights.
 	CHECK(model_b != nullptr);
-	// seq_a's own next decode step must still read artifact_a's weights, not artifact_b's --
-	// asserted via per-step CPU/GPU bit-equality against a CPU-oracle decode of artifact_a alone
-	// (the oracle apparatus dim6 owns; here the cell asserts only that model_a's handle is still
-	// independently addressable and the call proceeds, which is the lifetime-isolation claim).
-	CHECK(sslm_decode_step_gpu(ctx, seq_a, /*adapter_or_null=*/nullptr, 24u) == SSLM_OK);
+	// seq_a's own next decode step must still read artifact_a's weights, not artifact_b's.
+	// FullTokenBudget (not the bare per-layer 24u): this step is compared to the CPU oracle
+	// below, which decodes one COMPLETE token per call (fixture_common.h's own header note).
+	const uint32_t budget_a = oracle_a ? FullTokenBudget(oracle_a->num_hidden_layers) : 24u;
+	CHECK(RunStepBlocking(ctx, seq_a, /*adapter=*/nullptr, budget_a));
+	// FEATURE ORACLE, executed: per-step CPU/GPU bit-equality against model_a's own CPU oracle --
+	// if model_b's own map had evicted or aliased model_a's resident weights, this step's own
+	// hidden_codes would diverge from a fresh CPU-side decode of the SAME token against
+	// model_a's own weights.
+	if (oracle_a) {
+		SeqSnapshot gpu{};
+		CHECK(CaptureSnapshot(seq_a, &gpu));
+		CpuOracleRunner cpu;
+		cpu.Init(*oracle_a);
+		CHECK_MSG(cpu.StepMatchesGpu(5, *oracle_a, gpu),
+		          "M1: seq_a's own step diverges from model_a's own CPU oracle -- model_b's own "
+		          "map may have evicted or aliased model_a's resident weights");
+	}
 	CHECK(sslm_gpu_seq_release(ctx, seq_a) == SSLM_OK);
 	CHECK(sslm_gpu_model_unmap(ctx, model_a) == SSLM_OK);
 	CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_OK);
@@ -48,13 +72,14 @@ static void TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(SslmGpuContext* ctx,
 // buffer must never read the freed handle's stale content" -- the direct D-SLM3311 reproduction
 // against the sequence-handle allocator) ---
 static void TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(
-    SslmGpuContext* ctx, SslmGpuModelHandle* model) {
+    SslmGpuContext* ctx, SslmGpuModelHandle* model, const CpuOracleModel* oracle) {
 	SslmGpuSequenceHandle* seq1 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq1) == SSLM_OK);
 	CHECK(sslm_gpu_seq_embed_token(ctx, seq1, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	// Advance seq1's own K/V state so a stale read would be observable (not a freshly-zeroed
 	// buffer, which would hide the defect this cell exists to catch).
-	CHECK(sslm_decode_step_gpu(ctx, seq1, nullptr, 24u) == SSLM_OK);
+	const uint32_t budget = oracle ? FullTokenBudget(oracle->num_hidden_layers) : 24u;
+	CHECK(RunStepBlocking(ctx, seq1, nullptr, budget));
 	CHECK(sslm_gpu_seq_release(ctx, seq1) == SSLM_OK);
 	// Forced address-reuse pressure: churn several short-lived handles before the one under test,
 	// per this cell's own product twin below (design Sec11 dim1 product cell 1's own "forced via
@@ -68,11 +93,21 @@ static void TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(
 	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq2) == SSLM_OK);
 	CHECK(sslm_gpu_seq_embed_token(ctx, seq2, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
 	// seq2's first decode step must be identical to a sequence created fresh with no prior
-	// history at this address -- the per-step CPU/GPU bit-equality oracle (dim6) is the
-	// instrument; this cell's own claim is narrower and structural: seq2 != seq1's own stale
-	// state leaking through, checked here by requiring seq2's own handle to report a fresh
-	// Idle-state decode succeeding identically regardless of seq1's prior occupancy of the slot.
-	CHECK(sslm_decode_step_gpu(ctx, seq2, nullptr, 24u) == SSLM_OK);
+	// history at this address.
+	CHECK(RunStepBlocking(ctx, seq2, nullptr, budget));
+	// FEATURE ORACLE, executed: seq2's own step is compared to a fresh CPU-side decode of the
+	// same token -- a stale read from seq1's freed slot would diverge from this, since seq1 was
+	// advanced one real step (not left zeroed) before release specifically so a stale read is
+	// observable here.
+	if (oracle) {
+		SeqSnapshot gpu{};
+		CHECK(CaptureSnapshot(seq2, &gpu));
+		CpuOracleRunner cpu;
+		cpu.Init(*oracle);
+		CHECK_MSG(cpu.StepMatchesGpu(5, *oracle, gpu),
+		          "M2: seq2's own first step diverges from a fresh CPU-side decode -- seq1's "
+		          "freed, advanced state may have leaked through address reuse");
+	}
 	CHECK(sslm_gpu_seq_release(ctx, seq2) == SSLM_OK);
 }
 
@@ -80,16 +115,21 @@ static void TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(
 // the first's release may have freed, per-step CPU/GPU bit-equality on the second sequence's full
 // run) ---
 static void TestDim1_P1_RealArtifactAddressReuseBitEquality(SslmGpuContext* ctx,
-                                                              SslmGpuModelHandle* model_1p5b) {
+                                                              SslmGpuModelHandle* model_1p5b,
+                                                              const CpuOracleModel* oracle) {
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("real 1.5B artifact not supplied (--model1p5b=PATH) -- product cell not run");
 		return;
 	}
+	const uint32_t nhl_seq1 = oracle ? oracle->num_hidden_layers : 0;
 	SslmGpuSequenceHandle* seq1 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq1) == SSLM_OK);
-	CHECK(sslm_gpu_seq_embed_token(ctx, seq1, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
+	// Each of the 16 steps re-embeds token 5 fresh (RunFullTokenStep) -- a GPU sequence's
+	// layer_index does not auto-wrap after completing a token (fixture_common.h's own header
+	// note); without the re-embed, every call past the first would resume an already-complete
+	// sequence rather than start a fresh token.
 	for (int step = 0; step < 16; ++step)
-		CHECK(sslm_decode_step_gpu(ctx, seq1, nullptr, 24u) == SSLM_OK);
+		CHECK(RunFullTokenStep(ctx, seq1, nullptr, nhl_seq1, 5));
 	CHECK(sslm_gpu_seq_release(ctx, seq1) == SSLM_OK);
 	for (int i = 0; i < 32; ++i) {  // repeated create/release cycling, forcing address reuse
 		SslmGpuSequenceHandle* churn = nullptr;
@@ -98,13 +138,26 @@ static void TestDim1_P1_RealArtifactAddressReuseBitEquality(SslmGpuContext* ctx,
 	}
 	SslmGpuSequenceHandle* seq2 = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model_1p5b, 64, &seq2) == SSLM_OK);
-	CHECK(sslm_gpu_seq_embed_token(ctx, seq2, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
-	// FEATURE ORACLE (StandardsDocument.md Sec5.4 / catalog dim10): per-step CPU/GPU bit-equality
-	// against superslm::RunLayerLoop (the CPU oracle) for the FULL 64-step run on seq2, proving no
-	// residue from seq1 survived -- the oracle call itself is the build seat's own T-2100/O1
-	// harness (design Sec11 dim6), wired here once that harness's own 1.0-API entry point exists.
-	for (int step = 0; step < 64; ++step)
-		CHECK(sslm_decode_step_gpu(ctx, seq2, nullptr, 24u) == SSLM_OK);
+	// FEATURE ORACLE, executed (StandardsDocument.md Sec5.4 / catalog dim10): per-step CPU/GPU
+	// bit-equality against superslm::RunLayerLoop (the CPU oracle) for the FULL 64-step run on
+	// seq2, proving no residue from seq1 survived. Each step re-embeds token 5 fresh
+	// (RunFullTokenStep) -- a GPU sequence's layer_index does not auto-wrap after completing a
+	// token, so a multi-step loop compared to the CPU oracle (which resets every call) needs the
+	// re-embed every iteration, not once before the loop (fixture_common.h's own header note).
+	CpuOracleRunner cpu;
+	if (oracle) cpu.Init(*oracle);
+	const uint32_t nhl = oracle ? oracle->num_hidden_layers : 0;
+	for (int step = 0; step < 64; ++step) {
+		CHECK(RunFullTokenStep(ctx, seq2, nullptr, nhl, 5));
+		if (oracle) {
+			SeqSnapshot gpu{};
+			CHECK(CaptureSnapshot(seq2, &gpu));
+			CHECK_MSG(cpu.StepMatchesGpu(5, *oracle, gpu),
+			          "P1: seq2's own step %d diverges from the CPU oracle -- residue from seq1's "
+			          "freed slot may have survived address reuse",
+			          step);
+		}
+	}
 	CHECK(sslm_gpu_seq_release(ctx, seq2) == SSLM_OK);
 }
 
@@ -116,7 +169,7 @@ static void TestDim1_P2_TenSequenceLifecycleNoLeak(SslmGpuContext* ctx,
 		SslmGpuSequenceHandle* seq = nullptr;
 		CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
 		CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);  // T-2113 B3.5 (D-SLM3367)
-		CHECK(sslm_decode_step_gpu(ctx, seq, nullptr, 24u) == SSLM_OK);
+		CHECK(RunStepBlocking(ctx, seq, nullptr, 24u));
 		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 	}
 	// LiveAllocationCount()-style accounting (design's own B12 precedent) is a build-seat-owned
@@ -126,13 +179,6 @@ static void TestDim1_P2_TenSequenceLifecycleNoLeak(SslmGpuContext* ctx,
 	// artifact's Sec3 as an open wiring point rather than invented as a new API entry here.
 	CHECK(sslm_gpu_model_unmap(ctx, model) != SSLM_MODEL_HAS_LIVE_SEQUENCES);
 }
-
-// T-2114 (M2, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): the local
-// re-declaration this comment used to complete here is retired -- sslm_gpu_1p0.h (this
-// directory) now defines GpuContextConfig/GpuResidencyConfig as complete struct bodies
-// itself, matching gpu_1p0.h field-for-field (both were incomplete forward declarations
-// there before this fix, the real declaration-shape divergence M2 found). A second complete
-// definition in this TU would now be a duplicate-definition error, not merely redundant.
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
@@ -158,6 +204,15 @@ int main(int argc, char** argv) {
 	bool have_1p5b = !g_model_1p5b_path.empty() && LoadRealModel(g_model_1p5b_path, &view_a, &bytes_a, &err);
 	bool have_0p5b = !g_model_0p5b_path.empty() && LoadRealModel(g_model_0p5b_path, &view_b, &bytes_b, &err);
 
+	CpuOracleModel oracle_a{};
+	bool have_oracle_a = false;
+	if (have_1p5b) {
+		std::string oerr;
+		have_oracle_a = LoadCpuOracleModel(view_a, &oracle_a, &oerr);
+		CHECK_MSG(have_oracle_a, "dim1: CPU oracle failed to load against the real 1.5B artifact -- %s",
+		          oerr.c_str());
+	}
+
 	if (have_1p5b && have_0p5b) {
 		// M1 unmaps both handles internally -- map two DEDICATED handles for it so the primary
 		// handle used by M2/P1/P2 below is unaffected.
@@ -165,15 +220,15 @@ int main(int argc, char** argv) {
 		SslmGpuModelHandle* m1_b = nullptr;
 		CHECK(sslm_gpu_model_map(ctx, &view_a, GpuResidencyConfig{}, &m1_a) == SSLM_OK);
 		CHECK(sslm_gpu_model_map(ctx, &view_b, GpuResidencyConfig{}, &m1_b) == SSLM_OK);
-		TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(ctx, m1_a, m1_b);
+		TestDim1_M1_TwoLiveModelHandlesContentHashKeyed(ctx, m1_a, m1_b, have_oracle_a ? &oracle_a : nullptr);
 	} else {
 		SKIP_MSG("dim1 M1 needs both --model1p5b=PATH and --model0p5b=PATH -- not run");
 	}
 
 	if (have_1p5b) {
 		CHECK(sslm_gpu_model_map(ctx, &view_a, GpuResidencyConfig{}, &model_a) == SSLM_OK);
-		TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(ctx, model_a);
-		TestDim1_P1_RealArtifactAddressReuseBitEquality(ctx, model_a);
+		TestDim1_M2_ReleasedThenCreatedSequenceNeverReadsStaleContent(ctx, model_a, have_oracle_a ? &oracle_a : nullptr);
+		TestDim1_P1_RealArtifactAddressReuseBitEquality(ctx, model_a, have_oracle_a ? &oracle_a : nullptr);
 		// P2's own body calls sslm_gpu_model_unmap(model_a) itself at its tail (its own cell
 		// asserts the unmap succeeds once every sequence it created is released) -- run last,
 		// no further unmap call on model_a after this returns (the handle is gone).
