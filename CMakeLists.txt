@@ -168,6 +168,30 @@ if(SUPERSLM_BUILD_GPU)
 		message(FATAL_ERROR "SUPERSLM_BUILD_GPU requires Windows: src/gpu/*.cpp is a D3D12/HLSL implementation with no non-Windows backend.")
 	endif()
 
+	# T-2115 round 4 (NEW-3, Claude/Poirot/6f60491-t2115-cmake-product-
+	# surface.md, second confirmation): the project's own declared floor is
+	# 3.16 (restored in round 3, NEW-1 -- CPU-only Layer 1 embeddability is
+	# this project's own thesis, D-SLM13, and stays reachable on CMake
+	# 3.16-3.19). The GPU feature below this point does not: the SUPERSLM_
+	# GPU_SHADER_OUT_DIR set further down carries a $<CONFIG> generator
+	# expression on multi-config generators, and that string reaches
+	# add_custom_command(OUTPUT ...) -- CMake's own Help/command/
+	# add_custom_command.rst documents generator expressions in OUTPUT as
+	# `.. versionadded:: 3.20`, unconditionally, not the plain-genex-since-
+	# always shape install(FILES) has. Below 3.20 the genex is not expanded,
+	# so the build would attempt to create and write into a directory
+	# literally named "$<CONFIG>" -- an illegible path error (`<`/`>` are
+	# invalid Windows path characters) instead of the legible one-line
+	# refusal cmake_minimum_required exists to give. Gated here, not by
+	# raising the project's own declared floor: only the opt-in GPU target
+	# needs 3.20; the default, CPU-only configure must not pay for a feature
+	# it never reaches (confirmed by execution -- at SUPERSLM_BUILD_GPU=OFF
+	# neither shader output directory is ever created, so this branch is
+	# never entered for the CPU-only build's own CMake floor).
+	if(CMAKE_VERSION VERSION_LESS "3.20")
+		message(FATAL_ERROR "SUPERSLM_BUILD_GPU=ON requires CMake 3.20 or higher: the GPU target's per-config shader staging (add_custom_command(OUTPUT ...) with a $<CONFIG> generator expression, used on multi-config generators) needs CMake 3.20's own generator-expression support in OUTPUT (CMake Help/command/add_custom_command.rst). The CPU-only build (SUPERSLM_BUILD_GPU=OFF, the default) does not require this and still configures on CMake 3.16+.")
+	endif()
+
 	# dxc.exe (the DirectX Shader Compiler) is not reliably on PATH; build.bat
 	# hardcodes one Windows Kits 10 version. Search PATH first, then fall back
 	# to a glob over every installed Windows Kits 10 SDK version's x64 dxc.exe,
