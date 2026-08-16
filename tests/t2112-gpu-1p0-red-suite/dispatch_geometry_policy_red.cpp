@@ -2,7 +2,7 @@
 // 37 §11 cells -- a pin on design Sec6.1's own build-decomposition claim, "re-derived against 24,
 // not the stale 17"). Unlike every other file in this suite, this one links against the REAL,
 // ALREADY-SHIPPED `PlanDispatchBudgetGpu` (include/superslm/gpu_port.h:474, defined
-// src/gpu/superslm_gpu.cpp:2049) -- pure policy arithmetic, no device required, already built on
+// src/gpu/superslm_gpu.cpp:2673) -- pure policy arithmetic, no device required, already built on
 // main@495fbb4. Its own comment (gpu_port.h:467-469) states the CURRENT, PRE-B4 constant:
 // `complete_layers = min(dispatch_budget / 17, ...)`. Design Sec6.1: the 1.0 build re-derives this
 // against 24 (T-2105's own dispatches/layer count), not 17. This cell is RED BY ASSERTION, not

@@ -1,9 +1,4 @@
-# 3.20, raised from 3.16 (T-2115 fix round, S1, Claude/Poirot/6f60491-t2115-
-# cmake-product-surface.md): install(FILES ...) below installs the compiled
-# GPU shaders from a path carrying a $<CONFIG> generator expression on
-# multi-config generators, which install(FILES) only resolves against the
-# configuration passed to `cmake --install --config <cfg>` since CMake 3.20.
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 project(superslm VERSION 1.0.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
@@ -222,12 +217,35 @@ if(SUPERSLM_BUILD_GPU)
 		set(SUPERSLM_GPU_SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 	endif()
 
+	# T-2115 fix round 3 (NEW-1, Claude/Poirot/6f60491-t2115-cmake-product-
+	# surface.md): a second, FIXED copy of every compiled .cso, independent of
+	# $<CONFIG>, staged here purely so install(FILES ...) below never needs a
+	# generator expression in its file list -- install(FILES ...) resolving a
+	# $<CONFIG>-bearing path against `cmake --install --config <cfg>` is not,
+	# on inspection of CMake's own documentation, gated on a cmake_minimum_
+	# required floor above 3.16 the way an earlier round of this fix
+	# incorrectly justified (that round cited install(FILES RENAME ...)'s own
+	# 3.20 addition, a feature this file does not use); raising the floor
+	# anyway would have cost CMake 3.16-3.19 users -- Ubuntu 20.04, Debian
+	# 11 -- the ability to configure this project AT ALL, for a Windows-only,
+	# off-by-default target's install detail. Avoided entirely by never
+	# putting a generator expression in an install(FILES ...) list: this
+	# staging copy is a plain, configure-time-known path, unconditionally the
+	# same string on every generator and every configuration. A single
+	# file(MAKE_DIRECTORY ...) below (not a build-time step) is correct here,
+	# unlike SUPERSLM_GPU_SHADER_OUT_DIR above -- this path carries no
+	# generator expression for file(MAKE_DIRECTORY ...) to fail to evaluate.
+	set(SUPERSLM_GPU_SHADER_STAGE_DIR "${CMAKE_BINARY_DIR}/gpu-shaders-staged")
+	file(MAKE_DIRECTORY "${SUPERSLM_GPU_SHADER_STAGE_DIR}")
+
 	set(SUPERSLM_GPU_SHADER_OUTPUTS "")
+	set(SUPERSLM_GPU_SHADER_STAGED "")
 	foreach(_superslm_shader ${SUPERSLM_GPU_SHADER_SOURCES})
 		get_filename_component(_superslm_shader_name "${_superslm_shader}" NAME_WE)
 		set(_superslm_shader_cso "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_superslm_shader_name}.cso")
+		set(_superslm_shader_staged "${SUPERSLM_GPU_SHADER_STAGE_DIR}/${_superslm_shader_name}.cso")
 		add_custom_command(
-			OUTPUT "${_superslm_shader_cso}"
+			OUTPUT "${_superslm_shader_cso}" "${_superslm_shader_staged}"
 			# The output directory is created here, at build time, rather than via a
 			# configure-time file(MAKE_DIRECTORY ...): SUPERSLM_GPU_SHADER_OUT_DIR
 			# carries a $<CONFIG> generator expression on multi-config generators,
@@ -235,17 +253,20 @@ if(SUPERSLM_BUILD_GPU)
 			# literal, un-expanded string at configure time).
 			COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
 			COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_superslm_shader_cso}" "${_superslm_shader}" -O3 -HV 2018 -WX
+			COMMAND "${CMAKE_COMMAND}" -E copy "${_superslm_shader_cso}" "${_superslm_shader_staged}"
 			DEPENDS "${_superslm_shader}" ${SUPERSLM_GPU_SHADER_HEADERS}
 			COMMENT "dxc: ${_superslm_shader_name}.hlsl -> ${_superslm_shader_name}.cso"
 			VERBATIM
 		)
 		list(APPEND SUPERSLM_GPU_SHADER_OUTPUTS "${_superslm_shader_cso}")
+		list(APPEND SUPERSLM_GPU_SHADER_STAGED "${_superslm_shader_staged}")
 	endforeach()
 	unset(_superslm_shader)
 	unset(_superslm_shader_name)
 	unset(_superslm_shader_cso)
+	unset(_superslm_shader_staged)
 
-	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS})
+	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS} ${SUPERSLM_GPU_SHADER_STAGED})
 
 	add_library(superslm_gpu STATIC
 		src/gpu/gpu_1p0.cpp
@@ -309,16 +330,14 @@ if(TARGET superslm_gpu)
 	# catches std::exception and returns a generic failure status -- an
 	# installed package with the library but not the shaders links and runs
 	# sslm_gpu_context_create cleanly, then fails opaquely at first dispatch.
-	# SUPERSLM_GPU_SHADER_OUTPUTS carries a $<CONFIG> generator expression on
-	# multi-config generators (matching the custom-command outputs above);
-	# install(FILES ...) resolves it against whatever configuration
-	# `cmake --install --config <cfg>` names (CMake 3.20+, this project's own
-	# floor as of this fix). The .cso bytecode itself does not vary by
-	# Debug/Release -- only the build-tree path used to reach it does -- so
-	# every configuration's shaders land at the identical installed
-	# destination, overwriting on a second `--install --config <other>` with
-	# byte-identical content.
-	install(FILES ${SUPERSLM_GPU_SHADER_OUTPUTS}
+	# Installs from SUPERSLM_GPU_SHADER_STAGED (NEW-1 fix, round 3), the fixed,
+	# non-config-dependent copy staged above -- no generator expression
+	# anywhere in this FILES list. The .cso bytecode itself does not vary by
+	# Debug/Release -- only the build-tree path used to reach it does -- so a
+	# single staged copy, produced once regardless of which configuration was
+	# actually built, is correct for every `cmake --install` regardless of
+	# `--config`.
+	install(FILES ${SUPERSLM_GPU_SHADER_STAGED}
 		DESTINATION ${SUPERSLM_INSTALL_GPU_SHADER_DIR}
 	)
 endif()

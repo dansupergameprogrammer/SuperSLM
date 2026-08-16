@@ -838,7 +838,7 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	if (context_cap < 1) {
-		// Mirrors RunLayerLoopGpu's own InvalidContextCap guard (superslm_gpu.cpp:914,
+		// Mirrors RunLayerLoopGpu's own InvalidContextCap guard (superslm_gpu.cpp:1038,
 		// "context_cap < 1") -- design Sec9 assigns this call's own sizing failures to
 		// SequenceKvBufferMismatch, so a non-positive context_cap (which the sizing
 		// formula below cannot produce a sane buffer from either) takes that status

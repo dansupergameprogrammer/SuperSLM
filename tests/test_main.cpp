@@ -24327,8 +24327,8 @@ static void TestT2053_Item3_LastWeightUploadWasSkipped() {
 // item-3 cell above never exercises P2's own defect class -- its own call 3 rejection
 // (ChainInputOutOfDomain) happens deep inside the per-layer forward pass, past the point normal
 // weight-upload bookkeeping already runs and sets the flag correctly on its own. P2's own bug was
-// at the NINE-GUARD LADDER'S entry point (superslm_gpu.cpp:581), which returns BEFORE weight
-// bookkeeping runs at all -- before the fix (superslm_gpu.cpp:541, "set false at entry"), a
+// at the NINE-GUARD LADDER'S entry point (superslm_gpu.cpp:1037), which returns BEFORE weight
+// bookkeeping runs at all -- before the fix (superslm_gpu.cpp:990, "set false at entry"), a
 // guard-rejecting call immediately after a cache-hit call read the PREVIOUS call's own true,
 // stale. This cell is that exact sequence, three lines against the existing fixture shape.
 static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCacheHit() {
@@ -24360,7 +24360,7 @@ static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCache
 
 	// Call 3: layer_budget=0 -- rejected by the FIRST guard in the ladder
 	// (InvalidLayerBudget), before any weight bookkeeping runs. Before the
-	// superslm_gpu.cpp:541 fix, this read call 2's own stale `true`.
+	// superslm_gpu.cpp:990 fix, this read call 2's own stale `true`.
 	SequenceLayerState seq3;
 	int8_t codes3[2] = {5, -5};
 	seq3.hidden_codes = codes3;
@@ -24376,7 +24376,7 @@ static void TestT2063_MA_LastWeightUploadWasSkipped_FalseOnGuardRejectAfterCache
 	          "meaning what it claims",
 	          superslm::SslmForwardStatusName(st3));
 	CHECK_MSG(!superslm_gpu::LastWeightUploadWasSkipped(),
-	          "T2063 M-a (P2, superslm_gpu.cpp:541): a guard-rejecting call immediately after a "
+	          "T2063 M-a (P2, superslm_gpu.cpp:990): a guard-rejecting call immediately after a "
 	          "cache-hit call must NOT read the PREVIOUS call's own true -- "
 	          "LastWeightUploadWasSkipped() must read false on this rejecting path");
 }

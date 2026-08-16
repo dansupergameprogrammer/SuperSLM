@@ -7,7 +7,7 @@
 //
 // D-SLM3412 REPAIR (Curie, 2026-08-15): the casebook's own N3 re-run (Claude/Poirot/
 // 50f3d5d-t2113-1p0-gpu-core-build-review.md Sec14.2) diagnosed this file's own crash
-// (`superslm_gpu.cpp:1467`, `HR FAIL 0x80004005`, exit 9): M1 and P1 launched concurrent
+// (`superslm_gpu.cpp:1475`, `HR FAIL 0x80004005`, exit 9): M1 and P1 launched concurrent
 // `sslm_decode_step_gpu` calls with NO MUTEX anywhere in the file -- the exact documented-
 // unguarded residual design Sec5.4/`gpu_1p0.cpp`'s own `SslmGpuContext` comment and B8's own
 // account of the undrained-batch hang all name: "a caller driving two threads' decode calls
