@@ -114,6 +114,31 @@ def test_per_header_scan_matches_pinned_oracle():
 
 
 @requires_clang
+def test_derived_population_list_length_matches_the_oracle():
+    """T-2125 fix round (Poirot 242dc12-t2125-ci-drift-review.md, Significant
+    4): `test_per_header_scan_matches_pinned_oracle` above compares KEYSETS --
+    (header, line, name) triples -- so it stayed green even while
+    `_dedup_sort`'s old key silently stopped deduplicating a class template's
+    own member: `derive_population_per_header()` returned 22 entries for this
+    20-site population (one row per `ClassTemplateSpecializationDecl` Clang
+    emits for `SslmAmplifyingFoldScaleView<Kind>::Parse`'s two real
+    instantiations plus the primary template's own declaration), and nothing
+    here compared the LIST's own length against the oracle it is regenerated
+    from. `python tests/ci/derive_bad_alloc_membership.py` is the command the
+    oracle file's own header names as its regeneration command; this pins
+    that the number that command prints is the population's true size, not
+    the instantiation count of whichever member happens to be a template."""
+    oracle = _load_pinned_oracle()
+    derived = dbam.derive_population_per_header()
+    assert len(derived) == len(oracle), (
+        f"derive_population_per_header() returned {len(derived)} entries for "
+        f"a {len(oracle)}-site pinned oracle -- the list is no longer the same "
+        f"size as its own deduplicated keyset, which means _dedup_sort's key "
+        f"is admitting more than one row per (header, line, name)"
+    )
+
+
+@requires_clang
 def test_scan_strategy_independence_all_three_derive_identical_population():
     """The direct re-run of the property the strike found FALSE of the prior
     rule (Claude/Loki/superslm-sharden678-bundle-strike-2026-07-23.md Sec4.3:

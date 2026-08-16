@@ -30,11 +30,19 @@ internally" (`src/forward/forward_sites.cpp`) -- is not a call site and must
 not fail this check; a raw substring scan cannot tell the two apart, which is
 exactly the gap this correction closes (found live: that exact comment
 reddened the real-tree end-to-end cell with zero code change, a checker
-defect, not a code regression). A leaf name inside a STRING literal is still
-an accepted over-approximation -- this module strips comments, not string
-literals, because no production forward TU has ever had reason to name a
-leaf inside a string, and the rule remains a ban rather than a full
-classifier for that one remaining shape.
+defect, not a code regression). A leaf name inside a STRING or char literal
+is still an accepted over-approximation -- this module tracks literal state
+only to keep a `//`/`/*` inside one from being misread as a comment opener
+(CORRECTED further, T-2125 fix round, Poirot 242dc12-t2125-ci-drift-
+review.md Significant 1: the first version of the comment stripper had no
+notion of "inside a literal" at all, which traded that false positive for a
+false NEGATIVE -- a `//` inside an ordinary string blanked the rest of its
+line, and a bare `"/*"` string opened a block comment that swallowed every
+real call up to the next genuine `*/`; both executed and reproduced live at
+review time, see `_strip_comments_preserving_line_numbers`'s own docstring
+below for the fix), it does not classify what the literal's own content
+means, and the rule remains a ban rather than a full classifier for that one
+remaining shape.
 
 WHERE THIS STANDS AS OF THE S3.1 HEADER-CONTRACT BUILD (2026-07-28, commit
 32aca0c, T-200): `src/forward/checked_chain_funnel.cpp` now exists and
@@ -499,33 +507,123 @@ def _leaf_pattern(leaf: str) -> re.Pattern[str]:
 def _strip_comments_preserving_line_numbers(text: str) -> str:
     """`text` with every `//` line comment and `/* */` block comment blanked to
     spaces -- every newline byte kept exactly where it was, so line numbers
-    computed against the RETURNED text still match the original file line-for-
-    line. String and char literals are left alone (T-2125's own residual, named
-    in this module's docstring): this function closes the comment-vs-code
-    ambiguity `find_banned_leaf_uses` used to have, not the (separate, still
-    accepted) string-literal one. Mirrors the `strip_comments` convention
-    already used by tests/ci/check_gpu_guard_status_parity.py and tests/ci/
-    check_gemm_site_thread_width_parity.py, adapted to BLANK rather than DELETE
-    so the (line, leaf) hits this module reports stay accurate against the
-    original file."""
+    computed against the RETURNED text still match the original file
+    line-for-line. Mirrors the `strip_comments` convention already used by
+    tests/ci/check_gpu_guard_status_parity.py and tests/ci/
+    check_gemm_site_thread_width_parity.py, adapted to BLANK rather than
+    DELETE so the (line, leaf) hits this module reports stay accurate against
+    the original file.
+
+    CORRECTED (T-2125 fix round, Poirot 242dc12-t2125-ci-drift-review.md,
+    Significant 1): the first version of this function scanned for `//` and
+    `/*` with no notion of "inside a string or char literal," which traded
+    the false positive it was written to close for a false NEGATIVE -- the
+    harmful direction for a ban. A `//` inside an ordinary string (e.g.
+    `"scheme://host"`) blanked the rest of its line, silently hiding a real
+    call later on that same line; a bare `"/*"` string opened a block comment
+    that ran to the next real `*/`, however far away, swallowing every real
+    call in between. Both executed and reproduced live at review time.
+
+    String literals (`"..."`), char literals (`'...'`), and raw string
+    literals (`R"delim(...)delim"`, with the u8/u/U/L encoding-prefix
+    variants) are now tracked as a literal state, entered and exited by this
+    same single pass, and their bytes are copied through verbatim rather than
+    scanned for `//`/`/*` -- a comment marker inside one is literal content,
+    never a comment opener. Backslash escapes inside a string or char literal
+    (`\\"`, `\\'`, `\\\\`) are honored so an escaped quote does not end the
+    literal early. Leaf names inside a (non-raw-string-delimiter) literal
+    are therefore still reported by `find_banned_leaf_uses`, because the
+    literal's own text is preserved, not blanked -- the module docstring's
+    named, deliberate over-approximation for that one remaining shape is
+    unchanged by this correction.
+
+    A C++14 digit separator (`1'000`) is distinguished from a char-literal
+    opener the same way this repo's own T-1381/T-1383 sweep already had to
+    for the sibling AST-based door scanner this module replaced (see this
+    module's history above): a `'` immediately preceded by an alphanumeric
+    character is treated as a separator, not an opener, because no valid
+    char literal can be immediately preceded by an identifier or digit
+    character with no operator between them -- the exact defect class that
+    sweep found silently erasing everything after an odd-count digit
+    separator in a hand-rolled stripper, closed here before it could recur
+    in this one."""
     out = []
     i = 0
     n = len(text)
+    _RAW_STRING_PREFIXES = ("u8R", "uR", "UR", "LR", "R")
     while i < n:
+        c = text[i]
         two = text[i:i + 2]
+
         if two == "//":
             j = text.find("\n", i)
             end = n if j == -1 else j
             out.append(" " * (end - i))
             i = end
             continue
+
         if two == "/*":
             j = text.find("*/", i + 2)
             end = n if j == -1 else j + 2
-            out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+            out.append("".join("\n" if ch == "\n" else " " for ch in text[i:end]))
             i = end
             continue
-        out.append(text[i])
+
+        if c == '"':
+            raw_prefix_len = 0
+            for prefix in _RAW_STRING_PREFIXES:
+                start = i - len(prefix)
+                if start >= 0 and text[start:i] == prefix and (
+                    start == 0 or not (text[start - 1].isalnum() or text[start - 1] == "_")
+                ):
+                    raw_prefix_len = len(prefix)
+                    break
+            if raw_prefix_len:
+                paren = text.find("(", i + 1)
+                if paren == -1:
+                    out.append(text[i:])
+                    i = n
+                    continue
+                delim = text[i + 1:paren]
+                closer = ")" + delim + '"'
+                end_paren = text.find(closer, paren + 1)
+                end = n if end_paren == -1 else end_paren + len(closer)
+                out.append(text[i:end])
+                i = end
+                continue
+            j = i + 1
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(text[i:j])
+            i = j
+            continue
+
+        if c == "'":
+            prev = text[i - 1] if i > 0 else ""
+            if prev.isalnum():
+                out.append(c)
+                i += 1
+                continue
+            j = i + 1
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            out.append(text[i:j])
+            i = j
+            continue
+
+        out.append(c)
         i += 1
     return "".join(out)
 
@@ -534,15 +632,25 @@ def find_banned_leaf_uses(path: str, leaves: tuple[str, ...] = BANNED_LEAVES) ->
     """Every (1-based line number, leaf name) hit in `path`, in file order. A text
     scan, not an AST walk (Sec7.3) -- comments are stripped first (T-2125,
     `_strip_comments_preserving_line_numbers` above), so a leaf name mentioned
-    only in prose is not a hit; a leaf name inside a string literal is still
-    reported (comments are the ambiguity this module closes, not string
-    literals -- see the module docstring), a deliberate, narrower over-
-    approximation of a ban, not an attempt to fully classify intent."""
+    only in prose is not a hit; a leaf name inside a string or char literal is
+    still reported (comments and literal-vs-code confusion are the ambiguities
+    this module closes, not the identity of what is inside a literal -- see the
+    module docstring), a deliberate, narrower over-approximation of a ban, not
+    an attempt to fully classify intent.
+
+    CORRECTED (T-2125 fix round, Poirot 242dc12-t2125-ci-drift-review.md,
+    Significant 2): split on `stripped.splitlines()`, which also breaks on
+    `\\v`, `\\f`, `\\x1c`-`\\x1e`, `\\x85`, `\\u2028`, and `\\u2029` -- none of
+    which starts a new line in the ORIGINAL file's own numbering, so any of
+    those bytes anywhere before a hit shifted every line number reported after
+    it, in the one function whose stated purpose is line-number fidelity.
+    `str.split("\\n")` splits on exactly the byte that starts a new line in a
+    file opened in text mode, no more and no less."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         text = f.read()
     stripped = _strip_comments_preserving_line_numbers(text)
     hits: list[tuple[int, str]] = []
-    for lineno, line in enumerate(stripped.splitlines(), start=1):
+    for lineno, line in enumerate(stripped.split("\n"), start=1):
         for leaf in leaves:
             if _leaf_pattern(leaf).search(line):
                 hits.append((lineno, leaf))
