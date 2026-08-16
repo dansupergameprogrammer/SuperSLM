@@ -16,6 +16,11 @@ set ENG=%HEREDIR%..\..
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -no_logo
 cd /d "%HEREDIR%"
 if not exist obj mkdir obj
+rem T-2124 confirmation N1 (Claude/Poirot/435f730-t2124-adapter-uaf-review.md): ShaderPath()
+rem resolves <exe_dir>\shaders\*.cso, so binaries built into obj\ MUST have the compiled
+rem shaders beside them or every shader load surfaces as SSLM_DEVICE_LOST (the false
+rem D-SLM3388 signature). Copy the engine build's shaders next to the suite binaries.
+if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 
 set OVERALL_LINK_OK=1
 for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp) do (

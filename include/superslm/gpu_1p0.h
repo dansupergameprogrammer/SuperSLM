@@ -125,7 +125,23 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
                                   GpuResidencyConfig cfg, SslmGpuModelHandle** out_model);
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model);
 
-/* --- Sec5.2: adapter map/unmap. Declared for B6. --- */
+/* --- Sec5.2: adapter map/unmap. Declared for B6.
+ * `sslm_gpu_adapter_map`: on a base-hash mismatch against `model`, returns AdapterBaseHashMismatch,
+ * `*out_adapter=nullptr`; on an upload/allocation failure or a foreign `model` (mapped against a
+ * DIFFERENT context than `ctx`, T-2124 D-SLM3446 P1-4), returns DeviceLost, `*out_adapter=nullptr`.
+ *
+ * `sslm_gpu_adapter_unmap`: releases the adapter's own residency and returns Ok -- CARRIES A `Busy`
+ * PRECONDITION (added T-2124, D-SLM3446 P0-3, Claude/Poirot/435f730-t2124-adapter-uaf-review.md S1/
+ * S3; design Sec5.2/Sec9, mirrors sslm_gpu_model_unmap's own identical precondition, D-SLM3417):
+ * returns Busy while any Submitted sequence's own in-flight decode call still has `adapter` bound
+ * -- releasing while such a submission is in flight would free device buffers (lora_ab_buf/
+ * fold_buf) the GPU may still be reading through an already-recorded, not-yet-fenced command list, a
+ * real use-after-free. REMEDY: drain every sequence that bound this adapter (poll sslm_gpu_ready to
+ * completion) and retry -- the same remedy every other Busy-returning release call in this header
+ * already expects a caller to apply. `adapter` mapped against a DIFFERENT context than `ctx`
+ * (T-2124 P1-4) returns DeviceLost, same disposition as the map call's own foreign-`model` case
+ * above. `unmap(ctx, nullptr)` is a documented no-op, returns Ok, checked before the Busy/DeviceLost
+ * preconditions above (matches sslm_gpu_model_unmap(ctx, nullptr)'s own precedent). --- */
 SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* model,
                                     const SslmModelView* adapter_artifact,
                                     SslmGpuAdapterHandle** out_adapter);
