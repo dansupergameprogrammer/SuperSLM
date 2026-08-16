@@ -782,6 +782,15 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
                               size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size);
 
+// T-2113 (N1, design Sec4.2/Sec21, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md`
+// Sec8): reads only the blob's header (magic + `workspace_size`) -- never the body, never a device
+// call -- so `sslm_gpu_seq_restore` can derive the blob's own `context_cap` (Sec5.1's K/V sizing
+// formula) BEFORE it allocates the fresh handle, instead of always sizing that handle from
+// `model->context_cap`. Returns false for a blob too small to hold the header or carrying the wrong
+// magic (a v1 `'SSLM'` blob, or corrupt/foreign data) -- the same "malformed blob" disposition the
+// caller already assigns a rejecting status to; `*out_workspace_size` is untouched on a false return.
+bool PeekGpuSeqBlobWorkspaceSize(const void* blob, size_t blob_size, uint64_t* out_workspace_size);
+
 // --- B3 (Sec5.1, Sec11 B3): descriptor-table binding substrate + int8-native
 // packing. Maps a synthetic multi-array fixture (sized to a real tier's layer count
 // x 42-array-pointer shape, Sec4) through the table-based binder and reads back

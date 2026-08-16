@@ -2883,6 +2883,22 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 	return true;
 }
 
+// T-2113 (N1, design Sec4.2/Sec21): header-only peek -- reads `GpuSeqBlobHeader` and returns its
+// `workspace_size` without touching the body or the device, so gpu_1p0.cpp's own
+// `sslm_gpu_seq_restore` can derive the blob's own `context_cap` (Sec5.1's K/V sizing formula)
+// before it allocates anything. Same magic/size checks `RestoreGpuSequenceState` already applies at its own header read,
+// duplicated here rather than factored through it because this call must run BEFORE the fresh handle
+// (and therefore the `hidden_codes_size`/`out_workspace`/`workspace_size` arguments that function
+// requires) exists.
+bool PeekGpuSeqBlobWorkspaceSize(const void* blob, size_t blob_size, uint64_t* out_workspace_size) {
+	if (!blob || !out_workspace_size || blob_size < sizeof(GpuSeqBlobHeader)) return false;
+	GpuSeqBlobHeader hdr{};
+	std::memcpy(&hdr, blob, sizeof(hdr));
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
+	*out_workspace_size = hdr.workspace_size;
+	return true;
+}
+
 // ===========================================================================
 // B3 (Sec5.1/Sec11 B3): descriptor-table binding substrate. Real GPU
 // dispatch: one shader-visible descriptor heap sized to n_arrays, one RAW

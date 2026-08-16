@@ -39,5 +39,6 @@ uint32_t* SslmGpuSeqHandleLayerIndexForBench(SslmGpuSequenceHandle* seq);
 uint64_t* SslmGpuSeqHandleKvSaturationForBench(SslmGpuSequenceHandle* seq);
 int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq);
 size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq);
+int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq);  // T-2113 (N1)
 
 #endif  // SSLM_GPU_1P0_BENCH_BRIDGE_H

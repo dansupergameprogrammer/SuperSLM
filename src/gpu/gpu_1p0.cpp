@@ -1422,13 +1422,58 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	if (!ctx || !model || !blob) {  // T-2114 (S2): ->destroyed read removed, see model handle's own field comment.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-	// Design Sec5.3: "sslm_gpu_seq_restore allocates a fresh SslmGpuSequenceHandle...
-	// never reusing an existing handle's" -- the SAME allocation sslm_gpu_seq_create
-	// performs, at the model's own context_cap (design Sec4.2: restore takes no
-	// context_cap of its own; the model handle is the caller-independent source, the
-	// same one every sequence created against this model already uses).
+	// Design Sec4.2/Sec21 (T-2114 N1, corrected 2026-08-15, routing
+	// `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md` Sec6/Sec8): "sslm_gpu_seq_restore
+	// allocates a fresh SslmGpuSequenceHandle... never reusing an existing handle's" -- sized to the
+	// BLOB's own recorded context_cap, not the model's. Reading the header first (never the body,
+	// never a device call) lets this derive that cap before anything is allocated: `workspace_size`
+	// solves `workspace_size = num_hidden_layers * context_cap * num_key_value_heads * head_dim * 2`
+	// (Sec5.1/D-SLM3310's own K/V sizing formula) for context_cap, with every other term already
+	// known through `model`. A blob too small/wrong-magic to hold a header, a division with a
+	// nonzero remainder, or a derived context_cap <= 0 is malformed; a derived context_cap that
+	// EXCEEDS model->context_cap is inadmissible (this model cannot represent a sequence that large)
+	// -- both rejected under the same disposition every other structural refusal in this function
+	// uses. A derived context_cap strictly less than the model's own maximum is the ordinary case
+	// this correction exists to admit, not an error: the prior always-model-cap sizing made restoring
+	// a short, cheaply-capped sequence -- the common case, since context_cap is a sslm_gpu_seq_create
+	// parameter for exactly the reason not every sequence needs the model's full capacity -- the one
+	// case that always failed the size check below, loudly but wrongly scoped.
+	uint64_t blob_workspace_size = 0;
+	if (!superslm_gpu::PeekGpuSeqBlobWorkspaceSize(blob, blob_size, &blob_workspace_size)) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// Identical per-context_cap-unit byte count to sslm_gpu_seq_create's own kv_bytes_needed
+	// computation (this file, above), factored out of context_cap so dividing workspace_size by it
+	// recovers context_cap -- the same overflow-guarded product, computed the same way.
+	size_t per_cap_unit_bytes = static_cast<size_t>(model->num_hidden_layers);
+	const size_t per_cap_unit_factors[] = {model->num_key_value_heads,
+	                                        static_cast<size_t>(model->head_dim), 2u};
+	bool per_cap_unit_overflowed = false;
+	for (size_t factor : per_cap_unit_factors) {
+		if (factor != 0 && per_cap_unit_bytes > SIZE_MAX / factor) {
+			per_cap_unit_overflowed = true;
+			break;
+		}
+		per_cap_unit_bytes *= factor;
+	}
+	if (per_cap_unit_overflowed || per_cap_unit_bytes == 0 ||
+	    blob_workspace_size % static_cast<uint64_t>(per_cap_unit_bytes) != 0) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // malformed: not an integral context_cap
+	}
+	const uint64_t derived_context_cap = blob_workspace_size / static_cast<uint64_t>(per_cap_unit_bytes);
+	if (derived_context_cap == 0 ||
+	    derived_context_cap > static_cast<uint64_t>(model->context_cap)) {
+		// derived_context_cap == 0: malformed (a real save never produces a zero-cap sequence).
+		// derived_context_cap > model->context_cap: inadmissible -- this model cannot create a
+		// handle large enough to hold what the blob claims to be. Both share the one disposition
+		// every structural rejection in this function already uses (design Sec4.2/Sec21: "no new
+		// status is minted for this").
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+
 	SslmGpuSequenceHandle* fresh = nullptr;
-	const SslmGpuStatus create_status = sslm_gpu_seq_create(ctx, model, model->context_cap, &fresh);
+	const SslmGpuStatus create_status =
+	    sslm_gpu_seq_create(ctx, model, static_cast<int64_t>(derived_context_cap), &fresh);
 	if (create_status != SSLM_OK || !fresh) {
 		return create_status;
 	}
@@ -1538,4 +1583,11 @@ int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq) {
 }
 size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->hidden_codes.size() : 0;
+}
+// T-2113 (N1, design Sec4.2/Sec21, Sec11 dim9's own product cell): exposes the handle's own
+// context_cap so a bench driver can confirm sslm_gpu_seq_restore sized the FRESH handle to the
+// blob's own recorded context_cap, not the model's -- the exact property N1's fix makes true and
+// the property a red cell needs a real accessor, not a hardcoded assumption, to check.
+int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq) {
+	return seq ? seq->context_cap : 0;
 }
