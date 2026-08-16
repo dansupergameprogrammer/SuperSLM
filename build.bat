@@ -56,6 +56,37 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
+rem enumeration tool (tools\t2116_list_adapters.cpp) -- no .sslm artifact needed, so it is
+rem built here and NOT auto-run; run_crossvendor.ps1 invokes it directly. See that file's
+rem own header comment for why the battery tools themselves cannot serve this purpose.
+if not exist out\t2116 mkdir out\t2116
+cl /nologo /std:c++20 /O2 /W4 /EHsc ^
+	tools\t2116_list_adapters.cpp /Fo:out\t2116\ /Fe:out\t2116_list_adapters.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2100 (dispatch-path throughput benchmark, tools\t2100_gpu_throughput.cpp) -- same
+rem throwaway-harness precedent as tools\t2039_c5_harness.cpp above (needs a real .sslm
+rem artifact on disk this build does not assume exists, so it is built here but NOT
+rem auto-run). Added by T-2116 (cross-vendor certification package): this tool had no
+rem committed build recipe before this change, even though the T-2113/T-2114 build logs
+rem cite its own measured tok/s figures -- the recipe mirrors C5's exactly (same source
+rem list plus tools\sslm_marshal.h's -Itools include path). Usage after a successful
+rem build: out\t2100_gpu_throughput.exe ^<model.sslm^> [steps] [token_id].
+if not exist out\t2100 mkdir out\t2100
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2100_gpu_throughput.cpp /Fo:out\t2100\ /Fe:out\t2100_gpu_throughput.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B1, Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec10 B1):
 rem the context-lifecycle bench proof (tools/t2113_b1_context_smoke.cpp) -- built and
 rem RUN here (unlike the C5 harness above, this needs no external .sslm artifact),

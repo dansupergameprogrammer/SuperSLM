@@ -72,29 +72,86 @@ struct Device {
 	ComPtr<ID3D12Resource> timestamp_readback;
 	UINT64 timestamp_frequency = 0;  // ticks per second, from the command queue
 
+	// T-2116 (cross-vendor certification package): a machine used for cross-vendor
+	// certification may have more than one D3D12-capable adapter installed (a discrete GPU
+	// plus an iGPU, or two discrete GPUs). The default loop below picks whichever adapter
+	// DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE ranks first -- silently, with no way for a caller
+	// to name a different one. SSLM_GPU_ADAPTER_INDEX, when set to a non-negative integer,
+	// overrides that default and selects by RAW EnumAdapters1 index instead (the same
+	// enumeration order `run_crossvendor.ps1` uses to label results per adapter) -- a
+	// requested index that does not exist, is software, or fails device creation is a loud
+	// init failure (init_error names the index), never a silent fallback to adapter 0.
+	// Every successful selection -- override or default -- prints "# adapter: <name>" once,
+	// so a caller comparing results across adapters can label each run's output without
+	// re-deriving which physical GPU it ran on.
 	void Init() {
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
 			init_error = "CreateDXGIFactory2 failed";
 			return;
 		}
-		for (UINT i = 0;; ++i) {
+
+		int override_index = -1;
+		{
+			char buf[32] = {0};
+			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ADAPTER_INDEX", buf, sizeof(buf));
+			if (n > 0 && n < sizeof(buf)) {
+				override_index = std::atoi(buf);
+				if (override_index < 0) override_index = -1;
+			}
+		}
+
+		if (override_index >= 0) {
 			ComPtr<IDXGIAdapter1> a;
-			if (factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-			                                         IID_PPV_ARGS(&a)) == DXGI_ERROR_NOT_FOUND) {
-				break;
+			HRESULT hr = factory->EnumAdapters1(static_cast<UINT>(override_index), &a);
+			if (hr == DXGI_ERROR_NOT_FOUND) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              " does not exist (EnumAdapters1 DXGI_ERROR_NOT_FOUND)";
+				return;
+			}
+			if (FAILED(hr)) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              ": EnumAdapters1 failed";
+				return;
 			}
 			DXGI_ADAPTER_DESC1 d;
 			a->GetDesc1(&d);
-			if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
-			if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
-				adapter = a;
-				break;
+			if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              " is a software adapter, not a hardware one";
+				return;
+			}
+			if (FAILED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              ": D3D12CreateDevice failed";
+				return;
+			}
+			adapter = a;
+		} else {
+			for (UINT i = 0;; ++i) {
+				ComPtr<IDXGIAdapter1> a;
+				if (factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+				                                         IID_PPV_ARGS(&a)) == DXGI_ERROR_NOT_FOUND) {
+					break;
+				}
+				DXGI_ADAPTER_DESC1 d;
+				a->GetDesc1(&d);
+				if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+				if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+					adapter = a;
+					break;
+				}
 			}
 		}
 		if (!dev) {
-			init_error = "no D3D12 hardware compute adapter found";
+			if (init_error.empty()) init_error = "no D3D12 hardware compute adapter found";
 			return;
+		}
+		{
+			DXGI_ADAPTER_DESC1 d;
+			adapter->GetDesc1(&d);
+			std::wprintf(L"# adapter: %s\n", d.Description);
+			std::fflush(stdout);
 		}
 		D3D12_COMMAND_QUEUE_DESC qd{};
 		qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
