@@ -3,25 +3,32 @@
 # (S-HARDEN-7, design Sec3.1, T-411). One site per line: header:line:name
 # Regenerate with: python tests/ci/derive_bad_alloc_membership.py
 #
-# 19 sites, unchanged in count (T-1571, S3.7): artifact.h gained a
-# CalibrationBand section-type enumerator and model.h gained
-# SslmCalibrationBandVerdict/ClassifyCalibrationBand/SslmDecodeStepStatus,
-# all noexcept or non-function declarations, so none joins this population --
-# only line numbers moved, regenerated against the real headers on disk
-# rather than hand-adjusted.
-artifact.h:160:OpenFromMemory
-artifact.h:166:OpenFromFile
-artifact.h:174:FingerprintHex
-model.h:228:Parse
-model.h:278:Parse
-model.h:302:ParseConfig
-model.h:325:ParseSigmoidLut
-model.h:534:Load
+# 20 sites (T-2125, up from 19): artifact.h gained a CalibrationBand
+# section-type enumerator and model.h gained SslmCalibrationBandVerdict/
+# ClassifyCalibrationBand/SslmDecodeStepStatus, all noexcept or non-function
+# declarations, so none joins this population -- only line numbers moved,
+# regenerated against the real headers on disk rather than hand-adjusted.
+# T-2125 (D-SLM3446): SslmAmplifyingFoldScaleView<Kind>::Parse (model.h) --
+# the T-2021/T-2029 B0b runtime-additive-LoRA adapter view's own parse entry
+# point -- is a genuinely new, 20th member (found unwrapped by this suite's
+# own regression pin; closed by a rename-and-wrap fix in the same change,
+# src/model.h/model.cpp). Clang attributes all instantiations of a template
+# member to its one declaration site, so this member's line (387) appears
+# once here regardless of how many Kind values instantiate it.
+artifact.h:188:OpenFromMemory
+artifact.h:194:OpenFromFile
+artifact.h:213:FingerprintHex
+model.h:281:Parse
+model.h:331:Parse
+model.h:387:Parse
+model.h:461:ParseConfig
+model.h:484:ParseSigmoidLut
+model.h:744:Load
 proof_manifest.h:52:JsonEscape
 proof_manifest.h:101:ComputeTensorEvidence
 proof_manifest.h:117:ComputeWeightScaleEvidence
 proof_manifest.h:124:HashSectionHex
-proof_manifest.h:147:BuildProofManifestJson
+proof_manifest.h:151:BuildProofManifestJson
 sha256.h:20:Update
 sha256.h:41:Sha256Hash
 sha256.h:45:ToHex

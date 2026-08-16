@@ -26,11 +26,14 @@ independently-found population before it is trusted." The four Loki probes
 ARE that independently-found population for the prior rule; this module
 re-derives the population under the CORRECTED rule and this package's own
 test suite (test_membership_check_population.py) confirms it reproduces the
-mechanically-derived population -- nineteen as of T-1475 (JsonEscape's
-promotion into proof_manifest.h); design Sec3.1's table itself still states
-eighteen and is owed a matching amendment -- from the real headers on disk,
-under three independent scan strategies: the direct re-run of the property
-the strike found false of the prior rule.
+mechanically-derived population -- twenty as of T-2125
+(SslmAmplifyingFoldScaleView<Kind>::Parse joined the nineteen T-1475 left
+behind, JsonEscape's own promotion into proof_manifest.h; design Sec3.1's
+table itself still states eighteen and is owed a matching amendment;
+tests/ci/bad_alloc_membership_expected.txt is this population's own current
+source of truth) -- from the real headers on disk, under three independent
+scan strategies: the direct re-run of the property the strike found false of
+the prior rule.
 
 This is a REFERENCE tool, not the CI gate. The CI gate itself
 (design Sec3.1: "tools/ci/check_bad_alloc_contract.py or the build seat's
@@ -171,7 +174,16 @@ def _scan_ast_root(root: dict, header_name: str) -> list[dict]:
 
         kind = n.get("kind")
         pushed_class = False
-        if kind == "CXXRecordDecl" and n.get("name"):
+        # T-2125: `ClassTemplateSpecializationDecl` alongside `CXXRecordDecl` -- a class
+        # template's own IMPLICIT instantiations (e.g. SslmAmplifyingFoldScaleView<Delta>,
+        # SslmAmplifyingFoldScaleView<U>) surface in the dump under this second kind, carrying
+        # the SAME unqualified `name` as the primary template's own CXXRecordDecl but never that
+        # kind themselves -- a member function nested only inside a ClassTemplateSpecializationDecl
+        # previously left `enclosing` as None (the class_stack push condition admitted CXXRecordDecl
+        # only), which check_bad_alloc_contract.py's own qualified-name lookup then could not use to
+        # find the member's .cpp definition at all, misreporting a real, wrapped member as unwrapped
+        # (found live: SslmAmplifyingFoldScaleView<Kind>::Parse, model.h:387).
+        if kind in ("CXXRecordDecl", "ClassTemplateSpecializationDecl") and n.get("name"):
             class_stack.append(n["name"])
             pushed_class = True
 
@@ -231,10 +243,31 @@ def _scan_ast_root(root: dict, header_name: str) -> list[dict]:
 
 
 def _dedup_sort(hits: list[dict]) -> list[dict]:
+    """One entry per (header, line, name) -- already unique across distinct
+    members, since two overloads cannot share a declaration line. `type` is
+    deliberately NOT part of the key.
+
+    CORRECTED (T-2125 fix round, Poirot 242dc12-t2125-ci-drift-review.md,
+    Significant 4): a class TEMPLATE's own member surfaces once per
+    `ClassTemplateSpecializationDecl` Clang emits for it -- one per implicit
+    instantiation the scanned headers reference (`SslmAmplifyingFoldScaleView
+    <Delta>`, `SslmAmplifyingFoldScaleView<U>`, and the primary template's own
+    declaration) -- and each instantiation's `type` field carries the
+    substituted `Kind`, so a key that includes `type` stops deduplicating for
+    exactly a template member and grows by one entry per additional `Kind`
+    enumerator with no soundness reason to. `(header, line, name)` is what
+    both the pinned oracle and every consumer of this module's output already
+    treat as the population's own identity (`test_membership_check_
+    population.py`'s `_keyset` strips to exactly this triple); dropping
+    `type` from the dedup key makes the LIST length this function returns
+    match that identity, so `python tests/ci/derive_bad_alloc_membership.py`
+    -- the regeneration command the oracle file's own header names -- prints
+    the population's true size instead of counting every template
+    instantiation."""
     seen = set()
     uniq = []
     for x in hits:
-        key = (x["header"], x["line"], x["name"], x["type"])
+        key = (x["header"], x["line"], x["name"])
         if key in seen:
             continue
         seen.add(key)

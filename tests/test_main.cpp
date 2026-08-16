@@ -7249,12 +7249,16 @@ static void TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifac
 // Curie's S-HARDEN-7 suite (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_
 // Design-2026-07-23.md §3; T-411): the "throws only std::bad_alloc" contract.
 // Every cell below is authored against the corrected, four-condition
-// membership rule's population, NINETEEN sites as of T-1475 (JsonEscape's
-// promotion out of its anonymous namespace and into proof_manifest.h made
-// it the 19th derived member; design §3.1's table itself still states
-// eighteen and is owed a matching amendment outside this suite's writable
-// surface) -- not the twelve, ten, six, or seven a hand enumeration found
-// across earlier passes of the design.
+// membership rule's population -- TWENTY sites as of T-2125
+// (SslmAmplifyingFoldScaleView<Kind>::Parse joined JsonEscape-era nineteen;
+// JsonEscape's own promotion out of its anonymous namespace and into
+// proof_manifest.h had made it the 19th derived member, T-1475; design
+// §3.1's table itself still states eighteen and is owed a matching
+// amendment outside this suite's writable surface) -- not the twelve, ten,
+// six, or seven a hand enumeration found across earlier passes of the
+// design. tests/ci/bad_alloc_membership_expected.txt is this population's
+// single source of truth; read the count from there rather than
+// transcribing it again here.
 //
 // The rename-and-wrap has landed: every site's public entry point is now a
 // thin wrapper (src/bad_alloc_wrap.h's WrapBadAllocContract) around an
@@ -7300,7 +7304,7 @@ void CheckBadAllocContractSite(const char* site_name, Callable&& call_site) {
 
 }  // namespace
 
-// --- Site 1/19: SslmArtifact::OpenFromMemory (artifact.h:149) ---
+// --- Site 1/20: SslmArtifact::OpenFromMemory (artifact.h:149) ---
 static void TestBadAllocContractOpenFromMemory() {
 	uint8_t data[4] = {'S', 'S', 'L', 'M'};
 	SslmArtifact out;
@@ -7310,13 +7314,13 @@ static void TestBadAllocContractOpenFromMemory() {
 	});
 }
 
-// --- Site 1/19, representative marker cell (design §3.2 "New cell -- force a
+// --- Site 1/20, representative marker cell (design §3.2 "New cell -- force a
 //     genuine std::bad_alloc through the wrap"): the shared wrap helper must
 //     take the catch(const std::bad_alloc&){throw;} clause specifically, not
 //     merely produce an observably-equal std::bad_alloc via the general
 //     catch(const std::exception&) clause. One representative site stands for
 //     the mechanism per §17 dimension 11's usual population-validation shape
-//     (the shared helper makes this true for all nineteen sites by
+//     (the shared helper makes this true for all twenty sites by
 //     construction). ---
 static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
 	using namespace superslm_test;
@@ -7343,7 +7347,7 @@ static void TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific() {
 	                                                      : "kBadAllocClause");
 }
 
-// --- Site 2/19: SslmArtifact::OpenFromFile (artifact.h:155) ---
+// --- Site 2/20: SslmArtifact::OpenFromFile (artifact.h:155) ---
 static void TestBadAllocContractOpenFromFile() {
 	SslmArtifact out;
 	SslmError err;
@@ -7352,7 +7356,7 @@ static void TestBadAllocContractOpenFromFile() {
 	});
 }
 
-// --- Site 3/19 (this fold's addition, condition 4(b)): SslmArtifact::
+// --- Site 3/20 (this fold's addition, condition 4(b)): SslmArtifact::
 //     FingerprintHex (artifact.h:162) ---
 static void TestBadAllocContractFingerprintHex() {
 	SslmArtifact out;
@@ -7361,7 +7365,7 @@ static void TestBadAllocContractFingerprintHex() {
 	});
 }
 
-// --- Site 4/19: SslmTensorManifest::Parse (model.h:178), the direct-call
+// --- Site 4/20: SslmTensorManifest::Parse (model.h:178), the direct-call
 //     path ---
 static void TestBadAllocContractTensorManifestParseDirect() {
 	SslmSectionView section{};
@@ -7372,7 +7376,7 @@ static void TestBadAllocContractTensorManifestParseDirect() {
 	});
 }
 
-// --- Site 4/19, the Load-mediated path: the S-HARDEN-7 design's own defect
+// --- Site 4/20, the Load-mediated path: the S-HARDEN-7 design's own defect
 //     class (design §3.1: "Load's wrap ... is not a substitute for [a
 //     site's] own independent wrap") -- confirms the seam is consulted by the
 //     *Impl body itself, not only by whatever calls it directly, using a
@@ -7387,7 +7391,7 @@ static void TestBadAllocContractTensorManifestParseViaLoad() {
 	});
 }
 
-// --- Site 5/19: SslmKeyedConstants::Parse (model.h:219) ---
+// --- Site 5/20: SslmKeyedConstants::Parse (model.h:219) ---
 static void TestBadAllocContractKeyedConstantsParse() {
 	SslmSectionView section{};
 	SslmKeyedConstants out;
@@ -7397,7 +7401,7 @@ static void TestBadAllocContractKeyedConstantsParse() {
 	});
 }
 
-// --- Site 6/19: ParseConfig (model.h:239) ---
+// --- Site 6/20: ParseConfig (model.h:239) ---
 static void TestBadAllocContractParseConfig() {
 	SslmSectionView section{};
 	SslmModelConfig out{};
@@ -7407,7 +7411,7 @@ static void TestBadAllocContractParseConfig() {
 	});
 }
 
-// --- Site 7/19: ParseSigmoidLut (model.h:261) ---
+// --- Site 7/20: ParseSigmoidLut (model.h:261) ---
 static void TestBadAllocContractParseSigmoidLut() {
 	SslmSectionView section{};
 	SslmSigmoidLut out{};
@@ -7417,7 +7421,7 @@ static void TestBadAllocContractParseSigmoidLut() {
 	});
 }
 
-// --- Site 8/19: SslmModel::Load (model.h:416), its own unwrapped surface
+// --- Site 8/20: SslmModel::Load (model.h:416), its own unwrapped surface
 //     (model.cpp:711,788's string concatenations) -- exercised here via the
 //     null-data path, which reaches Load's own body before any sub-parser
 //     runs. ---
@@ -7429,7 +7433,7 @@ static void TestBadAllocContractLoad() {
 	});
 }
 
-// --- Site 9/19: TokenizerView::Open (tokenizer.h:35), the direct-call path
+// --- Site 9/20: TokenizerView::Open (tokenizer.h:35), the direct-call path
 //     (tools/tok_verify.cpp's bypass shape) ---
 static void TestBadAllocContractTokenizerOpenDirect() {
 	SslmArtifact artifact;  // default: no sections, Ok() == false
@@ -7440,7 +7444,7 @@ static void TestBadAllocContractTokenizerOpenDirect() {
 	});
 }
 
-// --- Site 9/19, the Load-mediated path: TokenizerView::Open called from
+// --- Site 9/20, the Load-mediated path: TokenizerView::Open called from
 //     inside SslmModel::Load when a Tokenizer section is present -- the exact
 //     bypass shape this fold's own §3.1 documents as previously missed. Uses
 //     the real Qwen2.5-1.5B fixture artifact (the only fixture in this suite
@@ -7468,7 +7472,7 @@ static void TestBadAllocContractTokenizerOpenViaLoad() {
 	});
 }
 
-// --- Site 10/19 (this fold's addition, condition 4(b)): TokenizerView::Encode
+// --- Site 10/20 (this fold's addition, condition 4(b)): TokenizerView::Encode
 //     (tokenizer.h:44) ---
 static void TestBadAllocContractTokenizerEncode() {
 	auto ft = OpenFixtureTokenizer();
@@ -7480,7 +7484,7 @@ static void TestBadAllocContractTokenizerEncode() {
 	});
 }
 
-// --- Site 11/19 (this fold's addition, condition 4(b)): TokenizerView::Decode
+// --- Site 11/20 (this fold's addition, condition 4(b)): TokenizerView::Decode
 //     (tokenizer.h:48) ---
 static void TestBadAllocContractTokenizerDecode() {
 	auto ft = OpenFixtureTokenizer();
@@ -7493,7 +7497,7 @@ static void TestBadAllocContractTokenizerDecode() {
 	});
 }
 
-// --- Site 12/19 (this fold's addition, condition 4(b)): ComputeTensorEvidence
+// --- Site 12/20 (this fold's addition, condition 4(b)): ComputeTensorEvidence
 //     (proof_manifest.h:84) ---
 static void TestBadAllocContractComputeTensorEvidence() {
 	SslmTensorManifest manifest;
@@ -7502,7 +7506,7 @@ static void TestBadAllocContractComputeTensorEvidence() {
 	});
 }
 
-// --- Site 13/19 (this fold's addition, condition 4(b)):
+// --- Site 13/20 (this fold's addition, condition 4(b)):
 //     ComputeWeightScaleEvidence (proof_manifest.h:99) ---
 static void TestBadAllocContractComputeWeightScaleEvidence() {
 	SslmTensorManifest manifest;
@@ -7511,7 +7515,7 @@ static void TestBadAllocContractComputeWeightScaleEvidence() {
 	});
 }
 
-// --- Site 14/19: HashSectionHex (proof_manifest.h:106) ---
+// --- Site 14/20: HashSectionHex (proof_manifest.h:106) ---
 static void TestBadAllocContractHashSectionHex() {
 	SslmSectionView section{};
 	CheckBadAllocContractSite("HashSectionHex", [&] {
@@ -7519,7 +7523,7 @@ static void TestBadAllocContractHashSectionHex() {
 	});
 }
 
-// --- Site 15/19: BuildProofManifestJson (proof_manifest.h:128) ---
+// --- Site 15/20: BuildProofManifestJson (proof_manifest.h:128) ---
 static void TestBadAllocContractBuildProofManifestJson() {
 	SslmArtifact artifact;
 	CheckBadAllocContractSite("BuildProofManifestJson", [&] {
@@ -7527,7 +7531,7 @@ static void TestBadAllocContractBuildProofManifestJson() {
 	});
 }
 
-// --- Site 16/19: Sha256::Update (sha256.h:19). Cannot currently throw
+// --- Site 16/20: Sha256::Update (sha256.h:19). Cannot currently throw
 //     anything (src/sha256.cpp operates on fixed-size stack buffers only,
 //     design §3.1) -- this cell proves the injection seam itself fires
 //     rather than a pre-existing real-world leak, the same shape every other
@@ -7541,7 +7545,7 @@ static void TestBadAllocContractSha256Update() {
 	});
 }
 
-// --- Site 17/19: Sha256Hash (sha256.h:32). Same "cannot currently throw"
+// --- Site 17/20: Sha256Hash (sha256.h:32). Same "cannot currently throw"
 //     shape as site 16. ---
 static void TestBadAllocContractSha256HashFreeFunction() {
 	const uint8_t byte = 'x';
@@ -7551,7 +7555,7 @@ static void TestBadAllocContractSha256HashFreeFunction() {
 	});
 }
 
-// --- Site 18/19 (this fold's addition, condition 4(b)): superslm::ToHex
+// --- Site 18/20 (this fold's addition, condition 4(b)): superslm::ToHex
 //     (sha256.h:35). A FREE FUNCTION in namespace superslm, not a Sha256
 //     member -- the design text writes "Sha256::ToHex" throughout §3.1/§3.2/
 //     §3.3, but sha256.h:35 declares it outside the Sha256 class (Weak
@@ -7567,7 +7571,7 @@ static void TestBadAllocContractToHex() {
 	});
 }
 
-// --- Site 19/19 (T-1475, T-1495): JsonEscape (proof_manifest.h:52).
+// --- Site 19/20 (T-1475, T-1495): JsonEscape (proof_manifest.h:52).
 //     JsonEscapeImpl was promoted out of proof_manifest.cpp's anonymous
 //     namespace and into the header, making it a derived member of the
 //     contract's population -- until this cell, that promotion had a wrap
@@ -7590,7 +7594,7 @@ static void TestBadAllocContractToHex() {
 //     at its parent alike, before this cell). Also asserts the wrap's clause
 //     marker, which only one other cell in this file does --
 //     TestBadAllocContractOpenFromMemoryPassthroughClauseIsSpecific
-//     (site 1/19, above) -- and here for a different reason: JsonEscape's
+//     (site 1/20, above) -- and here for a different reason: JsonEscape's
 //     own public entry point wraps JsonEscapeImpl directly (one layer), so
 //     an injected std::length_error must take the general
 //     catch(const std::exception&) clause, unlike the nested call inside
@@ -7613,6 +7617,30 @@ static void TestBadAllocContractJsonEscape() {
 	          : g_last_wrap_clause == LastWrapClause::kBadAllocClause
 	              ? "kBadAllocClause (wrong branch)"
 	              : "kGeneralClause");
+}
+
+// --- Site 20/20 (T-2125): SslmAmplifyingFoldScaleView<Kind>::Parse (model.h:387), the
+//     T-2021/T-2029 B0b runtime-additive-LoRA adapter view's own parse entry point -- the
+//     population's newest member (Poirot 242dc12-t2125-ci-drift-review.md, Significant 3): the
+//     T-2125 fix round's rename-and-wrap (src/model.h/model.cpp) landed a shape the Python
+//     production gate (tools/ci/check_bad_alloc_contract.py) verifies textually, but until this
+//     cell nothing exercised the BEHAVIOUR -- that an injected std::length_error crossing this
+//     specific member's own *Impl body is actually observed by a caller as std::bad_alloc. Exactly
+//     the project's own "a fix round that adds a production change routes a test pin for THAT
+//     change, in the same round" rule, in its named count-trails-by-one shape. A default-
+//     constructed SslmSectionView{} is sufficient, exactly as it is for
+//     TestBadAllocContractKeyedConstantsParse/TestBadAllocContractParseConfig above:
+//     ParseImpl's first statement is internal::MaybeThrowInjectedBadAllocFault(), before the
+//     section-type gate or any other logic, so the injected fault fires regardless of what the
+//     section otherwise contains. Only Kind::Delta is exercised here -- both Kind values share
+//     one template definition, and the wrap/*Impl split is not Kind-dependent. ---
+static void TestBadAllocContractAmplifyingFoldScaleViewParse() {
+	SslmSectionView section{};
+	SslmDeltaFoldScaleView out;
+	std::string err;
+	CheckBadAllocContractSite("SslmAmplifyingFoldScaleView<Delta>::Parse", [&] {
+		SslmDeltaFoldScaleView::Parse(section, out, &err);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -25984,9 +26012,10 @@ int main(int argc, char** argv) {
 	TestBuildProofManifestJsonReportsGeometryMismatchOnIncoherentArtifact();
 
 	// --- S-HARDEN-7 (F5, §3, T-411): the "throws only std::bad_alloc" contract,
-	//     all nineteen sites of the corrected, four-condition membership rule's
-	//     derived population (JsonEscape is the 19th, T-1475; design §3.1's
-	//     table itself still states eighteen and is owed a matching
+	//     all twenty sites of the corrected, four-condition membership rule's
+	//     derived population (JsonEscape was the 19th, T-1475;
+	//     SslmAmplifyingFoldScaleView<Kind>::Parse is the 20th, T-2125; design
+	//     §3.1's table itself still states eighteen and is owed a matching
 	//     amendment outside this suite's writable surface). The rename-and-
 	//     wrap has landed; each site's *Impl body consults the test-only
 	//     injection seam (tests/support/bad_alloc_injection.h). ---
@@ -26012,6 +26041,7 @@ int main(int argc, char** argv) {
 	TestBadAllocContractSha256HashFreeFunction();
 	TestBadAllocContractToHex();
 	TestBadAllocContractJsonEscape();
+	TestBadAllocContractAmplifyingFoldScaleViewParse();
 
 	// --- S-HARDEN-8 (F12, §4.2/§4.3, T-412): the generic section-descriptor
 	//     `reserved` field, untested until this cell. ---

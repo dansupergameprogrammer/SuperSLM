@@ -184,8 +184,37 @@ const uint8_t* AmplifyingFoldMagicFor(SslmAmplifyingFoldKind kind) noexcept {
 	return kDeltaFoldScalesMagic; // unreachable
 }
 
-// SslmAmplifyingFoldScaleView<Kind>::Parse -- mirrors SslmTensorManifest::ParseImpl's own
-// header/descriptor walk (byte-for-byte offset convention, same kManifestHeaderBytes/
+// T-2125 (design Sec3.1): the *Impl body below needs private access to
+// SslmAmplifyingFoldScaleView<Kind>'s own entries_, which a free function cannot have. The
+// sole friend of the template, declared and defined only here, mirroring
+// SslmTensorManifestAccess/SslmKeyedConstantsAccess below -- never in the header, so the
+// membership-check AST walk never sees it. See artifact.cpp's identical SslmArtifactAccess
+// comment for the full reasoning.
+template <SslmAmplifyingFoldKind Kind>
+struct SslmAmplifyingFoldScaleViewAccess {
+	static SslmModelStatus ParseImpl(const SslmSectionView& section,
+	                                 SslmAmplifyingFoldScaleView<Kind>& out, std::string* err);
+};
+
+// SslmAmplifyingFoldScaleView<Kind>::Parse -- the public rename-and-wrap entry point (S-HARDEN-7,
+// design Sec3.1's own convention, matching SslmTensorManifest::Parse/SslmKeyedConstants::Parse
+// below): a thin WrapBadAllocContract wrapper around ParseImpl, which carries every byte of the
+// actual parse. T-2125: this member was found calling MaybeThrowInjectedBadAllocFault and doing
+// its own parsing directly in its own body, with no WrapBadAllocContract around it at all -- the
+// header's own comment claimed "S-HARDEN-7 convention, matching every other sub-parse in this
+// file" while the implementation did not follow it, caught by tests/ci/test_membership_check_
+// population.py's own --list-unwrapped gate (a real gap in this template's own wrapping, not a
+// stale checker). Split here into the same rename-and-wrap shape every sibling Parse uses.
+template <SslmAmplifyingFoldKind Kind>
+SslmModelStatus SslmAmplifyingFoldScaleView<Kind>::Parse(const SslmSectionView& section,
+                                                         SslmAmplifyingFoldScaleView& out,
+                                                         std::string* err) {
+	return internal::WrapBadAllocContract(
+	    [&] { return SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl(section, out, err); });
+}
+
+// SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl -- mirrors SslmTensorManifest::ParseImpl's
+// own header/descriptor walk (byte-for-byte offset convention, same kManifestHeaderBytes/
 // kTensorDescBytes geometry, so the two array kinds stay a drop-in-compatible ON-DISK shape
 // with WSC1 even though their C++ TYPES are never interconvertible -- design Sec9's own
 // "storage-shape-identical... but domain-incompatible" framing), with the ONE load-bearing
@@ -195,9 +224,9 @@ const uint8_t* AmplifyingFoldMagicFor(SslmAmplifyingFoldKind kind) noexcept {
 // AmplifyingFoldSectionTypeMismatch at the very first line, never reaching a byte comparison
 // that a crafted WSC1 payload might otherwise pass.
 template <SslmAmplifyingFoldKind Kind>
-SslmModelStatus SslmAmplifyingFoldScaleView<Kind>::Parse(const SslmSectionView& section,
-                                                         SslmAmplifyingFoldScaleView& out,
-                                                         std::string* err) {
+SslmModelStatus SslmAmplifyingFoldScaleViewAccess<Kind>::ParseImpl(const SslmSectionView& section,
+                                                                   SslmAmplifyingFoldScaleView<Kind>& out,
+                                                                   std::string* err) {
 	internal::MaybeThrowInjectedBadAllocFault();
 	out.entries_.clear();
 	if (err) err->clear();

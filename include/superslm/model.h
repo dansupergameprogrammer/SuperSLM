@@ -399,6 +399,15 @@ public:
 	static int32_t Exponent(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept;
 
 private:
+	// T-2125 (design Sec3.1): grants src/model.cpp's SslmAmplifyingFoldScaleViewAccess<Kind>
+	// (defined only there) access to entries_, so Parse's *Impl body can live entirely in the
+	// .cpp rather than as a private member declaration here -- a private member declaration
+	// would itself be picked up by the membership-check AST walk, which does not see access
+	// specifiers. Mirrors SslmTensorManifest's identical SslmTensorManifestAccess comment
+	// above; a template friend declaration (rather than a same-Kind-only pairing) is what a
+	// dependent friend of a class template requires.
+	template <SslmAmplifyingFoldKind> friend struct SslmAmplifyingFoldScaleViewAccess;
+
 	std::vector<SslmAmplifyingFoldEntry> entries_;
 };
 
