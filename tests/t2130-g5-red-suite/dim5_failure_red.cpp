@@ -1,0 +1,142 @@
+// T-2130 (Curie) -- Dim 5 (Failure and rejection paths), design Sec7 dim5 (extended again this
+// fold, T-2122 repair). Cells here cover the rejections NOT already exercised by dim2's
+// load-time/restore-path cells: sslm_seq_set_schema's non-fresh-walk-state rejection, the
+// repair's own SSLM_SCHEMA_SPAN_UNBOUND rejection, and sslm_seq_adopt_prefix's
+// SSLM_PREFIX_SCHEMA_MISMATCH, stated exhaustively over BOTH branches the design names (a
+// mismatched bound schema, AND an unbound sequence adopting real progress -- the T-2126/T-2127
+// closed gap). 4 cells. RED BY LINK.
+#include "fixture_common.h"
+
+using namespace superslm;
+
+// --- Mechanism cell 1: sslm_seq_set_schema on a sequence whose DFA-walk state is not fresh
+// (has already consumed tokens) rejects -- SSLM_SCHEMA_BIND_REJECTED. Valid ONLY at a fresh
+// sslm_seq_create or immediately after sslm_seq_reset (design Sec5). ---
+static void TestDim5_M1_SetSchemaOnNonFreshWalkStateRejected(sslm_model model,
+                                                              sslm_schema schema_a,
+                                                              sslm_schema schema_b) {
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq, schema_a) == SSLM_OK);
+	int32_t forced_tokens[1] = {0};
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(model, seq, forced_tokens, 1, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	                    &consumed) == SSLM_OK);
+	// Walk state is now non-fresh (one token consumed, non-start). Re-binding, even to a
+	// DIFFERENT schema, rejects -- schema re-binding mid-generation is out of 1.0 scope
+	// (design Sec11).
+	CHECK(sslm_seq_set_schema(seq, schema_b) == SSLM_SCHEMA_BIND_REJECTED);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+// --- Mechanism cell 2 (design Sec5/Sec10.2, THE REPAIR's own rejection): a
+// SSLM_SPAN_SCHEMA_CONTENT prefill call against a sequence with no schema bound
+// (SSLM_SCHEMA_NONE) rejects -- SSLM_SCHEMA_SPAN_UNBOUND. "A span cannot be schema-content
+// against no schema." ---
+static void TestDim5_M2_SchemaContentSpanAgainstUnboundSequenceRejected(sslm_model model) {
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq, SSLM_SCHEMA_NONE) == SSLM_OK);
+	int32_t span_tokens[2] = {0, 1};
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(model, seq, span_tokens, 2, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	                    &consumed) == SSLM_SCHEMA_SPAN_UNBOUND);
+	// SSLM_SPAN_PROMPT against the same unbound sequence remains ordinary, unrejected
+	// prompt ingestion -- the rejection is specific to the CONTENT kind against no schema,
+	// never a blanket "unbound sequences can't prefill" rule.
+	int32_t prompt_tokens[2] = {2, 3};
+	CHECK(sslm_prefill(model, seq, prompt_tokens, 2, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) ==
+	      SSLM_OK);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+// --- Mechanism cell 3 (design Sec5, branch (a) of the exhaustive rejection): a sequence
+// bound to a DIFFERENT schema than the prefix's own recorded progress rejects adoption --
+// SSLM_PREFIX_SCHEMA_MISMATCH. ---
+static void TestDim5_M3_AdoptPrefixMismatchedBoundSchemaRejected(sslm_model model,
+                                                                  sslm_schema schema_a,
+                                                                  sslm_schema schema_b) {
+	sslm_prefix prefix = nullptr;
+	CHECK(sslm_prefix_begin(model, nullptr, &prefix) == SSLM_OK);
+	CHECK(sslm_prefix_set_schema(prefix, schema_a) == SSLM_OK);
+	int32_t schema_content[2] = {0, 1};
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, prefix, schema_content, 2, /*chunk_budget=*/8,
+	                           SSLM_SPAN_SCHEMA_CONTENT, nullptr, &prefix_consumed) == SSLM_OK);
+	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
+
+	sslm_seq seq_bound_to_b = nullptr;
+	CHECK(sslm_seq_create(model, nullptr, &seq_bound_to_b) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq_bound_to_b, schema_b) == SSLM_OK);
+	CHECK(sslm_seq_adopt_prefix(seq_bound_to_b, prefix) == SSLM_PREFIX_SCHEMA_MISMATCH);
+	CHECK(sslm_seq_release(seq_bound_to_b) == SSLM_OK);
+	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
+}
+
+// --- Mechanism cell 4 (design Sec5, branch (b) of the exhaustive rejection -- the
+// unbound-adoption gap T-2126 F1 / T-2127 G3 independently found, CLOSED this fold): a
+// sequence with NO schema bound adopting a prefix carrying real schema-content walk progress
+// rejects -- SSLM_PREFIX_SCHEMA_MISMATCH, deliberately, over an inert-adopt (which would
+// strand the sequence's walk-state permanently, per design Sec5's own updated comment). ---
+static void TestDim5_M4_AdoptPrefixByUnboundSequenceWithRealProgressRejected(
+    sslm_model model, sslm_schema schema_a) {
+	sslm_prefix prefix = nullptr;
+	CHECK(sslm_prefix_begin(model, nullptr, &prefix) == SSLM_OK);
+	CHECK(sslm_prefix_set_schema(prefix, schema_a) == SSLM_OK);
+	int32_t schema_content[2] = {0, 1};
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, prefix, schema_content, 2, /*chunk_budget=*/8,
+	                           SSLM_SPAN_SCHEMA_CONTENT, nullptr, &prefix_consumed) == SSLM_OK);
+	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
+
+	sslm_seq seq_unbound = nullptr;
+	CHECK(sslm_seq_create(model, nullptr, &seq_unbound) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq_unbound, SSLM_SCHEMA_NONE) == SSLM_OK);
+	CHECK(sslm_seq_adopt_prefix(seq_unbound, prefix) == SSLM_PREFIX_SCHEMA_MISMATCH);
+	// CONTRAST (the ordinary, compatible case, not this cell's own subject but recorded so
+	// the exhaustive rejection reads against its complement): a prefix built ENTIRELY from
+	// SSLM_SPAN_PROMPT calls freezes at the unbound/start walk-state and IS adoptable by an
+	// unbound sequence -- design Sec5's own "shared system/persona prefix" framing, exercised
+	// by dim8's prefix-sharing composition cell in this suite.
+	CHECK(sslm_seq_release(seq_unbound) == SSLM_OK);
+	CHECK(sslm_prefix_release(prefix) == SSLM_OK);
+}
+
+// --- Mechanism cell 5 (design Sec6 G5-4 red suite / Sec7 dim5): a template whose "fixed"
+// span is not actually reachable under the active schema is a defined rejection, not a silent
+// mismatch -- "a span that leaves the DFA's language before it is exhausted," checked token
+// by token as the walk advances through the SSLM_SPAN_SCHEMA_CONTENT span (design Sec6 G5-4).
+// ---
+static void TestDim5_M5_TemplateFixedSpanNotReachableUnderActiveSchemaRejected(
+    sslm_model model, sslm_schema reference_schema) {
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
+	// A host-declared "fixed" span whose token sequence does NOT match any path the schema's
+	// own compiled DFA admits from the sequence's current (start) walk-state -- e.g. a token
+	// the reference schema's own leading literal never emits at that position. Genuinely
+	// hostile input to the reachability check, not merely an empty span.
+	int32_t unreachable_span[4] = {9001, 9002, 9003, 9004};
+	int32_t consumed = 0;
+	CHECK(sslm_prefill(model, seq, unreachable_span, 4, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	                    &consumed) == SSLM_SCHEMA_SPAN_UNREACHABLE);
+	// The sequence's own walk-state is unmoved by the rejected call -- a subsequent call with
+	// the schema's OWN genuinely reachable leading span still succeeds, proving the rejection
+	// did not corrupt the walk-state on its way to reporting failure.
+	int32_t reachable_span[1] = {0};
+	int32_t consumed2 = 0;
+	CHECK(sslm_prefill(model, seq, reachable_span, 1, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	                    &consumed2) == SSLM_OK);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+int main(int argc, char** argv) {
+	ParseFixtureArgs(argc, argv);
+	volatile void* addr_0 = (void*)&TestDim5_M1_SetSchemaOnNonFreshWalkStateRejected; (void)addr_0;
+	volatile void* addr_1 = (void*)&TestDim5_M2_SchemaContentSpanAgainstUnboundSequenceRejected; (void)addr_1;
+	volatile void* addr_2 = (void*)&TestDim5_M3_AdoptPrefixMismatchedBoundSchemaRejected; (void)addr_2;
+	volatile void* addr_3 = (void*)&TestDim5_M4_AdoptPrefixByUnboundSequenceWithRealProgressRejected; (void)addr_3;
+	volatile void* addr_4 = (void*)&TestDim5_M5_TemplateFixedSpanNotReachableUnderActiveSchemaRejected; (void)addr_4;
+	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+	return GFailures ? 1 : 0;
+}
