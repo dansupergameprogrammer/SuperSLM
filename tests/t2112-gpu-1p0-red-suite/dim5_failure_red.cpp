@@ -120,6 +120,42 @@ static void TestDim5_M3_TeardownWhileSubmittedPinsActualCascade(SslmGpuContext* 
 	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
+// --- Mechanism cell 4 (T-2124, D-SLM3446 P0-3, external review): the adapter-handle analogue of
+// M3 above. Design Sec5.2 used to claim "an adapter handle holds no in-flight GPU work," which is
+// false on the async submit/finish split -- `sslm_decode_step_gpu` records a command list that
+// reads the bound adapter's own resident buffers via root descriptors and returns before the fence
+// signals. Fixed the same way M3's own gap was fixed (D-SLM3417's Busy-precedence, mirrored onto
+// `SslmGpuAdapterHandle::submitted_sequences`): a sequence left Submitted with an adapter bound, no
+// drain, `sslm_gpu_adapter_unmap` attempted against it. Pins the ACTUAL shipping behavior: the
+// unmap call returns Busy (not Ok -- which would delete the adapter's own lora_ab_buf/fold_buf
+// while the GPU may still be reading them via the in-flight command list); draining the sequence
+// then unmapping again succeeds. ---
+static void TestDim5_M4_AdapterUnmapWhileSubmittedReturnsBusyThenSucceedsAfterDrain(
+    SslmGpuContext* ctx, SslmGpuModelHandle* model, SslmGpuAdapterHandle* adapter) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);
+	// Submit ONE decode call with `adapter` bound and deliberately do NOT drain it -- `seq` is now
+	// Submitted, and `adapter`'s own submitted_sequences count is 1.
+	CHECK(sslm_decode_step_gpu(ctx, seq, adapter, 24u) == SSLM_OK);
+
+	CHECK_MSG(sslm_gpu_adapter_unmap(ctx, adapter) == SSLM_BUSY,
+	          "M4: sslm_gpu_adapter_unmap against an adapter bound to a Submitted (undrained) "
+	          "sequence must return Busy (T-2124, D-SLM3446 P0-3) -- returning Ok here would free "
+	          "lora_ab_buf/fold_buf while the GPU may still be reading them via the already-"
+	          "recorded, not-yet-fenced command list, a genuine use-after-free/device-removal "
+	          "hazard, not a theoretical one");
+
+	// Real cleanup: drain the sequence (the fence now signals, and the adapter's own
+	// submitted_sequences count collapses back to 0), THEN the SAME unmap call must succeed --
+	// proving Busy was a precondition, not a permanent rejection of this handle.
+	CHECK(Drain(ctx, seq) == SSLM_OK);
+	CHECK_MSG(sslm_gpu_adapter_unmap(ctx, adapter) == SSLM_OK,
+	          "M4: sslm_gpu_adapter_unmap against the SAME adapter, after the sequence that bound "
+	          "it has fully drained, must now succeed");
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+}
+
 // --- Product cell: the recording-window catch's own cache-invalidation behavior reproduced
 // against the new model-handle-owned residency -- a real rejecting call followed immediately by
 // a real successful call on the same model handle, proving the handle's own residency state was
@@ -149,6 +185,8 @@ int main(int argc, char** argv) {
 	volatile void* addr_1 = (void*)&TestDim5_M2_SequenceKvBufferMismatchGuarded; (void)addr_1;
 	volatile void* addr_2 = (void*)&TestDim5_M3_TeardownWhileSubmittedPinsActualCascade; (void)addr_2;
 	volatile void* addr_3 = (void*)&TestDim5_P1_RejectionDoesNotCorruptModelHandleResidency; (void)addr_3;
+	volatile void* addr_4 =
+	    (void*)&TestDim5_M4_AdapterUnmapWhileSubmittedReturnsBusyThenSucceedsAfterDrain; (void)addr_4;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -193,6 +231,33 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_context_destroy(ctx_m3) == SSLM_OK);
 	} else {
 		SKIP_MSG("dim5 M3 needs --model1p5b=PATH -- not run");
+	}
+
+	// M4 gets its OWN dedicated ctx/model/adapter -- same isolation reasoning as M3 above (it
+	// deliberately leaves a sequence Submitted and drives adapter_unmap into a state expected to
+	// reject before its own real cleanup).
+	if (!g_model_1p5b_path.empty() && !g_adapter_path.empty()) {
+		std::vector<uint8_t> adapter_bytes;
+		SslmModelView adapter_view{};
+		std::string aerr;
+		if (LoadRealModel(g_adapter_path, &adapter_view, &adapter_bytes, &aerr)) {
+			SslmGpuContext* ctx_m4 = nullptr;
+			CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx_m4) == SSLM_OK);
+			SslmGpuModelHandle* model_m4 = nullptr;
+			CHECK(sslm_gpu_model_map(ctx_m4, &view, GpuResidencyConfig{}, &model_m4) == SSLM_OK);
+			SslmGpuAdapterHandle* adapter_m4 = nullptr;
+			CHECK(sslm_gpu_adapter_map(ctx_m4, model_m4, &adapter_view, &adapter_m4) == SSLM_OK);
+			TestDim5_M4_AdapterUnmapWhileSubmittedReturnsBusyThenSucceedsAfterDrain(ctx_m4, model_m4,
+			                                                                        adapter_m4);
+			// Real cleanup: M4's own body already drained the sequence and unmapped the adapter.
+			CHECK(sslm_gpu_model_unmap(ctx_m4, model_m4) == SSLM_OK);
+			CHECK(sslm_gpu_context_destroy(ctx_m4) == SSLM_OK);
+		} else {
+			CHECK_MSG(false, "dim5 M4: --adapter=%s could not be loaded -- %s",
+			          g_adapter_path.c_str(), aerr.c_str());
+		}
+	} else {
+		SKIP_MSG("dim5 M4 needs --model1p5b=PATH --adapter=PATH -- not run");
 	}
 
 	CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
