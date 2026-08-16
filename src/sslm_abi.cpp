@@ -916,9 +916,13 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 	// unperturbed" contract, matching every other lifecycle guard in this design).
 	for (int32_t i = 0; i < n; ++i) {
 		if (!seqs[i] || seqs[i]->released) return SSLM_INVALID_ARGUMENT;
-		if (seqs[i]->state.layer_index == 0 && seqs[i]->current_token < 0) {
-			// No prompt/prior token to resume from -- a sequence reaching decode_step with
-			// neither a completed prefill nor a prior decode output has nothing to embed.
+		if (seqs[i]->state.layer_index == 0 && seqs[i]->current_token < 0 &&
+		    !seqs[i]->ready_for_logits) {
+			// No prompt/prior token to resume from, AND no already-computed final hidden state
+			// waiting for logits -- a sequence reaching decode_step in neither shape has nothing
+			// to produce a token from. (Bug found by execution, S-FREEZE-EXAMPLE's own restore-
+			// then-decode step: this check originally omitted the ready_for_logits exemption,
+			// rejecting every legitimately-restored resting sequence outright.)
 			return SSLM_INVALID_ARGUMENT;
 		}
 	}
@@ -1202,13 +1206,27 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	h->state.kv_saturation_count = kv_saturation_count;
 	h->state.context_length = context_length;
 	// current_token/ready_for_logits are this ABI's own internal bookkeeping, not part of the
-	// blob (see this section's own top-of-block comment) -- re-derived from the restored fields
-	// alone: a layer_index == 0 restore with real prior content (context_length > 0) has its
-	// last token's fully-computed final hidden state sitting in the residual just restored,
-	// identical in shape to sslm_prefill's own post-prefill state, so decode can go straight to
-	// logits (ready_for_logits = true) with no re-embed and no `current_token` needed at all --
-	// current_token is only ever consulted on the layer_index == 0 branch, which
-	// ready_for_logits short-circuits entirely on its first (and only) use.
+	// blob (see this section's own top-of-block comment) -- approximately re-derived from the
+	// restored fields: a layer_index == 0 restore with real prior content (context_length > 0)
+	// has SOME token's fully-computed final hidden state sitting in the residual just restored,
+	// so decode can go straight to logits (ready_for_logits = true) with no re-embed.
+	//
+	// KNOWN SEMANTIC GAP, found by execution (S-FREEZE-EXAMPLE's own restore-then-decode step,
+	// Claude/Brunel/t2139-abi-build-2026-08-16.md), not fully resolved here -- reported, not
+	// silently papered over. This re-derivation is EXACT when the saved state is fresh off a
+	// completed sslm_prefill/sslm_seq_adopt_prefix (the residual has never yet been used for
+	// logits -- ready_for_logits genuinely means "unconsumed"). It is NOT exact when the saved
+	// state is resting between sslm_decode_step calls: there, the residual was ALREADY consumed
+	// once (to produce the sequence's own `current_token`, the next id a live, never-restored
+	// handle would embed) -- but WHICH token that was is not part of SequenceLayerState and is
+	// not carried in the blob (design Sec7.3's own field list has no such field), so it cannot
+	// be restored. Computing logits from the restored residual again is well-defined and
+	// deterministic, but reproduces the SAME prediction the live sequence already emitted before
+	// saving, rather than the live sequence's own true next output one token further on -- a
+	// restored, decode-resting sequence's own continuation can diverge from a live sequence's
+	// own continuation by one duplicated token. Closing this exactly would add a `current_token`
+	// field to the save blob, a design Sec7.3 change outside this round's own ruled scope
+	// (design commit 212de7742c) -- named here as the concrete fix, not applied unilaterally.
 	h->current_token = -1;
 	h->ready_for_logits = (layer_index == 0 && context_length > 0);
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
@@ -1408,6 +1426,31 @@ extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state
 	if (!model->view.has_tokenizer) {
 		*out_n = 0;
 		return SSLM_ARTIFACT_REJECTED;
+	}
+
+	// design commit 212de7742c (the padded-vocabulary ruling, companion rule, Sec6/Sec7.4):
+	// every input id checked against tok_vocab BEFORE any text is looked up or emitted for it,
+	// and before `state` is touched -- the whole call is atomic, not per-id, matching every
+	// other rejection in this design's own "reject leaves output/state unperturbed" contract.
+	// tok_vocab <= cfg_vocab always holds for an artifact that reached this call (the loosened
+	// ValidateTokenizerVocabSizeJoin, src/model.cpp, already enforced it at sslm_model_map time)
+	// -- three disjoint bands: id < tok_vocab (real tokenizer entry, proceeds normally); id in
+	// [tok_vocab, cfg_vocab) (a legal decode-OUTPUT id with no tokenizer text -- padding row,
+	// SSLM_TOKEN_ID_UNMAPPED); id < 0 or id >= cfg_vocab (never a legal decode output at all --
+	// plain SSLM_INVALID_ARGUMENT, distinct from both the malformed-UTF-8 policy and the
+	// unmapped-padding case).
+	const int32_t tok_vocab = model->view.tokenizer.VocabSize();
+	const int64_t cfg_vocab = static_cast<int64_t>(model->view.config.vocab_size);
+	for (int32_t i = 0; i < n; ++i) {
+		const int32_t id = tokens[i];
+		if (id < 0 || static_cast<int64_t>(id) >= cfg_vocab) {
+			*out_n = 0;
+			return SSLM_INVALID_ARGUMENT;
+		}
+		if (id >= tok_vocab) {
+			*out_n = 0;
+			return SSLM_TOKEN_ID_UNMAPPED;
+		}
 	}
 
 	const std::vector<int32_t> ids(tokens, tokens + n);

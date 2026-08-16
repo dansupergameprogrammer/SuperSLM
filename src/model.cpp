@@ -1206,22 +1206,38 @@ SslmModelStatus ValidateCalibrationBandDomain(const SslmKeyedConstants& calibrat
 	return SslmModelStatus::Ok;
 }
 
-// S-HARDEN-2 (F18, join cell §17.3-3): TOK1.vocab_count x CFG1.vocab_size,
-// "enforced at a named API" -- this is that API. The two blobs are parsed by
-// entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
-// never see each other's bytes; nothing before this slot joined them, while
-// the forward path indexes the token embedding with whatever Encode() returns
-// and sizes that embedding from CFG1.vocab_size. Both views are already
-// populated and individually valid by the time this runs (Load's section
-// loop / tokenizer-open step), so this check is a pure comparison, not a
+// S-HARDEN-2 (F18, join cell §17.3-3), LOOSENED (Claude/Vitruvius/
+// t2133-layer1-c-abi-design-2026-08-16.md, design commit 212de7742c -- the padded-vocabulary
+// ruling, Brunel T-2139's own combined-artifact build against a real Qwen2.5-1.5B checkpoint):
+// TOK1.vocab_count x CFG1.vocab_size, "enforced at a named API" -- this is that API. The two
+// blobs are parsed by entirely independent sub-parsers (TokenizerView::Open, ParseConfig) that
+// never see each other's bytes; nothing before this slot joined them, while the forward path
+// indexes the token embedding with whatever Encode() returns and sizes that embedding from
+// CFG1.vocab_size. Both views are already populated and individually valid by the time this
+// runs (Load's section loop / tokenizer-open step), so this check is a pure comparison, not a
 // re-parse.
+//
+// DOMAIN: tok_vocab <= cfg_vocab (WIDENED from exact equality -- tok_vocab > cfg_vocab still
+// hard-rejects, unchanged, the check's own real remaining hazard). Real Qwen2.5 checkpoints pad
+// the embedding table past the tokenizer's own real BPE vocabulary (config vocab_size 151936 vs
+// the real tokenizer's 151665 entries) -- an architecturally normal pattern, not a malformed
+// pairing; exact equality rejected every real Qwen2.5 combined artifact, strictly stronger than
+// this check's own stated rationale requires. Safety argument (the ruling's own, restated here
+// so this comment carries the reason, not only the rule): every id TokenizerView::Encode() can
+// ever PRODUCE is < tok_vocab by construction; tok_vocab <= cfg_vocab therefore keeps every such
+// id < cfg_vocab too, so the embedding lookup this check protects stays in-bounds for every
+// INPUT-side id unconditionally, regardless of how much padding [tok_vocab, cfg_vocab) holds.
+// The padding rows are reachable only as sslm_decode_step's own argmax OUTPUTS (its logit vector
+// spans the full cfg_vocab), never as tokenizer input -- sslm_detokenize_stream's own new
+// SSLM_TOKEN_ID_UNMAPPED rejection (design Sec6/Sec7.4) is what covers that output-side case;
+// this join is not weakened to cover it, because it was never the hazard this join guards.
 SslmModelStatus ValidateTokenizerVocabSizeJoin(const SslmModelView& view, std::string* err) {
 	if (!view.has_tokenizer || !view.has_config) return SslmModelStatus::Ok;
 	const int32_t tok_vocab = view.tokenizer.VocabSize();
 	const int64_t cfg_vocab = int64_t(view.config.vocab_size);
-	if (int64_t(tok_vocab) != cfg_vocab) {
+	if (int64_t(tok_vocab) > cfg_vocab) {
 		if (err) {
-			*err = "TOK1.vocab_count (" + std::to_string(tok_vocab) + ") != CFG1.vocab_size (" +
+			*err = "TOK1.vocab_count (" + std::to_string(tok_vocab) + ") > CFG1.vocab_size (" +
 			       std::to_string(view.config.vocab_size) + ")";
 		}
 		return SslmModelStatus::TokenizerVocabSizeMismatch;

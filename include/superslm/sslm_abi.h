@@ -59,9 +59,29 @@ typedef struct sslm_detok_state {
     uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
 } sslm_detok_state;
 
-/* status enum -- design Sec6's full per-cause taxonomy, 17 enumerators (design Sec10 dim5's own
- * reconciled count: 1 + 3 + 4 + 7 + 2 = 17). SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one
- * of these (design Sec10 dim5, Sec7.3) -- it is G5's own status, reserved-but-unbuilt here.
+/* status enum -- design Sec6's full per-cause taxonomy, 18 enumerators (design Sec10 dim5's own
+ * reconciled count: 1 + 3 + 4 + 7 + 3 = 18, the numeric/domain group now carrying
+ * SSLM_TOKEN_ID_UNMAPPED alongside SSLM_TOKEN_ID_OUT_OF_RANGE/SSLM_CONTEXT_CAP_EXCEEDED).
+ * SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one of these (design Sec10 dim5, Sec7.3) -- it
+ * is G5's own status, reserved-but-unbuilt here.
+ *
+ * SSLM_TOKEN_ID_UNMAPPED -- NEW (design commit 212de7742c, the padded-vocabulary ruling, Brunel
+ * T-2139), appended at ordinal 17, the next free base ordinal, per the append-only reconciliation
+ * law (never inserted within the numeric/domain group's own prior position, even though it is
+ * semantically a numeric/domain rejection -- ordinal stability for every already-reconciled
+ * enumerator wins). sslm_detokenize_stream's own rejection for a decode-output token id in
+ * [tok_vocab, cfg_vocab) -- see that function's own header comment.
+ *
+ * *** COORDINATION NOTE FOR THE SUITE OWNER (tests/t2130-g5-red-suite/sslm_g5.h) ***
+ * sslm_g5.h's own reconciled enum (curie/t2130-g5-red-suite@a7655dd) currently carries this
+ * design's 0-16 base verbatim, with G5's own seven additions appended at 17-23 (24 total). This
+ * new enumerator inserts at ordinal 17 in THIS design's own base -- sslm_g5.h's copy needs
+ * SSLM_TOKEN_ID_UNMAPPED added at 17, with G5's own seven enumerators shifted to 18-24 (25
+ * total), to stay reconciled. Not performed here (suite ownership, StandardsDocument Sec6.4/
+ * Sec5.2's own persona-boundary discipline) -- Gate C (tools/t2139_gate_c_type_identity_check.cpp)
+ * will need its own real-values check extended to cover this 18th enumerator once sslm_g5.h
+ * reconciles; until then Gate C's existing 17-enumerator coverage is unaffected (it never checks
+ * an enumerator neither side yet defines).
  *
  * RECONCILED against tests/t2130-g5-red-suite/sslm_g5.h (Claude/Brunel/
  * t2139-abi-build-2026-08-16.md Sec4/Sec5's own executed finding, since resolved). Executing
@@ -69,11 +89,10 @@ typedef struct sslm_detok_state {
  * SSLM_ADAPTER_MODEL_MISMATCH, SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, SSLM_RESTORE_MODEL_MISMATCH
  * -- carrying different ordinal values between this header and sslm_g5.h's own then-current
  * enum (a G5-scoped pre-G5-subset-plus-G5-additions taxonomy the two were never reconciled
- * against). sslm_g5.h has since been reconciled (curie/t2130-g5-red-suite@a7655dd): it now
- * carries this design's own 0-16 base verbatim, with G5's own seven additions appended at
- * 17-23. Gate C's must-accept construction (tools/t2139_gate_c_type_identity_check.cpp) checks
- * every one of these 17 enumerators against sslm_g5.h's own real body, in full, with no
- * exclusion. */
+ * against). sslm_g5.h has since been reconciled (curie/t2130-g5-red-suite@a7655dd) for the prior
+ * 17-enumerator base; see the coordination note above for this fold's own follow-up. Gate C's
+ * must-accept construction (tools/t2139_gate_c_type_identity_check.cpp) checks every one of the
+ * (pre-this-fold) 17 enumerators against sslm_g5.h's own real body, in full, with no exclusion. */
 typedef enum sslm_status {
     SSLM_OK = 0,
 
@@ -99,7 +118,15 @@ typedef enum sslm_status {
 
     /* numeric/domain rejections (design Sec6) */
     SSLM_TOKEN_ID_OUT_OF_RANGE,
-    SSLM_CONTEXT_CAP_EXCEEDED
+    SSLM_CONTEXT_CAP_EXCEEDED,
+
+    /* NEW, appended (design commit 212de7742c, ordinal 17, the next free base ordinal --
+     * append-only, never inserted above): sslm_detokenize_stream's own input id in
+     * [tok_vocab, cfg_vocab) -- a legal decode-output id with no tokenizer entry (the padded-
+     * vocabulary case ValidateTokenizerVocabSizeJoin's loosening admits, src/model.cpp).
+     * Distinct from SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output at
+     * all). */
+    SSLM_TOKEN_ID_UNMAPPED
 } sslm_status;
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md

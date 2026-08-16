@@ -401,6 +401,35 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem Design commit 212de7742c's own same-round pin: a forced out-of-tokenizer-range id
+rem ([tok_vocab, cfg_vocab)) fed to sslm_detokenize_stream is SSLM_TOKEN_ID_UNMAPPED, output/
+rem state unperturbed, distinct from a plain SSLM_INVALID_ARGUMENT at id >= cfg_vocab. NOT
+rem auto-run here (same precedent as this file's other real-artifact tools). Usage:
+rem out\t2139_c7_unmapped_pin.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c7_unmapped_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_unmapped_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem S-FREEZE-EXAMPLE (design Sec9's own gate, D-SLM13): builds with NO internal include path --
+rem /Iinclude ONLY, the frozen public header, no /Itests, no /Isrc-internal, no Unreal, no
+rem test-harness affordance. Uses every verb C1-C7 ship, real text I/O (D-SLM3452), explicit
+rem pool capacity (D-SLM3454). NOT auto-run here (needs a real .sslm this build does not assume
+rem exists on every machine); built so it is ready. Usage:
+rem out\t2139_sfreeze_example.exe ^<model.sslm^> "prompt".
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_sfreeze_example.cpp /Fo:out\t2139\ /Fe:out\t2139_sfreeze_example.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
