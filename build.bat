@@ -250,6 +250,87 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2139 (Brunel, C1/C2): the Layer-1 CPU-side sslm_* ABI's own sizing/construction/model-
+rem lifecycle object, Gates A/C as standing must-accept + must-reject CI fixtures (design
+rem Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec9), and C2's own Gate B smoke.
+if not exist out\t2139 mkdir out\t2139
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /c src\sslm_abi.cpp /Fo:out\t2139\sslm_abi.obj
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem Gate A must-accept: compiles, links, runs to exit 0.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools tools\t2139_gate_a_header_parity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check.exe
+if errorlevel 1 (
+	echo Gate A must-accept construction FAILED TO COMPILE -- this is a real regression, not expected
+	popd & exit /b 1
+)
+out\t2139_gate_a_header_parity_check.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem Gate A must-reject: MUST fail to compile. errorlevel 0 here is the regression.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itools tools\t2139_gate_a_header_parity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_a_header_parity_check_negative.exe >out\t2139\gate_a_negative.log 2>&1
+if not errorlevel 1 (
+	echo Gate A must-reject construction COMPILED CLEAN -- Gate A has regressed, see out\t2139\gate_a_negative.log
+	popd & exit /b 1
+)
+echo Gate A must-reject construction correctly failed to compile ^(see out\t2139\gate_a_negative.log^)
+
+rem Gate C must-accept: compiles, links, runs to exit 0.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check.exe
+if errorlevel 1 (
+	echo Gate C must-accept construction FAILED TO COMPILE -- this is a real regression, not expected
+	popd & exit /b 1
+)
+out\t2139_gate_c_type_identity_check.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem Gate C must-reject: MUST fail to compile. errorlevel 0 here is the regression.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check_negative.exe >out\t2139\gate_c_negative.log 2>&1
+if not errorlevel 1 (
+	echo Gate C must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_negative.log
+	popd & exit /b 1
+)
+echo Gate C must-reject construction correctly failed to compile ^(see out\t2139\gate_c_negative.log^)
+
+rem count_abi_verbs.sh's own cited figure (design Sec4): 29. Checked only when bash is on PATH
+rem (git-bash on a typical Windows dev box) -- non-fatal if absent, matching this script's own
+rem python-checker precedent below.
+rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
+rem inside a `( ... )` block expands at PARSE time (before the block's own `set /p` line has
+rem run) without `setlocal enabledelayedexpansion`, which this script does not otherwise need
+rem and this step does not want to turn on globally -- goto/labels sidestep it instead.
+where bash >nul 2>nul
+if errorlevel 1 goto :t2139_verb_count_skip
+bash -c "cat include/superslm/sslm_abi_functions.inc include/superslm/sslm_abi_functions_g5_comparable.inc | grep -oE '\bsslm_[a-z0-9_]+\s*\(' | sed -E 's/\s*\($//' | sort -u | wc -l" > out\t2139\verb_count.txt
+set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
+if "%T2139_VERB_COUNT%"=="29" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 29 -- verb count drifted, see design Sec4
+popd & exit /b 1
+:t2139_verb_count_ok
+echo count_abi_verbs.sh: 29 verbs, matches design Sec4's own cited figure
+goto :t2139_verb_count_done
+:t2139_verb_count_skip
+echo bash not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal^)
+:t2139_verb_count_done
+
+rem C2's own Gate B smoke: maps a real artifact, exercises C1's own construction verbs against
+rem it, calls sslm_seq_state_size, unmaps. NOT auto-run against a real artifact here (matching
+rem B2/B3/.../t2124's own precedent above -- needs a real .sslm this build does not assume
+rem exists on every machine); built so it is ready. Usage: out\t2139_c2_smoke.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c2_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c2_smoke.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
