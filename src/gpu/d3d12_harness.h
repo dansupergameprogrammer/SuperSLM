@@ -438,8 +438,12 @@ inline std::vector<uint8_t> ReadFile(const std::string& path) {
 	return b;
 }
 
-// Locates `<exe_dir>/shaders/<name>.cso` -- built.bat/CMake copy this design's
-// own compiled shaders next to the test binary (see build.bat / CMakeLists.txt).
+// Locates `<exe_dir>/shaders/<name>.cso`. build.bat places its compiled
+// shaders next to its own built test binary (out\superslm_tests.exe).
+// CMakeLists.txt (T-2115, D-SLM3432) also compiles these shaders, behind
+// SUPERSLM_BUILD_GPU, but builds no GPU-linked executable of its own to sit
+// beside them -- see superslm_gpu.cpp's own ShaderPath() definition for the
+// current, full account of where each build puts them.
 std::string ShaderPath(const std::string& name);
 
 struct CachedPipeline {

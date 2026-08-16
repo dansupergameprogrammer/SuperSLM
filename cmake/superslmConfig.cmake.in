@@ -7,4 +7,24 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/superslmTargets.cmake")
 
+# T-2115 fix round (S1, Claude/Poirot/6f60491-t2115-cmake-product-surface.md):
+# superslm::superslm_gpu links and runs sslm_gpu_context_create cleanly with
+# no shaders installed at all -- the failure waits for the first real
+# dispatch, where a missing-file exception is caught and converted into a
+# generic status with no indication a file was ever missing. CMake installs
+# the library but has no way to know where a consumer's own executable will
+# end up, so it cannot place the 33 compiled .cso shaders "next to" anything
+# itself the way build.bat places them next to out\superslm_tests.exe.
+# superslm_GPU_SHADER_DIR names the absolute, installed location instead: a
+# consumer of superslm::superslm_gpu copies this directory's contents next to
+# its own binary's own output directory (matching superslm_gpu::harness::
+# ShaderPath()'s "<exe_dir>/shaders/<name>.cso" runtime lookup,
+# src/gpu/superslm_gpu.cpp) before its first GPU dispatch. Only set when the
+# GPU target was actually built and installed as part of this package --
+# set_and_check() (defined by the @PACKAGE_INIT@ block above) would otherwise
+# fail hard on a path nothing installed anything into.
+if(TARGET superslm::superslm_gpu)
+	set_and_check(superslm_GPU_SHADER_DIR "@PACKAGE_SUPERSLM_INSTALL_GPU_SHADER_DIR@")
+endif()
+
 check_required_components(superslm)

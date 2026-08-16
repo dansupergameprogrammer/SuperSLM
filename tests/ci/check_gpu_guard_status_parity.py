@@ -775,10 +775,18 @@ def derive_execution_scope(build_bat_text: str, cmake_text: str) -> tuple[Execut
 # Named, dated waivers for a hollow scope this sweep found and is NOT fixing this round -- per
 # `Claude/CLAUDE.md`'s own standing project rule ("Hardening isn't the phase... red/aborted CI is
 # expected and fine") and Dan's own explicit stance against chasing Actions/CI green at this
-# project phase. Adding GPU compilation to the CMake target is a real, larger engineering task
-# (conditional D3D12/Windows-only linkage, `dxc`-compiled shaders CMake does not currently invoke
-# at all) -- named here as owed, not silently absorbed into "CI is out of scope" as a blanket
-# excuse for every future gap.
+# project phase.
+#
+# UPDATED (T-2115, D-SLM3432, Claude/Poirot/6f60491-t2115-cmake-product-surface.md M2): the two
+# obstacles this paragraph originally named as the reason CMake GPU compilation was a "real,
+# larger engineering task" -- conditional D3D12/Windows-only linkage, and CMake never invoking
+# `dxc` at all -- are both closed. `CMakeLists.txt` now builds an optional `superslm_gpu` library
+# (`SUPERSLM_BUILD_GPU`, Windows/MSVC-guarded) and compiles every `src/gpu/shaders/*.hlsl` file via
+# `dxc`. The waiver below is UNCHANGED and still correct: `superslm_gpu` is a library, not linked
+# into any `add_executable` that compiles `test_main.cpp`, so the `"CMake: superslm_tests (GitHub
+# Actions)"` scope this module derives is still hollow for the exact reason its own entry states.
+# Wiring `superslm_gpu` into `superslm_tests` -- the remaining, larger step -- is still owed,
+# tracked in `Claude/Brunel/t2115-cmake-product-surface-2026-08-15.md` Sec2, not absorbed here.
 EXECUTION_SCOPE_WAIVERS = {
     "CMake: superslm_tests (GitHub Actions)": (
         "T-2091 (build log §27), 2026-08-14: does not compile src/gpu/superslm_gpu.cpp at all "

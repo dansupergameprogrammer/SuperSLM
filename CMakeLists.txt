@@ -1,4 +1,9 @@
-cmake_minimum_required(VERSION 3.16)
+# 3.20, raised from 3.16 (T-2115 fix round, S1, Claude/Poirot/6f60491-t2115-
+# cmake-product-surface.md): install(FILES ...) below installs the compiled
+# GPU shaders from a path carrying a $<CONFIG> generator expression on
+# multi-config generators, which install(FILES) only resolves against the
+# configuration passed to `cmake --install --config <cfg>` since CMake 3.20.
+cmake_minimum_required(VERSION 3.20)
 project(superslm VERSION 1.0.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
@@ -12,6 +17,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # find_package() config) needed by every install() rule below.
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+
+# T-2115 fix round (S1, Claude/Poirot/6f60491-t2115-cmake-product-surface.md):
+# the fixed, non-config-dependent install destination for the compiled GPU
+# shaders -- defined unconditionally (not only inside `if(TARGET
+# superslm_gpu)` below) so configure_package_config_file's PATH_VARS entry
+# for it always resolves, whether or not this configure actually built the
+# GPU target. Under CMAKE_INSTALL_DATADIR (GNUInstallDirs' own data-files
+# convention), not LIBDIR/BINDIR: the .cso files are neither a library nor an
+# executable, and this destination is never assumed to sit beside a
+# consumer's own binary (see cmake/superslmConfig.cmake.in's own comment).
+set(SUPERSLM_INSTALL_GPU_SHADER_DIR "${CMAKE_INSTALL_DATADIR}/superslm/gpu-shaders")
 
 # The core library. Layer 1 is independently embeddable — no Unreal, no third-party
 # runtime dependency in its graph (DecisionLog D-SLM13). Standard library only.
@@ -182,17 +198,29 @@ if(SUPERSLM_BUILD_GPU)
 
 	# Every compute shader compiles to cs_6_2, -O3, -HV 2018, -WX -- the same
 	# pinned target and flags build.bat uses (T-1986 GPU-serial port, Sec5.7).
-	# Output lands under ${CMAKE_BINARY_DIR}/shaders, mirroring build.bat's own
-	# out\shaders layout; superslm_gpu::harness::ShaderPath() (src/gpu/
-	# superslm_gpu.cpp) resolves "<exe_dir>/shaders/<name>.cso" at runtime, so a
-	# GPU-dispatching executable built on top of this library still needs its
-	# own copy of these .cso files placed next to it -- this unit adds no such
-	# executable, only the library and its shader-compile dependency.
+	# superslm_gpu::harness::ShaderPath() (src/gpu/superslm_gpu.cpp) resolves
+	# "<exe_dir>/shaders/<name>.cso" from GetModuleFileNameA at runtime -- the
+	# directory beside whatever executable is actually running, not a fixed
+	# build-tree path. On the Windows generator (multi-config: Visual Studio)
+	# an executable's own default output directory is
+	# ${CMAKE_BINARY_DIR}/$<CONFIG>/, not ${CMAKE_BINARY_DIR}/ itself, so the
+	# shader output directory below carries the same $<CONFIG> generator
+	# expression -- on a single-config generator (Ninja, Makefiles)
+	# GENERATOR_IS_MULTI_CONFIG is false and $<CONFIG> is never part of an
+	# executable's own output path, so the shaders land directly under
+	# ${CMAKE_BINARY_DIR}/shaders there instead, matching build.bat's own
+	# out\shaders-beside-out\*.exe layout in both cases. This unit adds no
+	# in-tree GPU-dispatching executable of its own -- this only makes the
+	# location agree with where one would land if added.
 	file(GLOB SUPERSLM_GPU_SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/*.hlsl")
 	file(GLOB SUPERSLM_GPU_SHADER_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/*.hlsli")
 
-	set(SUPERSLM_GPU_SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
-	file(MAKE_DIRECTORY "${SUPERSLM_GPU_SHADER_OUT_DIR}")
+	get_property(SUPERSLM_GPU_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+	if(SUPERSLM_GPU_IS_MULTI_CONFIG)
+		set(SUPERSLM_GPU_SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/$<CONFIG>/shaders")
+	else()
+		set(SUPERSLM_GPU_SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+	endif()
 
 	set(SUPERSLM_GPU_SHADER_OUTPUTS "")
 	foreach(_superslm_shader ${SUPERSLM_GPU_SHADER_SOURCES})
@@ -200,6 +228,12 @@ if(SUPERSLM_BUILD_GPU)
 		set(_superslm_shader_cso "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_superslm_shader_name}.cso")
 		add_custom_command(
 			OUTPUT "${_superslm_shader_cso}"
+			# The output directory is created here, at build time, rather than via a
+			# configure-time file(MAKE_DIRECTORY ...): SUPERSLM_GPU_SHADER_OUT_DIR
+			# carries a $<CONFIG> generator expression on multi-config generators,
+			# which file(MAKE_DIRECTORY ...) cannot evaluate (it only ever sees the
+			# literal, un-expanded string at configure time).
+			COMMAND "${CMAKE_COMMAND}" -E make_directory "${SUPERSLM_GPU_SHADER_OUT_DIR}"
 			COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_superslm_shader_cso}" "${_superslm_shader}" -O3 -HV 2018 -WX
 			DEPENDS "${_superslm_shader}" ${SUPERSLM_GPU_SHADER_HEADERS}
 			COMMENT "dxc: ${_superslm_shader_name}.hlsl -> ${_superslm_shader_name}.cso"
@@ -233,7 +267,16 @@ if(SUPERSLM_BUILD_GPU)
 	# same-directory search every compiler also does.
 	target_include_directories(superslm_gpu PRIVATE src/gpu)
 	target_link_libraries(superslm_gpu PRIVATE d3d12 dxgi dxguid)
-	target_compile_options(superslm_gpu PRIVATE /W4 /fp:precise)
+	# MSVC-guarded, not WIN32-guarded: WIN32 is also true under a MinGW or
+	# GNU-frontend-clang toolchain, where MSVC is false and /W4/-fp:precise
+	# are not valid flags (the compiler chokes on /W4 as a filename) --
+	# matching the if(MSVC)/else() convention every other target in this file
+	# already uses, rather than assuming WIN32 implies MSVC.
+	if(MSVC)
+		target_compile_options(superslm_gpu PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(superslm_gpu PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
 	add_dependencies(superslm_gpu superslm_gpu_shaders)
 endif()
 
@@ -257,6 +300,27 @@ if(TARGET superslm_gpu)
 		LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 		RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	)
+
+	# S1 (Claude/Poirot/6f60491-t2115-cmake-product-surface.md): superslm_gpu
+	# is unusable without its 33 compiled .cso shaders -- every real GPU
+	# dispatch reaches superslm_gpu::harness::GetOrBuildPipeline/
+	# GetOrBuildComposedPipeline (src/gpu/superslm_gpu.cpp), which throws if
+	# ShaderPath()'s file is missing, and every call site along that path
+	# catches std::exception and returns a generic failure status -- an
+	# installed package with the library but not the shaders links and runs
+	# sslm_gpu_context_create cleanly, then fails opaquely at first dispatch.
+	# SUPERSLM_GPU_SHADER_OUTPUTS carries a $<CONFIG> generator expression on
+	# multi-config generators (matching the custom-command outputs above);
+	# install(FILES ...) resolves it against whatever configuration
+	# `cmake --install --config <cfg>` names (CMake 3.20+, this project's own
+	# floor as of this fix). The .cso bytecode itself does not vary by
+	# Debug/Release -- only the build-tree path used to reach it does -- so
+	# every configuration's shaders land at the identical installed
+	# destination, overwriting on a second `--install --config <other>` with
+	# byte-identical content.
+	install(FILES ${SUPERSLM_GPU_SHADER_OUTPUTS}
+		DESTINATION ${SUPERSLM_INSTALL_GPU_SHADER_DIR}
+	)
 endif()
 
 install(DIRECTORY include/superslm/
@@ -279,6 +343,7 @@ configure_package_config_file(
 	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/superslmConfig.cmake.in"
 	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfig.cmake"
 	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
+	PATH_VARS SUPERSLM_INSTALL_GPU_SHADER_DIR
 )
 
 install(FILES

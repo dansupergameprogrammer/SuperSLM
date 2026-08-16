@@ -40,9 +40,17 @@ namespace superslm_gpu {
 namespace harness {
 
 // GetModuleFileNameA-derived directory of the running executable, plus
-// "shaders\\<name>.cso" -- build.bat/CMakeLists.txt (this design's own build
-// scripts, Sec5.7) place the compiled shaders there alongside the test
-// binary.
+// "shaders\\<name>.cso". build.bat (Sec5.7) places the compiled shaders
+// there alongside its own built test binary (out\superslm_tests.exe).
+// CMakeLists.txt (T-2115, D-SLM3432) also compiles these shaders, behind
+// SUPERSLM_BUILD_GPU, into a location matching wherever a GPU-linked
+// executable's own default output directory would be -- but does not itself
+// build any such executable (superslm_tests links only the CPU-only
+// superslm_test_injection), so nothing in the CMake tree currently ends up
+// beside them the way build.bat's test binary does. An installed
+// superslm::superslm_gpu package exposes their location as
+// superslm_GPU_SHADER_DIR (cmake/superslmConfig.cmake.in) for a consumer to
+// copy next to its own binary.
 std::string ShaderPath(const std::string& name) {
 	char path[MAX_PATH]{};
 	DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
