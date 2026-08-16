@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.16)
-project(superslm CXX)
+project(superslm VERSION 1.0.0 LANGUAGES CXX)
 
 # C++20: the S-LoRA delta path is specified at -std=c++20 (SuperSLM_Plan.md §19),
 # and the core carries wide-integer (int64) composition arithmetic throughout. One
 # standard across the project avoids a later per-target split.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# T-2115 (D-SLM3432): the versioned install surface (GNUInstallDirs for the
+# standard destination layout, CMakePackageConfigHelpers for the generated
+# find_package() config) needed by every install() rule below.
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
 # The core library. Layer 1 is independently embeddable — no Unreal, no third-party
 # runtime dependency in its graph (DecisionLog D-SLM13). Standard library only.
@@ -25,7 +31,14 @@ set(SUPERSLM_CORE_SOURCES
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
-target_include_directories(superslm PUBLIC include)
+# BUILD_INTERFACE/INSTALL_INTERFACE: consumers building against this tree see
+# the source-tree include/ path; consumers of an installed package see the
+# installed header destination (CMAKE_INSTALL_INCLUDEDIR) instead — the same
+# target property serves both without a second target definition.
+target_include_directories(superslm PUBLIC
+	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+	$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 
 # Determinism: forbid FP contraction. Implicit fused multiply-add would change
 # rounding and break the scalar/SIMD bit-equality the whole project is built on
@@ -126,3 +139,150 @@ if(MSVC)
 else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
+
+# T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
+# src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the
+# only build recipe that has ever compiled it. Off by default and gated behind
+# an explicit option, so every CI leg in .github/workflows/tests.yml (including
+# windows-x64, which runs a bare `cmake --build build` with no target named and
+# therefore builds every default target in the project) keeps building exactly
+# what it builds today; the GPU library only enters the build when a caller
+# opts in with -DSUPERSLM_BUILD_GPU=ON, and it errors immediately if that
+# happens on a non-Windows configure rather than failing later on a missing
+# header.
+option(SUPERSLM_BUILD_GPU "Build the D3D12/HLSL GPU acceleration library (Windows/MSVC only)" OFF)
+
+if(SUPERSLM_BUILD_GPU)
+	if(NOT WIN32)
+		message(FATAL_ERROR "SUPERSLM_BUILD_GPU requires Windows: src/gpu/*.cpp is a D3D12/HLSL implementation with no non-Windows backend.")
+	endif()
+
+	# dxc.exe (the DirectX Shader Compiler) is not reliably on PATH; build.bat
+	# hardcodes one Windows Kits 10 version. Search PATH first, then fall back
+	# to a glob over every installed Windows Kits 10 SDK version's x64 dxc.exe,
+	# preferring the highest (last, after a lexical sort -- SDK version
+	# directories are dot-separated zero-padded numerals, e.g. 10.0.19041.0,
+	# so a lexical sort is also a numeric sort here).
+	find_program(SUPERSLM_DXC_EXECUTABLE NAMES dxc.exe dxc)
+	if(NOT SUPERSLM_DXC_EXECUTABLE)
+		file(GLOB SUPERSLM_DXC_CANDIDATES
+			"$ENV{ProgramFiles\(x86\)}/Windows Kits/10/bin/*/x64/dxc.exe"
+			"C:/Program Files (x86)/Windows Kits/10/bin/*/x64/dxc.exe"
+		)
+		if(SUPERSLM_DXC_CANDIDATES)
+			list(SORT SUPERSLM_DXC_CANDIDATES)
+			list(REVERSE SUPERSLM_DXC_CANDIDATES)
+			list(GET SUPERSLM_DXC_CANDIDATES 0 SUPERSLM_DXC_EXECUTABLE)
+		endif()
+	endif()
+	if(NOT SUPERSLM_DXC_EXECUTABLE)
+		message(FATAL_ERROR "SUPERSLM_BUILD_GPU=ON but dxc.exe (DirectX Shader Compiler) was not found on PATH or under any installed Windows Kits 10 SDK. Install the Windows SDK, or pass -DSUPERSLM_DXC_EXECUTABLE=<path to dxc.exe>.")
+	endif()
+	message(STATUS "SuperSLM GPU: compiling shaders with ${SUPERSLM_DXC_EXECUTABLE}")
+
+	# Every compute shader compiles to cs_6_2, -O3, -HV 2018, -WX -- the same
+	# pinned target and flags build.bat uses (T-1986 GPU-serial port, Sec5.7).
+	# Output lands under ${CMAKE_BINARY_DIR}/shaders, mirroring build.bat's own
+	# out\shaders layout; superslm_gpu::harness::ShaderPath() (src/gpu/
+	# superslm_gpu.cpp) resolves "<exe_dir>/shaders/<name>.cso" at runtime, so a
+	# GPU-dispatching executable built on top of this library still needs its
+	# own copy of these .cso files placed next to it -- this unit adds no such
+	# executable, only the library and its shader-compile dependency.
+	file(GLOB SUPERSLM_GPU_SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/*.hlsl")
+	file(GLOB SUPERSLM_GPU_SHADER_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/gpu/shaders/*.hlsli")
+
+	set(SUPERSLM_GPU_SHADER_OUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+	file(MAKE_DIRECTORY "${SUPERSLM_GPU_SHADER_OUT_DIR}")
+
+	set(SUPERSLM_GPU_SHADER_OUTPUTS "")
+	foreach(_superslm_shader ${SUPERSLM_GPU_SHADER_SOURCES})
+		get_filename_component(_superslm_shader_name "${_superslm_shader}" NAME_WE)
+		set(_superslm_shader_cso "${SUPERSLM_GPU_SHADER_OUT_DIR}/${_superslm_shader_name}.cso")
+		add_custom_command(
+			OUTPUT "${_superslm_shader_cso}"
+			COMMAND "${SUPERSLM_DXC_EXECUTABLE}" -T cs_6_2 -E main -Fo "${_superslm_shader_cso}" "${_superslm_shader}" -O3 -HV 2018 -WX
+			DEPENDS "${_superslm_shader}" ${SUPERSLM_GPU_SHADER_HEADERS}
+			COMMENT "dxc: ${_superslm_shader_name}.hlsl -> ${_superslm_shader_name}.cso"
+			VERBATIM
+		)
+		list(APPEND SUPERSLM_GPU_SHADER_OUTPUTS "${_superslm_shader_cso}")
+	endforeach()
+	unset(_superslm_shader)
+	unset(_superslm_shader_name)
+	unset(_superslm_shader_cso)
+
+	add_custom_target(superslm_gpu_shaders DEPENDS ${SUPERSLM_GPU_SHADER_OUTPUTS})
+
+	add_library(superslm_gpu STATIC
+		src/gpu/gpu_1p0.cpp
+		src/gpu/superslm_gpu.cpp
+	)
+	# PUBLIC link to superslm: the GPU sources use SslmModelView/SslmModel::Load
+	# (model.h) and the checked-chain-funnel/forward-sites declarations
+	# (gpu_port.h), and this also carries superslm's own PUBLIC include/
+	# interface (BUILD_INTERFACE/INSTALL_INTERFACE above) through transitively,
+	# so superslm_gpu needs no separate include_directories(... PUBLIC include)
+	# of its own.
+	target_link_libraries(superslm_gpu PUBLIC superslm)
+	# d3d12_harness.h (src/gpu/, not installed -- GPU-internal) is a private
+	# implementation include, matching build.bat's own /Iinclude (public) with
+	# no separate GPU include path: the two GPU .cpp files #include
+	# "d3d12_harness.h" directly, which only resolves because src/gpu is each
+	# translation unit's own containing directory -- adding it explicitly here
+	# makes that dependency visible rather than relying on the implicit
+	# same-directory search every compiler also does.
+	target_include_directories(superslm_gpu PRIVATE src/gpu)
+	target_link_libraries(superslm_gpu PRIVATE d3d12 dxgi dxguid)
+	target_compile_options(superslm_gpu PRIVATE /W4 /fp:precise)
+	add_dependencies(superslm_gpu superslm_gpu_shaders)
+endif()
+
+# T-2115 (D-SLM3432): the versioned install surface. Only the product library
+# (or libraries, when SUPERSLM_BUILD_GPU=ON) and the public headers are
+# installed -- superslm_test_injection, superslm_tests, and every tool/
+# executable above are internal to this repository's own build and test loop,
+# not part of what an external consumer links against, so none of them gets
+# an install() rule.
+install(TARGETS superslm
+	EXPORT superslmTargets
+	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+if(TARGET superslm_gpu)
+	install(TARGETS superslm_gpu
+		EXPORT superslmTargets
+		ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+		LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+		RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	)
+endif()
+
+install(DIRECTORY include/superslm/
+	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/superslm
+)
+
+install(EXPORT superslmTargets
+	FILE superslmTargets.cmake
+	NAMESPACE superslm::
+	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
+)
+
+write_basic_package_version_file(
+	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfigVersion.cmake"
+	VERSION ${PROJECT_VERSION}
+	COMPATIBILITY SameMajorVersion
+)
+
+configure_package_config_file(
+	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/superslmConfig.cmake.in"
+	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfig.cmake"
+	INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
+)
+
+install(FILES
+	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfig.cmake"
+	"${CMAKE_CURRENT_BINARY_DIR}/superslmConfigVersion.cmake"
+	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/superslm
+)
