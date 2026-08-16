@@ -143,6 +143,24 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 	}
 }
 
+// A KNOWN-VALID sslm_config (design Sec7.1, revised buffer model, commit fab235c1c6) for any
+// cell that needs a real, accepted workspace-sizing call -- since Sec7.1's own domain makes an
+// all-zero/null config HOSTILE input (sslm_workspace_size returns 0, sslm_workspace_create
+// rejects SSLM_INVALID_ARGUMENT), a cell that expects SSLM_OK from sslm_workspace_create can no
+// longer pass a null config as a convenience default the way a reserved-only GPU-ABI-style
+// config would allow. max_batch/max_chunk_budget are sized generously (16/256) for any cell
+// that composes a handful of sequences or a few hundred prompt tokens in one call;
+// max_layer_budget is clamped to the real model's own num_hidden_layers, the one field whose
+// valid domain depends on the artifact.
+inline sslm_config ValidWorkspaceConfig(int32_t num_hidden_layers) {
+	sslm_config c{};
+	c.max_batch = 16;
+	c.max_chunk_budget = 256;
+	c.max_layer_budget = num_hidden_layers;
+	c.reserved = 0;
+	return c;
+}
+
 // The C4/dim6/dim10 CPU-forward-pass oracle -- the SAME construction
 // tests/t2112-gpu-1p0-red-suite/fixture_common.h's own CpuOracleModel/StepCpu establishes,
 // reused verbatim (StandardsDocument.md Sec6.6: one real implementation, not a second drifting
