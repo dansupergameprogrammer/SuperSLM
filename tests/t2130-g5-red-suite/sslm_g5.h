@@ -75,10 +75,14 @@ typedef struct sslm_workspace_s* sslm_workspace;
  * lifecycle/precondition-on-state, numeric/domain -- this enum's prior authorship-order
  * interleaving had no such principle), and the append-only/stable-ordinal law not yet binding
  * either side (this header is RED BY LINK -- nothing has ever linked against either taxonomy, so
- * this is the one moment renumbering is free). The result is ONE 24-enumerator sslm_status:
- * T-2133 Sec6's own 17 base enumerators at ordinals 0-16 exactly as that design states, G5's own
- * 7 schema-specific enumerators APPENDED at ordinals 17-23, preserving their existing relative
- * order among themselves (G5's own internal ordering is design T-2119's call, not T-2133's).
+ * this is the one moment renumbering is free). The result is ONE 25-enumerator sslm_status:
+ * T-2133 Sec6's own 18 base enumerators at ordinals 0-17 exactly as that design states (17 at
+ * this fold's own first pass, plus SSLM_TOKEN_ID_UNMAPPED appended at 17 in a follow-up base
+ * revision, design commit 212de7742c, Brunel T-2139, executed SuperSLM@f9a0065 -- see that
+ * enumerator's own comment below), G5's own 7 schema-specific enumerators APPENDED at ordinals
+ * 18-24, shifted from their prior 17-23 position to stay clear of the base's own growth,
+ * preserving their existing relative order among themselves (G5's own internal ordering is
+ * design T-2119's call, not T-2133's).
  * Gate C's sslm_status exclusion lifts once this lands (T-2133 Sec6/Sec9) -- the per-enumerator
  * check now runs unconditionally over the full, reconciled enum. */
 typedef enum sslm_status {
@@ -133,22 +137,45 @@ typedef enum sslm_status {
                                                 * the GPU ABI's own B3.5 addition, D-SLM3367 */
     SSLM_CONTEXT_CAP_EXCEEDED = 16,           /* a prefill/decode_step call that would push
                                                 * context_length past the artifact's context_cap */
+    SSLM_TOKEN_ID_UNMAPPED = 17,              /* NEW, appended this fold (design commit
+                                                * 212de7742c, the padded-vocabulary ruling, Brunel
+                                                * T-2139, executed SuperSLM@f9a0065): the base
+                                                * taxonomy's numeric/domain group gains this
+                                                * enumerator at ordinal 17, the next free base
+                                                * ordinal, per the append-only reconciliation law --
+                                                * never inserted within the group's own prior
+                                                * position, even though it is semantically a
+                                                * numeric/domain rejection, because ordinal
+                                                * stability for every already-reconciled enumerator
+                                                * wins. sslm_detokenize_stream's own rejection for a
+                                                * decode-output token id in [tok_vocab, cfg_vocab) --
+                                                * a legal decode output with no tokenizer entry
+                                                * (the padded-vocabulary case
+                                                * ValidateTokenizerVocabSizeJoin's loosening admits,
+                                                * src/model.cpp), distinct from
+                                                * SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never
+                                                * a legal decode output at all). Base taxonomy is
+                                                * now 18 enumerators (0-17); G5's own seven shift
+                                                * to 18-24, below, per
+                                                * include/superslm/sslm_abi.h's own coordination
+                                                * note (design commit 212de7742c). */
 
-    /* --- G5, design Sec5 / Sec7 dim5 -- APPENDED at 17-23, existing relative order preserved
+    /* --- G5, design Sec5 / Sec7 dim5 -- APPENDED at 18-24, existing relative order preserved
      * per the ruling's own append-only reasoning (G5's own internal ordering is T-2119's call,
-     * not T-2133's). --- */
-    SSLM_SCHEMA_NOT_FOUND = 17,                /* sslm_schema_lookup: unknown name, design Sec5 */
-    SSLM_SCHEMA_BIND_REJECTED = 18,            /* sslm_seq_set_schema on a non-fresh walk state,
+     * not T-2133's). SHIFTED 17-23 -> 18-24 this fold to make room for
+     * SSLM_TOKEN_ID_UNMAPPED's own base-taxonomy insertion at 17, above. --- */
+    SSLM_SCHEMA_NOT_FOUND = 18,                /* sslm_schema_lookup: unknown name, design Sec5 */
+    SSLM_SCHEMA_BIND_REJECTED = 19,            /* sslm_seq_set_schema on a non-fresh walk state,
                                                 * design Sec5 */
-    SSLM_SCHEMA_SPAN_UNBOUND = 19,             /* sslm_prefill(..., SSLM_SPAN_SCHEMA_CONTENT, ...)
+    SSLM_SCHEMA_SPAN_UNBOUND = 20,             /* sslm_prefill(..., SSLM_SPAN_SCHEMA_CONTENT, ...)
                                                 * against an unbound sequence, design Sec5/Sec10.2 */
-    SSLM_PREFIX_SCHEMA_MISMATCH = 20,          /* sslm_seq_adopt_prefix: real schema-content walk
+    SSLM_PREFIX_SCHEMA_MISMATCH = 21,          /* sslm_seq_adopt_prefix: real schema-content walk
                                                 * progress against a mismatched or unbound sequence,
                                                 * design Sec5 (stated exhaustively, both branches) */
-    SSLM_RESTORE_SCHEMA_MISMATCH = 21,         /* sslm_seq_restore: bound schema does not resolve
+    SSLM_RESTORE_SCHEMA_MISMATCH = 22,         /* sslm_seq_restore: bound schema does not resolve
                                                 * against the currently-mapped artifact's schema set,
                                                 * design Sec5 / Sec7 dim2/dim9 */
-    SSLM_SCHEMA_SPAN_UNREACHABLE = 22,         /* G5-4, design Sec6: a host-declared "fixed" span
+    SSLM_SCHEMA_SPAN_UNREACHABLE = 23,         /* G5-4, design Sec6: a host-declared "fixed" span
                                                 * that is not actually reachable under the active
                                                 * schema's DFA from the sequence's current walk-
                                                 * state -- "a span that leaves the DFA's language
@@ -162,7 +189,7 @@ typedef enum sslm_status {
                                                 * which the planner has since ruled on
                                                 * (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md,
                                                 * Wizard repo, ruling 1). */
-    SSLM_SCHEMA_UNSATISFIABLE = 23              /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
+    SSLM_SCHEMA_UNSATISFIABLE = 24              /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
                                                 * CPU/converter-side, listed here for completeness;
                                                 * the C++ decode-time surface never emits it */
 } sslm_status;
