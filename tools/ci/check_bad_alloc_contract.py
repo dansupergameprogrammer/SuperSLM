@@ -84,17 +84,34 @@ def _extract_balanced_body(source: str, search_from: int) -> str:
 
 
 def _find_definition_body(cpp_source: str, name: str, enclosing: str | None) -> str | None:
-    """Find the qualified (`Enclosing::name`) or free (`name`) function's
-    DEFINITION in `cpp_source` -- distinguished from a mere call site by the
-    project's own consistent style: every top-level definition starts at
-    column 0 (no leading whitespace), while every call site in this codebase
-    is indented inside another function's body. Returns the brace-balanced
-    body text of the first such definition, or None if not found."""
-    qualified = f"{enclosing}::{name}" if enclosing else name
+    """Find the qualified (`Enclosing::name` or `Enclosing<...>::name`) or free
+    (`name`) function's DEFINITION in `cpp_source` -- distinguished from a mere
+    call site by the project's own consistent style: every top-level definition
+    starts at column 0 (no leading whitespace), while every call site in this
+    codebase is indented inside another function's body. Returns the
+    brace-balanced body text of the first such definition, or None if not
+    found.
+
+    T-2125: `Enclosing::name` is now `Enclosing(?:<...>)?::name` -- a class
+    TEMPLATE's own member is qualified in its .cpp definition as
+    `Enclosing<Kind>::name` (the template parameter, not a concrete type
+    argument; this project's own convention, matching SslmAmplifyingFoldScaleView
+    <Kind>::Parse), which the old literal `f"{enclosing}::{name}"` string could
+    never match -- every templated member read as though its definition did not
+    exist, misreporting a real, wrapped member as unwrapped regardless of its
+    actual .cpp body (found live, `derive_bad_alloc_membership.py`'s own sibling
+    correction is the other half of this same gap: `enclosing` itself was `None`
+    for a template's implicit instantiations before that fix, so this one alone
+    would not have been reachable for two of the member's three derived
+    entries)."""
+    if enclosing:
+        qualified_pattern = re.escape(enclosing) + r"(?:<[^()]*>)?::" + re.escape(name)
+    else:
+        qualified_pattern = re.escape(name)
     # `\s*\(` immediately after the name excludes a `<name>Impl(` match (the
     # literal characters "Impl" between the name and "(" fail `\s*`).
     pattern = re.compile(
-        r"^(?:[A-Za-z_][\w:<>,\s\*&]*[\s\*&])?" + re.escape(qualified) + r"\s*\(",
+        r"^(?:[A-Za-z_][\w:<>,\s\*&]*[\s\*&])?" + qualified_pattern + r"\s*\(",
         re.MULTILINE,
     )
     for m in pattern.finditer(cpp_source):

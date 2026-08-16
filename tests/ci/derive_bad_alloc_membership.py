@@ -171,7 +171,16 @@ def _scan_ast_root(root: dict, header_name: str) -> list[dict]:
 
         kind = n.get("kind")
         pushed_class = False
-        if kind == "CXXRecordDecl" and n.get("name"):
+        # T-2125: `ClassTemplateSpecializationDecl` alongside `CXXRecordDecl` -- a class
+        # template's own IMPLICIT instantiations (e.g. SslmAmplifyingFoldScaleView<Delta>,
+        # SslmAmplifyingFoldScaleView<U>) surface in the dump under this second kind, carrying
+        # the SAME unqualified `name` as the primary template's own CXXRecordDecl but never that
+        # kind themselves -- a member function nested only inside a ClassTemplateSpecializationDecl
+        # previously left `enclosing` as None (the class_stack push condition admitted CXXRecordDecl
+        # only), which check_bad_alloc_contract.py's own qualified-name lookup then could not use to
+        # find the member's .cpp definition at all, misreporting a real, wrapped member as unwrapped
+        # (found live: SslmAmplifyingFoldScaleView<Kind>::Parse, model.h:387).
+        if kind in ("CXXRecordDecl", "ClassTemplateSpecializationDecl") and n.get("name"):
             class_stack.append(n["name"])
             pushed_class = True
 

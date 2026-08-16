@@ -210,6 +210,67 @@ def test_nested_leaf_call_inside_an_expression_is_still_found():
         assert leaves_hit == ["NormalizeScale", "RequantTokenCode"]
 
 
+# --- T-2125: the scan is comment-aware -- a leaf name mentioned only in prose is not a
+# call site and must not be reported (module docstring's own CORRECTED paragraph). ---
+
+
+def test_a_leaf_name_inside_a_line_comment_is_not_flagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "// this function uses the same facility RequantTokenCode already uses internally\n"
+            "int64_t Quiet(int64_t x) { return x; }\n",
+        )
+        assert cnfl.find_banned_leaf_uses(path) == []
+
+
+def test_a_leaf_name_inside_a_block_comment_is_not_flagged_and_line_numbers_after_it_stay_correct():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "/* explains why this forwards to the same facility\n"
+            "   RequantTokenCode/IExpEvaluate already use internally, across\n"
+            "   several lines */\n"
+            "auto d = NormalizeScale(d_prime);\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(4, "NormalizeScale")], (
+            f"the real call on line 4 must still be caught, at its real line number, "
+            f"unaffected by the leaf name sitting inside the block comment above it: {hits}"
+        )
+
+
+def test_a_leaf_name_in_code_is_still_flagged_when_a_trailing_comment_shares_its_line():
+    # Line-shape awareness, not merely "any comment anywhere in the file blanks the whole
+    # scan": a real call and a trailing `//` comment on the SAME line must still report the
+    # call -- only the comment's own portion of the line is blanked.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "auto d = NormalizeScale(d_prime);  // NormalizeScale, called directly, on purpose\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(1, "NormalizeScale")], (
+            f"expected exactly one real hit from the code portion of the line, not a second "
+            f"spurious hit from the trailing comment's own repetition of the name: {hits}"
+        )
+
+
+def test_a_leaf_name_inside_a_string_literal_is_still_flagged_the_documented_residual():
+    # The module docstring's own named residual: comments are stripped, string literals are
+    # not -- this is what keeps that claim honest rather than aspirational.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            'const char* msg = "calls RequantTokenCode internally";\n',
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(1, "RequantTokenCode")], (
+            "a leaf name inside a string literal remains a reported (accepted, documented) "
+            f"over-approximation: {hits}"
+        )
+
+
 # --- Present truth: the real forward directory, now that it exists. ---
 
 

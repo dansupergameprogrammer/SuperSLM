@@ -372,8 +372,11 @@ jobs:
 
   # S-HARDEN-7 (F5, design Sec3.1, T-411): the "throws only std::bad_alloc"
   # contract's `membership-check` job. Mechanically, on every run: derives the
-  # nineteen-site population (T-1475: JsonEscape's promotion into
-  # proof_manifest.h made it the 19th; design Sec3.1's table itself still
+  # twenty-site population (T-1475: JsonEscape's promotion into
+  # proof_manifest.h made it the 19th; T-2125: SslmAmplifyingFoldScaleView<Kind>::
+  # Parse (model.h), the T-2021/T-2029 B0b runtime-additive-LoRA adapter view,
+  # made it the 20th -- found unwrapped by this job, rename-and-wrap fixed in
+  # the same change, model.h/model.cpp; design Sec3.1's table itself still
   # states eighteen and is owed a matching amendment) from the nine
   # include/superslm/*.h headers via a Clang AST walk
   # (tests/ci/derive_bad_alloc_membership.py's corrected, four-condition

@@ -13,12 +13,28 @@ Modelled on the precedent already in the tree, tests/check_no_pow_operator.py,
 with the one property that precedent does NOT need and this check does: an
 INPUT SET derived from a directory glob rather than a hardcoded file tuple
 (Sec7.3 names check_no_pow_operator.py's hardcoded two-element tuple as "the
-precedent's own weakness, not inherited"). One property does NOT transfer:
-check_no_pow_operator.py gets its precision from `ast.parse` over Python; a
-ban on C++ identifiers in forward TUs has no AST behind it here and is a text
-scan (Sec7.3, verbatim) -- over-inclusive on a comment or a string literal
-naming a leaf is an accepted false-positive, not a soundness gap, because the
-rule is a ban, not a classifier.
+precedent's own weakness, not inherited"). One property does NOT fully
+transfer: check_no_pow_operator.py gets its precision from `ast.parse` over
+Python; a ban on C++ identifiers in forward TUs has no AST behind it here and
+is a text scan (Sec7.3, verbatim) -- but not a raw one.
+
+CORRECTED (T-2125): the scan is comment-aware. `find_banned_leaf_uses` blanks
+`//` line comments and `/* */` block comments before running the leaf-name
+regex (`_strip_comments_preserving_line_numbers`, below -- newlines are kept
+exactly where they were, so a hit reported after a multi-line block comment
+still carries its real line number), rather than scanning the raw byte
+stream. Prose that NAMES a leaf while documenting why a nearby function calls
+it -- e.g. a comment explaining that `BiasReconcileWide` "uses the same
+portable 128-bit facility RequantTokenCode/IExpEvaluate already use
+internally" (`src/forward/forward_sites.cpp`) -- is not a call site and must
+not fail this check; a raw substring scan cannot tell the two apart, which is
+exactly the gap this correction closes (found live: that exact comment
+reddened the real-tree end-to-end cell with zero code change, a checker
+defect, not a code regression). A leaf name inside a STRING literal is still
+an accepted over-approximation -- this module strips comments, not string
+literals, because no production forward TU has ever had reason to name a
+leaf inside a string, and the rule remains a ban rather than a full
+classifier for that one remaining shape.
 
 WHERE THIS STANDS AS OF THE S3.1 HEADER-CONTRACT BUILD (2026-07-28, commit
 32aca0c, T-200): `src/forward/checked_chain_funnel.cpp` now exists and
@@ -480,15 +496,53 @@ def _leaf_pattern(leaf: str) -> re.Pattern[str]:
     return cached
 
 
+def _strip_comments_preserving_line_numbers(text: str) -> str:
+    """`text` with every `//` line comment and `/* */` block comment blanked to
+    spaces -- every newline byte kept exactly where it was, so line numbers
+    computed against the RETURNED text still match the original file line-for-
+    line. String and char literals are left alone (T-2125's own residual, named
+    in this module's docstring): this function closes the comment-vs-code
+    ambiguity `find_banned_leaf_uses` used to have, not the (separate, still
+    accepted) string-literal one. Mirrors the `strip_comments` convention
+    already used by tests/ci/check_gpu_guard_status_parity.py and tests/ci/
+    check_gemm_site_thread_width_parity.py, adapted to BLANK rather than DELETE
+    so the (line, leaf) hits this module reports stay accurate against the
+    original file."""
+    out = []
+    i = 0
+    n = len(text)
+    while i < n:
+        two = text[i:i + 2]
+        if two == "//":
+            j = text.find("\n", i)
+            end = n if j == -1 else j
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if two == "/*":
+            j = text.find("*/", i + 2)
+            end = n if j == -1 else j + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def find_banned_leaf_uses(path: str, leaves: tuple[str, ...] = BANNED_LEAVES) -> list[tuple[int, str]]:
     """Every (1-based line number, leaf name) hit in `path`, in file order. A text
-    scan, not an AST walk (Sec7.3) -- a leaf name inside a comment or a string
-    literal is still reported; this is a deliberate over-approximation of a ban,
-    not an attempt to classify intent."""
+    scan, not an AST walk (Sec7.3) -- comments are stripped first (T-2125,
+    `_strip_comments_preserving_line_numbers` above), so a leaf name mentioned
+    only in prose is not a hit; a leaf name inside a string literal is still
+    reported (comments are the ambiguity this module closes, not string
+    literals -- see the module docstring), a deliberate, narrower over-
+    approximation of a ban, not an attempt to fully classify intent."""
     with open(path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
+        text = f.read()
+    stripped = _strip_comments_preserving_line_numbers(text)
     hits: list[tuple[int, str]] = []
-    for lineno, line in enumerate(lines, start=1):
+    for lineno, line in enumerate(stripped.splitlines(), start=1):
         for leaf in leaves:
             if _leaf_pattern(leaf).search(line):
                 hits.append((lineno, leaf))
