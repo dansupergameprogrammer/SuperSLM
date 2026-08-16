@@ -125,6 +125,10 @@ struct sslm_prefix_s {
 	size_t block_size = 0;
 	std::vector<int8_t> hidden_codes_storage;
 	superslm::SequenceLayerState state;
+	int32_t current_token = -1;  // the prefix's own last-prefilled token id (mirrors
+	                              // sslm_seq_s::current_token) -- carried to the adopting
+	                              // sequence so decode can resume immediately after adoption,
+	                              // without a redundant re-prefill of the prefix's own last token.
 	bool frozen = false;
 	bool released = false;
 };
@@ -144,6 +148,18 @@ struct sslm_seq_s {
 	std::vector<int8_t> hidden_codes_storage;
 	superslm::SequenceLayerState state;
 	int32_t current_token = -1;
+	// C4 (Brunel T-2139, correctness finding during oracle verification): true immediately
+	// after a completed sslm_prefill (its last token's own RunLayerLoop call already ran EVERY
+	// layer, matching RunGreedyDecodeLoop's own RunWholeToken convention -- Sec8.1's own "every
+	// layer" prefill semantics) -- state.hidden_codes ALREADY holds that token's fully-computed
+	// final-layer residual, ready for final_norm+logits+argmax with no further RunLayerLoop
+	// work. Without this flag, sslm_decode_step's own "layer_index == 0 means embed a fresh
+	// token" rule would re-embed and re-run the JUST-PREFILLED last token a second time,
+	// double-committing its KV position -- caught by this ticket's own bit-for-bit oracle
+	// comparison against RunGreedyDecodeLoop (tools/t2139_c4_oracle.cpp), not by construction.
+	// Cleared the instant sslm_decode_step consumes it (one call, no RunLayerLoop cost, since
+	// the layer work already happened during prefill).
+	bool ready_for_logits = false;
 	sslm_adapter adapter_handle = nullptr;
 	bool released = false;
 };
@@ -608,6 +624,55 @@ sslm_status MapForwardStatus(superslm::SslmForwardStatus st) {
 	return st == superslm::SslmForwardStatus::Ok ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 }
 
+// Shared whole-token prefill loop -- design Sec8.1's "every layer" prefill semantics, the SAME
+// EmbedEntry+RunLayerLoop composition RunGreedyDecodeLoop's own RunWholeToken lambda uses for
+// its own prefill phase (forward_sites.cpp), reused here as ONE implementation rather than two
+// independently-authored copies for sslm_prefix_prefill and sslm_prefill (StandardsDocument
+// Sec6.6's own one-real-implementation discipline -- the shape both callers need is identical:
+// a state/kv-block pair, a token array, a chunk_budget). Processes up to min(count,
+// chunk_budget) tokens, stopping early (leaving state/*consumed resumable) on the first
+// rejection, exactly as sslm_prefix_prefill's own already-tested contract does.
+sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
+                                uint8_t* kv_block, size_t block_size, const int32_t* tokens,
+                                int32_t count, int32_t chunk_budget, int32_t* consumed,
+                                int32_t* out_last_token) {
+	const superslm::SslmModelConfig& c = model->view.config;
+	const int32_t n = count < chunk_budget ? count : chunk_budget;
+	std::vector<int8_t> embed_codes(c.hidden_size);
+	for (int32_t i = 0; i < n; ++i) {
+		const int32_t token = tokens[i];
+		if (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size) {
+			return SSLM_TOKEN_ID_OUT_OF_RANGE;
+		}
+		if (state.context_length >= static_cast<int64_t>(c.context_cap)) {
+			return SSLM_CONTEXT_CAP_EXCEEDED;
+		}
+
+		superslm::CarriedScale embed_scale{};
+		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
+		    model->engine.embed_site_constant, embed_codes.data(), &embed_scale);
+		if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+		for (uint32_t k = 0; k < c.hidden_size; ++k) state.hidden_codes[k] = embed_codes[k];
+		state.hidden_scale = embed_scale;
+		state.layer_index = 0;
+
+		const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
+		    state, model->engine.layers.data(), c.num_hidden_layers,
+		    /*layer_budget=*/c.num_hidden_layers, c.hidden_size, c.head_dim,
+		    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
+		    kv_block, block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
+		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
+		// 0" -- RunLayerLoop, given the full layer_budget above, leaves layer_index at
+		// num_hidden_layers on success; reset to the resting convention before the next token.
+		state.layer_index = 0;
+		++(*consumed);
+		if (out_last_token) *out_last_token = token;
+	}
+	return SSLM_OK;
+}
+
 }  // namespace
 
 extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, sslm_prefix* out) {
@@ -650,40 +715,8 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 	if (prefix->frozen || prefix->released) return SSLM_PREFIX_FROZEN_REJECTED;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 
-	const superslm::SslmModelConfig& c = model->view.config;
-	const int32_t n = count < chunk_budget ? count : chunk_budget;
-	std::vector<int8_t> embed_codes(c.hidden_size);
-	for (int32_t i = 0; i < n; ++i) {
-		const int32_t token = tokens[i];
-		if (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size) {
-			return SSLM_TOKEN_ID_OUT_OF_RANGE;
-		}
-		if (prefix->state.context_length >= static_cast<int64_t>(c.context_cap)) {
-			return SSLM_CONTEXT_CAP_EXCEEDED;
-		}
-
-		superslm::CarriedScale embed_scale{};
-		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
-		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
-		    model->engine.embed_site_constant, embed_codes.data(), &embed_scale);
-		if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
-		for (uint32_t k = 0; k < c.hidden_size; ++k) prefix->state.hidden_codes[k] = embed_codes[k];
-		prefix->state.hidden_scale = embed_scale;
-		prefix->state.layer_index = 0;
-
-		const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
-		    prefix->state, model->engine.layers.data(), c.num_hidden_layers,
-		    /*layer_budget=*/c.num_hidden_layers, c.hidden_size, c.head_dim,
-		    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
-		    prefix->kv_block, prefix->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
-		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
-		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
-		// 0" -- RunLayerLoop, given the full layer_budget above, leaves layer_index at
-		// num_hidden_layers on success; reset to the resting convention before the next token.
-		prefix->state.layer_index = 0;
-		++(*consumed);
-	}
-	return SSLM_OK;
+	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
+	                           count, chunk_budget, consumed, &prefix->current_token);
 }
 
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
@@ -770,8 +803,180 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	seq->state.layer_index = prefix->state.layer_index;
 	seq->state.kv_saturation_count = prefix->state.kv_saturation_count;
 	seq->state.context_length = prefix->state.context_length;
-	seq->current_token = -1;  // the prefix carries no "last token" of its own (Sec7.2) -- the
-	                          // adopting sequence's own first sslm_prefill/decode call supplies
-	                          // whichever token continues from here.
+	seq->current_token = prefix->current_token;  // carries the prefix's own last-prefilled
+	                                              // token, so decode can resume immediately
+	                                              // after adoption with no redundant re-prefill.
+	// The copied hidden state is the prefix's own last-prefilled token's fully-computed final
+	// hidden state (identical reasoning to sslm_prefill's own ready_for_logits set, above) --
+	// ready for decode's first logits computation with no re-embed or further RunLayerLoop work.
+	seq->ready_for_logits = (prefix->current_token >= 0);
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// C4 -- prefill and decode over the internal engine (design Sec9 C4): wraps
+// RunLayerLoop/RunGreedyDecodeLoop, never reimplements them (design's own C4 law). sslm_prefill
+// reuses C3's own PrefillWholeTokens verbatim (a real sequence's own state/kv-block, in place of
+// a prefix's). sslm_decode_step is new: a genuinely bounded, resumable single micro-step over
+// RunLayerLoop directly (never RunGreedyDecodeLoop, which always runs a whole token to
+// completion in one call and manages its own prompt+generation loop together) -- the
+// composition (embed at a token boundary, RunLayerLoop bounded to layer_budget, finish with
+// final_norm+logits+argmax when the budget completes a token) is the SAME one
+// RunGreedyDecodeLoop's own RunWholeToken lambda performs per whole token
+// (forward_sites.cpp), here split at an externally-observable, resumable boundary
+// (params->layer_budget) instead of always running to completion internally -- verified
+// bit-for-bit against a direct RunGreedyDecodeLoop call by this ticket's own oracle tool
+// (tools/t2139_c4_oracle.cpp).
+// -----------------------------------------------------------------------------------------
+
+extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens,
+                                     int32_t count, int32_t chunk_budget, sslm_span_kind kind,
+                                     sslm_workspace ws, int32_t* consumed) {
+	(void)kind;  // behaviorally inert, same disposition as sslm_prefix_prefill's own (design
+	             // Sec4/Sec12)
+	(void)ws;    // this ABI's own batch-orchestration scratch has no per-prefill content (Sec7.1)
+	if (!consumed) return SSLM_INVALID_ARGUMENT;
+	*consumed = 0;
+	if (!model || !seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
+	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+
+	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->kv_block, seq->block_size,
+	                                           tokens, count, chunk_budget, consumed,
+	                                           &seq->current_token);
+	if (*consumed > 0) {
+		// The last token this call processed already ran every layer (PrefillWholeTokens'
+		// own full-layer_budget convention) -- its final hidden state is ready for logits with
+		// no further RunLayerLoop work (see sslm_seq_s::ready_for_logits's own comment).
+		seq->ready_for_logits = true;
+	}
+	return st;
+}
+
+extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
+                                         const sslm_decode_params* params, sslm_workspace ws,
+                                         int32_t* out_tokens) {
+	(void)ws;  // batch-orchestration scratch (Sec7.1) -- not read; every intermediate this call
+	           // needs is either RunLayerLoop's own internal std::vector scratch
+	           // (forward_sites.cpp) or this function's own small per-call locals, none of
+	           // which is persistent per-sequence state across calls (the W1 invariant).
+	if (!model || !seqs || !params || !out_tokens) return SSLM_INVALID_ARGUMENT;
+	if (n < 1) return SSLM_INVALID_ARGUMENT;
+	if (params->layer_budget < 1 ||
+	    static_cast<uint32_t>(params->layer_budget) > model->view.config.num_hidden_layers) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+	// Every sequence validated BEFORE any is touched -- a malformed entry anywhere in the batch
+	// leaves every sequence's state exactly as it was (this call's own "reject leaves state
+	// unperturbed" contract, matching every other lifecycle guard in this design).
+	for (int32_t i = 0; i < n; ++i) {
+		if (!seqs[i] || seqs[i]->released) return SSLM_INVALID_ARGUMENT;
+		if (seqs[i]->state.layer_index == 0 && seqs[i]->current_token < 0) {
+			// No prompt/prior token to resume from -- a sequence reaching decode_step with
+			// neither a completed prefill nor a prior decode output has nothing to embed.
+			return SSLM_INVALID_ARGUMENT;
+		}
+	}
+
+	const superslm::SslmModelConfig& c = model->view.config;
+	std::vector<int8_t> embed_codes(c.hidden_size);
+	std::vector<int8_t> final_codes(c.hidden_size);
+	std::vector<int64_t> wide_logits(static_cast<size_t>(c.vocab_size));
+	std::vector<int32_t> logit_row(static_cast<size_t>(c.vocab_size));
+
+	for (int32_t i = 0; i < n; ++i) {
+		sslm_seq_s* seq = seqs[i];
+
+		if (seq->ready_for_logits) {
+			// This sequence's state.hidden_codes already holds a fully-computed final hidden
+			// state (from sslm_prefill or sslm_seq_adopt_prefix, see sslm_seq_s's own comment)
+			// -- no embed, no RunLayerLoop this call; jump straight to finishing the token
+			// below. This is the ONE call that costs no layer work, matching
+			// RunGreedyDecodeLoop's own fold of the prompt's last token into its generation
+			// loop's first iteration (forward_sites.cpp).
+			seq->ready_for_logits = false;
+		} else {
+			if (seq->state.layer_index == 0) {
+				// A fresh token boundary -- embed the last produced/prior token first (design's
+				// own decode_step signature carries no token-input parameter; this ABI's own
+				// current_token tracking, sslm_seq_s's own header comment, is what supplies it),
+				// exactly RunGreedyDecodeLoop's own RunWholeToken lambda's first act.
+				if (seq->state.context_length >= static_cast<int64_t>(c.context_cap)) {
+					out_tokens[i] = -1;
+					return SSLM_CONTEXT_CAP_EXCEEDED;
+				}
+				superslm::CarriedScale embed_scale{};
+				const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+				    seq->current_token, static_cast<int32_t>(c.vocab_size),
+				    model->engine.embed_weights, c.hidden_size, model->engine.embed_site_constant,
+				    embed_codes.data(), &embed_scale);
+				if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+				for (uint32_t k = 0; k < c.hidden_size; ++k) {
+					seq->state.hidden_codes[k] = embed_codes[k];
+				}
+				seq->state.hidden_scale = embed_scale;
+				seq->state.layer_index = 0;
+			}
+
+			const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
+			    seq->state, model->engine.layers.data(), c.num_hidden_layers,
+			    static_cast<uint32_t>(params->layer_budget), c.hidden_size, c.head_dim,
+			    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
+			    seq->kv_block, seq->block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
+			if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+
+			if (seq->state.layer_index < c.num_hidden_layers) {
+				// The requested layer_budget did not reach the end of this token -- pending,
+				// resumable on the next call with layer_index carried forward (design's own
+				// -1 "pending" sentinel, SslmDecodeStepStatus::produced_token, model.h).
+				out_tokens[i] = -1;
+				continue;
+			}
+		}
+
+		// This call's own layer_budget completed the token (or the state was already complete,
+		// ready_for_logits) -- finish it: final_norm, logits,
+		// argmax, exactly RunGreedyDecodeLoop's own generation-loop body (forward_sites.cpp).
+		superslm::CarriedScale final_scale{};
+		superslm::SslmForwardStatus fst =
+		    superslm::RmsNormSite(seq->state.hidden_codes, model->engine.final_norm_gain.data(),
+		                           c.hidden_size, seq->state.hidden_scale,
+		                           model->engine.final_norm_site_constant, final_codes.data(),
+		                           &final_scale, "final_norm");
+		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+
+		fst = superslm::LogitsSite(final_codes.data(), c.hidden_size, model->engine.head_weights,
+		                            static_cast<int32_t>(c.vocab_size), wide_logits.data(),
+		                            logit_row.data());
+		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
+
+		const int32_t produced =
+		    superslm::ArgmaxLowestIndexTieBreak(logit_row.data(), static_cast<size_t>(c.vocab_size));
+		out_tokens[i] = produced;
+		seq->current_token = produced;
+		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
+		// 0" -- reset to the resting convention now that this token is complete.
+		seq->state.layer_index = 0;
+	}
+	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	if (!model || !seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	// design Sec12 ("ceiling + actual work, forced-token count, cache state"): this arc builds
+	// no schema/constrained-decoding surface (G5's own scope, declared-but-deferred here), so
+	// forced_token_count is always 0 -- a real, correct answer for a sequence with no schema
+	// bound (G5's own forcing mechanism has never run), not a placeholder. decode_step_ceiling/
+	// decode_step_actual are both the model's own num_hidden_layers: this arc's own
+	// sslm_decode_step always processes exactly one call's own layer_budget against the SAME
+	// worst-case ceiling (a full token, num_hidden_layers), since no partial-work-skipping
+	// mechanism (e.g. early-exit) exists in this arc's own scope to make ceiling and actual
+	// diverge -- reported honestly as equal, not fabricated apart.
+	out->decode_step_ceiling = static_cast<int64_t>(model->view.config.num_hidden_layers);
+	out->decode_step_actual = static_cast<int64_t>(model->view.config.num_hidden_layers);
+	out->forced_token_count = 0;
+	out->kv_blocks_resident = 1;  // this sequence's own single, whole-sequence block (Sec7.2)
 	return SSLM_OK;
 }

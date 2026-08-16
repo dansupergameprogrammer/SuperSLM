@@ -344,6 +344,21 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem C4's own gate (design Sec9): sslm_prefill + sslm_decode_step through this ABI reproduces
+rem RunGreedyDecodeLoop's own direct-call output bit-for-bit -- token sequence AND KV bytes,
+rem checked against tests/t2138-abi-red-suite/fixture_common.h's own CpuOracleModel/
+rem RunGreedyOracle construction (the suite's own already-reviewed oracle, reused rather than
+rem re-derived). NOT auto-run here (same precedent as C2/C3's smokes above). Usage:
+rem out\t2139_c4_oracle.exe ^<model.sslm^> [max_new_tokens].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests\t2138-abi-red-suite ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c4_oracle.cpp /Fo:out\t2139\ /Fe:out\t2139_c4_oracle.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
