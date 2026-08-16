@@ -93,9 +93,12 @@ typedef enum sslm_status {
                                                 * uncapitalized in the design's own prose ("fixed
                                                 * span not reachable"); this enumerator is this
                                                 * suite's own transcription, since the design gives
-                                                * no literal SSLM_-prefixed name for it -- routed as
-                                                * a naming gap alongside sslm_prefix_prefill's own
-                                                * (see that declaration's comment, above). */
+                                                * no literal SSLM_-prefixed name for it -- a naming
+                                                * gap distinct from sslm_prefix_prefill's own call
+                                                * shape (see that declaration's comment, below),
+                                                * which the planner has since ruled on
+                                                * (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md,
+                                                * Wizard repo, ruling 1). */
     SSLM_SCHEMA_UNSATISFIABLE                 /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
                                                 * CPU/converter-side, listed here for completeness;
                                                 * the C++ decode-time surface never emits it */
@@ -194,20 +197,26 @@ sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens, 
                           int32_t chunk_budget, sslm_span_kind kind, sslm_workspace ws,
                           int32_t* consumed);
 
-/* CURIE COVERAGE-MODEL-ADJACENT GAP #2 (routed to the planner, not invented as silent
- * coverage; see Claude/Curie/t2130-g5-red-suite-2026-08-16.md, Wizard repo): design Sec7
+/* CURIE COVERAGE-MODEL-ADJACENT GAP #2 -- BLESSED, with a contract
+ * (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md, Wizard repo, ruling 2): design Sec7
  * dim11 requires a guard-vitality cell proving the runtime's D-SLM40 non-check for an
  * all-masked logit vector has NO SUBJECT to catch -- but the design's OWN Sec5 ABI gives no
  * caller any way to construct an all-masked-vector state to observe this against (the
  * compiler's G-7a proof forecloses every legitimate path to one). This is a real
  * mask-application primitive with no ABI-level entry point named anywhere in Sec4/Sec5 --
  * internal to G5-2 by design. This declaration is this suite's own test-only hook, NOT part
- * of the design's own public ABI, so the dim11 guard-vitality claim is genuinely exercisable
- * rather than left as an unauthored placeholder. Whoever prosecutes G5-2 confirms this hook
- * (or an equivalent internal test seam) against the design of record, or the build seat
- * states explicitly that this guard-vitality claim is a code-review-only invariant with no
- * automated cell -- either disposition is a design-level call this suite's own authoring does
- * not settle. */
+ * of the design's own public ABI -- the planner's ruling confirms this disposition (not the
+ * bench-bridge precedent's "promote to production" fix: no real host has any legitimate
+ * reason to call raw mask+argmax directly, so promoting this would manufacture product
+ * surface nothing needs). THE HOOK'S CONTRACT, per the ruling: whoever prosecutes G5-2
+ * implements this as a THIN WRAPPER calling G5-2's own internal (non-exported) mask-
+ * application primitive -- never a parallel reimplementation, or a passing negative control
+ * proves nothing about the production guard (the project's own "producible by the real data
+ * path" commissioning discipline). Its non-shipping disposition is enforced structurally:
+ * declared ONLY in this suite-private header (never `include/superslm/`) and excluded from
+ * this repo's CMake install/export rule set from the start -- verified at this suite's own
+ * authoring commit: `sslm_g5.h` has no counterpart under `include/` and no CMake target in
+ * this repo installs or exports anything from `tests/t2130-g5-red-suite/`. */
 sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* logits, const uint8_t* mask,
                                                       int32_t vocab_size, int32_t* out_token_id);
 
@@ -215,21 +224,24 @@ sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* logits, const
  * has been prefilled into the prefix under construction. */
 sslm_status sslm_prefix_set_schema(sslm_prefix prefix, sslm_schema schema);
 
-/* CURIE COVERAGE-MODEL-ADJACENT GAP (routed to the planner, not invented as silent coverage;
- * see Claude/Curie/t2130-g5-red-suite-2026-08-16.md, Wizard repo, Sec "Gaps routed"):
+/* CURIE COVERAGE-MODEL-ADJACENT GAP -- RULED (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md,
+ * Wizard repo, ruling 1; superseding the routed-not-invented note this comment previously
+ * carried, see Claude/Curie/t2130-g5-red-suite-2026-08-16.md Sec5 for the original finding):
  * design Sec5 states prefix construction is "mechanically, prefilling into a scratch handle
  * before sslm_prefix_freeze converts it to a shared, read-only block" and that content
  * prefilled into a prefix under construction "carries the same sslm_span_kind parameter
- * sslm_prefill does" -- but Sec5 never gives the scratch-handle prefill call's own exact
- * signature (whether it reuses sslm_prefill against a handle typed as sslm_seq, a distinct
- * sslm_prefix-typed overload, or some other shape). This header declares the interpretation
- * this suite's own cells need to compile and reads most literally from Sec5's own words
- * ("prefilling into a scratch handle" = a prefill-shaped call, parameterized over the prefix
- * handle instead of a sequence handle) -- NOT a claim that this is the design's own intended
- * shape. Whoever prosecutes G5-6's prefix join confirms or corrects this signature against
- * the design of record before building it. */
-sslm_status sslm_prefix_prefill(sslm_prefix prefix, const int32_t* tokens, int32_t count,
-                                 sslm_span_kind kind);
+ * sslm_prefill does." This suite's original reading took "the same ... parameter" to mean
+ * `kind` alone (a four-parameter overload); the planner's ruling corrects this: "the same
+ * parameter" means the same PARAMETER SET, not one field of it -- full mechanical symmetry
+ * with sslm_prefill, `sslm_seq` swapped for `sslm_prefix`. `chunk_budget`/`consumed` are
+ * required by the frame-budget law (design Sec2/Sec8.1, plan G1) that applies to every
+ * token-admitting call with no prefix exemption; `sslm_workspace` and the explicit
+ * `sslm_model` argument match every other such call's existing shape. This is now the RULED
+ * shape, not an unconfirmed reading -- no further build-time confirmation is owed on the
+ * signature itself. */
+sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix, const int32_t* tokens,
+                                 int32_t count, int32_t chunk_budget, sslm_span_kind kind,
+                                 sslm_workspace ws, int32_t* consumed);
 
 #ifdef __cplusplus
 }

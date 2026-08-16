@@ -57,8 +57,9 @@ static void TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(
 	sslm_prefix shared_prefix = nullptr;
 	CHECK(sslm_prefix_begin(model, nullptr, &shared_prefix) == SSLM_OK);
 	int32_t system_prompt_tokens[6] = {0, 1, 2, 3, 4, 5};
-	CHECK(sslm_prefix_prefill(shared_prefix, system_prompt_tokens, 6, SSLM_SPAN_PROMPT) ==
-	      SSLM_OK);
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, shared_prefix, system_prompt_tokens, 6, /*chunk_budget=*/8,
+	                           SSLM_SPAN_PROMPT, nullptr, &prefix_consumed) == SSLM_OK);
 	CHECK(sslm_prefix_freeze(shared_prefix) == SSLM_OK);
 
 	// Sequence A: adopts the shared prefix, binds the reference schema, then jump-forwards a

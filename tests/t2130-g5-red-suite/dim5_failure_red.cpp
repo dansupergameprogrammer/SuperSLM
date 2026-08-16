@@ -60,7 +60,9 @@ static void TestDim5_M3_AdoptPrefixMismatchedBoundSchemaRejected(sslm_model mode
 	CHECK(sslm_prefix_begin(model, nullptr, &prefix) == SSLM_OK);
 	CHECK(sslm_prefix_set_schema(prefix, schema_a) == SSLM_OK);
 	int32_t schema_content[2] = {0, 1};
-	CHECK(sslm_prefix_prefill(prefix, schema_content, 2, SSLM_SPAN_SCHEMA_CONTENT) == SSLM_OK);
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, prefix, schema_content, 2, /*chunk_budget=*/8,
+	                           SSLM_SPAN_SCHEMA_CONTENT, nullptr, &prefix_consumed) == SSLM_OK);
 	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
 
 	sslm_seq seq_bound_to_b = nullptr;
@@ -82,7 +84,9 @@ static void TestDim5_M4_AdoptPrefixByUnboundSequenceWithRealProgressRejected(
 	CHECK(sslm_prefix_begin(model, nullptr, &prefix) == SSLM_OK);
 	CHECK(sslm_prefix_set_schema(prefix, schema_a) == SSLM_OK);
 	int32_t schema_content[2] = {0, 1};
-	CHECK(sslm_prefix_prefill(prefix, schema_content, 2, SSLM_SPAN_SCHEMA_CONTENT) == SSLM_OK);
+	int32_t prefix_consumed = 0;
+	CHECK(sslm_prefix_prefill(model, prefix, schema_content, 2, /*chunk_budget=*/8,
+	                           SSLM_SPAN_SCHEMA_CONTENT, nullptr, &prefix_consumed) == SSLM_OK);
 	CHECK(sslm_prefix_freeze(prefix) == SSLM_OK);
 
 	sslm_seq seq_unbound = nullptr;
