@@ -169,8 +169,27 @@ def _reference_vocab(schemas: list[dict]) -> list[str]:
 	_schema_literals, never by enumerating the full admitted-string set -- see that function's
 	own docstring for why enumeration does not scale here), matching this repo's own
 	Claude/Loki/t2122-probe/probe.py::build_vocab convention (multi-char literals as merged
-	tokens, single chars as fallback)."""
-	vocab: list[str] = list(sorted(set('{}",:_0123456789')))
+	tokens, single chars as fallback).
+
+	FIXTURE DEFECT, FIXED (routed by the G5 build seat, Claude/Brunel/t2132-g5-build-2026-08-16.md
+	Sec "G5-1"; ruled at source by Curie, this file's own owner): the base charset previously
+	omitted the a-z fallback characters build_vocab's own precedent includes
+	('{}",:_0123456789abcdefghijklmnopqrstuvwxyz', probe.py line 85), so two of the reference
+	schema's own literals sharing a 6-character prefix ('"negate"' and '"negated_slot":') left a
+	reachable DFA state with no vocabulary token able to spell the remainder after the shared
+	prefix diverges -- a genuine dead end BY CONSTRUCTION OF THE FIXTURE, not a compiler defect: a
+	correct G-7a-compliant compiler must reject it. Confirmed independently at this file's own
+	source before the fix: the base charset below lacked 'a'-'z' entirely. The fix restores the
+	single-character fallback coverage the docstring above already promised ("single chars as
+	fallback") and this function's own code did not implement for letters -- the reference
+	schema's real, satisfiable shape (D-SLM45: per-field enums/booleans/objects, no dead ends by
+	its own construction) now compiles, which is the claim this cell exists to prove. The cell's
+	own discriminating intent is unchanged: it still fails on a compiler that wrongly ACCEPTS a
+	genuinely unsatisfiable schema (see the sibling class below,
+	G5_1_UnsatisfiableSchemaRejectionGuardVitality, which constructs one on purpose and requires
+	rejection) -- this fix only removes an unsatisfiability the FIXTURE was accidentally
+	introducing, it does not weaken what the compiler is required to catch."""
+	vocab: list[str] = list(sorted(set('{}",:_0123456789abcdefghijklmnopqrstuvwxyz')))
 	for s in schemas:
 		for lit in sorted(_schema_literals(s)):
 			piece = lit.strip('"').rstrip(":")
