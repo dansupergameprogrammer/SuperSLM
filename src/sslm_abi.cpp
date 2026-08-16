@@ -1308,3 +1308,129 @@ extern "C" sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter) 
 	seq->adapter_handle = adapter;
 	return SSLM_OK;
 }
+
+// -----------------------------------------------------------------------------------------
+// C7 -- text I/O (design Sec9 C7, settled build-now by D-SLM3452): wraps
+// TokenizerView::Encode/Decode (already-shipped, whole-buffer C++ calls, include/superslm/
+// tokenizer.h). sslm_detokenize_stream adds the incremental-safety state Forge W4 names, not
+// present in TokenizerView itself.
+// -----------------------------------------------------------------------------------------
+
+extern "C" sslm_status sslm_tokenize(sslm_model model, const char* utf8, int32_t* tokens,
+                                      int32_t* n) {
+	if (!n) return SSLM_INVALID_ARGUMENT;
+	if (!model || !utf8) {
+		if (n) *n = 0;
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (!model->view.has_tokenizer) {
+		*n = 0;
+		return SSLM_ARTIFACT_REJECTED;
+	}
+	// TokenizerView::Encode throws only std::bad_alloc (tokenizer.h's own contract) -- this call
+	// site does not catch it, matching sslm_model_map's own house-convention disposition
+	// (bad_alloc_wrap.h) for the identical reason: sslm_status carries no resource-exhaustion
+	// member.
+	const std::vector<int32_t> ids = model->view.tokenizer.Encode(std::string_view(utf8));
+	if (!tokens || *n < static_cast<int32_t>(ids.size())) {
+		// design's own two-call sizing convention (Sec7.3's own precedent, extended here):
+		// *n set to the required count on this specific rejection.
+		*n = static_cast<int32_t>(ids.size());
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	std::copy(ids.begin(), ids.end(), tokens);
+	*n = static_cast<int32_t>(ids.size());
+	return SSLM_OK;
+}
+
+namespace {
+
+// Forge W4's own incremental-safety obligation: how many of `s`'s own TRAILING bytes form an
+// INCOMPLETE UTF-8 multi-byte sequence (0..3) -- these are held back (sslm_detok_state's own
+// pending_bytes/pending_count, design Sec7.4) rather than emitted, so a caller never sees a
+// multi-byte codepoint split across two sslm_detokenize_stream calls. A malformed (not merely
+// incomplete) lead byte is NOT a hold-back case -- it is the tokenizer's own already-established
+// "invalid sequences pass through as replacement chars" policy (design Sec10, inherited
+// unchanged), which TokenizerView::Decode has already applied by the time this function sees the
+// bytes; this function's own job is narrower: distinguish "this tail is genuinely incomplete, not
+// yet decodable" from "this tail is already a complete (possibly-replacement-char) sequence."
+size_t CountIncompleteTrailingUtf8(const std::string& s) {
+	const size_t len = s.size();
+	if (len == 0) return 0;
+	size_t lead_pos = len;
+	size_t back = 0;
+	while (back < 3 && back < len) {
+		const uint8_t b = static_cast<uint8_t>(s[len - 1 - back]);
+		if ((b & 0xC0) == 0x80) {
+			++back;
+			continue;
+		}
+		lead_pos = len - 1 - back;
+		break;
+	}
+	if (lead_pos == len) return 0;  // 3 continuation bytes scanned with no lead in range, or
+	                                 // len <= 3 continuation bytes -- treat as complete.
+	const uint8_t lead = static_cast<uint8_t>(s[lead_pos]);
+	size_t expected_len;
+	if ((lead & 0x80) == 0x00) {
+		expected_len = 1;
+	} else if ((lead & 0xE0) == 0xC0) {
+		expected_len = 2;
+	} else if ((lead & 0xF0) == 0xE0) {
+		expected_len = 3;
+	} else if ((lead & 0xF8) == 0xF0) {
+		expected_len = 4;
+	} else {
+		return 0;  // not a valid multi-byte lead -- the tokenizer's own replacement-char policy,
+		           // not a hold-back case.
+	}
+	const size_t have_len = len - lead_pos;
+	return have_len < expected_len ? have_len : 0;
+}
+
+}  // namespace
+
+extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state* state,
+                                               const int32_t* tokens, int32_t n, char* utf8,
+                                               int32_t* out_n) {
+	if (!out_n) return SSLM_INVALID_ARGUMENT;
+	if (!model || !state || n < 0 || (n > 0 && !tokens)) {
+		if (out_n) *out_n = 0;
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (state->pending_count > 3) {
+		// design Sec7.4: pending_count is in [0, 3] by this struct's own invariant -- a caller-
+		// supplied value outside that domain is hostile input, not a state this function can
+		// resume from.
+		*out_n = 0;
+		return SSLM_INVALID_ARGUMENT;
+	}
+	if (!model->view.has_tokenizer) {
+		*out_n = 0;
+		return SSLM_ARTIFACT_REJECTED;
+	}
+
+	const std::vector<int32_t> ids(tokens, tokens + n);
+	const std::string decoded = model->view.tokenizer.Decode(ids);
+
+	std::string combined;
+	combined.reserve(static_cast<size_t>(state->pending_count) + decoded.size());
+	combined.append(reinterpret_cast<const char*>(state->pending_bytes), state->pending_count);
+	combined.append(decoded);
+
+	const size_t hold = CountIncompleteTrailingUtf8(combined);
+	const size_t emit_len = combined.size() - hold;
+
+	if (!utf8 || static_cast<size_t>(*out_n) < emit_len) {
+		*out_n = static_cast<int32_t>(emit_len);
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	if (emit_len > 0) std::memcpy(utf8, combined.data(), emit_len);
+	*out_n = static_cast<int32_t>(emit_len);
+
+	state->pending_count = static_cast<uint8_t>(hold);
+	for (size_t i = 0; i < hold; ++i) {
+		state->pending_bytes[i] = static_cast<uint8_t>(combined[emit_len + i]);
+	}
+	return SSLM_OK;
+}

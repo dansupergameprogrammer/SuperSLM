@@ -387,6 +387,20 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem C7's own self-contained smoke (design Sec9: no Gate A/B -- sslm_g5.h declares neither verb):
+rem encode a fixed string, decode the result, compare, plus Forge W4's own incremental split-
+rem boundary safety obligation (every possible split point reassembles identically). NOT
+rem auto-run here (same precedent as C2/C3/C5/C6's smokes above). Usage:
+rem out\t2139_c7_smoke.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_c7_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_c7_smoke.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
