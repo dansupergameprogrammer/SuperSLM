@@ -11,23 +11,22 @@
 // failures from one missing drain. `TestDim5_P1` now drains before release, per every other
 // repaired file in this suite.
 //
-// M3 (NEW, this repair): design Sec9's own error-taxonomy table states `sslm_gpu_model_unmap`
-// returns `Busy` -- not `ModelHasLiveSequences` -- "against a model with any Submitted sequence
-// bound (Sec4.2, unchanged policy)," taking precedence over the ModelHasLiveSequences row's own
-// "any state, not only Submitted" caveat. Read at source (`src/gpu/gpu_1p0.cpp`,
-// `sslm_gpu_model_unmap`): the implementation checks only `model->live_sequences > 0` and never
-// inspects any bound sequence's own `state` -- it cannot distinguish a model with a Submitted
-// sequence from one with an Idle sequence, and returns `ModelHasLiveSequences` in both cases. This
-// is a genuine divergence between design Sec9's own documented channel and the shipped guard, not
-// a documentation staleness this suite's own charter can silently paper over (StandardsDocument.md
-// Sec5.6: "a document claiming what the code does not deliver is a code bug" -- fixing the code is
-// production scope, out of this seat's charter, routed rather than invented around). Per this
-// repair's own brief ("keep one deliberate cell that asserts the API's actual behavior for
-// teardown-while-submitted"), M3 pins the REAL, currently-shipping cascade
-// (`Busy` -> `ModelHasLiveSequences` -> `ContextHasLiveHandles`) as a genuine regression detector
-// -- not the design's own aspirational Busy-precedence for the unmap/destroy legs, which the
-// current build does not implement. The divergence itself is filed as a decision (D-SLM entry,
-// this repair's own artifact) and routed, not fixed here.
+// M3 (D-SLM3417, routed by Curie 2026-08-15, LANDED by the build seat this same T-2113 session):
+// design Sec9's own error-taxonomy table states `sslm_gpu_model_unmap` returns `Busy` -- not
+// `ModelHasLiveSequences` -- "against a model with any Submitted sequence bound (Sec4.2, unchanged
+// policy)," taking precedence over the ModelHasLiveSequences row's own "any state, not only
+// Submitted" caveat. Curie's own repair found the shipped guard checking only
+// `model->live_sequences > 0`, never a bound sequence's own state -- a genuine design/
+// implementation divergence, routed rather than fixed by that seat (production code, out of
+// Curie's charter). FIXED this session (`src/gpu/gpu_1p0.cpp`): `SslmGpuModelHandle` gains a
+// `submitted_sequences` counter, incremented the instant a bound sequence transitions
+// Idle->Submitted and decremented the instant it collapses back via `sslm_gpu_ready`;
+// `sslm_gpu_model_unmap` now checks it FIRST, matching design Sec9's own precedence exactly. M3
+// now pins the CORRECTED, currently-shipping cascade (`Busy` -> `Busy` -> `ContextHasLiveHandles`
+// -- leg 2 flips from `ModelHasLiveSequences` to `Busy`, legs 1/3 unchanged) -- re-authored in the
+// SAME commit as the production fix (per this build's own brief: "coordinate the flip in one
+// commit so the suite never lies in either direction"), never left pinning the divergence the fix
+// just closed.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -77,15 +76,17 @@ static void TestDim5_M2_SequenceKvBufferMismatchGuarded(SslmGpuContext* ctx,
 	CHECK(out_seq == nullptr);
 }
 
-// --- Mechanism cell 3 (NEW, D-SLM3412 repair): design Sec9's own real, pinned teardown-while-
-// Submitted cascade -- a sequence left Submitted (no drain), release/unmap/destroy attempted in
-// order against it. Pins the ACTUAL shipping behavior (see this file's own header comment): the
-// release call correctly returns Busy (design Sec9, implemented); the unmap and destroy calls
-// that follow it do NOT implement Sec9's own documented Busy-precedence for a model/context with
-// an Submitted (not merely live) sequence bound -- they return ModelHasLiveSequences/
-// ContextHasLiveHandles instead, because the current guards check only a live-count, never a
-// bound sequence's own state. This is a real, executed regression pin against what ships today;
-// the design/implementation divergence itself is routed (decision log), not invented around. ---
+// --- Mechanism cell 3 (D-SLM3412 original authoring; re-authored this session against the
+// landed D-SLM3417 fix): design Sec9's own real, pinned teardown-while-Submitted cascade -- a
+// sequence left Submitted (no drain), release/unmap/destroy attempted in order against it. Pins
+// the ACTUAL shipping behavior (see this file's own header comment): the release call correctly
+// returns Busy (design Sec9); the unmap call that follows it NOW ALSO returns Busy (design Sec9's
+// own precedence, fixed this session -- `sslm_gpu_model_unmap` checks a Submitted-sequence count
+// before the broader live-sequence count); the destroy call after that still returns
+// ContextHasLiveHandles (design Sec9 never documents a Busy-precedence for context_destroy, only
+// for model_unmap -- unchanged, correctly, by this fix). This is a real, executed regression pin
+// against what ships today, re-flipped in the same commit as the production fix per this build's
+// own brief ("the suite never lies in either direction"). ---
 static void TestDim5_M3_TeardownWhileSubmittedPinsActualCascade(SslmGpuContext* ctx,
                                                                  SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -99,16 +100,14 @@ static void TestDim5_M3_TeardownWhileSubmittedPinsActualCascade(SslmGpuContext* 
 	          "M3 leg 1: sslm_gpu_seq_release against a Submitted sequence must return Busy "
 	          "(design Sec9) -- the release having failed, seq is still bound for legs 2/3 below");
 
-	// Leg 2 (real, pinned): the release above rejected, so `seq` is still bound to `model`.
-	// Design Sec9's own Busy row claims `sslm_gpu_model_unmap` ALSO returns Busy here ("against a
-	// model with any Submitted sequence bound") -- the shipping guard checks only
-	// `model->live_sequences > 0` and cannot see that the one live sequence is Submitted, so it
-	// returns ModelHasLiveSequences instead. Pinned as the real behavior, not the documented one.
-	CHECK_MSG(sslm_gpu_model_unmap(ctx, model) == SSLM_MODEL_HAS_LIVE_SEQUENCES,
+	// Leg 2 (design Sec9, now correctly implemented, D-SLM3417): the release above rejected, so
+	// `seq` is still bound to `model` and still Submitted. `sslm_gpu_model_unmap` now checks its
+	// own `submitted_sequences` count FIRST (design Sec9's own Busy-precedence), so it returns
+	// Busy here rather than the broader ModelHasLiveSequences.
+	CHECK_MSG(sslm_gpu_model_unmap(ctx, model) == SSLM_BUSY,
 	          "M3 leg 2: sslm_gpu_model_unmap against a model with a Submitted (undrained) "
-	          "sequence returns ModelHasLiveSequences, not design Sec9's own documented Busy -- "
-	          "if this cell now reads Busy, the guard was corrected to match Sec9 and this "
-	          "assertion (and its routed decision entry) should be updated to match");
+	          "sequence must return Busy (design Sec9's own precedence, D-SLM3417) -- got a "
+	          "different status, meaning the Busy-precedence fix regressed");
 
 	// Leg 3 (real, pinned): the unmap above rejected too, so `ctx` still has a live handle.
 	CHECK_MSG(sslm_gpu_context_destroy(ctx) == SSLM_CONTEXT_HAS_LIVE_HANDLES,

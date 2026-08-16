@@ -190,6 +190,18 @@ struct SslmGpuModelHandle {
 	// incremented by sslm_gpu_seq_create, decremented on release, below.
 	int64_t live_sequences = 0;
 
+	// T-2113 (design Sec4.2/Sec9, routed `Claude/Curie/t2112-1p0-red-suite-2026-08-15.md` Sec7.2
+	// item 2, D-SLM3417): design Sec9's own Busy row states `sslm_gpu_model_unmap` returns Busy
+	// "against a model with any Submitted sequence bound... which takes precedence" over
+	// ModelHasLiveSequences' own "any state, not only Submitted" caveat -- `live_sequences` alone
+	// cannot distinguish a Submitted-bound model from an Idle-bound one. Incremented in
+	// SubmitOneSequenceDecode (below) the instant a bound sequence transitions Idle -> Submitted;
+	// decremented in sslm_gpu_ready the instant that SAME sequence collapses back to Idle. Every
+	// sequence that ever transitions to Submitted is, by construction, still bound to exactly the
+	// model it was created against (a sequence's own `model` pointer never changes across its
+	// lifetime) -- so this count is always a count of THIS model's own Submitted sequences.
+	int64_t submitted_sequences = 0;
+
 	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): host-side metadata
 	// sslm_gpu_seq_embed_token needs for its whole lifetime -- NOT new GPU residency (the
 	// design's own explicit "not new residency" clause, Sec5.3a): the embedding matrix
@@ -556,11 +568,24 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 // free the residency." T-2113 (B3): `live_sequences` is now incremented/decremented by
 // real `SslmGpuSequenceHandle`s (sslm_gpu_seq_create/release, below) -- this guard reads
 // live values as of this section.
+//
+// T-2113 (design Sec4.2/Sec9, routed `Claude/Curie/t2112-1p0-red-suite-2026-08-15.md` Sec7.2
+// item 2 / Sec7.3, D-SLM3417): design Sec9's own Busy row states this call returns `Busy`
+// "against a model with any Submitted sequence bound... which takes precedence" over
+// `ModelHasLiveSequences`' own "any state, not only Submitted" caveat -- the guard below used
+// to check only `live_sequences` and could not distinguish a Submitted-bound model from an
+// Idle-bound one, always returning `ModelHasLiveSequences` for both. Fixed: `submitted_sequences`
+// (SslmGpuModelHandle's own field, above) is checked FIRST, so a model with at least one
+// Submitted sequence bound returns `Busy`; only once that count is zero does the broader
+// `live_sequences` (any state) check run.
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	(void)ctx;  // T-2114 (M3): live_handles is decremented via model->ctx below, never this
 	            // parameter -- see that line's own comment.
 	if (!model) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_context_destroy(nullptr).
+	}
+	if (model->submitted_sequences > 0) {
+		return SSLM_BUSY;  // design Sec9's own Busy-precedence, D-SLM3417.
 	}
 	if (model->live_sequences > 0) {
 		return SSLM_MODEL_HAS_LIVE_SEQUENCES;
@@ -1102,6 +1127,9 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	}
 	seq->in_flight = inflight;
 	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+	// T-2113 (design Sec4.2/Sec9, D-SLM3417): model's own Busy-precedence count -- see
+	// SslmGpuModelHandle::submitted_sequences' own field comment, above.
+	model->submitted_sequences += 1;
 	return SSLM_OK;
 }
 }  // namespace
@@ -1374,6 +1402,11 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 	// handle's own canonical fields.
 	seq->in_flight = nullptr;  // RunLayerLoopGpuFinish already freed the token on this path
 	seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+	// T-2113 (design Sec4.2/Sec9, D-SLM3417): the model's own Busy-precedence count -- the
+	// symmetric twin of SubmitOneSequenceDecode's own increment, above.
+	if (seq->model && seq->model->submitted_sequences > 0) {
+		seq->model->submitted_sequences -= 1;
+	}
 	seq->hidden_scale = seq->live_state.hidden_scale;
 	seq->layer_index = seq->live_state.layer_index;
 	seq->kv_saturation_count = seq->live_state.kv_saturation_count;
@@ -1402,9 +1435,14 @@ SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle
 	// vector (design Sec5.3), so the residual stream now round-trips through the blob
 	// alongside the K/V workspace bytes, closing the class of loss a restored, non-zero
 	// hidden_scale paired with a zeroed residual used to produce silently.
+	// T-2113 (P2, design Sec4.2/Sec22, D-SLM3415): `seq->model->content_hash` -- the model this
+	// sequence was created against, already retained (design Sec5.1) -- is written into the v3
+	// blob's own trailing `model_content_hash` field so a later restore can detect a mismatch
+	// against a DIFFERENT target model.
 	const bool ok = superslm_gpu::SaveGpuSequenceState(seq->live_state, seq->hidden_codes.size(),
 	                                                    seq->host_kv_mirror.data(),
-	                                                    seq->host_kv_mirror.size(), out_blob,
+	                                                    seq->host_kv_mirror.size(),
+	                                                    seq->model->content_hash, out_blob,
 	                                                    out_blob_size);
 	// SaveGpuSequenceState's own contract (gpu_port.h): a too-small out_blob reports the
 	// required size via *out_blob_size and returns false -- not a device/guard failure,
@@ -1469,6 +1507,27 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 		// every structural rejection in this function already uses (design Sec4.2/Sec21: "no new
 		// status is minted for this").
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+
+	// T-2113 (P2, design Sec4.2/Sec9/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-
+	// build-review.md` Sec15, D-SLM3415): the identity check the N1 size-admissibility widening
+	// (above) left open -- a foreign blob whose derived context_cap happens to be admissible
+	// against a same-shape-but-different model would otherwise restore silently. Checked AFTER
+	// the size-derivation ladder (a structurally malformed blob is rejected for that reason
+	// first, before its content hash is even read) and BEFORE any device work -- the fresh
+	// handle is not created until this passes. A blob whose header cannot even be re-read here
+	// (should be unreachable: PeekGpuSeqBlobWorkspaceSize already validated the identical
+	// magic/size preconditions above) falls under the same structural-malformed disposition
+	// every other rejection in this function uses; a hash that IS read but does not match
+	// `model`'s own returns the distinctly-named SSLM_RESTORE_MODEL_MISMATCH (design Sec9) --
+	// never folded into the generic malformed-blob status, since a wrong size and a wrong model
+	// are different facts a caller needs told apart.
+	std::array<uint8_t, superslm::kIntegrityHashBytes> blob_model_hash{};
+	if (!superslm_gpu::PeekGpuSeqBlobModelHash(blob, blob_size, &blob_model_hash)) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (blob_model_hash != model->content_hash) {
+		return SSLM_RESTORE_MODEL_MISMATCH;
 	}
 
 	SslmGpuSequenceHandle* fresh = nullptr;

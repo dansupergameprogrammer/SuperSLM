@@ -23878,8 +23878,13 @@ static void TestT2047_S6_SaveRestoreRoundTripsThroughRealDevice() {
 	// convention) and its own oracle below does not check hidden_codes round-tripping;
 	// 0 keeps this cell's own established contract unchanged, exactly like `workspace_size`
 	// already gates the K/V bytes.
+	// T-2113 (P2): this pre-1.0 cell has no SslmGpuModelHandle to hash -- an all-zero
+	// model_content_hash keeps its own established contract unchanged (the restore below is
+	// the substrate's own RestoreGpuSequenceState, which does not check this field; the
+	// identity check lives only in the 1.0 sslm_gpu_seq_restore path, gpu_1p0.cpp).
+	const std::array<uint8_t, superslm::kIntegrityHashBytes> kNoHash{};
 	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws.data(),
-	                                                       ws.size(), blob.data(), &blob_size);
+	                                                       ws.size(), kNoHash, blob.data(), &blob_size);
 	CHECK_MSG(saved, "S6 save: SaveGpuSequenceState succeeds at a realistic workspace size");
 
 	SequenceLayerState restored{};
@@ -25145,8 +25150,10 @@ static void TestT2019_B8_SaveRestoreRoundTrip_GpuMatchesCpu() {
 	// disposition).
 	uint8_t blob[512];
 	size_t blob_size = sizeof(blob);
+	// T-2113 (P2): see the S6 cell above for the same "no model handle to hash" disposition.
+	const std::array<uint8_t, superslm::kIntegrityHashBytes> kNoHash{};
 	const bool saved = superslm_gpu::SaveGpuSequenceState(seq, /*hidden_codes_size=*/0, ws,
-	                                                       sizeof(ws), blob, &blob_size);  // LINK-RED
+	                                                       sizeof(ws), kNoHash, blob, &blob_size);  // LINK-RED
 	SequenceLayerState restored_seq;
 	uint8_t restored_ws[kWs] = {};
 	const bool restored = superslm_gpu::RestoreGpuSequenceState(  // LINK-RED

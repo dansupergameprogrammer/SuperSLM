@@ -1,5 +1,9 @@
 // T-2112 (Curie) -- Dim 2 (Trust boundaries and hostile inputs), design Sec11 dim2. 3 cells,
-// +1 (T-2114, S3) -- see that cell's own header comment.
+// +1 (T-2114, S3) -- see that cell's own header comment. +2 (T-2113 P2, design Sec22, D-SLM3415,
+// `TestDim2_P2_ForeignBlobRestoreModelMismatch`/`TestDim2_P3_SameShapeDifferentContentRestore
+// ModelMismatch`) -- authored by THIS BUILD SEAT per the design fold's own explicit instruction
+// ("the build seat owes ... the two new dim-2 cells in the T-2112 suite"), the one named exception
+// to Brunel's own "does not author the test suite" boundary.
 // RED BY LINK (see dim1_lifetime_red.cpp's own header for the shared explanation).
 #include "fixture_common.h"
 #include "../sslm_model_hostile_fixtures.h"
@@ -70,6 +74,167 @@ static void TestDim2_P1_OversizedRankAdapterRejectedNeverReadPastTensor(
 	const SslmGpuStatus st = sslm_gpu_adapter_map(ctx, model_1p5b, oversized_rank_adapter, &out_adapter);
 	CHECK(st == SSLM_ADAPTER_BASE_HASH_MISMATCH || st != SSLM_OK);
 	CHECK(out_adapter == nullptr);
+}
+
+// T-2113 (P2, design Sec4.2/Sec9/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-
+// review.md` Sec15, D-SLM3415, owed BY THIS BUILD SEAT per the fold's own explicit "the build seat
+// owes ... the two new dim-2 cells in the T-2112 suite" instruction -- the one exception to
+// Brunel's own "does not author the test suite" boundary, stated by the routing itself). Small
+// integer-arithmetic helper for TestDim2_P2 below: `gcd`, real and exact, never a floating
+// approximation. ---
+static int64_t GpuSeqBlobKvGcd(int64_t a, int64_t b) {
+	while (b != 0) {
+		const int64_t t = b;
+		b = a % b;
+		a = t;
+	}
+	return a;
+}
+
+// --- Product cell (design Sec22's own P2 dim-2 addition): "a blob saved from the real 0.5B
+// artifact restored against the real 1.5B model" -- design's own named example. Asserts
+// SSLM_RESTORE_MODEL_MISMATCH, not the generic malformed-blob disposition.
+//
+// Read at source before writing this cell (StandardsDocument.md Sec5.4: exactness verified by
+// execution, never by construction): sslm_gpu_seq_restore's own size-derivation ladder (design
+// Sec4.2/Sec21, gpu_1p0.cpp) runs BEFORE the model_content_hash check this cell exists to force,
+// and derives the fresh handle's own context_cap from `workspace_size / (num_hidden_layers *
+// num_key_value_heads * head_dim * 2)` computed against the TARGET (1.5B) model's own dimensions --
+// NOT the 0.5B model's, which is what the blob was actually saved at. The real 0.5B and 1.5B
+// artifacts have DIFFERENT per-cap-unit byte counts (different num_hidden_layers/
+// num_key_value_heads/head_dim), so an arbitrarily-chosen 0.5B context_cap (e.g. 64) produces a
+// workspace_size that does NOT divide evenly against the 1.5B model's own per-cap-unit bytes --
+// the size ladder would reject the blob as MALFORMED before the hash check is ever reached,
+// which would silently make this cell assert the wrong (still-rejecting, but wrong-CHANNEL)
+// status. The fix is arithmetic, not a different fixture: this cell picks the 0.5B sequence's own
+// context_cap as `per_unit(1.5B) / gcd(per_unit(0.5B), per_unit(1.5B))` -- the smallest positive
+// integer that makes `per_unit(0.5B) * context_cap` an exact multiple of `per_unit(1.5B)` by
+// construction, so the blob's own workspace_size divides evenly against the TARGET model's
+// dimensions and the size ladder admits it, reaching the hash check this cell actually exists to
+// pin. `hidden_codes_size` also mismatches (0.5B's own hidden_size vs. 1.5B's, design's own
+// parenthetical) -- irrelevant here, since the hash check runs and rejects before
+// RestoreGpuSequenceState (where hidden_codes_size would otherwise be checked) is ever reached.
+static void TestDim2_P2_ForeignBlobRestoreModelMismatch(SslmGpuContext* ctx,
+                                                          SslmGpuModelHandle* model_0p5b,
+                                                          SslmGpuModelHandle* model_1p5b,
+                                                          const SslmModelView& view_0p5b,
+                                                          const SslmModelView& view_1p5b) {
+	// `SslmGpuModelHandle` is an OPAQUE handle from this suite's own declared surface (design
+	// Sec4.1) -- its real fields are private to gpu_1p0.cpp, not readable from test code. Every
+	// dimension this cell's own cap arithmetic needs is already available from the LOADED
+	// `SslmModelView` config (the same real artifact each handle was mapped from), never through
+	// the handle pointer.
+	const int64_t per_unit_0p5b = static_cast<int64_t>(view_0p5b.config.num_hidden_layers) *
+	                               view_0p5b.config.num_key_value_heads * view_0p5b.config.head_dim * 2;
+	const int64_t per_unit_1p5b = static_cast<int64_t>(view_1p5b.config.num_hidden_layers) *
+	                               view_1p5b.config.num_key_value_heads * view_1p5b.config.head_dim * 2;
+	CHECK_MSG(per_unit_0p5b > 0 && per_unit_1p5b > 0,
+	          "P2 fixture bug: real artifacts must have nonzero per-cap-unit byte counts "
+	          "(0.5B=%lld, 1.5B=%lld)",
+	          (long long)per_unit_0p5b, (long long)per_unit_1p5b);
+	const int64_t g = GpuSeqBlobKvGcd(per_unit_0p5b, per_unit_1p5b);
+	const int64_t cap_0p5b = per_unit_1p5b / g;  // exact by construction, see this cell's own header.
+	const int64_t derived_cap_against_1p5b = per_unit_0p5b / g;
+	CHECK_MSG(cap_0p5b > 0 && derived_cap_against_1p5b > 0 &&
+	              derived_cap_against_1p5b <= static_cast<int64_t>(view_1p5b.config.context_cap),
+	          "P2 fixture bug: derived context_cap (%lld) must be positive and admissible against "
+	          "the 1.5B model's own context_cap (%lld) for this cell to reach the hash check rather "
+	          "than a spurious size-ladder rejection",
+	          (long long)derived_cap_against_1p5b, (long long)view_1p5b.config.context_cap);
+
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK_MSG(sslm_gpu_seq_create(ctx, model_0p5b, cap_0p5b, &seq) == SSLM_OK,
+	          "P2: 0.5B fixture sequence create at the exactly-divisible cap (%lld)",
+	          (long long)cap_0p5b);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);
+
+	size_t required_size = 0;
+	{
+		uint8_t probe = 0;
+		sslm_gpu_seq_save(ctx, seq, &probe, &required_size);
+	}
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK(sslm_gpu_seq_save(ctx, seq, blob.data(), &blob_size) == SSLM_OK);
+
+	// Sanity control, real and executed: the SAME blob restores cleanly against the model it was
+	// actually saved from -- proving the size-ladder admissibility this cell's own arithmetic set
+	// up is genuinely exact (not an accidental pass), before the cross-model call below is trusted.
+	SslmGpuSequenceHandle* restored_same_model = nullptr;
+	CHECK_MSG(sslm_gpu_seq_restore(ctx, model_0p5b, blob.data(), blob_size, &restored_same_model) ==
+	              SSLM_OK,
+	          "P2 control: the 0.5B blob must restore cleanly against the SAME (0.5B) model it was "
+	          "saved from -- if this fails, the cell's own cap arithmetic is wrong, not the "
+	          "cross-model assertion below");
+	if (restored_same_model) CHECK(sslm_gpu_seq_release(ctx, restored_same_model) == SSLM_OK);
+
+	SslmGpuSequenceHandle* restored = nullptr;
+	const SslmGpuStatus st = sslm_gpu_seq_restore(ctx, model_1p5b, blob.data(), blob_size, &restored);
+	CHECK_MSG(st == SSLM_RESTORE_MODEL_MISMATCH,
+	          "P2: a blob saved from the real 0.5B artifact, restored against the real 1.5B model, "
+	          "must return SSLM_RESTORE_MODEL_MISMATCH -- got %d",
+	          (int)st);
+	CHECK(restored == nullptr);
+
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
+}
+
+// --- Product cell (design Sec22's own second dim-2 addition): "two real artifacts sharing declared
+// hidden_size/context_cap... so only the hash differs" -- the cell that actually forces
+// model_content_hash to do work no other field already does. `g_model_1p5b_path` (instruct) and
+// `g_model_1p5b_variant_path` (a same-tier, same-architecture, genuinely different-weights real
+// artifact -- e.g. the real qwen2.5-1.5b-shopkeeper-lora-v2-merged-t2102.sslm (an adapter merged
+// into the 1.5B tier's own weights, same architecture) alongside qwen2.5-1.5b-instruct.sslm) share every
+// declared config dimension (hidden_size, num_hidden_layers, num_key_value_heads, head_dim,
+// context_cap), so the size-derivation ladder admits the cross-restore unconditionally and
+// hidden_codes_size matches too -- only RawIntegrityHash() differs. ---
+static void TestDim2_P3_SameShapeDifferentContentRestoreModelMismatch(
+    SslmGpuContext* ctx, SslmGpuModelHandle* model_a, SslmGpuModelHandle* model_b,
+    const SslmModelView& view_a, const SslmModelView& view_b) {
+	// `SslmGpuModelHandle` is opaque from this suite's own declared surface -- see TestDim2_P2's
+	// own header comment. The shape-parity fixture check reads the loaded `SslmModelView` configs
+	// instead, the real artifacts each handle was mapped from.
+	CHECK_MSG(view_a.config.hidden_size == view_b.config.hidden_size &&
+	              view_a.config.num_hidden_layers == view_b.config.num_hidden_layers &&
+	              view_a.config.num_key_value_heads == view_b.config.num_key_value_heads &&
+	              view_a.config.head_dim == view_b.config.head_dim,
+	          "P3 fixture bug: the two supplied artifacts must share every declared config "
+	          "dimension for this cell to exercise the hash check alone -- got a genuine shape "
+	          "mismatch instead, which would be P2's own class, not P3's");
+
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model_a, 64, &seq) == SSLM_OK);
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 5) == SSLM_OK);
+
+	size_t required_size = 0;
+	{
+		uint8_t probe = 0;
+		sslm_gpu_seq_save(ctx, seq, &probe, &required_size);
+	}
+	std::vector<uint8_t> blob(required_size);
+	size_t blob_size = blob.size();
+	CHECK(sslm_gpu_seq_save(ctx, seq, blob.data(), &blob_size) == SSLM_OK);
+
+	// Sanity control: restoring against the SAME model (model_a) the blob was saved from succeeds.
+	SslmGpuSequenceHandle* restored_same = nullptr;
+	CHECK_MSG(sslm_gpu_seq_restore(ctx, model_a, blob.data(), blob_size, &restored_same) == SSLM_OK,
+	          "P3 control: the blob must restore cleanly against the SAME model it was saved from");
+	if (restored_same) CHECK(sslm_gpu_seq_release(ctx, restored_same) == SSLM_OK);
+
+	// The real assertion: restoring the IDENTICAL blob against model_b -- same declared shape,
+	// different content hash -- must be rejected, and specifically under SSLM_RESTORE_MODEL_MISMATCH,
+	// never a silent success (the defect this whole fold exists to close) and never a generic
+	// malformed-blob status (every size check above passes; only the hash differs).
+	SslmGpuSequenceHandle* restored_b = nullptr;
+	const SslmGpuStatus st = sslm_gpu_seq_restore(ctx, model_b, blob.data(), blob_size, &restored_b);
+	CHECK_MSG(st == SSLM_RESTORE_MODEL_MISMATCH,
+	          "P3: a blob saved from model_a, restored against SAME-SHAPE model_b (different "
+	          "content hash), must return SSLM_RESTORE_MODEL_MISMATCH -- got %d -- if this reads "
+	          "SSLM_OK, model_content_hash is not being checked at all",
+	          (int)st);
+	CHECK(restored_b == nullptr);
+
+	CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 }
 
 // --- Product cell (T-2114, S3, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md):
@@ -145,6 +310,10 @@ int main(int argc, char** argv) {
 	volatile void* addr_2 = (void*)&TestDim2_P1_OversizedRankAdapterRejectedNeverReadPastTensor; (void)addr_2;
 	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
 	volatile void* addr_3 = (void*)&TestDim2_S3_ShortEmbedTensorRejectedAtMapTime; (void)addr_3;
+	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
+	volatile void* addr_4 = (void*)&TestDim2_P2_ForeignBlobRestoreModelMismatch; (void)addr_4;
+	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
+	volatile void* addr_5 = (void*)&TestDim2_P3_SameShapeDifferentContentRestoreModelMismatch; (void)addr_5;
 
 	// S3's own cell is fully synthetic (no real artifact needed) -- run it unconditionally,
 	// including when no --model*/--adapter args are supplied, rather than gating it behind the
@@ -219,6 +388,48 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// P2 (design Sec22): foreign-blob rejection -- 0.5B save, restore against the real 1.5B model.
+	{
+		SslmGpuContext* ctx = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+		SslmGpuModelHandle* model_0p5b = nullptr;
+		SslmGpuModelHandle* model_1p5b = nullptr;
+		CHECK(sslm_gpu_model_map(ctx, &view_0p5b, GpuResidencyConfig{}, &model_0p5b) == SSLM_OK);
+		CHECK(sslm_gpu_model_map(ctx, &view_1p5b, GpuResidencyConfig{}, &model_1p5b) == SSLM_OK);
+		TestDim2_P2_ForeignBlobRestoreModelMismatch(ctx, model_0p5b, model_1p5b, view_0p5b, view_1p5b);
+		CHECK(sslm_gpu_model_unmap(ctx, model_0p5b) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx, model_1p5b) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// P3 (design Sec22): same-shape, different-content rejection -- needs a SECOND real artifact
+	// sharing the 1.5B tier's own declared config dimensions but a genuinely different content
+	// hash (--model1p5bvariant=PATH); optional like every other real-artifact flag.
+	if (!g_model_1p5b_variant_path.empty()) {
+		std::vector<uint8_t> bytes_variant;
+		SslmModelView view_variant{};
+		std::string variant_err;
+		if (LoadRealModel(g_model_1p5b_variant_path, &view_variant, &bytes_variant, &variant_err)) {
+			SslmGpuContext* ctx = nullptr;
+			CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
+			SslmGpuModelHandle* model_a = nullptr;
+			SslmGpuModelHandle* model_b = nullptr;
+			CHECK(sslm_gpu_model_map(ctx, &view_1p5b, GpuResidencyConfig{}, &model_a) == SSLM_OK);
+			CHECK(sslm_gpu_model_map(ctx, &view_variant, GpuResidencyConfig{}, &model_b) == SSLM_OK);
+			TestDim2_P3_SameShapeDifferentContentRestoreModelMismatch(ctx, model_a, model_b, view_1p5b,
+			                                                           view_variant);
+			CHECK(sslm_gpu_model_unmap(ctx, model_a) == SSLM_OK);
+			CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_OK);
+			CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+		} else {
+			SKIP_MSG("P3: --model1p5bvariant=PATH could not be loaded: %s", variant_err.c_str());
+		}
+	} else {
+		SKIP_MSG("P3 (same-shape, different-content restore rejection) needs "
+		         "--model1p5bvariant=PATH -- a second real artifact sharing the 1.5B tier's own "
+		         "declared shape but a different content hash -- not supplied, not run");
 	}
 
 	// P1: NOT driven this reconciliation, named rather than silently skipped-without-comment

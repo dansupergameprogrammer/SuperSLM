@@ -96,12 +96,18 @@ typedef enum SslmGpuStatus {
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9, ADDED at this fold     */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9, ADDED at the 2026-08-15
                                            * mini-fold (Sec18), D-SLM3367       */
-    SSLM_SEQUENCE_REJECTED               /* design Sec9, ADDED T-2114 (S1, review
+    SSLM_SEQUENCE_REJECTED,               /* design Sec9, ADDED T-2114 (S1, review
                                            * 50f3d5d): a per-sequence CPU-domain
                                            * guard/decode rejection, distinct from
                                            * SSLM_DEVICE_LOST -- see gpu_1p0.h's
                                            * own header comment on this enumerator
                                            * for the full account.               */
+    SSLM_RESTORE_MODEL_MISMATCH          /* design Sec9/Sec22, ADDED at the 2026-08-15
+                                           * mini-fold (P2, D-SLM3415): sslm_gpu_seq_restore's
+                                           * v3 blob model_content_hash does not match the
+                                           * target model handle's own RawIntegrityHash() --
+                                           * see gpu_1p0.h's own header comment for the full
+                                           * account. Appended LAST, same S1 precedent. */
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy --- */
@@ -133,7 +139,10 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         int32_t token_id);
 
-/* --- Sec4.2: save/restore/reset --- */
+/* --- Sec4.2: save/restore/reset. sslm_gpu_seq_save writes a v3 blob ('SLM3'), carrying the
+ * model's own content hash (P2, Sec22, D-SLM3415). sslm_gpu_seq_restore rejects a model-hash
+ * mismatch under SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob
+ * disposition its size-derivation ladder (N1, Sec21) uses. --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size);
 SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,

@@ -72,6 +72,14 @@ static int GSkips = 0;
 static std::string g_model_1p5b_path;
 static std::string g_model_0p5b_path;
 static std::string g_adapter_path;   // real adapter artifact (e.g. shopkeeper-v2), for dim8/dim10
+// T-2113 (P2, design Sec4.2/Sec22, D-SLM3415): a SECOND real artifact sharing the 1.5B tier's own
+// declared hidden_size/context_cap but a genuinely different content hash (e.g. the base,
+// qwen2.5-1.5b-shopkeeper-lora-v2-merged-t2102.sslm, a same-tier adapter-merged derivative,
+// alongside qwen2.5-1.5b-instruct.sslm) -- design Sec22's own dim-2 "same-shape, different-content" product cell
+// needs a pair that forces the model_content_hash check to do work the size/hidden_size checks do
+// not (a shape mismatch alone, the g_model_0p5b_path pairing already covers as the foreign-blob
+// cell). Optional like every other real-artifact flag: absent means that one product cell SKIPs.
+static std::string g_model_1p5b_variant_path;
 
 // Reuses tools/t2100_gpu_throughput.cpp's own load path verbatim (T-2100, this repo).
 inline bool LoadRealModel(const std::string& path, superslm::SslmModelView* out_view,
@@ -102,8 +110,8 @@ inline bool LoadRealModel(const std::string& path, superslm::SslmModelView* out_
 }
 
 // Parses this suite's own argv convention: <binary> [--model1p5b=PATH] [--model0p5b=PATH]
-// [--adapter=PATH]. Every flag optional; a cell whose fixture is missing SKIPs rather than
-// asserting against nothing.
+// [--adapter=PATH] [--model1p5bvariant=PATH]. Every flag optional; a cell whose fixture is
+// missing SKIPs rather than asserting against nothing.
 inline void ParseFixtureArgs(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
@@ -114,6 +122,7 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		if (const char* v = take("--model1p5b=")) g_model_1p5b_path = v;
 		else if (const char* v = take("--model0p5b=")) g_model_0p5b_path = v;
 		else if (const char* v = take("--adapter=")) g_adapter_path = v;
+		else if (const char* v = take("--model1p5bvariant=")) g_model_1p5b_variant_path = v;
 	}
 }
 

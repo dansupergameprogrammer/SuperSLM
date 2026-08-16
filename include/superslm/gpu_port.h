@@ -38,6 +38,7 @@
 // Each one's own test cell(s) are filed in tests/test_main.cpp (search "T-2019") and
 // derived in full in the Curie casebook cited above.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -776,9 +777,21 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // `sslm_gpu_seq_restore` path passes the model's real hidden_size and gets the full
 // round-trip. Save reads from `seq.hidden_codes`; Restore writes into `out_seq->hidden_codes`
 // (both already-set pointers, never allocated here).
+//
+// T-2113 (P2, design Sec4.2/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md`
+// Sec15, D-SLM3415): `model_content_hash` is the SAVING model's own 32-byte
+// `SslmModelView::RawIntegrityHash()` (design Sec5.1) -- written into the v3 blob's own new,
+// append-only trailing field so a later restore against a DIFFERENT model can detect the mismatch
+// the N1 size-admissibility widening left open (a foreign blob whose derived context_cap happens to
+// be admissible against a same-shape-but-different model used to restore silently). Restore's own
+// identity check is NOT threaded through this function -- it runs in the caller
+// (`sslm_gpu_seq_restore`, gpu_1p0.cpp) via `PeekGpuSeqBlobModelHash` below, before this function (or
+// the fresh handle it restores into) is ever reached, matching the peek-then-validate-then-allocate
+// ordering the size-derivation ladder already established.
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
-                           const uint8_t* workspace, size_t workspace_size, void* out_blob,
-                           size_t* out_blob_size);
+                           const uint8_t* workspace, size_t workspace_size,
+                           const std::array<uint8_t, superslm::kIntegrityHashBytes>& model_content_hash,
+                           void* out_blob, size_t* out_blob_size);
 bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::SequenceLayerState* out_seq,
                               size_t hidden_codes_size, uint8_t* out_workspace, size_t workspace_size);
 
@@ -787,9 +800,22 @@ bool RestoreGpuSequenceState(const void* blob, size_t blob_size, superslm::Seque
 // call -- so `sslm_gpu_seq_restore` can derive the blob's own `context_cap` (Sec5.1's K/V sizing
 // formula) BEFORE it allocates the fresh handle, instead of always sizing that handle from
 // `model->context_cap`. Returns false for a blob too small to hold the header or carrying the wrong
-// magic (a v1 `'SSLM'` blob, or corrupt/foreign data) -- the same "malformed blob" disposition the
-// caller already assigns a rejecting status to; `*out_workspace_size` is untouched on a false return.
+// magic (a v1 `'SSLM'` or v2 `'SLM2'` blob, or corrupt/foreign data) -- the same "malformed blob"
+// disposition the caller already assigns a rejecting status to; `*out_workspace_size` is untouched on
+// a false return.
 bool PeekGpuSeqBlobWorkspaceSize(const void* blob, size_t blob_size, uint64_t* out_workspace_size);
+
+// T-2113 (P2, design Sec4.2/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md`
+// Sec15, D-SLM3415): the identity twin of `PeekGpuSeqBlobWorkspaceSize` above -- reads only the v3
+// blob's own header (magic + `model_content_hash`), never the body, never a device call, so
+// `sslm_gpu_seq_restore` can compare the blob's own recorded model identity against the TARGET model
+// handle's `RawIntegrityHash()` before any device work, per design Sec4.2's own "checked after the
+// size-derivation ladder... and before any device work" ordering. Returns false under the identical
+// "malformed blob" disposition `PeekGpuSeqBlobWorkspaceSize` uses (too small to hold the header, or
+// wrong magic -- a v1/v2 blob predates this field entirely); `*out_hash` is untouched on a false
+// return.
+bool PeekGpuSeqBlobModelHash(const void* blob, size_t blob_size,
+                              std::array<uint8_t, superslm::kIntegrityHashBytes>* out_hash);
 
 // --- B3 (Sec5.1, Sec11 B3): descriptor-table binding substrate + int8-native
 // packing. Maps a synthetic multi-array fixture (sized to a real tier's layer count

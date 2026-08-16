@@ -104,7 +104,16 @@ typedef enum SslmGpuStatus {
      * honor -- the batch loop's own DeviceLost-poisons-the-rest logic (gpu_1p0.cpp) cannot
      * tell a real device loss apart from a healthy device's per-sequence rejection when both
      * arrive through the same value. */
-    SSLM_SEQUENCE_REJECTED
+    SSLM_SEQUENCE_REJECTED,
+    /* T-2113 (P2, design Sec4.2/Sec9/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-
+     * build-review.md` Sec15, D-SLM3415): `sslm_gpu_seq_restore` (Sec4.2/Sec5.3), the v3 blob's
+     * own `model_content_hash` field does not match the TARGET model handle's own
+     * `RawIntegrityHash()` -- a blob saved from one model restored against a different one, the
+     * identity gap the N1 size-admissibility widening (Sec21) left open. Checked after the
+     * size-derivation ladder (a malformed blob is rejected for that reason first) and before any
+     * device work. Appended LAST, the same precedent SSLM_SEQUENCE_REJECTED (T-2114 S1) already
+     * set: no existing enumerator value moves. */
+    SSLM_RESTORE_MODEL_MISMATCH
 } SslmGpuStatus;
 
 /* --- Sec4.1.1: context create/destroy. DEFINED as of B1 (src/gpu/gpu_1p0.cpp). --- */
@@ -137,7 +146,13 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         int32_t token_id);
 
-/* --- Sec4.2: save/restore/reset. Declared for B3/B5. --- */
+/* --- Sec4.2: save/restore/reset. Declared for B3/B5.
+ * `sslm_gpu_seq_save` writes a v3 blob ('SLM3'), carrying `model`'s own content hash (T-2113 P2,
+ * design Sec22). `sslm_gpu_seq_restore` sizes the fresh handle to the blob's own recorded
+ * context_cap (N1, Sec21) and rejects a v1/v2 blob outright on magic, a malformed/inadmissible
+ * size derivation, OR a model_content_hash that does not match `model`'s own hash --
+ * SSLM_RESTORE_MODEL_MISMATCH, distinct from the generic malformed-blob disposition (P2, Sec22).
+ * --- */
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size);
 SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* model,

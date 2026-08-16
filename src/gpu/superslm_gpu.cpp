@@ -2746,17 +2746,19 @@ bool GpuReadySignalsCompletion(bool fence_signaled, int32_t* out_ready,
 // callers in test_main.cpp pass 0 and keep their own established contract;
 // the 1.0 `sslm_gpu_seq_restore` path (gpu_1p0.cpp) passes the model's real
 // hidden_size and gets the full round-trip). The blob format is versioned
-// honestly: the magic changed from the pre-fix 'SSLM' to 'SLM2' so an
-// old-format blob is rejected cleanly at the first check below, never
-// misread against the new (larger) header layout.
+// honestly: the magic changed from the pre-fix 'SSLM' (v1) to 'SLM2' (v2,
+// T-2114 C1: +hidden_codes_size/bytes) to 'SLM3' (v3, T-2113 P2, design
+// Sec4.2/Sec22, D-SLM3415: +model_content_hash) -- an older-format blob is
+// rejected cleanly at the first check below, never misread against a newer,
+// larger header layout.
 // ===========================================================================
 
 namespace {
 struct GpuSeqBlobHeader {
-	uint32_t magic;  // 'SLM2' little-endian -- v2 format (T-2114 C1: +hidden_codes_size/bytes).
-	                  // The pre-fix v1 magic ('SSLM') is a DIFFERENT value on purpose: a v1 blob
-	                  // fails the magic check below rather than being misread against this
-	                  // larger header.
+	uint32_t magic;  // 'SLM3' little-endian -- v3 format (T-2113 P2: +model_content_hash). Every
+	                  // older magic ('SSLM' v1, 'SLM2' v2) is a DIFFERENT value on purpose: an
+	                  // older-format blob fails the magic check below rather than being misread
+	                  // against this larger header.
 	uint32_t layer_index;
 	int64_t hidden_scale_m;
 	int64_t hidden_scale_e;
@@ -2765,13 +2767,23 @@ struct GpuSeqBlobHeader {
 	uint64_t hidden_codes_size;  // T-2114 C1: byte count of the residual stream that follows
 	                              // this header in the blob body, before the workspace bytes.
 	uint64_t workspace_size;
+	// T-2113 (P2, design Sec4.2/Sec22, D-SLM3415): the SAVING model's own 32-byte
+	// `SslmModelView::RawIntegrityHash()` (design Sec5.1) -- appended LAST, the identical
+	// append-only precedent T-2114 C1 already set for `hidden_codes_size`/`workspace_size`.
+	// The 1.0 `sslm_gpu_seq_restore` entry point compares this against the TARGET model handle's
+	// own hash and rejects a mismatch under `SSLM_RESTORE_MODEL_MISMATCH`, closing the identity
+	// gap the N1 size-admissibility widening (Sec21) left open: a foreign blob whose derived
+	// context_cap happens to be admissible against a same-shape-but-different model used to
+	// restore silently.
+	std::array<uint8_t, superslm::kIntegrityHashBytes> model_content_hash;
 };
-constexpr uint32_t kGpuSeqBlobMagic = 0x324D4C53u;  // "SLM2" little-endian u32 (v2: +hidden_codes)
+constexpr uint32_t kGpuSeqBlobMagic = 0x334D4C53u;  // "SLM3" little-endian u32 (v3: +model_content_hash)
 }  // namespace
 
 bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden_codes_size,
-                           const uint8_t* workspace, size_t workspace_size, void* out_blob,
-                           size_t* out_blob_size) {
+                           const uint8_t* workspace, size_t workspace_size,
+                           const std::array<uint8_t, superslm::kIntegrityHashBytes>& model_content_hash,
+                           void* out_blob, size_t* out_blob_size) {
 	const size_t required = sizeof(GpuSeqBlobHeader) + hidden_codes_size + workspace_size;
 	if (!out_blob_size) return false;
 	if (!out_blob || *out_blob_size < required) {
@@ -2787,6 +2799,7 @@ bool SaveGpuSequenceState(const superslm::SequenceLayerState& seq, size_t hidden
 	hdr.context_length = seq.context_length;
 	hdr.hidden_codes_size = static_cast<uint64_t>(hidden_codes_size);
 	hdr.workspace_size = static_cast<uint64_t>(workspace_size);
+	hdr.model_content_hash = model_content_hash;
 	uint8_t* dst = static_cast<uint8_t*>(out_blob);
 	std::memcpy(dst, &hdr, sizeof(hdr));
 	size_t off = sizeof(hdr);
@@ -2896,6 +2909,24 @@ bool PeekGpuSeqBlobWorkspaceSize(const void* blob, size_t blob_size, uint64_t* o
 	std::memcpy(&hdr, blob, sizeof(hdr));
 	if (hdr.magic != kGpuSeqBlobMagic) return false;
 	*out_workspace_size = hdr.workspace_size;
+	return true;
+}
+
+// T-2113 (P2, design Sec4.2/Sec22, routed `Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md`
+// Sec15, D-SLM3415): the identity twin of `PeekGpuSeqBlobWorkspaceSize` above -- header-only peek,
+// reads `GpuSeqBlobHeader.model_content_hash` without touching the body or the device, so
+// `sslm_gpu_seq_restore` can compare the blob's own recorded model identity against the TARGET
+// model handle's own hash before any device work. Same magic/size checks the other peek/restore
+// functions already apply at their own header reads, duplicated here for the identical reason
+// `PeekGpuSeqBlobWorkspaceSize`'s own header comment states: this call must run BEFORE the fresh
+// handle exists.
+bool PeekGpuSeqBlobModelHash(const void* blob, size_t blob_size,
+                              std::array<uint8_t, superslm::kIntegrityHashBytes>* out_hash) {
+	if (!blob || !out_hash || blob_size < sizeof(GpuSeqBlobHeader)) return false;
+	GpuSeqBlobHeader hdr{};
+	std::memcpy(&hdr, blob, sizeof(hdr));
+	if (hdr.magic != kGpuSeqBlobMagic) return false;
+	*out_hash = hdr.model_content_hash;
 	return true;
 }
 
