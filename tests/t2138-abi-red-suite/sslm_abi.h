@@ -20,20 +20,26 @@
  * tests/t2112-gpu-1p0-red-suite/build_link_red.bat / tests/t2130-g5-red-suite/build_link_red.bat
  * both established.
  *
- * TWO TYPES THIS HEADER CANNOT COMPLETE -- routed as a Coverage-Model gap (Curie's own
- * jurisdiction: realize the model, route what it does not say, never invent a body it never
- * gave). The design's Sec8 code block passes `const sslm_config*` (sslm_workspace_size,
- * sslm_workspace_create) and `sslm_detok_state*` (sslm_detokenize_stream) but defines the body
- * of NEITHER struct anywhere in the document -- Sec7/Sec8's own text states only that a
- * hostile `sslm_config` would carry "an out-of-range `layer_budget`, negative `chunk_budget`"
- * (Sec10 dimension 2), which names two PROBABLE field names, not a field layout Curie can
- * build a struct from with any confidence (no declared type width, no declared valid domain
- * beyond "out-of-range", no confirmation these are the ONLY fields). Declared here as
- * INCOMPLETE (forward-declared, no body) rather than guessed at, so every verb that takes a
- * pointer to either type still compiles and links red for the right reason; no cell in this
- * suite constructs an instance of either type or dereferences a field of either -- see this
- * suite's own test-design record (Claude/Curie/t2138-abi-red-suite-2026-08-16.md) for the
- * routed finding.
+ * sslm_config AND sslm_detok_state -- ROUTED GAP CLOSED (design commit 41b72091c2, "T-2133:
+ * micro-fold -- define sslm_config and sslm_detok_state field layouts routed from the T-2138
+ * red suite's model gaps", Sec7.1/Sec7.4). This suite's own first pass (Claude/Curie/
+ * t2138-abi-red-suite-2026-08-16.md Sec6) found neither struct given a body anywhere in the
+ * design and declared both incomplete rather than guess; the planner ruled both bodies and this
+ * header now carries them verbatim from Sec7.1/Sec7.4/Sec8:
+ *
+ * sslm_config (Sec7.1) is the call-shape declaration sslm_workspace_size/sslm_workspace_create
+ * size the workspace against. ALL-ZERO IS HOSTILE INPUT here (every field is a required
+ * positive sizing input) -- the opposite domain from sslm_detok_state below. Domain:
+ * max_batch >= 1, max_chunk_budget >= 1, 1 <= max_layer_budget <= num_hidden_layers,
+ * reserved == 0. A structurally invalid config makes sslm_workspace_size return 0 (its only
+ * channel) and sslm_workspace_create reject SSLM_INVALID_ARGUMENT (re-validated independently,
+ * never trusting the size_t call's return) -- dim2_hostile_red.cpp's own five sub-cells drive
+ * this per field.
+ *
+ * sslm_detok_state (Sec7.4) is a fixed-size, caller-allocated POD value type (no create/destroy
+ * verb, unlike sslm_workspace/sslm_kv_pool) holding a partial UTF-8 tail across successive
+ * sslm_detokenize_stream calls. THE ALL-ZERO VALUE IS A VALID START STATE here (pending_count
+ * == 0 means "no partial tail pending") -- the opposite domain from sslm_config above.
  */
 #ifndef SSLM_T2138_ABI_H
 #define SSLM_T2138_ABI_H
@@ -53,12 +59,25 @@ typedef struct sslm_adapter_s*   sslm_adapter;
 typedef struct sslm_kv_pool_s*   sslm_kv_pool;
 typedef struct sslm_workspace_s* sslm_workspace;
 
-/* INCOMPLETE by design -- see this file's own header comment, "TWO TYPES THIS HEADER CANNOT
- * COMPLETE". Never given a body in Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md. */
-struct sslm_config;
-struct sslm_detok_state;
-typedef struct sslm_config sslm_config;
-typedef struct sslm_detok_state sslm_detok_state;
+/* call-shape declaration for workspace sizing -- design Sec7.1, verbatim. All-zero is HOSTILE
+ * input here (every field is a required positive sizing input), unlike a GPU-ABI-style
+ * reserved-only config. */
+typedef struct sslm_config {
+    int32_t max_batch;         /* max sequences in one sslm_decode_step call, >= 1 */
+    int32_t max_chunk_budget;  /* max tokens in one sslm_prefill/sslm_prefix_prefill call, >= 1 */
+    int32_t max_layer_budget;  /* max layers in one sslm_decode_step call -- in
+                                 * [1, config.num_hidden_layers] */
+    uint32_t reserved;         /* must be 0 */
+} sslm_config;
+
+/* fixed-size POD, caller-allocated, no create/destroy verb -- design Sec7.4, verbatim. {0} IS A
+ * VALID start state (unlike sslm_config, above): pending_count == 0 means "no partial UTF-8
+ * tail yet". */
+typedef struct sslm_detok_state {
+    uint8_t pending_bytes[3];  /* a partial UTF-8 multi-byte sequence's leading bytes, carried
+                                 * from the previous call -- at most 3 */
+    uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
+} sslm_detok_state;
 
 /* status enum -- design Sec6's full per-cause taxonomy, 17 enumerators (design Sec10 dim5's own
  * reconciled count: 1 + 3 + 4 + 7 + 2 = 17). SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one

@@ -230,17 +230,23 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 		generated_tokens.push_back(out_token);
 	}
 
-	// 6. Detokenize (real text OUT -- the deliverable a user would receive).
+	// 6. Detokenize (real text OUT -- the deliverable a user would receive). Design Sec7.4
+	// (folded from this suite's own routed gap 2): sslm_detok_state is a fixed-size,
+	// caller-allocated POD -- {0} is the valid start state, declared on the stack, no
+	// construction verb -- exercising the ACTUAL incremental-detokenize call shape a real
+	// consumer uses, not a null stand-in.
 	char utf8_out[1024];
 	int32_t utf8_out_len = sizeof(utf8_out);
-	sslm_detok_state* detok_state = nullptr;  // opaque per this suite's own routed model gap
-	                                           // (see dim2_hostile_red.cpp's header comment) --
-	                                           // a null state is this cell's own best-effort
-	                                           // construction absent a defined allocation
-	                                           // convention for the type.
-	CHECK(sslm_detokenize_stream(model, detok_state, generated_tokens.data(),
+	sslm_detok_state detok_state = {0};
+	CHECK(sslm_detokenize_stream(model, &detok_state, generated_tokens.data(),
 	                              (int32_t)generated_tokens.size(), utf8_out, &utf8_out_len) ==
 	      SSLM_OK);
+	// FEATURE ORACLE (design Sec7.4's own invariant): after a single, non-fragmenting call over
+	// a complete token span, pending_count settles at a value in [0, 2] -- never 3 (the design's
+	// own "never exceeds 2 across two consecutive calls without progress"), proving the state
+	// was genuinely written to, not left at its {0} initializer by an implementation that
+	// ignores the parameter.
+	CHECK(detok_state.pending_count <= 2);
 
 	// 7. Save.
 	unsigned char blob[65536];

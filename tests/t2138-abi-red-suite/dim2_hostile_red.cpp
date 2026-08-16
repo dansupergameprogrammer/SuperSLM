@@ -1,18 +1,19 @@
-// T-2138 (Curie) -- Dim 2 (Trust boundaries and hostile inputs), design Sec10 dim2. 7 cells.
+// T-2138 (Curie) -- Dim 2 (Trust boundaries and hostile inputs), design Sec10 dim2. 12 cells.
 // RED BY LINK.
 //
-// ROUTED MODEL GAP (Curie's own jurisdiction -- realize the model, never invent a body it never
-// gave): design Sec10 dim2's own text names "a hostile sslm_config/sslm_decode_params
-// (out-of-range layer_budget, negative chunk_budget) is SSLM_INVALID_ARGUMENT" as an applicable
-// cell. sslm_decode_params's body IS given (design Sec8, one int32 field, layer_budget) and its
-// own hostile cell is authored below (M7). sslm_config's body is NEVER given anywhere in the
-// design document -- Sec7/Sec8 pass `const sslm_config*` through sslm_workspace_size/
-// sslm_workspace_create but no section defines what sslm_config contains, beyond this same
-// dim2 sentence implying a layer_budget/chunk_budget-shaped pair with no confirmation those are
-// the ONLY fields or their exact domain. sslm_abi.h therefore declares sslm_config as an
-// INCOMPLETE type (see that header's own comment) and this file cannot construct a hostile
-// instance of it -- filed here as the routed finding rather than a guessed struct body. See
-// Claude/Curie/t2138-abi-red-suite-2026-08-16.md.
+// ROUTED MODEL GAP CLOSED (design commit 41b72091c2, Sec7.1, folded from this suite's own
+// first-pass finding, Claude/Curie/t2138-abi-red-suite-2026-08-16.md Sec6 Gap 1): sslm_config's
+// field layout is now defined (sslm_abi.h) -- max_batch/max_chunk_budget/max_layer_budget/
+// reserved, all-zero is hostile input. The hostile-sslm_config cell design Sec10 dim2's own
+// text names is authored below as FIVE independent sub-cells (M8a-M8e), one per field, each
+// mutating exactly ONE field hostile against an otherwise-valid baseline -- per field, not one
+// bundled cell, per the design's own "five sub-cells, not one" accounting. Every sub-cell
+// asserts BOTH the valid baseline (sslm_workspace_size > 0, sslm_workspace_create == SSLM_OK)
+// AND the hostile mutation (sslm_workspace_size == 0, sslm_workspace_create ==
+// SSLM_INVALID_ARGUMENT) -- an implementation that always returns 0/always rejects fails the
+// baseline half; an implementation that never checks sslm_config at all (always accepts) fails
+// the hostile half. Neither half alone would be a cell that can fail against both defect
+// classes; both together are.
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -157,6 +158,100 @@ static void TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(sslm_model model,
 	      SSLM_INVALID_ARGUMENT);
 }
 
+// --- Cells 8a-8e (design Sec7.1/Sec10 dim2, five independent sub-cells -- "each driven
+// independently against sslm_workspace_size (== 0) and sslm_workspace_create
+// (SSLM_INVALID_ARGUMENT)"). A shared helper builds a KNOWN-VALID baseline config
+// (max_batch=4, max_chunk_budget=64, max_layer_budget=num_hidden_layers, reserved=0) so each
+// sub-cell can mutate exactly one field and still assert the baseline half independently --
+// isolating the mutated field, not testing "everything hostile at once". ---
+static sslm_config ValidBaselineConfig(int32_t num_hidden_layers) {
+	sslm_config c{};
+	c.max_batch = 4;
+	c.max_chunk_budget = 64;
+	c.max_layer_budget = num_hidden_layers;
+	c.reserved = 0;
+	return c;
+}
+
+// Asserts the FULL contrast for one config: baseline (valid) succeeds on both functions, then
+// the SAME config with exactly one field mutated hostile fails on both -- the shape every
+// M8x sub-cell below shares, factored once so each sub-cell's own body states only which field
+// it mutates and to what.
+static void AssertConfigHostileContrast(sslm_model model, const sslm_config& baseline,
+                                         const sslm_config& hostile, const char* field_name) {
+	const size_t valid_size = sslm_workspace_size(model, &baseline);
+	CHECK_MSG(valid_size > 0, "baseline sslm_config (mutating %s) reported size 0 -- baseline "
+	                          "itself must be accepted",
+	          field_name);
+	std::vector<uint8_t> valid_buf(valid_size);
+	sslm_workspace valid_ws = nullptr;
+	CHECK_MSG(sslm_workspace_create(model, &baseline, valid_buf.data(), valid_buf.size(),
+	                                 &valid_ws) == SSLM_OK,
+	          "baseline sslm_config (mutating %s) was rejected -- baseline itself must be "
+	          "accepted",
+	          field_name);
+	if (valid_ws) CHECK(sslm_workspace_destroy(valid_ws) == SSLM_OK);
+
+	const size_t hostile_size = sslm_workspace_size(model, &hostile);
+	CHECK_MSG(hostile_size == 0, "hostile sslm_config.%s was NOT signaled by sslm_workspace_size "
+	                             "(returned %zu, expected 0)",
+	          field_name, hostile_size);
+	std::vector<uint8_t> hostile_buf(valid_size > 0 ? valid_size : 4096);
+	sslm_workspace hostile_ws = nullptr;
+	const sslm_status hostile_status = sslm_workspace_create(
+	    model, &hostile, hostile_buf.data(), hostile_buf.size(), &hostile_ws);
+	CHECK_MSG(hostile_status == SSLM_INVALID_ARGUMENT,
+	          "hostile sslm_config.%s was not rejected SSLM_INVALID_ARGUMENT (status=%d)",
+	          field_name, (int)hostile_status);
+	CHECK(hostile_ws == nullptr);
+}
+
+static void TestDim2_M8a_ConfigMaxBatchZeroRejected(sslm_model model, int32_t num_hidden_layers) {
+	sslm_config baseline = ValidBaselineConfig(num_hidden_layers);
+	sslm_config hostile = baseline;
+	hostile.max_batch = 0;
+	AssertConfigHostileContrast(model, baseline, hostile, "max_batch(=0)");
+}
+
+static void TestDim2_M8b_ConfigMaxBatchNegativeRejected(sslm_model model,
+                                                          int32_t num_hidden_layers) {
+	sslm_config baseline = ValidBaselineConfig(num_hidden_layers);
+	sslm_config hostile = baseline;
+	hostile.max_batch = -1;
+	AssertConfigHostileContrast(model, baseline, hostile, "max_batch(=-1)");
+}
+
+static void TestDim2_M8c_ConfigMaxChunkBudgetZeroRejected(sslm_model model,
+                                                            int32_t num_hidden_layers) {
+	sslm_config baseline = ValidBaselineConfig(num_hidden_layers);
+	sslm_config hostile = baseline;
+	hostile.max_chunk_budget = 0;
+	AssertConfigHostileContrast(model, baseline, hostile, "max_chunk_budget(=0)");
+}
+
+static void TestDim2_M8d_ConfigMaxLayerBudgetZeroAndOverCapRejected(sslm_model model,
+                                                                     int32_t num_hidden_layers) {
+	sslm_config baseline = ValidBaselineConfig(num_hidden_layers);
+	// Two sub-values for the SAME field, both hostile for a different reason (design Sec7.1:
+	// "max_layer_budget at 0 and at num_hidden_layers + 1") -- both checked here since they
+	// share one field's own contrast shape.
+	sslm_config hostile_zero = baseline;
+	hostile_zero.max_layer_budget = 0;
+	AssertConfigHostileContrast(model, baseline, hostile_zero, "max_layer_budget(=0)");
+	sslm_config hostile_over_cap = baseline;
+	hostile_over_cap.max_layer_budget = num_hidden_layers + 1;
+	AssertConfigHostileContrast(model, baseline, hostile_over_cap,
+	                             "max_layer_budget(=num_hidden_layers+1)");
+}
+
+static void TestDim2_M8e_ConfigReservedNonzeroRejected(sslm_model model,
+                                                         int32_t num_hidden_layers) {
+	sslm_config baseline = ValidBaselineConfig(num_hidden_layers);
+	sslm_config hostile = baseline;
+	hostile.reserved = 1;
+	AssertConfigHostileContrast(model, baseline, hostile, "reserved(=1)");
+}
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	volatile void* addr_0 = (void*)&TestDim2_M1_WorkspaceCreateTooSmallBufferRejected;
@@ -173,6 +268,16 @@ int main(int argc, char** argv) {
 	(void)addr_5;
 	volatile void* addr_6 = (void*)&TestDim2_M7_DecodeParamsHostileLayerBudgetRejected;
 	(void)addr_6;
+	volatile void* addr_7 = (void*)&TestDim2_M8a_ConfigMaxBatchZeroRejected;
+	(void)addr_7;
+	volatile void* addr_8 = (void*)&TestDim2_M8b_ConfigMaxBatchNegativeRejected;
+	(void)addr_8;
+	volatile void* addr_9 = (void*)&TestDim2_M8c_ConfigMaxChunkBudgetZeroRejected;
+	(void)addr_9;
+	volatile void* addr_10 = (void*)&TestDim2_M8d_ConfigMaxLayerBudgetZeroAndOverCapRejected;
+	(void)addr_10;
+	volatile void* addr_11 = (void*)&TestDim2_M8e_ConfigReservedNonzeroRejected;
+	(void)addr_11;
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
