@@ -404,9 +404,20 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 	}
 
-	// P3 (design Sec22): same-shape, different-content rejection -- needs a SECOND real artifact
-	// sharing the 1.5B tier's own declared config dimensions but a genuinely different content
-	// hash (--model1p5bvariant=PATH); optional like every other real-artifact flag.
+	// P3 (design Sec22, Q1 repair 2026-08-15): same-shape, different-content rejection -- "the
+	// arc's own only discriminating model-identity pin" (T-2114 third confirmation, casebook
+	// @7b627d5). Per the reviewer's own named fix: a cell whose PURPOSE is discrimination FAILS,
+	// naming the missing fixture and how to produce it, when that fixture is absent -- it never
+	// SKIPs. A silent skip here is exactly the second reduced-invocation-as-result shape this arc
+	// has found (the first was dim8's own D-SLM3412/P1, §7.4 of this suite's own artifact): a
+	// "clean-clone" run supplying the documented three-artifact baseline
+	// (--model1p5b/--model0p5b/--adapter) already reports dim2 GREEN without
+	// --model1p5bvariant=PATH -- the one flag beyond that baseline this specific cell needs -- so
+	// model_content_hash's own discrimination silently never executes while the run looks
+	// complete. Every OTHER skip in this suite gates on the documented three-artifact baseline
+	// itself (an artifact-less CI runner, this suite's own founding convention,
+	// fixture_common.h's own header comment) -- this is the one cell that needs a FOURTH,
+	// undocumented-by-default artifact, which is why it is the one that fails rather than skips.
 	if (!g_model_1p5b_variant_path.empty()) {
 		std::vector<uint8_t> bytes_variant;
 		SslmModelView view_variant{};
@@ -424,12 +435,28 @@ int main(int argc, char** argv) {
 			CHECK(sslm_gpu_model_unmap(ctx, model_b) == SSLM_OK);
 			CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
 		} else {
-			SKIP_MSG("P3: --model1p5bvariant=PATH could not be loaded: %s", variant_err.c_str());
+			CHECK_MSG(false,
+			          "P3 (the arc's only discriminating model-identity pin) FAILS, not skips: "
+			          "--model1p5bvariant=%s was supplied but could not be loaded -- %s. Supply "
+			          "a real, on-disk artifact sharing the 1.5B tier's own declared config shape "
+			          "(hidden_size/num_hidden_layers/num_key_value_heads/head_dim) but a "
+			          "genuinely different content hash -- e.g. the real "
+			          "qwen2.5-1.5b-shopkeeper-lora-v2-merged-t2102.sslm alongside "
+			          "qwen2.5-1.5b-instruct.sslm.",
+			          g_model_1p5b_variant_path.c_str(), variant_err.c_str());
 		}
 	} else {
-		SKIP_MSG("P3 (same-shape, different-content restore rejection) needs "
-		         "--model1p5bvariant=PATH -- a second real artifact sharing the 1.5B tier's own "
-		         "declared shape but a different content hash -- not supplied, not run");
+		CHECK_MSG(false,
+		          "P3 (the arc's only discriminating model-identity pin) FAILS, not skips, when "
+		          "--model1p5bvariant=PATH is absent -- a silent skip here would let a "
+		          "clean-clone run supplying only the documented three-artifact baseline "
+		          "(--model1p5b/--model0p5b/--adapter) report dim2 GREEN while "
+		          "model_content_hash's own discrimination is never exercised (Q1, casebook "
+		          "@7b627d5). Supply a second real artifact sharing the 1.5B tier's own declared "
+		          "config shape (hidden_size/num_hidden_layers/num_key_value_heads/head_dim) but "
+		          "a genuinely different content hash, e.g. "
+		          "--model1p5bvariant=<path to qwen2.5-1.5b-shopkeeper-lora-v2-merged-t2102.sslm> "
+		          "alongside --model1p5b=<path to qwen2.5-1.5b-instruct.sslm>.");
 	}
 
 	// P1: NOT driven this reconciliation, named rather than silently skipped-without-comment
