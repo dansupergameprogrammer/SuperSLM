@@ -19,6 +19,8 @@
 #include <climits>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cwchar>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -72,29 +74,117 @@ struct Device {
 	ComPtr<ID3D12Resource> timestamp_readback;
 	UINT64 timestamp_frequency = 0;  // ticks per second, from the command queue
 
+	// T-2116 (cross-vendor certification package): a machine used for cross-vendor
+	// certification may have more than one D3D12-capable adapter installed (a discrete GPU
+	// plus an iGPU, or two discrete GPUs). The default loop below picks whichever adapter
+	// DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE ranks first -- silently, with no way for a caller
+	// to name a different one. SSLM_GPU_ADAPTER_INDEX, when set to a non-negative integer,
+	// overrides that default and selects by RAW EnumAdapters1 index instead (the same
+	// enumeration order `run_crossvendor.ps1` uses to label results per adapter) -- a
+	// requested index that does not exist, is software, fails device creation, OR IS NOT A
+	// WELL-FORMED NON-NEGATIVE INTEGER (T-2116 fix round, Claude/Poirot's own S6: `std::atoi`
+	// has no failure signal and silently read a malformed value as 0, selecting adapter 0
+	// with no diagnostic -- the exact silent fallback this comment already promised never to
+	// do) is a loud init failure (init_error names the index or the malformed value), never a
+	// silent fallback to adapter 0 or to the default-preference path.
+	//
+	// The "# adapter: <name>" print (below, on a successful selection) is gated on the
+	// override actually being requested -- i.e. SSLM_GPU_ADAPTER_INDEX was set at all, valid
+	// or not -- per the same fix round's S2: this function is also reached from the public
+	// 1.0 C API (`sslm_gpu_context_create`, gpu_1p0.cpp), once per context, on every
+	// caller's own stdout, unconditionally, with no way to suppress it and no query to ask
+	// which adapter a context landed on. `run_crossvendor.ps1` sets the env var for every
+	// cell it runs, so certification output is unaffected; every other consumer of the 1.0
+	// API (unset env var) gets byte-identical stdout to before this ticket.
 	void Init() {
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
 			init_error = "CreateDXGIFactory2 failed";
 			return;
 		}
-		for (UINT i = 0;; ++i) {
+
+		int override_index = -1;
+		bool override_requested = false;
+		{
+			char buf[32] = {0};
+			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ADAPTER_INDEX", buf, sizeof(buf));
+			if (n > 0) {
+				override_requested = true;
+				if (n >= sizeof(buf)) {
+					// Too long to have fit -- GetEnvironmentVariableA truncates silently on a
+					// too-small buffer, so a truncated value must never be parsed: it could
+					// read as a different, shorter, entirely valid-looking index.
+					init_error =
+					    "SSLM_GPU_ADAPTER_INDEX is set but longer than this parser accepts (" +
+					    std::to_string(sizeof(buf) - 1) +
+					    " chars) -- refusing rather than parsing a truncated value";
+					return;
+				}
+				char* endp = nullptr;
+				long v = std::strtol(buf, &endp, 10);
+				const bool well_formed = (endp != buf) && (*endp == '\0');
+				if (!well_formed || v < 0 || v > static_cast<long>(INT_MAX)) {
+					init_error = "SSLM_GPU_ADAPTER_INDEX=\"" + std::string(buf) +
+					              "\" is not a well-formed non-negative integer -- refusing "
+					              "rather than guessing which adapter was meant";
+					return;
+				}
+				override_index = static_cast<int>(v);
+			}
+		}
+
+		if (override_index >= 0) {
 			ComPtr<IDXGIAdapter1> a;
-			if (factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-			                                         IID_PPV_ARGS(&a)) == DXGI_ERROR_NOT_FOUND) {
-				break;
+			HRESULT hr = factory->EnumAdapters1(static_cast<UINT>(override_index), &a);
+			if (hr == DXGI_ERROR_NOT_FOUND) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              " does not exist (EnumAdapters1 DXGI_ERROR_NOT_FOUND)";
+				return;
+			}
+			if (FAILED(hr)) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              ": EnumAdapters1 failed";
+				return;
 			}
 			DXGI_ADAPTER_DESC1 d;
 			a->GetDesc1(&d);
-			if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
-			if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
-				adapter = a;
-				break;
+			if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              " is a software adapter, not a hardware one";
+				return;
+			}
+			if (FAILED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+				init_error = "SSLM_GPU_ADAPTER_INDEX=" + std::to_string(override_index) +
+				              ": D3D12CreateDevice failed";
+				return;
+			}
+			adapter = a;
+		} else {
+			for (UINT i = 0;; ++i) {
+				ComPtr<IDXGIAdapter1> a;
+				if (factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+				                                         IID_PPV_ARGS(&a)) == DXGI_ERROR_NOT_FOUND) {
+					break;
+				}
+				DXGI_ADAPTER_DESC1 d;
+				a->GetDesc1(&d);
+				if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) continue;
+				if (SUCCEEDED(D3D12CreateDevice(a.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&dev)))) {
+					adapter = a;
+					break;
+				}
 			}
 		}
 		if (!dev) {
-			init_error = "no D3D12 hardware compute adapter found";
+			if (init_error.empty()) init_error = "no D3D12 hardware compute adapter found";
 			return;
+		}
+		if (override_requested) {
+			// Only when SSLM_GPU_ADAPTER_INDEX was set -- see the Init() header comment (S2).
+			DXGI_ADAPTER_DESC1 d;
+			adapter->GetDesc1(&d);
+			std::wprintf(L"# adapter: %s\n", d.Description);
+			std::fflush(stdout);
 		}
 		D3D12_COMMAND_QUEUE_DESC qd{};
 		qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
