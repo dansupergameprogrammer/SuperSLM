@@ -234,6 +234,22 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2124 (D-SLM3446, adapter UAF fix -- Claude/Poirot/435f730-t2124-adapter-uaf-review.md's own
+rem adopted recommendation): a standalone executable witness for the adapter use-after-free fix,
+rem needing the real 1.5B model and the real shopkeeper adapter, so it is built here but NOT
+rem auto-run (matching B2/B3/B5/B6/B6b/B7/B8's own precedent above). Usage after a successful
+rem build: out\t2124_adapter_uaf_repro.exe ^<model1p5b.sslm^> ^<adapter.sslm^> [--concurrent].
+if not exist out\t2124 mkdir out\t2124
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_O11_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2124_adapter_uaf_repro.cpp /Fo:out\t2124\ /Fe:out\t2124_adapter_uaf_repro.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real

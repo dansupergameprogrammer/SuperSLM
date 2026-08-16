@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -200,7 +201,24 @@ struct SslmGpuModelHandle {
 	// sequence that ever transitions to Submitted is, by construction, still bound to exactly the
 	// model it was created against (a sequence's own `model` pointer never changes across its
 	// lifetime) -- so this count is always a count of THIS model's own Submitted sequences.
-	int64_t submitted_sequences = 0;
+	//
+	// T-2124 (D-SLM3446 S2, Claude/Poirot/435f730-t2124-adapter-uaf-review.md): `std::atomic`, not
+	// a plain `int64_t` -- design Sec5.4 blesses two threads each driving a DIFFERENT sequence
+	// handle concurrently, and Sec6.2's own Submit/Finish split is built precisely so the submit
+	// (writer: SubmitOneSequenceDecode) and the drain (writer: sslm_gpu_ready) can happen on
+	// different threads. A plain `+= 1`/`-= 1` is a non-atomic read-modify-write; two sequences
+	// sharing one model, driven from two threads, can race it -- a lost increment reopens the
+	// model-handle analogue of this ticket's own adapter UAF class (the guard below reads 0 while
+	// a sequence is genuinely Submitted), a lost decrement makes the model permanently un-unmappable.
+	// `seq_cst` (the type's own default for every operator used below: `+=`, `-=`, `> 0`, `load()`)
+	// is kept deliberately rather than relaxed to `acquire`/`release`: this counter gates a
+	// correctness precondition (whether it is safe to free device memory the GPU may still read),
+	// not a performance-sensitive hot path -- one Submit/Finish pair per decode step, not per
+	// dispatch -- so there is no measured cost this file's own conventions (Sec12, performance
+	// claims anchored to execution) would accept trading away the simplest-to-reason-about ordering
+	// for. A weaker order would need its own argued happens-before edge to the buffer-free this
+	// counter gates; none is on record, so none is assumed.
+	std::atomic<int64_t> submitted_sequences{0};
 
 	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): host-side metadata
 	// sslm_gpu_seq_embed_token needs for its whole lifetime -- NOT new GPU residency (the
@@ -288,7 +306,19 @@ struct SslmGpuAdapterHandle {
 	// decode-step call records reads this handle's own lora_ab_buf/fold_buf via root descriptors
 	// and returns before the fence signals, so deleting this handle while any count above zero is
 	// outstanding would free a buffer the GPU may still be reading from.
-	mutable int64_t submitted_sequences = 0;
+	//
+	// `mutable` is a DELIBERATE weakening of the published `const SslmGpuAdapterHandle*` contract
+	// every public decode signature (include/superslm/gpu_1p0.h) presents to a caller -- not merely
+	// a consequence of that pointer's constness. A caller reasoning from the header's `const` sees a
+	// handle safe to share read-only across threads (design Sec5.4's own claim); this field is the
+	// one piece of state that call actually writes through that same const pointer. Named here
+	// explicitly (T-2124 S2, Claude/Poirot/435f730-t2124-adapter-uaf-review.md) because the prior
+	// wording of this comment described only the mechanism and not the contract it weakens, which is
+	// what let the concurrency consequence (S2, below) go unexamined at authoring time. `std::atomic`
+	// (not a plain `int64_t`): see SslmGpuModelHandle::submitted_sequences' own comment, above, for
+	// the race this closes and the memory-order justification -- identical reasoning, restated there
+	// rather than duplicated here since this field mirrors that one's shape exactly.
+	mutable std::atomic<int64_t> submitted_sequences{0};
 
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field, above --
 	// identical disposition here.
@@ -613,6 +643,13 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	if (model->ctx != ctx) {
 		return SSLM_DEVICE_LOST;  // same "no more specific status" disposition sslm_gpu_model_map
 		                          // already uses for a malformed/foreign-context argument.
+		                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST):
+		                          // this rejects a PERMANENT caller-contract violation (a foreign
+		                          // handle never becomes valid by retrying) through a status §9
+		                          // classifies transient/recoverable -- routing left as-is per
+		                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2 (a new
+		                          // enumerator is out of this ticket's scope), flagged here so the
+		                          // P1-6 taxonomy pass (S-FREEZE) finds this site.
 	}
 	if (model->submitted_sequences > 0) {
 		return SSLM_BUSY;  // design Sec9's own Busy-precedence, D-SLM3417.
@@ -660,6 +697,11 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	if (model->ctx != ctx) {  // T-2124 (D-SLM3446 P1-4): cross-context validation -- a model
 	                          // handle mapped against a different context names a different
 	                          // D3D12 device; same disposition as the malformed-argument case above.
+	                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST): this
+	                          // rejects a PERMANENT caller-contract violation through a status §9
+	                          // classifies transient/recoverable -- routing left as-is per
+	                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2, flagged for
+	                          // the P1-6 taxonomy pass (S-FREEZE).
 		return SSLM_DEVICE_LOST;
 	}
 
@@ -811,6 +853,11 @@ SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* 
 	if (adapter->ctx != ctx) {
 		return SSLM_DEVICE_LOST;  // same "no more specific status" disposition sslm_gpu_adapter_map
 		                          // already uses for a malformed/foreign-context argument.
+		                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST): this
+		                          // rejects a PERMANENT caller-contract violation through a status
+		                          // §9 classifies transient/recoverable -- routing left as-is per
+		                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2, flagged
+		                          // for the P1-6 taxonomy pass (S-FREEZE).
 	}
 	if (adapter->submitted_sequences > 0) {
 		return SSLM_BUSY;  // T-2124 (D-SLM3446 P0-3): Busy-precedence, mirroring
