@@ -9,8 +9,15 @@ of which is the plan's own reproducibility claim.
 Green: run `calibrate_checkpoint.py` (B1) twice against the same small on-disk fixture
 checkpoint and assert byte-identical `artifact_cache._compute_fingerprint` output across the
 two runs -- the mutation-provable form of the plan's §11 claim, checked from the vendored
-location rather than inherited by assertion. CI-runnable (fixture-scale, no real checkpoint
-download).
+location rather than inherited by assertion. CI-runnable, at TWO reduced cells stacked (named
+here explicitly, per Poirot casebook f83afe0-t2137-vendoring-review.md M5, which found the
+prior docstring's "fixture-scale" named only the checkpoint and left the corpus reduction
+unstated): the on-disk checkpoint is a tiny fixture (not the real 1.5B model), AND
+calibration is reduced to the first 2 of the real 600-record corpus
+(`pl.calibration_records` monkeypatched below). §11's own formula names the
+calibration-corpus hash as one of its inputs; this cell exercises reproducibility over 2 of
+those 600 records, not the full corpus -- narrower than the full release-gate claim, stated
+rather than left implicit.
 """
 
 import calibrate_checkpoint as CLI
@@ -41,8 +48,14 @@ def test_two_calibration_runs_against_the_same_fixture_checkpoint_are_byte_ident
     )
 
     # And the two artifact directories' own weight/scale arrays agree bit-for-bit, not just
-    # the summary fingerprint -- the fingerprint is a hash of exactly these arrays, so this is
-    # a second, independent read of the same claim.
+    # the summary fingerprint. This is NOT an independent second witness (Poirot casebook
+    # f83afe0-t2137-vendoring-review.md, M5): the fingerprint IS a hash of exactly these
+    # arrays (artifact_cache._compute_fingerprint), so a hash of X and X itself is one
+    # reading, not two -- StandardsDocument §5.4's rule that a reference sharing its input
+    # with the thing it grades is not a reference. What this second check DOES establish,
+    # independently of the fingerprint comparison above: it LOCALIZES a mismatch to a named
+    # array rather than only reporting "the hash differs" -- useful for diagnosis, not a
+    # second proof that reproducibility holds.
     import numpy as np
 
     arr1 = np.load(out1 / "arrays.npz")

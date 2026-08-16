@@ -354,6 +354,7 @@ _PROJECTION_FULL_PATH = {
     "gate_proj": "mlp.gate_proj", "up_proj": "mlp.up_proj", "down_proj": "mlp.down_proj",
 }
 
+
 def _load_spike():
     """Lazy import (T-2123/T-2137: `reference_pipeline`, vendored in-tree at
     tools/reference_pipeline/ -- no longer a cross-tree import), matching `convert_model.py`'s

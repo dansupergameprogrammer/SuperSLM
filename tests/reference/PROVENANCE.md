@@ -61,11 +61,17 @@ live copy gets a bug fix; the frozen copy stays frozen until someone deliberatel
 re-vendors it — but a divergence nobody decided and nobody can see is not
 acceptable. `check_provenance.py`'s cross-repo reach check passes a file on either
 byte-identity between the two locations, or an explicit, dated row below recording
-the two as intentionally decoupled.
+the two as intentionally decoupled **as of a stated commit** (design §3.5's own
+words) -- checked by pinning the live file's own SHA-256 at that commit, not merely
+by the file having a row. A row names the divergence a commit actually produced; it
+is not a standing exemption from every future divergence the file might ever carry.
+A live file that no longer hashes to the pinned value -- whether "fixed" back toward
+the frozen copy or drifted further from it -- fails the check again until a new,
+dated row records the new divergence.
 
-| File | Date | Reason |
-|---|---|---|
-| `rope.py` | 2026-08-16 | T-2123/T-2137 B0 rewrote `tools/reference_pipeline/rope.py`'s internal import from `from superslm_spike.intmath import rounding_divide_by_pot` to `from reference_pipeline.intmath import rounding_divide_by_pot` as part of vendoring the module out of the cross-tree `D:\Wizard` dependency (§3.2). This directory's frozen copy under `superslm_spike/rope.py` is untouched by that rename (S-HARDEN-5's own frozen-copy discipline: it stays pinned to its recorded source commit above). The two files therefore differ by exactly this one import line; every other line is byte-identical. |
+| File | Date | Commit | Live SHA-256 (LF-normalized) | Reason |
+|---|---|---|---|---|
+| `rope.py` | 2026-08-16 | `db2825b` | `e2ca56020f3443e90b8a102dbb428d2da39844d7b672b75e449068f57820c25b` | T-2123/T-2137 B0 rewrote `tools/reference_pipeline/rope.py`'s internal import from `from superslm_spike.intmath import rounding_divide_by_pot` to `from reference_pipeline.intmath import rounding_divide_by_pot` as part of vendoring the module out of the cross-tree `D:\Wizard` dependency (§3.2). This directory's frozen copy under `superslm_spike/rope.py` is untouched by that rename (S-HARDEN-5's own frozen-copy discipline: it stays pinned to its recorded source commit above). The two files therefore differ by exactly this one import line; every other line is byte-identical, confirmed by diff at commit `db2825b`. |
 
 `intmath.py` carries no row here because it has no internal `superslm_spike`-prefixed
 import to rewrite (checked at source, T-2123/T-2137 design §2.1) — its two copies

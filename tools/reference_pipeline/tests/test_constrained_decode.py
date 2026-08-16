@@ -392,9 +392,16 @@ def _dfa(constrain):
     return constrain.compile_schema(SHOPKEEPER_SCHEMA, VOCAB)
 
 
-CORPUS_PATH = (
-    pathlib.Path(__file__).resolve().parents[3] / "Claude" / "Docs" / "spike" / "shopkeeper_corpus_v1.jsonl"
-)
+def _corpus_path():
+    # T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, S2): read from
+    # reference_pipeline.pipeline's own CALIBRATION_CORPUS_PATH (B3) rather than re-derive a
+    # second, independent parents[N]-style path off this file's own __file__ -- exactly the
+    # silent-relocation fragility B3 already fixed one file over, in test_pipeline.py.
+    import reference_pipeline.pipeline as pl
+    return pl.CALIBRATION_CORPUS_PATH
+
+
+CORPUS_PATH = _corpus_path()
 
 
 def _corpus_golds() -> list[dict[str, Any]]:

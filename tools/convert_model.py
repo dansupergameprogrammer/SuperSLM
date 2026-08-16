@@ -20,7 +20,6 @@ int8 [-128,127] silently — this module's own defect finding.
 
 import argparse
 import os
-import sys
 
 import numpy as np
 

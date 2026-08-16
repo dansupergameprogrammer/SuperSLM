@@ -206,40 +206,37 @@ $AdapterArtifact = Join-Path $Artifacts "clean-checkout-adapter.sslm"
 Push-Location (Join-Path $Clean "tools")
 try {
     if ($AdapterLayerLimit -gt 0) {
-        # Written to a temp .py file rather than piped through `python -c` -- a PowerShell
-        # here-string does not reliably round-trip embedded escaped quotes to the child
-        # process, and this block's f-strings need them.
+        # T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, S3): this
+        # branch previously hand-reassembled sslm_convert_adapter.py's own main() body
+        # (build_runtime_additive_sections + dispatch_conversion_outcome + write_artifact +
+        # verify_and_merge) instead of invoking the CLI -- which meant the substitute dropped
+        # main()'s own stale-artifact unlink and its rejection-diagnostics printing, and every
+        # recorded gate run at this cell exercised the substitute, never the real CLI. The
+        # layer-count reduction is the SAME mechanism either way (patch pl.load_config before
+        # the call) -- the fix is to patch it in front of the real A.main() invocation, not to
+        # avoid calling main() at all. Written to a temp .py file rather than piped through
+        # `python -c` -- a PowerShell here-string does not reliably round-trip embedded quotes
+        # to the child process.
         $reducedScript = @'
-import os, sys, dataclasses
+import dataclasses
+import os
+import sys
+
 sys.path.insert(0, '.')
 import sslm_convert_adapter as A
-import sslm_format as sf
-import sslm_convert_manifest as scm
 from reference_pipeline import pipeline as pl
 
 n = int(os.environ['SSLM_ADAPTER_LAYER_LIMIT'])
-adapter_dir = os.environ['SSLM_ADAPTER_DIR']
-base_path = os.environ['SSLM_BASE_MODEL_PATH']
-out_path = os.environ['SSLM_ADAPTER_OUT_PATH']
-
 orig_load_config = pl.load_config
 pl.load_config = lambda path: dataclasses.replace(orig_load_config(path), num_hidden_layers=n)
 
-sections, verdict, round_trip = A.build_runtime_additive_sections(adapter_dir, base_path)
-print('domain_trip={} margin_exceeded={} saturation_elevated={}'.format(
-    verdict['domain_trip'], verdict['margin_exceeded'], verdict['saturation_elevated']))
-branch, outcome = A.dispatch_conversion_outcome(
-    domain_trip=verdict['domain_trip'], margin_exceeded=verdict['margin_exceeded'],
-    saturation_elevated=verdict['saturation_elevated'], fallback_flag_present=False)
-print('branch={} outcome={}'.format(branch.name, outcome.name))
-if outcome == A.ArtifactOutcome.RUNTIME_ADDITIVE:
-    fingerprint = sf.write_artifact(out_path, sections)
-    print('wrote {}'.format(fingerprint))
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath('convert_model.py')))
-    scm.verify_and_merge(repo_root, out_path, adapter_dir, verifier_cmd=None, manifest_out_path=None)
-    print('verified: independent loader accepted the artifact')
-else:
-    raise SystemExit('REJECTED: {}'.format(branch.name))
+sys.argv = [
+    'sslm_convert_adapter.py',
+    '--adapter', os.environ['SSLM_ADAPTER_DIR'],
+    '--base', os.environ['SSLM_BASE_MODEL_PATH'],
+    '--out', os.environ['SSLM_ADAPTER_OUT_PATH'],
+]
+raise SystemExit(A.main())
 '@
         $reducedScriptPath = Join-Path $Artifacts "_step9_reduced_cell.py"
         Set-Content -Path $reducedScriptPath -Value $reducedScript -Encoding UTF8

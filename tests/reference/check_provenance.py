@@ -47,8 +47,19 @@ _CROSS_REPO_PAIRS = (
 )
 
 _ROW_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{64}|PENDING)`\s*\|\s*$", re.MULTILINE)
-_DECOUPLING_RE = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*(.+?)\s*\|\s*$",
-                            re.MULTILINE)
+
+# T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, S1): a decoupling row
+# names the ONE divergence a stated commit produced -- `| File | Date | Commit | Live SHA-256
+# | Reason |` -- not a standing exemption for the file. Scoped between the section's own start
+# marker and the next `##` heading (M1: a bare re.MULTILINE scan over the whole document would
+# also match any other five-column table that happened to start with a backticked filename).
+_CROSS_REPO_SECTION_RE = re.compile(
+    r"^## Cross-repo reach.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL
+)
+_DECOUPLING_RE = re.compile(
+    r"^\|\s*`([^`]+)`\s*\|\s*(\d{4}-\d{2}-\d{2})\s*\|\s*`([0-9a-f]{7,40})`\s*\|\s*`([0-9a-f]{64})`\s*\|\s*(.+?)\s*\|\s*$",
+    re.MULTILINE,
+)
 
 
 def _parse_provenance(text: str) -> dict[str, str]:
@@ -62,11 +73,19 @@ def _sha256_of(path: str) -> str:
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
 
-def _parse_decoupling_entries(text: str) -> dict[str, tuple[str, str]]:
-    """Rows of the "Cross-repo reach" table: `| file.py | YYYY-MM-DD | free-text reason |`."""
-    entries: dict[str, tuple[str, str]] = {}
-    for name, date, reason in _DECOUPLING_RE.findall(text):
-        entries[name] = (date, reason)
+def _parse_decoupling_entries(text: str) -> dict[str, tuple[str, str, str]]:
+    """Rows of the "Cross-repo reach" section's own table:
+    `| file.py | YYYY-MM-DD | commit | live-SHA-256 | free-text reason |`.
+
+    Scoped to the section (not the whole document, M1) so a future unrelated table that
+    happens to start with a backticked filename and a date cannot become a silent exemption
+    anywhere else in this file.
+    """
+    section_match = _CROSS_REPO_SECTION_RE.search(text)
+    section_text = section_match.group(0) if section_match else ""
+    entries: dict[str, tuple[str, str, str]] = {}
+    for name, date, commit, live_sha256, reason in _DECOUPLING_RE.findall(section_text):
+        entries[name] = (date, commit, live_sha256)
     return entries
 
 
@@ -88,14 +107,27 @@ def _check_cross_repo_reach(provenance_text: str) -> list[str]:
         live_bytes = open(live_path, "rb").read().replace(b"\r\n", b"\n")
         frozen_bytes = open(frozen_path, "rb").read().replace(b"\r\n", b"\n")
         if live_bytes == frozen_bytes:
+            continue  # no divergence at all -- nothing to record or check against a pin
+        entry = decoupled.get(name)
+        if entry is None:
+            problems.append(
+                f"cross-repo reach: {name}: tools/reference_pipeline/{name} diverges from "
+                f"tests/reference/{frozen_rel} with no PROVENANCE.md 'Cross-repo reach' entry "
+                f"recording the divergence as intentional"
+            )
             continue
-        if name in decoupled:
-            continue  # explicit, dated decoupling entry recorded -- divergence is intentional
-        problems.append(
-            f"cross-repo reach: {name}: tools/reference_pipeline/{name} diverges from "
-            f"tests/reference/{frozen_rel} with no PROVENANCE.md 'Cross-repo reach' entry "
-            f"recording the divergence as intentional"
-        )
+        _date, commit, pinned_live_sha256 = entry
+        actual_live_sha256 = hashlib.sha256(live_bytes).hexdigest()
+        if actual_live_sha256 != pinned_live_sha256:
+            problems.append(
+                f"cross-repo reach: {name}: PROVENANCE.md's decoupling entry (commit {commit}) "
+                f"pins the live copy's SHA-256 to {pinned_live_sha256}, but the live copy on "
+                f"disk hashes to {actual_live_sha256} -- the recorded row names ONE approved "
+                f"divergence, not blanket permission for this file to drift further (or to "
+                f"revert to some other, unrecorded state); update the pinned hash with a new, "
+                f"dated row if this change was intentional"
+            )
+        # else: byte-identical to the pinned, approved divergence -- passes.
     return problems
 
 

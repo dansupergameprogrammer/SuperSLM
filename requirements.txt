@@ -10,3 +10,8 @@ pytest
 # calibrate_checkpoint.py's chat-template tokenization. torch is never imported by the
 # vendored reference pipeline.
 transformers
+# T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): declared directly,
+# not left to transformers' own transitive pin. tools/_calibrate_checkpoint_fixture.py imports
+# it directly (`from tokenizers import Tokenizer, decoders, pre_tokenizers`) to build B1's
+# on-disk fixture checkpoint's tokenizer -- a real, direct dependency, not an inherited one.
+tokenizers
