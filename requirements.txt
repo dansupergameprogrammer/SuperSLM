@@ -1,0 +1,17 @@
+# tools/ and tests/ dependency declaration (T-2123/T-2137, design §5/§6 B1). Before this file,
+# no requirements.txt or pyproject.toml existed anywhere in this repository; every CI job
+# declared its own ad hoc `pip install numpy` / `pip install pytest` line
+# (.github/workflows/tests.yml). This file supersedes those scattered declarations and gives
+# the clean-checkout gate's own `pip install -r requirements.txt` step (design §5 step 2) a
+# real target.
+numpy
+pytest
+# reference_pipeline's Closure-B addition (design §2.2): AutoTokenizer only, for
+# calibrate_checkpoint.py's chat-template tokenization. torch is never imported by the
+# vendored reference pipeline.
+transformers
+# T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): declared directly,
+# not left to transformers' own transitive pin. tools/_calibrate_checkpoint_fixture.py imports
+# it directly (`from tokenizers import Tokenizer, decoders, pre_tokenizers`) to build B1's
+# on-disk fixture checkpoint's tokenizer -- a real, direct dependency, not an inherited one.
+tokenizers

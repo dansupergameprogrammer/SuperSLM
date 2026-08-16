@@ -22,26 +22,28 @@ is that reading the emitter's source to build a "join" oracle produces a
 correlated oracle, not an independent one -- this suite instead RUNS the real
 emitter and reads its actual return value.
 
-SKIPPED, NOT SILENTLY PASSED, WHEN THE CROSS-TREE SPIKE IS UNAVAILABLE.
+SKIPPED, NOT SILENTLY PASSED, IF `reference_pipeline` IS EVER UNIMPORTABLE.
 `_ctx_fold_tensor` unconditionally calls `convert_model._load_spike()`
-(`from superslm_spike import artifact_cache, pipeline`, sourced from
-`D:\\Wizard\\Tools`) before it ever inspects a scale value -- this is a hard,
-unconditional dependency of the real emitter itself (not a choice this test
-module makes), and it is why every OTHER module in this `tools/` family
-(sslm_convert_validate.py's own docstring; sslm_pinned_calibration_fixture.py's
-own docstring) deliberately injects a fixture stand-in instead of calling
-`convert_model._ctx_fold_tensor` directly. `.github/workflows/tests.yml`'s
+(`from reference_pipeline import artifact_cache, pipeline` as of T-2123/T-2137
+B0/B5 -- vendored in-tree at `tools/reference_pipeline/`, no longer a
+cross-tree `D:\\Wizard\\Tools` import) before it ever inspects a scale value --
+this is a hard, unconditional dependency of the real emitter itself (not a
+choice this test module makes), and it is why every OTHER module in this
+`tools/` family (sslm_convert_validate.py's own docstring;
+sslm_pinned_calibration_fixture.py's own docstring) deliberately injects a
+fixture stand-in instead of calling `convert_model._ctx_fold_tensor` directly.
+Before B5, this dependency was a cross-tree `D:\\Wizard` import and this suite
+could not run in CI at all (`.github/workflows/tests.yml`'s
 `converter-validate` job runs `pytest tools/` on `ubuntu-latest` with no
-`D:\\Wizard` sibling present, so this suite CANNOT execute for real on that
-runner -- it is `pytest.mark.skipif`-gated on the same import this file's own
-function under test performs, the identical pattern
-`tools/test_pinned_calibration_gate.py` already uses for `sslm_verify` not
-being built locally. Wherever the cross-tree spike IS present (this
-repository's own working-tree sibling on the maintainer's machine, or any
-future CI leg provisioned with it), this suite runs the real emitter for
-real and fails loudly the day a calibration change starts emitting a
-non-identity row -- closing D-SLM394's "checked nowhere" gap everywhere the
-premise is actually checkable, rather than leaving it checked nowhere at all.
+`D:\\Wizard` sibling present); after B5, `reference_pipeline` is vendored
+in-tree and importable everywhere this repository is checked out, so the skip
+condition below is now a defensive guard against `reference_pipeline` itself
+being broken or absent, not a routine CI condition -- it is
+`pytest.mark.skipif`-gated on the same import this file's own function under
+test performs, the identical pattern `tools/test_pinned_calibration_gate.py`
+already uses for `sslm_verify` not being built locally. This suite runs the
+real emitter for real and fails loudly the day a calibration change starts
+emitting a non-identity row -- closing D-SLM394's "checked nowhere" gap.
 
 Test-design record:
 Claude/Curie/superslm-s3.3-t1317-ctx-fold-identity-premise-test-design-2026-07-28.md
@@ -64,9 +66,9 @@ def _spike_available():
 
 pytestmark = pytest.mark.skipif(
     not _spike_available(),
-    reason="cross-tree superslm_spike (D:\\Wizard\\Tools) not available in this environment -- "
-           "see module docstring; this is the real emitter's own unconditional dependency, "
-           "not a choice this test module makes")
+    reason="reference_pipeline (vendored in-tree, T-2123/T-2137) is not importable in this "
+           "environment -- see module docstring; this is the real emitter's own unconditional "
+           "dependency, not a choice this test module makes")
 
 
 class _Scales:

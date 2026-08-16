@@ -106,6 +106,14 @@ else()
 	target_compile_options(sslm_verify PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+add_executable(sslm_generate tools/sslm_generate.cpp)
+target_link_libraries(sslm_generate PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_generate PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_generate PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
 # T-2046 (design §24.2 D-SLM3162, closing Poirot c81e48c review Significant 6): dumps an adapter
 # artifact's DeltaFoldScales/UFoldScales/Weights sections, loaded through the REAL B0b typed path,
 # as JSON -- the write->load round-trip proof's own read side (tools/sslm_adapter_dump.cpp).

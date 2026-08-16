@@ -552,7 +552,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: pip install numpy pytest
+      # T-2137 (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): this job now collects
+      # tools/test_calibrate_checkpoint.py, tools/test_reference_pipeline_b1a_reproducibility.py,
+      # and tools/test_reference_pipeline_b1b_composition_cell.py (none carries
+      # @pytest.mark.upstream, so none is deselected), which reach tokenizers directly
+      # (tools/_calibrate_checkpoint_fixture.py) and transformers via
+      # reference_pipeline.pipeline.load_model -- both declared in requirements.txt.
+      - run: pip install -r requirements.txt
       # T-407: assert the Python<->Unicode coupling the comment above only documents, at setup,
       # so a runner drift fails loud HERE instead of deep inside the pytest run as an opaque
       # UnicodeVersionMismatch. Compares the running interpreter against the single pinned source
