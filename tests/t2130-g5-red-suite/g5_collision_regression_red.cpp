@@ -41,10 +41,12 @@ namespace {
 // runtime to consume exactly one chunk per call) and returns the resulting sequence's own
 // save-blob, for byte-for-byte comparison against a differently-chunked run of the identical
 // content.
-bool RunScenario(sslm_model model, sslm_schema schema, const int32_t* prompt_tokens,
-                  int32_t prompt_len, int32_t chunk_budget, std::vector<uint8_t>* out_blob) {
+bool RunScenario(sslm_model model, sslm_kv_pool* pool, sslm_schema schema,
+                  const int32_t* leading_forced_span, int32_t leading_forced_len,
+                  const int32_t* prompt_tokens, int32_t prompt_len, int32_t chunk_budget,
+                  std::vector<uint8_t>* out_blob) {
 	sslm_seq seq = nullptr;
-	if (sslm_seq_create(model, nullptr, &seq) != SSLM_OK) return false;
+	if (sslm_seq_create(model, pool, &seq) != SSLM_OK) return false;
 	if (sslm_seq_set_schema(seq, schema) != SSLM_OK) return false;
 
 	// Drive the walk to a genuinely non-start, mid-generation state BEFORE the prompt content
@@ -52,10 +54,13 @@ bool RunScenario(sslm_model model, sslm_schema schema, const int32_t* prompt_tok
 	// short forced (schema-content) span so the sequence's DFA-walk-state field is non-fresh
 	// when the SSLM_SPAN_PROMPT calls below execute. This is the mid-generation half of the
 	// struck shape; a fresh sequence's FIRST prompt call is the ordinary, already-covered
-	// case (the strike's own P1 call), not the collision this fixture pins.
-	int32_t leading_forced_span[3] = {0, 1, 2};
+	// case (the strike's own P1 call), not the collision this fixture pins. The span's own ids
+	// are DERIVED from the real schema/tokenizer at runtime by the caller (T-2132/Curie fix --
+	// see fixture_common.h's DeriveRealSchemaContentSpan), passed in rather than literal ids
+	// assumed legal by construction, and identical across both of this fixture's own calls
+	// (chunked vs. unchunked) so only the prompt's own chunking differs between them.
 	int32_t consumed = 0;
-	if (sslm_prefill(model, seq, leading_forced_span, 3, chunk_budget,
+	if (sslm_prefill(model, seq, leading_forced_span, leading_forced_len, chunk_budget,
 	                  SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed) != SSLM_OK)
 		return false;
 
@@ -73,10 +78,10 @@ bool RunScenario(sslm_model model, sslm_schema schema, const int32_t* prompt_tok
 		offset += this_consumed;
 	}
 
-	unsigned char blob[65536];
-	size_t blob_size = sizeof(blob);
-	if (sslm_seq_save(seq, blob, &blob_size) != SSLM_OK) return false;
-	out_blob->assign(blob, blob + blob_size);
+	std::vector<uint8_t> blob = AllocRealSaveBlobBuffer(model);
+	size_t blob_size = blob.size();
+	if (sslm_seq_save(seq, blob.data(), &blob_size) != SSLM_OK) return false;
+	out_blob->assign(blob.data(), blob.data() + blob_size);
 	return sslm_seq_release(seq) == SSLM_OK;
 }
 
@@ -84,24 +89,40 @@ bool RunScenario(sslm_model model, sslm_schema schema, const int32_t* prompt_tok
 
 // --- THE COLLISION-REGRESSION CELL (design Sec6 G5-2 gate, Sec7 dim7, T-2127 G1 closed). ---
 static void TestG5CollisionRegression_ChunkedVsUnchunkedPromptMidGenerationBitIdentical(
-    sslm_model model, sslm_schema reference_schema) {
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
+	// The leading forced span (drives the walk to a genuinely mid-generation state before the
+	// prompt content under test arrives) is DERIVED from the real schema/tokenizer at runtime
+	// (T-2132/Curie fix -- see fixture_common.h's DeriveRealSchemaContentSpan), not a literal
+	// id assumed legal by construction. Derived ONCE and reused identically for both scenarios
+	// below, so the two runs differ ONLY in how the prompt content is chunked -- exactly the
+	// isolated variable this collision-regression fixture exists to pin.
+	std::vector<int32_t> leading_forced_span;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 3, &leading_forced_span)) {
+		SKIP_MSG("could not derive a real 3-token schema-legal leading span from the live "
+		         "fixture -- collision-regression cell not run");
+		return;
+	}
+
 	// The struck probe's own prompt (13 tokens, the reference task's own utterance shape) and
 	// its own chunkBudget = 8, reproduced verbatim from
 	// Claude/Loki/t2122-probe/probe.py / Claude/Vitruvius/t2119-repair-verification/
 	// repair_probe.py -- "Friday works, just not with Mox." tokenized against the probe's own
 	// vocabulary. Represented here as opaque token ids (the C++ ABI's own int32_t contract);
-	// the specific ids are immaterial to the claim under test, only that BOTH runs below
-	// consume the SAME 13 ids.
+	// the specific ids are immaterial to the claim under test (this is an SSLM_SPAN_PROMPT
+	// span, never checked against the schema's DFA -- design Sec5: SSLM_SPAN_PROMPT never
+	// advances the walk), only that BOTH runs below consume the SAME 13 ids.
 	int32_t prompt_tokens[13];
 	for (int i = 0; i < 13; ++i) prompt_tokens[i] = 10 + i;  // arbitrary, fixed, shared token ids
 
 	std::vector<uint8_t> chunked_blob;
-	CHECK(RunScenario(model, reference_schema, prompt_tokens, 13, /*chunk_budget=*/8,
+	CHECK(RunScenario(model, pool, reference_schema, leading_forced_span.data(),
+	                  (int32_t)leading_forced_span.size(), prompt_tokens, 13, /*chunk_budget=*/8,
 	                  &chunked_blob));
 
 	std::vector<uint8_t> unchunked_blob;
-	CHECK(RunScenario(model, reference_schema, prompt_tokens, 13, /*chunk_budget=*/64,
-	                  &unchunked_blob));
+	CHECK(RunScenario(model, pool, reference_schema, leading_forced_span.data(),
+	                  (int32_t)leading_forced_span.size(), prompt_tokens, 13,
+	                  /*chunk_budget=*/64, &unchunked_blob));
 
 	// FEATURE ORACLE, behavioral (design Sec6 G5-2's own wording): the two save-blobs --
 	// header, KV, DFA-walk-state, everything sslm_seq_save captures -- are byte-for-byte
@@ -123,9 +144,13 @@ int main(int argc, char** argv) {
 	sslm_schema schema_ref = nullptr;
 	const bool have_schema_ref =
 	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
-	if (have_schema_ref) {
-		TestG5CollisionRegression_ChunkedVsUnchunkedPromptMidGenerationBitIdentical(model,
-		                                                                            schema_ref);
+	// Real KV pool (T-2132/Curie fix): sslm_seq_create below requires a non-null,
+	// already-created sslm_kv_pool* -- see fixture_common.h's own RealKvPool comment.
+	RealKvPool pool;
+	const bool have_pool = have_model && pool.Create(model, kRealPoolBlockCount);
+	if (have_schema_ref && have_pool) {
+		TestG5CollisionRegression_ChunkedVsUnchunkedPromptMidGenerationBitIdentical(
+		    model, pool.ptr(), schema_ref);
 	} else {
 		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- collision-"
 		         "regression cell not run");

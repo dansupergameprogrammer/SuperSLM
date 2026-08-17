@@ -54,14 +54,16 @@ static void TestDim2_M3_MaskPageWidthVocabMismatchRejectedBeforeMap() {
 // symmetric with the adapter's own dim-9 restore-mismatch cell. Ordering: this check runs
 // AFTER the existing KV/model-hash validation and BEFORE any device work (design Sec5). ---
 static void TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(sslm_model model_a,
+                                                                 sslm_kv_pool* pool_a,
                                                                  sslm_model model_b,
+                                                                 sslm_kv_pool* pool_b,
                                                                  sslm_schema schema_only_on_a) {
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model_a, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model_a, pool_a, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, schema_only_on_a) == SSLM_OK);
-	unsigned char blob[65536];
-	size_t blob_size = sizeof(blob);
-	CHECK(sslm_seq_save(seq, blob, &blob_size) == SSLM_OK);
+	std::vector<uint8_t> blob = AllocRealSaveBlobBuffer(model_a);
+	size_t blob_size = blob.size();
+	CHECK(sslm_seq_save(seq, blob.data(), &blob_size) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	// Restore against model_b, an artifact whose schema set does not include
 	// schema_only_on_a's identity -- the save-blob's model-hash mismatch would ALSO fire here
@@ -72,7 +74,7 @@ static void TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(sslm_model model
 	// validation and before any device work") is what this cell's own restore-target choice
 	// is designed to exercise.
 	sslm_seq restored = nullptr;
-	CHECK(sslm_seq_restore(model_b, nullptr, blob, blob_size, &restored) ==
+	CHECK(sslm_seq_restore(model_b, pool_b, blob.data(), blob_size, &restored) ==
 	      SSLM_RESTORE_SCHEMA_MISMATCH);
 	CHECK(restored == nullptr);
 }
@@ -91,12 +93,21 @@ int main(int argc, char** argv) {
 	sslm_schema schema_only_on_a = nullptr;
 	const bool have_schema_on_a =
 	    have_model_a && TryLookupSchema(model_a, g_reference_schema_name.c_str(), &schema_only_on_a);
-	if (have_model_a && have_model_b && have_schema_on_a) {
-		TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(model_a, model_b, schema_only_on_a);
+
+	// Real KV pools (T-2132/Curie fix): sslm_seq_create/sslm_seq_restore below require a
+	// non-null, already-created sslm_kv_pool* -- one per model (see fixture_common.h's own
+	// RealKvPool comment).
+	RealKvPool pool_a, pool_b;
+	const bool have_pool_a = have_model_a && pool_a.Create(model_a, kRealPoolBlockCount);
+	const bool have_pool_b = have_model_b && pool_b.Create(model_b, kRealPoolBlockCount);
+
+	if (have_model_a && have_model_b && have_schema_on_a && have_pool_a && have_pool_b) {
+		TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(model_a, pool_a.ptr(), model_b,
+		                                                     pool_b.ptr(), schema_only_on_a);
 	} else {
 		SKIP_MSG("two real artifacts sharing a base content hash (--model1p5b=PATH, "
-		         "--model1p5b_variant=PATH), the second lacking the first's schema, not "
-		         "supplied -- mechanism cell 4 not run");
+		         "--model1p5b_variant=PATH), the second lacking the first's schema, or a real "
+		         "KV pool for either, not supplied/constructible -- mechanism cell 4 not run");
 	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;

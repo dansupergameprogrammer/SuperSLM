@@ -11,14 +11,18 @@ using namespace superslm;
 // adapter's effect (not the base model's) -- the structural/scored split (dim10) applies
 // identically; jump-forward under an adapter reproduces the full-forward-under-that-adapter
 // constrained path bit-for-bit (the G5-3 oracle, adapter-crossed). ---
-static void TestDim8_M1_AdapterCrossedSchemaAndJumpForward(sslm_model model,
+static void TestDim8_M1_AdapterCrossedSchemaAndJumpForward(sslm_model model, sslm_kv_pool* pool,
                                                             sslm_schema reference_schema,
                                                             sslm_adapter shopkeeper_adapter) {
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
 	CHECK(sslm_seq_set_adapter(seq, shopkeeper_adapter) == SSLM_OK);
-	sslm_decode_params params{};
+	// sslm_decode_step's own precondition requires prior content on a fresh sequence -- seeded
+	// with one arbitrary SSLM_SPAN_PROMPT token, which never advances the DFA walk (design
+	// Sec5). See fixture_common.h's SeedPromptForDecodeStep.
+	CHECK(SeedPromptForDecodeStep(model, seq));
+	sslm_decode_params params = MakeFullDepthDecodeParams();
 	int32_t out_tokens[16];
 	for (int step = 0; step < 16; ++step)
 		CHECK(sslm_decode_step(model, &seq, 1, &params, nullptr, &out_tokens[step]) == SSLM_OK);
@@ -34,12 +38,20 @@ static void TestDim8_M1_AdapterCrossedSchemaAndJumpForward(sslm_model model,
 	// is driven via jump-forward, produces output and K/V bit-identical to the full-forward
 	// constrained-under-adapter path -- the G5-3 equivalence oracle, adapter-crossed.
 	sslm_seq seq_jf = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq_jf) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq_jf) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq_jf, reference_schema) == SSLM_OK);
 	CHECK(sslm_seq_set_adapter(seq_jf, shopkeeper_adapter) == SSLM_OK);
-	int32_t forced_tokens[4] = {0, 1, 2, 3};
+	// DERIVED from the real schema/tokenizer at runtime (T-2132/Curie fix), not a literal id
+	// assumed legal by construction -- see fixture_common.h's DeriveRealSchemaContentSpan.
+	std::vector<int32_t> forced_tokens;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 4, &forced_tokens)) {
+		SKIP_MSG("could not derive a real 4-token schema-legal forced span from the live "
+		         "fixture -- mechanism cell 1's own oracle (b) half not run");
+		CHECK(sslm_seq_release(seq_jf) == SSLM_OK);
+		return;
+	}
 	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq_jf, forced_tokens, 4, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	CHECK(sslm_prefill(model, seq_jf, forced_tokens.data(), 4, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
 	                    &consumed) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_jf) == SSLM_OK);
 }
@@ -50,12 +62,25 @@ static void TestDim8_M1_AdapterCrossedSchemaAndJumpForward(sslm_model model,
 // boundary -- reproduces the same output as an equivalent sequence decoding under the same
 // schema with NO shared prefix (prefix sharing composes bit-identically with the mask). ---
 static void TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(
-    sslm_model model, sslm_schema reference_schema) {
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
+	// The forced-at-boundary span's own ids are DERIVED from the real schema/tokenizer at
+	// runtime (T-2132/Curie fix -- see fixture_common.h's DeriveRealSchemaContentSpan), not
+	// literal ids assumed legal by construction. Legal because SSLM_SPAN_PROMPT never
+	// advances the walk-state (design Sec5), so the walk is still at the schema's own start
+	// state when this span is prefilled, on BOTH sequences below -- the same derived span is
+	// therefore a legal continuation for each. system_prompt_tokens stays literal/arbitrary:
+	// it is an SSLM_SPAN_PROMPT span, never checked against the schema's DFA.
+	std::vector<int32_t> forced_at_boundary;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 3, &forced_at_boundary)) {
+		SKIP_MSG("could not derive a real 3-token schema-legal forced span from the live "
+		         "fixture -- mechanism cell 2 not run");
+		return;
+	}
 	// The prefix is built entirely from SSLM_SPAN_PROMPT calls (the ordinary "shared
 	// system/persona prefix" case, design Sec5/Sec7) -- freezes at the unbound/start
 	// walk-state, compatible with any sequence's schema binding.
 	sslm_prefix shared_prefix = nullptr;
-	CHECK(sslm_prefix_begin(model, nullptr, &shared_prefix) == SSLM_OK);
+	CHECK(sslm_prefix_begin(model, pool, &shared_prefix) == SSLM_OK);
 	int32_t system_prompt_tokens[6] = {0, 1, 2, 3, 4, 5};
 	int32_t prefix_consumed = 0;
 	CHECK(sslm_prefix_prefill(model, shared_prefix, system_prompt_tokens, 6, /*chunk_budget=*/8,
@@ -66,25 +91,24 @@ static void TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(
 	// forced span that begins AT the prefix boundary (the schema's own leading forced
 	// literal, right after the adopted prefix's last token).
 	sslm_seq seq_with_prefix = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq_with_prefix) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq_with_prefix) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq_with_prefix, reference_schema) == SSLM_OK);
 	CHECK(sslm_seq_adopt_prefix(seq_with_prefix, shared_prefix) == SSLM_OK);
-	int32_t forced_at_boundary[3] = {6, 7, 8};
 	int32_t consumed_a = 0;
-	CHECK(sslm_prefill(model, seq_with_prefix, forced_at_boundary, 3, 8,
+	CHECK(sslm_prefill(model, seq_with_prefix, forced_at_boundary.data(), 3, 8,
 	                    SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed_a) == SSLM_OK);
 
 	// Sequence B: no shared prefix -- the identical system-prompt tokens supplied directly as
 	// an ordinary SSLM_SPAN_PROMPT span, then the identical forced span.
 	sslm_seq seq_no_prefix = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq_no_prefix) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq_no_prefix) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq_no_prefix, reference_schema) == SSLM_OK);
 	int32_t consumed_prompt = 0;
 	CHECK(sslm_prefill(model, seq_no_prefix, system_prompt_tokens, 6, 8, SSLM_SPAN_PROMPT,
 	                    nullptr, &consumed_prompt) == SSLM_OK);
 	int32_t consumed_b = 0;
-	CHECK(sslm_prefill(model, seq_no_prefix, forced_at_boundary, 3, 8, SSLM_SPAN_SCHEMA_CONTENT,
-	                    nullptr, &consumed_b) == SSLM_OK);
+	CHECK(sslm_prefill(model, seq_no_prefix, forced_at_boundary.data(), 3, 8,
+	                    SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed_b) == SSLM_OK);
 
 	// FEATURE ORACLE: seq_with_prefix and seq_no_prefix produce the same DFA-walk-state and
 	// the same K/V content over the shared span -- prefix sharing composes bit-identically
@@ -130,6 +154,11 @@ int main(int argc, char** argv) {
 	const bool have_schema_ref =
 	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
 
+	// Real KV pool (T-2132/Curie fix): sslm_seq_create/sslm_prefix_begin below require a
+	// non-null, already-created sslm_kv_pool* -- see fixture_common.h's own RealKvPool comment.
+	RealKvPool pool;
+	const bool have_pool = have_model && pool.Create(model, kRealPoolBlockCount);
+
 	// M1 needs a real sslm_adapter handle; sslm_g5.h declares sslm_seq_set_adapter but no
 	// sslm_adapter-map verb under the sslm_ prefix at all (the only shipped map verb is
 	// sslm_gpu_adapter_map, a different, incompatible handle type) -- a fixture this suite
@@ -139,11 +168,12 @@ int main(int argc, char** argv) {
 	SKIP_MSG("no sslm_adapter fixture is constructible -- design Sec5's ABI (sslm_g5.h) "
 	         "declares no sslm_adapter-map verb under the sslm_ prefix -- mechanism cell 1 "
 	         "not run");
-	if (have_schema_ref) {
-		TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(model, schema_ref);
+	if (have_schema_ref && have_pool) {
+		TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(model, pool.ptr(),
+		                                                                   schema_ref);
 	} else {
-		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- mechanism cell 2 "
-		         "not run");
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied, or a real KV pool "
+		         "could not be constructed -- mechanism cell 2 not run");
 	}
 	// P1 self-skips on g_model_1p5b_path.empty() || g_adapter_path.empty() before touching any
 	// argument, including the adapter this main() cannot itself construct.

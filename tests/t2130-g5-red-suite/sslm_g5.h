@@ -277,6 +277,23 @@ typedef struct sslm_stats_out {
 sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out);
 sslm_status sslm_model_unmap(sslm_model model);
 
+/* C1 KV-pool sizing/construction primitives (plan Sec12, RULED design commit fab235c1c6) --
+ * mirrored verbatim from include/superslm/sslm_abi_functions_g5_comparable.inc, ADDED T-2132
+ * (Curie) so this suite's own sslm_seq_create/sslm_prefix_begin/sslm_seq_restore calls below
+ * can construct a REAL sslm_kv_pool per the shipped ABI's own precondition
+ * (`if (!model || !pool || !*pool) return SSLM_INVALID_ARGUMENT;`, src/sslm_abi.cpp) instead
+ * of passing nullptr -- this suite's ORIGINAL construction, which failed 28/28 checks at the
+ * first sslm_seq_create call against the real fixture (Claude/Brunel/
+ * t2132-g5-build-2026-08-16.md's pool=nullptr finding). sslm_kv_block_size: one WHOLE
+ * sequence's entire KV footprint across every layer, never a sub-sequence PagedAttention page
+ * (design commit fab235c1c6). sslm_kv_pool_create's block_count: how many concurrent
+ * SEQUENCES the pool can back, one whole block each -- no token-count arithmetic. */
+size_t sslm_kv_block_size(sslm_model model);
+size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
+sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t buf_size,
+                                 uint32_t block_count, sslm_kv_pool* out);
+sslm_status sslm_kv_pool_destroy(sslm_kv_pool pool);
+
 sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, sslm_prefix* out);
 sslm_status sslm_prefix_freeze(sslm_prefix prefix);
 sslm_status sslm_prefix_release(sslm_prefix prefix);

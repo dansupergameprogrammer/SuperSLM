@@ -16,23 +16,46 @@ using namespace superslm;
 // an unresolvable binding (SSLM_RESTORE_SCHEMA_MISMATCH) is exercised in
 // dim2_hostile_red.cpp's own mechanism cell 4, cross-cited here rather than duplicated. ---
 static void TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(
-    sslm_model model, sslm_schema reference_schema) {
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
+	// Derive a 4-token real, schema-legal walk from the live fixture (T-2132/Curie fix -- see
+	// fixture_common.h's DeriveRealSchemaContentSpan): the first 3 tokens are the forced span
+	// that advances the walk state before the round-trip, and the 4th is what a decode-step
+	// walk continuing sequentially from that SAME state would produce next -- exactly the
+	// "next forced token the schema's own DFA admits from the mid-walk state" this cell's own
+	// oracle needs, rather than a literal id assumed legal by construction.
+	std::vector<int32_t> walk;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 4, &walk)) {
+		SKIP_MSG("could not derive a real 4-token schema-legal walk from the live fixture -- "
+		         "mechanism cell 1 not run");
+		return;
+	}
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
 	// Advance the walk state to something non-start/non-trivial before the round-trip, so a
 	// round-trip that silently resets it (rather than preserving it) is observable.
-	int32_t forced_tokens[3] = {0, 1, 2};
 	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq, forced_tokens, 3, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
+	CHECK(sslm_prefill(model, seq, walk.data(), 3, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
 	                    &consumed) == SSLM_OK);
-	unsigned char blob[65536];
-	size_t blob_size = sizeof(blob);
-	CHECK(sslm_seq_save(seq, blob, &blob_size) == SSLM_OK);
+	std::vector<uint8_t> blob = AllocRealSaveBlobBuffer(model);
+	size_t blob_size = blob.size();
+	CHECK(sslm_seq_save(seq, blob.data(), &blob_size) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 
 	sslm_seq restored = nullptr;
-	CHECK(sslm_seq_restore(model, nullptr, blob, blob_size, &restored) == SSLM_OK);
+	CHECK(sslm_seq_restore(model, pool, blob.data(), blob_size, &restored) == SSLM_OK);
+
+	// CORRECTED (T-2132/Curie fix, real-fixture reproduction): a SECOND save IMMEDIATELY after
+	// restore -- before anything else touches `restored` -- reproduces the identical blob
+	// bytes: bit-equal round-trip, not merely "restore succeeds". The prior ordering placed
+	// this save AFTER an additional forced-token prefill below, so it was comparing a
+	// 3-token-deep blob against a 4-token-deep one and could never pass; moved here to match
+	// its own stated intent ("immediately after restore").
+	std::vector<uint8_t> blob2 = AllocRealSaveBlobBuffer(model);
+	size_t blob2_size = blob2.size();
+	CHECK(sslm_seq_save(restored, blob2.data(), &blob2_size) == SSLM_OK);
+	CHECK(blob2_size == blob_size);
+	CHECK(std::memcmp(blob.data(), blob2.data(), blob_size) == 0);
 
 	// FEATURE ORACLE: the restored sequence's own schema binding resolves to reference_schema
 	// (re-binding is REJECTED -- sslm_seq_set_schema requires a fresh/reset walk state,
@@ -40,18 +63,9 @@ static void TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(
 	// DFA-walk-state continues correctly: the next forced token the schema's own DFA admits
 	// from the mid-walk state is accepted, not rejected as though the walk had reset to start.
 	CHECK(sslm_seq_set_schema(restored, reference_schema) == SSLM_SCHEMA_BIND_REJECTED);
-	int32_t next_forced_token[1] = {3};
 	int32_t consumed2 = 0;
-	CHECK(sslm_prefill(model, restored, next_forced_token, 1, 8, SSLM_SPAN_SCHEMA_CONTENT,
+	CHECK(sslm_prefill(model, restored, walk.data() + 3, 1, 8, SSLM_SPAN_SCHEMA_CONTENT,
 	                    nullptr, &consumed2) == SSLM_OK);
-
-	// And a SECOND save immediately after restore reproduces the identical blob bytes --
-	// bit-equal round-trip, not merely "restore succeeds".
-	unsigned char blob2[65536];
-	size_t blob2_size = sizeof(blob2);
-	CHECK(sslm_seq_save(restored, blob2, &blob2_size) == SSLM_OK);
-	CHECK(blob2_size == blob_size);
-	CHECK(std::memcmp(blob, blob2, blob_size) == 0);
 	CHECK(sslm_seq_release(restored) == SSLM_OK);
 }
 
@@ -63,11 +77,16 @@ int main(int argc, char** argv) {
 	sslm_schema schema_ref = nullptr;
 	const bool have_schema_ref =
 	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
-	if (have_schema_ref) {
-		TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(model, schema_ref);
+	// Real KV pool (T-2132/Curie fix): sslm_seq_create/sslm_seq_restore below require a
+	// non-null, already-created sslm_kv_pool* -- see fixture_common.h's own RealKvPool comment.
+	RealKvPool pool;
+	const bool have_pool = have_model && pool.Create(model, kRealPoolBlockCount);
+	if (have_schema_ref && have_pool) {
+		TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(model, pool.ptr(),
+		                                                                schema_ref);
 	} else {
-		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- mechanism cell 1 "
-		         "not run");
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied, or a real KV pool "
+		         "could not be constructed -- mechanism cell 1 not run");
 	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;

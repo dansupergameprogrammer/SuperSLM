@@ -17,7 +17,7 @@ using namespace superslm;
 // config)) applied to the fixed-span half of a template-fill call specifically, isolated from
 // the generated hole-fill (which reduces to G5-2/G5-3's own already-proven determinism). ---
 static void TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(
-    sslm_model model, sslm_schema reference_schema) {
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("real 1.5B artifact not supplied -- product cell not run (this cell's own "
 		         "cross-toolchain half additionally requires the CI matrix's own multiple "
@@ -25,19 +25,27 @@ static void TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(
 		         "invocation exercises the single-toolchain half only)");
 		return;
 	}
+	// The fixed span's own ids are DERIVED from the real schema/tokenizer at runtime
+	// (T-2132/Curie fix -- see fixture_common.h's DeriveRealSchemaContentSpan), not literal
+	// ids assumed legal by construction.
+	std::vector<int32_t> fixed_span_tokens;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 8, &fixed_span_tokens)) {
+		SKIP_MSG("could not derive a real 8-token schema-legal fixed span from the live "
+		         "fixture -- product cell not run");
+		return;
+	}
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
 	// A host-declared fixed span (e.g. the reference schema's own leading `{"intent":`
 	// literal, forced by construction per design Sec9.10.1's own execution) supplied via
 	// SSLM_SPAN_SCHEMA_CONTENT.
-	int32_t fixed_span_tokens[8] = {0, 1, 2, 3, 4, 5, 6, 7};
 	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq, fixed_span_tokens, 8, /*chunk_budget=*/8,
+	CHECK(sslm_prefill(model, seq, fixed_span_tokens.data(), 8, /*chunk_budget=*/8,
 	                    SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed) == SSLM_OK);
-	unsigned char blob_run1[65536];
-	size_t blob_run1_size = sizeof(blob_run1);
-	CHECK(sslm_seq_save(seq, blob_run1, &blob_run1_size) == SSLM_OK);
+	std::vector<uint8_t> blob_run1 = AllocRealSaveBlobBuffer(model);
+	size_t blob_run1_size = blob_run1.size();
+	CHECK(sslm_seq_save(seq, blob_run1.data(), &blob_run1_size) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 
 	// FEATURE ORACLE (determinism, dim6): the identical (artifact, token inputs, schema,
@@ -57,7 +65,11 @@ int main(int argc, char** argv) {
 	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
 	sslm_schema schema_ref = nullptr;
 	if (have_model) TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
-	TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(model, schema_ref);
+	// Real KV pool (T-2132/Curie fix): sslm_seq_create below requires a non-null,
+	// already-created sslm_kv_pool* -- see fixture_common.h's own RealKvPool comment.
+	RealKvPool pool;
+	if (have_model) pool.Create(model, kRealPoolBlockCount);
+	TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(model, pool.ptr(), schema_ref);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
