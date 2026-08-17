@@ -285,14 +285,18 @@ rem side, not both, must avoid the [dcl.link] collision). This closes half the d
 rem named outright; the other half is one more static_assert that the library's own highest base
 rem ordinal is strictly below the suite's first G5-only ordinal.
 rem
-rem THAT ASSERTION IS CURRENTLY, CORRECTLY, EXPECTED TO FAIL TO COMPILE: sslm_abi.h's own new
-rem SSLM_TOKEN_ID_UNMAPPED (ordinal 17, this same fix round) collides with sslm_g5.h's own
-rem SSLM_SCHEMA_NOT_FOUND (also ordinal 17) -- the exact drift S8 found already sitting in the
-rem tree, now caught by construction instead of silently passing. Reconciling sslm_g5.h itself is
-rem suite ownership (tests/t2130-g5-red-suite/, Curie's own tree; design Sec6's own coordination
-rem note) and is NOT performed by this build step. Until that reconciliation lands, this compile
-rem is treated as a KNOWN, DISCLOSED, cross-suite-coordination block -- logged and reported, never
-rem silenced and never treated as this build's own regression.
+rem THAT ASSERTION IS CURRENTLY, CORRECTLY, EXPECTED TO FAIL TO COMPILE -- REASON UPDATED, P2
+rem (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, third confirmation pass): the
+rem original ordinal-17 collision this comment used to name was reconciled (curie/
+rem t2130-g5-red-suite@59e26ff). N3's own SSLM_ALLOCATION_FAILED addition (ordinal 25) then
+rem re-opened the same class at a different ordinal -- the base taxonomy's own real maximum
+rem (SSLM_STATUS_BASE_MAX, sslm_abi.h) now sits ABOVE sslm_g5.h's own G5 block (18-24) instead of
+rem below it, an interleaving the assertion's own text names directly. The enum-governance rule
+rem this needs (who takes ordinal 26; whether base/G5 must occupy disjoint ranges at all) is being
+rem ruled at the planner in parallel to this round, not performed by this build step. Until that
+rem ruling lands and sslm_g5.h is reconciled again, this compile is treated as a KNOWN, DISCLOSED,
+rem cross-suite-coordination block -- logged and reported, never silenced and never treated as
+rem this build's own regression.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check.exe >out\t2139\gate_c_must_accept.log 2>&1
 if errorlevel 1 (
 	findstr /C:"ordinal collision" out\t2139\gate_c_must_accept.log >nul

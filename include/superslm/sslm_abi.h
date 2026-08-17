@@ -142,14 +142,31 @@ typedef enum sslm_status {
      * times a build.bat run) states plainly that a throwing extern "C" function's behavior is
      * undefined -- this design's own Sec6 deliberately declined a resource-exhaustion catch-all
      * when the base taxonomy was first cut ("What this design does NOT add: a SSLM_DEVICE_LOST-
-     * shaped catch-all"), so no existing enumerator names this cause. FLAGGED for the design
-     * authority's own formal ratification at the next design-doc pass (this is a real taxonomy
-     * change, executed here under explicit operator instruction rather than a prior design
-     * commit -- StandardsDocument Sec5.6's own "smaller promise stated truthfully" discipline:
-     * this comment states exactly what authorized it, so a later reader is never left guessing
-     * whether a design commit already exists for this ordinal). */
+     * shaped catch-all"), so no existing enumerator names this cause.
+     *
+     * RATIFIED at design commit 9f84d9e4ca ("ratify SSLM_ALLOCATION_FAILED (T-2139 N3) --
+     * resource-exhaustion family, ordinal 25, append-only law held") -- P3 (Claude/Poirot/
+     * 2c18dab-t2139-abi-build-review.md Sec7.5, third confirmation pass): this comment previously
+     * said the ratification was still pending and told a reader to go chase an authorization that
+     * by then already existed; corrected in place rather than left to mislead the next reader.
+     *
+     * P2 (same casebook, Sec7.4): this insertion left the ordinal space INTERLEAVED --
+     * SSLM_ALLOCATION_FAILED (25) sits numerically ABOVE sslm_g5.h's own G5 block (18-24), not
+     * below it, breaking the arc's own "base low, G5 appended above" arrangement and leaving no
+     * rule for who takes 26. That governance question is being ruled at the planner in parallel
+     * to this round; SSLM_STATUS_BASE_MAX below is this header's own honest, single-source-of-
+     * truth answer to "what is the base taxonomy's real highest ordinal today" in the meantime --
+     * update it in the SAME change that appends any future base enumerator, and take the
+     * planner's own ruling at landing if it changes this arrangement's shape. */
     SSLM_ALLOCATION_FAILED = 25
 } sslm_status;
+
+/* P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4): the base taxonomy's own real
+ * highest ordinal, maintained by hand alongside the enum above (a C enum has no built-in "my own
+ * maximum" query) -- tools/t2139_gate_c_type_identity_check.cpp's own ordinal-disjointness
+ * assertion reads THIS, not a specific enumerator's name, so its own message ("the base
+ * taxonomy's own real maximum") stays true regardless of which enumerator is appended next. */
+#define SSLM_STATUS_BASE_MAX SSLM_ALLOCATION_FAILED
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
  * Sec5" -- transcribed here verbatim, since this design does not restate G5's own struct

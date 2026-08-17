@@ -301,6 +301,58 @@ bool RoundUpToAlignment(size_t offset, size_t alignment, size_t* out) {
 	return true;
 }
 
+// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, the third confirmation pass):
+// N3's own remedy converted every place the COMPILER could see an explicit `throw
+// std::bad_alloc()`; it did not convert every place one can actually happen -- std::vector/
+// std::string operations (`.assign`, `.resize`, `.reserve`, construction, `TokenizerView::
+// Encode`/`Decode`'s own "throws only std::bad_alloc" contract) can all throw without any
+// `throw` keyword visible in THIS file, so C4297 (the diagnostic that found the class) has
+// nothing to fire on and stayed silent at exactly the sites this finding names.
+//
+// SWEEP METHOD (stated per the coordinator's own instruction): every `extern "C"` verb in this
+// file (29 total, `tools/t2139_count_abi_verbs.sh`'s own count) was read in full, and every
+// operation in its own body AND in every anonymous-namespace helper it calls directly (one level
+// -- `PrefillWholeTokens`, `BuildEngineCache`, `ResolveLayers`) was classified: (a)
+// `new (std::nothrow)` -- never throws, already returns nullptr on failure, no wrap needed; (b)
+// POD field copies, `std::memcpy`/`std::memset`/`std::fill` over an ALREADY-sized destination,
+// arithmetic, `noexcept`-declared calls (`RawIntegrityHash`) -- cannot throw, no wrap needed; (c)
+// `std::vector`/`std::string` construction, `.assign`/`.resize`/`.reserve`/`.push_back`, or a
+// call into another TU with a documented "throws only std::bad_alloc" contract
+// (`TokenizerView::Encode`/`Decode`, `tokenizer.h`; `SslmModel::Load`, already caught) -- CAN
+// throw, needs a boundary catch. Verbs found in class (c), beyond the three the finding named by
+// name: `sslm_kv_pool_create` (`free_list.reserve`/`push_back`), `sslm_prefix_begin`/
+// `sslm_seq_create`/`sslm_seq_restore` (`hidden_codes_storage.assign`), `PrefillWholeTokens`
+// (shared by `sslm_prefix_prefill`/`sslm_prefill` -- its own `embed_codes` fallback `.assign`
+// and `ResolveLayers`' own per-call `layers_scratch` vector copy when an adapter is bound),
+// `sslm_decode_step` (the identical fallback-vector class, plus its own `layers_scratch` copy),
+// `sslm_adapter_map` (`PopulateAdapterFromView`, `adapter_marshal.h` -- allocates the adapter's
+// own per-layer delta arrays). Every one of these, plus the three named sites
+// (`sslm_tokenize`/`sslm_detokenize_stream`/`sslm_model_map`'s own `BuildEngineCache` call), is
+// now wrapped below. Verbs NOT wrapped (class (a)/(b) only, verified by the same reading):
+// `sslm_workspace_size`/`sslm_kv_block_size`/`sslm_kv_pool_overhead_size`/`sslm_seq_state_size`
+// (pure arithmetic), `sslm_workspace_create`/`sslm_workspace_destroy`/`sslm_kv_pool_destroy`/
+// `sslm_model_unmap`/`sslm_prefix_freeze`/`sslm_prefix_release`/`sslm_seq_release`/
+// `sslm_seq_reset`/`sslm_seq_adopt_prefix`/`sslm_stats`/`sslm_seq_save`/`sslm_adapter_release`/
+// `sslm_adapter_residency`/`sslm_seq_set_adapter` (no vector mutation, no documented-throwing
+// callee).
+//
+// One general helper, not sixteen ad hoc try/catch blocks with the same three lines each: `fn`'s
+// own return value passes through unchanged on success; ANY `std::exception` (not only
+// `std::bad_alloc` -- `std::length_error` is F5's own second confirmed type, and this is the
+// FINAL boundary an extern "C" verb has, so nothing past this point may propagate as a C++
+// exception regardless of its concrete type) narrows to SSLM_ALLOCATION_FAILED, matching
+// src/bad_alloc_wrap.h's own house narrowing convention (S-HARDEN-7) -- the difference from that
+// helper is that THIS one terminates the exception here, rather than rethrowing it, because this
+// IS the extern "C" boundary that must never let one cross.
+template <typename Fn>
+sslm_status CatchAllocationFailure(Fn&& fn) {
+	try {
+		return fn();
+	} catch (const std::exception&) {
+		return SSLM_ALLOCATION_FAILED;
+	}
+}
+
 // Saturating compose of an arbitrary sequence of (multiply, then add) steps -- every sizing
 // function below is a sum of a small number of products, and a single "did anything overflow"
 // flag threaded through is simpler and no less exact than re-deriving the check inline at each
@@ -355,6 +407,17 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 // one-real-implementation discipline -- this is a second call site of an already-proven pattern,
 // not a second, independently-authored copy of its logic). Called once, at sslm_model_map time.
 bool BuildEngineCache(sslm_model_s* h) {
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass):
+	// consulted at THIS function's own entry, matching S-HARDEN-7's own *Impl convention. NOT
+	// independently exercisable through sslm_model_map's own armed call today, and that is
+	// disclosed rather than implied otherwise (tools/t2139_n3_bad_alloc_pin.cpp's own header
+	// comment): the shared injection seam is single-shot, and SslmModel::Load (model.cpp) is
+	// itself an S-HARDEN-7 site whose own *Impl consults the SAME seam as its own first
+	// statement, running before this function on every sslm_model_map call -- an armed fault
+	// always trips Load's own consultation first. Kept anyway as real, zero-cost (outside the
+	// test-injection build, bad_alloc_wrap.h's own guard) defense-in-depth: it fires for real if
+	// this function is ever reached by a future call path that does not go through Load first.
+	superslm::internal::MaybeThrowInjectedBadAllocFault();
 	auto& view = h->view;
 	auto& cache = h->engine;
 	const uint32_t num_layers = view.config.num_hidden_layers;
@@ -720,8 +783,19 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	h->buf_size = buf_size;
 	h->block_count = block_count;
 	h->block_size = block_size;
-	h->free_list.reserve(block_count);
-	for (uint32_t i = 0; i < block_count; ++i) h->free_list.push_back(i);
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): the
+	// sweep above found `free_list.reserve`/`push_back` can throw `std::bad_alloc` past the
+	// `new (std::nothrow)` check above -- caught here (see CatchAllocationFailure's own comment),
+	// with `h` deleted first so a mid-construction throw never leaks the handle.
+	const sslm_status fill_st = CatchAllocationFailure([&]() -> sslm_status {
+		h->free_list.reserve(block_count);
+		for (uint32_t i = 0; i < block_count; ++i) h->free_list.push_back(i);
+		return SSLM_OK;
+	});
+	if (fill_st != SSLM_OK) {
+		delete h;
+		return fill_st;
+	}
 	*out = h;
 	return SSLM_OK;
 }
@@ -753,11 +827,21 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// the closed status taxonomy instead of crossing the boundary as an exception.
 	superslm::SslmModelStatus st;
 	try {
-		// N3 pin: a no-op outside the test-injection build (bad_alloc_wrap.h's own guard) --
-		// armed, this throws std::bad_alloc right here, exercising the catch below for real.
-		superslm::internal::MaybeThrowInjectedBadAllocFault();
+		// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass):
+		// the injection seam's own consultation point moved from here to BuildEngineCache's own
+		// entry (below) -- the seam is single-shot and consulted synchronously, so one armed
+		// fault can only ever reach the FIRST consultation point a call makes; having a
+		// consultation here would make BuildEngineCache's own path structurally unreachable by
+		// the pin, exactly the gap P1 named. This try/catch's own correctness is unchanged and
+		// still real (any std::bad_alloc SslmModel::Load's own documented contract produces is
+		// still caught here); the pin's own injected-fault coverage is now spent proving the
+		// specific gap the finding named, not duplicating coverage of an already-proven catch.
 		st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, view, &err);
-	} catch (const std::bad_alloc&) {
+	} catch (const std::exception&) {
+		// P1 widened this from `catch (const std::bad_alloc&)` to `catch (const std::exception&)`
+		// -- this is the FINAL boundary (see CatchAllocationFailure's own comment); narrowing any
+		// exception type to SSLM_ALLOCATION_FAILED here, not only bad_alloc, matches the general
+		// fix applied throughout this sweep.
 		return SSLM_ALLOCATION_FAILED;
 	}
 	if (st != superslm::SslmModelStatus::Ok) {
@@ -781,9 +865,23 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// correspondingly SSLM_ARTIFACT_REJECTED here too -- the same "this artifact cannot be used"
 	// class SslmModel::Load's own rejection already maps to, extended to this ABI's own
 	// resolution step rather than left to fail unrecoverably at first real use.
-	if (!BuildEngineCache(h)) {
+	//
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): THE
+	// named finding -- BuildEngineCache sat OUTSIDE the N3 fix round's own try, allocating freely
+	// (backings.resize/layers.resize/WidenGainToInt32's own returned vector/cache.err's string
+	// assignment) with nothing catching it, which is also exactly why the pre-P1 N3 pin could not
+	// reach it (that pin's own injection point was inside sslm_model_map's earlier try, around
+	// SslmModel::Load, which ran to completion and returned before BuildEngineCache was ever
+	// called). Wrapped now, with `h` deleted on an allocation failure exactly as it already is on
+	// BuildEngineCache's own ordinary rejection, so both failure paths leave no leaked handle. The
+	// injection seam's own consultation point moved INTO BuildEngineCache itself (its own top
+	// comment) so tools/t2139_n3_bad_alloc_pin.cpp's own armed call now reaches this exact wrap.
+	const sslm_status cache_st = CatchAllocationFailure([&]() -> sslm_status {
+		return BuildEngineCache(h) ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
+	});
+	if (cache_st != SSLM_OK) {
 		delete h;
-		return SSLM_ARTIFACT_REJECTED;
+		return cache_st;
 	}
 	*out = h;
 	return SSLM_OK;
@@ -870,11 +968,17 @@ const superslm::LayerWeights* ResolveLayers(sslm_model_s* model, sslm_adapter_s*
 // rejection, exactly as sslm_prefix_prefill's own already-tested contract does. `adapter` is
 // nullptr for every sslm_prefix_prefill call (adapters bind to sequences, never prefixes,
 // design Sec12) and the sequence's own bound adapter (possibly nullptr) for sslm_prefill.
-sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
-                                uint8_t* kv_block, size_t block_size, const int32_t* tokens,
-                                int32_t count, int32_t chunk_budget, int32_t* consumed,
-                                int32_t* out_last_token, sslm_adapter_s* adapter,
-                                sslm_workspace_s* ws) {
+// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
+// to *Impl and wrapped (the same rename-and-wrap convention src/bad_alloc_wrap.h's own S-HARDEN-7
+// population already uses) -- this function's own `embed_codes_fallback.assign` (ws-absent path)
+// and `ResolveLayers`' own per-call `layers_scratch` copy (adapter-bound path) can both throw,
+// and this helper is shared by two extern "C" verbs (sslm_prefix_prefill, sslm_prefill), so
+// wrapping it once here closes both call sites at once rather than twice, separately.
+sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerState& state,
+                                    uint8_t* kv_block, size_t block_size, const int32_t* tokens,
+                                    int32_t count, int32_t chunk_budget, int32_t* consumed,
+                                    int32_t* out_last_token, sslm_adapter_s* adapter,
+                                    sslm_workspace_s* ws) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
 	// S7 fix round 2 (coordinator's own closing-round brief): thread this function's own
@@ -931,6 +1035,17 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 	return SSLM_OK;
 }
 
+sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
+                                uint8_t* kv_block, size_t block_size, const int32_t* tokens,
+                                int32_t count, int32_t chunk_budget, int32_t* consumed,
+                                int32_t* out_last_token, sslm_adapter_s* adapter,
+                                sslm_workspace_s* ws) {
+	return CatchAllocationFailure([&]() -> sslm_status {
+		return PrefillWholeTokensImpl(model, state, kv_block, block_size, tokens, count,
+		                               chunk_budget, consumed, out_last_token, adapter, ws);
+	});
+}
+
 }  // namespace
 
 extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, sslm_prefix* out) {
@@ -962,7 +1077,18 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 	h->block_index = block_index;
 	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
 	h->block_size = p->block_size;
-	h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3): `.assign` can throw past the
+	// `new (std::nothrow)` check above -- caught, with both the handle AND its own drawn block
+	// released on failure (matching M4's own leak discipline).
+	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
+		h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+		return SSLM_OK;
+	});
+	if (assign_st != SSLM_OK) {
+		ReturnBlock(p, block_index, h->kv_block, p->block_size);
+		delete h;
+		return assign_st;
+	}
 	h->state.hidden_codes = h->hidden_codes_storage.data();
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
 	*out = h;
@@ -1029,7 +1155,16 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	h->block_index = block_index;
 	h->kv_block = static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size;
 	h->block_size = p->block_size;
-	h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+	// P1 -- see sslm_prefix_begin's own identical fix.
+	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
+		h->hidden_codes_storage.assign(model->view.config.hidden_size, 0);
+		return SSLM_OK;
+	});
+	if (assign_st != SSLM_OK) {
+		ReturnBlock(p, block_index, h->kv_block, p->block_size);
+		delete h;
+		return assign_st;
+	}
 	h->state.hidden_codes = h->hidden_codes_storage.data();
 	h->current_token = -1;
 	model->live_refs.fetch_add(1, std::memory_order_acq_rel);
@@ -1154,7 +1289,11 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 	return st;
 }
 
-extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
+// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
+// to *Impl and wrapped (same rename-and-wrap convention as PrefillWholeTokens/*Impl, above) --
+// the fallback vectors' own `.assign` calls (ws-absent/undersized path) and `ResolveLayers`' own
+// per-call `layers_scratch` copy (adapter-bound path, inside the loop below) can both throw.
+static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_t n,
                                          const sslm_decode_params* params, sslm_workspace ws,
                                          int32_t* out_tokens) {
 	if (!model || !seqs || !params || !out_tokens) return SSLM_INVALID_ARGUMENT;
@@ -1318,6 +1457,14 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 		seq->state.layer_index = 0;
 	}
 	return SSLM_OK;
+}
+
+extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
+                                         const sslm_decode_params* params, sslm_workspace ws,
+                                         int32_t* out_tokens) {
+	return CatchAllocationFailure([&]() -> sslm_status {
+		return sslm_decode_stepImpl(model, seqs, n, params, ws, out_tokens);
+	});
 }
 
 extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out) {
@@ -1561,7 +1708,16 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	    static_cast<uint8_t*>(pool_ptr->buf) + static_cast<size_t>(block_index) * pool_ptr->block_size;
 	h->block_size = pool_ptr->block_size;
 	std::memcpy(h->kv_block, kv_blocks_ptr, block_size);
-	h->hidden_codes_storage.assign(c.hidden_size, 0);
+	// P1 -- see sslm_prefix_begin's own identical fix.
+	const sslm_status assign_st = CatchAllocationFailure([&]() -> sslm_status {
+		h->hidden_codes_storage.assign(c.hidden_size, 0);
+		return SSLM_OK;
+	});
+	if (assign_st != SSLM_OK) {
+		ReturnBlock(pool_ptr, block_index, h->kv_block, pool_ptr->block_size);
+		delete h;
+		return assign_st;
+	}
 	if (residual_len > 0) {
 		std::memcpy(h->hidden_codes_storage.data(), residual_ptr, residual_len);
 	}
@@ -1622,7 +1778,9 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	try {
 		load_st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, adapter_view,
 		                                     &err);
-	} catch (const std::bad_alloc&) {
+	} catch (const std::exception&) {
+		// P1 widened this to catch (const std::exception&) -- see sslm_model_map's own identical
+		// comment.
 		return SSLM_ALLOCATION_FAILED;
 	}
 	if (load_st != superslm::SslmModelStatus::Ok) return SSLM_ARTIFACT_REJECTED;
@@ -1647,8 +1805,21 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	h->handle.view_ = std::move(adapter_view);
 	// M3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): no separate local -- populates
 	// h->handle.layer_adapters directly, matching the comment above.
-	const superslm_adapter::AdapterLoadStatus populate_st = superslm_adapter::PopulateAdapterFromView(
-	    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
+	//
+	// P1 (Sec7.3, third confirmation pass): the sweep found PopulateAdapterFromView
+	// (adapter_marshal.h) allocates the adapter's own per-layer delta arrays -- can throw past
+	// every check above it. Wrapped; `h` is deleted on an allocation failure exactly as it
+	// already is on either of PopulateAdapterFromView's own ordinary rejections below.
+	superslm_adapter::AdapterLoadStatus populate_st = superslm_adapter::AdapterLoadStatus::Ok;
+	const sslm_status populate_alloc_st = CatchAllocationFailure([&]() -> sslm_status {
+		populate_st = superslm_adapter::PopulateAdapterFromView(
+		    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
+		return SSLM_OK;
+	});
+	if (populate_alloc_st != SSLM_OK) {
+		delete h;
+		return populate_alloc_st;
+	}
 	if (populate_st == superslm_adapter::AdapterLoadStatus::BaseHashMismatch) {
 		delete h;
 		return SSLM_ADAPTER_MODEL_MISMATCH;
@@ -1722,11 +1893,24 @@ extern "C" sslm_status sslm_tokenize(sslm_model model, const char* utf8, int32_t
 		*n = 0;
 		return SSLM_ARTIFACT_REJECTED;
 	}
-	// TokenizerView::Encode throws only std::bad_alloc (tokenizer.h's own contract) -- this call
-	// site does not catch it, matching sslm_model_map's own house-convention disposition
-	// (bad_alloc_wrap.h) for the identical reason: sslm_status carries no resource-exhaustion
-	// member.
-	const std::vector<int32_t> ids = model->view.tokenizer.Encode(std::string_view(utf8));
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): THIS
+	// COMMENT PREVIOUSLY ARGUED THE EXACT RATIONALE N3 REFUTED, on this same file, in this same
+	// commit's own earlier round -- "does not catch it, matching sslm_model_map's own house-
+	// convention disposition ... sslm_status carries no resource-exhaustion member" was already
+	// false the moment N3 gave sslm_model_map a try/catch and sslm_status a resource-exhaustion
+	// member (SSLM_ALLOCATION_FAILED, ordinal 25, ratified design commit 9f84d9e4ca). Fixed for
+	// real now, not merely re-worded: TokenizerView::Encode "throws only std::bad_alloc"
+	// (tokenizer.h's own contract) is caught here, same as every other documented-throwing call
+	// this sweep found.
+	std::vector<int32_t> ids;
+	const sslm_status encode_st = CatchAllocationFailure([&]() -> sslm_status {
+		ids = model->view.tokenizer.Encode(std::string_view(utf8));
+		return SSLM_OK;
+	});
+	if (encode_st != SSLM_OK) {
+		*n = 0;
+		return encode_st;
+	}
 	if (!tokens || *n < static_cast<int32_t>(ids.size())) {
 		// design's own two-call sizing convention (Sec7.3's own precedent, extended here):
 		// *n set to the required count on this specific rejection.
@@ -1839,16 +2023,30 @@ extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state
 		}
 	}
 
-	const std::vector<int32_t> ids(tokens, tokens + n);
-	const std::string decoded = model->view.tokenizer.Decode(ids);
-
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): named
+	// finding -- `tokenizer.Decode(ids)` ("throws only std::bad_alloc", tokenizer.h's own
+	// contract, same as Encode above) plus this function's own `std::vector`/`std::string`
+	// construction were all previously uncaught. Wrapped as one block: `combined`/`hold`/
+	// `emit_len` need to stay visible below (the buffer-size check and the state update both
+	// read them), so they are declared outside the lambda and assigned inside it, matching the
+	// same outer-declared/inner-assigned shape sslm_tokenize's own `ids` fix uses above.
 	std::string combined;
-	combined.reserve(static_cast<size_t>(state->pending_count) + decoded.size());
-	combined.append(reinterpret_cast<const char*>(state->pending_bytes), state->pending_count);
-	combined.append(decoded);
-
-	const size_t hold = CountIncompleteTrailingUtf8(combined);
-	const size_t emit_len = combined.size() - hold;
+	size_t hold = 0;
+	size_t emit_len = 0;
+	const sslm_status decode_st = CatchAllocationFailure([&]() -> sslm_status {
+		const std::vector<int32_t> ids(tokens, tokens + n);
+		const std::string decoded = model->view.tokenizer.Decode(ids);
+		combined.reserve(static_cast<size_t>(state->pending_count) + decoded.size());
+		combined.append(reinterpret_cast<const char*>(state->pending_bytes), state->pending_count);
+		combined.append(decoded);
+		hold = CountIncompleteTrailingUtf8(combined);
+		emit_len = combined.size() - hold;
+		return SSLM_OK;
+	});
+	if (decode_st != SSLM_OK) {
+		*out_n = 0;
+		return decode_st;
+	}
 
 	if (!utf8 || static_cast<size_t>(*out_n) < emit_len) {
 		*out_n = static_cast<int32_t>(emit_len);

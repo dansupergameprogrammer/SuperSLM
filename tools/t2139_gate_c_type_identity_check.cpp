@@ -116,16 +116,32 @@ T2139_GATE_C_STATUS_CHECK(SSLM_TOKEN_ID_UNMAPPED);
 // share a numeric value but not a name never appear in the same T2139_GATE_C_STATUS_CHECK call.
 // Stated as "the library's highest base ordinal is strictly below the suite's first G5-only
 // ordinal" (design Sec6's own reconciled-shape statement: this design's base occupies low
-// ordinals, G5's own additions are appended above all of them, never interleaved). PREVIOUSLY,
-// CORRECTLY, RED (this fix round's own first pass): sslm_abi.h's SSLM_TOKEN_ID_UNMAPPED = 17 and
-// sslm_g5.h's own first G5 enumerator, SSLM_SCHEMA_NOT_FOUND, were ALSO = 17 before the suite-side
-// reconciliation above landed. Now GREEN for real, not silenced -- the reconciliation is real
-// (SSLM_SCHEMA_NOT_FOUND is now 18), so this assertion passing reflects the closed coordination,
-// not a loosened check. ---
-static_assert(static_cast<int>(::SSLM_TOKEN_ID_UNMAPPED) <
+// ordinals, G5's own additions are appended above all of them, never interleaved).
+//
+// P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, third confirmation pass): this
+// assertion's own MESSAGE said "highest base enumerator" while its own EXPRESSION tested one
+// hard-coded name (SSLM_TOKEN_ID_UNMAPPED) -- true the round it was written (17 genuinely was the
+// highest base ordinal then), false the instant N3 appended SSLM_ALLOCATION_FAILED at 25 without
+// this assertion's own text or expression being revisited, the exact transcription-vs-reality gap
+// S8 was raised to fix in the first place, one level in. Fixed for real: the expression now reads
+// SSLM_STATUS_BASE_MAX (sslm_abi.h's own maintained sentinel, updated in the same change that
+// appends any future base enumerator) instead of a specific name, so the message stays true
+// regardless of which enumerator is the base taxonomy's own current maximum.
+//
+// CORRECTLY, CURRENTLY RED (not silenced, not narrowed to force green): SSLM_STATUS_BASE_MAX is
+// now 25 (SSLM_ALLOCATION_FAILED), which sits ABOVE sslm_g5.h's own G5 block (18-24) -- the
+// ordinal space is genuinely interleaved (P2's own finding), and this assertion's job is to say
+// so, not to look green. The enum-governance rule this needs (who takes ordinal 26; whether base
+// and G5 additions should keep occupying disjoint ranges at all) is being ruled at the planner in
+// parallel to this round -- take that ruling at landing if it changes this assertion's own shape;
+// until then, this is the same disclosed-red pattern Gate C already used once this arc (S8's own
+// pre-reconciliation state), not a regression this round introduced. ---
+static_assert(static_cast<int>(::SSLM_STATUS_BASE_MAX) <
                   static_cast<int>(t2139_gate_c_suite_side::SSLM_SCHEMA_NOT_FOUND),
-              "ordinal collision: sslm_abi.h's highest base enumerator is not strictly below "
-              "sslm_g5.h's first G5-only enumerator");
+              "ordinal collision: sslm_abi.h's own SSLM_STATUS_BASE_MAX is not strictly below "
+              "sslm_g5.h's first G5-only enumerator -- the base taxonomy and G5's own block are "
+              "interleaved (P2, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4); the "
+              "enum-governance ruling this needs is with the planner, not performed by this gate");
 
 // --- sslm_span_kind: per-shared-enumerator-name value equality ---
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_SPAN_PROMPT) ==
