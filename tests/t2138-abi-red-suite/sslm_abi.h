@@ -79,13 +79,37 @@ typedef struct sslm_detok_state {
     uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
 } sslm_detok_state;
 
-/* status enum -- design Sec6's full per-cause taxonomy, 18 enumerators (design Sec10 dim5's own
- * reconciled count: 1 + 3 + 4 + 7 + 3 = 18, RECONCILED against the shipped
- * include/superslm/sslm_abi.h and tests/t2130-g5-red-suite/sslm_g5.h@curie/
- * t2130-g5-red-suite@59e26ff -- SSLM_TOKEN_ID_UNMAPPED appended at ordinal 17, design commit
- * 212de7742c, the padded-vocabulary ruling, Brunel T-2139). SSLM_RESTORE_SCHEMA_MISMATCH is
- * explicitly NOT one of these (design Sec10 dim5, Sec7.3) -- it is G5's own status,
- * reserved-but-unbuilt here. */
+/* status enum -- RECONCILED to Sec6's COMPLETE 26-entry ordinal registry (design commit
+ * 4f4eb23896, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6 GOVERNANCE RULING,
+ * FOLD RULING 2026-08-17 on Poirot's third confirmation casebook
+ * 4466666-t2139-third-confirmation-review.md F1, correction 1: "sslm_abi.h also mirrors the
+ * complete 26-entry registry, verbatim -- the identical convention already ruled for sslm_g5.h,
+ * applied symmetrically. Neither header owns a subset of the registry to extend independently").
+ * This is this suite's own THIRD, independently-maintained transcription of the enum (the same
+ * casebook's F5, Minor: distinct from both include/superslm/sslm_abi.h and
+ * tests/t2130-g5-red-suite/sslm_g5.h) -- carried here in the SAME implicit-sequential-value style
+ * this file already used before this fold (no `= N` needed per entry; the declaration order below
+ * IS the registry's own ordinal order, 0 through 25, then the sentinel).
+ *
+ * SSLM_RESTORE_SCHEMA_MISMATCH (ordinal 22) was previously named here as "explicitly NOT one of
+ * these... reserved-but-unbuilt" -- that carve-out is retired by the symmetric-mirroring ruling
+ * above: every registry entry is now declared as an enumerator VALUE this suite's own C1-C7
+ * cells do not all exercise functionally, exactly the relationship this header already had to
+ * SSLM_TOKEN_ID_UNMAPPED before the padded-vocabulary fold landed it. Declaring the name is not a
+ * claim this suite drives G5 behavior through it.
+ *
+ * WHAT GUARDS THIS COPY, AND WHAT DOES NOT (F5's own residual, named so it is not silently
+ * assumed swept): Gate A (tools/t2139_gate_a_header_parity_check.cpp) and Gate C
+ * (tools/t2139_gate_c_type_identity_check.cpp) both compare the REAL include/superslm/sslm_abi.h
+ * against tests/t2130-g5-red-suite/sslm_g5.h ONLY -- neither gate reads or references this file at
+ * all. This copy has NO compile-time parity check of its own against either real header; it is
+ * guarded only by the fact that the 564-cell suite this header serves links against the real
+ * src/sslm_abi.cpp (tests/t2138-abi-red-suite/build_link_red.bat) -- and C linkage resolves calls
+ * by SYMBOL NAME alone, never by re-checking argument or enum-value types across translation
+ * units, so a divergence here (a wrong ordinal, a missing name) would NOT be caught by the linker;
+ * it would silently pass the wrong int-valued status to a CHECK() that expects a different name. A
+ * dedicated Gate A/C-style comparison against this copy is a suite-owned follow-up this fold does
+ * not itself add (Curie ownership, same as the pin list this round derives). */
 typedef enum sslm_status {
     SSLM_OK = 0,
 
@@ -113,12 +137,37 @@ typedef enum sslm_status {
     SSLM_TOKEN_ID_OUT_OF_RANGE,
     SSLM_CONTEXT_CAP_EXCEEDED,
 
-    /* NEW, appended at ordinal 17 (design commit 212de7742c, never inserted above -- append-only
-     * reconciliation law): sslm_detokenize_stream's own rejection for a decode-output token id in
+    /* appended at ordinal 17, design commit 212de7742c, the padded-vocabulary ruling, Brunel
+     * T-2139: sslm_detokenize_stream's own rejection for a decode-output token id in
      * [tok_vocab, cfg_vocab) -- a legal decode-output id with no tokenizer entry (the
      * padded-vocabulary case ValidateTokenizerVocabSizeJoin's loosening admits, src/model.cpp).
      * Distinct from SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output). */
-    SSLM_TOKEN_ID_UNMAPPED
+    SSLM_TOKEN_ID_UNMAPPED,
+
+    /* G5, design Sec5 -- ordinals 18-24, meaning owned by G5 (T-2119), ordinal allocated by Sec6.
+     * Declared here per the symmetric-mirroring ruling above; not functionally driven by any C1-C7
+     * verb this suite's own cells exercise. */
+    SSLM_SCHEMA_NOT_FOUND,
+    SSLM_SCHEMA_BIND_REJECTED,
+    SSLM_SCHEMA_SPAN_UNBOUND,
+    SSLM_PREFIX_SCHEMA_MISMATCH,
+    SSLM_RESTORE_SCHEMA_MISMATCH,
+    SSLM_SCHEMA_SPAN_UNREACHABLE,
+    SSLM_SCHEMA_UNSATISFIABLE,
+
+    /* Resource-exhaustion rejection, ordinal 25 -- design Sec6 RATIFIED, Brunel T-2139 Sec19/N3;
+     * FOLD RULING 2026-08-17 (design Sec6, F2) narrows the boundary catch this status covers to
+     * std::bad_alloc and std::length_error alone; a bare catch (...) returns SSLM_ARTIFACT_REJECTED
+     * instead (no new ordinal). Distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory
+     * exhaustion, an entirely different cause). */
+    SSLM_ALLOCATION_FAILED,
+
+    /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, F1) -- the enum's own final member, no
+     * explicit value, auto-valuing to one past this header's own last explicit member and moving
+     * itself on the next append. Compared against the real headers' own identical last member by
+     * whichever gate is extended to cover this copy (see the guard note above); never itself a
+     * valid status value any call returns. */
+    SSLM_STATUS__NEXT_FREE
 } sslm_status;
 
 /* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create AND

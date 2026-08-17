@@ -1,8 +1,13 @@
-// T-2138 (Curie) -- Dim 5 (Failure and rejection paths), design Sec6/Sec10 dim5. sslm_status
-// carries 17 enumerators (design Sec10 dim5's own reconciled count: SSLM_OK(1) + argument/
-// precondition(3) + artifact/content(4) + lifecycle/precondition-on-state(7) + numeric/domain(2)
-// = 17). Cells NOT already exercised elsewhere are authored here; the rest are cross-cited so no
-// enumerator is asserted twice under a different name:
+// T-2138 (Curie) -- Dim 5 (Failure and rejection paths), design Sec6/Sec10 dim5. This file's own
+// dedicated cells target the base rejection families this suite's sslm_abi.h declares (18 base
+// enumerators as of the padded-vocabulary fold, SSLM_OK(1) + argument/precondition(3) +
+// artifact/content(4) + lifecycle/precondition-on-state(7) + numeric/domain(3) = 18) -- the
+// registry has since grown to 26 entries total across both real headers (Sec6's GOVERNANCE
+// RULING, design commit 4f4eb23896): G5's own 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED
+// (25), and the SSLM_STATUS__NEXT_FREE sentinel are covered by Gate C's own construction, not by
+// this dimension's cells, which stay scoped to the base family this suite's own sslm_abi.h
+// declares functionally. Cells NOT already exercised elsewhere are authored here; the rest are
+// cross-cited so no enumerator is asserted twice under a different name:
 //   SSLM_BUFFER_TOO_SMALL, SSLM_MISALIGNED_BUFFER -- dim2 M1/M2/M3.
 //   SSLM_ARTIFACT_REJECTED -- dim2 M5. SSLM_ADAPTER_MODEL_MISMATCH -- dim2 M6.
 //   SSLM_RESTORE_MODEL_MISMATCH, SSLM_RESTORE_KV_MISMATCH -- dim9 M2/M3.

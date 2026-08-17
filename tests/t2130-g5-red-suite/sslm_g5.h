@@ -78,10 +78,16 @@ typedef struct sslm_workspace_s* sslm_workspace;
  * SSLM_ALLOCATION_FAILED at 25 (a prior gap in this header, closed this fold). Next-free ordinal
  * per the registry: 26 -- requested from and assigned by Sec6, whichever side needs it next.
  * Gate C's sslm_status exclusion lifted at the prior reconciliation and stays lifted -- the
- * per-enumerator check runs unconditionally over the full, reconciled enum; Gate C's own retired
+ * per-enumerator check runs unconditionally over the full, reconciled enum. Gate C's own retired
  * "highest base enumerator strictly below first G5-only enumerator" ordering sentinel (false on
- * its own terms once SSLM_ALLOCATION_FAILED landed at 25) is superseded by full mirroring, not
- * this header's concern to re-implement. */
+ * its own terms once SSLM_ALLOCATION_FAILED landed at 25) was NOT left retired -- FOLD RULING
+ * 2026-08-17 (design Sec6, on Poirot's third confirmation casebook 4466666-t2139-third-
+ * confirmation-review.md F1) reinstated a structural version of it: both this header and
+ * include/superslm/sslm_abi.h gain a final enumerator, SSLM_STATUS__NEXT_FREE, with no explicit
+ * value, so it auto-values one past whichever header's own last explicit member and moves itself
+ * whenever either side appends -- see the enum body below, and Gate C's own generated per-name
+ * checks plus the SSLM_STATUS__NEXT_FREE-pair static_assert this header's addition now makes
+ * possible on the library side. */
 typedef enum sslm_status {
     SSLM_OK = 0,                              /* the only non-error value */
 
@@ -151,11 +157,16 @@ typedef enum sslm_status {
                                                 * ValidateTokenizerVocabSizeJoin's loosening admits,
                                                 * src/model.cpp), distinct from
                                                 * SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never
-                                                * a legal decode output at all). Base taxonomy is
-                                                * now 18 enumerators (0-17); G5's own seven shift
-                                                * to 18-24, below, per
-                                                * include/superslm/sslm_abi.h's own coordination
-                                                * note (design commit 212de7742c). */
+                                                * a legal decode output at all). This closed the
+                                                * base family's own contiguous 0-17 run of 18
+                                                * enumerators AT THE TIME; the registry has since
+                                                * grown past that shape entirely -- Sec6's
+                                                * GOVERNANCE RULING (below) makes this a single
+                                                * 26-entry registry, one interleaved ordinal
+                                                * sequence spanning base (0-17, then 25) and G5
+                                                * (18-24) together, not two independently-counted
+                                                * blocks. G5's own seven sit at 18-24, immediately
+                                                * below. */
 
     /* --- G5, design Sec5 / Sec7 dim5 -- APPENDED at 18-24, existing relative order preserved
      * per the ruling's own append-only reasoning (G5's own internal ordering is T-2119's call,
@@ -193,17 +204,32 @@ typedef enum sslm_status {
     /* --- Resource-exhaustion rejection (T-2133 Sec6, RATIFIED Brunel T-2139 Sec19/N3; registry
      * entry per Sec6's GOVERNANCE RULING, design commit 4f4eb23896) -- process-level allocation
      * failure, distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory exhaustion, an
-     * entirely different cause). Seven verbs (sslm_workspace_create, sslm_kv_pool_create,
-     * sslm_model_map, sslm_prefix_begin, sslm_seq_create, sslm_seq_restore, sslm_adapter_map)
-     * carry a small number of remaining internal std::vector/SslmModel::Load allocations this
-     * ABI layer cannot eliminate; each catches std::bad_alloc at its own extern "C" boundary
-     * (undefined behavior to let it cross, under this codebase's own /EHc build flags) and
-     * returns this status instead. Ordinal 25 -- appended past the entire already-coordinated
-     * 0-24 range at ratification time (the append-only law's own correct reasoning then); this
-     * header previously did not carry it at all (0 occurrences, closed this fold). */
-    SSLM_ALLOCATION_FAILED = 25                 /* the next-free registry ordinal is 26 -- Sec6
-                                                * assigns it, whichever side (base or G5) needs it
-                                                * next; neither header self-numbers independently */
+     * entirely different cause). Eight verbs plus two shared internal helpers (the swept set,
+     * Claude/Poirot/4466666-t2139-third-confirmation-review.md Sec2/O2 -- a superset of the seven
+     * originally named, corrected to the actual swept scope) carry a small number of remaining
+     * internal std::vector/SslmModel::Load allocations this ABI layer cannot eliminate. FOLD
+     * RULING 2026-08-17 (design Sec6, on the same casebook's F2) narrowed the boundary catch to
+     * exactly two exception types for this status -- catch (const std::bad_alloc&) and
+     * catch (const std::length_error&), the only causes this family is defined to cover -- with a
+     * final catch (...) closing the extern "C" boundary unconditionally and returning
+     * SSLM_ARTIFACT_REJECTED instead (no new ordinal minted; MapForwardStatus's own existing
+     * "no dedicated status" mapping, extended). Ordinal 25 -- appended past the entire
+     * already-coordinated 0-24 range at ratification time (the append-only law's own correct
+     * reasoning then); this header previously did not carry it at all (0 occurrences, closed that
+     * fold). */
+    SSLM_ALLOCATION_FAILED = 25,                /* see catch-split above; the resource-exhaustion
+                                                * cause alone, never a wrapper for a cause that
+                                                * already has its own status */
+
+    /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
+     * explicit value, so it auto-values to one past whichever entry above it is this header's own
+     * last explicit member, and moves itself automatically on either header's own next append.
+     * Paired with include/superslm/sslm_abi.h's identical last member via Gate C's own
+     * static_assert(SSLM_STATUS__NEXT_FREE == SSLM_STATUS__NEXT_FREE) sentinel check -- catches a
+     * shared ordinal claimed by two different names (F1's own Probe C), which the per-name checks
+     * structurally cannot see. Never referenced as a valid status value by any call; it exists
+     * only for this comparison. */
+    SSLM_STATUS__NEXT_FREE
 } sslm_status;
 
 /* --- G5's own span-kind discriminator -- design Sec5, THE REPAIR (Sec10.2). The single
