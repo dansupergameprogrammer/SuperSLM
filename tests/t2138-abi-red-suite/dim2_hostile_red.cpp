@@ -189,7 +189,10 @@ static void AssertConfigHostileContrast(sslm_model model, const sslm_config& bas
 	CHECK_MSG(valid_size > 0, "baseline sslm_config (mutating %s) reported size 0 -- baseline "
 	                          "itself must be accepted",
 	          field_name);
-	std::vector<uint8_t> valid_buf(valid_size);
+	// S2/S3 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_workspace_create
+	// now checks alignment -- AlignedBuffer (fixture_common.h) for the ACCEPT half, since a
+	// plain std::vector<uint8_t> carries no alignment guarantee.
+	AlignedBuffer valid_buf(valid_size);
 	sslm_workspace valid_ws = nullptr;
 	CHECK_MSG(sslm_workspace_create(model, &baseline, valid_buf.data(), valid_buf.size(),
 	                                 &valid_ws) == SSLM_OK,
@@ -258,32 +261,62 @@ static void TestDim2_M8e_ConfigReservedNonzeroRejected(sslm_model model,
 	AssertConfigHostileContrast(model, baseline, hostile, "reserved(=1)");
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment for why this now calls every
+// Test* function for real instead of merely taking its address.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim2_M1_WorkspaceCreateTooSmallBufferRejected;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim2_M2_WorkspaceCreateMisalignedBufferRejected;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim2_M3_KvPoolCreateTooSmallBufferRejected;
-	(void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim2_M4_KvPoolOverheadArithmeticOverflowSafe;
-	(void)addr_3;
-	volatile void* addr_4 = (void*)&TestDim2_M5_ModelMapHostileArtifactRejected;
-	(void)addr_4;
-	volatile void* addr_5 = (void*)&TestDim2_M6_AdapterMapBaseMismatchRejected;
-	(void)addr_5;
-	volatile void* addr_6 = (void*)&TestDim2_M7_DecodeParamsHostileLayerBudgetRejected;
-	(void)addr_6;
-	volatile void* addr_7 = (void*)&TestDim2_M8a_ConfigMaxBatchZeroRejected;
-	(void)addr_7;
-	volatile void* addr_8 = (void*)&TestDim2_M8b_ConfigMaxBatchNegativeRejected;
-	(void)addr_8;
-	volatile void* addr_9 = (void*)&TestDim2_M8c_ConfigMaxChunkBudgetZeroRejected;
-	(void)addr_9;
-	volatile void* addr_10 = (void*)&TestDim2_M8d_ConfigMaxLayerBudgetZeroAndOverCapRejected;
-	(void)addr_10;
-	volatile void* addr_11 = (void*)&TestDim2_M8e_ConfigReservedNonzeroRejected;
-	(void)addr_11;
+	TestDim2_M5_ModelMapHostileArtifactRejected();
+	TestDim2_M6_AdapterMapBaseMismatchRejected();
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim2 mechanism cells M1-M4, M7-M8e not run");
+	} else {
+		SslmModelView view;
+		std::vector<uint8_t> bytes;
+		std::string err;
+		if (LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
+				TestDim2_M1_WorkspaceCreateTooSmallBufferRejected(model, num_hidden_layers);
+				TestDim2_M2_WorkspaceCreateMisalignedBufferRejected(model, num_hidden_layers);
+				TestDim2_M3_KvPoolCreateTooSmallBufferRejected(model);
+				TestDim2_M4_KvPoolOverheadArithmeticOverflowSafe(model);
+				TestDim2_M8a_ConfigMaxBatchZeroRejected(model, num_hidden_layers);
+				TestDim2_M8b_ConfigMaxBatchNegativeRejected(model, num_hidden_layers);
+				TestDim2_M8c_ConfigMaxChunkBudgetZeroRejected(model, num_hidden_layers);
+				TestDim2_M8d_ConfigMaxLayerBudgetZeroAndOverCapRejected(model, num_hidden_layers);
+				TestDim2_M8e_ConfigReservedNonzeroRejected(model, num_hidden_layers);
+
+				// M7 needs one real, live sequence (design's own decode_step hostile-params
+				// call shape) -- built here rather than threaded as a parameter default, using
+				// a pool sized generously for this file's own single-sequence need.
+				const uint32_t block_count = 1;
+				const size_t block_bytes = sslm_kv_block_size(model);
+				const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+				const size_t pool_buf_size = block_bytes * block_count + overhead;
+				std::vector<uint8_t> pool_storage(pool_buf_size + 63);
+				void* pool_aligned = pool_storage.data();
+				size_t pool_space = pool_storage.size();
+				std::align(64, pool_buf_size, pool_aligned, pool_space);
+				sslm_kv_pool pool = nullptr;
+				CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
+				      SSLM_OK);
+				if (pool) {
+					sslm_seq seq = nullptr;
+					CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
+					if (seq) {
+						TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(model, seq);
+						CHECK(sslm_seq_release(seq) == SSLM_OK);
+					}
+					CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+				}
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		} else {
+			SKIP_MSG("could not load real artifact: %s", err.c_str());
+		}
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -99,12 +99,20 @@ int main(int argc, char** argv) {
 	const size_t kv_block_bytes = sslm_kv_block_size(model);
 	const size_t kv_overhead_bytes = sslm_kv_pool_overhead_size(model, block_count);
 	if (kv_block_bytes == 0) Fail("sslm_kv_block_size", 0);
-	std::vector<uint8_t> pool_buf(kv_block_bytes * block_count + kv_overhead_bytes);
+	// S2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_kv_pool_create now checks its
+	// caller-supplied buffer's alignment too (SSLM_ABI_ALIGNMENT_BYTES, sslm_abi.h) -- a plain
+	// std::vector<uint8_t>::data() is not guaranteed to meet it, so this example aligns the same
+	// way it already does for the workspace buffer, above.
+	const size_t kv_required = kv_block_bytes * block_count + kv_overhead_bytes;
+	std::vector<uint8_t> pool_buf_raw(kv_required + (SSLM_ABI_ALIGNMENT_BYTES - 1));
+	void* pool_buf_aligned = pool_buf_raw.data();
+	size_t pool_buf_space = pool_buf_raw.size();
+	std::align(SSLM_ABI_ALIGNMENT_BYTES, kv_required, pool_buf_aligned, pool_buf_space);
 	sslm_kv_pool pool = nullptr;
-	st = sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), block_count, &pool);
+	st = sslm_kv_pool_create(model, pool_buf_aligned, kv_required, block_count, &pool);
 	if (st != SSLM_OK || !pool) Fail("sslm_kv_pool_create", static_cast<int>(st));
 	std::printf("[3/9] sslm_kv_pool_create: OK (block_count=%u explicit, %zu bytes)\n", block_count,
-	            pool_buf.size());
+	            kv_required);
 
 	// sslm_workspace: batch-orchestration scratch (design Sec7.1, RULED). max_batch=1 (one
 	// sequence), max_chunk_budget=token_count (the whole prompt in one sslm_prefill call),
@@ -117,10 +125,14 @@ int main(int argc, char** argv) {
 	config.reserved = 0;
 	const size_t ws_bytes = sslm_workspace_size(model, &config);
 	if (ws_bytes == 0) Fail("sslm_workspace_size", 0);
-	std::vector<uint8_t> ws_buf_raw(ws_bytes + 63);
+	// S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): SSLM_ABI_ALIGNMENT_BYTES is now a
+	// public constant (sslm_abi.h) -- this reference consumer reads it from the frozen header,
+	// exactly as the S-FREEZE bar requires, instead of the number this file previously had to
+	// transcribe by reading the implementation.
+	std::vector<uint8_t> ws_buf_raw(ws_bytes + (SSLM_ABI_ALIGNMENT_BYTES - 1));
 	void* ws_aligned = ws_buf_raw.data();
 	size_t ws_space = ws_buf_raw.size();
-	std::align(64, ws_bytes, ws_aligned, ws_space);
+	std::align(SSLM_ABI_ALIGNMENT_BYTES, ws_bytes, ws_aligned, ws_space);
 	sslm_workspace ws = nullptr;
 	st = sslm_workspace_create(model, &config, ws_aligned, ws_bytes, &ws);
 	if (st != SSLM_OK || !ws) Fail("sslm_workspace_create", static_cast<int>(st));

@@ -39,6 +39,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
 	src/decode_digest.cpp
+	src/sslm_abi.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
@@ -158,6 +159,56 @@ if(MSVC)
 else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
+
+# C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate
+# C's own must-accept/must-reject constructions (tools/t2139_gate_a_header_parity_check*.cpp,
+# tools/t2139_gate_c_type_identity_check*.cpp) were previously compiled ONLY by build.bat (MSVC
+# x64) -- the design's own stated CI-matrix closure mechanism ("re-run as part of every real
+# slot's CI build across that matrix") did not exist for either gate. Wired here as CMake targets
+# so `cmake --build` on ANY configured toolchain (not only build.bat's MSVC x64) exercises them.
+#
+# EXCLUDE_FROM_ALL: none of these four is meant to LINK into anything or run as a program (Gate A
+# is compile-only by design Sec9's own construction; Gate C the same) -- they are pure
+# compilation checks, so they are built on demand by the ctest entries below rather than by every
+# plain `cmake --build`. The must-reject targets are EXPECTED TO FAIL TO COMPILE; the must-accept
+# targets are expected to succeed -- EXCEPT Gate C's must-accept, which is CURRENTLY, CORRECTLY,
+# expected to fail too (S8: sslm_abi.h's new SSLM_TOKEN_ID_UNMAPPED collides with sslm_g5.h's own
+# SSLM_SCHEMA_NOT_FOUND at ordinal 17 -- suite-side reconciliation owed, not performed here; see
+# tools/t2139_gate_c_type_identity_check.cpp's own header comment). Each ctest entry below states,
+# in its own name and WILL_FAIL setting, which outcome is currently correct -- flip Gate C's own
+# WILL_FAIL to FALSE the moment sslm_g5.h reconciles, not before.
+add_executable(t2139_gate_a_must_accept EXCLUDE_FROM_ALL
+	tools/t2139_gate_a_header_parity_check.cpp)
+target_include_directories(t2139_gate_a_must_accept PRIVATE include tests)
+
+add_executable(t2139_gate_a_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_a_header_parity_check_negative.cpp)
+target_include_directories(t2139_gate_a_must_reject PRIVATE include tools tests)
+
+add_executable(t2139_gate_c_must_accept EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_type_identity_check.cpp)
+target_include_directories(t2139_gate_c_must_accept PRIVATE include)
+
+add_executable(t2139_gate_c_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_type_identity_check_negative.cpp)
+target_include_directories(t2139_gate_c_must_reject PRIVATE include)
+
+enable_testing()
+add_test(NAME t2139_gate_a_must_accept_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_accept --config $<CONFIG>)
+add_test(NAME t2139_gate_a_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_reject --config $<CONFIG>)
+set_tests_properties(t2139_gate_a_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+add_test(NAME t2139_gate_c_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_reject --config $<CONFIG>)
+set_tests_properties(t2139_gate_c_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+# Gate C must-accept: WILL_FAIL TRUE reflects the CURRENT, disclosed, cross-suite-coordination
+# state (see the comment block above) -- this is a passing test today because the compile
+# correctly fails; it becomes a REAL regression test only once sslm_g5.h reconciles and this
+# property flips to FALSE.
+add_test(NAME t2139_gate_c_must_accept_known_pending_g5_reconciliation
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)
+set_tests_properties(t2139_gate_c_must_accept_known_pending_g5_reconciliation PROPERTIES WILL_FAIL TRUE)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the

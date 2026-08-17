@@ -148,6 +148,16 @@ typedef struct sslm_stats_out {
     int32_t kv_blocks_resident;
 } sslm_stats_out;
 
+/* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create and
+ * sslm_kv_pool_create both require of their caller-supplied `buf`, on pain of
+ * SSLM_MISALIGNED_BUFFER -- previously an anonymous-namespace constant inside src/sslm_abi.cpp
+ * with no counterpart in this frozen header, so a consumer holding only this header (the
+ * S-FREEZE bar's own definition of "consumer") could only discover the requirement by receiving
+ * SSLM_MISALIGNED_BUFFER and guessing. Exported here so a caller can pass it directly to
+ * std::align (or its own aligned-allocation path) instead of transcribing the number from the
+ * implementation. */
+#define SSLM_ABI_ALIGNMENT_BYTES 64u
+
 /* ============================================================================
  * model lifecycle -- design Sec8: 3 args, NO config parameter (sslm_g5.h:149, verbatim).
  * DEFINED (C2, src/sslm_abi.cpp).

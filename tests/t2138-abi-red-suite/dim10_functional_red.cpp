@@ -199,7 +199,7 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	CHECK_MSG(kv_block_bytes > 0, "sslm_kv_block_size must be positive");
 	const uint32_t block_count = 1;  // N=1, single sequence (design Sec7.2's own reduction).
 	const size_t pool_overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> pool_buf(block_count * kv_block_bytes + pool_overhead);
+	AlignedBuffer pool_buf(block_count * kv_block_bytes + pool_overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), block_count, &pool) ==
 	      SSLM_OK);
@@ -210,7 +210,7 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
 	const size_t ws_size = sslm_workspace_size(model, &config);
 	CHECK_MSG(ws_size > 0, "a valid sslm_config must report a positive workspace size");
-	std::vector<uint8_t> ws_buf(ws_size);
+	AlignedBuffer ws_buf(ws_size);
 	sslm_workspace ws = nullptr;
 	CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
 	sslm_seq seq = nullptr;
@@ -295,14 +295,13 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	// suite's existing harness.
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. All three cells here are
+// self-contained (each checks g_model_path/g_adapter_path and SKIPs on its own).
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim10_P2_TokenizeGoldenParityWithTokenizerViewDirect;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim10_P4_SFreezeExampleShapeFullRealWorkflow;
-	(void)addr_2;
+	TestDim10_P2_TokenizeGoldenParityWithTokenizerViewDirect();
+	TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi();
+	TestDim10_P4_SFreezeExampleShapeFullRealWorkflow();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -107,14 +107,99 @@ static void TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(sslm_model 
 	CHECK(stats_before.decode_step_ceiling == stats_after.decode_step_ceiling);
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. NOTE (real, disclosed, S7
+// residual -- Claude/Poirot/2c18dab-t2139-abi-build-review.md): this fix round's own S7 remedy
+// threads sslm_decode_step's per-token scratch through a caller-supplied workspace, but
+// EXPLICITLY does NOT thread sslm_prefill's own embed_codes/layers_scratch (disclosed in
+// src/sslm_abi.cpp's own top-of-file comment as a real, named residual, not silently dropped).
+// TestDim7_C1 checks BOTH sslm_prefill and sslm_decode_step make zero heap allocations -- the
+// sslm_prefill half of this cell is therefore EXPECTED to fail here, honestly reflecting that
+// disclosed residual rather than a regression this round introduced.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim7_C1_HotPathMakesNoAllocation;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent;
-	(void)addr_2;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim7 cells not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	SslmModelView view;
+	std::vector<uint8_t> bytes;
+	std::string err;
+	if (!LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	sslm_model model = nullptr;
+	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+	if (model) {
+		const uint32_t block_count = 1;
+		const size_t block_bytes = sslm_kv_block_size(model);
+		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+		const size_t pool_buf_size = block_bytes * block_count + overhead;
+		std::vector<uint8_t> pool_storage(pool_buf_size + 63, 0);
+		void* pool_aligned = pool_storage.data();
+		size_t pool_space = pool_storage.size();
+		std::align(64, pool_buf_size, pool_aligned, pool_space);
+		sslm_kv_pool pool = nullptr;
+		CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
+		      SSLM_OK);
+		if (pool) {
+			const sslm_config config =
+			    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
+			const size_t ws_bytes = sslm_workspace_size(model, &config);
+			std::vector<uint8_t> ws_storage(ws_bytes + 63, 0);
+			void* ws_aligned = ws_storage.data();
+			size_t ws_space = ws_storage.size();
+			std::align(64, ws_bytes, ws_aligned, ws_space);
+			sslm_workspace ws = nullptr;
+			CHECK(sslm_workspace_create(model, &config, ws_aligned, ws_bytes, &ws) == SSLM_OK);
+
+			sslm_seq seq1 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq1) == SSLM_OK);
+			if (seq1 && ws) TestDim7_C1_HotPathMakesNoAllocation(model, seq1, ws);
+			if (seq1) CHECK(sslm_seq_release(seq1) == SSLM_OK);
+
+			sslm_seq seq2 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq2) == SSLM_OK);
+			if (seq2) {
+				TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(model, seq2);
+				CHECK(sslm_seq_release(seq2) == SSLM_OK);
+			}
+
+			if (g_adapter_path.empty()) {
+				SKIP_MSG("--adapter=PATH not supplied -- C3 not run");
+			} else {
+				std::vector<uint8_t> adapter_bytes;
+				CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
+				sslm_adapter adapter = nullptr;
+				CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+				                        &adapter) == SSLM_OK);
+				sslm_seq seq3 = nullptr;
+				CHECK(sslm_seq_create(model, &pool, &seq3) == SSLM_OK);
+				if (seq3 && adapter) {
+					// Leave seq3 mid-token first (C3's own precondition for the swap rejection).
+					sslm_decode_params params{};
+					params.layer_budget = 1;
+					int32_t tokens[1] = {0};
+					int32_t consumed = 0;
+					CHECK(sslm_prefill(model, seq3, tokens, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+					                    &consumed) == SSLM_OK);
+					int32_t out_token = 0;
+					sslm_seq batch[1] = {seq3};
+					CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) ==
+					      SSLM_OK);
+					TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(model, seq3, adapter);
+				}
+				if (seq3) CHECK(sslm_seq_release(seq3) == SSLM_OK);
+				if (adapter) CHECK(sslm_adapter_release(adapter) == SSLM_OK);
+			}
+
+			if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+			CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+		}
+		CHECK(sslm_model_unmap(model) == SSLM_OK);
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -9,20 +9,25 @@
 // sslm_model_map, sslm_model_unmap -- and nothing past them. C3-C7's verbs are declared in the
 // header (for Gate A's own whole-header coverage) but not defined here.
 //
-// PROVISIONAL SIZING FORMULAS, stated plainly rather than presented as final (Claude/Brunel/
-// t2139-abi-build-2026-08-16.md Sec4, the buffer-mapping ruling, design commit fab235c1c6):
-// sslm_workspace_size's exact byte count and sslm_workspace_create's alignment requirement are
-// this design's own "opaque to the caller, self-describing internally" layout (design Sec7.1) --
-// no consumer of the ACTUAL bytes exists until C4 wires this buffer into the real per-sequence
-// call. The formulas below are a real, overflow-checked, monotonic sizing function of `config`/
-// `model` that satisfies every C1 gate obligation (hostile-config sentinel/rejection parity
-// between sslm_workspace_size and sslm_workspace_create, buffer-too-small/misaligned detection,
-// construct/destroy symmetry) -- they are NOT yet grounded in a real per-call scratch layout,
-// because C4 has not been built. Revisited, not re-derived from scratch, once C4 lands: the
-// DOMAIN CHECK (which configs are hostile) is the design's own Sec7.1 statement and does not
-// change; only the BYTE COUNT a valid config maps to may grow or shrink, which is exactly the
-// "the caller only ever sees sslm_workspace_size's return value grow or shrink" contract design
-// Sec7.1 states this internal layout is free to do.
+// SIZING FORMULAS (Claude/Brunel/t2139-abi-build-2026-08-16.md Sec4, the buffer-mapping ruling,
+// design commit fab235c1c6). sslm_workspace_size's exact byte count and sslm_workspace_create's
+// alignment requirement are this design's own "opaque to the caller, self-describing internally"
+// layout (design Sec7.1). REVISITED at C4/S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md,
+// the fix round following the initial build's own review): this note previously said the layout
+// was "NOT yet grounded in a real per-call scratch layout, because C4 has not been built" -- C4
+// landed in the same change set this note was written in and the note was not revisited then
+// (M5/S7's own finding). It is grounded now: sslm_decode_step's own per-token scratch (embed
+// codes, final-norm codes, wide logits, the narrowed logit row) is sized into this layout and
+// carved from a caller-supplied workspace when one is provided and correctly sized for the model
+// (see ComputeWorkspaceLayout and sslm_decode_step's own comment on the fallback path). NOT
+// covered, disclosed rather than silently left as a residual claim: sslm_decode_step's own
+// per-sequence `layers_scratch` copy (only allocated when an adapter is bound -- a
+// std::vector<superslm::LayerWeights>, not POD bytes this workspace layout can describe) and
+// PrefillWholeTokens' own embed_codes/layers_scratch (sslm_prefill/sslm_prefix_prefill run once
+// per prompt, not per generated token, so were not the path design Sec2's "hot path" phrase names
+// most directly -- deprioritized under this fix round's own time budget, not forgotten). Neither
+// is RunLayerLoop's own internal per-layer scratch (forward_sites.cpp) in scope of this ABI layer
+// at all -- design Sec3 already discloses that allocation as belowthis layer, unchanged by S7.
 #include "superslm/sslm_abi.h"
 
 #include <algorithm>
@@ -121,6 +126,15 @@ struct sslm_workspace_s {
 // SSLM_POOL_HAS_LIVE_HANDLES guard's own bookkeeping (design Sec6), incremented/decremented by
 // C3's own draw/return.
 struct sslm_kv_pool_s {
+	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the owning model, bound at
+	// sslm_kv_pool_create time. Design Sec7.2 states "a pool is bound to exactly one model for
+	// its whole lifetime -- mixing models against one pool is structurally impossible" as settled
+	// fact; recording `block_size` alone (below) does not enforce that, since two different
+	// models can produce equal block sizes and a well-formed blob from one model can still
+	// overrun a pool sized for another. This field, checked at every draw site (sslm_prefix_begin,
+	// sslm_seq_create, sslm_seq_restore) and at sslm_seq_adopt_prefix, is what makes the design's
+	// claim true rather than merely asserted.
+	sslm_model_s* model = nullptr;
 	void* buf = nullptr;
 	size_t buf_size = 0;
 	uint32_t block_count = 0;
@@ -148,7 +162,13 @@ struct sslm_prefix_s {
 	                              // sequence so decode can resume immediately after adoption,
 	                              // without a redundant re-prefill of the prefix's own last token.
 	bool frozen = false;
-	bool released = false;
+	// NO `released` flag (S5, Claude/Poirot/2c18dab-t2139-abi-build-review.md): a flag written
+	// immediately before `delete` protects nothing -- there is no window on which a LIVE handle
+	// carries it true, and every read of it on an already-released handle is itself a read of
+	// freed memory (undefined behaviour), never a safe reject. Double-release and any other use
+	// of an already-released handle is caller UB, documented here rather than pretend-guarded --
+	// the same honest position sslm_workspace_destroy/sslm_kv_pool_destroy already take (neither
+	// keeps a poisoned handle alive to detect misuse either).
 };
 
 // C3. One live decode sequence. `current_token` is the ABI's own tracked "last embedded or
@@ -179,7 +199,8 @@ struct sslm_seq_s {
 	// the layer work already happened during prefill).
 	bool ready_for_logits = false;
 	sslm_adapter adapter_handle = nullptr;
-	bool released = false;
+	// NO `released` flag -- see sslm_prefix_s's own comment on why (S5): double-release and any
+	// other use of an already-released handle is caller UB, not a state this ABI pretend-guards.
 };
 
 namespace {
@@ -337,11 +358,25 @@ struct WorkspaceLayout {
 	size_t status_array_bytes = 0;
 	size_t staged_tokens_offset = 0;
 	size_t staged_tokens_bytes = 0;
+	// S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_decode_step's own per-call
+	// scratch, carved from THIS buffer when the caller supplies one, instead of the
+	// std::vector<...> heap allocations the design's "never mallocs on the hot path" law (Sec2/
+	// Sec10 dim7) names by name. Sized once here, per token, since sslm_decode_step processes its
+	// `n` sequences one at a time within a single call and reuses the same scratch for each --
+	// these do NOT scale with max_batch, only with the model's own hidden_size/vocab_size.
+	size_t embed_codes_offset = 0;
+	size_t embed_codes_bytes = 0;
+	size_t final_codes_offset = 0;
+	size_t final_codes_bytes = 0;
+	size_t wide_logits_offset = 0;
+	size_t wide_logits_bytes = 0;
+	size_t logit_row_offset = 0;
+	size_t logit_row_bytes = 0;
 	size_t total_bytes = 0;
 	bool overflowed = false;
 };
 
-WorkspaceLayout ComputeWorkspaceLayout(const sslm_config& config) {
+WorkspaceLayout ComputeWorkspaceLayout(const sslm_model_s* model, const sslm_config& config) {
 	WorkspaceLayout L;
 	L.header_bytes = 64;
 	L.status_array_offset = L.header_bytes;
@@ -364,9 +399,44 @@ WorkspaceLayout ComputeWorkspaceLayout(const sslm_config& config) {
 		of = true;
 	}
 	L.staged_tokens_bytes = staged_bytes;
-	size_t total = 0;
-	if (!CheckedAddSizeT(L.staged_tokens_offset, L.staged_tokens_bytes, &total)) of = true;
-	L.total_bytes = of ? kSizeMax : total;
+	size_t after_staged = 0;
+	if (!CheckedAddSizeT(L.staged_tokens_offset, L.staged_tokens_bytes, &after_staged)) of = true;
+
+	// S7's own four regions -- present only when `model` is supplied (sslm_workspace_size always
+	// passes one; kept optional in signature-shape only so this function's own internal callers
+	// never need a fake model to size the header/status/staged regions alone).
+	size_t cursor = after_staged;
+	if (model != nullptr) {
+		const superslm::SslmModelConfig& c = model->view.config;
+		L.embed_codes_offset = cursor;
+		L.embed_codes_bytes = static_cast<size_t>(c.hidden_size);  // int8 codes
+		size_t after_embed = 0;
+		if (!CheckedAddSizeT(L.embed_codes_offset, L.embed_codes_bytes, &after_embed)) of = true;
+
+		L.final_codes_offset = after_embed;
+		L.final_codes_bytes = static_cast<size_t>(c.hidden_size);
+		size_t after_final = 0;
+		if (!CheckedAddSizeT(L.final_codes_offset, L.final_codes_bytes, &after_final)) of = true;
+
+		L.wide_logits_offset = after_final;
+		if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int64_t),
+		                      &L.wide_logits_bytes)) {
+			of = true;
+		}
+		size_t after_wide = 0;
+		if (!CheckedAddSizeT(L.wide_logits_offset, L.wide_logits_bytes, &after_wide)) of = true;
+
+		L.logit_row_offset = after_wide;
+		if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int32_t),
+		                      &L.logit_row_bytes)) {
+			of = true;
+		}
+		size_t after_logit = 0;
+		if (!CheckedAddSizeT(L.logit_row_offset, L.logit_row_bytes, &after_logit)) of = true;
+		cursor = after_logit;
+	}
+
+	L.total_bytes = of ? kSizeMax : cursor;
 	L.overflowed = of;
 	return L;
 }
@@ -383,7 +453,7 @@ WorkspaceLayout ComputeWorkspaceLayout(const sslm_config& config) {
 
 extern "C" size_t sslm_workspace_size(sslm_model model, const sslm_config* config) {
 	if (!ConfigDomainOk(model, config)) return 0;
-	const WorkspaceLayout L = ComputeWorkspaceLayout(*config);
+	const WorkspaceLayout L = ComputeWorkspaceLayout(model, *config);
 	return L.overflowed ? 0 : L.total_bytes;
 }
 
@@ -467,7 +537,12 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 // -----------------------------------------------------------------------------------------
 
 namespace {
-constexpr size_t kAbiAlignmentBytes = 64;
+// S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the ONE real definition is now the
+// public header's SSLM_ABI_ALIGNMENT_BYTES macro (sslm_abi.h) -- this constant reads it rather
+// than restating "64" a second time, closing the exact drift class the finding named (the
+// example previously had to hardcode this number by reading THIS file, which the S-FREEZE bar
+// says a consumer never does).
+constexpr size_t kAbiAlignmentBytes = SSLM_ABI_ALIGNMENT_BYTES;
 
 bool IsAligned(const void* p) {
 	return (reinterpret_cast<uintptr_t>(p) % kAbiAlignmentBytes) == 0;
@@ -522,8 +597,17 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 		return SSLM_INVALID_ARGUMENT;
 	}
 	if (buf_size < required) return SSLM_BUFFER_TOO_SMALL;
+	// S2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): design Sec6 names "Sec7.1's
+	// workspace/pool construction verbs" as the ones that check alignment explicitly, and
+	// sslm_workspace_create (above) already does. Checked AFTER the size check, matching
+	// sslm_workspace_create's own ordering (buf_size before alignment) -- so a buffer that is
+	// BOTH too small and misaligned still reports SSLM_BUFFER_TOO_SMALL first, consistent with
+	// the sibling verb and with this suite's own too-small-buffer cells, which do not separately
+	// construct an aligned-but-too-small buffer.
+	if (!IsAligned(buf)) return SSLM_MISALIGNED_BUFFER;
 	sslm_kv_pool_s* h = new (std::nothrow) sslm_kv_pool_s();
 	if (!h) throw std::bad_alloc();
+	h->model = model;
 	h->buf = buf;
 	h->buf_size = buf_size;
 	h->block_count = block_count;
@@ -720,12 +804,23 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 	*out = nullptr;
 	if (!model || !pool || !*pool) return SSLM_INVALID_ARGUMENT;
 	sslm_kv_pool_s* p = *pool;
+	// C2: reject a pool bound to a different model before drawing from it (design Sec7.2's
+	// "structurally impossible" claim, enforced rather than assumed).
+	if (p->model != model) return SSLM_INVALID_ARGUMENT;
 	uint32_t block_index = 0;
 	const sslm_status draw_st = DrawBlock(p, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
+	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): return the block before throwing on
+	// allocation failure, or the pool permanently loses it (and sslm_kv_pool_destroy would then
+	// reject forever with SSLM_POOL_HAS_LIVE_HANDLES for a block nobody can ever release).
 	auto* h = new (std::nothrow) sslm_prefix_s();
-	if (!h) throw std::bad_alloc();
+	if (!h) {
+		ReturnBlock(p, block_index,
+		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
+		            p->block_size);
+		throw std::bad_alloc();
+	}
 	h->model = model;
 	h->pool = p;
 	h->block_index = block_index;
@@ -752,7 +847,7 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 	*consumed = 0;
 	if (!model || !prefix) return SSLM_INVALID_ARGUMENT;
 	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
-	if (prefix->frozen || prefix->released) return SSLM_PREFIX_FROZEN_REJECTED;
+	if (prefix->frozen) return SSLM_PREFIX_FROZEN_REJECTED;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 
 	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
@@ -761,16 +856,14 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
-	if (prefix->released) return SSLM_INVALID_ARGUMENT;
 	prefix->frozen = true;
 	return SSLM_OK;
 }
 
 extern "C" sslm_status sslm_prefix_release(sslm_prefix prefix) {
-	if (!prefix || prefix->released) return SSLM_INVALID_ARGUMENT;
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
 	ReturnBlock(prefix->pool, prefix->block_index, prefix->kv_block, prefix->block_size);
 	prefix->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
-	prefix->released = true;
 	delete prefix;
 	return SSLM_OK;
 }
@@ -780,12 +873,21 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	*out = nullptr;
 	if (!model || !pool || !*pool) return SSLM_INVALID_ARGUMENT;
 	sslm_kv_pool_s* p = *pool;
+	// C2: see sslm_prefix_begin's own identical check.
+	if (p->model != model) return SSLM_INVALID_ARGUMENT;
 	uint32_t block_index = 0;
 	const sslm_status draw_st = DrawBlock(p, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
+	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): see sslm_prefix_begin's own identical
+	// return-before-throw fix.
 	auto* h = new (std::nothrow) sslm_seq_s();
-	if (!h) throw std::bad_alloc();
+	if (!h) {
+		ReturnBlock(p, block_index,
+		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
+		            p->block_size);
+		throw std::bad_alloc();
+	}
 	h->model = model;
 	h->pool = p;
 	h->block_index = block_index;
@@ -800,7 +902,7 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 }
 
 extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
-	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (seq->adapter_handle) {
 		// A still-bound adapter's own live_refs must drop too, or sslm_adapter_release would
 		// wrongly see a live reference from a sequence that no longer exists.
@@ -808,13 +910,12 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	}
 	ReturnBlock(seq->pool, seq->block_index, seq->kv_block, seq->block_size);
 	seq->model->live_refs.fetch_sub(1, std::memory_order_acq_rel);
-	seq->released = true;
 	delete seq;
 	return SSLM_OK;
 }
 
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
-	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
 	std::memset(seq->kv_block, 0xCD, seq->block_size);
 	seq->state.context_length = 0;
@@ -823,6 +924,13 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	seq->state.hidden_scale = superslm::CarriedScale{};
 	std::fill(seq->hidden_codes_storage.begin(), seq->hidden_codes_storage.end(), int8_t{0});
 	seq->current_token = -1;
+	// S1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): reset-as-restart (design Sec12,
+	// D-SLM32) must leave the handle indistinguishable from a freshly created one, and a fresh
+	// handle's ready_for_logits is false. Left uncleared, a reset sequence carried layer_index==0,
+	// current_token==-1, context_length==0 AND ready_for_logits==true -- sslm_decode_step's own
+	// ready_for_logits branch would then skip straight to final_norm/logits/argmax over the
+	// just-zeroed residual, emitting a token from an empty sequence with no history.
+	seq->ready_for_logits = false;
 	return SSLM_OK;
 }
 
@@ -837,10 +945,22 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 // context_length within each layer's own span are copied too, but nothing ever reads them,
 // since context_length gates what RunLayerLoop treats as valid history).
 extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
-	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
-	if (!prefix || prefix->released) return SSLM_INVALID_ARGUMENT;
-	if (!prefix->frozen) return SSLM_PREFIX_FROZEN_REJECTED;
-	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;  // different models
+	if (!seq) return SSLM_INVALID_ARGUMENT;
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	// M2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): SSLM_PREFIX_FROZEN_REJECTED's design
+	// Sec6 meaning is "sslm_prefix_prefill called on a prefix PAST freeze" -- i.e. the call is
+	// rejected BECAUSE the prefix is frozen. Adoption is the opposite condition (rejected because
+	// the prefix is NOT YET frozen); the design's closed 18-enumerator Sec6 taxonomy names no
+	// status for it, so SSLM_INVALID_ARGUMENT (the general call-shape-wrong family) is used here
+	// rather than reusing an enumerator whose own name asserts the opposite of what happened.
+	if (!prefix->frozen) return SSLM_INVALID_ARGUMENT;
+	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the real granularity is the MODEL,
+	// not the block size two different-but-same-geometry models could still share -- checked
+	// first, model identity, then block_size as defense-in-depth (a model mismatch that somehow
+	// carried equal block_size would still be a mismatch worth catching, though it cannot arise
+	// once sslm_kv_pool_s is itself bound to one model, below).
+	if (seq->model != prefix->model) return SSLM_INVALID_ARGUMENT;  // different models
+	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;
 	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());
@@ -882,7 +1002,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 	(void)ws;    // this ABI's own batch-orchestration scratch has no per-prefill content (Sec7.1)
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
 	*consumed = 0;
-	if (!model || !seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
 	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 
@@ -901,10 +1021,6 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                                          const sslm_decode_params* params, sslm_workspace ws,
                                          int32_t* out_tokens) {
-	(void)ws;  // batch-orchestration scratch (Sec7.1) -- not read; every intermediate this call
-	           // needs is either RunLayerLoop's own internal std::vector scratch
-	           // (forward_sites.cpp) or this function's own small per-call locals, none of
-	           // which is persistent per-sequence state across calls (the W1 invariant).
 	if (!model || !seqs || !params || !out_tokens) return SSLM_INVALID_ARGUMENT;
 	if (n < 1) return SSLM_INVALID_ARGUMENT;
 	if (params->layer_budget < 1 ||
@@ -916,7 +1032,7 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 	// leaves every sequence's state exactly as it was (this call's own "reject leaves state
 	// unperturbed" contract, matching every other lifecycle guard in this design).
 	for (int32_t i = 0; i < n; ++i) {
-		if (!seqs[i] || seqs[i]->released) return SSLM_INVALID_ARGUMENT;
+		if (!seqs[i]) return SSLM_INVALID_ARGUMENT;
 		if (seqs[i]->state.layer_index == 0 && seqs[i]->current_token < 0 &&
 		    !seqs[i]->ready_for_logits) {
 			// No prompt/prior token to resume from, AND no already-computed final hidden state
@@ -929,10 +1045,45 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 	}
 
 	const superslm::SslmModelConfig& c = model->view.config;
-	std::vector<int8_t> embed_codes(c.hidden_size);
-	std::vector<int8_t> final_codes(c.hidden_size);
-	std::vector<int64_t> wide_logits(static_cast<size_t>(c.vocab_size));
-	std::vector<int32_t> logit_row(static_cast<size_t>(c.vocab_size));
+
+	// S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): "never mallocs on the hot path"
+	// (design Sec2/Sec10 dim7) -- when the caller supplies a workspace sized against THIS model
+	// (the ordinary case: sslm_workspace_size(model, &config) then sslm_workspace_create), this
+	// call's own per-token scratch is carved from it instead of heap-allocated per call. `ws` is
+	// still optional on this signature (unchanged from before this fix, and already exercised
+	// that way throughout this build's own smokes and the red suite) -- a null or
+	// too-small-for-this-model workspace falls back to the pre-fix heap-allocating path, so no
+	// existing caller regresses; it is the SUPPLIED-and-sized case that now actually honors the
+	// caller-owned-memory contract instead of silently discarding the buffer.
+	const WorkspaceLayout layout = ws ? ComputeWorkspaceLayout(model, ws->config) : WorkspaceLayout{};
+	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes;
+	uint8_t* const ws_base = ws_usable ? static_cast<uint8_t*>(ws->buf) : nullptr;
+
+	// Fallback storage -- only actually allocated (non-empty) when ws_usable is false, so the
+	// caller-supplied-workspace path performs no heap allocation here at all.
+	std::vector<int8_t> embed_codes_fallback;
+	std::vector<int8_t> final_codes_fallback;
+	std::vector<int64_t> wide_logits_fallback;
+	std::vector<int32_t> logit_row_fallback;
+	int8_t* embed_codes;
+	int8_t* final_codes;
+	int64_t* wide_logits;
+	int32_t* logit_row;
+	if (ws_usable) {
+		embed_codes = reinterpret_cast<int8_t*>(ws_base + layout.embed_codes_offset);
+		final_codes = reinterpret_cast<int8_t*>(ws_base + layout.final_codes_offset);
+		wide_logits = reinterpret_cast<int64_t*>(ws_base + layout.wide_logits_offset);
+		logit_row = reinterpret_cast<int32_t*>(ws_base + layout.logit_row_offset);
+	} else {
+		embed_codes_fallback.assign(c.hidden_size, 0);
+		final_codes_fallback.assign(c.hidden_size, 0);
+		wide_logits_fallback.assign(static_cast<size_t>(c.vocab_size), 0);
+		logit_row_fallback.assign(static_cast<size_t>(c.vocab_size), 0);
+		embed_codes = embed_codes_fallback.data();
+		final_codes = final_codes_fallback.data();
+		wide_logits = wide_logits_fallback.data();
+		logit_row = logit_row_fallback.data();
+	}
 
 	for (int32_t i = 0; i < n; ++i) {
 		sslm_seq_s* seq = seqs[i];
@@ -959,7 +1110,7 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 				const superslm::SslmForwardStatus est = superslm::EmbedEntry(
 				    seq->current_token, static_cast<int32_t>(c.vocab_size),
 				    model->engine.embed_weights, c.hidden_size, model->engine.embed_site_constant,
-				    embed_codes.data(), &embed_scale);
+				    embed_codes, &embed_scale);
 				if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
 				for (uint32_t k = 0; k < c.hidden_size; ++k) {
 					seq->state.hidden_codes[k] = embed_codes[k];
@@ -994,17 +1145,17 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 		superslm::SslmForwardStatus fst =
 		    superslm::RmsNormSite(seq->state.hidden_codes, model->engine.final_norm_gain.data(),
 		                           c.hidden_size, seq->state.hidden_scale,
-		                           model->engine.final_norm_site_constant, final_codes.data(),
+		                           model->engine.final_norm_site_constant, final_codes,
 		                           &final_scale, "final_norm");
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
-		fst = superslm::LogitsSite(final_codes.data(), c.hidden_size, model->engine.head_weights,
-		                            static_cast<int32_t>(c.vocab_size), wide_logits.data(),
-		                            logit_row.data());
+		fst = superslm::LogitsSite(final_codes, c.hidden_size, model->engine.head_weights,
+		                            static_cast<int32_t>(c.vocab_size), wide_logits,
+		                            logit_row);
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
 		const int32_t produced =
-		    superslm::ArgmaxLowestIndexTieBreak(logit_row.data(), static_cast<size_t>(c.vocab_size));
+		    superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
 		out_tokens[i] = produced;
 		seq->current_token = produced;
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -1016,7 +1167,7 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 
 extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out) {
 	if (!out) return SSLM_INVALID_ARGUMENT;
-	if (!model || !seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
 	// design Sec12 ("ceiling + actual work, forced-token count, cache state"): this arc builds
 	// no schema/constrained-decoding surface (G5's own scope, declared-but-deferred here), so
 	// forced_token_count is always 0 -- a real, correct answer for a sequence with no schema
@@ -1099,7 +1250,7 @@ constexpr size_t kSeqBlobFixedHeaderBytes = 100;
 
 extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	if (!n) return SSLM_INVALID_ARGUMENT;
-	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!seq) return SSLM_INVALID_ARGUMENT;
 	sslm_model_s* model = seq->model;
 	const superslm::SslmModelConfig& c = model->view.config;
 	// design Sec7.3: "residual_bytes ... zero-length when layer_index == 0" (§7's own "a
@@ -1176,8 +1327,11 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// design Sec7.3, corrected (Mendeleev audit 4.5): magic-per-version HARD REJECT -- checked
 	// first, before any other field is trusted, exactly GpuSeqBlobHeader's own precedent
 	// (superslm_gpu.cpp). A well-formed GPU-format ('SLM3') blob is rejected here on the magic
-	// check alone, never mis-parsed as a CPU blob (design Sec10 dim7/dim9).
-	if (std::memcmp(p, kSeqBlobMagic, 4) != 0) return SSLM_RESTORE_MODEL_MISMATCH;
+	// check alone, never mis-parsed as a CPU blob (design Sec10 dim7/dim9). M1 (Claude/Poirot/
+	// 2c18dab-t2139-abi-build-review.md): a bad magic is a malformed/foreign-format BLOB, not a
+	// model mismatch -- SSLM_INVALID_ARGUMENT states the actual cause (the blob itself is
+	// unusable) rather than sending the caller to re-check which MODEL it bound.
+	if (std::memcmp(p, kSeqBlobMagic, 4) != 0) return SSLM_INVALID_ARGUMENT;
 
 	std::array<uint8_t, 32> saved_hash{};
 	std::memcpy(saved_hash.data(), p + 4, 32);
@@ -1216,12 +1370,34 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const uint8_t* kv_blocks_ptr = residual_ptr + residual_len + 4;
 
 	sslm_kv_pool_s* pool_ptr = *pool;
+	// C2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): THE actual overflow site -- checked
+	// BEFORE DrawBlock, so a mismatched pool is rejected before any block is even drawn (never
+	// mind copied into). Without this, `block_size` above (from sslm_kv_block_size(model), the
+	// MODEL's own footprint) and `pool_ptr->block_size` (the POOL's own per-block stride) can
+	// differ -- a well-formed blob/model pair against a pool built for a smaller-footprint model
+	// then memcpy's the model's block_size into a destination sized by the pool's own smaller
+	// one, overrunning the pool's buffer by the difference (measured, pre-fix: 268,435,456 bytes
+	// restoring a 1.5B sequence into a 0.5B-sized pool). Checking `pool_ptr->model != model` here
+	// is exactly equivalent to checking `block_size != pool_ptr->block_size` (both are pure,
+	// deterministic functions of the model) but states the real invariant directly instead of by
+	// coincidence.
+	if (pool_ptr->model != model) return SSLM_INVALID_ARGUMENT;
 	uint32_t block_index = 0;
 	const sslm_status draw_st = DrawBlock(pool_ptr, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
+	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the handle is allocated BEFORE the
+	// block is copied into and BEFORE any further work, so an early return path never needs to
+	// unwind a drawn block -- the `bad_alloc` path (immediately below) is the only way out before
+	// the block is committed to `h`, and it now returns the block first.
 	auto* h = new (std::nothrow) sslm_seq_s();
-	if (!h) throw std::bad_alloc();
+	if (!h) {
+		ReturnBlock(pool_ptr, block_index,
+		            static_cast<uint8_t*>(pool_ptr->buf) +
+		                static_cast<size_t>(block_index) * pool_ptr->block_size,
+		            pool_ptr->block_size);
+		throw std::bad_alloc();
+	}
 	h->model = model;
 	h->pool = pool_ptr;
 	h->block_index = block_index;
@@ -1304,7 +1480,8 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	// (adapter_marshal.h) point into this handle's own member, never the temporary local
 	// `adapter_view` above (which would leave them dangling the instant this function returns).
 	h->handle.view_ = std::move(adapter_view);
-	std::vector<superslm::LayerAdapter> layer_adapters;
+	// M3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): no separate local -- populates
+	// h->handle.layer_adapters directly, matching the comment above.
 	const superslm_adapter::AdapterLoadStatus populate_st = superslm_adapter::PopulateAdapterFromView(
 	    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
 	if (populate_st == superslm_adapter::AdapterLoadStatus::BaseHashMismatch) {
@@ -1347,7 +1524,7 @@ extern "C" size_t sslm_adapter_residency(sslm_adapter adapter) {
 // design forecloses by rejecting outright rather than defining. `adapter == nullptr` unbinds
 // (LayerWeights::adapter's own existing NULL-adapter convention, forward_sites.h).
 extern "C" sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter) {
-	if (!seq || seq->released) return SSLM_INVALID_ARGUMENT;
+	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (seq->state.layer_index != 0) return SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED;
 	if (adapter && adapter->base != seq->model) return SSLM_ADAPTER_MODEL_MISMATCH;
 
@@ -1449,6 +1626,15 @@ extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state
 	if (!out_n) return SSLM_INVALID_ARGUMENT;
 	if (!model || !state || n < 0 || (n > 0 && !tokens)) {
 		if (out_n) *out_n = 0;
+		return SSLM_INVALID_ARGUMENT;
+	}
+	// S4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): `*out_n` is the caller's buffer
+	// capacity on entry -- a negative value must be rejected here, before the later
+	// `static_cast<size_t>(*out_n) < emit_len` guard, which casts a negative capacity to
+	// SIZE_MAX and lets it silently pass, exactly the way sslm_tokenize's own `*n < 0` guard
+	// (below, its sibling verb) already does for its own capacity parameter.
+	if (*out_n < 0) {
+		*out_n = 0;
 		return SSLM_INVALID_ARGUMENT;
 	}
 	if (state->pending_count > 3) {

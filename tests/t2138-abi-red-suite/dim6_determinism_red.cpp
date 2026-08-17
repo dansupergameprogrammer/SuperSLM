@@ -108,12 +108,30 @@ static void TestDim6_M2_NoHookInstalledCallSitesAreSafe(sslm_model model) {
 	CHECK(sslm_seq_release(seq_b) == SSLM_OK);
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. NOTE (real, disclosed suite/
+// design staleness, not an ABI defect from this round): both cells' own bodies hardcode
+// `sslm_seq_create(model, nullptr, &seq)` -- authored before the buffer-mapping ruling (design
+// commit fab235c1c6) required a REAL pool on every draw. Under the current, correct
+// implementation a null pool pointer is SSLM_INVALID_ARGUMENT, so each cell's own internal
+// CHECK(... == SSLM_OK) on that call fails here.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim6_P1_AbiDecodeMatchesDirectEngineCallBitForBit;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim6_M2_NoHookInstalledCallSitesAreSafe;
-	(void)addr_1;
+	TestDim6_P1_AbiDecodeMatchesDirectEngineCallBitForBit();
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim6 M2 not run");
+	} else {
+		std::vector<uint8_t> bytes;
+		if (ReadFileBytes(g_model_path, &bytes)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				TestDim6_M2_NoHookInstalledCallSitesAreSafe(model);
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		} else {
+			SKIP_MSG("could not read %s", g_model_path.c_str());
+		}
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

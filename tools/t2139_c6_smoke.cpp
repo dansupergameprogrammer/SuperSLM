@@ -98,9 +98,15 @@ int main(int argc, char** argv) {
 	const uint32_t block_count = 1;
 	const size_t block_bytes = sslm_kv_block_size(base);
 	const size_t overhead = sslm_kv_pool_overhead_size(base, block_count);
-	std::vector<uint8_t> pool_raw(block_bytes * block_count + overhead);
+	// S2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_kv_pool_create now checks
+	// alignment -- over-allocate and round up, matching tools/t2139_c2_smoke.cpp's own pattern.
+	const size_t pool_buf_size = block_bytes * block_count + overhead;
+	std::vector<uint8_t> pool_raw_storage(pool_buf_size + 63);
+	void* pool_raw = pool_raw_storage.data();
+	size_t pool_raw_space = pool_raw_storage.size();
+	std::align(64, pool_buf_size, pool_raw, pool_raw_space);
 	sslm_kv_pool pool = nullptr;
-	st = sslm_kv_pool_create(base, pool_raw.data(), pool_raw.size(), block_count, &pool);
+	st = sslm_kv_pool_create(base, pool_raw, pool_buf_size, block_count, &pool);
 	if (st != SSLM_OK || !pool) {
 		std::fprintf(stderr, "FAIL: sslm_kv_pool_create returned %d\n", static_cast<int>(st));
 		return 1;

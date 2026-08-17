@@ -33,11 +33,15 @@ if not exist obj mkdir obj
 set OVERALL_LINK_OK=1
 for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp dim4_shape_red.cpp dim5_failure_red.cpp dim6_determinism_red.cpp dim7_contract_red.cpp dim8_composition_red.cpp dim9_persistence_red.cpp dim10_functional_red.cpp dim11_guard_red.cpp) do (
     echo ===== %%f =====
+    rem S6 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): src\sslm_abi.cpp was
+    rem absent from this source list -- the whole reason this suite reported RED BY LINK forever,
+    rem even after the ABI implementation existed, and the reason not one of these 51 cells had
+    rem ever actually executed against it. Added here, matching build.bat's own root source list.
     cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include /I. ^
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
-        %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp ^
+        %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\sslm_abi.cpp ^
         "%%f" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul

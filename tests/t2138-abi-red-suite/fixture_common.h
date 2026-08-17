@@ -28,8 +28,10 @@
 #ifndef SSLM_T2138_FIXTURE_COMMON_H
 #define SSLM_T2138_FIXTURE_COMMON_H
 
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,42 @@
 // t2133-layer1-c-abi-design-2026-08-16.md Sec8). Promoted copy, this directory -- see
 // sslm_abi.h's own header comment.
 #include "sslm_abi.h"
+
+// S2 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_kv_pool_create now checks
+// its caller-supplied buffer's alignment the same way sslm_workspace_create already did
+// (SSLM_ABI_ALIGNMENT_BYTES, include/superslm/sslm_abi.h) -- a plain std::vector<uint8_t>::data()
+// carries no alignment guarantee past whatever the allocator happens to return. Every fixture in
+// this suite (and the T-2139 smokes that share this header) that previously passed a
+// std::vector<uint8_t> buffer to sslm_kv_pool_create or sslm_workspace_create now uses this
+// instead -- same data()/size() interface, so the call sites this round touches are a type swap,
+// not a rewrite.
+//
+// The literal 64 here (not the SSLM_ABI_ALIGNMENT_BYTES macro) is deliberate: this suite includes
+// its OWN promoted copy of sslm_abi.h (this directory, suite ownership -- see this file's own
+// header comment above), which does not yet carry that macro (it was added to the real
+// include/superslm/sslm_abi.h this same fix round). Reconciling the promoted copy is suite
+// ownership, not performed here; this constant is kept in exact sync with the real header's own
+// value by a comment on each side, matching the discipline already used for the two headers'
+// declaration-shape parity generally.
+constexpr size_t kAlignedBufferAlignment = 64;
+
+struct AlignedBuffer {
+	explicit AlignedBuffer(size_t n)
+	    : bytes_(n),
+	      storage_(n > 0 ? ::operator new(n, std::align_val_t(kAlignedBufferAlignment)) : nullptr) {}
+	~AlignedBuffer() {
+		if (storage_) ::operator delete(storage_, std::align_val_t(kAlignedBufferAlignment));
+	}
+	AlignedBuffer(const AlignedBuffer&) = delete;
+	AlignedBuffer& operator=(const AlignedBuffer&) = delete;
+	void* data() { return storage_; }
+	const void* data() const { return storage_; }
+	size_t size() const { return bytes_; }
+
+  private:
+	size_t bytes_;
+	void* storage_;
+};
 
 static int GChecks = 0;
 static int GFailures = 0;

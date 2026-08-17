@@ -243,21 +243,90 @@ static void TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(
 	CHECK(sslm_seq_release(long_lived) == SSLM_OK);
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. NOTE (real, disclosed suite/
+// design staleness, not an ABI defect this round introduces): TestDim8_M4's own body hardcodes
+// `sslm_seq_create(model, nullptr, &seq)` twice -- predates the buffer-mapping ruling's real-pool
+// requirement (design commit fab235c1c6), same class as dim3/dim6's own note.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContamination;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes;
-	(void)addr_2;
-	volatile void* addr_3 =
-	    (void*)&TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked;
-	(void)addr_3;
-	volatile void* addr_4 =
-	    (void*)&TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence;
-	(void)addr_4;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim8 mechanism/product cells not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	SslmModelView view;
+	std::vector<uint8_t> bytes;
+	std::string err;
+	if (!LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	{
+		sslm_model model = nullptr;
+		CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+		if (model) {
+			const uint32_t block_count = 4;
+			const size_t block_bytes = sslm_kv_block_size(model);
+			const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+			const size_t pool_buf_size = block_bytes * block_count + overhead;
+			std::vector<uint8_t> pool_storage(pool_buf_size + 63, 0);
+			void* pool_aligned = pool_storage.data();
+			size_t pool_space = pool_storage.size();
+			std::align(64, pool_buf_size, pool_aligned, pool_space);
+			sslm_kv_pool pool = nullptr;
+			CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
+			      SSLM_OK);
+			if (pool) {
+				const sslm_config config =
+				    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
+				const size_t ws_bytes = sslm_workspace_size(model, &config);
+				std::vector<uint8_t> ws_storage(ws_bytes + 63, 0);
+				void* ws_aligned = ws_storage.data();
+				size_t ws_space = ws_storage.size();
+				std::align(64, ws_bytes, ws_aligned, ws_space);
+				sslm_workspace ws = nullptr;
+				CHECK(sslm_workspace_create(model, &config, ws_aligned, ws_bytes, &ws) == SSLM_OK);
+				if (ws) {
+					TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContamination(model, ws,
+					                                                                        &pool);
+					CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+				}
+
+				if (g_adapter_path.empty()) {
+					SKIP_MSG("--adapter=PATH not supplied -- M2/M3 not run");
+				} else {
+					std::vector<uint8_t> adapter_bytes;
+					CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
+					sslm_adapter adapter_m2 = nullptr;
+					CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+					                        &adapter_m2) == SSLM_OK);
+					if (adapter_m2) {
+						TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
+						    model, &pool, adapter_m2);
+						CHECK(sslm_adapter_release(adapter_m2) == SSLM_OK);
+					}
+
+					sslm_adapter adapter_m3 = nullptr;
+					CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+					                        &adapter_m3) == SSLM_OK);
+					sslm_seq seq_m3 = nullptr;
+					CHECK(sslm_seq_create(model, &pool, &seq_m3) == SSLM_OK);
+					if (adapter_m3 && seq_m3) {
+						TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes(model, seq_m3,
+						                                                          adapter_m3);
+					}
+					if (seq_m3) CHECK(sslm_seq_release(seq_m3) == SSLM_OK);
+					if (adapter_m3) CHECK(sslm_adapter_release(adapter_m3) == SSLM_OK);
+				}
+
+				TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(model, &pool);
+				CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+			}
+			CHECK(sslm_model_unmap(model) == SSLM_OK);
+		}
+	}
+	TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

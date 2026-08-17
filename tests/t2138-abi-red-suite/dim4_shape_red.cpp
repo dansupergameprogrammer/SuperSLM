@@ -23,13 +23,13 @@ static void TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(
 	const size_t exact = sslm_workspace_size(model, &config);
 	CHECK_MSG(exact > 0, "a valid sslm_config must report a positive workspace size");
 	{
-		std::vector<uint8_t> buf(exact);
+		AlignedBuffer buf(exact);
 		sslm_workspace ws = nullptr;
 		CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) == SSLM_OK);
 		CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
 	}
 	{
-		std::vector<uint8_t> buf(exact + 4096);  // oversized -- must still be accepted, never
+		AlignedBuffer buf(exact + 4096);  // oversized -- must still be accepted, never
 		                                          // rejected for being "too large".
 		sslm_workspace ws = nullptr;
 		CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) == SSLM_OK);
@@ -52,7 +52,7 @@ static void TestDim4_M2_KvPoolBlockCountSweptOneTypicalLarge(sslm_model model) {
 	for (uint32_t block_count : sweep) {
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-		std::vector<uint8_t> buf(block_count * block_bytes + overhead);
+		AlignedBuffer buf(block_count * block_bytes + overhead);
 		sslm_kv_pool pool = nullptr;
 		CHECK_MSG(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) ==
 		              SSLM_OK,
@@ -112,15 +112,29 @@ static void TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape() {
 	CHECK(sslm_model_unmap(model_b) == SSLM_OK);
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim4_M2_KvPoolBlockCountSweptOneTypicalLarge;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape;
-	(void)addr_2;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim4 M1/M2 not run");
+	} else {
+		SslmModelView view;
+		std::vector<uint8_t> bytes;
+		std::string err;
+		if (LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(
+				    model, static_cast<int32_t>(view.config.num_hidden_layers));
+				TestDim4_M2_KvPoolBlockCountSweptOneTypicalLarge(model);
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		} else {
+			SKIP_MSG("could not load real artifact: %s", err.c_str());
+		}
+	}
+	TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -100,16 +100,56 @@ static void TestDim9_C3_CorruptedMagicOnRealV1BlobRejectedBeforeFieldParsing(ssl
 	CHECK(restored == nullptr);
 }
 
+// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. NOTE (real, disclosed suite/
+// design staleness, not an ABI defect this round introduces): C1 and C3 both hardcode
+// `sslm_seq_restore(model, nullptr, ...)` in their own bodies -- predates the buffer-mapping
+// ruling's real-pool requirement (design commit fab235c1c6), same class as dim3/dim6/dim8's own
+// notes; their own internal CHECK(... == SSLM_OK)/CHECK(st != SSLM_OK) on that call will read
+// SSLM_INVALID_ARGUMENT instead of the status the cell's own comment names.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim9_C1_SaveRestoreMidTokenRoundTripBitEqual;
-	(void)addr_0;
-	volatile void* addr_1 =
-	    (void*)&TestDim9_C2_RestoreRejectsWellFormedGpuFormatBlobOnMagicMismatch;
-	(void)addr_1;
-	volatile void* addr_2 =
-	    (void*)&TestDim9_C3_CorruptedMagicOnRealV1BlobRejectedBeforeFieldParsing;
-	(void)addr_2;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim9 cells not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	std::vector<uint8_t> bytes;
+	if (!ReadFileBytes(g_model_path, &bytes)) {
+		SKIP_MSG("could not read %s", g_model_path.c_str());
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	sslm_model model = nullptr;
+	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+	if (model) {
+		const uint32_t block_count = 3;
+		const size_t block_bytes = sslm_kv_block_size(model);
+		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+		const size_t pool_buf_size = block_bytes * block_count + overhead;
+		std::vector<uint8_t> pool_storage(pool_buf_size + 63, 0);
+		void* pool_aligned = pool_storage.data();
+		size_t pool_space = pool_storage.size();
+		std::align(64, pool_buf_size, pool_aligned, pool_space);
+		sslm_kv_pool pool = nullptr;
+		CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
+		      SSLM_OK);
+		if (pool) {
+			sslm_seq seq1 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq1) == SSLM_OK);
+			if (seq1) TestDim9_C1_SaveRestoreMidTokenRoundTripBitEqual(model, seq1);
+
+			TestDim9_C2_RestoreRejectsWellFormedGpuFormatBlobOnMagicMismatch(model, &pool);
+
+			sslm_seq seq3 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq3) == SSLM_OK);
+			if (seq3) {
+				TestDim9_C3_CorruptedMagicOnRealV1BlobRejectedBeforeFieldParsing(model, seq3);
+				CHECK(sslm_seq_release(seq3) == SSLM_OK);
+			}
+			CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+		}
+		CHECK(sslm_model_unmap(model) == SSLM_OK);
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

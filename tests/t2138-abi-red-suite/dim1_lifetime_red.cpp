@@ -16,7 +16,10 @@ static void TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
 	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
 	const size_t required = sslm_workspace_size(model, &config);
 	CHECK_MSG(required > 0, "a valid sslm_config must report a positive workspace size");
-	std::vector<uint8_t> buf(required);
+	// S2/S3 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_workspace_create/
+	// sslm_kv_pool_create both check alignment now -- AlignedBuffer (fixture_common.h) replaces
+	// a plain std::vector<uint8_t> wherever this suite expects SSLM_OK from either verb.
+	AlignedBuffer buf(required);
 	sslm_workspace ws1 = nullptr;
 	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws1) == SSLM_OK);
 	CHECK(sslm_workspace_destroy(ws1) == SSLM_OK);
@@ -46,7 +49,7 @@ static void TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(sslm_model model)
 	const uint32_t block_count = 4;
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
+	AlignedBuffer buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 
@@ -167,18 +170,35 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
+// S6 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): main() previously only took
+// the address of each Test* function (the RED-BY-LINK-phase convention, this file's own top
+// comment) -- necessary to force linking while the ABI was undeclared, but never updated once it
+// landed, so linking clean never actually RAN a single cell (checks=0 unconditionally). Now that
+// src/sslm_abi.cpp is wired into build_link_red.bat's own source list (S6's own literal remedy)
+// and this suite links against the real implementation, main() drives every cell for real.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly;
-	(void)addr_1;
-	volatile void* addr_2 =
-	    (void*)&TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping;
-	(void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle;
-	(void)addr_3;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim1 mechanism cells (M1-M3) not run");
+	} else {
+		SslmModelView view;
+		std::vector<uint8_t> bytes;
+		std::string err;
+		if (LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
+				    model, static_cast<int32_t>(view.config.num_hidden_layers));
+				TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(model);
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+			TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping(bytes.data(), bytes.size());
+		} else {
+			SKIP_MSG("could not load real artifact: %s", err.c_str());
+		}
+	}
+	TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
