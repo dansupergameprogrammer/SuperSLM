@@ -1609,23 +1609,13 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 	return st;
 }
 
-// G5-2 (design Sec4/Sec6, T-2132): the internal mask-application primitive both
-// sslm_decode_step (below) and the suite's own test-only guard-vitality hook
-// (sslm_g5_test_only_apply_mask_and_argmax, this file's own bottom) call -- ONE implementation,
-// never a parallel reimplementation (design Sec11.2's own ruling: a passing negative control
-// proves nothing about the production guard unless the hook calls this exact function). Table
-// lookup + bitmask AND, int32 logits, pre-argmax (design Sec4's architecture table): masked-out
-// positions are forced to INT32_MIN so ArgmaxLowestIndexTieBreak's own lowest-index tie-break
-// can never select them. NO defensive check for an all-masked page (D-SLM40's own positive
-// requirement, design Sec3/Sec7 dim11) -- an all-zero mask degrades to picking the lowest
-// index, exactly dim11's own negative-control cell.
-static void ApplyMaskAndArgmaxImpl(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
-                                    int32_t* out_token_id) {
-	for (int32_t t = 0; t < vocab_size; ++t) {
-		if (!((mask[t >> 3] >> (t & 7)) & 1u)) logits[t] = INT32_MIN;
-	}
-	*out_token_id = superslm::ArgmaxLowestIndexTieBreak(logits, static_cast<size_t>(vocab_size));
-}
+// G5-2/G5-5 (design Sec4/Sec6, T-2132): the mask-application primitive both sslm_decode_step
+// (below) and the suite's own test-only guard-vitality hook (sslm_g5_test_only_apply_mask_and_
+// argmax, this file's own bottom) call -- RELOCATED this fold (G5-5, T-2132) to
+// superslm::ApplyMaskAndArgmax (forward_sites.h/.cpp), unchanged bits, so a second TU
+// (src/gpu/gpu_1p0.cpp) can call the identical implementation instead of a parallel
+// reimplementation -- ONE implementation, never two, exactly the discipline this file's own
+// prior comment already named, now enforced across TUs rather than only within this one.
 
 // P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
 // to *Impl and wrapped (same rename-and-wrap convention as PrefillWholeTokens/*Impl, above) --
@@ -1795,7 +1785,7 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
 			const uint8_t* page = entry->mask_pages +
 			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
-			ApplyMaskAndArgmaxImpl(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
+			superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
 			// The walk advances to whatever state `produced` reaches -- guaranteed to exist by
 			// the loader's own mask/transition cross-check (Sec13.3): `produced` was masked-valid,
 			// and a masked-valid token always has a matching CSR transition entry by construction.
@@ -2474,21 +2464,22 @@ extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state
 // in include/superslm/ -- deliberately absent from sslm_abi.h/sslm_abi_functions*.inc, so it
 // carries no counterpart in this repo's own install/export rule set at all (an entry it is
 // never added to, not an entry removed later, per the ruling's own "install-list curation"
-// remedy). Its entire body is a call to ApplyMaskAndArgmaxImpl -- G5-2's own internal,
-// non-exported mask-application primitive, the SAME one sslm_decode_step's masked-argmax step
-// (above) calls -- never a parallel reimplementation, per the ruling's own contract: a passing
-// negative control here proves something about the production guard only because this hook
-// exercises the production guard's own code, not a lookalike.
+// remedy). Its entire body is a call to superslm::ApplyMaskAndArgmax (forward_sites.h, relocated
+// this fold from this file's own file-local ApplyMaskAndArgmaxImpl, G5-5/T-2132) -- the SAME
+// primitive sslm_decode_step's masked-argmax step (above) AND the GPU-1.0 parity bridge
+// (src/gpu/gpu_1p0.cpp) call -- never a parallel reimplementation, per the ruling's own contract:
+// a passing negative control here proves something about the production guard only because this
+// hook exercises the production guard's own code, not a lookalike.
 // -----------------------------------------------------------------------------------------
 extern "C" sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* logits,
                                                                  const uint8_t* mask,
                                                                  int32_t vocab_size,
                                                                  int32_t* out_token_id) {
 	if (!logits || !mask || vocab_size < 1 || !out_token_id) return SSLM_INVALID_ARGUMENT;
-	// ApplyMaskAndArgmaxImpl mutates `logits` in place (masked-out positions become INT32_MIN) --
+	// ApplyMaskAndArgmax mutates `logits` in place (masked-out positions become INT32_MIN) --
 	// this hook's own caller (dim11's negative-control cell) does not rely on `logits` surviving
 	// the call, matching the production decode_step path's own identical use of its scratch
 	// `logit_row` (never read again after this step there either).
-	ApplyMaskAndArgmaxImpl(const_cast<int32_t*>(logits), mask, vocab_size, out_token_id);
+	superslm::ApplyMaskAndArgmax(const_cast<int32_t*>(logits), mask, vocab_size, out_token_id);
 	return SSLM_OK;
 }

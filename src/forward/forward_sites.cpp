@@ -2010,6 +2010,18 @@ int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {
 	return best_index;
 }
 
+// G5-2/G5-5 (T-2132): see this function's own declaration (forward_sites.h) for why this is the
+// ONE mask-application primitive both the CPU and GPU constrained-decode paths call. Body moved
+// here verbatim from sslm_abi.cpp's own file-local ApplyMaskAndArgmaxImpl (G5-2, unchanged
+// bits) -- no new arithmetic, per design Sec4's own "no new arithmetic" architecture claim.
+void ApplyMaskAndArgmax(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
+                          int32_t* out_token_id) {
+	for (int32_t t = 0; t < vocab_size; ++t) {
+		if (!((mask[t >> 3] >> (t & 7)) & 1u)) logits[t] = INT32_MIN;
+	}
+	*out_token_id = ArgmaxLowestIndexTieBreak(logits, static_cast<size_t>(vocab_size));
+}
+
 // §9.1's real prefill-then-repeat composition (T-1389; built against
 // Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-2026-07-31.md's
 // red suite, replacing the WorkspaceTooSmall stub the test-design pass

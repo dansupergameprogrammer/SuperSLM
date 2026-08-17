@@ -1053,6 +1053,31 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 // lowest-index rather than last-write-wins or highest-index.
 int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n);
 
+// G5-2/G5-5 (T-2132, Brunel): the ONE mask-application-before-argmax primitive design Sec4's
+// architecture table names ("Table lookup + bitmask AND, int32 logits, pre-argmax") -- every
+// caller that needs a schema-constrained token, CPU (`sslm_decode_step`'s own masked-argmax
+// step, src/sslm_abi.cpp) or GPU (G5-5's parity bridge, src/gpu/gpu_1p0.cpp), calls this exact
+// function on its own hidden-state-derived logits, never a parallel reimplementation --
+// StandardsDocument.md Sec5.4's "one implementation, not two copies that could drift"
+// discipline, applied here the same way D-SLM3352 already applied it to weight packing.
+// Extracted from sslm_abi.cpp's own file-local ApplyMaskAndArgmaxImpl (G5-2) so a second TU
+// (gpu_1p0.cpp) can call the identical bits rather than a lookalike -- bit-parity between the
+// CPU and GPU constrained-decode paths is achievable BY CONSTRUCTION only if both feed their
+// own (bit-identical, by the base kernel set's own already-proven GPU parity) hidden state
+// through this SAME function, never through two independently-authored copies of it.
+//
+// `mask` is `entry`'s own page for the sequence's current DFA-walk-state (state_count *
+// mask_page_bytes bytes total per schema, schema_masks.h) -- caller-selects the right page;
+// this function does the table lookup ONLY in the sense of "look up whether bit t is set,"
+// never in the sense of picking which page. Masked-out positions (bit not set) are forced to
+// INT32_MIN so ArgmaxLowestIndexTieBreak's own lowest-index tie-break can never select them.
+// NO defensive check for an all-masked page (D-SLM40's own positive requirement, design Sec3/
+// Sec7 dim11) -- an all-zero mask degrades to picking the lowest index, exactly dim11's own
+// negative-control cell. Mutates `logits` in place; caller-ensures `vocab_size >= 1` (the same
+// caller-ensures convention ArgmaxLowestIndexTieBreak's own `n >= 1` already documents).
+void ApplyMaskAndArgmax(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
+                          int32_t* out_token_id);
+
 // §9.1's two terminal reasons a greedy decode loop stops for a reason OTHER
 // than a rejection. Distinct from SslmForwardStatus (checked_chain_funnel.h),
 // which names rejections; a loop that reaches either of these two reasons
