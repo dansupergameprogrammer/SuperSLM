@@ -281,39 +281,25 @@ echo Gate A must-reject construction correctly failed to compile ^(see out\t2139
 rem Gate C must-accept (S8 fix round, Claude/Poirot/2c18dab-t2139-abi-build-review.md): now
 rem includes the REAL include/superslm/sslm_abi.h at global scope for the library side (only the
 rem suite side is still a hand transcription -- see the file's own header comment for why one
-rem side, not both, must avoid the [dcl.link] collision). This closes half the drift class S8
-rem named outright; the other half is one more static_assert that the library's own highest base
-rem ordinal is strictly below the suite's first G5-only ordinal.
+rem side, not both, must avoid the [dcl.link] collision).
 rem
-rem THAT ASSERTION IS CURRENTLY, CORRECTLY, EXPECTED TO FAIL TO COMPILE -- REASON UPDATED, P2
-rem (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, third confirmation pass): the
-rem original ordinal-17 collision this comment used to name was reconciled (curie/
-rem t2130-g5-red-suite@59e26ff). N3's own SSLM_ALLOCATION_FAILED addition (ordinal 25) then
-rem re-opened the same class at a different ordinal -- the base taxonomy's own real maximum
-rem (SSLM_STATUS_BASE_MAX, sslm_abi.h) now sits ABOVE sslm_g5.h's own G5 block (18-24) instead of
-rem below it, an interleaving the assertion's own text names directly. The enum-governance rule
-rem this needs (who takes ordinal 26; whether base/G5 must occupy disjoint ranges at all) is being
-rem ruled at the planner in parallel to this round, not performed by this build step. Until that
-rem ruling lands and sslm_g5.h is reconciled again, this compile is treated as a KNOWN, DISCLOSED,
-rem cross-suite-coordination block -- logged and reported, never silenced and never treated as
-rem this build's own regression.
+rem PLAIN MUST-PASS, matching Gate A (the known-block disclosure arm this step previously
+rem carried is RETIRED): the block it disclosed closed when sslm_g5.h took the T-2133 Sec6
+rem full-registry mirror (curie/t2130-g5-red-suite@52dc6cd) and the checker's second-half
+rem assertion took the ruling's shape (registry-top identity; see the checker's own comments).
+rem A compile failure here is a real regression now -- treating it as known/disclosed would
+rem report the exact wrong direction.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check.exe >out\t2139\gate_c_must_accept.log 2>&1
 if errorlevel 1 (
-	findstr /C:"ordinal collision" out\t2139\gate_c_must_accept.log >nul
-	if not errorlevel 1 (
-		echo Gate C must-accept: KNOWN, DISCLOSED cross-suite block ^(sslm_g5.h ordinal-17 reconciliation owed, suite ownership^) -- see out\t2139\gate_c_must_accept.log
-	) else (
-		echo Gate C must-accept construction FAILED TO COMPILE for an UNEXPECTED reason -- see out\t2139\gate_c_must_accept.log
-		type out\t2139\gate_c_must_accept.log
-		popd & exit /b 1
-	)
-) else (
-	out\t2139_gate_c_type_identity_check.exe
-	if errorlevel 1 (
-		popd & exit /b 1
-	)
-	echo Gate C must-accept construction: PASS ^(sslm_g5.h has been reconciled -- this branch is the target end state^)
+	echo Gate C must-accept construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\gate_c_must_accept.log
+	type out\t2139\gate_c_must_accept.log
+	popd & exit /b 1
 )
+out\t2139_gate_c_type_identity_check.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+echo Gate C must-accept construction: PASS
 
 rem Gate C must-reject: MUST fail to compile. errorlevel 0 here is the regression.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_type_identity_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_type_identity_check_negative.exe >out\t2139\gate_c_negative.log 2>&1

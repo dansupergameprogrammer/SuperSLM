@@ -15,15 +15,18 @@
 // re-states sslm_abi.h's own body a second time by hand.
 //
 // The OTHER half -- two headers assigning the SAME ordinal to DIFFERENT enumerator names, which
-// a per-shared-NAME check structurally cannot see -- is closed by one more assertion below: the
-// library's own highest base ordinal must be STRICTLY BELOW the suite's first G5-only ordinal.
-// This assertion WAS expected to fail to compile (sslm_abi.h's own new SSLM_TOKEN_ID_UNMAPPED at
-// 17 collided with tests/t2130-g5-red-suite/sslm_g5.h's own then-current SSLM_SCHEMA_NOT_FOUND,
-// ALSO 17) -- the exact drift S8 found already in the tree. RECONCILED (curie/
-// t2130-g5-red-suite@59e26ff, the closing-round coordination this gate's own red state named):
-// sslm_g5.h now carries SSLM_TOKEN_ID_UNMAPPED at 17 with its own seven G5 additions shifted to
-// 18-24. This gate is GREEN for real now -- both the per-name check (below) and the
-// ordinal-disjointness assertion compile clean against the reconciled real header.
+// a per-shared-NAME check structurally cannot see -- is closed by COMPLETE per-name coverage
+// against a COMPLETE mirror, per the T-2133 enum-governance ruling (design Sec6, design commit
+// 4f4eb23896): design Sec6 is the single-authority complete ordinal registry for sslm_status,
+// and sslm_g5.h mirrors it VERBATIM (all 26 entries, 0..25, no gaps; next-free is a Sec6 fact).
+// The earlier "base low / G5 appended above, disjoint ranges" arrangement is RETIRED by that
+// ruling -- the suite header is no longer a base-plus-additions overlay but a full mirror, so
+// the disjointness assertion this file previously carried (correctly red at the time, P2,
+// Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4) is replaced by the registry-top
+// identity assertion below: with every library enumerator per-name checked against the complete
+// mirror, a rename is caught by name lookup failing, a move is caught by value inequality, and
+// a one-sided append is caught by the registry-top identity -- the different-name class has no
+// remaining silent path.
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -31,10 +34,10 @@
 #include "superslm/sslm_abi.h"
 
 namespace t2139_gate_c_suite_side {
-// Transcribed from tests/t2130-g5-red-suite/sslm_g5.h@a7655dd, verbatim (this design's own
-// 0-16 base plus G5's own 17-23 appended -- every enumerator is transcribed, even though only
-// the 0-16 shared subset is checked below, so this namespace stays a faithful copy of the real
-// header rather than a pre-filtered stand-in).
+// Transcribed from tests/t2130-g5-red-suite/sslm_g5.h@52dc6cd, verbatim (the complete 26-entry
+// Sec6 registry mirror -- every enumerator is transcribed, even though only the names sslm_abi.h
+// also declares are checked below, so this namespace stays a faithful copy of the real header
+// rather than a pre-filtered stand-in).
 typedef enum sslm_status {
 	SSLM_OK = 0,
 	SSLM_INVALID_ARGUMENT = 1,
@@ -63,7 +66,10 @@ typedef enum sslm_status {
 	SSLM_PREFIX_SCHEMA_MISMATCH = 21,
 	SSLM_RESTORE_SCHEMA_MISMATCH = 22,
 	SSLM_SCHEMA_SPAN_UNREACHABLE = 23,
-	SSLM_SCHEMA_UNSATISFIABLE = 24
+	SSLM_SCHEMA_UNSATISFIABLE = 24,
+	// Mirrored in at 25 (curie/t2130-g5-red-suite@52dc6cd, executing the T-2133 Sec6 ruling:
+	// sslm_g5.h mirrors the complete registry verbatim; next-free is 26, a Sec6 fact).
+	SSLM_ALLOCATION_FAILED = 25
 } sslm_status;
 
 typedef enum sslm_span_kind {
@@ -109,39 +115,38 @@ T2139_GATE_C_STATUS_CHECK(SSLM_CONTEXT_CAP_EXCEEDED);
 // comment named): sslm_g5.h now carries SSLM_TOKEN_ID_UNMAPPED at 17, matching sslm_abi.h.
 // Checked per-name now, same as every other base enumerator above.
 T2139_GATE_C_STATUS_CHECK(SSLM_TOKEN_ID_UNMAPPED);
+// Mirrored (curie/t2130-g5-red-suite@52dc6cd, the T-2133 Sec6 ruling's execution): the mirror
+// now carries SSLM_ALLOCATION_FAILED at 25, so it is a shared name and is checked per-name like
+// every other. This closes P2's live half -- the ordinal the library appended is now declared
+// identically on both sides.
+T2139_GATE_C_STATUS_CHECK(SSLM_ALLOCATION_FAILED);
 #undef T2139_GATE_C_STATUS_CHECK
 
 // --- S8's own second half: no ordinal is claimed by both sides under DIFFERENT names. A
 // per-shared-NAME check (above) is blind to exactly this class -- two enumerators that happen to
 // share a numeric value but not a name never appear in the same T2139_GATE_C_STATUS_CHECK call.
-// Stated as "the library's highest base ordinal is strictly below the suite's first G5-only
-// ordinal" (design Sec6's own reconciled-shape statement: this design's base occupies low
-// ordinals, G5's own additions are appended above all of them, never interleaved).
 //
-// P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, third confirmation pass): this
-// assertion's own MESSAGE said "highest base enumerator" while its own EXPRESSION tested one
-// hard-coded name (SSLM_TOKEN_ID_UNMAPPED) -- true the round it was written (17 genuinely was the
-// highest base ordinal then), false the instant N3 appended SSLM_ALLOCATION_FAILED at 25 without
-// this assertion's own text or expression being revisited, the exact transcription-vs-reality gap
-// S8 was raised to fix in the first place, one level in. Fixed for real: the expression now reads
-// SSLM_STATUS_BASE_MAX (sslm_abi.h's own maintained sentinel, updated in the same change that
-// appends any future base enumerator) instead of a specific name, so the message stays true
-// regardless of which enumerator is the base taxonomy's own current maximum.
-//
-// CORRECTLY, CURRENTLY RED (not silenced, not narrowed to force green): SSLM_STATUS_BASE_MAX is
-// now 25 (SSLM_ALLOCATION_FAILED), which sits ABOVE sslm_g5.h's own G5 block (18-24) -- the
-// ordinal space is genuinely interleaved (P2's own finding), and this assertion's job is to say
-// so, not to look green. The enum-governance rule this needs (who takes ordinal 26; whether base
-// and G5 additions should keep occupying disjoint ranges at all) is being ruled at the planner in
-// parallel to this round -- take that ruling at landing if it changes this assertion's own shape;
-// until then, this is the same disclosed-red pattern Gate C already used once this arc (S8's own
-// pre-reconciliation state), not a regression this round introduced. ---
-static_assert(static_cast<int>(::SSLM_STATUS_BASE_MAX) <
-                  static_cast<int>(t2139_gate_c_suite_side::SSLM_SCHEMA_NOT_FOUND),
-              "ordinal collision: sslm_abi.h's own SSLM_STATUS_BASE_MAX is not strictly below "
-              "sslm_g5.h's first G5-only enumerator -- the base taxonomy and G5's own block are "
-              "interleaved (P2, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4); the "
-              "enum-governance ruling this needs is with the planner, not performed by this gate");
+// SHAPE UPDATED at the T-2133 enum-governance ruling's landing (design Sec6, design commit
+// 4f4eb23896), exactly as the previous revision's own comment instructed ("take that ruling at
+// landing if it changes this assertion's own shape" -- it does). The ruling retires the
+// "base low / G5 appended above, disjoint ranges" arrangement the previous assertion here
+// (SSLM_STATUS_BASE_MAX strictly below the first G5-only ordinal, correctly red as P2's own
+// disclosure) was built on: design Sec6 is now the single-authority complete ordinal registry,
+// and sslm_g5.h mirrors it verbatim -- one interleaved registry, not two ranges. Under that
+// arrangement the different-name class is closed by construction plus one identity: every
+// enumerator sslm_abi.h declares is per-name checked above against the complete mirror (a
+// rename fails name lookup; a move fails value equality), and the registry-top identity below
+// pins the mirror's own top to the library's declared maximum, so a one-sided append -- the
+// exact mechanics by which P2 arose (N3 appended 25 to the library while the mirror ended at
+// 24) -- fails to compile on whichever side lagged. ---
+static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_ALLOCATION_FAILED) ==
+                  static_cast<int>(::SSLM_STATUS_BASE_MAX),
+              "registry-top divergence: sslm_g5.h's mirror of the Sec6 registry does not top out "
+              "at sslm_abi.h's own SSLM_STATUS_BASE_MAX -- one side has appended an enumerator "
+              "the other has not taken (the exact one-sided-append mechanics of P2, "
+              "Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4); reconcile both to design "
+              "Sec6, the single-authority complete ordinal registry (T-2133 ruling, design "
+              "commit 4f4eb23896)");
 
 // --- sslm_span_kind: per-shared-enumerator-name value equality ---
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_SPAN_PROMPT) ==

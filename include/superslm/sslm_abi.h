@@ -150,22 +150,23 @@ typedef enum sslm_status {
      * said the ratification was still pending and told a reader to go chase an authorization that
      * by then already existed; corrected in place rather than left to mislead the next reader.
      *
-     * P2 (same casebook, Sec7.4): this insertion left the ordinal space INTERLEAVED --
-     * SSLM_ALLOCATION_FAILED (25) sits numerically ABOVE sslm_g5.h's own G5 block (18-24), not
-     * below it, breaking the arc's own "base low, G5 appended above" arrangement and leaving no
-     * rule for who takes 26. That governance question is being ruled at the planner in parallel
-     * to this round; SSLM_STATUS_BASE_MAX below is this header's own honest, single-source-of-
-     * truth answer to "what is the base taxonomy's real highest ordinal today" in the meantime --
-     * update it in the SAME change that appends any future base enumerator, and take the
-     * planner's own ruling at landing if it changes this arrangement's shape. */
+     * P2 (same casebook, Sec7.4) -- RESOLVED by the T-2133 enum-governance ruling (design Sec6,
+     * design commit 4f4eb23896): design Sec6 is the single-authority complete ordinal registry
+     * for sslm_status; sslm_g5.h mirrors it verbatim (executed at curie/t2130-g5-red-suite@
+     * 52dc6cd), the registry is one interleaved sequence rather than disjoint base/G5 ranges,
+     * and next-free (26) is a Sec6 fact. SSLM_STATUS_BASE_MAX below stays as this header's own
+     * declared maximum -- update it in the SAME change that appends any future enumerator here,
+     * and reconcile design Sec6 first: an ordinal is claimed in the registry before either
+     * header takes it. */
     SSLM_ALLOCATION_FAILED = 25
 } sslm_status;
 
-/* P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4): the base taxonomy's own real
- * highest ordinal, maintained by hand alongside the enum above (a C enum has no built-in "my own
- * maximum" query) -- tools/t2139_gate_c_type_identity_check.cpp's own ordinal-disjointness
- * assertion reads THIS, not a specific enumerator's name, so its own message ("the base
- * taxonomy's own real maximum") stays true regardless of which enumerator is appended next. */
+/* P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4): this header's own real highest
+ * ordinal, maintained by hand alongside the enum above (a C enum has no built-in "my own
+ * maximum" query) -- tools/t2139_gate_c_type_identity_check.cpp's registry-top identity
+ * assertion (the T-2133 Sec6 ruling's shape) reads THIS, not a specific enumerator's name, and
+ * pins it equal to the sslm_g5.h mirror's own top, so a one-sided append on either header fails
+ * to compile on whichever side lagged. */
 #define SSLM_STATUS_BASE_MAX SSLM_ALLOCATION_FAILED
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
