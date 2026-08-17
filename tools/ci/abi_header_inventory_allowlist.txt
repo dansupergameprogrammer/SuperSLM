@@ -1,0 +1,28 @@
+# T-2139 sixth confirmation review item 5 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md,
+# ruled in Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec8's "structural half"
+# paragraph) -- tools/ci/check_abi_header_inventory.py's own allowlist. Format:
+# `<IDENTIFIER>  # <reason>`. An allowlisted identifier is still PRINTED every run, never
+# silently dropped -- same convention as tools/ci/tools_build_recipe_allowlist.txt.
+#
+# Validated (StandardsDocument Sec4) against the real tip BEFORE this file existed: the checker
+# extracted 6 identifiers from include/superslm/sslm_abi.h (SUPERSLM_INCLUDE_SSLM_ABI_H,
+# SSLM_STATUS_ENUM_LIST, SSLM_STATUS_ENUM_VALUE_, SSLM_ABI_ALIGNMENT_BYTES,
+# SUPERSLM_ABI_ENUM_ONLY, SUPERSLM_ABI_FUNCTIONS_INCLUDED_). Four already have a Sec8 inventory
+# line in prose (SUPERSLM_INCLUDE_SSLM_ABI_H's own top-level guard is narrated by name three times
+# outside any code block; the other three carry the ruling's own dedicated inventory paragraphs).
+# Two did not, and this file is that finding's honest disposition -- NOT both "fine to skip" for
+# the same reason; see each entry below.
+SSLM_STATUS_ENUM_VALUE_  # a scratch, function-like X-macro-expansion helper #define'd and
+# #undef'd within the same six lines of sslm_status's own enum-body definition (sslm_abi.h:151-153)
+# -- never visible past its own #undef, never consumer-facing surface, the same kind of pure
+# implementation-internal identifier the design's own ruling names the top-level include guard as
+# an example of (Sec8, "an explicit allowlist for identifiers this section deliberately does not
+# narrate"). Ruled deliberately out of scope for a Sec8 inventory line, not a gap.
+SSLM_ABI_ALIGNMENT_BYTES  # GENUINE GAP, flagged rather than ruled: this macro IS consumer-facing
+# surface (sslm_abi.h:180-188's own header comment: exported so a caller can pass it directly to
+# std::align instead of transcribing the number) and has no Sec8 inventory line anywhere in the
+# design document as of this check's first real run (T-2139 sixth confirmation fold, item 5). This
+# is disclosed here so the check stays green rather than blocking the round on a design-doc edit
+# that is not this seat's to make (Brunel builds implementation, not design) -- filed back to the
+# planner as a new owed §8 inventory line in the build log for this round; NOT a judgment that the
+# omission is fine. Remove this entry once §8 gains the line.

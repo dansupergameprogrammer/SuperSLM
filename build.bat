@@ -276,7 +276,18 @@ if not errorlevel 1 (
 	echo Gate A must-reject construction COMPILED CLEAN -- Gate A has regressed, see out\t2139\gate_a_negative.log
 	popd & exit /b 1
 )
-echo Gate A must-reject construction correctly failed to compile ^(see out\t2139\gate_a_negative.log^)
+rem T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
+rem same marker-text treatment as the X-macro/sentinel negatives below -- a compile failure alone
+rem is not proof the INTENDED assertion fired. This is Gate A's ONLY proof Gate A can fail at all
+rem (its own header comment: the corruption is hand-maintained, not script-generated, so a stale
+rem hand copy after a real declaration change fails the compile for a reason that is not the
+rem assertion, and exit-code-only reports that as correct).
+findstr /C:"sslm_model_map: library signature diverges from tests/t2130-g5-red-suite/sslm_g5.h" out\t2139\gate_a_negative.log >nul
+if errorlevel 1 (
+	echo Gate A must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_a_negative.log
+	popd & exit /b 1
+)
+echo Gate A must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_a_negative.log^)
 
 rem Gate C must-accept (S8 fix round, Claude/Poirot/2c18dab-t2139-abi-build-review.md): now
 rem includes the REAL include/superslm/sslm_abi.h at global scope for the library side (only the
@@ -307,7 +318,15 @@ if not errorlevel 1 (
 	echo Gate C must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_negative.log
 	popd & exit /b 1
 )
-echo Gate C must-reject construction correctly failed to compile ^(see out\t2139\gate_c_negative.log^)
+rem T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
+rem same marker-text treatment as the X-macro/sentinel negatives below -- a compile failure alone
+rem is not proof the INTENDED assertion fired.
+findstr /C:"SSLM_ARTIFACT_REJECTED diverges" out\t2139\gate_c_negative.log >nul
+if errorlevel 1 (
+	echo Gate C must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_negative.log
+	popd & exit /b 1
+)
+echo Gate C must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_negative.log^)
 
 rem Gate C's THIRD TU (S1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md, owed remedy
 rem 5): the structural half of S1's fix -- includes the REAL tests/t2130-g5-red-suite/sslm_g5.h
@@ -832,8 +851,22 @@ if not errorlevel 1 (
 		echo check_tools_have_build_recipe.py FAILED -- see output above
 		set ec=1
 	)
+	rem T-2139 sixth confirmation review item 5 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-
+	rem review.md, ruled in Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec8's
+	rem "structural half" paragraph): M3's class-closer -- extracts every #define/#ifndef/
+	rem #if !defined identifier from include/superslm/sslm_abi.h and fails when one has no Sec8
+	rem inventory line (a code-block-only mention does not count), same allowlist-escape-hatch
+	rem shape as check_tools_have_build_recipe.py above. SKIPS gracefully, loudly, if the Wizard
+	rem records repo (a different repository, holding the design document) is not checked out
+	rem alongside this one -- this script's own population source is a cross-repo input, not
+	rem something a code-repo-only build can always satisfy.
+	python tools\ci\check_abi_header_inventory.py
+	if errorlevel 1 (
+		echo check_abi_header_inventory.py FAILED -- see output above
+		set ec=1
+	)
 ) else (
-	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, and tools\ci\check_tools_have_build_recipe.py ^(non-fatal^)
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, tools\ci\check_tools_have_build_recipe.py, and tools\ci\check_abi_header_inventory.py ^(non-fatal^)
 )
 
 popd

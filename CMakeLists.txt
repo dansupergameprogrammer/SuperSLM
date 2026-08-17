@@ -224,12 +224,21 @@ target_include_directories(t2139_gate_c_sentinel_must_reject PRIVATE include)
 enable_testing()
 add_test(NAME t2139_gate_a_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_accept --config $<CONFIG>)
+# T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
+# these two were still WILL_FAIL-only (exit-code-only) after S3 gave the X-macro/sentinel pair
+# below the marker-text discrimination -- the same class the fifth casebook's S3 named in class
+# terms, not instance terms. Both now go through tools/ci/check_negative_compile_marker.cmake with
+# their own static_assert marker text, matching their two siblings' convention.
 add_test(NAME t2139_gate_a_must_reject_fails_to_compile
-	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_reject --config $<CONFIG>)
-set_tests_properties(t2139_gate_a_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_a_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=sslm_model_map:\ library\ signature\ diverges\ from\ tests/t2130-g5-red-suite/sslm_g5.h
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 add_test(NAME t2139_gate_c_must_reject_fails_to_compile
-	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_reject --config $<CONFIG>)
-set_tests_properties(t2139_gate_c_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 # Gate C must-accept: a plain must-pass compile check, matching its Gate A sibling. The known
 # ordinal-interleaving block this entry previously disclosed (P2, Claude/Poirot/
 # 2c18dab-t2139-abi-build-review.md Sec7.4) closed when sslm_g5.h took the T-2133 Sec6 registry
@@ -244,7 +253,9 @@ add_test(NAME t2139_gate_c_real_suite_side_check_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_real_suite_side_check --config $<CONFIG>)
 
 # S4's owed must-reject constructions: both MUST fail to compile, same convention as
-# t2139_gate_c_must_reject_fails_to_compile above.
+# t2139_gate_a_must_reject_fails_to_compile and t2139_gate_c_must_reject_fails_to_compile above
+# (all four negative-compile constructions now run through the marker script; see S1 comment
+# above them for the finding that made this true of all four rather than just these two).
 #
 # T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S3):
 # a plain WILL_FAIL entry only inverts the build's exit code -- it cannot tell the construction's
@@ -254,8 +265,9 @@ add_test(NAME t2139_gate_c_real_suite_side_check_compiles
 # with WILL_FAIL still reporting green). tools/ci/check_negative_compile_marker.cmake requires BOTH
 # the build failing AND the target's own static_assert marker text appearing in the captured
 # output, so a degeneration of the underlying mechanism is a hard ctest failure instead of a silent
-# pass. No WILL_FAIL here -- the script's own exit code is already correct (0 only when both
-# conditions hold).
+# pass. WILL_FAIL must never be set on an entry that invokes this script -- see the script's own
+# header comment for why (T-2139 sixth confirmation review S2): the script's exit code is already
+# correct (0 only when both conditions hold), and WILL_FAIL on top of it inverts the check.
 add_test(NAME t2139_gate_c_xmacro_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND}
 		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_xmacro_must_reject -DBUILD_CONFIG=$<CONFIG>

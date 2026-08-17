@@ -147,17 +147,19 @@ SSLM_STATUS_ENUM_LIST(T2139_GATE_C_STATUS_CHECK_GEN_)
 // value), so it moves itself whenever either side appends a new enumerator anywhere before it --
 // nothing left for an author to hand-bump. The assertion below compares the two sentinels
 // directly; a rename is still caught by the per-name checks above failing name lookup, a move is
-// still caught by those checks failing value equality, and a one-sided append -- the exact
-// mechanics P2 first found and F1 proved the old assertion could not re-catch -- now fails here
-// because the two sentinels no longer agree. ---
-// M1 (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md): the message below names what
-// THIS file actually compares -- t2139_gate_c_suite_side's own transcription (above), not
-// tests/t2130-g5-red-suite/sslm_g5.h itself. The prior wording claimed the real suite header,
-// which was false of this construction (this file has never included sslm_g5.h) and is exactly
-// the class the fourth casebook's M1 named. tools/t2139_gate_c_real_suite_side_check.cpp is the
-// TU that compares against the REAL sslm_g5.h directly; this assertion's own job is confirming
-// the transcription above still agrees with the real library header, which is a narrower and
-// different claim.
+// still caught by those checks failing value equality, and an append to ONE of the two sides this
+// assertion actually compares -- the real library header (::SSLM_STATUS_NEXT_FREE, included via
+// superslm/sslm_abi.h) or this file's own hand transcription (t2139_gate_c_suite_side::
+// SSLM_STATUS_NEXT_FREE, above) -- now fails here because the two sentinels no longer agree. ---
+// M2 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md), correcting M1
+// (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md): the message below names what THIS
+// file actually compares -- t2139_gate_c_suite_side's own hand transcription (above) against the
+// REAL library header sslm_abi.h, NOT tests/t2130-g5-red-suite/sslm_g5.h. This file has never
+// included sslm_g5.h (grep, whole file) and its assertion cannot see a one-sided append to that
+// header at all, by construction -- that is tools/t2139_gate_c_real_suite_side_check.cpp's job,
+// the TU that includes the REAL sslm_g5.h directly. This assertion's own job is narrower: catching
+// this file's transcription drifting out of sync with the real library header, whichever side
+// moves.
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_STATUS_NEXT_FREE) ==
                   static_cast<int>(::SSLM_STATUS_NEXT_FREE),
               "registry-top divergence: this file's own transcription of sslm_g5.h's Sec6 "

@@ -10,10 +10,16 @@
 #
 # This script runs the named target's build and requires BOTH: the build failed, AND its own
 # captured output contains the target's own marker text (the literal static_assert message that
-# proves the INTENDED assertion is what fired). A failure for the wrong reason is reported as a
-# hard script failure -- ctest sees this script exit non-zero and (via its own WILL_FAIL) still
-# reports the test correctly, but the diagnostic in the log names the real problem instead of
-# reading as a routine, expected compile failure.
+# proves the INTENDED assertion is what fired). The script's contract is exit 0 exactly when the
+# construction failed for its own reason -- a failure for the wrong reason is a hard script
+# failure (non-zero exit), which ctest reports as a plain, correctly-attributed test failure.
+#
+# WILL_FAIL MUST NEVER BE SET on a ctest add_test entry that invokes this script (T-2139 sixth
+# confirmation review, Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S2). This script's
+# own exit code is already correct -- 0 only when both conditions hold. Adding WILL_FAIL on top
+# inverts the check completely: a wrong-reason compile failure (this script exits 1) would report
+# PASS, and a healthy tree (this script exits 0) would report FAIL. See CMakeLists.txt's own
+# add_test entries for this script -- none of them set WILL_FAIL, and none of them ever should.
 #
 # Invocation (see CMakeLists.txt's own add_test entries for the exact arguments):
 #   cmake -DBUILD_DIR=<binary dir> -DBUILD_TARGET=<target> -DBUILD_CONFIG=<config>
@@ -21,6 +27,14 @@
 #         tools/ci/check_negative_compile_marker.cmake
 if(NOT DEFINED BUILD_DIR OR NOT DEFINED BUILD_TARGET OR NOT DEFINED MARKER_TEXT)
 	message(FATAL_ERROR "check_negative_compile_marker.cmake: BUILD_DIR, BUILD_TARGET, and MARKER_TEXT are all required -DVAR=... arguments")
+endif()
+# T-2139 sixth confirmation review M1 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md):
+# -DMARKER_TEXT= (empty string) satisfies NOT DEFINED above (it IS defined, just empty), and
+# string(FIND "${output}" "" pos) returns 0 -- found -- so an empty marker passed vacuously.
+# Reject it explicitly rather than let a mis-escaped or dropped -DMARKER_TEXT= argument silently
+# degrade this check to exit-code-only, which is the exact defect this script exists to close.
+if(MARKER_TEXT STREQUAL "")
+	message(FATAL_ERROR "check_negative_compile_marker.cmake: MARKER_TEXT must not be empty (an empty marker matches vacuously and defeats this script's whole purpose)")
 endif()
 if(NOT DEFINED BUILD_CONFIG OR BUILD_CONFIG STREQUAL "")
 	set(BUILD_CONFIG "Debug")
