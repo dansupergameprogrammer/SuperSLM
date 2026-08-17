@@ -82,6 +82,7 @@
 #include "superslm/forward_sites.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
+#include "superslm/schema_masks.h"
 
 #include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
                               // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
@@ -89,6 +90,14 @@
                               // uses -- consulted once, at sslm_model_map's own Load call, so a
                               // test can force a genuine bad_alloc through this file's own new
                               // catch-and-return path without needing an actual OOM condition.
+
+// G5 (design Sec5/Sec13.4, T-2132): the DFA-walk-state "no schema bound" sentinel -- moved up
+// here (out of the save/restore-local anonymous namespace it originated in, below) so it is
+// visible to every G5 verb, not only save/restore. `kMaxSchemaStates` (schema_masks.h) is fixed
+// well below this value, so it is never a legitimate state id (design Sec13.4).
+namespace {
+constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
+}  // namespace
 
 // -----------------------------------------------------------------------------------------
 // Opaque handle bodies (design Sec8: sslm_model_s/sslm_kv_pool_s/sslm_workspace_s are declared
@@ -122,14 +131,33 @@ struct sslm_model_engine_cache {
 	const int8_t* head_weights = nullptr;
 };
 
+// G5 (T-2119 design Sec5, T-2132 build): one entry of sslm_model_s::schema_handles below. No
+// map/release verb (design Sec5) -- these live exactly as long as the owning model, allocated
+// once at sslm_model_map time, never individually created/destroyed. `index` is this schema's
+// own row in the model's SchemaMasksTable (superslm::schema_masks.h).
+struct sslm_schema_s {
+	sslm_model_s* model = nullptr;
+	uint32_t index = 0;
+};
+
 // C2. Owns the loaded model view and (C4) the resolved engine cache. `live_refs` is the D-SLM32
 // lifecycle-guard bookkeeping design Sec9's own C2 gate names ("unmap-while-live is rejected") --
 // incremented/decremented by C3's sslm_seq_create/_release, sslm_prefix_begin/_release, and (C6,
 // not built) sslm_adapter_map.
+//
+// G5-2 (T-2132): `schemas`/`schema_handles` -- built once at sslm_model_map time (below), from
+// this model's own SchemaMasks/SCM1 section if present (design Sec13.1: absence is a valid,
+// unconstrained-only artifact, exactly today's pre-G5 behavior -- `schemas.Count() == 0`).
+// `schema_handles[i]` is the stable, never-reallocated `sslm_schema` handle
+// `sslm_schema_lookup`/`sslm_schema_name` hand out for `schemas.ByIndex(i)`/`ByName(...)`; both
+// vectors are sized once, at construction, and never resized afterward, so every handle this
+// model ever returns stays valid (and stably addressed) for the model's own whole lifetime.
 struct sslm_model_s {
 	superslm::SslmModelView view;
 	std::atomic<uint32_t> live_refs{0};
 	sslm_model_engine_cache engine;
+	superslm::SchemaMasksTable schemas;
+	std::vector<sslm_schema_s> schema_handles;
 };
 
 // C6. A mapped LoRA adapter (design Sec9 C6, S-LoRA-serial's own outstanding ABI debt): wraps
@@ -206,6 +234,18 @@ struct sslm_prefix_s {
 	                              // sequence so decode can resume immediately after adoption,
 	                              // without a redundant re-prefill of the prefix's own last token.
 	bool frozen = false;
+	// G5 (design Sec5, T-2132): "prefix construction inherits the same discriminator" -- a
+	// prefix's own recorded schema binding and DFA-walk-state, set by sslm_prefix_set_schema
+	// and advanced by sslm_prefix_prefill's own SSLM_SPAN_SCHEMA_CONTENT path, consulted by
+	// sslm_seq_adopt_prefix's own schema-compatibility rule. kDfaWalkStateUnused == no schema
+	// ever bound; 0 == a schema IS bound but the walk is still at its start state (no
+	// SSLM_SPAN_SCHEMA_CONTENT content prefilled yet). Both read as "no real schema-content
+	// progress" -- "compatible with any [adopting sequence's] binding" per design Sec5's own
+	// "prompt-only prefix" framing -- only a walk-state that is neither of these two values is
+	// real, transferable progress (the `prefix_has_real_progress` check inline in
+	// sslm_seq_adopt_prefix, below, is where this reasoning is applied).
+	sslm_schema bound_schema = nullptr;
+	uint32_t dfa_walk_state = kDfaWalkStateUnused;
 	// NO `released` flag (S5, Claude/Poirot/2c18dab-t2139-abi-build-review.md): a flag written
 	// immediately before `delete` protects nothing -- there is no window on which a LIVE handle
 	// carries it true, and every read of it on an already-released handle is itself a read of
@@ -243,6 +283,18 @@ struct sslm_seq_s {
 	// the layer work already happened during prefill).
 	bool ready_for_logits = false;
 	sslm_adapter adapter_handle = nullptr;
+	// G5 (design Sec5, T-2132): see sslm_prefix_s's own identical fields for the shared
+	// semantics (kDfaWalkStateUnused == no schema bound; 0 == bound, at start). Reset by
+	// sslm_seq_reset (walk-state only, binding preserved) and round-tripped through
+	// sslm_seq_save/restore (Sec13.4). `forced_token_count` (design Sec6 G5-3/Sec7 dim7):
+	// sslm_stats' own "actual forced-position count, not the ceiling" -- incremented once per
+	// token admitted through a SSLM_SPAN_SCHEMA_CONTENT prefill call (this build's own G5-3
+	// scope: the host/runtime issues the forced span explicitly; no autonomous jump-forward
+	// scheduling heuristic is built, design Sec6 G5-3's own "no separate forced-chain-detection
+	// mechanism is required" text).
+	sslm_schema bound_schema = nullptr;
+	uint32_t dfa_walk_state = kDfaWalkStateUnused;
+	int64_t forced_token_count = 0;
 	// NO `released` flag -- see sslm_prefix_s's own comment on why (S5): double-release and any
 	// other use of an already-released handle is caller UB, not a state this ABI pretend-guards.
 };
@@ -972,7 +1024,78 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 		delete h;
 		return cache_st;
 	}
+
+	// G5-2 (T-2132, design Sec13): parse this artifact's own SchemaMasks/SCM1 section, if
+	// present -- absence is a valid, unconstrained-only artifact (design Sec13.1), exactly
+	// today's pre-G5 behavior; `h->schemas` stays default-constructed/empty in that case, and
+	// `sslm_schema_lookup` correctly reports SSLM_SCHEMA_NOT_FOUND for every name against it.
+	// Runs AFTER BuildEngineCache (h->engine.ok already true) but BEFORE *out is published, the
+	// same "not visible to any caller until fully built" discipline BuildEngineCache's own
+	// comment states for C4's resolution step. Every structural/cross-check rejection Sec13.3
+	// names is enforced by SchemaMasksTable::Parse (schema_masks.h); this call site maps ANY
+	// such rejection to SSLM_ARTIFACT_REJECTED -- see schema_masks.h's own header comment for
+	// why this build deliberately does not mint per-rejection SslmModelStatus enumerators.
+	const superslm::SslmSectionView* schema_section =
+	    h->view.Section(superslm::SslmSectionType::SchemaMasks);
+	if (schema_section) {
+		std::string schema_err;
+		if (!superslm::SchemaMasksTable::Parse(schema_section->data, schema_section->byte_size,
+		                                        h->view.config.vocab_size, h->schemas,
+		                                        &schema_err)) {
+			delete h;
+			return SSLM_ARTIFACT_REJECTED;
+		}
+		// P1-style throw safety: schema_handles.resize can throw (bad_alloc/length_error) past
+		// every check above it, matching every other vector-mutation site this file already
+		// wraps (see this file's own P1 sweep comment, above).
+		const sslm_status handles_st = CatchAllocationFailure([&]() -> sslm_status {
+			h->schema_handles.resize(h->schemas.Count());
+			for (size_t i = 0; i < h->schema_handles.size(); ++i) {
+				h->schema_handles[i].model = h;
+				h->schema_handles[i].index = static_cast<uint32_t>(i);
+			}
+			return SSLM_OK;
+		});
+		if (handles_st != SSLM_OK) {
+			delete h;
+			return handles_st;
+		}
+	}
+
 	*out = h;
+	return SSLM_OK;
+}
+
+// G5 (design Sec5, T-2132): schema lookup/enumeration -- read-only, no map/release verb, the
+// schema is already resident wherever the model is.
+extern "C" sslm_status sslm_schema_lookup(sslm_model model, const char* name, sslm_schema* out) {
+	if (!out) return SSLM_INVALID_ARGUMENT;
+	*out = nullptr;
+	if (!model || !name) return SSLM_INVALID_ARGUMENT;
+	size_t index = 0;
+	if (!model->schemas.ByName(name, &index)) return SSLM_SCHEMA_NOT_FOUND;
+	*out = &model->schema_handles[index];
+	return SSLM_OK;
+}
+
+extern "C" size_t sslm_schema_count(sslm_model model) {
+	if (!model) return 0;
+	return model->schemas.Count();
+}
+
+extern "C" sslm_status sslm_schema_name(sslm_model model, int32_t index, char* buf, size_t* n) {
+	if (!n) return SSLM_INVALID_ARGUMENT;
+	if (!model || index < 0 || static_cast<size_t>(index) >= model->schemas.Count()) {
+		return SSLM_INVALID_ARGUMENT;
+	}
+	const superslm::SchemaEntry* entry = model->schemas.ByIndex(static_cast<size_t>(index));
+	const size_t required = entry->name.size();
+	if (!buf || *n < required) {
+		*n = required;
+		return SSLM_BUFFER_TOO_SMALL;
+	}
+	std::memcpy(buf, entry->name.data(), required);
+	*n = required;
 	return SSLM_OK;
 }
 
@@ -1063,13 +1186,31 @@ const superslm::LayerWeights* ResolveLayers(sslm_model_s* model, sslm_adapter_s*
 // and `ResolveLayers`' own per-call `layers_scratch` copy (adapter-bound path) can both throw,
 // and this helper is shared by two extern "C" verbs (sslm_prefix_prefill, sslm_prefill), so
 // wrapping it once here closes both call sites at once rather than twice, separately.
+// G5 (design Sec5/Sec10.2, T-2132): `kind`/`bound_schema`/`walk_state` thread the repaired
+// span-kind discriminator through the shared prefill loop -- SSLM_SPAN_PROMPT never advances
+// `*walk_state` (design's own "never advance, whatever schema is bound"); SSLM_SPAN_SCHEMA_CONTENT
+// advances it token by token, checking each token's reachability against `bound_schema`'s own
+// compiled DFA FIRST (before that token's forward pass runs) -- a span that leaves the DFA's
+// language returns SSLM_SCHEMA_SPAN_UNREACHABLE with the walk-state left at its last-good value
+// (design Sec6 G5-4: "the sequence's own walk-state is unmoved by the rejected call"). Callers
+// (sslm_prefill/sslm_prefix_prefill) reject SSLM_SCHEMA_SPAN_UNBOUND against SSLM_SCHEMA_NONE
+// BEFORE calling this -- `bound_schema` is only ever non-null here on a SCHEMA_CONTENT call, so
+// this function never itself needs to re-check for the unbound case. `forced_token_count`
+// (nullptr for prefix construction, design Sec12's own "no dedicated stats call for a prefix")
+// is incremented once per token admitted under SCHEMA_CONTENT (design Sec6 G5-3/Sec7 dim7).
 sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerState& state,
                                     uint8_t* kv_block, size_t block_size, const int32_t* tokens,
                                     int32_t count, int32_t chunk_budget, int32_t* consumed,
                                     int32_t* out_last_token, sslm_adapter_s* adapter,
-                                    sslm_workspace_s* ws) {
+                                    sslm_workspace_s* ws, sslm_span_kind kind,
+                                    sslm_schema bound_schema, uint32_t* walk_state,
+                                    int64_t* forced_token_count) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
+	const superslm::SchemaEntry* schema_entry =
+	    (kind == SSLM_SPAN_SCHEMA_CONTENT && bound_schema)
+	        ? model->schemas.ByIndex(bound_schema->index)
+	        : nullptr;
 	// S7 fix round 2 (coordinator's own closing-round brief): thread this function's own
 	// embed_codes scratch through a caller-supplied, correctly-sized workspace, exactly the
 	// carving sslm_decode_step already does -- the SAME embed_codes region (design Sec7.1's own
@@ -1099,6 +1240,19 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			return SSLM_CONTEXT_CAP_EXCEEDED;
 		}
 
+		// G5-4 (design Sec6): the reachability check runs BEFORE this token's forward pass, so a
+		// rejected token never advances layer_index/context_length/kv content -- the walk-state
+		// and every other observable stays exactly at its last-good value on rejection (design
+		// Sec6 G5-4's own "the sequence's own walk-state is unmoved by the rejected call" claim,
+		// pinned by dim5_failure_red.cpp's own TestDim5_M5 cell).
+		uint32_t next_walk_state = 0;
+		if (schema_entry) {
+			if (!model->schemas.Transition(*schema_entry, *walk_state, static_cast<uint32_t>(token),
+			                                &next_walk_state)) {
+				return SSLM_SCHEMA_SPAN_UNREACHABLE;
+			}
+		}
+
 		superslm::CarriedScale embed_scale{};
 		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
 		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
@@ -1118,6 +1272,10 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 		// 0" -- RunLayerLoop, given the full layer_budget above, leaves layer_index at
 		// num_hidden_layers on success; reset to the resting convention before the next token.
 		state.layer_index = 0;
+		if (schema_entry) {
+			*walk_state = next_walk_state;
+			if (forced_token_count) ++(*forced_token_count);
+		}
 		++(*consumed);
 		if (out_last_token) *out_last_token = token;
 	}
@@ -1128,10 +1286,12 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
                                 uint8_t* kv_block, size_t block_size, const int32_t* tokens,
                                 int32_t count, int32_t chunk_budget, int32_t* consumed,
                                 int32_t* out_last_token, sslm_adapter_s* adapter,
-                                sslm_workspace_s* ws) {
+                                sslm_workspace_s* ws, sslm_span_kind kind, sslm_schema bound_schema,
+                                uint32_t* walk_state, int64_t* forced_token_count) {
 	return CatchAllocationFailure([&]() -> sslm_status {
 		return PrefillWholeTokensImpl(model, state, kv_block, block_size, tokens, count,
-		                               chunk_budget, consumed, out_last_token, adapter, ws);
+		                               chunk_budget, consumed, out_last_token, adapter, ws, kind,
+		                               bound_schema, walk_state, forced_token_count);
 	});
 }
 
@@ -1184,14 +1344,29 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 	return SSLM_OK;
 }
 
-// `kind` (design Sec4/Sec12): behaviorally inert on this base-only, SSLM_SPAN_PROMPT-throughout
-// build -- G5's schema-content differentiation is not built (declared-but-deferred, this
-// design's own Sec12 scope statement); every call is driven identically regardless of `kind`.
+// G5 (design Sec5, T-2132): "Valid only before any content has been prefilled into the prefix
+// under construction" -- prefix->current_token == -1 (its own default, and its own
+// never-touched sentinel; PrefillWholeTokensImpl only ever writes a token id >= 0 to it) is
+// exactly that condition. No dedicated rejection status is named for this case in the design's
+// closed Sec6 taxonomy (unlike sslm_seq_set_schema's own SSLM_SCHEMA_BIND_REJECTED) --
+// SSLM_INVALID_ARGUMENT is the general call-shape-wrong family, matching this file's own
+// identical precedent at sslm_seq_adopt_prefix's "M2" comment for an analogous naming gap.
+extern "C" sslm_status sslm_prefix_set_schema(sslm_prefix prefix, sslm_schema schema) {
+	if (!prefix) return SSLM_INVALID_ARGUMENT;
+	if (prefix->frozen || prefix->current_token != -1) return SSLM_INVALID_ARGUMENT;
+	prefix->bound_schema = schema;
+	prefix->dfa_walk_state = schema ? 0u : kDfaWalkStateUnused;
+	return SSLM_OK;
+}
+
+// G5 (design Sec5's "prefix construction inherits the same discriminator", T-2132, wired for
+// real this build): SSLM_SPAN_SCHEMA_CONTENT against a prefix with no schema bound rejects
+// (SSLM_SCHEMA_SPAN_UNBOUND, symmetric with sslm_prefill's own identical rule); otherwise the
+// span kind threads through PrefillWholeTokens exactly as sslm_prefill's own call does.
 extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
                                             const int32_t* tokens, int32_t count,
                                             int32_t chunk_budget, sslm_span_kind kind,
                                             sslm_workspace ws, int32_t* consumed) {
-	(void)kind;
 	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment) -- no longer
 	// merely accepted for call-shape parity.
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
@@ -1200,9 +1375,13 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
 	if (prefix->frozen) return SSLM_PREFIX_FROZEN_REJECTED;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+	if (kind == SSLM_SPAN_SCHEMA_CONTENT && !prefix->bound_schema) {
+		return SSLM_SCHEMA_SPAN_UNBOUND;
+	}
 
 	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
-	                           count, chunk_budget, consumed, &prefix->current_token, nullptr, ws);
+	                           count, chunk_budget, consumed, &prefix->current_token, nullptr, ws,
+	                           kind, prefix->bound_schema, &prefix->dfa_walk_state, nullptr);
 }
 
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
@@ -1274,6 +1453,22 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 	return SSLM_OK;
 }
 
+// G5 (design Sec5, T-2132): "valid ONLY when the sequence's DFA-walk state is at its start (a
+// fresh sslm_seq_create, or immediately after sslm_seq_reset)". Both of those states leave
+// dfa_walk_state at kDfaWalkStateUnused (never bound) or 0 (bound, unadvanced) -- see
+// sslm_seq_s's own field comment. Any other value means the walk has genuinely advanced (some
+// SSLM_SPAN_SCHEMA_CONTENT content was admitted), so re-binding -- even to a different schema --
+// rejects: schema re-binding mid-generation is out of 1.0 scope (design Sec11).
+extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
+	if (!seq) return SSLM_INVALID_ARGUMENT;
+	if (seq->dfa_walk_state != kDfaWalkStateUnused && seq->dfa_walk_state != 0) {
+		return SSLM_SCHEMA_BIND_REJECTED;
+	}
+	seq->bound_schema = schema;
+	seq->dfa_walk_state = schema ? 0u : kDfaWalkStateUnused;
+	return SSLM_OK;
+}
+
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
@@ -1291,6 +1486,13 @@ extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	// ready_for_logits branch would then skip straight to final_norm/logits/argmax over the
 	// just-zeroed residual, emitting a token from an empty sequence with no history.
 	seq->ready_for_logits = false;
+	// G5 (design Sec5, T-2132): "clears the DFA-walk-state back to the bound schema's start
+	// state... but preserves the schema binding itself" -- bound_schema is untouched;
+	// dfa_walk_state returns to 0 (bound) or stays kDfaWalkStateUnused (unbound). No leak from
+	// the prior generation's walk into the next one (design Sec7 dim1, the poison-fill
+	// discipline this dimension already applies to KV-block recycling, applied here).
+	seq->dfa_walk_state = seq->bound_schema ? 0u : kDfaWalkStateUnused;
+	seq->forced_token_count = 0;
 	return SSLM_OK;
 }
 
@@ -1321,6 +1523,27 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 	// once sslm_kv_pool_s is itself bound to one model, below).
 	if (seq->model != prefix->model) return SSLM_INVALID_ARGUMENT;  // different models
 	if (seq->block_size != prefix->block_size) return SSLM_INVALID_ARGUMENT;
+
+	// G5 (design Sec5, T-2132): the prefix's own recorded walk-state transfers IFF the
+	// adopting sequence's bound schema matches the prefix's recorded origin schema, OR the
+	// prefix carries no real schema-content progress (unbound, or bound-but-still-at-start --
+	// "a prompt-only prefix... compatible with any sequence's schema binding"). EVERY OTHER
+	// CASE is SSLM_PREFIX_SCHEMA_MISMATCH -- stated exhaustively (design Sec5): a mismatched
+	// bound schema, AND an unbound sequence adopting real progress, both reject. Checked BEFORE
+	// any copy below, so a rejection leaves the sequence's own KV/state untouched (this file's
+	// own "reject leaves state unperturbed" convention).
+	const bool prefix_has_real_progress =
+	    prefix->bound_schema != nullptr && prefix->dfa_walk_state != kDfaWalkStateUnused &&
+	    prefix->dfa_walk_state != 0;
+	if (prefix_has_real_progress && seq->bound_schema != prefix->bound_schema) {
+		return SSLM_PREFIX_SCHEMA_MISMATCH;
+	}
+	if (prefix_has_real_progress) {
+		seq->dfa_walk_state = prefix->dfa_walk_state;
+	}
+	// else: prefix is prompt-only (or bound-but-unadvanced) -- the adopting sequence's own
+	// walk-state (and binding) is left exactly as it already was, per design Sec5.
+
 	std::memcpy(seq->kv_block, prefix->kv_block, seq->block_size);
 	std::copy(prefix->hidden_codes_storage.begin(), prefix->hidden_codes_storage.end(),
 	          seq->hidden_codes_storage.begin());
@@ -1354,21 +1577,29 @@ extern "C" sslm_status sslm_seq_adopt_prefix(sslm_seq seq, sslm_prefix prefix) {
 // (tools/t2139_c4_oracle.cpp).
 // -----------------------------------------------------------------------------------------
 
+// G5 (design Sec5/Sec10.2, T-2132): `kind` is wired for real -- SSLM_SPAN_PROMPT never
+// advances the walk (whatever schema is bound); SSLM_SPAN_SCHEMA_CONTENT always advances it,
+// rejecting SSLM_SCHEMA_SPAN_UNBOUND against an unbound sequence up front (the repair's own
+// rejection, design Sec5/Sec10.2). This is THE discriminator the rung-5 strike's pigeonhole
+// proof (design Sec10.1) forced -- see PrefillWholeTokensImpl's own comment for the mechanism.
 extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens,
                                      int32_t count, int32_t chunk_budget, sslm_span_kind kind,
                                      sslm_workspace ws, int32_t* consumed) {
-	(void)kind;  // behaviorally inert, same disposition as sslm_prefix_prefill's own (design
-	             // Sec4/Sec12)
 	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment).
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
 	*consumed = 0;
 	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
 	if (count < 0 || chunk_budget < 1 || (count > 0 && !tokens)) return SSLM_INVALID_ARGUMENT;
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
+	if (kind == SSLM_SPAN_SCHEMA_CONTENT && !seq->bound_schema) {
+		return SSLM_SCHEMA_SPAN_UNBOUND;
+	}
 
 	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->kv_block, seq->block_size,
 	                                           tokens, count, chunk_budget, consumed,
-	                                           &seq->current_token, seq->adapter_handle, ws);
+	                                           &seq->current_token, seq->adapter_handle, ws, kind,
+	                                           seq->bound_schema, &seq->dfa_walk_state,
+	                                           &seq->forced_token_count);
 	if (*consumed > 0) {
 		// The last token this call processed already ran every layer (PrefillWholeTokens'
 		// own full-layer_budget convention) -- its final hidden state is ready for logits with
@@ -1376,6 +1607,24 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 		seq->ready_for_logits = true;
 	}
 	return st;
+}
+
+// G5-2 (design Sec4/Sec6, T-2132): the internal mask-application primitive both
+// sslm_decode_step (below) and the suite's own test-only guard-vitality hook
+// (sslm_g5_test_only_apply_mask_and_argmax, this file's own bottom) call -- ONE implementation,
+// never a parallel reimplementation (design Sec11.2's own ruling: a passing negative control
+// proves nothing about the production guard unless the hook calls this exact function). Table
+// lookup + bitmask AND, int32 logits, pre-argmax (design Sec4's architecture table): masked-out
+// positions are forced to INT32_MIN so ArgmaxLowestIndexTieBreak's own lowest-index tie-break
+// can never select them. NO defensive check for an all-masked page (D-SLM40's own positive
+// requirement, design Sec3/Sec7 dim11) -- an all-zero mask degrades to picking the lowest
+// index, exactly dim11's own negative-control cell.
+static void ApplyMaskAndArgmaxImpl(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
+                                    int32_t* out_token_id) {
+	for (int32_t t = 0; t < vocab_size; ++t) {
+		if (!((mask[t >> 3] >> (t & 7)) & 1u)) logits[t] = INT32_MIN;
+	}
+	*out_token_id = superslm::ArgmaxLowestIndexTieBreak(logits, static_cast<size_t>(vocab_size));
 }
 
 // P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass): renamed
@@ -1537,8 +1786,26 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 		                            logit_row);
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
-		const int32_t produced =
-		    superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
+		// G5-2 (design Sec4, T-2132): masking applies to int32 logits BEFORE argmax, indexed by
+		// the sequence's own DFA-walk-state (design Sec4's architecture table) -- SSLM_SCHEMA_NONE
+		// (bound_schema == nullptr) is byte-for-byte unchanged from pre-G5 output (no masking, the
+		// existing ArgmaxLowestIndexTieBreak call, unmodified).
+		int32_t produced;
+		if (seq->bound_schema) {
+			const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+			const uint8_t* page = entry->mask_pages +
+			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
+			ApplyMaskAndArgmaxImpl(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
+			// The walk advances to whatever state `produced` reaches -- guaranteed to exist by
+			// the loader's own mask/transition cross-check (Sec13.3): `produced` was masked-valid,
+			// and a masked-valid token always has a matching CSR transition entry by construction.
+			uint32_t next_state = seq->dfa_walk_state;
+			model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(produced),
+			                           &next_state);
+			seq->dfa_walk_state = next_state;
+		} else {
+			produced = superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
+		}
 		out_tokens[i] = produced;
 		seq->current_token = produced;
 		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
@@ -1559,10 +1826,7 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out) {
 	if (!out) return SSLM_INVALID_ARGUMENT;
 	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
-	// design Sec12 ("ceiling + actual work, forced-token count, cache state"): this arc builds
-	// no schema/constrained-decoding surface (G5's own scope, declared-but-deferred here), so
-	// forced_token_count is always 0 -- a real, correct answer for a sequence with no schema
-	// bound (G5's own forcing mechanism has never run), not a placeholder. decode_step_ceiling/
+	// design Sec12 ("ceiling + actual work, forced-token count, cache state"). decode_step_ceiling/
 	// decode_step_actual are both the model's own num_hidden_layers: this arc's own
 	// sslm_decode_step always processes exactly one call's own layer_budget against the SAME
 	// worst-case ceiling (a full token, num_hidden_layers), since no partial-work-skipping
@@ -1570,7 +1834,12 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 	// diverge -- reported honestly as equal, not fabricated apart.
 	out->decode_step_ceiling = static_cast<int64_t>(model->view.config.num_hidden_layers);
 	out->decode_step_actual = static_cast<int64_t>(model->view.config.num_hidden_layers);
-	out->forced_token_count = 0;
+	// G5-3 (design Sec6/Sec7 dim7, T-2132): the actual forced-position count, not the ceiling --
+	// seq->forced_token_count is incremented once per token admitted through a
+	// SSLM_SPAN_SCHEMA_CONTENT prefill call (PrefillWholeTokensImpl, above), never fabricated
+	// from the schema binding alone. A sequence with no schema bound (or one bound but never
+	// driven through a forced/fixed span) correctly reports 0.
+	out->forced_token_count = seq->forced_token_count;
 	out->kv_blocks_resident = 1;  // this sequence's own single, whole-sequence block (Sec7.2)
 	return SSLM_OK;
 }
@@ -1607,7 +1876,6 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 namespace {
 
 constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '1'};
-constexpr uint32_t kDfaWalkStateUnused = 0xFFFFFFFFu;
 constexpr int32_t kSeqBlobNoCurrentToken = -1;
 
 void WriteLE32(uint8_t* p, uint32_t v) {
@@ -1665,9 +1933,16 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 32;
 	WriteLE32(p + off, static_cast<uint32_t>(c.kv_precision));
 	off += 4;
-	WriteLE64(p + off, 0);  // schema_name_hash -- G5 scope, not built
+	// G5 (design Sec13.4, T-2132): schema_name_hash is Fnv1a64(bound schema's own name), or 0
+	// when SSLM_SCHEMA_NONE is bound -- 0 is never a legitimate Fnv1a64 output for this
+	// project's own name-hash convention with any realistic probability, and restore's own
+	// resolution (below) treats a stored 0 as "no schema" without a name-blob scan, matching
+	// this file's own "0 == not applicable" sentinel convention (kSeqBlobNoCurrentToken).
+	const uint64_t schema_name_hash =
+	    seq->bound_schema ? model->schemas.ByIndex(seq->bound_schema->index)->name_hash : 0;
+	WriteLE64(p + off, schema_name_hash);
 	off += 8;
-	WriteLE32(p + off, kDfaWalkStateUnused);  // dfa_walk_state -- G5 scope, not built
+	WriteLE32(p + off, seq->dfa_walk_state);  // dfa_walk_state -- design Sec13.4
 	off += 4;
 	WriteLE64(p + off, 0);  // adapter_binding_id -- C6 scope, not built (no adapter can be bound)
 	off += 8;
@@ -1732,6 +2007,25 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const uint32_t saved_kv_precision = ReadLE32(p + 36);
 	if (saved_kv_precision != static_cast<uint32_t>(model->view.config.kv_precision)) {
 		return SSLM_RESTORE_KV_MISMATCH;
+	}
+
+	// G5 (design Sec5/Sec13.4, T-2132): resolve the save-blob's own schema binding AFTER the
+	// model/kv-precision validation above and BEFORE any device work -- specifically, before
+	// DrawBlock draws a block from the pool, below, so a rejection here never claims (and never
+	// needs to return) pool resources. schema_name_hash == 0 means SSLM_SCHEMA_NONE was bound
+	// (this file's own save-side sentinel, above) -- restores as unbound, no name-blob scan. A
+	// nonzero hash that does not resolve against this model's OWN schema set -- including a
+	// model with no SchemaMasks section at all -- is SSLM_RESTORE_SCHEMA_MISMATCH, symmetric
+	// with SSLM_RESTORE_MODEL_MISMATCH's own precedent (design Sec5).
+	const uint64_t saved_schema_name_hash = ReadLE64(p + 40);
+	const uint32_t saved_dfa_walk_state = ReadLE32(p + 48);
+	sslm_schema resolved_schema = nullptr;
+	if (saved_schema_name_hash != 0) {
+		size_t idx = 0;
+		if (!model->schemas.ByNameHash(saved_schema_name_hash, &idx)) {
+			return SSLM_RESTORE_SCHEMA_MISMATCH;
+		}
+		resolved_schema = &model->schema_handles[idx];
 	}
 
 	const int64_t context_length = static_cast<int64_t>(ReadLE64(p + 60));
@@ -1815,6 +2109,10 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	h->state.layer_index = layer_index;
 	h->state.kv_saturation_count = kv_saturation_count;
 	h->state.context_length = context_length;
+	// G5 (design Sec5/Sec13.4, T-2132): the binding/walk-state resolved above -- restored
+	// verbatim, bit-equal (design Sec7 dim9's own round-trip cell).
+	h->bound_schema = resolved_schema;
+	h->dfa_walk_state = saved_dfa_walk_state;
 	// current_token/ready_for_logits reconstruction -- CLOSED (design commit 9e2995f4e7, the
 	// blob-amendment ruling; see this whole C5 block's own top comment for the finding this
 	// resolves). `saved_current_token` (read above, `-1` sentinel = not applicable) is now the
@@ -2166,5 +2464,31 @@ extern "C" sslm_status sslm_detokenize_stream(sslm_model model, sslm_detok_state
 	for (size_t i = 0; i < hold; ++i) {
 		state->pending_bytes[i] = static_cast<uint8_t>(combined[emit_len + i]);
 	}
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// G5-2's own test-only guard-vitality hook (design Sec11.2, BLESSED with a structural
+// ship-boundary -- Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md, Wizard repo, ruling 2).
+// Declared ONLY in tests/t2130-g5-red-suite/sslm_g5.h (this suite's own private header), NEVER
+// in include/superslm/ -- deliberately absent from sslm_abi.h/sslm_abi_functions*.inc, so it
+// carries no counterpart in this repo's own install/export rule set at all (an entry it is
+// never added to, not an entry removed later, per the ruling's own "install-list curation"
+// remedy). Its entire body is a call to ApplyMaskAndArgmaxImpl -- G5-2's own internal,
+// non-exported mask-application primitive, the SAME one sslm_decode_step's masked-argmax step
+// (above) calls -- never a parallel reimplementation, per the ruling's own contract: a passing
+// negative control here proves something about the production guard only because this hook
+// exercises the production guard's own code, not a lookalike.
+// -----------------------------------------------------------------------------------------
+extern "C" sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* logits,
+                                                                 const uint8_t* mask,
+                                                                 int32_t vocab_size,
+                                                                 int32_t* out_token_id) {
+	if (!logits || !mask || vocab_size < 1 || !out_token_id) return SSLM_INVALID_ARGUMENT;
+	// ApplyMaskAndArgmaxImpl mutates `logits` in place (masked-out positions become INT32_MIN) --
+	// this hook's own caller (dim11's negative-control cell) does not rely on `logits` surviving
+	// the call, matching the production decode_step path's own identical use of its scratch
+	// `logit_row` (never read again after this step there either).
+	ApplyMaskAndArgmaxImpl(const_cast<int32_t*>(logits), mask, vocab_size, out_token_id);
 	return SSLM_OK;
 }

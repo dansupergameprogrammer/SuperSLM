@@ -39,6 +39,15 @@ typedef struct sslm_adapter_s*   sslm_adapter;
 typedef struct sslm_kv_pool_s*   sslm_kv_pool;
 typedef struct sslm_workspace_s* sslm_workspace;
 
+/* G5 (T-2119 design Sec5, T-2132 build): the schema handle -- transcribed verbatim from
+ * tests/t2130-g5-red-suite/sslm_g5.h, the same declaration-shape-parity convention this
+ * whole file's own header comment states for every type here. No map/release verb -- a schema
+ * is already resident wherever the model is (Sec5). SSLM_SCHEMA_NONE is the unconstrained
+ * sentinel, a null handle by construction, matching sslm_seq_set_adapter's own NULL-adapter
+ * convention. */
+typedef struct sslm_schema_s*    sslm_schema;
+#define SSLM_SCHEMA_NONE ((sslm_schema)0)
+
 /* call-shape declaration for workspace sizing -- design Sec7.1, verbatim. All-zero is HOSTILE
  * input here (every field is a required positive sizing input), unlike a GPU-ABI-style
  * reserved-only config. */

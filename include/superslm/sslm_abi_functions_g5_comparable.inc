@@ -110,3 +110,19 @@ sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
 sslm_status sslm_tokenize(sslm_model model, const char* utf8, int32_t* tokens, int32_t* n);
 
 sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out);
+
+/* G5 (T-2119 design Sec5, T-2132 build): schema lookup, read-only, no map/release verb.
+ * Unknown name is SSLM_SCHEMA_NOT_FOUND. Lookup-by-name, D-SLM3442. */
+sslm_status sslm_schema_lookup(sslm_model model, const char* name, sslm_schema* out);
+size_t      sslm_schema_count(sslm_model model);
+sslm_status sslm_schema_name(sslm_model model, int32_t index, char* buf, size_t* n);
+
+/* G5 design Sec5: binds a compiled schema to a sequence (SSLM_SCHEMA_NONE = unconstrained).
+ * Valid ONLY when the sequence's DFA-walk state is at its start (fresh sslm_seq_create, or
+ * immediately after sslm_seq_reset) -- a non-fresh walk state rejects
+ * (SSLM_SCHEMA_BIND_REJECTED). No mid-generation re-binding (design Sec5/Sec11, out of scope). */
+sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema);
+
+/* G5 design Sec5: "Prefix construction inherits the same discriminator." Valid only before any
+ * content has been prefilled into the prefix under construction. */
+sslm_status sslm_prefix_set_schema(sslm_prefix prefix, sslm_schema schema);
