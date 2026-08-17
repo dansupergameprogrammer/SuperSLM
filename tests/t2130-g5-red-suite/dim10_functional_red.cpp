@@ -181,6 +181,12 @@ static void TestDim10_B_JumpForwardEquivalentToFullForwardTokenAndKvBitForBit(
 	int32_t jf_continuation = 0;
 	CHECK(sslm_decode_step(model, &seq_jump_forward, 1, &params, nullptr, &jf_continuation) ==
 	      SSLM_OK);
+	// D-SLM3486 (design Sec7.3, M4, T-2133 session 8): forced_token_count is now REAL and
+	// mechanism-specific -- captured here, before save/release, via the same sslm_stats query a
+	// real host would use (never re-derived from the blob bytes this cell also inspects below,
+	// which would make the two assertions the same check twice).
+	sslm_stats_out jf_stats{};
+	CHECK(sslm_stats(model, seq_jump_forward, &jf_stats) == SSLM_OK);
 	std::vector<uint8_t> jf_blob = AllocRealSaveBlobBuffer(model);
 	size_t jf_blob_size = jf_blob.size();
 	CHECK(sslm_seq_save(seq_jump_forward, jf_blob.data(), &jf_blob_size) == SSLM_OK);
@@ -200,18 +206,51 @@ static void TestDim10_B_JumpForwardEquivalentToFullForwardTokenAndKvBitForBit(
 	for (int i = 0; i < 26; ++i)
 		CHECK(sslm_decode_step(model, &seq_full_forward, 1, &params, nullptr, &out_tok) ==
 		      SSLM_OK);
+	sslm_stats_out ff_stats{};
+	CHECK(sslm_stats(model, seq_full_forward, &ff_stats) == SSLM_OK);
 	std::vector<uint8_t> ff_blob = AllocRealSaveBlobBuffer(model);
 	size_t ff_blob_size = ff_blob.size();
 	CHECK(sslm_seq_save(seq_full_forward, ff_blob.data(), &ff_blob_size) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_full_forward) == SSLM_OK);
 
-	// FEATURE ORACLE: jf_blob and ff_blob -- the K/V content AND the DFA-walk-state -- are
-	// byte-for-byte identical. This is the equivalence oracle, independent of the mask
-	// application's own internal consistency: jump-forward could be perfectly self-consistent
-	// (same bits every run) while still being WRONG relative to the full-forward path, and
-	// only this direct comparison would catch it.
+	// D-SLM3486's own POSITIVE assertion, stated before the blob comparison below narrows around
+	// it: the two paths reach the SAME resting state by DIFFERENT mechanisms, and
+	// forced_token_count is specifically the field that records which mechanism ran --
+	// seq_jump_forward admitted its whole 25-token span via SSLM_SPAN_SCHEMA_CONTENT (the only
+	// path that increments the counter, PrefillWholeTokensImpl); seq_full_forward reached the
+	// token-for-token-identical state via 26 ORDINARY masked-argmax decode_step calls, which
+	// never touch it. A jump-forward implementation that silently fell back to ordinary decode
+	// (self-consistent, but not actually exercising G5-3's own forced-chain mechanism) would
+	// pass every other assertion in this cell and fail exactly this one.
+	CHECK(jf_stats.forced_token_count == 25);
+	CHECK(ff_stats.forced_token_count == 0);
+
+	// FEATURE ORACLE: jf_blob and ff_blob -- the K/V content, the DFA-walk-state, and every
+	// other field two paths that reached an equivalent resting state must agree on -- are
+	// byte-for-byte identical, with the ONE exception D-SLM3486 makes correct and expected:
+	// forced_token_count (design Sec7.3's 'SSB2' layout, offset kForcedTokenCountBlobOffset,
+	// width kForcedTokenCountBlobWidth = sizeof(int64_t)) legitimately differs, asserted
+	// separately above. No public header or suite-side mirror names the save-blob's own byte
+	// layout (T-2132 session 8's own build-log text) -- kForcedTokenCountBlobOffset is therefore
+	// cited from design Sec7.3's field list / src/sslm_abi.cpp's own kSeqBlobFixedHeaderBytes
+	// (108) and WriteLE64(p + 100, ...)/ReadLE64(p + 100) call sites (the field immediately
+	// preceding it, kv_saturation_count, ends at offset 100; forced_token_count is the LAST
+	// fixed-header field, ending at 108), not re-derived from a header this suite has no access
+	// to. This is the same, not a weaker, comparison as before EXCEPT for the one field that has
+	// a real, by-design difference -- excluding a field without asserting it separately would be
+	// the hole this fix exists to close, not merely a narrower memcmp.
+	constexpr size_t kForcedTokenCountBlobOffset = 100;
+	constexpr size_t kForcedTokenCountBlobWidth = sizeof(int64_t);  // 8
+	constexpr size_t kForcedTokenCountBlobEnd =
+	    kForcedTokenCountBlobOffset + kForcedTokenCountBlobWidth;  // 108, == kSeqBlobFixedHeaderBytes
 	CHECK(jf_blob_size == ff_blob_size);
-	CHECK(std::memcmp(jf_blob.data(), ff_blob.data(), jf_blob_size) == 0);
+	CHECK(jf_blob_size >= kForcedTokenCountBlobEnd);
+	if (jf_blob_size >= kForcedTokenCountBlobEnd) {
+		CHECK(std::memcmp(jf_blob.data(), ff_blob.data(), kForcedTokenCountBlobOffset) == 0);
+		CHECK(std::memcmp(jf_blob.data() + kForcedTokenCountBlobEnd,
+		                   ff_blob.data() + kForcedTokenCountBlobEnd,
+		                   jf_blob_size - kForcedTokenCountBlobEnd) == 0);
+	}
 }
 
 // --- Oracle (c): adapter x constraint-schema yields schema-valid, adapter-conditioned
