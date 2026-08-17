@@ -18,11 +18,7 @@ SSLM_STATUS_ENUM_VALUE_  # a scratch, function-like X-macro-expansion helper #de
 # implementation-internal identifier the design's own ruling names the top-level include guard as
 # an example of (Sec8, "an explicit allowlist for identifiers this section deliberately does not
 # narrate"). Ruled deliberately out of scope for a Sec8 inventory line, not a gap.
-SSLM_ABI_ALIGNMENT_BYTES  # GENUINE GAP, flagged rather than ruled: this macro IS consumer-facing
-# surface (sslm_abi.h:180-188's own header comment: exported so a caller can pass it directly to
-# std::align instead of transcribing the number) and has no Sec8 inventory line anywhere in the
-# design document as of this check's first real run (T-2139 sixth confirmation fold, item 5). This
-# is disclosed here so the check stays green rather than blocking the round on a design-doc edit
-# that is not this seat's to make (Brunel builds implementation, not design) -- filed back to the
-# planner as a new owed §8 inventory line in the build log for this round; NOT a judgment that the
-# omission is fine. Remove this entry once §8 gains the line.
+# SSLM_ABI_ALIGNMENT_BYTES's entry was removed 2026-08-17 per its own removal instruction: the
+# design ruled it public consumer-facing surface and Sec8 gained its inventory line (D-SLM3472,
+# design fold commit 579845b4b4), so the check now guards it for real instead of treating it as
+# a disclosed exception.
