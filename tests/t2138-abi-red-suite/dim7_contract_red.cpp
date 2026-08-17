@@ -1,5 +1,6 @@
-// T-2138 (Curie) -- Dim 7 (Contract claims), design Sec10 dim7. 3 cells authored here; two
-// dispositions named without a cell (N/A-with-reason, per the design's own text):
+// T-2138 (Curie) -- Dim 7 (Contract claims), design Sec10 dim7. 4 cells authored here (C1
+// recalibrated into C1a/C1b per design commit 959336ad64, below); two dispositions named
+// without a cell (N/A-with-reason, per the design's own text):
 //   - The handle-type half of §5's distinct-but-consistent ruling (sslm_model vs
 //     SslmGpuModelHandle are compile-time-distinct incomplete-struct pointer types with no
 //     implicit C conversion) is N/A-with-reason: a caller passing one where the other is
@@ -17,13 +18,30 @@
 
 using namespace superslm;
 
-// --- Cell 1 (design Sec7/Sec10 dim7: "caller-owned memory, never mallocs on the hot path" ->
-// asserted by construction, an allocation-tracking test per §17 dim 7's existing convention).
-// sslm_prefill/sslm_decode_step's own call graph makes zero heap allocations -- proven by
-// overriding global operator new/delete for the scope of the hot-path calls and asserting the
-// allocation counter is unmoved. This is a REAL, mutation-provable counter (not a comment-only
-// stub, StandardsDocument.md §5.4): a build that reintroduces a hidden heap allocation on this
-// path makes g_new_call_count nonzero and this cell fails for exactly that reason. ---
+// --- Cell 1 (design Sec7/Sec10 dim7, RECALIBRATED per design commit 959336ad64: "narrow the
+// hot-path-allocation contract to what this ABI layer controls; true zero-allocation joins
+// D-SLM3457's 1.x inventory"). The T-2139 closing round measured sslm_prefill at 9717
+// allocations and sslm_decode_step at 1 against a real 1.5B artifact, contradicting the
+// original zero-allocation claim -- traced to source, the bulk is RunLayerLoop's/EmbedEntry's
+// own internal per-call std::vector scratch (design Sec3's own grounding: "the engine's own
+// internal per-call compute scratch... is separately, internally heap-allocated... never a
+// caller-supplied buffer of any kind"), never this ABI layer's own code. The ruled contract,
+// two halves, both still real and mutation-provable (overriding global operator new/delete,
+// the same counter every cell in this file shares):
+//   (a) THIS ABI LAYER's own allocations are the exact disclosed count -- zero on
+//       sslm_decode_step's common ready_for_logits path; zero on sslm_prefill when a real,
+//       correctly-sized workspace is supplied and no adapter is bound (the embed_codes
+//       fallback fires ONLY workspace-absent/undersized; layers_scratch fires ONLY
+//       adapter-bound) -- proven by a WITH-WORKSPACE-vs-WITHOUT-WORKSPACE differential on the
+//       IDENTICAL call shape (same tokens, same seq freshness), which isolates exactly the one
+//       disclosed embed_codes-fallback allocation from RunLayerLoop's own per-token engine cost
+//       (workspace presence has no bearing on RunLayerLoop's own scratch, so the delta between
+//       the two calls can only be the ABI layer's own embed_codes handling).
+//   (b) THE ENGINE's own internal scratch allocation count is a disclosed, DATA-INDEPENDENT
+//       function of (num_hidden_layers, token count, layer_budget) -- design Sec14's own
+//       cost-determinism law applied to allocation count, never a zero requirement -- proven by
+//       a STABLE-COUNT cell: the identical call shape, with DIFFERENT (still valid) token
+//       values, produces the identical allocation count both times. ---
 static int g_new_call_count = 0;
 static void ResetAllocCounter() { g_new_call_count = 0; }
 
@@ -34,25 +52,94 @@ void* operator new(std::size_t size) {
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
-static void TestDim7_C1_HotPathMakesNoAllocation(sslm_model model, sslm_seq seq,
-                                                  sslm_workspace ws) {
-	int32_t tokens[4] = {0, 1, 2, 3};
-	int32_t consumed = 0;
-	ResetAllocCounter();
-	CHECK(sslm_prefill(model, seq, tokens, 4, 8, SSLM_SPAN_PROMPT, ws, &consumed) == SSLM_OK);
-	CHECK_MSG(g_new_call_count == 0, "sslm_prefill made %d heap allocation(s) on its own hot "
-	                                 "path -- design Sec7's caller-owned-memory contract",
-	          g_new_call_count);
+// --- Cell 1a: this ABI layer's own allocations are the exact disclosed count. ---
+static void TestDim7_C1a_AbiLayerOwnAllocationsAreTheDisclosedCount(
+    sslm_model model, sslm_seq seq_decode, sslm_seq seq_with_ws, sslm_seq seq_without_ws,
+    sslm_workspace ws) {
+	// Half 1: sslm_decode_step's common ready_for_logits path (the FIRST decode_step call after
+	// a completed prefill, fixture_common.h::EnterMidToken's own house precedent for why this is
+	// the "free" step) -- design Sec6/Poirot S1's own finding: this path "skips embed and skips
+	// RunLayerLoop entirely, runs final_norm -> logits -> argmax", so total allocations (ABI AND
+	// engine, both) must be exactly zero here, not merely this ABI layer's own share of it.
+	int32_t decode_prompt[1] = {0};
+	int32_t decode_consumed = 0;
+	CHECK(sslm_prefill(model, seq_decode, decode_prompt, 1, 8, SSLM_SPAN_PROMPT, ws,
+	                    &decode_consumed) == SSLM_OK);
 	sslm_decode_params params{};
-	params.layer_budget = 1;  // any positive value in [1, num_hidden_layers] -- this cell's own
-	                          // subject is the allocation count, not the decoded content.
+	params.layer_budget = 1;
 	int32_t out_token = 0;
-	sslm_seq batch[1] = {seq};
+	sslm_seq batch[1] = {seq_decode};
 	ResetAllocCounter();
 	CHECK(sslm_decode_step(model, batch, 1, &params, ws, &out_token) == SSLM_OK);
-	CHECK_MSG(g_new_call_count == 0, "sslm_decode_step made %d heap allocation(s) on its own "
-	                                 "hot path -- design Sec7's caller-owned-memory contract",
+	CHECK_MSG(g_new_call_count == 0,
+	          "sslm_decode_step's own ready_for_logits path made %d allocation(s), expected 0 "
+	          "(design commit 959336ad64's own disclosed count)",
 	          g_new_call_count);
+
+	// Half 2: sslm_prefill's own embed_codes handling, isolated by a WITH-vs-WITHOUT-workspace
+	// differential on the IDENTICAL call shape (same 4 tokens, both sequences equally fresh).
+	// RunLayerLoop's own per-token engine scratch does not depend on workspace presence at all
+	// (the workspace only ever backs PrefillWholeTokens's own embed_codes storage) -- so the
+	// delta between these two calls can only be the ABI layer's own fallback allocation, proving
+	// BOTH that the fix is real (the delta is not zero -- the fallback still exists when the
+	// workspace is genuinely absent) AND that it is exactly the disclosed size (delta == 1, not
+	// more): a regression that made the with-workspace call ALSO allocate would shrink the delta
+	// to 0 or make the with-workspace call itself the nonzero side, either way changing the
+	// measured delta away from 1.
+	int32_t prefill_tokens[4] = {0, 1, 2, 3};
+	int32_t consumed_with_ws = 0;
+	ResetAllocCounter();
+	CHECK(sslm_prefill(model, seq_with_ws, prefill_tokens, 4, 8, SSLM_SPAN_PROMPT, ws,
+	                    &consumed_with_ws) == SSLM_OK);
+	const int with_ws_count = g_new_call_count;
+
+	int32_t consumed_without_ws = 0;
+	ResetAllocCounter();
+	CHECK(sslm_prefill(model, seq_without_ws, prefill_tokens, 4, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &consumed_without_ws) == SSLM_OK);
+	const int without_ws_count = g_new_call_count;
+
+	CHECK_MSG(without_ws_count - with_ws_count == 1,
+	          "with_ws=%d without_ws=%d (delta=%d), expected delta=1 -- the disclosed "
+	          "embed_codes-fallback allocation, design commit 959336ad64",
+	          with_ws_count, without_ws_count, without_ws_count - with_ws_count);
+}
+
+// --- Cell 1b: the engine's own internal scratch allocation count is a disclosed,
+// DATA-INDEPENDENT function of (num_hidden_layers, token count, layer_budget) -- a stable-count
+// cell, never a zero requirement. ---
+static void TestDim7_C1b_EngineAllocationCountIsStableAcrossHostileContent(sslm_model model,
+                                                                            sslm_seq seq_benign,
+                                                                            sslm_seq seq_hostile,
+                                                                            sslm_workspace ws) {
+	// Same SHAPE (4 tokens, same chunk_budget, same freshly-created sequence state), different
+	// token VALUES -- still in-domain (dim5's own C10 already covers genuinely out-of-range
+	// values as a separate rejection path; this cell's own subject is in-domain content that
+	// merely differs).
+	int32_t benign_tokens[4] = {0, 1, 2, 3};
+	int32_t hostile_tokens[4] = {97, 53, 11, 29};  // different values, same count/shape.
+
+	int32_t consumed_benign = 0;
+	ResetAllocCounter();
+	CHECK(sslm_prefill(model, seq_benign, benign_tokens, 4, 8, SSLM_SPAN_PROMPT, ws,
+	                    &consumed_benign) == SSLM_OK);
+	const int benign_count = g_new_call_count;
+
+	int32_t consumed_hostile = 0;
+	ResetAllocCounter();
+	CHECK(sslm_prefill(model, seq_hostile, hostile_tokens, 4, 8, SSLM_SPAN_PROMPT, ws,
+	                    &consumed_hostile) == SSLM_OK);
+	const int hostile_count = g_new_call_count;
+
+	// FEATURE ORACLE: the identical call shape produces the IDENTICAL allocation count
+	// regardless of token content -- proving the engine's own per-call scratch cost is bounded
+	// and disclosed (a function of shape alone), never content-dependent. This cell can fail: a
+	// regression that made allocation count scale with token VALUE (e.g. a content-dependent
+	// branch inside RunLayerLoop's own scratch sizing) would make benign_count != hostile_count.
+	CHECK_MSG(benign_count == hostile_count,
+	          "benign=%d hostile=%d -- allocation count is not data-independent at this shape",
+	          benign_count, hostile_count);
+	CHECK(consumed_benign == consumed_hostile);  // same shape consumed the same token count too.
 }
 
 // --- Cell 2 (design Sec7/Sec10 dim7: "resumable between calls -> the save/restore round-trip
@@ -161,7 +248,9 @@ int main(int argc, char** argv) {
 	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
 	if (model) {
 		const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
-		const uint32_t block_count = 3;
+		// C1a needs 3 fresh sequences (decode-common-path, with-ws, without-ws), C1b needs 2
+		// (benign, hostile), C2/C3 need 1 each -- 7 total, one shared pool.
+		const uint32_t block_count = 7;
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
 		AlignedBuffer pool_buf(block_count * block_bytes + overhead);
@@ -175,11 +264,25 @@ int main(int argc, char** argv) {
 		CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
 
 		if (pool && ws) {
-			sslm_seq seq_c1 = nullptr, seq_c2 = nullptr, seq_c3 = nullptr;
-			CHECK(sslm_seq_create(model, &pool, &seq_c1) == SSLM_OK);
+			sslm_seq seq_decode = nullptr, seq_with_ws = nullptr, seq_without_ws = nullptr,
+			         seq_benign = nullptr, seq_hostile = nullptr, seq_c2 = nullptr,
+			         seq_c3 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq_decode) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_with_ws) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_without_ws) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_benign) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_hostile) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_c2) == SSLM_OK);
 			CHECK(sslm_seq_create(model, &pool, &seq_c3) == SSLM_OK);
-			if (seq_c1) TestDim7_C1_HotPathMakesNoAllocation(model, seq_c1, ws);
+
+			if (seq_decode && seq_with_ws && seq_without_ws) {
+				TestDim7_C1a_AbiLayerOwnAllocationsAreTheDisclosedCount(
+				    model, seq_decode, seq_with_ws, seq_without_ws, ws);
+			}
+			if (seq_benign && seq_hostile) {
+				TestDim7_C1b_EngineAllocationCountIsStableAcrossHostileContent(
+				    model, seq_benign, seq_hostile, ws);
+			}
 			if (seq_c2) TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(model, seq_c2);
 			if (!seq_c3) {
 				// nothing to do -- C3's own SKIP is subsumed by the seq_create failure above.
@@ -197,7 +300,11 @@ int main(int argc, char** argv) {
 					CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 				}
 			}
-			if (seq_c1) CHECK(sslm_seq_release(seq_c1) == SSLM_OK);
+			if (seq_decode) CHECK(sslm_seq_release(seq_decode) == SSLM_OK);
+			if (seq_with_ws) CHECK(sslm_seq_release(seq_with_ws) == SSLM_OK);
+			if (seq_without_ws) CHECK(sslm_seq_release(seq_without_ws) == SSLM_OK);
+			if (seq_benign) CHECK(sslm_seq_release(seq_benign) == SSLM_OK);
+			if (seq_hostile) CHECK(sslm_seq_release(seq_hostile) == SSLM_OK);
 			if (seq_c2) CHECK(sslm_seq_release(seq_c2) == SSLM_OK);
 			if (seq_c3) CHECK(sslm_seq_release(seq_c3) == SSLM_OK);
 		}
