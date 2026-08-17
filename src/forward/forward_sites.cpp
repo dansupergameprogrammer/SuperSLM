@@ -411,7 +411,8 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site, size_t token_index,
-                               SslmTraceHookState* trace_hook_state) {
+                               SslmTraceHookState* trace_hook_state,
+                               int64_t* external_wide_scratch) {
 	// C31 (§5.1, §6.2 step 1/9): sumsq -> ISqrt(FloorDivI64(...)) ->
 	// max(root,1) -> per-element FloorDivI64(h[i]<<2*NORM_FRAC_BITS, root)*g[i]
 	// -> the funnel, with the incoming span EMPTY. `incoming_scale` is accepted
@@ -427,7 +428,19 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 	    ISqrt(FloorDivI64(sumsq << (2 * kNormFracBits), static_cast<int64_t>(hidden_size)));
 	root = root > 1 ? root : 1;
 
-	std::vector<int64_t> wide(hidden_size);
+	// T-2139 closing round (curie/t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a cell):
+	// `external_wide_scratch`, when the caller supplies one, replaces this call's own internal
+	// heap allocation -- the ONLY change from the pre-existing behavior (see this function's own
+	// header-comment addition, forward_sites.h) is WHERE `wide` lives, never what it holds or how
+	// it's computed below.
+	std::vector<int64_t> wide_fallback;
+	int64_t* wide;
+	if (external_wide_scratch) {
+		wide = external_wide_scratch;
+	} else {
+		wide_fallback.assign(hidden_size, 0);
+		wide = wide_fallback.data();
+	}
 	for (size_t i = 0; i < hidden_size; ++i) {
 		const int64_t hi = static_cast<int64_t>(h[i]);
 		wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
@@ -438,7 +451,7 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 	// composition serves every RMSNorm instance in the per-layer forward), so
 	// the caller's own site string, token index, and model-handle hook state
 	// are exactly what reaches the funnel's own emission seam.
-	const ChainResult result = RequantChainChecked(wide.data(), hidden_size,
+	const ChainResult result = RequantChainChecked(wide, hidden_size,
 	                                                std::span<const CarriedScale>{}, site_constant,
 	                                                out_codes, out_scale, site, token_index,
 	                                                trace_hook_state);

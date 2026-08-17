@@ -30,32 +30,39 @@
 // safely describe without a much larger, riskier placement-new scheme; disclosed, not fixed, this
 // round.
 //
-// DESIGN-SCOPE FINDING, not fixed here (the coordinator's own named escape valve: "if the
-// workspace sizing formula can't cover prefill's true scratch, report it with the measured
-// requirement"). Curie's own minimal repro (dim7's TestDim7_C1, global operator-new override)
-// measured sslm_prefill at 9717 allocations and sslm_decode_step at 1, against a contract of 0.
-// After this round's own fix, sslm_decode_step's OWN code makes zero allocations when a
-// sufficient workspace is supplied (the "1" was RmsNormSite's/EmbedEntry's own internal `wide`
-// scratch, below); sslm_prefill's own code (PrefillWholeTokens) now makes at most one allocation
-// per call (embed_codes, only on the ws-absent/undersized fallback path) plus the adapter-bound
-// layers_scratch case above -- nowhere near 9717. The measured bulk (thousands of allocations)
-// is NOT reachable from this file's own workspace layout at all: it is RunLayerLoop's own
-// internal per-layer scratch (attention-interior temporaries, matmul accumulators, softmax rows
-// -- forward_sites.cpp, dozens of std::vector locals per layer, times num_hidden_layers, times
-// tokens) PLUS RmsNormSite's/EmbedEntry's/LogitsSite's own internal `wide` scratch (each function
-// allocates its own fixed-shape std::vector<int64_t> internally, with NO caller-supplied-buffer
-// parameter in their existing, already-proven signatures). The design's own text is explicit and
-// permanent on this exact point (Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md, the
-// RunLayerLoop/RunGreedyDecodeLoop signature note): "The engine's own internal per-call compute
-// scratch (attention-interior, matmul accumulators, softmax rows) is separately, internally
-// heap-allocated ... never a caller-supplied buffer of any kind." Reaching true zero-allocation
-// on this path is not a workspace-SIZING problem this ABI layer can solve by growing a formula --
-// it requires changing RmsNormSite/EmbedEntry/LogitsSite/RunLayerLoop's own signatures (shared,
-// already-proven forward_sites.cpp primitives, used identically by RunGreedyDecodeLoop and every
-// other production caller) to accept external scratch, a deep, cross-cutting engine change this
-// design's own text places below this ABI's file boundary, not inside it. Reported here as the
-// measured requirement (9717 prefill-side, 1 decode-side pre-fix) rather than silently left or
-// forced green by moving the allocation somewhere the counter does not see it.
+// S7, ROUND 3 (arc-final closing round, design commit 959336ad64's own recalibration; curie/
+// t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a/C1b cells). The ruled contract narrowed
+// to what THIS ABI layer controls (true engine-wide zero-allocation is D-SLM3457's own later,
+// separate inventory) -- and one real ABI-layer gap remained inside that narrowed contract:
+// sslm_decode_step's own ready_for_logits path (the one call shape that skips RunLayerLoop
+// entirely -- no engine-internal-scratch exception applies there at all) measured 1 allocation
+// against a ruled 0. Traced with a WITH-vs-WITHOUT-workspace differential (the technique C1a's own
+// second half uses) to RmsNormSite's own internal `wide` scratch for the final_norm call this file
+// makes directly. FIXED FOR REAL: RmsNormSite (forward_sites.h/.cpp) gained a trailing, defaulted
+// `external_wide_scratch` parameter -- nullptr (every pre-existing call site, unchanged behavior)
+// keeps the original internal allocation; this file's own final_norm call in sslm_decode_step now
+// passes a `WorkspaceLayout::rms_wide` region carved from the caller's workspace, eliminating the
+// allocation for real rather than reporting it as engine-internal-and-out-of-scope -- unlike
+// RunLayerLoop's own much larger, deeply nested per-layer scratch (attention-interior temporaries,
+// matmul accumulators, softmax rows -- dozens of std::vector locals per layer × num_hidden_layers
+// × tokens, still explicitly out of scope per the design's own RunLayerLoop/RunGreedyDecodeLoop
+// signature note: "separately, internally heap-allocated ... never a caller-supplied buffer of
+// any kind"), RmsNormSite is a single, small, already-directly-called site this file owns the
+// call to -- adding one optional parameter closes the gap without touching RunLayerLoop's own,
+// much deeper, shared per-layer machinery.
+//
+// PrefillWholeTokens' own embed_codes is threaded the same way (round 2); `layers_scratch` (both
+// call sites) stays unthreaded -- only allocated when an adapter is bound (the common no-adapter
+// case makes zero allocation there already), and a std::vector<superslm::LayerWeights> is not POD
+// bytes this byte-oriented workspace layout can safely describe without a much larger, riskier
+// placement-new scheme; disclosed, not fixed.
+//
+// sslm_prefill's own remaining ~9716 allocations (EmbedEntry's own internal `wide` scratch, called
+// once per prefilled token, PLUS RunLayerLoop's own internal per-layer scratch) are NOT reachable
+// from this file's own workspace layout, and are NOT part of the recalibrated contract (C1b's own
+// stable-count cell states the engine's own scratch cost as disclosed and data-independent, never
+// a zero requirement) -- correctly, permanently out of this ABI layer's own scope per the design's
+// own text quoted above.
 #include "superslm/sslm_abi.h"
 
 #include <algorithm>
@@ -400,6 +407,17 @@ struct WorkspaceLayout {
 	size_t wide_logits_bytes = 0;
 	size_t logit_row_offset = 0;
 	size_t logit_row_bytes = 0;
+	// T-2139 closing round (curie/t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a cell,
+	// design commit 959336ad64): sslm_decode_step's own ready_for_logits path was ruled at
+	// EXACTLY ZERO allocations (it skips RunLayerLoop entirely -- no engine-internal-scratch
+	// exception applies), and measured at 1: RmsNormSite's own internal `wide` scratch for the
+	// final_norm call. `int64_t[hidden_size]`, forwarded to RmsNormSite's own new
+	// `external_wide_scratch` trailing parameter (forward_sites.h) -- eliminates that allocation
+	// for real rather than reporting it as engine-internal-and-out-of-scope, since RmsNormSite
+	// (unlike RunLayerLoop's own much larger per-layer scratch) is a single, small, ABI-callable
+	// site this file already calls directly.
+	size_t rms_wide_offset = 0;
+	size_t rms_wide_bytes = 0;
 	size_t total_bytes = 0;
 	bool overflowed = false;
 };
@@ -461,7 +479,15 @@ WorkspaceLayout ComputeWorkspaceLayout(const sslm_model_s* model, const sslm_con
 		}
 		size_t after_logit = 0;
 		if (!CheckedAddSizeT(L.logit_row_offset, L.logit_row_bytes, &after_logit)) of = true;
-		cursor = after_logit;
+
+		L.rms_wide_offset = after_logit;
+		if (!CheckedMulSizeT(static_cast<size_t>(c.hidden_size), sizeof(int64_t),
+		                      &L.rms_wide_bytes)) {
+			of = true;
+		}
+		size_t after_rms_wide = 0;
+		if (!CheckedAddSizeT(L.rms_wide_offset, L.rms_wide_bytes, &after_rms_wide)) of = true;
+		cursor = after_rms_wide;
 	}
 
 	L.total_bytes = of ? kSizeMax : cursor;
@@ -1115,11 +1141,16 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 	int8_t* final_codes;
 	int64_t* wide_logits;
 	int32_t* logit_row;
+	// rms_wide: nullptr on the fallback path is CORRECT, not an oversight -- RmsNormSite's own
+	// external_wide_scratch parameter (forward_sites.h) already defaults to nullptr, meaning "fall
+	// back to your own internal allocation," exactly this path's pre-existing behavior.
+	int64_t* rms_wide = nullptr;
 	if (ws_usable) {
 		embed_codes = reinterpret_cast<int8_t*>(ws_base + layout.embed_codes_offset);
 		final_codes = reinterpret_cast<int8_t*>(ws_base + layout.final_codes_offset);
 		wide_logits = reinterpret_cast<int64_t*>(ws_base + layout.wide_logits_offset);
 		logit_row = reinterpret_cast<int32_t*>(ws_base + layout.logit_row_offset);
+		rms_wide = reinterpret_cast<int64_t*>(ws_base + layout.rms_wide_offset);
 	} else {
 		embed_codes_fallback.assign(c.hidden_size, 0);
 		final_codes_fallback.assign(c.hidden_size, 0);
@@ -1188,11 +1219,16 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 		// ready_for_logits) -- finish it: final_norm, logits,
 		// argmax, exactly RunGreedyDecodeLoop's own generation-loop body (forward_sites.cpp).
 		superslm::CarriedScale final_scale{};
+		// T-2139 closing round: rms_wide (carved from the workspace when supplied, nullptr
+		// otherwise -- see this function's own carving block above) eliminates the ready_for_logits
+		// path's own last disclosed allocation (RmsNormSite's internal `wide` scratch, design
+		// commit 959336ad64's own recalibrated zero-allocation ruling for this specific path).
 		superslm::SslmForwardStatus fst =
 		    superslm::RmsNormSite(seq->state.hidden_codes, model->engine.final_norm_gain.data(),
 		                           c.hidden_size, seq->state.hidden_scale,
 		                           model->engine.final_norm_site_constant, final_codes,
-		                           &final_scale, "final_norm");
+		                           &final_scale, "final_norm", /*token_index=*/0,
+		                           /*trace_hook_state=*/nullptr, rms_wide);
 		if (fst != superslm::SslmForwardStatus::Ok) return MapForwardStatus(fst);
 
 		fst = superslm::LogitsSite(final_codes, c.hidden_size, model->engine.head_weights,
