@@ -51,6 +51,13 @@ namespace t2139_gate_c_real_suite_side {
 // The REAL header, included whole -- not a transcription. Its own 18 function declarations land
 // here, namespaced; nothing at global scope declares those same names in this TU (the library
 // side's own functions are suppressed above), so there is nothing for them to collide with.
+//
+// INCLUDE ORDER IS LOAD-BEARING (fifth confirmation M2, Claude/Poirot/
+// ce5aff2-t2139-fifth-confirmation-review.md): sslm_g5.h's own #include <stdint.h>/<stddef.h>
+// are no-ops here only because superslm/sslm_abi.h already satisfied both at GLOBAL scope
+// above -- any include this file gains that has not already been seen at global scope lands at
+// namespace scope instead. The failure is loud (a must-accept TU stops compiling), which is why
+// this is a named dependency rather than a restructure.
 #include "t2130-g5-red-suite/sslm_g5.h"
 }  // namespace t2139_gate_c_real_suite_side
 
