@@ -162,6 +162,34 @@ inline bool TryMapRealModel(const std::string& path, std::vector<uint8_t>* keepa
 	return sslm_model_map(keepalive->data(), keepalive->size(), out_model) == SSLM_OK;
 }
 
+// T-2130/G5-6 (Curie, adapter-join fixture gap closed): maps a real adapter artifact against an
+// already-mapped base model, via the now-shipped sslm_adapter_map (mirrored into sslm_g5.h --
+// see that header's own comment on the addition). `keepalive` must outlive every call made
+// against the returned handle (sslm_adapter_map does not copy the bytes), matching
+// TryMapRealModel's own convention immediately above. Returns false -- never asserts -- when the
+// path is empty, the file cannot be read, the base model is null, or the artifact is rejected
+// (including a genuine SSLM_ADAPTER_MODEL_MISMATCH against an incompatible base) -- callers SKIP
+// rather than call a cell with a null adapter handle.
+inline bool TryMapRealAdapter(const std::string& path, sslm_model base,
+                               std::vector<uint8_t>* keepalive, sslm_adapter* out_adapter) {
+	*out_adapter = nullptr;
+	if (path.empty() || !base) return false;
+	std::FILE* f = std::fopen(path.c_str(), "rb");
+	if (!f) return false;
+	std::fseek(f, 0, SEEK_END);
+	const long sz = std::ftell(f);
+	std::fseek(f, 0, SEEK_SET);
+	keepalive->resize(sz > 0 ? (size_t)sz : 0);
+	if (sz > 0) {
+		const size_t n = std::fread(keepalive->data(), 1, (size_t)sz, f);
+		std::fclose(f);
+		if (n != (size_t)sz) return false;
+	} else {
+		std::fclose(f);
+	}
+	return sslm_adapter_map(keepalive->data(), keepalive->size(), base, out_adapter) == SSLM_OK;
+}
+
 // Looks up a named schema on an already-mapped model. Returns false (leaves *out null) when the
 // model is null or the lookup fails -- including "unresolved external", pre-G5-2, which never
 // reaches runtime at all (the whole binary fails to link, per this suite's own RED BY LINK

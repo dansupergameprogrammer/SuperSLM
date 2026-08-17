@@ -308,6 +308,24 @@ sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* b
 
 sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter);
 
+/* T-2130/G5-6 (Curie, adapter-join fixture gap closed): mirrored verbatim from the now-shipped
+ * include/superslm/sslm_abi_functions_g5_comparable.inc (T-2139 C-slots), per this suite's own
+ * declaration-shape-parity convention (this header's own top comment) -- the shipped ABI's real
+ * sslm_adapter construction/release/residency verbs, previously absent from this header entirely
+ * (the S-LoRA-serial-shipped map verb, sslm_gpu_adapter_map, is a distinct, incompatible handle
+ * type under the SslmGpu* surface, not this one). Declaring these here is what makes
+ * TestDim8_M1_AdapterCrossedSchemaAndJumpForward's own sslm_adapter fixture constructible
+ * (Claude/Curie/t2130-g5-red-suite-2026-08-16.md Sec11's routed gap, now closed) -- previously
+ * SKIP_MSG'd unconditionally for want of any sslm_-prefixed adapter-map declaration. Gate A
+ * (tools/t2139_gate_a_header_parity_check.cpp) and Gate C's real-suite-side TU (tools/
+ * t2139_gate_c_real_suite_side_check.cpp) both include this header directly and re-declare these
+ * exact three names from the shipped .inc unrenamed in the same TU -- a signature mismatch here
+ * would be a C-linkage redeclaration conflict (a compile error), so both gates guard this
+ * addition's parity even without a dedicated static_assert naming these three verbs. */
+sslm_status sslm_adapter_map(const void* data, size_t size, sslm_model base, sslm_adapter* out);
+sslm_status sslm_adapter_release(sslm_adapter adapter);
+size_t      sslm_adapter_residency(sslm_adapter adapter);
+
 sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                               const sslm_decode_params* params, sslm_workspace ws,
                               int32_t* out_tokens);
