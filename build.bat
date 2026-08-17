@@ -401,8 +401,14 @@ if errorlevel 1 (
 )
 echo Gate C sentinel must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_sentinel_negative.log^)
 
-rem count_abi_verbs.sh's own cited figure (design Sec4): 29. Checked only when bash is on PATH
-rem (git-bash on a typical Windows dev box) -- non-fatal if absent, matching this script's own
+rem count_abi_verbs.sh's own cited figure (T-2139 design Sec4): 29, for the C1-C7 scope alone.
+rem RAISED to 34 (T-2132, G5-2): five new production verbs landed in
+rem sslm_abi_functions_g5_comparable.inc (sslm_schema_lookup, sslm_schema_count,
+rem sslm_schema_name, sslm_seq_set_schema, sslm_prefix_set_schema -- design Claude/Vitruvius/
+rem t2119-g5-constrained-decoding-design-2026-08-16.md Sec5, Wizard repo) -- a deliberate,
+rem documented extension of the ABI surface this counter is meant to CATCH undocumented drift
+rem against, not itself an instance of that drift. Checked only when bash is on PATH (git-bash
+rem on a typical Windows dev box) -- non-fatal if absent, matching this script's own
 rem python-checker precedent below.
 rem T2139_VERB_COUNT is read and compared OUTSIDE any parenthesized if-block on purpose: %VAR%
 rem inside a `( ... )` block expands at PARSE time (before the block's own `set /p` line has
@@ -412,11 +418,11 @@ where bash >nul 2>nul
 if errorlevel 1 goto :t2139_verb_count_skip
 bash -c "cat include/superslm/sslm_abi_functions.inc include/superslm/sslm_abi_functions_g5_comparable.inc | grep -oE '\bsslm_[a-z0-9_]+\s*\(' | sed -E 's/\s*\($//' | sort -u | wc -l" > out\t2139\verb_count.txt
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
-if "%T2139_VERB_COUNT%"=="29" goto :t2139_verb_count_ok
-echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 29 -- verb count drifted, see design Sec4
+if "%T2139_VERB_COUNT%"=="34" goto :t2139_verb_count_ok
+echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 34 -- verb count drifted, see design Sec4 / T-2132
 popd & exit /b 1
 :t2139_verb_count_ok
-echo count_abi_verbs.sh: 29 verbs, matches design Sec4's own cited figure
+echo count_abi_verbs.sh: 34 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five new verbs
 goto :t2139_verb_count_done
 :t2139_verb_count_skip
 echo bash not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal^)
