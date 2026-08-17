@@ -883,6 +883,107 @@ if defined T2132_G5_FIXTURE (
 	echo t2132_g5_gpu_parity: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
 
+rem C1 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): sslm_seq_restore's own restored
+rem dfa_walk_state, bounded against the resolved schema's state_count -- out-of-range and
+rem sentinel-as-bound-state both rejected, against a real corrupted save-blob from the real G5
+rem fixture. Usage: out\t2132_c1_restore_walk_state_pin.exe ^<g5-fixture.sslm^> [schema_name].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_c1_restore_walk_state_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c1_restore_walk_state_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2132_c1_restore_walk_state_pin.exe %T2132_G5_FIXTURE%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_c1_restore_walk_state_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
+rem C2 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): sslm_seq_set_schema/
+rem sslm_prefix_set_schema now reject a schema handle bound to a DIFFERENT model. Needs a SECOND,
+rem independently-mapped artifact (the 0.5B fixture -- no schema section needed on that side, the
+rem schema comes from model A). Usage: out\t2132_c2_cross_model_schema_pin.exe
+rem ^<g5-fixture-1.5b.sslm^> ^<plain-0.5b.sslm^> [schema_name].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_c2_cross_model_schema_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_c2_cross_model_schema_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+if defined T2132_MODEL_0P5B (
+	out\t2132_c2_cross_model_schema_pin.exe %T2132_G5_FIXTURE% %T2132_MODEL_0P5B%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_c2_cross_model_schema_pin: built, NOT run ^(set T2132_MODEL_0P5B=path\to\a-0.5b-plain.sslm too^)
+)
+) else (
+	echo t2132_c2_cross_model_schema_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
+rem S7 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): sslm_seq_set_schema's own guard now
+rem matches its shipped header's freshness condition (current_token == -1), not merely
+rem dfa_walk_state -- a first-time bind attempted after real unconstrained generation rejects.
+rem Usage: out\t2132_s7_set_schema_freshness_pin.exe ^<g5-fixture.sslm^> [schema_name].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_s7_set_schema_freshness_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s7_set_schema_freshness_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2132_s7_set_schema_freshness_pin.exe %T2132_G5_FIXTURE%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_s7_set_schema_freshness_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
+rem S2/D-SLM3476 pin (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): out_tokens[i]
+rem == -2 reserved for a schema-bound walk with no legal continuation -- found by BFS'ing the
+rem REAL compiled reference schema for a genuinely dead-end state, not a hand-built artifact.
+rem Usage: out\t2132_s2_dead_end_sentinel_pin.exe ^<g5-fixture.sslm^> [schema_name].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_s2_dead_end_sentinel_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s2_dead_end_sentinel_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2132_s2_dead_end_sentinel_pin.exe %T2132_G5_FIXTURE%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_s2_dead_end_sentinel_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
+rem S4 pin (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): restores a discriminating mechanism
+rem for the dimension-1 leak guard T-2132's own DrawBlock zero-fill made unobservable -- a
+rem test-only pool-peek hook (src\sslm_abi.cpp, sslm_g5_test_only_peek_kv_block_bytes) bypasses
+rem DrawBlock's zero-fill to observe ReturnBlock's own poison-fill directly.
+rem Usage: out\t2132_s4_leak_guard_mutation_pin.exe ^<g5-fixture.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_s4_leak_guard_mutation_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_s4_leak_guard_mutation_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2132_s4_leak_guard_mutation_pin.exe %T2132_G5_FIXTURE%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_s4_leak_guard_mutation_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real

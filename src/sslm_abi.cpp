@@ -1141,11 +1141,24 @@ namespace {
 // still proves -- if prior content leaked through, the drawn block would read non-zero at a
 // position no write touched, exactly as detectable as it was against the poison pattern.
 sslm_status DrawBlock(sslm_kv_pool_s* pool, uint32_t* out_block_index) {
-	std::lock_guard<std::mutex> lock(pool->mutex);
-	if (pool->free_list.empty()) return SSLM_KV_POOL_EXHAUSTED;
-	const uint32_t block_index = pool->free_list.back();
-	pool->free_list.pop_back();
-	pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	uint32_t block_index;
+	{
+		std::lock_guard<std::mutex> lock(pool->mutex);
+		if (pool->free_list.empty()) return SSLM_KV_POOL_EXHAUSTED;
+		block_index = pool->free_list.back();
+		pool->free_list.pop_back();
+		pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	}
+	// S3 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the memset moved OUTSIDE the lock,
+	// mirroring ReturnBlock's own sibling shape (fill outside, publish under lock) below.
+	// Reasoning: once `block_index` is popped off `free_list` inside the critical section
+	// above, no OTHER thread can draw that same index again -- `free_list` is the pool's only
+	// publication mechanism for "this block is available," and this block is no longer on it.
+	// The memset therefore touches memory no concurrent DrawBlock/ReturnBlock call can reach,
+	// so it needs no lock at all; the draw is still atomic (the free-list pop/live_refs bump
+	// happen together, under the lock, before any caller sees `*out_block_index`), only the
+	// ~448 MB fill (the 1.5B fixture's own block_size) no longer serializes every concurrent
+	// sslm_seq_create/sslm_prefix_begin/sslm_seq_restore behind one pool-wide mutex.
 	std::memset(static_cast<uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size,
 	            0, pool->block_size);
 	*out_block_index = block_index;
@@ -1262,11 +1275,21 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 			return SSLM_CONTEXT_CAP_EXCEEDED;
 		}
 
-		// G5-4 (design Sec6): the reachability check runs BEFORE this token's forward pass, so a
-		// rejected token never advances layer_index/context_length/kv content -- the walk-state
-		// and every other observable stays exactly at its last-good value on rejection (design
-		// Sec6 G5-4's own "the sequence's own walk-state is unmoved by the rejected call" claim,
-		// pinned by dim5_failure_red.cpp's own TestDim5_M5 cell).
+		// G5-4 (design Sec6/Sec14.3, D-SLM3478 -- RULED design text as of this fold, Claude/
+		// Poirot/9bc9ec6-t2132-g5-arc-review.md S5): the reachability check runs BEFORE this
+		// token's forward pass, so the REJECTED token itself never advances layer_index/
+		// context_length/kv content -- its own walk-state transition, forward pass, and
+		// `++(*consumed)` are all skipped. That is the only thing "unmoved." Sec6 G5-4's own text
+		// says only that an unreachable span "is a defined rejection (dim 5), not a silent
+		// mismatch" -- it never claimed the whole call, or the sequence as a whole, stays
+		// unmoved, and Sec14.3 rules explicitly (reading this same loop at source) that it is
+		// NOT, for a multi-token span: every token STRICTLY BEFORE the rejected one is fully,
+		// permanently admitted in this same call -- forward pass run, KV written, dfa_walk_state/
+		// forced_token_count advanced, `*consumed` incremented -- exactly as if that prefix had
+		// been submitted alone and accepted in full. This is PARTIAL CONSUMPTION, not atomic
+		// rejection, matching `sslm_prefill`'s own established non-schema shape, pinned by
+		// dim5_failure_red.cpp's own TestDim5_M5 cell against the actual post-rejection state of
+		// a multi-token partial span.
 		uint32_t next_walk_state = 0;
 		if (schema_entry) {
 			if (!model->schemas.Transition(*schema_entry, *walk_state, static_cast<uint32_t>(token),
@@ -1376,6 +1399,16 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 extern "C" sslm_status sslm_prefix_set_schema(sslm_prefix prefix, sslm_schema schema) {
 	if (!prefix) return SSLM_INVALID_ARGUMENT;
 	if (prefix->frozen || prefix->current_token != -1) return SSLM_INVALID_ARGUMENT;
+	// C2 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): `sslm_schema_s::model` (written once at
+	// sslm_model_map, src/sslm_abi.cpp:1054) is read here for exactly the cross-model bind this
+	// field exists to prevent -- mirrors sslm_seq_set_schema's own identical fix below, and the
+	// GPU twin (`SslmGpuSeqSetSchemaForG5Bridge`) already rejects an out-of-range schema index
+	// the same way. Uses this file's own existing cross-handle-mismatch family
+	// (SSLM_INVALID_ARGUMENT, the same status sslm_prefix_begin/sslm_seq_create/
+	// sslm_seq_adopt_prefix/sslm_seq_restore already return for a pool/model/prefix identity
+	// mismatch, src/sslm_abi.cpp:1336/1436/1562/2121) rather than minting a new schema-specific
+	// ordinal -- no design ruling names one, and Sec6's registry is closed without a fold.
+	if (schema && schema->model != prefix->model) return SSLM_INVALID_ARGUMENT;
 	prefix->bound_schema = schema;
 	prefix->dfa_walk_state = schema ? 0u : kDfaWalkStateUnused;
 	return SSLM_OK;
@@ -1483,9 +1516,28 @@ extern "C" sslm_status sslm_seq_release(sslm_seq seq) {
 // rejects: schema re-binding mid-generation is out of 1.0 scope (design Sec11).
 extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
+	// S7 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the shipped header's own condition is
+	// "valid ONLY when the sequence's DFA-walk state is at its start (a fresh sslm_seq_create, or
+	// immediately after sslm_seq_reset)" (design Sec5, ABI surface). `dfa_walk_state` alone does
+	// not detect that: an unbound sequence's walk-state stays at kDfaWalkStateUnused forever, no
+	// matter how much UNCONSTRAINED content has already been prefilled/decoded on it (nothing
+	// touches dfa_walk_state while bound_schema is null), so the pre-fix guard would accept a
+	// first-time bind on a sequence that is neither freshly created nor freshly reset -- not "at
+	// its start" by the header's own two named examples. `current_token == -1` is exactly what
+	// both of those examples share (sslm_seq_create's own default; sslm_seq_reset's own explicit
+	// reset, src/sslm_abi.cpp) and what changes the instant either a prompt or schema-content
+	// token is prefilled/decoded -- the same discriminator sslm_prefix_set_schema already uses
+	// for the mirrored precondition on a prefix (above), which this fix now makes symmetric
+	// across both handle types.
+	if (seq->current_token != -1) {
+		return SSLM_SCHEMA_BIND_REJECTED;
+	}
 	if (seq->dfa_walk_state != kDfaWalkStateUnused && seq->dfa_walk_state != 0) {
 		return SSLM_SCHEMA_BIND_REJECTED;
 	}
+	// C2 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): see sslm_prefix_set_schema's own
+	// identical fix and comment, above.
+	if (schema && schema->model != seq->model) return SSLM_INVALID_ARGUMENT;
 	seq->bound_schema = schema;
 	seq->dfa_walk_state = schema ? 0u : kDfaWalkStateUnused;
 	return SSLM_OK;
@@ -1817,12 +1869,31 @@ static sslm_status sslm_decode_stepImpl(sslm_model model, sslm_seq* seqs, int32_
 			const uint8_t* page = entry->mask_pages +
 			                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
 			superslm::ApplyMaskAndArgmax(logit_row, page, static_cast<int32_t>(c.vocab_size), &produced);
-			// The walk advances to whatever state `produced` reaches -- guaranteed to exist by
-			// the loader's own mask/transition cross-check (Sec13.3): `produced` was masked-valid,
-			// and a masked-valid token always has a matching CSR transition entry by construction.
+			// S2/D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the walk
+			// advances to whatever state `produced` reaches ONLY when a matching CSR transition
+			// entry actually exists. It is NOT guaranteed to: Sec13.2 permits an accepting state's
+			// own mask page to be legitimately all-zero (the compiler's own non-empty-valid-set
+			// proof, G-7a, only covers reachable NON-accepting states), and at such a state masked
+			// argmax forces every logit to INT32_MIN and the lowest-index tie-break returns token
+			// 0 -- for which no CSR row entry exists, because the row is empty. Before this fix
+			// that failure was silently discarded and the walk froze in place, emitting token 0
+			// forever at SSLM_OK. Ruled (Sec14.1): this is a genuine, defined dead end, not a
+			// caller error -- `out_tokens[i]` reserves -2 for it (alongside the existing -1
+			// "pending" sentinel), no new sslm_status ordinal. Nothing schema-related advances for
+			// this sequence when it fires: `seq->dfa_walk_state` stays exactly at the state that
+			// had no legal continuation, and neither `current_token` nor `state.layer_index` are
+			// touched, so a caller that calls sslm_decode_step on this sequence again gets -2
+			// again, deterministically -- a defined, resumable stop, never a torn state (design
+			// Sec7 dim5's own "reject leaves state unperturbed" contract, applied to a per-sequence
+			// outcome rather than a call-level fault, mirroring how -1/pending already coexists
+			// with an overall SSLM_OK call).
 			uint32_t next_state = seq->dfa_walk_state;
-			model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(produced),
-			                           &next_state);
+			const bool has_transition = model->schemas.Transition(
+			    *entry, seq->dfa_walk_state, static_cast<uint32_t>(produced), &next_state);
+			if (!has_transition) {
+				out_tokens[i] = -2;
+				continue;
+			}
 			seq->dfa_walk_state = next_state;
 		} else {
 			produced = superslm::ArgmaxLowestIndexTieBreak(logit_row, static_cast<size_t>(c.vocab_size));
@@ -2047,6 +2118,30 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 			return SSLM_RESTORE_SCHEMA_MISMATCH;
 		}
 		resolved_schema = &model->schema_handles[idx];
+		// C1 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): the blob is untrusted input --
+		// every other field on this path is checked, and this is the one that was not. Bound
+		// the restored walk-state against the RESOLVED schema's own state_count before it is
+		// ever used to index mask_pages/state_offsets_le (sslm_decode_step,
+		// src/sslm_abi.cpp:1816-1826). kDfaWalkStateUnused (0xFFFFFFFF) is a real reject here,
+		// not a pass-through: a bound sequence's walk-state is always a real state id in
+		// [0, state_count) (see the kDfaWalkStateUnused-as-"no schema" comments above), so the
+		// sentinel arriving on a BOUND blob is exactly the malformed-blob case this check
+		// exists for, not the unbound case (that one is handled in the branch below, where
+		// resolved_schema stays null and the sentinel is the only value accepted). Rejected as
+		// SSLM_RESTORE_SCHEMA_MISMATCH -- the taxonomy's existing status for "the blob's schema
+		// binding cannot be honoured against this model", already minted, no new ordinal.
+		const superslm::SchemaEntry* resolved_entry = model->schemas.ByIndex(idx);
+		if (!resolved_entry || saved_dfa_walk_state >= resolved_entry->state_count) {
+			return SSLM_RESTORE_SCHEMA_MISMATCH;
+		}
+	} else if (saved_dfa_walk_state != kDfaWalkStateUnused) {
+		// C1 / O3 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): schema_name_hash == 0 means
+		// "no schema bound" (this file's own save-side sentinel). A non-sentinel walk-state on
+		// an unbound blob is symmetric malformation -- reject it here rather than admit a
+		// restored sequence that holds an unbound binding with a non-sentinel walk-state, which
+		// used to reject its own later sslm_seq_set_schema call (O3) instead of being rejected
+		// at the point the bad blob was actually read.
+		return SSLM_RESTORE_SCHEMA_MISMATCH;
 	}
 
 	const int64_t context_length = static_cast<int64_t>(ReadLE64(p + 60));
@@ -2512,5 +2607,49 @@ extern "C" sslm_status sslm_g5_test_only_apply_mask_and_argmax(const int32_t* lo
 	// the call, matching the production decode_step path's own identical use of its scratch
 	// `logit_row` (never read again after this step there either).
 	superslm::ApplyMaskAndArgmax(const_cast<int32_t*>(logits), mask, vocab_size, out_token_id);
+	return SSLM_OK;
+}
+
+// -----------------------------------------------------------------------------------------
+// S4 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): a test-only pool-level peek hook,
+// following the EXACT precedent this file's own sslm_g5_test_only_apply_mask_and_argmax already
+// established one function above (design Sec11.2's own "test-only guard-vitality hook, BLESSED
+// with a structural ship-boundary") -- not declared anywhere in include/superslm/, no
+// install/export entry, callable only by a tool that declares this exact extern "C" signature
+// itself (this file's own compiled .obj is the only definition; nothing routes a real host to
+// it).
+//
+// WHY THIS EXISTS: T-2132's own zero-fill fix (DrawBlock, above) made ReturnBlock's poison-fill
+// unobservable through the PRODUCTION read path -- every live sequence's own KV block is reached
+// via DrawBlock, which now zero-fills unconditionally, so ANY dimension-1 leak-check cell that
+// reads a block through a live sequence handle passes whether or not ReturnBlock ever poisoned
+// anything at all (Poirot's own finding: "the guard is now one that cannot fail"). The leak
+// obligation itself (Sec7 dim1: "no content from the PRIOR sequence survives release") did not
+// get weaker -- it got STRONGER, structurally guaranteed by the zero-fill rather than merely
+// detectable against a poison pattern -- but a guard that structurally cannot fail is also a
+// guard nothing can exercise, and Poirot's own remedy (S4) asks for a discriminating mechanism to
+// be restored or the claim to be honestly retired.
+//
+// THE MECHANISM: reads `n` raw bytes directly from `pool`'s own backing buffer at `block_index`,
+// BYPASSING DrawBlock entirely -- the one read path in this whole file that does NOT run through
+// the zero-fill. A test can therefore: draw a block, write real content into it (a real decode),
+// release it (ReturnBlock's own poison-fill runs), then peek the SAME block_index through THIS
+// hook BEFORE drawing it again -- proving the poison-fill actually ran (0xCD observed) rather
+// than merely trusting the source. This restores exactly the discrimination S4 asks for: DELETE
+// ReturnBlock's own `std::memset(kv_block, 0xCD, block_size)` line and this peek would read
+// whatever ReturnBlock's caller left behind instead of 0xCD -- a real, demonstrated failure mode
+// for the pin built against this hook (tools/t2132_s4_leak_guard_mutation_pin.cpp), not an
+// assertion that cannot be tripped. Bounds-checked against `pool->buf_size`/`block_count` --
+// hostile-input-safe like every other verb in this file, even though only a test author is
+// expected to call it.
+extern "C" sslm_status sslm_g5_test_only_peek_kv_block_bytes(sslm_kv_pool pool,
+                                                               uint32_t block_index, uint8_t* out_buf,
+                                                               size_t n) {
+	if (!pool || !out_buf) return SSLM_INVALID_ARGUMENT;
+	if (block_index >= pool->block_count) return SSLM_INVALID_ARGUMENT;
+	if (n > pool->block_size) return SSLM_INVALID_ARGUMENT;
+	const uint8_t* src =
+	    static_cast<const uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size;
+	std::memcpy(out_buf, src, n);
 	return SSLM_OK;
 }

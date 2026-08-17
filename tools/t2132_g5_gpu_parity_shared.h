@@ -64,4 +64,36 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
                                 const std::string& schema_name, int32_t num_decode_steps,
                                 const std::vector<int32_t>& forced_chain);
 
+// S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): Gate 3 -- CPU/GPU `ready_for_logits`
+// parity on the PARTIAL-REJECTION path of a forced span. `chain_with_illegal_tail` is Gate 2's
+// own real, schema-legal `forced_chain` (every token admitted, by construction) with ONE more
+// token appended that is NOT a legal transition from the state that chain leaves the walk in --
+// so the schema-content prefill call admits every token up to the last one, then rejects. Before
+// this ticket's own S6 fix, the CPU ABI set `ready_for_logits = true` whenever `*consumed > 0`
+// (unconditional on the call's own return status), but the GPU bridge returned the rejection
+// status without ever reaching its own `ready_for_logits = true` set -- so a caller's immediate
+// next decode step would, on GPU only, wrongly re-embed the last ADMITTED token instead of
+// finishing its already-computed residual, diverging from the CPU ABI on the exact same input.
+// `post_reject_token`, run identically on both paths immediately after the (identically) partial
+// rejection, is what this gate compares.
+struct G5Gate3Result {
+	bool setup_ok = false;
+	std::string last_error;
+	int checks = 0;
+	int failures = 0;
+	int32_t forced_consumed = -1;    // tokens admitted before the illegal tail token rejects.
+	bool rejected_as_expected = false;  // the call returned the expected per-path rejection status.
+	int32_t post_reject_token = -1;  // ONE decode step run immediately after the rejection.
+};
+
+G5Gate3Result RunCpuGate3(const uint8_t* bytes, size_t byte_count,
+                           const std::vector<int32_t>& prompt_tokens,
+                           const std::string& schema_name,
+                           const std::vector<int32_t>& chain_with_illegal_tail);
+
+G5Gate3Result RunGpuGate3(const uint8_t* bytes, size_t byte_count,
+                           const std::vector<int32_t>& prompt_tokens,
+                           const std::string& schema_name,
+                           const std::vector<int32_t>& chain_with_illegal_tail);
+
 #endif  // T2132_G5_GPU_PARITY_SHARED_H

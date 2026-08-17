@@ -227,6 +227,90 @@ int main(int argc, char** argv) {
 	        ? "MATCH"
 	        : "DIVERGE");
 
+	// ---- Gate 3 (S6, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): CPU/GPU ready_for_logits
+	// parity on the PARTIAL-REJECTION path. Reuses Gate 2's own real, schema-legal forced_chain
+	// and appends ONE token that is not a legal transition from the state that chain leaves the
+	// walk in -- found by re-parsing the same SchemaMasks section (schema_masks.h, collision-free
+	// against both sslm_abi.h and gpu_1p0.h) and scanning the reached state's own mask page for
+	// the first CLEAR bit (an illegal token by construction: the loader's own mask/transition
+	// cross-check, Sec13.3, guarantees clear-bit <=> no CSR row entry). ----
+	int32_t illegal_token = -1;
+	{
+		superslm::SslmModelView diag_view;
+		std::string diag_err;
+		if (!forced_chain.empty() &&
+		    superslm::SslmModel::Load(bytes.data(), bytes.size(), diag_view, &diag_err) ==
+		        superslm::SslmModelStatus::Ok) {
+			const superslm::SslmSectionView* sec =
+			    diag_view.Section(superslm::SslmSectionType::SchemaMasks);
+			if (sec) {
+				superslm::SchemaMasksTable table;
+				std::string perr;
+				if (superslm::SchemaMasksTable::Parse(sec->data, sec->byte_size,
+				                                       diag_view.config.vocab_size, table, &perr)) {
+					size_t idx = 0;
+					const superslm::SchemaEntry* entry = table.ByName(schema_name, &idx);
+					if (entry) {
+						uint32_t state = 0;
+						for (int32_t t : forced_chain) {
+							uint32_t next = state;
+							table.Transition(*entry, state, static_cast<uint32_t>(t), &next);
+							state = next;
+						}
+						const uint8_t* page = entry->mask_pages +
+						                       static_cast<size_t>(state) * table.MaskPageBytes();
+						const int32_t vocab = static_cast<int32_t>(diag_view.config.vocab_size);
+						for (int32_t t = 0; t < vocab; ++t) {
+							if (!((page[t >> 3] >> (t & 7)) & 1u)) {
+								illegal_token = t;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (illegal_token < 0) {
+		std::fprintf(stderr,
+		             "\n[Gate 3] SKIPPED -- could not find a clear mask bit (illegal token) at "
+		             "the forced chain's own end state; the reference schema's own reachable "
+		             "states may all be fully dense at this depth. Not a Gate 3 failure -- no "
+		             "input to run it against.\n");
+	} else {
+		std::vector<int32_t> chain_with_illegal_tail = forced_chain;
+		chain_with_illegal_tail.push_back(illegal_token);
+
+		const G5Gate3Result cpu3 =
+		    RunCpuGate3(bytes.data(), bytes.size(), prompt_tokens, schema_name, chain_with_illegal_tail);
+		const G5Gate3Result gpu3 =
+		    RunGpuGate3(bytes.data(), bytes.size(), prompt_tokens, schema_name, chain_with_illegal_tail);
+
+		Check(cpu3.setup_ok && cpu3.failures == 0, "Gate 3: CPU path reported internal check failures");
+		Check(gpu3.setup_ok && gpu3.failures == 0, "Gate 3: GPU path reported internal check failures");
+		Check(cpu3.rejected_as_expected, "Gate 3: CPU path did not partially reject as expected");
+		Check(gpu3.rejected_as_expected, "Gate 3: GPU path did not partially reject as expected");
+		Check(cpu3.forced_consumed == gpu3.forced_consumed,
+		      "Gate 3: CPU/GPU partial-rejection consumed counts diverged");
+		Check(cpu3.post_reject_token == gpu3.post_reject_token,
+		      "Gate 3: CPU/GPU post-partial-rejection token diverged (the S6 ready_for_logits "
+		      "parity bug this gate exists to catch)");
+		std::printf(
+		    "\n[Gate 3] partial-rejection ready_for_logits parity: illegal_token=%d, CPU "
+		    "consumed=%d/%zu rejected=%s post_token=%d; GPU consumed=%d/%zu rejected=%s "
+		    "post_token=%d %s\n",
+		    illegal_token, cpu3.forced_consumed, chain_with_illegal_tail.size(),
+		    cpu3.rejected_as_expected ? "true" : "false", cpu3.post_reject_token, gpu3.forced_consumed,
+		    chain_with_illegal_tail.size(), gpu3.rejected_as_expected ? "true" : "false",
+		    gpu3.post_reject_token,
+		    (cpu3.forced_consumed == gpu3.forced_consumed &&
+		     cpu3.post_reject_token == gpu3.post_reject_token && cpu3.rejected_as_expected &&
+		     gpu3.rejected_as_expected)
+		        ? "MATCH"
+		        : "DIVERGE");
+	}
+
 	std::printf("\n=== T-2132 G5-5 GPU PARITY: %s (checks=%d failures=%d, CPU checks=%d/%d, "
 	            "GPU checks=%d/%d) ===\n",
 	            total_failures ? "FAIL" : "PASS", total_checks, total_failures, cpu.checks,

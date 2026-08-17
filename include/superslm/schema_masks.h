@@ -252,7 +252,16 @@ inline bool SchemaMasksTable::Parse(const uint8_t* data, uint64_t size, uint32_t
 		}
 	}
 	const uint64_t name_blob_off = manifest_end - name_blob_len;
-	const uint32_t mask_page_bytes = (vocab_size + 7u) / 8u;
+	// M3 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): widened to uint64_t before the `+7`--
+	// `vocab_size` is untrusted `u32` input (only checked `!= 0` above; this is a hostile-input
+	// section, design Sec7 dim2) and `vocab_size + 7u` in uint32_t arithmetic wraps for any
+	// `vocab_size > 0xFFFFFFF8`, silently truncating `mask_page_bytes` to a small, wrong value
+	// that would then pass the CheckedMulU64 bounds checks below as if the artifact declared a
+	// tiny vocabulary. `mask_page_bytes` itself is still representable in `uint32_t` for any
+	// `vocab_size` this format can otherwise support (`ceil(2^32/8)` fits in 32 bits with room to
+	// spare), so only the intermediate `+7` needs the wider type.
+	const uint64_t mask_page_bytes64 = (static_cast<uint64_t>(vocab_size) + 7u) / 8u;
+	const uint32_t mask_page_bytes = static_cast<uint32_t>(mask_page_bytes64);
 
 	std::vector<SchemaEntry> entries;
 	entries.reserve(schema_count);
@@ -268,11 +277,15 @@ inline bool SchemaMasksTable::Parse(const uint8_t* data, uint64_t size, uint32_t
 		const uint32_t accepting_count = ReadLE32(d + 12);
 		const uint32_t transition_count = ReadLE32(d + 16);
 		const uint32_t desc_reserved = ReadLE32(d + 20);
+		// M1 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): design Sec13.2's descriptor table
+		// DOES constrain this field to `== 0` (the same row as the fixed header's own `reserved`
+		// field, checked above) -- the comment previously here claimed the opposite. Corrected;
+		// the check itself was simply missing.
 		const uint64_t mask_pages_off = ReadLE32(d + 24) | (static_cast<uint64_t>(ReadLE32(d + 28)) << 32);
 		const uint64_t state_offsets_off = ReadLE32(d + 32) | (static_cast<uint64_t>(ReadLE32(d + 36)) << 32);
 		const uint64_t accepting_off = ReadLE32(d + 40) | (static_cast<uint64_t>(ReadLE32(d + 44)) << 32);
 		const uint64_t transitions_off = ReadLE32(d + 48) | (static_cast<uint64_t>(ReadLE32(d + 52)) << 32);
-		(void)desc_reserved;  // no constraint named on this field in Sec13.2's descriptor table
+		if (desc_reserved != 0) return fail("BadSchemaMasksReserved");
 
 		if (name_len == 0 || static_cast<uint64_t>(name_off) + name_len > name_blob_len) {
 			return fail("BadSchemaName");

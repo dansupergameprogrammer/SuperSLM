@@ -124,17 +124,24 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
 // governs how many layers land per GPU submission -- the SAME primitive, never a second one).
 // Reachability is checked BEFORE each token's own forward pass (`SchemaMasksTable::Transition`
 // against `seq`'s own current walk-state) -- a token that leaves the DFA's language is rejected
-// (SSLM_SEQUENCE_REJECTED) with `seq`'s own walk-state, layer_index, and context_length left
-// exactly at their last-good value (mirrors `PrefillWholeTokensImpl`'s own "the sequence's own
-// walk-state is unmoved by the rejected call" contract) and `*consumed` reporting how many
-// tokens were admitted before the rejection -- matching `sslm_prefill`'s own partial-consumption
-// contract. Requires a schema already bound (SSLM_SEQUENCE_REJECTED otherwise -- the GPU twin of
-// SSLM_SCHEMA_SPAN_UNBOUND, no dedicated enumerator on this bridge's own small surface). On
-// success (count > 0), sets the SAME "ready for logits" flag
-// `SslmGpuSeqPrefillPromptForG5Bridge` sets (session 3 fix, mirrors `sslm_prefill`'s own
-// unconditional `ready_for_logits = true` regardless of span kind, src/sslm_abi.cpp:1607) -- a
-// caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call (the "one ordinary masked step
-// run immediately after the forced chain") does not re-embed the chain's own last token.
+// (SSLM_SEQUENCE_REJECTED). Only the REJECTED token's own effects are withheld: its own
+// walk-state transition never applies, its own forward pass never runs, and `*consumed` is never
+// incremented for it. Tokens admitted BEFORE it in the same call already had their walk-state
+// advance, K/V write, and layer loop run for real, and `*consumed` already counts them -- this is
+// the documented partial-consumption contract (matching `sslm_prefill`'s own shape), not
+// full-call atomicity (design Sec14.3, D-SLM3478 -- RULED design text as of this fold, Claude/
+// Poirot/9bc9ec6-t2132-g5-arc-review.md S5: no sentence in the design of record ever claimed the
+// whole call or sequence is left unmoved, and Sec14.3 rules it false for a multi-token partial
+// span, reading this bridge's own CPU counterpart, PrefillWholeTokensImpl, at source). Requires a
+// schema already bound (SSLM_SEQUENCE_REJECTED otherwise --
+// the GPU twin of SSLM_SCHEMA_SPAN_UNBOUND, no dedicated enumerator on this bridge's own small
+// surface). Sets the SAME "ready for logits" flag `SslmGpuSeqPrefillPromptForG5Bridge` sets
+// whenever `*consumed > 0` -- including on the rejection path, when earlier tokens in the same
+// call were already admitted (S6, same review: the CPU ABI's `sslm_prefill` sets this
+// unconditionally on `*consumed > 0`, src/sslm_abi.cpp, whether or not the call's own return
+// status is success) -- a caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call (the
+// "one ordinary masked step run immediately after the forced chain, or after a partial one") does
+// not re-embed the last admitted token.
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,

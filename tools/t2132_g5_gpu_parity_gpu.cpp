@@ -29,6 +29,14 @@ void Check(G5ParityPathResult& r, bool cond, const char* msg) {
 	}
 }
 
+void Check(G5Gate3Result& r, bool cond, const char* msg) {
+	++r.checks;
+	if (!cond) {
+		++r.failures;
+		if (r.last_error.empty()) r.last_error = msg;
+	}
+}
+
 }  // namespace
 
 G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
@@ -137,6 +145,89 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
 		}
 	} else {
 		Check(r, false, "Gate 2: no forced chain supplied");
+	}
+
+	sslm_gpu_model_unmap(ctx, model);
+	sslm_gpu_context_destroy(ctx);
+
+	r.setup_ok = true;
+	return r;
+}
+
+G5Gate3Result RunGpuGate3(const uint8_t* bytes, size_t byte_count,
+                           const std::vector<int32_t>& prompt_tokens,
+                           const std::string& schema_name,
+                           const std::vector<int32_t>& chain_with_illegal_tail) {
+	G5Gate3Result r;
+	constexpr uint32_t kDispatchBudget = 24;
+
+	superslm::SslmModelView view;
+	std::string load_err;
+	const superslm::SslmModelStatus load_st = superslm::SslmModel::Load(bytes, byte_count, view, &load_err);
+	Check(r, load_st == superslm::SslmModelStatus::Ok, "SslmModel::Load (GPU Gate 3 view) failed");
+	if (load_st != superslm::SslmModelStatus::Ok) {
+		r.last_error += ": " + load_err;
+		return r;
+	}
+
+	GpuContextConfig gcfg{};
+	GpuResidencyConfig rcfg{};
+	SslmGpuContext* ctx = nullptr;
+	Check(r, sslm_gpu_context_create(gcfg, &ctx) == SSLM_OK && ctx != nullptr,
+	      "sslm_gpu_context_create failed");
+	if (!ctx) return r;
+
+	SslmGpuModelHandle* model = nullptr;
+	Check(r, sslm_gpu_model_map(ctx, &view, rcfg, &model) == SSLM_OK && model != nullptr,
+	      "sslm_gpu_model_map failed");
+	if (!model) {
+		sslm_gpu_context_destroy(ctx);
+		return r;
+	}
+
+	const int32_t schema_index = SslmGpuSchemaLookupForG5Bridge(model, schema_name.c_str());
+	Check(r, schema_index >= 0, "SslmGpuSchemaLookupForG5Bridge failed");
+	const int64_t context_cap = static_cast<int64_t>(view.config.context_cap);
+
+	SslmGpuSequenceHandle* seq = nullptr;
+	Check(r, sslm_gpu_seq_create(ctx, model, context_cap, &seq) == SSLM_OK && seq != nullptr,
+	      "sslm_gpu_seq_create (Gate 3) failed");
+	if (seq && schema_index >= 0) {
+		Check(r, SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, schema_index) == SSLM_OK,
+		      "SslmGpuSeqSetSchemaForG5Bridge (Gate 3) failed");
+		Check(r,
+		      SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, prompt_tokens.data(),
+		                                          static_cast<int32_t>(prompt_tokens.size()),
+		                                          kDispatchBudget) == SSLM_OK,
+		      "SslmGpuSeqPrefillPromptForG5Bridge (Gate 3, prompt) failed");
+
+		int32_t forced_consumed = 0;
+		const SslmGpuStatus reject_st = SslmGpuSeqPrefillSchemaContentForG5Bridge(
+		    ctx, seq, chain_with_illegal_tail.data(),
+		    static_cast<int32_t>(chain_with_illegal_tail.size()), kDispatchBudget, &forced_consumed);
+		r.forced_consumed = forced_consumed;
+		r.rejected_as_expected =
+		    (reject_st == SSLM_SEQUENCE_REJECTED) &&
+		    (forced_consumed == static_cast<int32_t>(chain_with_illegal_tail.size()) - 1);
+		Check(r, r.rejected_as_expected,
+		      "SslmGpuSeqPrefillSchemaContentForG5Bridge did not partially reject as expected");
+
+		// S6 fix under test: before it, this bridge returned SSLM_SEQUENCE_REJECTED here without
+		// ever setting `ready_for_logits`, so the call below would wrongly re-embed
+		// `chain_with_illegal_tail[forced_consumed - 1]` (the last ADMITTED token) instead of
+		// finishing its already-computed residual -- diverging from the CPU reference above on
+		// the identical input. token_to_embed_if_needed is supplied anyway (harmless if ignored,
+		// load-bearing if the bug has regressed).
+		const int32_t last_admitted =
+		    forced_consumed > 0 ? chain_with_illegal_tail[static_cast<size_t>(forced_consumed) - 1]
+		                        : (prompt_tokens.empty() ? 0 : prompt_tokens.back());
+		int32_t next_token = -1;
+		Check(r,
+		      SslmGpuSeqDecodeStepForG5Bridge(ctx, seq, last_admitted, kDispatchBudget, &next_token) ==
+		          SSLM_OK,
+		      "SslmGpuSeqDecodeStepForG5Bridge (Gate 3, post-partial-reject) failed");
+		r.post_reject_token = next_token;
+		sslm_gpu_seq_release(ctx, seq);
 	}
 
 	sslm_gpu_model_unmap(ctx, model);

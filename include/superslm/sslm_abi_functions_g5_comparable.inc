@@ -103,6 +103,15 @@ size_t      sslm_adapter_residency(sslm_adapter adapter);
 sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens, int32_t count,
                           int32_t chunk_budget, sslm_span_kind kind, sslm_workspace ws,
                           int32_t* consumed);
+/* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2): out_tokens[i]
+ * reserves TWO sentinels, not one -- the existing -1 ("pending, mid-token, call again with the
+ * same layer_budget-carried state") and -2 ("this sequence's schema-bound walk reached a state
+ * with NO legal continuation at all -- the argmax-selected token has no matching CSR transition
+ * entry, which Sec13.2 permits at an accepting state with a legitimately all-zero mask page").
+ * -2 is a per-sequence outcome, not a call fault: the call's own return status stays SSLM_OK,
+ * and nothing schema-related advances for that sequence (dfa_walk_state/current_token/
+ * layer_index all stay exactly as this call found them) -- calling again on the same sequence
+ * deterministically returns -2 again. No new sslm_status ordinal. */
 sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_t n,
                               const sslm_decode_params* params, sslm_workspace ws,
                               int32_t* out_tokens);
@@ -115,6 +124,12 @@ sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out);
  * Unknown name is SSLM_SCHEMA_NOT_FOUND. Lookup-by-name, D-SLM3442. */
 sslm_status sslm_schema_lookup(sslm_model model, const char* name, sslm_schema* out);
 size_t      sslm_schema_count(sslm_model model);
+/* M2 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): *n query/fill shape matches sslm_tokenize's
+ * own established convention (call with buf==nullptr or *n too small to get the required byte
+ * count in *n via SSLM_BUFFER_TOO_SMALL, then call again with a buffer of that size). buf is
+ * filled with EXACTLY *n bytes on success -- the schema's own name bytes, NOT NUL-terminated
+ * (the converter's own name blob carries no terminator, sslm_convert_schema.py). A caller that
+ * wants a C string appends '\0' itself in a buffer sized *n + 1. */
 sslm_status sslm_schema_name(sslm_model model, int32_t index, char* buf, size_t* n);
 
 /* G5 design Sec5: binds a compiled schema to a sequence (SSLM_SCHEMA_NONE = unconstrained).

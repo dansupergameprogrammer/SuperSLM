@@ -2191,12 +2191,30 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
 	for (int32_t i = 0; i < count; ++i) {
 		const int32_t token = tokens[i];
 		// design Sec6 G5-3/G5-5's own "the reachability check runs BEFORE this token's forward
-		// pass" (src/sslm_abi.cpp's PrefillWholeTokensImpl, mirrored here verbatim): on
-		// rejection, the walk-state (and everything else) is left exactly at its last-good
-		// value, and `*consumed` reports how many tokens were admitted before it.
+		// pass" (src/sslm_abi.cpp's PrefillWholeTokensImpl, mirrored here verbatim): the
+		// REJECTED token's own effects never land -- its walk-state transition is never applied,
+		// its forward pass never runs, `*consumed` is never incremented for it. That is the only
+		// thing left "unmoved." Tokens admitted BEFORE the rejected one in this same call already
+		// had their walk-state advance, K/V write, and layer loop run for real, and `*consumed`
+		// already counts them (design Sec14.3, D-SLM3478 -- RULED design text as of this fold,
+		// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S5): this is not full-span atomicity, it is
+		// the documented partial-consumption contract, matching `sslm_prefill`'s own shape.
 		uint32_t next_state = 0;
 		if (!model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(token),
 		                                &next_state)) {
+			// S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): CPU/GPU ready_for_logits parity
+			// on the partial-rejection path -- the CPU ABI is the reference
+			// (src/sslm_abi.cpp's sslm_prefill: `if (*consumed > 0) seq->ready_for_logits =
+			// true;`, unconditional on the returned status). When earlier tokens in this call
+			// were already admitted, the last admitted token's own forward pass already ran to
+			// full depth and its hidden_codes already hold the finished residual -- exactly the
+			// condition ready_for_logits exists to record, whether this call as a whole succeeds
+			// or a later token in it rejects. Before this fix the GPU bridge returned
+			// SSLM_SEQUENCE_REJECTED without ever reaching the `ready_for_logits = true` set at
+			// this function's tail, so a caller's next `SslmGpuSeqDecodeStepForG5Bridge` call
+			// would wrongly re-embed the already-finished last admitted token, diverging from the
+			// CPU ABI's behaviour on the exact same input.
+			if (*consumed > 0) seq->ready_for_logits = true;
 			return SSLM_SEQUENCE_REJECTED;
 		}
 		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) {
@@ -2223,11 +2241,15 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
 		seq->dfa_walk_state = next_state;
 		++(*consumed);
 	}
-	// G5-5 session 3 fix (T-2132, Brunel): mirrors `sslm_prefill`'s own unconditional
-	// `ready_for_logits = true` set on any successful prefill, whatever span kind
-	// (src/sslm_abi.cpp:1607) -- the forced chain's own last token already ran its full layer
-	// loop above; a caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call (the "one
-	// ordinary masked step run immediately after the forced chain") must not re-embed it.
-	if (count > 0) seq->ready_for_logits = true;
+	// G5-5 session 3 fix (T-2132, Brunel): mirrors `sslm_prefill`'s own `if (*consumed > 0)
+	// seq->ready_for_logits = true;` (src/sslm_abi.cpp) -- the last ADMITTED token already ran
+	// its full layer loop above; a caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call
+	// (the "one ordinary masked step run immediately after the forced chain") must not re-embed
+	// it. S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): keyed on `*consumed`, not `count`,
+	// to match the CPU ABI's own condition exactly -- on this all-admitted success path the two
+	// are equal, but keeping the same predicate as the rejection-path fix above (which can only
+	// test `*consumed`) keeps this one function internally consistent rather than using two
+	// different truths for the same flag.
+	if (*consumed > 0) seq->ready_for_logits = true;
 	return SSLM_OK;
 }
