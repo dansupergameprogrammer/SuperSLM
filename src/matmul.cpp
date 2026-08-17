@@ -32,6 +32,17 @@
 #define SUPERSLM_MATMUL_HAVE_SSE2 0
 #endif
 
+// T-2145 (Laplace, EXPERIMENT ONLY -- this guard is defined by the disposable
+// t2145_build.bat and by nothing in the product build, so the shipping default
+// is unchanged). Widens the same conformant construction from 128-bit/8-lane to
+// 256-bit/16-lane to measure what SIMD width buys on the CPU decode path.
+#if defined(SUPERSLM_MATMUL_T2145_AVX2) && !defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+#define SUPERSLM_MATMUL_HAVE_AVX2 1
+#include <immintrin.h>
+#else
+#define SUPERSLM_MATMUL_HAVE_AVX2 0
+#endif
+
 namespace superslm {
 namespace {
 
@@ -117,8 +128,79 @@ inline int64_t DotRowSse2(const int8_t* activations, const int8_t* weights,
 
 #endif  // SUPERSLM_MATMUL_HAVE_SSE2
 
+#if SUPERSLM_MATMUL_HAVE_AVX2
+
+// --- T-2145 EXPERIMENT: the AVX2 specialization -------------------------------
+//
+// Same conformant class as the SSE2 path above (design §7's "widening
+// (non-saturating) multiply-accumulate"), widened from 8 lanes to 16:
+//   1. Unaligned-safe 128-bit loads (no alignment precondition, matching the
+//      SSE2 path's movq -- the caller contract is unchanged).
+//   2. VPMOVSXBW (_mm256_cvtepi8_epi16): an exact int8 -> int16 sign-extend of
+//      all 16 lanes at once. Replaces the SSE2 path's unpack-then-shift pair,
+//      and is exact for the same reason: int8's full range fits int16.
+//   3. _mm256_madd_epi16: the 256-bit form of the SAME widening, non-saturating
+//      instruction the SSE2 path uses. Per-int32-lane magnitude bound is
+//      unchanged, because the lane arithmetic is unchanged -- two products,
+//      each at most 16384 by design §8's conservative bound, so at most 32768
+//      per lane per block.
+//   4. Flushed into the int64 accumulator on the SAME kFlushBlocks window, so
+//      the peak int32 partial-sum magnitude is identical to the SSE2 path's:
+//      16384 * 32768 = 536,870,912, a 4x margin under INT32_MAX.
+//
+// Bit-identity to the scalar reference rests on design §4's associativity
+// argument exactly as the SSE2 path's does -- every product is exact, nothing
+// narrows or saturates mid-reduction, so any traversal order yields the same
+// int64 total. That argument is the HYPOTHESIS; it is proven by execution in
+// t2145_bench's `identity` mode and by the axis digest, never inferred.
+//
+// Tail remainder (in_channels not a multiple of 16) falls through to the scalar
+// accumulation, as the SSE2 path does for its own remainder.
+inline int64_t DotRowAvx2(const int8_t* activations, const int8_t* weights,
+                           size_t in_channels) {
+	int64_t acc64 = 0;
+	__m256i acc32 = _mm256_setzero_si256();  // 8 int32 lanes
+
+	constexpr size_t kFlushBlocks = 16384;  // identical window to the SSE2 path
+
+	size_t k = 0;
+	size_t blocks_since_flush = 0;
+	for (; k + 16 <= in_channels; k += 16) {
+		__m128i a8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(activations + k));
+		__m128i w8 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(weights + k));
+
+		__m256i a16 = _mm256_cvtepi8_epi16(a8);
+		__m256i w16 = _mm256_cvtepi8_epi16(w8);
+
+		__m256i prod32 = _mm256_madd_epi16(a16, w16);  // widening, non-saturating
+		acc32 = _mm256_add_epi32(acc32, prod32);
+
+		if (++blocks_since_flush == kFlushBlocks) {
+			alignas(32) int32_t lanes[8];
+			_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc32);
+			for (int32_t v : lanes) acc64 += static_cast<int64_t>(v);
+			acc32 = _mm256_setzero_si256();
+			blocks_since_flush = 0;
+		}
+	}
+	{
+		alignas(32) int32_t lanes[8];
+		_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc32);
+		for (int32_t v : lanes) acc64 += static_cast<int64_t>(v);
+	}
+
+	for (; k < in_channels; ++k) {  // scalar tail remainder
+		acc64 += static_cast<int64_t>(activations[k]) * static_cast<int64_t>(weights[k]);
+	}
+	return acc64;
+}
+
+#endif  // SUPERSLM_MATMUL_HAVE_AVX2
+
 inline int64_t DotRow(const int8_t* activations, const int8_t* weights, size_t in_channels) {
-#if SUPERSLM_MATMUL_HAVE_SSE2
+#if SUPERSLM_MATMUL_HAVE_AVX2
+	return DotRowAvx2(activations, weights, in_channels);
+#elif SUPERSLM_MATMUL_HAVE_SSE2
 	return DotRowSse2(activations, weights, in_channels);
 #else
 	return DotRowScalar(activations, weights, in_channels);
