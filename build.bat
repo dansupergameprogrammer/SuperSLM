@@ -482,7 +482,14 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 if errorlevel 1 (
 	popd & exit /b 1
 )
-if defined T2139_MODEL if defined T2139_ADAPTER (
+rem Conductor observation (Claude/Bach/t2139-battery-varsunset-failure-2026-08-16.md): a chained
+rem `if defined A if defined B (block) else (block)` binds its `else` to the SECOND `if` only --
+rem when A is undefined, the whole compound statement is skipped without ever reaching the else,
+rem so the announced-skip echo below never printed even on a healthy run. Sequential guard
+rem instead: set a plain flag only when both are defined, then a single if/else on that flag.
+set "c6_ready="
+if defined T2139_MODEL if defined T2139_ADAPTER set "c6_ready=1"
+if defined c6_ready (
 	out\t2139_c6_smoke.exe %T2139_MODEL% %T2139_ADAPTER% %T2139_FOREIGN%
 	if errorlevel 1 ( popd & exit /b 1 )
 ) else (
@@ -496,7 +503,10 @@ cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
 if errorlevel 1 (
 	popd & exit /b 1
 )
-if defined T2139_MODEL if defined T2139_ADAPTER if defined T2139_FOREIGN (
+rem Same chained-if-defined defect as C6's own smoke above -- same sequential-guard fix.
+set "c6neg_ready="
+if defined T2139_MODEL if defined T2139_ADAPTER if defined T2139_FOREIGN set "c6neg_ready=1"
+if defined c6neg_ready (
 	out\t2139_c6_smoke_negative.exe %T2139_MODEL% %T2139_ADAPTER% %T2139_FOREIGN%
 	if errorlevel 1 ( popd & exit /b 1 )
 ) else (

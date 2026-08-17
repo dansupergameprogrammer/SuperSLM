@@ -59,115 +59,104 @@ typedef struct sslm_detok_state {
     uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
 } sslm_detok_state;
 
-/* status enum -- design Sec6's full per-cause taxonomy, 18 enumerators (design Sec10 dim5's own
- * reconciled count: 1 + 3 + 4 + 7 + 3 = 18, the numeric/domain group now carrying
- * SSLM_TOKEN_ID_UNMAPPED alongside SSLM_TOKEN_ID_OUT_OF_RANGE/SSLM_CONTEXT_CAP_EXCEEDED).
- * SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one of these (design Sec10 dim5, Sec7.3) -- it
- * is G5's own status, reserved-but-unbuilt here.
+/* status enum -- FULL-REGISTRY MIRROR, design Sec6's own single-authority complete ordinal
+ * registry, 26 entries (0-25) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
+ * design commit 4f4eb23896; symmetric-mirroring FOLD RULING on the third confirmation pass's F1,
+ * design commit dated 2026-08-17, Claude/Poirot/4466666-t2139-third-confirmation-review.md).
  *
- * SSLM_TOKEN_ID_UNMAPPED -- NEW (design commit 212de7742c, the padded-vocabulary ruling, Brunel
- * T-2139), appended at ordinal 17, the next free base ordinal, per the append-only reconciliation
- * law (never inserted within the numeric/domain group's own prior position, even though it is
- * semantically a numeric/domain rejection -- ordinal stability for every already-reconciled
- * enumerator wins). sslm_detokenize_stream's own rejection for a decode-output token id in
- * [tok_vocab, cfg_vocab) -- see that function's own header comment.
+ * Prior to this fold this header declared only 19 of the 26 registry entries (ordinals 0-17 and
+ * 25) -- G5's own schema block (18-24) existed only in tests/t2130-g5-red-suite/sslm_g5.h. F1
+ * found the governance ruling's premise ("every one of the 26 entries is a shared name once
+ * sslm_g5.h carries the complete list") false as written, because nothing had ever ruled the
+ * symmetric obligation onto THIS header. The fold ruling corrects this: neither header owns a
+ * subset of the registry to extend independently; both mirror the full, current, reconciled
+ * enum verbatim, including the other side's block as enumerator VALUES this header's own C1-C7
+ * build does not yet exercise functionally -- exactly the relationship sslm_g5.h already had to
+ * SSLM_ALLOCATION_FAILED (25) before its own mirroring fold. Ordinal allocation stays Sec6's
+ * alone; semantic ownership of G5's own schema-cause meanings (18-24) stays G5's (T-2119) --
+ * only which header's enum body carries which NAMES changed.
  *
- * *** COORDINATION NOTE FOR THE SUITE OWNER (tests/t2130-g5-red-suite/sslm_g5.h) ***
- * sslm_g5.h's own reconciled enum (curie/t2130-g5-red-suite@a7655dd) currently carries this
- * design's 0-16 base verbatim, with G5's own seven additions appended at 17-23 (24 total). This
- * new enumerator inserts at ordinal 17 in THIS design's own base -- sslm_g5.h's copy needs
- * SSLM_TOKEN_ID_UNMAPPED added at 17, with G5's own seven enumerators shifted to 18-24 (25
- * total), to stay reconciled. Not performed here (suite ownership, StandardsDocument Sec6.4/
- * Sec5.2's own persona-boundary discipline) -- Gate C (tools/t2139_gate_c_type_identity_check.cpp)
- * will need its own real-values check extended to cover this 18th enumerator once sslm_g5.h
- * reconciles; until then Gate C's existing 17-enumerator coverage is unaffected (it never checks
- * an enumerator neither side yet defines).
+ * SSLM_STATUS__NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
+ * the compiler assigns one past SSLM_ALLOCATION_FAILED, i.e. 26). This is the fold's OTHER
+ * ruling: a plain #define "top" macro (SSLM_STATUS_BASE_MAX, retired this fold -- no design
+ * record, no consumer beyond one test tool, F1 collateral) cannot move itself
+ * when a header appends a new enumerator, so F1's four compiled mutations proved it silently
+ * asserted nothing (Probe A: deleting the whole registry-top static_assert still compiled
+ * clean). An auto-valued enum tag inside the enum body has no such gap -- it moves automatically
+ * on whichever side appends, with nothing for an author to remember to hand-update. Gate C
+ * (tools/t2139_gate_c_type_identity_check.cpp) asserts both headers' SSLM_STATUS__NEXT_FREE
+ * equal, IN ADDITION TO (never replacing) its per-name checks: the per-name checks catch a
+ * shared name claimed at different ordinals; the sentinel catches a shared ordinal claimed by
+ * two different names (F1's Probe C, the collision the retired static_assert did not catch).
  *
- * RECONCILED against tests/t2130-g5-red-suite/sslm_g5.h (Claude/Brunel/
- * t2139-abi-build-2026-08-16.md Sec4/Sec5's own executed finding, since resolved). Executing
- * Gate C's own per-shared-enumerator-value construction once found three names --
- * SSLM_ADAPTER_MODEL_MISMATCH, SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, SSLM_RESTORE_MODEL_MISMATCH
- * -- carrying different ordinal values between this header and sslm_g5.h's own then-current
- * enum (a G5-scoped pre-G5-subset-plus-G5-additions taxonomy the two were never reconciled
- * against). sslm_g5.h has since been reconciled (curie/t2130-g5-red-suite@a7655dd) for the prior
- * 17-enumerator base; see the coordination note above for this fold's own follow-up. Gate C's
- * must-accept construction (tools/t2139_gate_c_type_identity_check.cpp) checks every one of the
- * (pre-this-fold) 17 enumerators against sslm_g5.h's own real body, in full, with no exclusion. */
+ * The registry, complete (design Sec6 GOVERNANCE RULING table, verbatim ordinals) -- expressed
+ * as an X-MACRO LIST rather than a hand-written enum body, per the fold ruling's own remedy #2:
+ * "the per-name check list itself is generated from the header ... never hand-written, so a
+ * newly appended enumerator cannot land without gaining a check line." SSLM_STATUS_ENUM_LIST is
+ * that generation mechanism -- it is BOTH how this enum's own body is built (below) AND, by
+ * design, the same list tools/t2139_gate_c_type_identity_check.cpp re-expands to emit one
+ * T2139_GATE_C_STATUS_CHECK per name (see that file). A name added here without a matching Gate
+ * C check is structurally impossible: there is no second place a name could be added to this
+ * enum, and any TU that expands SSLM_STATUS_ENUM_LIST sees every name this one does. */
+#define SSLM_STATUS_ENUM_LIST(X) \
+    X(SSLM_OK) /* 0 -- the only non-error value */ \
+    /* argument/precondition rejections (design Sec6) */ \
+    X(SSLM_INVALID_ARGUMENT) /* 1 */ \
+    X(SSLM_BUFFER_TOO_SMALL) /* 2 */ \
+    X(SSLM_MISALIGNED_BUFFER) /* 3 */ \
+    /* artifact/content rejections (design Sec6) */ \
+    X(SSLM_ARTIFACT_REJECTED) /* 4 */ \
+    X(SSLM_ADAPTER_MODEL_MISMATCH) /* 5 */ \
+    X(SSLM_RESTORE_MODEL_MISMATCH) /* 6 */ \
+    X(SSLM_RESTORE_KV_MISMATCH) /* 7 */ \
+    /* lifecycle/precondition-on-state rejections (design Sec6) */ \
+    X(SSLM_MODEL_HAS_LIVE_SEQUENCES) /* 8 */ \
+    X(SSLM_POOL_HAS_LIVE_HANDLES) /* 9 */ \
+    X(SSLM_ADAPTER_HAS_LIVE_SEQUENCES) /* 10 */ \
+    X(SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED) /* 11 */ \
+    X(SSLM_SEQ_RESET_MIDTOKEN_REJECTED) /* 12 */ \
+    X(SSLM_PREFIX_FROZEN_REJECTED) /* 13 */ \
+    X(SSLM_KV_POOL_EXHAUSTED) /* 14 */ \
+    /* numeric/domain rejections (design Sec6) */ \
+    X(SSLM_TOKEN_ID_OUT_OF_RANGE) /* 15 */ \
+    X(SSLM_CONTEXT_CAP_EXCEEDED) /* 16 */ \
+    /* sslm_detokenize_stream's own input id in [tok_vocab, cfg_vocab) -- a legal decode-output
+     * id with no tokenizer entry (padded-vocabulary case, src/model.cpp). Distinct from
+     * SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output at all). */ \
+    X(SSLM_TOKEN_ID_UNMAPPED) /* 17 */ \
+    /* G5's own schema block (design Sec5, T-2119) -- ordinals 18-24 ALLOCATED by Sec6, MEANING
+     * owned by G5; mirrored here verbatim, same convention sslm_g5.h already used for
+     * SSLM_ALLOCATION_FAILED before this fold. Not exercised by this header's own C1-C7 build --
+     * declared so the registry is complete and Gate C's per-name checks have something to
+     * compare on both sides for every entry, not only the 19 that happened to already coincide. */ \
+    X(SSLM_SCHEMA_NOT_FOUND) /* 18 -- sslm_schema_lookup: unknown name */ \
+    X(SSLM_SCHEMA_BIND_REJECTED) /* 19 -- sslm_seq_set_schema on a non-fresh walk */ \
+    X(SSLM_SCHEMA_SPAN_UNBOUND) /* 20 -- schema-content span, unbound sequence */ \
+    X(SSLM_PREFIX_SCHEMA_MISMATCH) /* 21 -- sslm_seq_adopt_prefix schema mismatch */ \
+    X(SSLM_RESTORE_SCHEMA_MISMATCH) /* 22 -- sslm_seq_restore schema does not resolve */ \
+    X(SSLM_SCHEMA_SPAN_UNREACHABLE) /* 23 -- a fixed span not reachable under the DFA */ \
+    X(SSLM_SCHEMA_UNSATISFIABLE) /* 24 -- G5-1 compiler rejection, CPU/converter-side */ \
+    /* resource-exhaustion rejection (design Sec6, RATIFIED Brunel T-2139 Sec19/N3; FOLD RULING
+     * on the third confirmation pass's F2, design commit dated 2026-08-17) -- process-level
+     * allocation failure, distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory
+     * exhaustion). The boundary catch (src/sslm_abi.cpp, CatchAllocationFailure and both
+     * SslmModel::Load call sites): catch(const std::bad_alloc&)/catch(const std::length_error&)
+     * -- the only causes this family covers -- return this status; a final catch(...) is the
+     * true, unconditional boundary and returns SSLM_ARTIFACT_REJECTED instead (no new ordinal
+     * minted for it -- MapForwardStatus's own existing "no dedicated status" mapping, extended
+     * here on the record). */ \
+    X(SSLM_ALLOCATION_FAILED) /* 25 */
+
 typedef enum sslm_status {
-    SSLM_OK = 0,
-
-    /* argument/precondition rejections (design Sec6) */
-    SSLM_INVALID_ARGUMENT,
-    SSLM_BUFFER_TOO_SMALL,
-    SSLM_MISALIGNED_BUFFER,
-
-    /* artifact/content rejections (design Sec6) */
-    SSLM_ARTIFACT_REJECTED,
-    SSLM_ADAPTER_MODEL_MISMATCH,
-    SSLM_RESTORE_MODEL_MISMATCH,
-    SSLM_RESTORE_KV_MISMATCH,
-
-    /* lifecycle/precondition-on-state rejections (design Sec6) */
-    SSLM_MODEL_HAS_LIVE_SEQUENCES,
-    SSLM_POOL_HAS_LIVE_HANDLES,
-    SSLM_ADAPTER_HAS_LIVE_SEQUENCES,
-    SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED,
-    SSLM_SEQ_RESET_MIDTOKEN_REJECTED,
-    SSLM_PREFIX_FROZEN_REJECTED,
-    SSLM_KV_POOL_EXHAUSTED,
-
-    /* numeric/domain rejections (design Sec6) */
-    SSLM_TOKEN_ID_OUT_OF_RANGE,
-    SSLM_CONTEXT_CAP_EXCEEDED,
-
-    /* NEW, appended (design commit 212de7742c, ordinal 17, the next free base ordinal --
-     * append-only, never inserted above): sslm_detokenize_stream's own input id in
-     * [tok_vocab, cfg_vocab) -- a legal decode-output id with no tokenizer entry (the padded-
-     * vocabulary case ValidateTokenizerVocabSizeJoin's loosening admits, src/model.cpp).
-     * Distinct from SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output at
-     * all). */
-    SSLM_TOKEN_ID_UNMAPPED = 17,
-
-    /* NEW, appended at ordinal 25 -- N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3),
-     * executed under the coordinator's own explicit closing-round instruction ("catch at the
-     * boundary and return the design's allocation-failure status per the taxonomy"). This
-     * design's own Sec6 base taxonomy (0-16) plus SSLM_TOKEN_ID_UNMAPPED (17) is otherwise
-     * exhaustively reconciled against tests/t2130-g5-red-suite/sslm_g5.h, whose own seven G5-
-     * scoped additions occupy 18-24 (curie/t2130-g5-red-suite@59e26ff) -- 25 is the next ordinal
-     * neither side has ever claimed, so this insertion needs no renumbering of anything already
-     * coordinated (unlike SSLM_TOKEN_ID_UNMAPPED's own insertion at 17, which did). Seven
-     * `extern "C"` verbs (sslm_workspace_create, sslm_kv_pool_create, sslm_model_map,
-     * sslm_prefix_begin, sslm_seq_create, sslm_seq_restore, sslm_adapter_map) previously let
-     * std::bad_alloc cross this ABI boundary under /EHc, where MSVC's own C4297 diagnostic (63
-     * times a build.bat run) states plainly that a throwing extern "C" function's behavior is
-     * undefined -- this design's own Sec6 deliberately declined a resource-exhaustion catch-all
-     * when the base taxonomy was first cut ("What this design does NOT add: a SSLM_DEVICE_LOST-
-     * shaped catch-all"), so no existing enumerator names this cause.
-     *
-     * RATIFIED at design commit 9f84d9e4ca ("ratify SSLM_ALLOCATION_FAILED (T-2139 N3) --
-     * resource-exhaustion family, ordinal 25, append-only law held") -- P3 (Claude/Poirot/
-     * 2c18dab-t2139-abi-build-review.md Sec7.5, third confirmation pass): this comment previously
-     * said the ratification was still pending and told a reader to go chase an authorization that
-     * by then already existed; corrected in place rather than left to mislead the next reader.
-     *
-     * P2 (same casebook, Sec7.4) -- RESOLVED by the T-2133 enum-governance ruling (design Sec6,
-     * design commit 4f4eb23896): design Sec6 is the single-authority complete ordinal registry
-     * for sslm_status; sslm_g5.h mirrors it verbatim (executed at curie/t2130-g5-red-suite@
-     * 52dc6cd), the registry is one interleaved sequence rather than disjoint base/G5 ranges,
-     * and next-free (26) is a Sec6 fact. SSLM_STATUS_BASE_MAX below stays as this header's own
-     * declared maximum -- update it in the SAME change that appends any future enumerator here,
-     * and reconcile design Sec6 first: an ordinal is claimed in the registry before either
-     * header takes it. */
-    SSLM_ALLOCATION_FAILED = 25
+#define SSLM_STATUS_ENUM_VALUE_(name) name,
+    SSLM_STATUS_ENUM_LIST(SSLM_STATUS_ENUM_VALUE_)
+#undef SSLM_STATUS_ENUM_VALUE_
+    /* Sentinel -- see the header comment above. NOT a real status; never returned by any verb,
+     * never a valid argument. Auto-valued (no explicit value given here), always one past the
+     * enum's own last real member, so appending a new enumerator to the X-macro list above moves
+     * this automatically with nothing to hand-maintain. */
+    SSLM_STATUS__NEXT_FREE
 } sslm_status;
-
-/* P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4): this header's own real highest
- * ordinal, maintained by hand alongside the enum above (a C enum has no built-in "my own
- * maximum" query) -- tools/t2139_gate_c_type_identity_check.cpp's registry-top identity
- * assertion (the T-2133 Sec6 ruling's shape) reads THIS, not a specific enumerator's name, and
- * pins it equal to the sslm_g5.h mirror's own top, so a one-sided append on either header fails
- * to compile on whichever side lagged. */
-#define SSLM_STATUS_BASE_MAX SSLM_ALLOCATION_FAILED
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
  * Sec5" -- transcribed here verbatim, since this design does not restate G5's own struct

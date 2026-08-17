@@ -74,6 +74,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -337,19 +338,44 @@ bool RoundUpToAlignment(size_t offset, size_t alignment, size_t* out) {
 // callee).
 //
 // One general helper, not sixteen ad hoc try/catch blocks with the same three lines each: `fn`'s
-// own return value passes through unchanged on success; ANY `std::exception` (not only
-// `std::bad_alloc` -- `std::length_error` is F5's own second confirmed type, and this is the
-// FINAL boundary an extern "C" verb has, so nothing past this point may propagate as a C++
-// exception regardless of its concrete type) narrows to SSLM_ALLOCATION_FAILED, matching
-// src/bad_alloc_wrap.h's own house narrowing convention (S-HARDEN-7) -- the difference from that
-// helper is that THIS one terminates the exception here, rather than rethrowing it, because this
-// IS the extern "C" boundary that must never let one cross.
+// own return value passes through unchanged on success. This IS the extern "C" boundary that
+// must never let a C++ exception cross it (undefined behavior under this codebase's own /EHc
+// build flags, MSVC's own C4297 diagnostic) -- so every exception is caught here, never rethrown,
+// but NOT every exception narrows to the same status.
+//
+// FOLD RULING on the third confirmation pass's F2 (Claude/Vitruvius/
+// t2133-layer1-c-abi-design-2026-08-16.md Sec6, design commit dated 2026-08-17; D-SLM3462):
+// this comment previously claimed `catch (const std::exception&)` meant "nothing past this point
+// may propagate as a C++ exception regardless of its concrete type" -- false in both directions,
+// proven by a compiled probe (F2): a throw NOT derived from `std::exception` (a custom type, or a
+// non-class throw like `throw int`) crossed the boundary as real, observed undefined behavior,
+// while every `std::exception` subtype that is NOT an allocation failure (`std::out_of_range`,
+// `std::logic_error`, ...) was mis-attributed as SSLM_ALLOCATION_FAILED -- contradicting design
+// Sec6's own ratified meaning for that status ("one dedicated cause (process-level exhaustion),
+// never a wrapper for causes that already have their own status") and the "What this design does
+// NOT add" text ("a SSLM_DEVICE_LOST-shaped catch-all"). The ruling narrows the shape to satisfy
+// both constraints with one helper:
+//   - `catch (const std::bad_alloc&)` and `catch (const std::length_error&)` -- the two standard
+//     exceptions that mean "the requested allocation/size cannot be honored," the only causes
+//     this family is defined to cover -- return SSLM_ALLOCATION_FAILED, unchanged.
+//   - A final `catch (...)` -- the true, unconditional boundary, catching every remaining
+//     exception type, INCLUDING non-`std::exception`-derived ones and non-class throws -- returns
+//     SSLM_ARTIFACT_REJECTED. No new ordinal is minted: SSLM_ARTIFACT_REJECTED is the existing
+//     family for "this call cannot be honored for an internal-rejection cause with no dedicated
+//     status of its own," the same mapping MapForwardStatus (below, this file) already
+//     establishes for every SslmForwardStatus cause this ABI's own closed taxonomy does not
+//     separately enumerate, extended here to the identical `catch (...)`-boundary shape rather
+//     than inventing a second mechanism for the same decision.
 template <typename Fn>
 sslm_status CatchAllocationFailure(Fn&& fn) {
 	try {
 		return fn();
-	} catch (const std::exception&) {
+	} catch (const std::bad_alloc&) {
 		return SSLM_ALLOCATION_FAILED;
+	} catch (const std::length_error&) {
+		return SSLM_ALLOCATION_FAILED;
+	} catch (...) {
+		return SSLM_ARTIFACT_REJECTED;
 	}
 }
 
@@ -837,12 +863,21 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 		// still caught here); the pin's own injected-fault coverage is now spent proving the
 		// specific gap the finding named, not duplicating coverage of an already-proven catch.
 		st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, view, &err);
-	} catch (const std::exception&) {
-		// P1 widened this from `catch (const std::bad_alloc&)` to `catch (const std::exception&)`
-		// -- this is the FINAL boundary (see CatchAllocationFailure's own comment); narrowing any
-		// exception type to SSLM_ALLOCATION_FAILED here, not only bad_alloc, matches the general
-		// fix applied throughout this sweep.
+	} catch (const std::bad_alloc&) {
+		// FOLD RULING on F2 (design Sec6, design commit dated 2026-08-17; D-SLM3462) -- see
+		// CatchAllocationFailure's own comment for the full reasoning: this is one of the two
+		// exception types this family is defined to cover.
 		return SSLM_ALLOCATION_FAILED;
+	} catch (const std::length_error&) {
+		return SSLM_ALLOCATION_FAILED;
+	} catch (...) {
+		// The true, unconditional boundary -- every exception type NOT caught above, including
+		// non-`std::exception`-derived ones and non-class throws, which the previous
+		// `catch (const std::exception&)` here let cross this extern "C" boundary as real,
+		// observed undefined behavior (F2's compiled probe). No new ordinal minted;
+		// SSLM_ARTIFACT_REJECTED is the existing "internal rejection, no dedicated status"
+		// family (MapForwardStatus, below, this file, is the existing precedent).
+		return SSLM_ARTIFACT_REJECTED;
 	}
 	if (st != superslm::SslmModelStatus::Ok) {
 		// design Sec6: every SslmModel::Load rejection maps to SSLM_ARTIFACT_REJECTED; the
@@ -873,9 +908,24 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// reach it (that pin's own injection point was inside sslm_model_map's earlier try, around
 	// SslmModel::Load, which ran to completion and returned before BuildEngineCache was ever
 	// called). Wrapped now, with `h` deleted on an allocation failure exactly as it already is on
-	// BuildEngineCache's own ordinary rejection, so both failure paths leave no leaked handle. The
-	// injection seam's own consultation point moved INTO BuildEngineCache itself (its own top
-	// comment) so tools/t2139_n3_bad_alloc_pin.cpp's own armed call now reaches this exact wrap.
+	// BuildEngineCache's own ordinary rejection, so both failure paths leave no leaked handle.
+	//
+	// F3 (Claude/Poirot/4466666-t2139-third-confirmation-review.md): this comment previously
+	// claimed the injection seam's own consultation point moving INTO BuildEngineCache itself
+	// (its own top comment) meant tools/t2139_n3_bad_alloc_pin.cpp's own armed call now reaches
+	// THIS exact wrap -- false. That pin file's own header comment states the opposite, and is
+	// correct: the seam is single-shot and thread_local, SslmModel::Load (model.cpp) consults it
+	// first and always runs before BuildEngineCache inside sslm_model_map, so an armed fault
+	// always trips Load's own consultation and never reaches BuildEngineCache's. Confirmed by
+	// instrumentation during that round (build log Sec21). BuildEngineCache's own wrap is
+	// verified by construction instead -- the SAME CatchAllocationFailure helper this sweep
+	// applies everywhere else, proven correct end-to-end by the pin's own armed test (which
+	// exercises Load's catch) and by code inspection (this wrap's own try/catch shape is
+	// identical to every other use). Isolating BuildEngineCache's own consultation specifically
+	// needs a site-specific arming mechanism or a test-only hook -- neither built here, and this
+	// is stated plainly rather than papered over with a pin that would look isolated without
+	// being isolated (tools/t2139_n3_bad_alloc_pin.cpp's own header comment, unchanged, is the
+	// record of that limitation).
 	const sslm_status cache_st = CatchAllocationFailure([&]() -> sslm_status {
 		return BuildEngineCache(h) ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 	});
@@ -1778,10 +1828,14 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	try {
 		load_st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, adapter_view,
 		                                     &err);
-	} catch (const std::exception&) {
-		// P1 widened this to catch (const std::exception&) -- see sslm_model_map's own identical
-		// comment.
+	} catch (const std::bad_alloc&) {
+		// FOLD RULING on F2 -- see sslm_model_map's own identical comment and
+		// CatchAllocationFailure's own comment for the full reasoning.
 		return SSLM_ALLOCATION_FAILED;
+	} catch (const std::length_error&) {
+		return SSLM_ALLOCATION_FAILED;
+	} catch (...) {
+		return SSLM_ARTIFACT_REJECTED;
 	}
 	if (load_st != superslm::SslmModelStatus::Ok) return SSLM_ARTIFACT_REJECTED;
 
