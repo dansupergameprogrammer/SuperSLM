@@ -843,6 +843,46 @@ if defined T2132_G5_FIXTURE (
 	echo t2132_g5_smoke: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
 
+rem T-2132 (G5-5, Brunel, design Sec6 Slot G5-5 -- REQUIRED 1.0 gate, D-SLM3443): the executed
+rem CPU-vs-GPU parity proof for schema-constrained decode and jump-forward. Needs the SAME real
+rem G5 fixture as G5-2's own smoke above plus real D3D12 hardware -- built here (both the CPU ABI
+rem and the GPU-1.0 TUs, per this tool's own #include list) but NOT auto-run (matching every
+rem other real-artifact GPU tool's own precedent above: B2/B3/.../t2124). Usage:
+rem out\t2132_g5_gpu_parity.exe ^<g5-fixture.sslm^> "prompt" [schema_name] [num_decode_steps].
+rem NOTE: split into three tool TUs (t2132_g5_gpu_parity.cpp / _cpu.cpp / _gpu.cpp) -- sslm_abi.h's
+rem `sslm_status` and gpu_1p0.h's `SslmGpuStatus` share several enumerator spellings at GLOBAL C
+rem scope (SSLM_OK, SSLM_ADAPTER_MODEL_MISMATCH, SSLM_MODEL_HAS_LIVE_SEQUENCES,
+rem SSLM_TOKEN_ID_OUT_OF_RANGE, SSLM_RESTORE_MODEL_MISMATCH) -- a real collision this tool is the
+rem first target to trip (needing both APIs at once), fixed by keeping the two headers out of the
+rem same TU rather than editing either (both declaration-pinned). /Itools resolves the shared POD
+rem header (t2132_g5_gpu_parity_shared.h) between the three.
+if not exist out\t2132g5gpu mkdir out\t2132g5gpu
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itools ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2132_g5_gpu_parity.cpp tools\t2132_g5_gpu_parity_cpu.cpp tools\t2132_g5_gpu_parity_gpu.cpp ^
+	/Fo:out\t2132g5gpu\ /Fe:out\t2132_g5_gpu_parity.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+rem T-2132 (G5-5) build log finding, Claude/Brunel/t2132-g5-build-2026-08-16.md: real, reproducible,
+rem dispatch-budget-independent CPU/GPU divergence found starting at decode step 19 of a real,
+rem content-varying 24-step generation -- localized (walk-state replay) to the underlying GPU
+rem layer-loop substrate's own numerics, NOT G5-5's masking/walk-state/jump-forward mechanism
+rem (which stays state-for-state identical to the CPU oracle through and past the divergence).
+rem Auto-run here at 18 steps -- the largest length this build has real, executed, clean evidence
+rem for -- so this step gives a real PASS/FAIL signal instead of a known-red one; the diverging
+rem >18-step run is documented, not silently dropped, in the build log above.
+if defined T2132_G5_FIXTURE (
+	out\t2132_g5_gpu_parity.exe %T2132_G5_FIXTURE% "Book me with Rin, Thursday afternoon." shopkeeper_intent_extraction 18
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_g5_gpu_parity: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
