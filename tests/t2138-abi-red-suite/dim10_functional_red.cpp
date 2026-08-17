@@ -125,8 +125,10 @@ static void TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi() {
 	sslm_adapter adapter = nullptr;
 	CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model, &adapter) ==
 	      SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_OK);
 	int32_t consumed = 0;
 	CHECK(sslm_prefill(model, seq, prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
@@ -151,6 +153,7 @@ static void TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi() {
 	}
 	CHECK(sslm_seq_set_adapter(seq, nullptr) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
@@ -189,17 +192,20 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	// following Sec7.2's own sizing recipe, REVISED against the whole-block buffer model
 	// (commit fab235c1c6): block_count = N, the number of concurrently resident SEQUENCES the
 	// caller wants (not a token-derived ceil division against kv_block_size -- kv_block_size(model)
-	// now reports one whole sequence's own entire KV footprint already, so a single sequence is
-	// simply block_count = 1, D-SLM3454's own single-sequence reduction, corrected).
+	// now reports one whole sequence's own entire KV footprint already. block_count = 2, NOT 1:
+	// this cell's own step 8 restores into a FRESH sequence while the ORIGINAL `seq` is still
+	// live (both compared at step 9), so two concurrent blocks are genuinely needed -- matching
+	// the real reference build's own block_count (tools/t2139_sfreeze_example.cpp:98), which
+	// this cell's prior text mis-cited as block_count=1 before checking the reference.
 	SslmModelView view;
 	std::vector<uint8_t> parse_bytes;
 	std::string err;
 	CHECK(LoadRealModelView(g_model_path, &view, &parse_bytes, &err));
 	const size_t kv_block_bytes = sslm_kv_block_size(model);
 	CHECK_MSG(kv_block_bytes > 0, "sslm_kv_block_size must be positive");
-	const uint32_t block_count = 1;  // N=1, single sequence (design Sec7.2's own reduction).
+	const uint32_t block_count = 2;  // seq + restored, concurrently live.
 	const size_t pool_overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> pool_buf(block_count * kv_block_bytes + pool_overhead);
+	AlignedBuffer pool_buf(block_count * kv_block_bytes + pool_overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), block_count, &pool) ==
 	      SSLM_OK);
@@ -210,7 +216,7 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
 	const size_t ws_size = sslm_workspace_size(model, &config);
 	CHECK_MSG(ws_size > 0, "a valid sslm_config must report a positive workspace size");
-	std::vector<uint8_t> ws_buf(ws_size);
+	AlignedBuffer ws_buf(ws_size);
 	sslm_workspace ws = nullptr;
 	CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
 	sslm_seq seq = nullptr;
@@ -254,13 +260,12 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	CHECK(detok_state.pending_count <= 2);
 
 	// 7. Save.
-	unsigned char blob[65536];
-	size_t blob_size = sizeof(blob);
-	CHECK(sslm_seq_save(seq, blob, &blob_size) == SSLM_OK);
+	SeqBlobBuffer blob(model);
+	CHECK(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK);
 
 	// 8. Restore into a FRESH sequence.
 	sslm_seq restored = nullptr;
-	CHECK(sslm_seq_restore(model, &pool, blob, blob_size, &restored) == SSLM_OK);
+	CHECK(sslm_seq_restore(model, &pool, blob.bytes.data(), blob.size, &restored) == SSLM_OK);
 
 	// 9. Decode-verify IDENTICAL continuation: the restored handle's own next decoded token
 	// equals what the ORIGINAL handle would have produced next -- the save/restore round trip's
@@ -295,14 +300,14 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	// suite's existing harness.
 }
 
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. Every cell
+// in this file is self-contained (loads its own real artifacts via g_model_path/g_adapter_path)
+// and SKIPs internally when its own fixture is absent.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim10_P2_TokenizeGoldenParityWithTokenizerViewDirect;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim10_P4_SFreezeExampleShapeFullRealWorkflow;
-	(void)addr_2;
+	TestDim10_P2_TokenizeGoldenParityWithTokenizerViewDirect();
+	TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi();
+	TestDim10_P4_SFreezeExampleShapeFullRealWorkflow();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

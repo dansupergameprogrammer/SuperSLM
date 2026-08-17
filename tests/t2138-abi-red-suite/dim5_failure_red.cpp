@@ -35,14 +35,17 @@ static void TestDim5_C2_ModelUnmapWhileLiveSeqRejected(const void* artifact_byte
                                                         size_t artifact_size) {
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(artifact_bytes, artifact_size, &model) == SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_MODEL_HAS_LIVE_SEQUENCES);
 	// The rejected unmap leaves the model and sequence both usable.
 	int32_t tokens[1] = {0};
 	int32_t consumed = 0;
 	CHECK(sslm_prefill(model, seq, tokens, 1, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
@@ -75,13 +78,13 @@ static void TestDim5_C4_AdapterReleaseWhileLiveSeqRejected(sslm_model model, ssl
 // token in flight, layer_index != 0) rejects. ---
 static void TestDim5_C5_AdapterSwapMidTokenRejected(sslm_model model, sslm_seq seq,
                                                      sslm_adapter adapter) {
-	sslm_decode_params params{};
-	params.layer_budget = 1;  // deliberately less than a full token's own layer count, so the
-	                          // sequence is left resting mid-token (layer_index != 0) rather
-	                          // than completing a whole token.
-	int32_t out_tokens[1] = {0};
-	sslm_seq batch[1] = {seq};
-	CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, out_tokens) == SSLM_OK);
+	// decode_step requires a prior prefill (a virgin sequence has no current_token to continue
+	// from) -- a real, minimal prompt establishes that before entering mid-token state.
+	int32_t setup_prompt[1] = {0};
+	int32_t setup_consumed = 0;
+	CHECK(sslm_prefill(model, seq, setup_prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &setup_consumed) == SSLM_OK);
+	CHECK(EnterMidToken(model, seq));
 	CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED);
 }
 
@@ -89,11 +92,11 @@ static void TestDim5_C5_AdapterSwapMidTokenRejected(sslm_model model, sslm_seq s
 // design's own Sec6): sslm_seq_reset against a non-zero residual marker rejects, symmetric with
 // cell 5's adapter-swap rejection under the identical mid-token precondition. ---
 static void TestDim5_C6_SeqResetMidTokenRejected(sslm_model model, sslm_seq seq) {
-	sslm_decode_params params{};
-	params.layer_budget = 1;
-	int32_t out_tokens[1] = {0};
-	sslm_seq batch[1] = {seq};
-	CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, out_tokens) == SSLM_OK);
+	int32_t setup_prompt[1] = {0};
+	int32_t setup_consumed = 0;
+	CHECK(sslm_prefill(model, seq, setup_prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &setup_consumed) == SSLM_OK);
+	CHECK(EnterMidToken(model, seq));
 	CHECK(sslm_seq_reset(seq) == SSLM_SEQ_RESET_MIDTOKEN_REJECTED);
 }
 
@@ -140,7 +143,7 @@ static void TestDim5_C8_KvPoolExhaustedSequenceResumable(sslm_model model) {
 	const uint32_t block_count = 1;  // deliberately tiny -- one concurrent sequence only.
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
+	AlignedBuffer buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 	sslm_seq seq = nullptr;
@@ -177,7 +180,7 @@ static void TestDim5_C9_KvPoolExhaustedPrefixResumable(sslm_model model) {
 	const uint32_t block_count = 1;
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
+	AlignedBuffer buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 
@@ -219,41 +222,188 @@ static void TestDim5_C10_TokenIdOutOfRangeRejected(sslm_model model, sslm_seq se
 }
 
 // --- Cell 11 (SSLM_CONTEXT_CAP_EXCEEDED -- design Sec6): a prefill/decode_step call that would
-// push context_length past the artifact's own context_cap rejects. ---
+// push context_length past the artifact's own context_cap rejects.
+//
+// GROUNDED AGAINST THE REAL IMPLEMENTATION (StandardsDocument.md Sec5.4 -- exactness verified at
+// source, not by construction): the check (src/sslm_abi.cpp's own PrefillWholeTokens) is
+// `if (state.context_length >= context_cap) return SSLM_CONTEXT_CAP_EXCEEDED;`, evaluated PER
+// TOKEN, using context_length as it stands AT CALL ENTRY for the first token -- never a
+// pre-flight check against the full requested count. A real 1.5B artifact's context_cap is
+// 32768; reaching it by actually prefilling real content would mean processing ~32768 real
+// per-token forward passes (this cell's own prior version tried exactly that, at a chunk_budget
+// wide enough to attempt the whole span in one call, and did not return in a reasonable time --
+// StandardsDocument.md Sec5.6, a ruling contradicted by measurement is re-opened, not defended).
+//
+// The cheap, still-real construction: save a real (tiny, non-mid-token) sequence, tamper ONLY
+// the blob's own context_length field (the real implementation's exact byte offset, cited from
+// src/sslm_abi.cpp's own sslm_seq_save: magic(4) + model_hash(32) + kv_precision(4) +
+// schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) = offset 60, 8 bytes LE) to
+// context_cap itself, restore (every OTHER field, including model_hash, is untouched and still
+// valid, so restore succeeds structurally), then issue ONE small prefill call -- the FIRST
+// token's own check now reads context_length == context_cap and rejects immediately, no real
+// per-token compute required to reach it. ---
 static void TestDim5_C11_ContextCapExceededRejected(sslm_model model, sslm_seq seq,
-                                                     int64_t context_cap) {
-	// A prompt one token longer than the artifact's own declared cap -- genuinely hostile
-	// against the real domain, not an arbitrary large constant.
-	std::vector<int32_t> over_cap(static_cast<size_t>(context_cap) + 1, 0);
+                                                     int64_t context_cap, sslm_kv_pool* pool) {
+	int32_t setup_prompt[1] = {0};
+	int32_t setup_consumed = 0;
+	CHECK(sslm_prefill(model, seq, setup_prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &setup_consumed) == SSLM_OK);
+
+	SeqBlobBuffer blob(model);
+	CHECK(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK);
+	constexpr size_t kContextLengthOffset = 60;  // cited from src/sslm_abi.cpp's own field order
+	                                              // above -- 8 bytes, little-endian uint64.
+	CHECK_MSG(blob.size > kContextLengthOffset + 8,
+	          "blob too small (%zu bytes) to carry a context_length field at offset %zu",
+	          blob.size, kContextLengthOffset);
+	const uint64_t tampered_context_length = static_cast<uint64_t>(context_cap);
+	for (int i = 0; i < 8; ++i) {
+		blob.bytes[kContextLengthOffset + i] =
+		    static_cast<uint8_t>((tampered_context_length >> (8 * i)) & 0xFF);
+	}
+
+	sslm_seq restored = nullptr;
+	CHECK(sslm_seq_restore(model, pool, blob.bytes.data(), blob.size, &restored) == SSLM_OK);
+	if (!restored) return;
+
+	int32_t over_cap_tokens[2] = {0, 1};
 	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq, over_cap.data(), (int32_t)over_cap.size(), 8, SSLM_SPAN_PROMPT,
-	                    nullptr, &consumed) == SSLM_CONTEXT_CAP_EXCEEDED);
+	CHECK(sslm_prefill(model, restored, over_cap_tokens, 2, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &consumed) == SSLM_CONTEXT_CAP_EXCEEDED);
+	CHECK(sslm_seq_release(restored) == SSLM_OK);
 }
 
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. The
+// builder's own ad-hoc driver crashed (STATUS_HEAP_CORRUPTION, root cause unisolated) and was
+// reverted to link-only (Claude/Brunel/t2139-abi-build-2026-08-16.md S6). Authored fresh here:
+// C1/C3/C4/C5/C6/C10/C11 each get their OWN dedicated, freshly-created sequence from one pool
+// sized for the whole set (block_count=7), so no cell's own mid-token/hostile-input mutation
+// (C5/C6 deliberately leave a sequence mid-token; C10/C11 deliberately feed hostile content)
+// can be observed by a later cell reusing the same handle. C7/C8/C9 build their own dedicated
+// pools (self-contained already). C2 is fully self-contained.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim5_C1_InvalidArgumentNullOutAndNegativeCount;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim5_C2_ModelUnmapWhileLiveSeqRejected;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim5_C3_KvPoolDestroyWhileLiveHandleRejected;
-	(void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim5_C4_AdapterReleaseWhileLiveSeqRejected;
-	(void)addr_3;
-	volatile void* addr_4 = (void*)&TestDim5_C5_AdapterSwapMidTokenRejected;
-	(void)addr_4;
-	volatile void* addr_5 = (void*)&TestDim5_C6_SeqResetMidTokenRejected;
-	(void)addr_5;
-	volatile void* addr_6 = (void*)&TestDim5_C7_PrefixPrefillAfterFreezeOrReleaseRejected;
-	(void)addr_6;
-	volatile void* addr_7 = (void*)&TestDim5_C8_KvPoolExhaustedSequenceResumable;
-	(void)addr_7;
-	volatile void* addr_8 = (void*)&TestDim5_C9_KvPoolExhaustedPrefixResumable;
-	(void)addr_8;
-	volatile void* addr_9 = (void*)&TestDim5_C10_TokenIdOutOfRangeRejected;
-	(void)addr_9;
-	volatile void* addr_10 = (void*)&TestDim5_C11_ContextCapExceededRejected;
-	(void)addr_10;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim5 C1/C3-C6/C8-C11 not run");
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	SslmModelView view;
+	std::vector<uint8_t> bytes;
+	std::string err;
+	if (!LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+		SKIP_MSG("could not load real artifact: %s", err.c_str());
+		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
+		return GFailures ? 1 : 0;
+	}
+	sslm_model model = nullptr;
+	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+	if (model) {
+		const int32_t vocab_size = static_cast<int32_t>(view.config.vocab_size);
+		const int64_t context_cap = static_cast<int64_t>(view.config.context_cap);
+
+		// C1, C4, C5, C6, C10 -- 5 dedicated sequences, one shared pool (C3/C11 get their own
+		// pools below: C3 destroys the pool itself as part of its own test; C11 needs a SECOND
+		// concurrent block for its own restored handle).
+		const uint32_t bc = 5;
+		const size_t block_bytes = sslm_kv_block_size(model);
+		AlignedBuffer pool_buf(bc * block_bytes + sslm_kv_pool_overhead_size(model, bc));
+		sslm_kv_pool pool = nullptr;
+		CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc, &pool) == SSLM_OK);
+		if (pool) {
+			sslm_seq seq_c1 = nullptr, seq_c4 = nullptr, seq_c5 = nullptr, seq_c6 = nullptr,
+			         seq_c10 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq_c1) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c4) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c5) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c6) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c10) == SSLM_OK);
+
+			if (seq_c1) {
+				TestDim5_C1_InvalidArgumentNullOutAndNegativeCount(model, seq_c1);
+				CHECK(sslm_seq_release(seq_c1) == SSLM_OK);
+			}
+			if (g_adapter_path.empty()) {
+				SKIP_MSG("--adapter=PATH not supplied -- dim5 C4/C5 not run");
+			} else {
+				std::vector<uint8_t> adapter_bytes;
+				CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
+				sslm_adapter adapter_c4 = nullptr, adapter_c5 = nullptr;
+				CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+				                        &adapter_c4) == SSLM_OK);
+				CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+				                        &adapter_c5) == SSLM_OK);
+				if (seq_c4 && adapter_c4) {
+					TestDim5_C4_AdapterReleaseWhileLiveSeqRejected(model, seq_c4, adapter_c4);
+				} else if (adapter_c4) {
+					CHECK(sslm_adapter_release(adapter_c4) == SSLM_OK);
+				}
+				if (seq_c5 && adapter_c5) {
+					TestDim5_C5_AdapterSwapMidTokenRejected(model, seq_c5, adapter_c5);
+					CHECK(sslm_adapter_release(adapter_c5) == SSLM_OK);
+				} else if (adapter_c5) {
+					CHECK(sslm_adapter_release(adapter_c5) == SSLM_OK);
+				}
+			}
+			if (seq_c4) CHECK(sslm_seq_release(seq_c4) == SSLM_OK);
+			if (seq_c5) CHECK(sslm_seq_release(seq_c5) == SSLM_OK);
+
+			if (seq_c6) {
+				TestDim5_C6_SeqResetMidTokenRejected(model, seq_c6);
+				CHECK(sslm_seq_release(seq_c6) == SSLM_OK);
+			}
+			if (seq_c10) {
+				TestDim5_C10_TokenIdOutOfRangeRejected(model, seq_c10, vocab_size);
+				CHECK(sslm_seq_release(seq_c10) == SSLM_OK);
+			}
+			CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+		}
+
+		// C11 gets its own dedicated 2-block pool -- its own seq stays live while its own
+		// tampered-blob restore creates a SECOND handle, both concurrently held mid-cell.
+		{
+			SinglePool sp11;
+			sslm_seq seq_c11 = nullptr;
+			if (MakePool(model, 2, &sp11))
+				CHECK(sslm_seq_create(model, &sp11.pool, &seq_c11) == SSLM_OK);
+			if (seq_c11) {
+				TestDim5_C11_ContextCapExceededRejected(model, seq_c11, context_cap, &sp11.pool);
+				CHECK(sslm_seq_release(seq_c11) == SSLM_OK);
+			}
+			if (sp11.pool) CHECK(sslm_kv_pool_destroy(sp11.pool) == SSLM_OK);
+		}
+
+		// C3 gets its own dedicated pool -- it destroys the pool itself as part of its own test
+		// (SSLM_POOL_HAS_LIVE_HANDLES while its own seq is live, then a real destroy after
+		// release), which no other cell can share a pool with.
+		{
+			const uint32_t bc3 = 1;
+			AlignedBuffer pool_buf3(bc3 * block_bytes + sslm_kv_pool_overhead_size(model, bc3));
+			sslm_kv_pool pool3 = nullptr;
+			CHECK(sslm_kv_pool_create(model, pool_buf3.data(), pool_buf3.size(), bc3, &pool3) ==
+			      SSLM_OK);
+			if (pool3) TestDim5_C3_KvPoolDestroyWhileLiveHandleRejected(model, pool3);
+		}
+
+		// C7, C8, C9 build their own dedicated pools internally.
+		{
+			const uint32_t bc7 = 2;
+			AlignedBuffer pool_buf7(bc7 * block_bytes + sslm_kv_pool_overhead_size(model, bc7));
+			sslm_kv_pool pool7 = nullptr;
+			CHECK(sslm_kv_pool_create(model, pool_buf7.data(), pool_buf7.size(), bc7, &pool7) ==
+			      SSLM_OK);
+			if (pool7) {
+				TestDim5_C7_PrefixPrefillAfterFreezeOrReleaseRejected(model, &pool7);
+				CHECK(sslm_kv_pool_destroy(pool7) == SSLM_OK);
+			}
+		}
+		TestDim5_C8_KvPoolExhaustedSequenceResumable(model);
+		TestDim5_C9_KvPoolExhaustedPrefixResumable(model);
+
+		CHECK(sslm_model_unmap(model) == SSLM_OK);
+	}
+	// C2 is fully self-contained (maps/unmaps its own dedicated model handle).
+	TestDim5_C2_ModelUnmapWhileLiveSeqRejected(bytes.data(), bytes.size());
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -16,7 +16,7 @@ static void TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
 	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
 	const size_t required = sslm_workspace_size(model, &config);
 	CHECK_MSG(required > 0, "a valid sslm_config must report a positive workspace size");
-	std::vector<uint8_t> buf(required);
+	AlignedBuffer buf(required);
 	sslm_workspace ws1 = nullptr;
 	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws1) == SSLM_OK);
 	CHECK(sslm_workspace_destroy(ws1) == SSLM_OK);
@@ -46,7 +46,7 @@ static void TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(sslm_model model)
 	const uint32_t block_count = 4;
 	const size_t block_bytes = sslm_kv_block_size(model);
 	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-	std::vector<uint8_t> buf(block_count * block_bytes + overhead);
+	AlignedBuffer buf(block_count * block_bytes + overhead);
 	sslm_kv_pool pool = nullptr;
 	CHECK(sslm_kv_pool_create(model, buf.data(), buf.size(), block_count, &pool) == SSLM_OK);
 
@@ -91,9 +91,12 @@ static void TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping(
     const void* artifact_bytes, size_t artifact_size) {
 	sslm_model model1 = nullptr;
 	CHECK(sslm_model_map(artifact_bytes, artifact_size, &model1) == SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model1, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model1, /*pool=*/nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model1, &sp.pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model1) == SSLM_OK);
 
 	sslm_model model2 = nullptr;
@@ -127,8 +130,10 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	// Warm sequence: short generation (3 tokens), then long (12), then short again (3),
 	// interleaved with sslm_seq_reset between phases (design Sec12's own reset-as-restart
 	// symmetry) so the "warm" handle genuinely re-enters a fresh walk each phase.
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq warm = nullptr;
-	CHECK(sslm_seq_create(model, /*pool=*/nullptr, &warm) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &warm) == SSLM_OK);
 	int32_t phase_a[3] = {0, 1, 2};
 	int32_t phase_b[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 	int32_t phase_c[3] = {0, 1, 2};
@@ -143,8 +148,13 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	      SSLM_OK);
 	int32_t warm_out[1] = {0};
 	sslm_decode_params params{};
+	// A FULL-TOKEN budget is required here, not any positive value: this cell's own oracle
+	// comparison (below) is against RunGreedyOracle's own per-token output, which only matches a
+	// decode call that completes a whole token, not a partial-layer step.
+	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
 	CHECK(sslm_decode_step(model, &warm, 1, &params, nullptr, warm_out) == SSLM_OK);
 	CHECK(sslm_seq_release(warm) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 
 	// FEATURE ORACLE: a FRESH handle running phase_c alone (never touched by phase_a/phase_b)
 	// produces the identical decoded token -- proving the warm handle's own reset between
@@ -167,18 +177,35 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
+// REAL INVOCATION DRIVER (house pattern, tests/t2112-gpu-1p0-red-suite/dim1_lifetime_red.cpp):
+// builds real fixtures through the production ABI and calls every Test* function above --
+// superseding the RED-BY-LINK-phase address-only convention now that a real implementation
+// exists to link against and run (Claude/Poirot/2c18dab-t2139-abi-build-review.md S6). A cell
+// whose own fixture requirement is unmet SKIPs, never silently passes.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly;
-	(void)addr_1;
-	volatile void* addr_2 =
-	    (void*)&TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping;
-	(void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle;
-	(void)addr_3;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim1 M1-M3 not run");
+	} else {
+		SslmModelView view;
+		std::vector<uint8_t> bytes;
+		std::string err;
+		if (LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
+				    model, static_cast<int32_t>(view.config.num_hidden_layers));
+				TestDim1_M2_SeqReleaseRestoresPoolFreeCountExactly(model);
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+			TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping(bytes.data(), bytes.size());
+		} else {
+			SKIP_MSG("could not load real artifact: %s", err.c_str());
+		}
+	}
+	// P1 is self-contained (loads g_model_path itself) -- SKIPs internally if absent.
+	TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

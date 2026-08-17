@@ -69,6 +69,8 @@ static void TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
 	CHECK(sslm_seq_adopt_prefix(seq_adopted, prefix) == SSLM_OK);
 	CHECK(sslm_seq_set_adapter(seq_adopted, adapter) == SSLM_OK);
 	sslm_decode_params params{};
+	params.layer_budget = 1;  // any positive value -- both sides of the comparison below share
+	                          // this identical params, so the comparison stays meaningful.
 	int32_t token_adopted = 0;
 	sslm_seq batch_adopted[1] = {seq_adopted};
 	CHECK(sslm_decode_step(model, batch_adopted, 1, &params, nullptr, &token_adopted) == SSLM_OK);
@@ -111,18 +113,20 @@ static void TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
 // without an adapter). ---
 static void TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes(sslm_model model,
                                                                        sslm_seq seq,
-                                                                       sslm_adapter adapter) {
+                                                                       sslm_adapter adapter,
+                                                                       sslm_kv_pool* pool) {
 	CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_OK);
-	sslm_decode_params params{};
-	params.layer_budget = 1;  // leaves the sequence resting mid-token.
-	int32_t out_token = 0;
-	sslm_seq batch[1] = {seq};
-	CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) == SSLM_OK);
-	unsigned char blob[65536];
-	size_t blob_size = sizeof(blob);
-	CHECK(sslm_seq_save(seq, blob, &blob_size) == SSLM_OK);
+	// decode_step requires a prior prefill (a virgin sequence has no current_token to continue
+	// from).
+	int32_t setup_prompt[1] = {0};
+	int32_t setup_consumed = 0;
+	CHECK(sslm_prefill(model, seq, setup_prompt, 1, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &setup_consumed) == SSLM_OK);
+	CHECK(EnterMidToken(model, seq));  // leaves the sequence resting mid-token.
+	SeqBlobBuffer blob(model);
+	CHECK(sslm_seq_save(seq, blob.bytes.data(), &blob.size) == SSLM_OK);
 	sslm_seq restored = nullptr;
-	CHECK(sslm_seq_restore(model, nullptr, blob, blob_size, &restored) == SSLM_OK);
+	CHECK(sslm_seq_restore(model, pool, blob.bytes.data(), blob.size, &restored) == SSLM_OK);
 	// FEATURE ORACLE: the restored handle's adapter-swap guard fires identically to the
 	// original's (SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED against a NEW adapter binding attempt) --
 	// proving both the mid-token residual AND the adapter binding round-tripped together, since
@@ -136,12 +140,16 @@ static void TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes(sslm_model
 // sequence one unchunked sslm_prefill call would consume"). Real artifact required (tokenize
 // needs a real vocabulary). ---
 static void TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked() {
-	if (g_model_path.empty()) {
-		SKIP_MSG("real base artifact not supplied (--model=PATH) -- product cell not run");
+	// Needs a tokenizer-BEARING artifact, distinct from g_model_path (the adapter-matching base
+	// M2/M3 use, which often has no tokenizer bound -- house convention, build.bat's own
+	// T2139_MODEL/T2139_MODEL_TOK split).
+	if (g_model_tok_path.empty()) {
+		SKIP_MSG("real tokenizer-bearing artifact not supplied (--modeltok=PATH) -- product cell "
+		         "not run");
 		return;
 	}
 	std::vector<uint8_t> bytes;
-	CHECK(ReadFileBytes(g_model_path, &bytes));
+	CHECK(ReadFileBytes(g_model_tok_path, &bytes));
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
 	const char* utf8_prompt = "the quick brown fox";
@@ -149,9 +157,13 @@ static void TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked(
 	int32_t token_count = 64;
 	CHECK(sslm_tokenize(model, utf8_prompt, tokens, &token_count) == SSLM_OK);
 
+	SinglePool sp_unchunked, sp_chunked;
+	CHECK(MakeSinglePool(model, &sp_unchunked));
+	CHECK(MakeSinglePool(model, &sp_chunked));
+
 	// Unchunked: one sslm_prefill call, chunk_budget covering the whole prompt.
 	sslm_seq seq_unchunked = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq_unchunked) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp_unchunked.pool, &seq_unchunked) == SSLM_OK);
 	int32_t consumed_unchunked = 0;
 	CHECK(sslm_prefill(model, seq_unchunked, tokens, token_count, /*chunk_budget=*/token_count,
 	                    SSLM_SPAN_PROMPT, nullptr, &consumed_unchunked) == SSLM_OK);
@@ -159,7 +171,7 @@ static void TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked(
 
 	// Chunked: the SAME token array, fed across multiple chunk_budget=2-bounded calls.
 	sslm_seq seq_chunked = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq_chunked) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp_chunked.pool, &seq_chunked) == SSLM_OK);
 	int32_t total_consumed_chunked = 0;
 	for (int32_t offset = 0; offset < token_count; offset += 2) {
 		const int32_t remaining = token_count - offset;
@@ -178,6 +190,8 @@ static void TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked(
 	CHECK(sslm_stats(model, seq_chunked, &stats_chunked) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_unchunked) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_chunked) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp_unchunked.pool) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp_chunked.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
@@ -219,6 +233,8 @@ static void TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(
 	std::vector<int32_t> decoded_tokens;
 	std::thread decoder([&]() {
 		sslm_decode_params params{};
+		params.layer_budget = 1;  // any positive value -- this cell's own subject is concurrency
+		                          // safety, not full-token content.
 		sslm_seq batch[1] = {long_lived};
 		for (int i = 0; i < 8; ++i) {
 			int32_t out_token = 0;
@@ -243,21 +259,115 @@ static void TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(
 	CHECK(sslm_seq_release(long_lived) == SSLM_OK);
 }
 
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. Each cell
+// that needs more than one live block gets its OWN dedicated pool, sized for its own worst case,
+// so no cell observes another's leftover exhaustion.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContamination;
-	(void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes;
-	(void)addr_2;
-	volatile void* addr_3 =
-	    (void*)&TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked;
-	(void)addr_3;
-	volatile void* addr_4 =
-	    (void*)&TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence;
-	(void)addr_4;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim8 M1-M3/P1 not run");
+	} else {
+		SslmModelView view;
+		std::vector<uint8_t> bytes;
+		std::string err;
+		if (LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				const int32_t num_hidden_layers =
+				    static_cast<int32_t>(view.config.num_hidden_layers);
+				const size_t block_bytes = sslm_kv_block_size(model);
+
+				// --- M1: pool(2) + workspace ---
+				{
+					const uint32_t bc = 2;
+					AlignedBuffer pool_buf(bc * block_bytes + sslm_kv_pool_overhead_size(model, bc));
+					sslm_kv_pool pool = nullptr;
+					CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc, &pool) ==
+					      SSLM_OK);
+					const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+					AlignedBuffer ws_buf(sslm_workspace_size(model, &config));
+					sslm_workspace ws = nullptr;
+					CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) ==
+					      SSLM_OK);
+					if (pool && ws) {
+						TestDim8_M1_SharedWorkspaceServesDisjointSequencesNoCrossContamination(
+						    model, ws, &pool);
+					}
+					if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+					if (pool) CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+				}
+
+				// --- M2/M3 need a real adapter; P1 does not ---
+				if (g_adapter_path.empty()) {
+					SKIP_MSG("--adapter=PATH not supplied -- dim8 M2/M3 not run");
+				} else {
+					std::vector<uint8_t> adapter_bytes;
+					CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
+					sslm_adapter adapter_m2 = nullptr, adapter_m3 = nullptr;
+					CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+					                        &adapter_m2) == SSLM_OK);
+					CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
+					                        &adapter_m3) == SSLM_OK);
+
+					if (adapter_m2) {
+						// M2: pool(3) -- prefix + seq_adopted + seq_prefilled.
+						const uint32_t bc = 3;
+						AlignedBuffer pool_buf(bc * block_bytes +
+						                        sslm_kv_pool_overhead_size(model, bc));
+						sslm_kv_pool pool = nullptr;
+						CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc,
+						                           &pool) == SSLM_OK);
+						if (pool) {
+							TestDim8_M2_AdapterBoundAfterPrefixAdoptMatchesFreshPrefillThenSwap(
+							    model, &pool, adapter_m2);
+							CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+						}
+						CHECK(sslm_adapter_release(adapter_m2) == SSLM_OK);
+					}
+
+					if (adapter_m3) {
+						// M3: pool(2) -- the original seq + the restored one.
+						const uint32_t bc = 2;
+						AlignedBuffer pool_buf(bc * block_bytes +
+						                        sslm_kv_pool_overhead_size(model, bc));
+						sslm_kv_pool pool = nullptr;
+						CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc,
+						                           &pool) == SSLM_OK);
+						sslm_seq seq = nullptr;
+						if (pool) CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
+						if (seq) {
+							TestDim8_M3_SaveRestoreMidTokenWithAdapterBindingComposes(
+							    model, seq, adapter_m3, &pool);
+							CHECK(sslm_seq_release(seq) == SSLM_OK);
+						}
+						if (pool) CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+						CHECK(sslm_adapter_release(adapter_m3) == SSLM_OK);
+					}
+				}
+
+				// --- P1: its own pool(2) ---
+				{
+					const uint32_t bc = 2;
+					AlignedBuffer pool_buf(bc * block_bytes + sslm_kv_pool_overhead_size(model, bc));
+					sslm_kv_pool pool = nullptr;
+					CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc, &pool) ==
+					      SSLM_OK);
+					if (pool) {
+						TestDim8_P1_LifetimeConcurrencyChurnDoesNotCorruptLongLivedSequence(model,
+						                                                                     &pool);
+						CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+					}
+				}
+
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		} else {
+			SKIP_MSG("could not load real artifact: %s", err.c_str());
+		}
+	}
+	// M4 is self-contained (loads g_model_path itself) -- SKIPs internally if absent.
+	TestDim8_M4_TokenizedPromptAcrossChunkedPrefillReassemblesUnchunked();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
