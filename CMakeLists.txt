@@ -171,12 +171,19 @@ endif()
 # is compile-only by design Sec9's own construction; Gate C the same) -- they are pure
 # compilation checks, so they are built on demand by the ctest entries below rather than by every
 # plain `cmake --build`. The must-reject targets are EXPECTED TO FAIL TO COMPILE; the must-accept
-# targets are expected to succeed -- EXCEPT Gate C's must-accept, which is CURRENTLY, CORRECTLY,
-# expected to fail too (S8: sslm_abi.h's new SSLM_TOKEN_ID_UNMAPPED collides with sslm_g5.h's own
-# SSLM_SCHEMA_NOT_FOUND at ordinal 17 -- suite-side reconciliation owed, not performed here; see
-# tools/t2139_gate_c_type_identity_check.cpp's own header comment). Each ctest entry below states,
-# in its own name and WILL_FAIL setting, which outcome is currently correct -- flip Gate C's own
-# WILL_FAIL to FALSE the moment sslm_g5.h reconciles, not before.
+# targets are expected to succeed, both of them -- Gate C's own sslm_g5.h ordinal-17 collision
+# (SSLM_TOKEN_ID_UNMAPPED vs SSLM_SCHEMA_NOT_FOUND) reconciled at curie/t2130-g5-red-suite@59e26ff,
+# closing S8 for real.
+#
+# N1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): the WILL_FAIL TRUE below on Gate C's
+# own must-accept entry was written when the reconciliation above was still pending, with a comment
+# saying to flip it once reconciliation landed -- reconciliation landed two rounds later and the
+# flag was never revisited (the exact rule-enforced-by-memory class this arc has been fighting
+# elsewhere). Left in place, this ctest entry inverts: it reports FAILURE (ctest exit 8) on a
+# healthy tree, and would report SUCCESS the day Gate C genuinely regresses -- the one entry whose
+# whole job is catching header drift silently saying the opposite of what it finds. Fixed here:
+# WILL_FAIL removed (the target now must actually compile, matching its Gate A sibling), and the
+# entry renamed off its own now-false "known_pending" name.
 add_executable(t2139_gate_a_must_accept EXCLUDE_FROM_ALL
 	tools/t2139_gate_a_header_parity_check.cpp)
 target_include_directories(t2139_gate_a_must_accept PRIVATE include tests)
@@ -202,13 +209,10 @@ set_tests_properties(t2139_gate_a_must_reject_fails_to_compile PROPERTIES WILL_F
 add_test(NAME t2139_gate_c_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_reject --config $<CONFIG>)
 set_tests_properties(t2139_gate_c_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
-# Gate C must-accept: WILL_FAIL TRUE reflects the CURRENT, disclosed, cross-suite-coordination
-# state (see the comment block above) -- this is a passing test today because the compile
-# correctly fails; it becomes a REAL regression test only once sslm_g5.h reconciles and this
-# property flips to FALSE.
-add_test(NAME t2139_gate_c_must_accept_known_pending_g5_reconciliation
+# Gate C must-accept: reconciliation landed (see the comment block above) -- this target must
+# actually compile now, matching t2139_gate_a_must_accept_compiles' own shape exactly. No WILL_FAIL.
+add_test(NAME t2139_gate_c_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)
-set_tests_properties(t2139_gate_c_must_accept_known_pending_g5_reconciliation PROPERTIES WILL_FAIL TRUE)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the

@@ -126,7 +126,29 @@ typedef enum sslm_status {
      * vocabulary case ValidateTokenizerVocabSizeJoin's loosening admits, src/model.cpp).
      * Distinct from SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output at
      * all). */
-    SSLM_TOKEN_ID_UNMAPPED
+    SSLM_TOKEN_ID_UNMAPPED = 17,
+
+    /* NEW, appended at ordinal 25 -- N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3),
+     * executed under the coordinator's own explicit closing-round instruction ("catch at the
+     * boundary and return the design's allocation-failure status per the taxonomy"). This
+     * design's own Sec6 base taxonomy (0-16) plus SSLM_TOKEN_ID_UNMAPPED (17) is otherwise
+     * exhaustively reconciled against tests/t2130-g5-red-suite/sslm_g5.h, whose own seven G5-
+     * scoped additions occupy 18-24 (curie/t2130-g5-red-suite@59e26ff) -- 25 is the next ordinal
+     * neither side has ever claimed, so this insertion needs no renumbering of anything already
+     * coordinated (unlike SSLM_TOKEN_ID_UNMAPPED's own insertion at 17, which did). Seven
+     * `extern "C"` verbs (sslm_workspace_create, sslm_kv_pool_create, sslm_model_map,
+     * sslm_prefix_begin, sslm_seq_create, sslm_seq_restore, sslm_adapter_map) previously let
+     * std::bad_alloc cross this ABI boundary under /EHc, where MSVC's own C4297 diagnostic (63
+     * times a build.bat run) states plainly that a throwing extern "C" function's behavior is
+     * undefined -- this design's own Sec6 deliberately declined a resource-exhaustion catch-all
+     * when the base taxonomy was first cut ("What this design does NOT add: a SSLM_DEVICE_LOST-
+     * shaped catch-all"), so no existing enumerator names this cause. FLAGGED for the design
+     * authority's own formal ratification at the next design-doc pass (this is a real taxonomy
+     * change, executed here under explicit operator instruction rather than a prior design
+     * commit -- StandardsDocument Sec5.6's own "smaller promise stated truthfully" discipline:
+     * this comment states exactly what authorized it, so a later reader is never left guessing
+     * whether a design commit already exists for this ordinal). */
+    SSLM_ALLOCATION_FAILED = 25
 } sslm_status;
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md

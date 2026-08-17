@@ -18,7 +18,17 @@
 #include "superslm/sslm_abi_functions_g5_comparable.inc"
 
 /* Takes the caller-memory call-shape struct (design Sec7.1) -- not part of the g5-comparable
- * subset (see above). */
+ * subset (see above).
+ *
+ * Concurrency (N4, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3, matching
+ * include/superslm/gpu_1p0.h's own per-declaration thread-safety convention): a single
+ * sslm_workspace returned by sslm_workspace_create is reusable across an arbitrary SEQUENCE of
+ * calls (design Sec7.1), but is NOT safe to pass to two calls running concurrently -- the
+ * implementation carves per-call scratch out of it, and two concurrent calls sharing one
+ * workspace handle will corrupt each other's scratch. A caller driving multiple sequences
+ * concurrently needs one workspace per concurrently-active call (one per thread is the common
+ * shape), exactly as sslm_kv_pool's own per-block accounting already requires one pool sized for
+ * every concurrently-resident sequence (design Sec7.2). */
 size_t sslm_workspace_size(sslm_model model, const sslm_config* config);
 sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
                                    void* buf, size_t buf_size, sslm_workspace* out);

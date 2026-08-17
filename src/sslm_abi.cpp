@@ -68,6 +68,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -80,6 +81,13 @@
 #include "superslm/forward_sites.h"
 #include "superslm/layer_marshal.h"
 #include "superslm/model.h"
+
+#include "bad_alloc_wrap.h"  // N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3):
+                              // superslm::internal::MaybeThrowInjectedBadAllocFault(), the same
+                              // test-only fault-injection seam S-HARDEN-7's own population already
+                              // uses -- consulted once, at sslm_model_map's own Load call, so a
+                              // test can force a genuine bad_alloc through this file's own new
+                              // catch-and-return path without needing an actual OOM condition.
 
 // -----------------------------------------------------------------------------------------
 // Opaque handle bodies (design Sec8: sslm_model_s/sslm_kv_pool_s/sslm_workspace_s are declared
@@ -272,6 +280,27 @@ bool CheckedAddSizeT(size_t a, size_t b, size_t* out) {
 	return true;
 }
 
+// N2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): rounds `offset` up to the next
+// multiple of `alignment` (`alignment` a power of two, always SSLM_ABI_ALIGNMENT_BYTES here --
+// the same constant sslm_workspace_create/sslm_kv_pool_create already enforce on the WHOLE
+// buffer's own base address, design Sec7.1). Every WorkspaceLayout region carve below rounds its
+// own start offset through this first: `ws->buf` is 64-byte aligned by construction, but a raw
+// byte-size accumulation of PRECEDING regions is not guaranteed to land the NEXT region's start on
+// any particular boundary -- `4*max_chunk_budget` at an odd max_chunk_budget is exactly the
+// counter-example N2 found (a 4-mod-8 residue reaching an int64_t* region, UB on any platform
+// where an 8-byte load must be 8-byte-aligned). Overflow-checked the same way every other
+// composition in this function already is.
+bool RoundUpToAlignment(size_t offset, size_t alignment, size_t* out) {
+	size_t mask = alignment - 1;  // alignment is always a power of two (SSLM_ABI_ALIGNMENT_BYTES)
+	size_t padded = 0;
+	if (!CheckedAddSizeT(offset, mask, &padded)) {
+		*out = kSizeMax;
+		return false;
+	}
+	*out = padded & ~mask;
+	return true;
+}
+
 // Saturating compose of an arbitrary sequence of (multiply, then add) steps -- every sizing
 // function below is a sum of a small number of products, and a single "did anything overflow"
 // flag threaded through is simpler and no less exact than re-deriving the check inline at each
@@ -424,70 +453,88 @@ struct WorkspaceLayout {
 
 WorkspaceLayout ComputeWorkspaceLayout(const sslm_model_s* model, const sslm_config& config) {
 	WorkspaceLayout L;
-	L.header_bytes = 64;
-	L.status_array_offset = L.header_bytes;
 	bool of = false;
+
+	// N2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): EVERY region's own start
+	// offset is rounded up to SSLM_ABI_ALIGNMENT_BYTES before it is assigned -- not only the
+	// int64_t-typed regions the finding measured, so this layout never depends on which C++ type
+	// a future region happens to carve as. `cursor` is always the next free, ALREADY-ALIGNED
+	// offset; each region advances it by its own byte size (never itself required to be a
+	// multiple of the alignment) and the NEXT region rounds up again before claiming it.
+	size_t cursor = 0;
+	size_t aligned = 0;
+	if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+	L.header_bytes = 64;
+	cursor = aligned;
+	size_t after_header = 0;
+	if (!CheckedAddSizeT(cursor, L.header_bytes, &after_header)) of = true;
+	cursor = after_header;
+
+	if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+	L.status_array_offset = aligned;
 	size_t status_bytes = 0;
 	if (!CheckedMulSizeT(static_cast<size_t>(config.max_batch), sizeof(DecodeSeqStatus),
 	                      &status_bytes)) {
 		of = true;
 	}
 	L.status_array_bytes = status_bytes;
-	size_t after_status = 0;
-	if (!CheckedAddSizeT(L.status_array_offset, L.status_array_bytes, &after_status)) of = true;
-	L.staged_tokens_offset = after_status;
+	if (!CheckedAddSizeT(L.status_array_offset, L.status_array_bytes, &cursor)) of = true;
+
 	// sslm_prefill's own chunk_budget-bounded internal loop stages up to max_chunk_budget token
 	// ids at a time (design Sec7.1's own "staged output-token bookkeeping across a sslm_prefill
-	// call's own chunk_budget-bounded internal loop").
+	// call's own chunk_budget-bounded internal loop"). THE region N2 named: max_chunk_budget is
+	// caller-supplied and odd on the real S-FREEZE prompt (5 tokens) -- its own byte size
+	// (4*max_chunk_budget) is what left every region after it on a 4-mod-8 residue pre-fix.
+	if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+	L.staged_tokens_offset = aligned;
 	size_t staged_bytes = 0;
 	if (!CheckedMulSizeT(static_cast<size_t>(config.max_chunk_budget), sizeof(int32_t),
 	                      &staged_bytes)) {
 		of = true;
 	}
 	L.staged_tokens_bytes = staged_bytes;
-	size_t after_staged = 0;
-	if (!CheckedAddSizeT(L.staged_tokens_offset, L.staged_tokens_bytes, &after_staged)) of = true;
+	if (!CheckedAddSizeT(L.staged_tokens_offset, L.staged_tokens_bytes, &cursor)) of = true;
 
 	// S7's own four regions -- present only when `model` is supplied (sslm_workspace_size always
 	// passes one; kept optional in signature-shape only so this function's own internal callers
 	// never need a fake model to size the header/status/staged regions alone).
-	size_t cursor = after_staged;
 	if (model != nullptr) {
 		const superslm::SslmModelConfig& c = model->view.config;
-		L.embed_codes_offset = cursor;
+
+		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+		L.embed_codes_offset = aligned;
 		L.embed_codes_bytes = static_cast<size_t>(c.hidden_size);  // int8 codes
-		size_t after_embed = 0;
-		if (!CheckedAddSizeT(L.embed_codes_offset, L.embed_codes_bytes, &after_embed)) of = true;
+		if (!CheckedAddSizeT(L.embed_codes_offset, L.embed_codes_bytes, &cursor)) of = true;
 
-		L.final_codes_offset = after_embed;
+		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+		L.final_codes_offset = aligned;
 		L.final_codes_bytes = static_cast<size_t>(c.hidden_size);
-		size_t after_final = 0;
-		if (!CheckedAddSizeT(L.final_codes_offset, L.final_codes_bytes, &after_final)) of = true;
+		if (!CheckedAddSizeT(L.final_codes_offset, L.final_codes_bytes, &cursor)) of = true;
 
-		L.wide_logits_offset = after_final;
+		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+		L.wide_logits_offset = aligned;  // int64_t* -- the region N2 measured landing at
+		                                 // 4-mod-8 whenever max_chunk_budget was odd.
 		if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int64_t),
 		                      &L.wide_logits_bytes)) {
 			of = true;
 		}
-		size_t after_wide = 0;
-		if (!CheckedAddSizeT(L.wide_logits_offset, L.wide_logits_bytes, &after_wide)) of = true;
+		if (!CheckedAddSizeT(L.wide_logits_offset, L.wide_logits_bytes, &cursor)) of = true;
 
-		L.logit_row_offset = after_wide;
+		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+		L.logit_row_offset = aligned;
 		if (!CheckedMulSizeT(static_cast<size_t>(c.vocab_size), sizeof(int32_t),
 		                      &L.logit_row_bytes)) {
 			of = true;
 		}
-		size_t after_logit = 0;
-		if (!CheckedAddSizeT(L.logit_row_offset, L.logit_row_bytes, &after_logit)) of = true;
+		if (!CheckedAddSizeT(L.logit_row_offset, L.logit_row_bytes, &cursor)) of = true;
 
-		L.rms_wide_offset = after_logit;
+		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
+		L.rms_wide_offset = aligned;  // int64_t* -- the other region N2 measured misaligned.
 		if (!CheckedMulSizeT(static_cast<size_t>(c.hidden_size), sizeof(int64_t),
 		                      &L.rms_wide_bytes)) {
 			of = true;
 		}
-		size_t after_rms_wide = 0;
-		if (!CheckedAddSizeT(L.rms_wide_offset, L.rms_wide_bytes, &after_rms_wide)) of = true;
-		cursor = after_rms_wide;
+		if (!CheckedAddSizeT(L.rms_wide_offset, L.rms_wide_bytes, &cursor)) of = true;
 	}
 
 	L.total_bytes = of ? kSizeMax : cursor;
@@ -613,7 +660,13 @@ extern "C" sslm_status sslm_workspace_create(sslm_model model, const sslm_config
 	if (buf_size < required) return SSLM_BUFFER_TOO_SMALL;
 	if (!IsAligned(buf)) return SSLM_MISALIGNED_BUFFER;
 	sslm_workspace_s* h = new (std::nothrow) sslm_workspace_s();
-	if (!h) throw std::bad_alloc();  // house convention: propagates unchanged, bad_alloc_wrap.h
+	// N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): never throws across this
+	// extern "C" boundary -- under /EHc (this file's own build flag, build.bat/CMakeLists.txt)
+	// a throwing extern "C" function's behavior is undefined (MSVC's own C4297 diagnostic, fired
+	// 63 times a build against the pre-fix `throw std::bad_alloc()` at all seven construction
+	// verbs). SSLM_ALLOCATION_FAILED (sslm_abi.h, ordinal 25) reports the cause through the
+	// closed status taxonomy instead.
+	if (!h) return SSLM_ALLOCATION_FAILED;
 	h->buf = buf;
 	h->buf_size = buf_size;
 	h->config = *config;
@@ -660,7 +713,8 @@ extern "C" sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t b
 	// construct an aligned-but-too-small buffer.
 	if (!IsAligned(buf)) return SSLM_MISALIGNED_BUFFER;
 	sslm_kv_pool_s* h = new (std::nothrow) sslm_kv_pool_s();
-	if (!h) throw std::bad_alloc();
+	// N3 -- see sslm_workspace_create's own identical comment, above.
+	if (!h) return SSLM_ALLOCATION_FAILED;
 	h->model = model;
 	h->buf = buf;
 	h->buf_size = buf_size;
@@ -691,14 +745,21 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 
 	superslm::SslmModelView view;
 	std::string err;
-	// SslmModel::Load "throws only std::bad_alloc" (model.h's own contract, S-HARDEN-7) -- this
-	// call site does not catch it, matching src/bad_alloc_wrap.h's own house convention: a
-	// bad_alloc crosses this ABI boundary unchanged rather than being encoded into sslm_status,
-	// which (design Sec6, 17 enumerators, closed set) carries no resource-exhaustion member.
-	// `view` is a local, stack-owned RAII object, so no handle allocation happens before Load
-	// returns -- there is nothing for a thrown bad_alloc to leak here.
-	const superslm::SslmModelStatus st = superslm::SslmModel::Load(
-	    static_cast<const uint8_t*>(data), size, view, &err);
+	// N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): SslmModel::Load "throws only
+	// std::bad_alloc" (model.h's own contract, S-HARDEN-7) -- previously left uncaught here on
+	// the theory that "a bad_alloc crosses this ABI boundary unchanged," which is not a guarantee
+	// /EHc gives an extern "C" function (MSVC's own C4297: undefined behavior, not propagation).
+	// Caught explicitly now, mapped to SSLM_ALLOCATION_FAILED (sslm_abi.h, ordinal 25) through
+	// the closed status taxonomy instead of crossing the boundary as an exception.
+	superslm::SslmModelStatus st;
+	try {
+		// N3 pin: a no-op outside the test-injection build (bad_alloc_wrap.h's own guard) --
+		// armed, this throws std::bad_alloc right here, exercising the catch below for real.
+		superslm::internal::MaybeThrowInjectedBadAllocFault();
+		st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, view, &err);
+	} catch (const std::bad_alloc&) {
+		return SSLM_ALLOCATION_FAILED;
+	}
 	if (st != superslm::SslmModelStatus::Ok) {
 		// design Sec6: every SslmModel::Load rejection maps to SSLM_ARTIFACT_REJECTED; the
 		// specific SslmModelStatus (`err`/`st`) has no exposed channel on this signature
@@ -709,7 +770,8 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	}
 
 	sslm_model_s* h = new (std::nothrow) sslm_model_s{std::move(view)};
-	if (!h) throw std::bad_alloc();
+	// N3 -- see sslm_workspace_create's own identical comment.
+	if (!h) return SSLM_ALLOCATION_FAILED;
 	// C3/C4's own dependency: resolve every layer's LayerWeights[] plus embed/final_norm/head
 	// once, now, while the handle is not yet visible to any caller (Sec8.3's "sslm_model
 	// read-only concurrent" contract, honored by building this BEFORE *out is set, never lazily
@@ -883,15 +945,17 @@ extern "C" sslm_status sslm_prefix_begin(sslm_model model, sslm_kv_pool* pool, s
 	const sslm_status draw_st = DrawBlock(p, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
-	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): return the block before throwing on
+	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): return the block before reporting
 	// allocation failure, or the pool permanently loses it (and sslm_kv_pool_destroy would then
-	// reject forever with SSLM_POOL_HAS_LIVE_HANDLES for a block nobody can ever release).
+	// reject forever with SSLM_POOL_HAS_LIVE_HANDLES for a block nobody can ever release). N3
+	// (same casebook, Sec6.3): return SSLM_ALLOCATION_FAILED rather than throw across this
+	// extern "C" boundary -- see sslm_workspace_create's own identical comment.
 	auto* h = new (std::nothrow) sslm_prefix_s();
 	if (!h) {
 		ReturnBlock(p, block_index,
 		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
 		            p->block_size);
-		throw std::bad_alloc();
+		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = p;
@@ -951,14 +1015,14 @@ extern "C" sslm_status sslm_seq_create(sslm_model model, sslm_kv_pool* pool, ssl
 	const sslm_status draw_st = DrawBlock(p, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
-	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): see sslm_prefix_begin's own identical
-	// return-before-throw fix.
+	// M4/N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): see sslm_prefix_begin's own
+	// identical return-before-throw (M4) and no-throw-across-the-boundary (N3) fixes.
 	auto* h = new (std::nothrow) sslm_seq_s();
 	if (!h) {
 		ReturnBlock(p, block_index,
 		            static_cast<uint8_t*>(p->buf) + static_cast<size_t>(block_index) * p->block_size,
 		            p->block_size);
-		throw std::bad_alloc();
+		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = p;
@@ -1151,6 +1215,15 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 		wide_logits = reinterpret_cast<int64_t*>(ws_base + layout.wide_logits_offset);
 		logit_row = reinterpret_cast<int32_t*>(ws_base + layout.logit_row_offset);
 		rms_wide = reinterpret_cast<int64_t*>(ws_base + layout.rms_wide_offset);
+		// N2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): a real, compiled-in check
+		// at the exact point of use, not merely trusted from ComputeWorkspaceLayout's own rounding
+		// -- these two are the int64_t*-typed regions the finding measured landing on a 4-mod-8
+		// address whenever max_chunk_budget was odd (wide_logits/rms_wide; embed_codes/final_codes
+		// are int8_t*, logit_row is int32_t* and 8-byte alignment already implies its own
+		// 4-byte requirement). Fires immediately, at the call that would otherwise silently read/
+		// write through a misaligned int64_t* on any platform that faults on it.
+		assert(reinterpret_cast<uintptr_t>(wide_logits) % alignof(int64_t) == 0);
+		assert(reinterpret_cast<uintptr_t>(rms_wide) % alignof(int64_t) == 0);
 	} else {
 		embed_codes_fallback.assign(c.hidden_size, 0);
 		final_codes_fallback.assign(c.hidden_size, 0);
@@ -1468,17 +1541,18 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const sslm_status draw_st = DrawBlock(pool_ptr, &block_index);
 	if (draw_st != SSLM_OK) return draw_st;
 
-	// M4 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the handle is allocated BEFORE the
+	// M4/N3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the handle is allocated BEFORE the
 	// block is copied into and BEFORE any further work, so an early return path never needs to
-	// unwind a drawn block -- the `bad_alloc` path (immediately below) is the only way out before
-	// the block is committed to `h`, and it now returns the block first.
+	// unwind a drawn block -- the allocation-failure path (immediately below) is the only way out
+	// before the block is committed to `h`, and it now returns the block first (M4) and reports
+	// SSLM_ALLOCATION_FAILED rather than throwing across this extern "C" boundary (N3).
 	auto* h = new (std::nothrow) sslm_seq_s();
 	if (!h) {
 		ReturnBlock(pool_ptr, block_index,
 		            static_cast<uint8_t*>(pool_ptr->buf) +
 		                static_cast<size_t>(block_index) * pool_ptr->block_size,
 		            pool_ptr->block_size);
-		throw std::bad_alloc();
+		return SSLM_ALLOCATION_FAILED;
 	}
 	h->model = model;
 	h->pool = pool_ptr;
@@ -1541,8 +1615,16 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 
 	superslm::SslmModelView adapter_view;
 	std::string err;
-	const superslm::SslmModelStatus load_st = superslm::SslmModel::Load(
-	    static_cast<const uint8_t*>(data), size, adapter_view, &err);
+	// N3 -- see sslm_model_map's own identical comment (Claude/Poirot/
+	// 2c18dab-t2139-abi-build-review.md Sec6.3): SslmModel::Load caught explicitly rather than
+	// left to cross this extern "C" boundary as an exception.
+	superslm::SslmModelStatus load_st;
+	try {
+		load_st = superslm::SslmModel::Load(static_cast<const uint8_t*>(data), size, adapter_view,
+		                                     &err);
+	} catch (const std::bad_alloc&) {
+		return SSLM_ALLOCATION_FAILED;
+	}
 	if (load_st != superslm::SslmModelStatus::Ok) return SSLM_ARTIFACT_REJECTED;
 
 	superslm_adapter::BaseModelGeometry base_geom;
@@ -1554,7 +1636,8 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	base_geom.base_artifact_hash = base->view.RawIntegrityHash();
 
 	auto* h = new (std::nothrow) sslm_adapter_s();
-	if (!h) throw std::bad_alloc();
+	// N3 -- see sslm_workspace_create's own identical comment.
+	if (!h) return SSLM_ALLOCATION_FAILED;
 	h->base = base;
 	h->artifact_bytes = size;
 	// AdapterHandle::view_ is the long-lived owner of the adapter's own tensor bytes --

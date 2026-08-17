@@ -577,6 +577,46 @@ if defined T2139_MODEL (
 	echo t2139_dim9_current_token_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
 
+rem N2 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): an ODD max_chunk_budget --
+rem the real S-FREEZE prompt's own token count -- through a full prefill+decode, under
+rem src/sslm_abi.cpp's own compiled-in alignment asserts at wide_logits/rms_wide's point of use.
+rem Usage: out\t2139_n2_odd_budget_smoke.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_n2_odd_budget_smoke.cpp /Fo:out\t2139\ /Fe:out\t2139_n2_odd_budget_smoke.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2139_MODEL (
+	out\t2139_n2_odd_budget_smoke.exe %T2139_MODEL%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2139_n2_odd_budget_smoke: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
+)
+
+rem N3 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): sslm_model_map returns
+rem SSLM_ALLOCATION_FAILED, not UB, when a genuine std::bad_alloc crosses its own try/catch --
+rem via the SAME test-only fault-injection seam (tests/support/bad_alloc_injection.h) S-HARDEN-7's
+rem own population already trusts. Needs SUPERSLM_ENABLE_BAD_ALLOC_INJECTION + /Itests, matching
+rem the test-injection build's own convention (see the C5 block above). Usage:
+rem out\t2139_n3_bad_alloc_pin.exe ^<model.sslm^>.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_n3_bad_alloc_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_n3_bad_alloc_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2139_MODEL (
+	out\t2139_n3_bad_alloc_pin.exe %T2139_MODEL%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2139_n3_bad_alloc_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
+)
+
 rem S-FREEZE-EXAMPLE (design Sec9's own gate, D-SLM13): builds with NO internal include path --
 rem /Iinclude ONLY, the frozen public header, no /Itests, no /Isrc-internal, no Unreal, no
 rem test-harness affordance. Uses every verb C1-C7 ship, real text I/O (D-SLM3452), explicit
