@@ -22,3 +22,14 @@ SSLM_STATUS_ENUM_VALUE_  # a scratch, function-like X-macro-expansion helper #de
 # design ruled it public consumer-facing surface and Sec8 gained its inventory line (D-SLM3472,
 # design fold commit 579845b4b4), so the check now guards it for real instead of treating it as
 # a disclosed exception.
+SSLM_SCHEMA_NONE  # T-2132 (G5-2), added 2026-08-17. This checker's own inventory source is
+# t2133-layer1-c-abi-design-2026-08-16.md Sec8 -- the pre-G5 C1-C7 ABI's own design of record.
+# SSLM_SCHEMA_NONE is NOT a t2133/Sec8 identifier at all: it is transcribed verbatim from
+# tests/t2130-g5-red-suite/sslm_g5.h, which itself transcribes it from
+# t2119-g5-constrained-decoding-design-2026-08-16.md Sec5 ("SSLM_SCHEMA_NONE -- the
+# unconstrained sentinel schema handle, design Sec5") -- a different design document this
+# checker's own inventory source does not, and structurally cannot, cover. Ruled public
+# consumer-facing surface by THAT design (the unconstrained sentinel every
+# sslm_seq_set_schema/sslm_prefix_set_schema caller passes), matching sslm_g5.h's own
+# unconditional #define -- allowlisted here rather than mis-filed against t2133's own Sec8
+# text, which would be citing the wrong design for what it does not, and should not, name.
