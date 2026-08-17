@@ -200,6 +200,27 @@ add_executable(t2139_gate_c_must_reject EXCLUDE_FROM_ALL
 	tools/t2139_gate_c_type_identity_check_negative.cpp)
 target_include_directories(t2139_gate_c_must_reject PRIVATE include)
 
+# S1's structural remedy (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md, owed remedy
+# 5): the THIRD Gate C TU -- includes the REAL tests/t2130-g5-red-suite/sslm_g5.h directly (not a
+# transcription) alongside the library's own SSLM_STATUS_ENUM_LIST expansion, so a divergence in
+# the real suite header itself (not just a stale hand-transcription of it) fails here. Needs
+# `tests` on its include path to resolve the real suite header (matching Gate A's own convention).
+add_executable(t2139_gate_c_real_suite_side_check EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_real_suite_side_check.cpp)
+target_include_directories(t2139_gate_c_real_suite_side_check PRIVATE include tests)
+
+# S4's owed must-reject constructions (same casebook): one per NEW mechanism this round's own Gate
+# C remedy added, each exercising the REAL SSLM_STATUS_ENUM_LIST/SSLM_STATUS_NEXT_FREE machinery
+# rather than a toy hand-written enum (tools/t2139_gate_c_type_identity_check_negative.cpp's own
+# sibling, unchanged, still covers the generic "does static_assert work" case).
+add_executable(t2139_gate_c_xmacro_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_xmacro_check_negative.cpp)
+target_include_directories(t2139_gate_c_xmacro_must_reject PRIVATE include)
+
+add_executable(t2139_gate_c_sentinel_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_sentinel_negative.cpp)
+target_include_directories(t2139_gate_c_sentinel_must_reject PRIVATE include)
+
 enable_testing()
 add_test(NAME t2139_gate_a_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_accept --config $<CONFIG>)
@@ -216,6 +237,20 @@ set_tests_properties(t2139_gate_c_must_reject_fails_to_compile PROPERTIES WILL_F
 # ordinal registry verbatim, so the type-identity construction compiles and this entry must pass.
 add_test(NAME t2139_gate_c_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)
+
+# S1's structural remedy: the third TU is a plain must-pass compile check, matching its two
+# siblings above.
+add_test(NAME t2139_gate_c_real_suite_side_check_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_real_suite_side_check --config $<CONFIG>)
+
+# S4's owed must-reject constructions: both MUST fail to compile, same convention as
+# t2139_gate_c_must_reject_fails_to_compile above.
+add_test(NAME t2139_gate_c_xmacro_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_xmacro_must_reject --config $<CONFIG>)
+set_tests_properties(t2139_gate_c_xmacro_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+add_test(NAME t2139_gate_c_sentinel_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_sentinel_must_reject --config $<CONFIG>)
+set_tests_properties(t2139_gate_c_sentinel_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the

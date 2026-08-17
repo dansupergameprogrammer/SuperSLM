@@ -108,6 +108,49 @@ inline void DisarmInjectedFault() {
 	g_inject_throw = InjectThrowKind::kNone;
 }
 
+// D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3): a
+// SECOND, INDEPENDENT single-shot slot, consulted only at the post-Load construction step of
+// sslm_model_map/sslm_adapter_map (BuildEngineCache/PopulateAdapterFromView, src/sslm_abi.cpp)
+// -- never at SslmModel::Load's own S-HARDEN-7 consultation point (g_inject_throw, above), which
+// stays untouched by this slot. This is the site-specific arming mechanism the N3 pin's own
+// header comment (tools/t2139_n3_bad_alloc_pin.cpp) named as the missing instrument: because the
+// two slots are independent thread_locals, arming THIS one and calling sslm_model_map does not
+// get consumed by Load's own consultation (which only ever reads g_inject_throw) -- the fault
+// survives past Load and reaches BuildEngineCache/PopulateAdapterFromView's own consultation
+// point for real, closing the isolation gap the shared single-shot seam could not close alone.
+inline thread_local InjectThrowKind g_inject_throw_post_load_region = InjectThrowKind::kNone;
+
+// Consulted at the entry of BuildEngineCache/PopulateAdapterFromView's own wrap
+// (superslm::internal::MaybeThrowInjectedBadAllocFaultPostLoadRegion(), src/bad_alloc_wrap.h) --
+// NEVER at SslmModel::Load's own *Impl sites, which continue to consult MaybeThrowInjectedFault()
+// / g_inject_throw exclusively. Single-shot, matching MaybeThrowInjectedFault()'s own contract.
+inline void MaybeThrowInjectedFaultPostLoadRegion() {
+	InjectThrowKind kind = g_inject_throw_post_load_region;
+	g_inject_throw_post_load_region = InjectThrowKind::kNone;
+	switch (kind) {
+		case InjectThrowKind::kNone:
+			return;
+		case InjectThrowKind::kLengthError:
+			throw std::length_error("superslm_test: injected fault (length_error, post-load region)");
+		case InjectThrowKind::kRuntimeError:
+			throw std::runtime_error("superslm_test: injected fault (runtime_error, post-load region)");
+		case InjectThrowKind::kBadAlloc:
+			throw std::bad_alloc();
+		case InjectThrowKind::kForeignFault:
+			throw ForeignFault{};
+	}
+}
+
+// Test-side convenience, mirroring ArmInjectedFault()/DisarmInjectedFault() for the post-load
+// region's own independent slot.
+inline void ArmInjectedFaultPostLoadRegion(InjectThrowKind kind) {
+	g_inject_throw_post_load_region = kind;
+}
+
+inline void DisarmInjectedFaultPostLoadRegion() {
+	g_inject_throw_post_load_region = InjectThrowKind::kNone;
+}
+
 }  // namespace superslm_test
 
 #endif  // SUPERSLM_TESTS_SUPPORT_BAD_ALLOC_INJECTION_H

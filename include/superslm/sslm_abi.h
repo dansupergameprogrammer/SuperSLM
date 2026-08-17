@@ -76,7 +76,7 @@ typedef struct sslm_detok_state {
  * alone; semantic ownership of G5's own schema-cause meanings (18-24) stays G5's (T-2119) --
  * only which header's enum body carries which NAMES changed.
  *
- * SSLM_STATUS__NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
+ * SSLM_STATUS_NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
  * the compiler assigns one past SSLM_ALLOCATION_FAILED, i.e. 26). This is the fold's OTHER
  * ruling: a plain #define "top" macro (SSLM_STATUS_BASE_MAX, retired this fold -- no design
  * record, no consumer beyond one test tool, F1 collateral) cannot move itself
@@ -84,7 +84,7 @@ typedef struct sslm_detok_state {
  * asserted nothing (Probe A: deleting the whole registry-top static_assert still compiled
  * clean). An auto-valued enum tag inside the enum body has no such gap -- it moves automatically
  * on whichever side appends, with nothing for an author to remember to hand-update. Gate C
- * (tools/t2139_gate_c_type_identity_check.cpp) asserts both headers' SSLM_STATUS__NEXT_FREE
+ * (tools/t2139_gate_c_type_identity_check.cpp) asserts both headers' SSLM_STATUS_NEXT_FREE
  * equal, IN ADDITION TO (never replacing) its per-name checks: the per-name checks catch a
  * shared name claimed at different ordinals; the sentinel catches a shared ordinal claimed by
  * two different names (F1's Probe C, the collision the retired static_assert did not catch).
@@ -155,7 +155,7 @@ typedef enum sslm_status {
      * never a valid argument. Auto-valued (no explicit value given here), always one past the
      * enum's own last real member, so appending a new enumerator to the X-macro list above moves
      * this automatically with nothing to hand-maintain. */
-    SSLM_STATUS__NEXT_FREE
+    SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
@@ -190,8 +190,26 @@ typedef struct sslm_stats_out {
 /* ============================================================================
  * model lifecycle -- design Sec8: 3 args, NO config parameter (sslm_g5.h:149, verbatim).
  * DEFINED (C2, src/sslm_abi.cpp).
- * ============================================================================ */
+ * ============================================================================
+ *
+ * SUPERSLM_ABI_ENUM_ONLY (owed remedy 5, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
+ * review.md S1): #define this BEFORE including this header to suppress the function-declaration
+ * include below -- every type/enum/struct above it (including sslm_status and the
+ * SSLM_STATUS_ENUM_LIST macro itself) still declares normally. This is Gate C's OWN escape
+ * hatch (tools/t2139_gate_c_real_suite_side_check.cpp): its real-suite-side TU needs the REAL
+ * tests/t2130-g5-red-suite/sslm_g5.h's own function declarations visible at the SAME scope this
+ * header's own functions would otherwise occupy, and two extern "C" declarations of the same
+ * function name with different parameter types is ill-formed ([dcl.link]) regardless of C++
+ * namespace (C linkage collides by name only, ignoring the enclosing namespace) -- so the two
+ * real headers' FUNCTIONS cannot both be visible in one TU no matter how they are namespaced.
+ * Suppressing this header's own functions (which the enum-only gate does not need) removes the
+ * only thing that would collide, while keeping SSLM_STATUS_ENUM_LIST -- the single generation
+ * source both this enum body and Gate C's own per-name checks re-expand -- available exactly as
+ * before. No consumer outside this one gate TU ever defines this macro; every ordinary include of
+ * this header (the frozen public S-FREEZE surface, D-SLM13) is completely unaffected. */
+#ifndef SUPERSLM_ABI_ENUM_ONLY
 #include "superslm/sslm_abi_functions.inc"
+#endif
 
 #ifdef __cplusplus
 }

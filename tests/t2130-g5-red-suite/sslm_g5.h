@@ -229,7 +229,7 @@ typedef enum sslm_status {
      * shared ordinal claimed by two different names (F1's own Probe C), which the per-name checks
      * structurally cannot see. Never referenced as a valid status value by any call; it exists
      * only for this comparison. */
-    SSLM_STATUS__NEXT_FREE
+    SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
 /* --- G5's own span-kind discriminator -- design Sec5, THE REPAIR (Sec10.2). The single

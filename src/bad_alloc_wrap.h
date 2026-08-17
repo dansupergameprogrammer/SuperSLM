@@ -78,6 +78,20 @@ inline void MaybeThrowInjectedBadAllocFault() {
 #endif
 }
 
+// D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3):
+// consults the SEPARATE, independent post-load-region slot (tests/support/bad_alloc_injection.h)
+// -- never the plain slot MaybeThrowInjectedBadAllocFault() above consults. Called ONLY from
+// sslm_model_map's BuildEngineCache step and sslm_adapter_map's PopulateAdapterFromView step
+// (src/sslm_abi.cpp), both of which run AFTER SslmModel::Load's own *Impl consultation (which
+// still calls the plain MaybeThrowInjectedBadAllocFault() above, unchanged) -- arming this slot
+// and calling either verb reaches THIS consultation point specifically, closing the isolation gap
+// the N3 pin's own header comment (tools/t2139_n3_bad_alloc_pin.cpp) named as unclosed.
+inline void MaybeThrowInjectedBadAllocFaultPostLoadRegion() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedFaultPostLoadRegion();
+#endif
+}
+
 }  // namespace internal
 }  // namespace superslm
 

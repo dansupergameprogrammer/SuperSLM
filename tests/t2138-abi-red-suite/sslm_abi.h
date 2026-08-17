@@ -167,7 +167,7 @@ typedef enum sslm_status {
      * itself on the next append. Compared against the real headers' own identical last member by
      * whichever gate is extended to cover this copy (see the guard note above); never itself a
      * valid status value any call returns. */
-    SSLM_STATUS__NEXT_FREE
+    SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
 /* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create AND

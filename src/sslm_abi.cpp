@@ -446,17 +446,19 @@ size_t KvElementBytes(superslm::SslmKvPrecision p) {
 // one-real-implementation discipline -- this is a second call site of an already-proven pattern,
 // not a second, independently-authored copy of its logic). Called once, at sslm_model_map time.
 bool BuildEngineCache(sslm_model_s* h) {
-	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass):
-	// consulted at THIS function's own entry, matching S-HARDEN-7's own *Impl convention. NOT
-	// independently exercisable through sslm_model_map's own armed call today, and that is
-	// disclosed rather than implied otherwise (tools/t2139_n3_bad_alloc_pin.cpp's own header
-	// comment): the shared injection seam is single-shot, and SslmModel::Load (model.cpp) is
-	// itself an S-HARDEN-7 site whose own *Impl consults the SAME seam as its own first
-	// statement, running before this function on every sslm_model_map call -- an armed fault
-	// always trips Load's own consultation first. Kept anyway as real, zero-cost (outside the
-	// test-injection build, bad_alloc_wrap.h's own guard) defense-in-depth: it fires for real if
-	// this function is ever reached by a future call path that does not go through Load first.
-	superslm::internal::MaybeThrowInjectedBadAllocFault();
+	// P1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.3, third confirmation pass),
+	// CLOSED (D-SLM3466's owed pin, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/
+	// S3): consulted at THIS function's own entry, matching S-HARDEN-7's own *Impl convention --
+	// but now through the SITE-SPECIFIC post-load-region slot
+	// (MaybeThrowInjectedBadAllocFaultPostLoadRegion(), src/bad_alloc_wrap.h /
+	// tests/support/bad_alloc_injection.h), not the plain shared slot SslmModel::Load's own *Impl
+	// consults. The two slots are independent thread_locals -- arming the post-load-region slot
+	// and calling sslm_model_map is NOT consumed by Load's own consultation (which only ever reads
+	// the plain slot), so an armed fault reaches THIS consultation point for real
+	// (tools/t2139_d3466_postload_region_pin.cpp). Real, zero-cost (outside the test-injection
+	// build, bad_alloc_wrap.h's own guard) defense-in-depth otherwise: it fires for real if this
+	// function is ever reached by a future call path that does not go through Load first.
+	superslm::internal::MaybeThrowInjectedBadAllocFaultPostLoadRegion();
 	auto& view = h->view;
 	auto& cache = h->engine;
 	const uint32_t num_layers = view.config.num_hidden_layers;
@@ -953,19 +955,16 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 	// F3 (Claude/Poirot/4466666-t2139-third-confirmation-review.md): this comment previously
 	// claimed the injection seam's own consultation point moving INTO BuildEngineCache itself
 	// (its own top comment) meant tools/t2139_n3_bad_alloc_pin.cpp's own armed call now reaches
-	// THIS exact wrap -- false. That pin file's own header comment states the opposite, and is
-	// correct: the seam is single-shot and thread_local, SslmModel::Load (model.cpp) consults it
-	// first and always runs before BuildEngineCache inside sslm_model_map, so an armed fault
-	// always trips Load's own consultation and never reaches BuildEngineCache's. Confirmed by
-	// instrumentation during that round (build log Sec21). BuildEngineCache's own wrap is
-	// verified by construction instead -- the SAME CatchAllocationFailure helper this sweep
-	// applies everywhere else, proven correct end-to-end by the pin's own armed test (which
-	// exercises Load's catch) and by code inspection (this wrap's own try/catch shape is
-	// identical to every other use). Isolating BuildEngineCache's own consultation specifically
-	// needs a site-specific arming mechanism or a test-only hook -- neither built here, and this
-	// is stated plainly rather than papered over with a pin that would look isolated without
-	// being isolated (tools/t2139_n3_bad_alloc_pin.cpp's own header comment, unchanged, is the
-	// record of that limitation).
+	// THIS exact wrap -- false at the time (the seam was single-shot and shared, and
+	// SslmModel::Load consulted it first). CLOSED (D-SLM3466's owed pin, Claude/Poirot/
+	// 3bcbe43-t2139-fourth-confirmation-review.md S2/S3): BuildEngineCache's own consultation
+	// (above) now reads a SEPARATE, independent post-load-region slot
+	// (tests/support/bad_alloc_injection.h) that Load's own *Impl never touches, so arming that
+	// slot specifically and calling sslm_model_map DOES reach this exact wrap, isolated from
+	// Load's own catch. Proven by tools/t2139_d3466_postload_region_pin.cpp. The N3 pin
+	// (tools/t2139_n3_bad_alloc_pin.cpp) is unchanged and still documents the ORIGINAL, still-true
+	// fact about the PLAIN shared slot it arms: that one still always trips Load's own
+	// consultation first, by design -- the two pins now exercise the two independent slots.
 	const sslm_status cache_st = CatchAllocationFailure([&]() -> sslm_status {
 		return BuildEngineCache(h) ? SSLM_OK : SSLM_ARTIFACT_REJECTED;
 	});
@@ -1914,6 +1913,12 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 	// already is on either of PopulateAdapterFromView's own ordinary rejections below.
 	superslm_adapter::AdapterLoadStatus populate_st = superslm_adapter::AdapterLoadStatus::Ok;
 	const sslm_status populate_alloc_st = CatchAllocationFailure([&]() -> sslm_status {
+		// D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3):
+		// consulted at THIS step's own entry, matching BuildEngineCache's own identical convention
+		// (above, this file) -- the SITE-SPECIFIC post-load-region slot, independent of the plain
+		// slot this verb's own SslmModel::Load call (above) consults. Proven by
+		// tools/t2139_d3466_postload_region_pin.cpp.
+		superslm::internal::MaybeThrowInjectedBadAllocFaultPostLoadRegion();
 		populate_st = superslm_adapter::PopulateAdapterFromView(
 		    h->handle.view_, base_geom, h->handle.meta, h->handle.layer_adapters, &err);
 		return SSLM_OK;

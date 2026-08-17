@@ -1,0 +1,12 @@
+# T-2139 Finding 3 (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S3) --
+# tools/ci/check_tools_have_build_recipe.py's own allowlist. Format: `<basename.cpp>  # <reason>`.
+#
+# Starts EMPTY (validated against an independently-found population, StandardsDocument Sec4, run
+# BEFORE this round's own new tool files gained their recipes below -- the checker found exactly
+# six files missing a recipe, all six this round's own new deliverables, and all six were WIRED
+# rather than allowlisted; the four pre-existing tools/*.cpp files that first looked recipe-less by
+# a narrower 3-location grep (sslm_inspect.cpp, sslm_layer_trace.cpp, sslm_lora_switch_demo.cpp,
+# tok_verify.cpp) all turned out to have real, working recipes in tools/build_*.bat, which is why
+# the checker treats that glob as a fourth checked location rather than allowlisting all four).
+#
+# A genuine future exception goes here, one line, with its own justification -- never silently.

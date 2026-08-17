@@ -32,7 +32,7 @@
 //      enum without also being added to this list, because there is no second place to add it;
 //      this file re-expanding that one list is what makes a missing check line structurally
 //      impossible rather than a discipline someone has to remember.
-//   2. A registry-top IDENTITY assertion compares the two headers' own SSLM_STATUS__NEXT_FREE
+//   2. A registry-top IDENTITY assertion compares the two headers' own SSLM_STATUS_NEXT_FREE
 //      sentinels -- an auto-valued enum tag, not a #define, so it moves itself when either side
 //      appends. This is IN ADDITION TO the per-name checks, never a replacement: per-name checks
 //      catch a shared name at different ordinals; the sentinel catches a shared ordinal claimed
@@ -40,7 +40,7 @@
 //      because a library author who forgets to hand-bump the macro is the same author who, by
 //      construction of that failure, did not coordinate the ordinal in the first place).
 // SSLM_STATUS_BASE_MAX itself is retired (no design record, no consumer beyond this file, F1
-// collateral) -- both remedies read SSLM_STATUS__NEXT_FREE instead.
+// collateral) -- both remedies read SSLM_STATUS_NEXT_FREE instead.
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -84,17 +84,17 @@ typedef enum sslm_status {
 	// Mirrored in at 25 (curie/t2130-g5-red-suite@52dc6cd, executing the T-2133 Sec6 ruling:
 	// sslm_g5.h mirrors the complete registry verbatim; next-free is 26, a Sec6 fact).
 	SSLM_ALLOCATION_FAILED = 25,
-	// SSLM_STATUS__NEXT_FREE -- NOT part of the real tests/t2130-g5-red-suite/sslm_g5.h as it
-	// stands today (grep-confirmed absent; the fold ruling's sentinel remedy is suite-owned code,
-	// StandardsDocument Sec6.4/Sec5.2's own persona-boundary discipline, and lands in the suite's
-	// own dispatch that follows this one). Added HERE, in this file's own namespace transcription
-	// only, as an auto-valued tag with the identical shape the real header will gain -- this is
-	// what lets the registry-top identity assertion below compile and run TODAY against a
-	// same-shape construction rather than being deferred past this round, per the invocation
-	// contract's own instruction to keep the cross-header sentinel assert in place. Once the
-	// suite's own sslm_g5.h gains a real SSLM_STATUS__NEXT_FREE member, this line is confirmed
-	// (not re-derived) against the real header at that dispatch's own commissioning.
-	SSLM_STATUS__NEXT_FREE
+	// SSLM_STATUS_NEXT_FREE -- CONFIRMED (M1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
+	// review.md), not re-derived: the real tests/t2130-g5-red-suite/sslm_g5.h now carries this
+	// same sentinel, landed by curie/t2130-g5-red-suite@beb2355 (this line's own prior comment
+	// claimed the landing was still pending -- stale the moment beb2355 merged, and left
+	// uncorrected for a full round, which is exactly M1's own finding). This namespace's own
+	// transcription of the sentinel is confirmed against the real header's own identical member,
+	// not the placeholder this comment previously described it as. tools/
+	// t2139_gate_c_real_suite_side_check.cpp (S1's structural remedy, owed remedy 5) now also
+	// compares this sentinel against the REAL header directly, closing the class this
+	// transcription-based comparison could only confirm by hand.
+	SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
 typedef enum sslm_span_kind {
@@ -143,17 +143,17 @@ SSLM_STATUS_ENUM_LIST(T2139_GATE_C_STATUS_CHECK_GEN_)
 // name the per-name check above already covers (Probe A: deleting the whole assertion still
 // compiled clean; Probe C: both headers independently claiming ordinal 26 under different names
 // also compiled clean). The remedy is structural, not a rewritten static_assert body: both
-// headers now carry SSLM_STATUS__NEXT_FREE as an AUTO-VALUED enum member (no explicit numeric
+// headers now carry SSLM_STATUS_NEXT_FREE as an AUTO-VALUED enum member (no explicit numeric
 // value), so it moves itself whenever either side appends a new enumerator anywhere before it --
 // nothing left for an author to hand-bump. The assertion below compares the two sentinels
 // directly; a rename is still caught by the per-name checks above failing name lookup, a move is
 // still caught by those checks failing value equality, and a one-sided append -- the exact
 // mechanics P2 first found and F1 proved the old assertion could not re-catch -- now fails here
 // because the two sentinels no longer agree. ---
-static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_STATUS__NEXT_FREE) ==
-                  static_cast<int>(::SSLM_STATUS__NEXT_FREE),
+static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_STATUS_NEXT_FREE) ==
+                  static_cast<int>(::SSLM_STATUS_NEXT_FREE),
               "registry-top divergence: sslm_g5.h's mirror of the Sec6 registry does not top out "
-              "at the same SSLM_STATUS__NEXT_FREE sentinel sslm_abi.h declares -- one side has "
+              "at the same SSLM_STATUS_NEXT_FREE sentinel sslm_abi.h declares -- one side has "
               "appended an enumerator the other has not taken (the exact one-sided-append "
               "mechanics of P2, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, and of "
               "F1's Probe C, Claude/Poirot/4466666-t2139-third-confirmation-review.md); reconcile "

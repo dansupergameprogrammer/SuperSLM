@@ -309,6 +309,40 @@ if not errorlevel 1 (
 )
 echo Gate C must-reject construction correctly failed to compile ^(see out\t2139\gate_c_negative.log^)
 
+rem Gate C's THIRD TU (S1, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md, owed remedy
+rem 5): the structural half of S1's fix -- includes the REAL tests/t2130-g5-red-suite/sslm_g5.h
+rem directly (not a transcription) alongside the library's own SSLM_STATUS_ENUM_LIST expansion, so
+rem a divergence in the REAL suite header itself (not just a stale hand-transcription of it) fails
+rem here. /Itests resolves the real suite header's own #include path (matching Gate A's own
+rem convention above). MUST-ACCEPT: a compile failure here is a real regression.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itests tools\t2139_gate_c_real_suite_side_check.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_real_suite_side_check.exe >out\t2139\gate_c_real_suite_side.log 2>&1
+if errorlevel 1 (
+	echo Gate C real-suite-side construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\gate_c_real_suite_side.log
+	type out\t2139\gate_c_real_suite_side.log
+	popd & exit /b 1
+)
+out\t2139_gate_c_real_suite_side_check.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+echo Gate C real-suite-side construction: PASS
+
+rem Gate C must-reject, X-MACRO GENERATION mechanism specifically (S4): MUST fail to compile.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_xmacro_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_xmacro_check_negative.exe >out\t2139\gate_c_xmacro_negative.log 2>&1
+if not errorlevel 1 (
+	echo Gate C X-macro must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_xmacro_negative.log
+	popd & exit /b 1
+)
+echo Gate C X-macro must-reject construction correctly failed to compile ^(see out\t2139\gate_c_xmacro_negative.log^)
+
+rem Gate C must-reject, SENTINEL IDENTITY mechanism specifically (S4): MUST fail to compile.
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_sentinel_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_sentinel_negative.exe >out\t2139\gate_c_sentinel_negative.log 2>&1
+if not errorlevel 1 (
+	echo Gate C sentinel must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_sentinel_negative.log
+	popd & exit /b 1
+)
+echo Gate C sentinel must-reject construction correctly failed to compile ^(see out\t2139\gate_c_sentinel_negative.log^)
+
 rem count_abi_verbs.sh's own cited figure (design Sec4): 29. Checked only when bash is on PATH
 rem (git-bash on a typical Windows dev box) -- non-fatal if absent, matching this script's own
 rem python-checker precedent below.
@@ -641,6 +675,62 @@ if defined T2139_MODEL (
 	echo t2139_d3464_foreignfault_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run; optionally also T2139_ADAPTER=path\to\real-adapter.sslm^)
 )
 
+rem F2 pin item 2 (Claude/Brunel/t2139-abi-build-2026-08-16.md Sec22, Claude/Poirot/
+rem 3bcbe43-t2139-fourth-confirmation-review.md S3): std::length_error also narrows to
+rem SSLM_ALLOCATION_FAILED through SslmModel::Load's own WrapBadAllocContract narrowing. Committed
+rem at beb2355 with NO build recipe until this round (S3's own named finding) -- wired here on the
+rem N3/D-SLM3464 pins' own convention (SUPERSLM_ENABLE_BAD_ALLOC_INJECTION + /Itests).
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_f2_length_error_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_f2_length_error_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2139_MODEL (
+	out\t2139_f2_length_error_pin.exe %T2139_MODEL%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2139_f2_length_error_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
+)
+
+rem F2 pin item 1 (Claude/Brunel/t2139-abi-build-2026-08-16.md Sec22, Claude/Poirot/
+rem 3bcbe43-t2139-fourth-confirmation-review.md S3): a MECHANISM CHECK, not a real-path pin (its
+rem own header comment states this plainly -- CatchAllocationFailure has internal linkage and no
+rem real call path today reaches its own catch(...) arm with an unnarrowed exception type). No
+rem real .sslm artifact needed -- self-contained, always built AND run. Committed at beb2355 with
+rem NO build recipe until this round (S3's own named finding).
+cl /nologo /std:c++20 /O2 /W4 /EHsc tools\t2139_f2_catchall_construction_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_f2_catchall_construction_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+out\t2139_f2_catchall_construction_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3):
+rem proves a non-allocation cause in sslm_model_map's/sslm_adapter_map's own POST-Load
+rem construction step (BuildEngineCache/PopulateAdapterFromView) returns SSLM_ARTIFACT_REJECTED --
+rem via the NEW site-specific arming slot (tests/support/bad_alloc_injection.h), independent of the
+rem plain slot SslmModel::Load's own *Impl consults, closing the isolation gap the N3 pin's own
+rem header comment named. Same seam/build convention as the N3/D-SLM3464 pins above.
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_d3466_postload_region_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3466_postload_region_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2139_MODEL (
+	out\t2139_d3466_postload_region_pin.exe %T2139_MODEL% %T2139_ADAPTER%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2139_d3466_postload_region_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run; optionally also T2139_ADAPTER=path\to\real-adapter.sslm^)
+)
+
 rem S-FREEZE-EXAMPLE (design Sec9's own gate, D-SLM13): builds with NO internal include path --
 rem /Iinclude ONLY, the frozen public header, no /Itests, no /Isrc-internal, no Unreal, no
 rem test-harness affordance. Uses every verb C1-C7 ship, real text I/O (D-SLM3452), explicit
@@ -712,8 +802,18 @@ if not errorlevel 1 (
 		echo check_gemm_site_thread_width_parity.py FAILED -- see output above
 		set ec=1
 	)
+	rem T-2139 (Finding 3 class-closer, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md
+	rem S3): every tools/*.cpp must have a build recipe SOMEWHERE in HEAD (build.bat,
+	rem CMakeLists.txt, tests/*/build_link_red.bat, or tools/build_*.bat) or be an explicitly
+	rem justified allowlist entry -- the T-2045/S5 scar this file's own C5 comment already names
+	rem once, closed as a class here rather than fixed instance-by-instance again.
+	python tools\ci\check_tools_have_build_recipe.py
+	if errorlevel 1 (
+		echo check_tools_have_build_recipe.py FAILED -- see output above
+		set ec=1
+	)
 ) else (
-	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py and check_gemm_site_thread_width_parity.py ^(non-fatal^)
+	echo python not found on PATH -- skipping tests\ci\check_gpu_guard_status_parity.py, check_gemm_site_thread_width_parity.py, and tools\ci\check_tools_have_build_recipe.py ^(non-fatal^)
 )
 
 popd
