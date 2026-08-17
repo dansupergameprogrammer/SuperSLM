@@ -10,38 +10,113 @@ using namespace superslm;
 
 // --- Oracle (a): schema-constrained decode yields schema-valid output. Structural cells
 // (enum legality, field presence, key order, well-formedness) asserted at 0 violations, per
-// D-SLM45; cross-field violations reported, never asserted 0 (scored, not constrained). ---
+// D-SLM45; cross-field violations reported, never asserted 0 (scored, not constrained).
+//
+// FEATURE ORACLE, real (T-2132/Curie fix -- Poirot's G5 arc review, S1: the prior cell's own
+// "FEATURE ORACLE" block was a comment with no code under it and asserted nothing). No JSON
+// validator exists anywhere in this repository (confirmed by Curie's own prior finding, Claude/
+// Curie/t2130-g5-red-suite-composition-joins-2026-08-17.md), so this cell's own instrument is a
+// DFA-REPLAY oracle: the emitted token stream is walked through the schema's own compiled
+// transition table, parsed a SECOND, INDEPENDENT time (BuildIndependentSchemaMasksTable,
+// fixture_common.h -- a fresh SslmModel::Load over the same artifact bytes, entirely outside
+// sslm_model_map's own opaque handle and outside `model->schemas`, the table the decode path
+// under test actually reads), asserting every produced token is mask-legal at the state the
+// REPLAY (not decode's own internal state) says it was produced from, and that the walk stops at
+// a state the replay independently confirms is accepting (cross-checked against the new
+// D-SLM3476 schema_accepting stats field, never trusted from that field alone).
+//
+// WHAT THIS PROVES: decode's masked-argmax step never emits a token outside the schema's own
+// compiled mask at its own state (a wrong-but-self-consistent decode path -- e.g. one applying
+// the wrong state's mask, or an off-by-one walk advance -- would diverge from this independent
+// replay and fail here), and decode stops (schema_accepting) at a state the schema's own accept
+// set, read fresh, agrees is accepting. WHAT THIS DOES NOT PROVE: that the *schema itself*
+// matches Claude/Docs/Shopkeeper_IntentExtraction_Schema.md's own prose (that is G5-1's own
+// compiler-fuzz gate, a different oracle against a different claim), or JSON well-formedness/
+// cross-field validity of the detokenized text (no JSON validator exists in this repo -- routed,
+// not silently narrowed, per Curie's own prior finding).
 static void TestDim10_A_SchemaConstrainedDecodeYieldsSchemaValidOutput(
-    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema,
+    const std::vector<uint8_t>& model_bytes) {
+	superslm::SslmModelView replay_view;  // kept alive for replay_table's/replay_entry's own
+	                                       // whole lifetime -- see BuildIndependentSchemaMasksTable's
+	                                       // own LIFETIME comment.
+	superslm::SchemaMasksTable replay_table;
+	const superslm::SchemaEntry* replay_entry = nullptr;
+	if (!BuildIndependentSchemaMasksTable(model_bytes, g_reference_schema_name, &replay_view,
+	                                       &replay_table, &replay_entry)) {
+		SKIP_MSG("could not independently re-parse the real compiled schema for the DFA-replay "
+		         "oracle -- oracle (a) not run");
+		return;
+	}
+
 	sslm_seq seq = nullptr;
 	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
 	// sslm_decode_step's own precondition requires prior content on a fresh sequence -- seeded
 	// with one arbitrary SSLM_SPAN_PROMPT token, which never advances the DFA walk (design
 	// Sec5), so the schema-constrained decode below still starts from the schema's own start
-	// state. See fixture_common.h's SeedPromptForDecodeStep.
+	// state (state 0, matching replay_state's own initial value below). See fixture_common.h's
+	// SeedPromptForDecodeStep.
 	CHECK(SeedPromptForDecodeStep(model, seq));
 	sslm_decode_params params = MakeFullDepthDecodeParams();
-	int32_t out_tokens[64];
+
+	uint32_t replay_state = 0;         // the schema's own start state (design Sec13)
+	int structural_violations = 0;     // mask-illegal tokens or transition-table misses
+	bool reached_accepting = false;
+	bool hit_dead_end = false;
 	int step = 0;
-	for (; step < 64; ++step) {
-		const sslm_status st = sslm_decode_step(model, &seq, 1, &params, nullptr,
-		                                         &out_tokens[step]);
+	// D-SLM3476 half A (design Sec14.1): the real stop condition is schema_accepting, not a
+	// fixed step bound -- kMaxSteps is a generous ceiling against a genuine runaway only, never
+	// the intended stop signal itself (asserted below: the loop must stop for a REAL reason).
+	constexpr int kMaxSteps = 128;
+	for (; step < kMaxSteps; ++step) {
+		int32_t produced = 0;
+		const sslm_status st = sslm_decode_step(model, &seq, 1, &params, nullptr, &produced);
 		CHECK(st == SSLM_OK);
 		if (st != SSLM_OK) break;
-		// A real driver stops at the DFA's own accepting state (design Sec9's
-		// greedy_decode-shaped loop); this cell's own structural half runs to a fixed step
-		// bound as a placeholder for that stop condition, pending the build seat's own
-		// accepting-state query.
+		if (produced == -2) {
+			// D-SLM3476 half B: a genuine schema dead end (no legal continuation at all) --
+			// independently confirm the replay agrees this state has an empty CSR row before
+			// accepting the stop as legitimate rather than a masking defect wearing the sentinel.
+			const uint32_t row_begin = ReadLE32Local(replay_entry->state_offsets_le +
+			                                          static_cast<size_t>(replay_state) * 4);
+			const uint32_t row_end = ReadLE32Local(
+			    replay_entry->state_offsets_le + static_cast<size_t>(replay_state + 1) * 4);
+			CHECK(row_begin == row_end);
+			hit_dead_end = true;
+			break;
+		}
+		// FEATURE ORACLE core: `produced` must be mask-legal at `replay_state` -- re-read from
+		// the independently-parsed schema, never from decode's own internal state -- and
+		// Transition (also independently parsed) must actually advance to a state, which
+		// `replay_state` (not seq->dfa_walk_state) then becomes.
+		const bool in_range = static_cast<uint32_t>(produced) < replay_table.VocabSize();
+		const bool mask_legal =
+		    in_range && replay_table.MaskBit(*replay_entry, replay_state,
+		                                      static_cast<uint32_t>(produced));
+		if (!mask_legal) ++structural_violations;
+		uint32_t next_state = replay_state;
+		const bool has_transition =
+		    in_range && replay_table.Transition(*replay_entry, replay_state,
+		                                         static_cast<uint32_t>(produced), &next_state);
+		if (!has_transition) ++structural_violations;
+		if (has_transition) replay_state = next_state;
+
+		// Poll the accepting-state query (D-SLM3476 half A) as the real stop condition.
+		sslm_stats_out stats{};
+		CHECK(sslm_stats(model, seq, &stats) == SSLM_OK);
+		if (stats.schema_accepting) {
+			// Cross-check: the production query's own claim against the independently-replayed
+			// state's own accept-set membership -- never trust the field without re-deriving the
+			// same fact from the schema's own compiled data a second time.
+			CHECK(ReplayIsAcceptingState(*replay_entry, replay_state));
+			reached_accepting = true;
+			break;
+		}
 	}
-	// FEATURE ORACLE: the emitted token stream, detokenized and parsed by an INDEPENDENT JSON
-	// parser (never the runtime's own DFA, which would make this a consistency oracle) against
-	// reference_schema's own textual definition (Claude/Docs/Shopkeeper_IntentExtraction_
-	// Schema.md), reports 0 STRUCTURAL violations (enum legality, key presence, declaration-
-	// order key emission per D-SLM40, well-formedness) and reports (never asserts 0) any
-	// cross-field violations (D-SLM45: scored, not constrained -- the reference schema's own
-	// three cross-field-carrying rules, per design Sec6 G5-1's own gate text, are exactly the
-	// case this scoring exists for).
+	CHECK(structural_violations == 0);
+	CHECK(reached_accepting || hit_dead_end);  // stopped for a real reason, not the ceiling
+	CHECK(step < kMaxSteps);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
@@ -211,7 +286,8 @@ int main(int argc, char** argv) {
 	const bool have_pool = have_model && pool.Create(model, kRealPoolBlockCount);
 
 	if (have_schema_ref && have_pool) {
-		TestDim10_A_SchemaConstrainedDecodeYieldsSchemaValidOutput(model, pool.ptr(), schema_ref);
+		TestDim10_A_SchemaConstrainedDecodeYieldsSchemaValidOutput(model, pool.ptr(), schema_ref,
+		                                                            model_bytes);
 	} else {
 		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied, or a real KV pool "
 		         "could not be constructed -- oracle (a) not run");

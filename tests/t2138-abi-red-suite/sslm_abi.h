@@ -193,6 +193,17 @@ typedef struct sslm_stats_out {
     int64_t decode_step_actual;
     int64_t forced_token_count;
     int32_t kv_blocks_resident;
+    /* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2, T-2132/Curie):
+     * mirrored here in lockstep with the production struct (include/superslm/sslm_abi.h) and
+     * with tests/t2130-g5-red-suite/sslm_g5.h's own identical addition -- this suite's own
+     * dim7_contract_red.cpp/dim8_composition_red.cpp both stack-allocate sslm_stats_out and pass
+     * it to the real sslm_stats(), so growing the production struct without this mirror growing
+     * in the same commit would leave those callers' own stack allocation sized by a STALE,
+     * narrower definition (the exact hazard the production build session's own STOP-and-report
+     * named against tests/t2130-g5-red-suite's identical struct). This suite has no G5-specific
+     * concept of its own to name the field's own semantics against (schemas are G5's), so the
+     * field is carried here purely for layout parity, unread by this suite's own cells. */
+    int32_t schema_accepting;
 } sslm_stats_out;
 
 /* ============================================================================

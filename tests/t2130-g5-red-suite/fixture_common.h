@@ -17,6 +17,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <string>
 #include <utility>
@@ -24,6 +25,7 @@
 
 #include "superslm/artifact.h"
 #include "superslm/model.h"
+#include "superslm/schema_masks.h"
 
 // The declared G5 ABI surface this whole suite is written against (Claude/Vitruvius/
 // t2119-g5-constrained-decoding-design-2026-08-16.md Sec5, post rung-6 confirmation fold).
@@ -407,6 +409,121 @@ inline bool DeriveRealSchemaContentSpan(sslm_model model, sslm_kv_pool* pool, ss
 	if (sslm_seq_release(scratch) != SSLM_OK) return false;
 	*out_tokens = std::move(tokens);
 	return true;
+}
+
+// --- Independent DFA-replay machinery (T-2132/Curie, S1/dim10 oracle (a) and D-SLM3476/D-SLM3478
+// coverage): dim10's own FEATURE ORACLE needs a reference that does NOT read anything the decode
+// path under test computed (its own internal SchemaMasksTable, `model->schemas`, or the
+// sequence's own `dfa_walk_state`) -- otherwise a wrong-but-self-consistent decode path would
+// pass by construction. This is a SECOND, independent parse of the SAME artifact bytes, via a
+// fresh `SslmModel::Load` call entirely outside `sslm_model_map`'s own opaque handle -- the same
+// technique `tools/t2132_s2_dead_end_sentinel_pin.cpp` (the D-SLM3476 half-B pin) already
+// established for exactly this reason. Every `SchemaEntry` pointer the returned table exposes
+// points into `model_bytes` (never into `*out_view`, which the caller may let go out of scope
+// once this returns), so `model_bytes` must outlive the returned table -- the same lifetime
+// contract `TryMapRealModel` already documents for the opaque `sslm_model` handle it produces
+// from the identical bytes. ---
+
+// Parses `model_bytes`' own SchemaMasks section a second time and resolves `schema_name` within
+// it. Returns false -- callers SKIP, never fabricate a table -- if the bytes are empty, the
+// artifact fails this independent load, it carries no SchemaMasks section, the section fails
+// SchemaMasksTable::Parse, or `schema_name` is not found.
+//
+// LIFETIME (load-bearing, not a convenience signature): `SslmModel::Load` parses through an
+// internal `SslmArtifact` that OWNS A COPY of the artifact bytes (artifact.h: "owns a copy of
+// the artifact bytes; section views point into that buffer") -- `*out_table`'s own SchemaEntry
+// pointers therefore point into `*out_view`'s own owned storage, NOT into `model_bytes` (which
+// this call reads once and then never touches again). `*out_view` is an OUT-parameter for
+// exactly this reason: the caller must keep it alive for as long as `*out_table`/`*out_entry`
+// are used, the same "keepalive" discipline TryMapRealModel already documents for its own
+// `keepalive` vector, one level further down the ownership chain.
+inline bool BuildIndependentSchemaMasksTable(const std::vector<uint8_t>& model_bytes,
+                                              const std::string& schema_name,
+                                              superslm::SslmModelView* out_view,
+                                              superslm::SchemaMasksTable* out_table,
+                                              const superslm::SchemaEntry** out_entry) {
+	*out_entry = nullptr;
+	if (model_bytes.empty()) return false;
+	std::string load_err;
+	if (superslm::SslmModel::Load(model_bytes.data(), model_bytes.size(), *out_view,
+	                               &load_err) != superslm::SslmModelStatus::Ok) {
+		return false;
+	}
+	const superslm::SslmSectionView* schema_section =
+	    out_view->Section(superslm::SslmSectionType::SchemaMasks);
+	if (!schema_section) return false;
+	std::string parse_err;
+	if (!superslm::SchemaMasksTable::Parse(schema_section->data, schema_section->byte_size,
+	                                        out_view->config.vocab_size, *out_table,
+	                                        &parse_err)) {
+		return false;
+	}
+	*out_entry = out_table->ByName(schema_name);
+	return *out_entry != nullptr;
+}
+
+// Reads a little-endian u32 from `p` -- a local, self-contained copy (this suite's own
+// established convention -- see tools/t2132_s2_dead_end_sentinel_pin.cpp's own local `RowBegin`
+// helper -- of reaching into schema_masks.h's own `superslm::schema_masks_detail` namespace,
+// which that header itself names as an implementation detail, not a consumer-facing surface).
+inline uint32_t ReadLE32Local(const uint8_t* p) {
+	return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+	       (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+}
+
+// True iff `state` is a member of `entry`'s own accept set (`accepting_le`, strictly ascending
+// per SchemaMasksTable::Parse's own validated invariant) -- an INDEPENDENT re-derivation of the
+// same fact D-SLM3476's `schema_accepting` stats field reports, used to cross-check that field
+// against the schema's own compiled accept set rather than trusting the field's own arithmetic.
+inline bool ReplayIsAcceptingState(const superslm::SchemaEntry& entry, uint32_t state) {
+	uint32_t lo = 0, hi = entry.accepting_count;
+	while (lo < hi) {
+		const uint32_t mid = lo + (hi - lo) / 2;
+		const uint32_t v = ReadLE32Local(entry.accepting_le + static_cast<size_t>(mid) * 4);
+		if (v == state) return true;
+		if (v < state) lo = mid + 1; else hi = mid;
+	}
+	return false;
+}
+
+// BFS from `start_state` for the shortest path of LEGAL forced tokens to the nearest state for
+// which `want(state)` returns true (e.g. ReplayIsAcceptingState, or an empty-CSR-row dead-end
+// test) -- the same construction `tools/t2132_s2_dead_end_sentinel_pin.cpp` (the D-SLM3476
+// half-B pin) already established for its own dead-end search, generalized to an arbitrary
+// per-state predicate so this suite's own schema_accepting cell can reuse it for the opposite
+// search (nearest ACCEPTING state, not nearest dead end). Returns true and fills `out_path` on
+// success; false (path unchanged) if no reachable state satisfies `want`.
+template <typename Predicate>
+inline bool FindPathToState(const superslm::SchemaMasksTable& table,
+                             const superslm::SchemaEntry& entry, uint32_t start_state,
+                             Predicate want, std::vector<int32_t>* out_path) {
+	std::vector<bool> visited(entry.state_count, false);
+	std::deque<std::pair<uint32_t, std::vector<int32_t>>> q;
+	q.push_back({start_state, {}});
+	if (start_state < visited.size()) visited[start_state] = true;
+	while (!q.empty()) {
+		auto [state, path] = q.front();
+		q.pop_front();
+		if (want(state)) {
+			*out_path = path;
+			return true;
+		}
+		const uint32_t begin = ReadLE32Local(entry.state_offsets_le + static_cast<size_t>(state) * 4);
+		const uint32_t end =
+		    ReadLE32Local(entry.state_offsets_le + static_cast<size_t>(state + 1) * 4);
+		for (uint32_t k = begin; k < end; ++k) {
+			const uint8_t* row = entry.transitions_le + static_cast<size_t>(k) * 8;
+			const uint32_t tok = ReadLE32Local(row);
+			const uint32_t next = ReadLE32Local(row + 4);
+			if (next < visited.size() && !visited[next]) {
+				visited[next] = true;
+				std::vector<int32_t> next_path = path;
+				next_path.push_back(static_cast<int32_t>(tok));
+				q.push_back({next, next_path});
+			}
+		}
+	}
+	return false;
 }
 
 #endif  // SSLM_T2130_FIXTURE_COMMON_H

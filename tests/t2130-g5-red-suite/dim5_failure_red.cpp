@@ -4,7 +4,8 @@
 // repair's own SSLM_SCHEMA_SPAN_UNBOUND rejection, and sslm_seq_adopt_prefix's
 // SSLM_PREFIX_SCHEMA_MISMATCH, stated exhaustively over BOTH branches the design names (a
 // mismatched bound schema, AND an unbound sequence adopting real progress -- the T-2126/T-2127
-// closed gap). 4 cells. RED BY LINK.
+// closed gap). 6 cells (T-2132/Curie fix round: cell 5 rebuilt for D-SLM3478's own
+// partial-consumption law; cell 6 added for D-SLM3476 half A's schema_accepting query).
 #include "fixture_common.h"
 
 using namespace superslm;
@@ -129,38 +130,162 @@ static void TestDim5_M4_AdoptPrefixByUnboundSequenceWithRealProgressRejected(
 // span is not actually reachable under the active schema is a defined rejection, not a silent
 // mismatch -- "a span that leaves the DFA's language before it is exhausted," checked token
 // by token as the walk advances through the SSLM_SPAN_SCHEMA_CONTENT span (design Sec6 G5-4).
-// ---
-static void TestDim5_M5_TemplateFixedSpanNotReachableUnderActiveSchemaRejected(
-    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema) {
-	// The CONTRAST half's own reachable span is DERIVED from the real schema/tokenizer at
-	// runtime (T-2132/Curie fix -- see fixture_common.h's DeriveRealSchemaContentSpan);
-	// unreachable_span below stays a literal, deliberately-illegal id sequence -- that IS this
-	// cell's own subject (a span the DFA never admits), not the defect this fix closes.
-	std::vector<int32_t> reachable_span;
-	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, 1, &reachable_span)) {
-		SKIP_MSG("could not derive a real 1-token schema-legal span from the live fixture -- "
-		         "mechanism cell 5 not run");
+//
+// D-SLM3478 (design Sec14.3, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S5, T-2132/Curie fix):
+// RULED law is PARTIAL CONSUMPTION, not atomic rejection -- every token strictly before the
+// rejected one is fully, permanently admitted (forward pass run, KV written, dfa_walk_state/
+// forced_token_count advanced, *consumed incremented); only the rejected token and everything
+// after it have no effect. Three code comments previously attributed the OPPOSITE claim ("the
+// sequence's own walk-state is unmoved by the rejected call") to this design, which does not say
+// it and which is false whenever the rejected token is not the first one in a multi-token span.
+// This cell's own construction previously used an ALL-illegal-from-the-start span, under which
+// *consumed == 0 and the walk genuinely is unmoved -- a degenerate case that cannot distinguish
+// the true (partial-consumption) contract from the false (atomic) one, since both agree when
+// zero tokens are admitted. Rebuilt below with a span whose rejection is NOT the first token, the
+// one construction that actually discriminates the two readings: it FAILS under the false
+// "unmoved" reading (which would predict *consumed == 0 and dfa_walk_state still at the schema's
+// start) and PASSES under the TRUE, now-ruled contract. ---
+static void TestDim5_M5_TemplateFixedSpanPartiallyConsumedOnMidSpanRejection(
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema,
+    const std::vector<uint8_t>& model_bytes) {
+	constexpr int32_t kLegalPrefixLen = 3;
+	// The legal prefix is DERIVED from the real schema/tokenizer at runtime (T-2132/Curie fix --
+	// see fixture_common.h's DeriveRealSchemaContentSpan): kLegalPrefixLen genuinely legal
+	// continuations from the schema's own start state, driven by real masked decode.
+	std::vector<int32_t> legal_prefix;
+	if (!DeriveRealSchemaContentSpan(model, pool, reference_schema, kLegalPrefixLen,
+	                                  &legal_prefix)) {
+		SKIP_MSG("could not derive a real %d-token schema-legal prefix from the live fixture -- "
+		         "mechanism cell 5 not run",
+		         static_cast<int>(kLegalPrefixLen));
 		return;
 	}
+	// The illegal 4th token is independently CONFIRMED illegal at the state the legal prefix
+	// reaches -- re-derived from the schema's own compiled definition (a second, independent
+	// parse, never the runtime's own internal walk), not assumed from a literal id.
+	superslm::SslmModelView replay_view;  // kept alive for replay_table's/replay_entry's own
+	                                       // whole lifetime -- see BuildIndependentSchemaMasksTable's
+	                                       // own LIFETIME comment.
+	superslm::SchemaMasksTable replay_table;
+	const superslm::SchemaEntry* replay_entry = nullptr;
+	if (!BuildIndependentSchemaMasksTable(model_bytes, g_reference_schema_name, &replay_view,
+	                                       &replay_table, &replay_entry)) {
+		SKIP_MSG("could not independently re-parse the real compiled schema -- mechanism cell 5 "
+		         "not run");
+		return;
+	}
+	uint32_t replay_state = 0;
+	for (int32_t tok : legal_prefix) {
+		uint32_t next_state = replay_state;
+		CHECK(replay_table.Transition(*replay_entry, replay_state, static_cast<uint32_t>(tok),
+		                               &next_state));
+		replay_state = next_state;
+	}
+	int32_t illegal_token = -1;
+	for (uint32_t t = 0; t < replay_table.VocabSize(); ++t) {
+		if (!replay_table.MaskBit(*replay_entry, replay_state, t)) {
+			illegal_token = static_cast<int32_t>(t);
+			break;
+		}
+	}
+	if (illegal_token < 0) {
+		SKIP_MSG("the real compiled schema admits every vocabulary token at the state the legal "
+		         "prefix reaches -- no illegal continuation to inject; mechanism cell 5 not run");
+		return;
+	}
+
+	std::vector<int32_t> span = legal_prefix;
+	span.push_back(illegal_token);
+
 	sslm_seq seq = nullptr;
 	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
-	// A host-declared "fixed" span whose token sequence does NOT match any path the schema's
-	// own compiled DFA admits from the sequence's current (start) walk-state -- e.g. a token
-	// the reference schema's own leading literal never emits at that position. Genuinely
-	// hostile input to the reachability check, not merely an empty span. Kept as literal,
-	// deliberately-illegal ids: this cell's own subject is precisely a span the DFA rejects,
-	// so "legal" ids would defeat the cell rather than fix a defect.
-	int32_t unreachable_span[4] = {9001, 9002, 9003, 9004};
+	int32_t consumed = -1;
+	CHECK(sslm_prefill(model, seq, span.data(), static_cast<int32_t>(span.size()), 8,
+	                    SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed) ==
+	      SSLM_SCHEMA_SPAN_UNREACHABLE);
+	// THE DISCRIMINATING ASSERTION: *consumed == kLegalPrefixLen (partial consumption), never 0
+	// (which is what the now-corrected "unmoved" comment would have predicted).
+	CHECK(consumed == kLegalPrefixLen);
+	sslm_stats_out stats{};
+	CHECK(sslm_stats(model, seq, &stats) == SSLM_OK);
+	// forced_token_count advanced exactly once per ADMITTED token -- the rejected token and
+	// everything after it contribute nothing.
+	CHECK(stats.forced_token_count == kLegalPrefixLen);
+	// The sequence's walk genuinely advanced (not merely that *consumed reports a number): the
+	// next ordinary decode step succeeds and does not land on a schema dead end, proving the
+	// resting state is the schema's own real post-prefix state, not the start state a "walk
+	// unmoved" reading would have left it at.
+	sslm_decode_params params = MakeFullDepthDecodeParams();
+	int32_t next_tok = 0;
+	CHECK(sslm_decode_step(model, &seq, 1, &params, nullptr, &next_tok) == SSLM_OK);
+	CHECK(next_tok != -2);
+	CHECK(sslm_seq_release(seq) == SSLM_OK);
+}
+
+// --- Mechanism cell 6 (D-SLM3476 half A, design Sec14.1, Claude/Poirot/
+// 9bc9ec6-t2132-g5-arc-review.md S2, T-2132/Curie): sslm_stats's new schema_accepting field
+// reflects the schema's own real accept set -- 0 at the schema's start state (the reference
+// schema requires real content before any accepting state is reachable) and 1 once a real,
+// independently-confirmed accepting state is reached via genuinely legal forced tokens. The BFS
+// construction (FindPathToState, fixture_common.h) is this cell's own precedent: the same
+// technique tools/t2132_s2_dead_end_sentinel_pin.cpp (the D-SLM3476 half-B pin) uses to find a
+// real dead-end state, generalized here to find the nearest real ACCEPTING state instead. ---
+static void TestDim5_M6_SchemaAcceptingQueryAgainstRealAcceptingAndNonAcceptingStates(
+    sslm_model model, sslm_kv_pool* pool, sslm_schema reference_schema,
+    const std::vector<uint8_t>& model_bytes) {
+	superslm::SslmModelView replay_view;  // kept alive for replay_table's/replay_entry's own
+	                                       // whole lifetime -- see BuildIndependentSchemaMasksTable's
+	                                       // own LIFETIME comment.
+	superslm::SchemaMasksTable replay_table;
+	const superslm::SchemaEntry* replay_entry = nullptr;
+	if (!BuildIndependentSchemaMasksTable(model_bytes, g_reference_schema_name, &replay_view,
+	                                       &replay_table, &replay_entry)) {
+		SKIP_MSG("could not independently re-parse the real compiled schema -- mechanism cell 6 "
+		         "not run");
+		return;
+	}
+	// The schema's own start state (0) is asserted NOT accepting by this cell's own construction
+	// below (the reference schema requires real content, per its own field-presence rules) --
+	// confirmed via the independent replay first, so this cell's own premise is checked rather
+	// than assumed.
+	if (ReplayIsAcceptingState(*replay_entry, 0)) {
+		SKIP_MSG("the real compiled reference schema's own start state is already accepting -- "
+		         "this cell's own start/non-start contrast has no real state to exercise; "
+		         "mechanism cell 6 not run");
+		return;
+	}
+	std::vector<int32_t> path_to_accepting;
+	if (!FindPathToState(
+	        replay_table, *replay_entry, /*start_state=*/0,
+	        [&](uint32_t s) { return ReplayIsAcceptingState(*replay_entry, s); },
+	        &path_to_accepting) ||
+	    path_to_accepting.empty()) {
+		SKIP_MSG("no reachable accepting state (via a non-empty forced path) found in the real "
+		         "compiled reference schema -- mechanism cell 6 not run");
+		return;
+	}
+
+	sslm_seq seq = nullptr;
+	CHECK(sslm_seq_create(model, pool, &seq) == SSLM_OK);
+	CHECK(sslm_seq_set_schema(seq, reference_schema) == SSLM_OK);
+
+	// At the fresh, non-accepting start state: schema_accepting == 0.
+	sslm_stats_out stats_at_start{};
+	CHECK(sslm_stats(model, seq, &stats_at_start) == SSLM_OK);
+	CHECK(stats_at_start.schema_accepting == 0);
+
 	int32_t consumed = 0;
-	CHECK(sslm_prefill(model, seq, unreachable_span, 4, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
-	                    &consumed) == SSLM_SCHEMA_SPAN_UNREACHABLE);
-	// The sequence's own walk-state is unmoved by the rejected call -- a subsequent call with
-	// the schema's OWN genuinely reachable leading span still succeeds, proving the rejection
-	// did not corrupt the walk-state on its way to reporting failure.
-	int32_t consumed2 = 0;
-	CHECK(sslm_prefill(model, seq, reachable_span.data(), 1, 8, SSLM_SPAN_SCHEMA_CONTENT, nullptr,
-	                    &consumed2) == SSLM_OK);
+	CHECK(PrefillLooped(model, seq, path_to_accepting.data(),
+	                     static_cast<int32_t>(path_to_accepting.size()), /*chunk_budget=*/8,
+	                     SSLM_SPAN_SCHEMA_CONTENT, nullptr, &consumed) == SSLM_OK);
+	CHECK(consumed == static_cast<int32_t>(path_to_accepting.size()));
+
+	// At the real, independently-confirmed accepting state reached by real forced tokens:
+	// schema_accepting == 1 -- the field genuinely discriminates, not merely defaults to 1.
+	sslm_stats_out stats_at_accepting{};
+	CHECK(sslm_stats(model, seq, &stats_at_accepting) == SSLM_OK);
+	CHECK(stats_at_accepting.schema_accepting == 1);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
 
@@ -206,11 +331,18 @@ int main(int argc, char** argv) {
 		         "could not be constructed -- mechanism cell 4 not run");
 	}
 	if (have_schema_a && have_pool) {
-		TestDim5_M5_TemplateFixedSpanNotReachableUnderActiveSchemaRejected(model, pool.ptr(),
-		                                                                   schema_a);
+		TestDim5_M5_TemplateFixedSpanPartiallyConsumedOnMidSpanRejection(model, pool.ptr(),
+		                                                                 schema_a, model_bytes);
 	} else {
 		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied, or a real KV pool "
 		         "could not be constructed -- mechanism cell 5 not run");
+	}
+	if (have_schema_a && have_pool) {
+		TestDim5_M6_SchemaAcceptingQueryAgainstRealAcceptingAndNonAcceptingStates(
+		    model, pool.ptr(), schema_a, model_bytes);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied, or a real KV pool "
+		         "could not be constructed -- mechanism cell 6 not run");
 	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;

@@ -267,6 +267,13 @@ typedef struct sslm_stats_out {
     int64_t decode_step_actual;
     int64_t forced_token_count;       /* G5-3, design Sec6/Sec7 dim7 */
     int32_t kv_blocks_resident;
+    /* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2, T-2132/Curie
+     * suite-side mirror -- lands in the SAME commit as the production struct's own growth,
+     * include/superslm/sslm_abi.h, per this ticket's atomicity requirement): 1 iff the
+     * sequence's current dfa_walk_state is a member of its bound schema's accept set, 0 when it
+     * is not, and 0 when no schema is bound. The query dim10's own placeholder comment named
+     * ("pending the build seat's own accepting-state query"). */
+    int32_t schema_accepting;
 } sslm_stats_out;
 
 /* ============================================================================

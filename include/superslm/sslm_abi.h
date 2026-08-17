@@ -184,6 +184,15 @@ typedef struct sslm_stats_out {
     int64_t decode_step_actual;
     int64_t forced_token_count;
     int32_t kv_blocks_resident;
+    /* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2): 1 iff the
+     * sequence's current dfa_walk_state is a member of its bound schema's accept set
+     * (accepting_le/accepting_count, design Sec13.2); 0 when it is not, and 0 when no schema is
+     * bound (SSLM_SCHEMA_NONE) -- a host never needs to special-case whether a schema is even
+     * bound before reading it. The query dim10's own placeholder comment named ("pending the
+     * build seat's own accepting-state query"), added to this existing per-sequence stats
+     * accessor rather than as a new verb, per the ruling's own "smallest sound thing" reasoning
+     * (the same one already applied to forced_token_count). */
+    int32_t schema_accepting;
 } sslm_stats_out;
 
 /* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create and

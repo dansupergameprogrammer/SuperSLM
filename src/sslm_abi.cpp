@@ -1915,6 +1915,25 @@ extern "C" sslm_status sslm_decode_step(sslm_model model, sslm_seq* seqs, int32_
 	});
 }
 
+namespace {
+// D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2): true iff `state`
+// is a member of `entry`'s own accept set (accepting_le, strictly ascending -- SchemaMasksTable::
+// Parse's own validated invariant, schema_masks.h). Binary search, matching Transition's own
+// CSR-row lookup style; never reads decode's own internal state, only the schema's own compiled
+// accept set.
+bool IsAcceptingState(const superslm::SchemaEntry& entry, uint32_t state) {
+	using superslm::schema_masks_detail::ReadLE32;
+	uint32_t lo = 0, hi = entry.accepting_count;
+	while (lo < hi) {
+		const uint32_t mid = lo + (hi - lo) / 2;
+		const uint32_t v = ReadLE32(entry.accepting_le + static_cast<size_t>(mid) * 4);
+		if (v == state) return true;
+		if (v < state) lo = mid + 1; else hi = mid;
+	}
+	return false;
+}
+}  // namespace
+
 extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out) {
 	if (!out) return SSLM_INVALID_ARGUMENT;
 	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
@@ -1933,6 +1952,15 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 	// driven through a forced/fixed span) correctly reports 0.
 	out->forced_token_count = seq->forced_token_count;
 	out->kv_blocks_resident = 1;  // this sequence's own single, whole-sequence block (Sec7.2)
+	// D-SLM3476 (design Sec14.1): 0 when no schema is bound; otherwise 1 iff dfa_walk_state is
+	// currently a member of the bound schema's own accept set.
+	out->schema_accepting = 0;
+	if (seq->bound_schema) {
+		const superslm::SchemaEntry* entry = model->schemas.ByIndex(seq->bound_schema->index);
+		if (entry && IsAcceptingState(*entry, seq->dfa_walk_state)) {
+			out->schema_accepting = 1;
+		}
+	}
 	return SSLM_OK;
 }
 
