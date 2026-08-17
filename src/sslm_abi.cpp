@@ -659,7 +659,27 @@ WorkspaceLayout ComputeWorkspaceLayout(const sslm_model_s* model, const sslm_con
 
 		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
 		L.embed_codes_offset = aligned;
-		L.embed_codes_bytes = static_cast<size_t>(c.hidden_size);  // int8 codes
+		// T-2147 (design §15.3, D-SLM3483): GROWN from `hidden_size` (one token) to
+		// `max_chunk_budget * hidden_size` -- PrefillWholeTokensImpl's chunk-batched path
+		// (RunLayerLoopChunkBatched) needs a [chunk_tokens, hidden_size] activation region to
+		// embed and carry the whole admitted chunk across layers, not one token's worth. This
+		// is an ABI-VISIBLE change to `sslm_workspace_size`'s own returned byte count -- correct
+		// and larger for any config with `max_chunk_budget > 1`, identical to before for
+		// `max_chunk_budget == 1` (the region's byte count is unchanged at exactly `hidden_size`)
+		// -- legitimate now, before S-FREEZE locks the ABI surface, by the identical reasoning
+		// already applied once to `sslm_prefill`'s own `sslm_span_kind` parameter (§5 there,
+		// "Pre-freeze migration note"). `sslm_decode_step`'s own single-token consumer is
+		// unaffected: it always uses the first `hidden_size` bytes of whatever the (now larger)
+		// region provides, exactly as `sslm_workspace`'s own reuse law (T-2133 §7.1) already
+		// requires of every other region. `final_codes` (below) is UNCHANGED at `hidden_size` --
+		// design §15.3 rules only `embed_codes_bytes` grows; the exact remaining scratch geometry
+		// (kacc_all/vacc_all/normed/etc.) is chunk-batched, function-local `std::vector` scratch,
+		// the same convention RunLayerLoopImpl's own per-token locals already use, never
+		// ABI-workspace-carved.
+		if (!CheckedMulSizeT(static_cast<size_t>(config.max_chunk_budget),
+		                      static_cast<size_t>(c.hidden_size), &L.embed_codes_bytes)) {
+			of = true;
+		}
 		if (!CheckedAddSizeT(L.embed_codes_offset, L.embed_codes_bytes, &cursor)) of = true;
 
 		if (!RoundUpToAlignment(cursor, SSLM_ABI_ALIGNMENT_BYTES, &aligned)) of = true;
@@ -1259,78 +1279,136 @@ sslm_status PrefillWholeTokensImpl(sslm_model_s* model, superslm::SequenceLayerS
 	// sslm_prefill/sslm_decode_step calls is the whole point of a shared, caller-owned scratch
 	// region, design Sec8.3/dim8 M1). Falls back to a heap-allocated vector when `ws` is null or
 	// undersized for this model, so no existing nullptr-`ws` caller regresses.
+	//
+	// T-2147 (design §15.3, D-SLM3483): `embed_codes` is now `max_chunk_budget * hidden_size`
+	// bytes when workspace-carved (ComputeWorkspaceLayout, above) -- this function uses it as the
+	// chunk-batched forward pass's own [chunk_tokens, hidden_size] activation buffer, staging
+	// every admitted token's embedding before the first layer runs, then letting
+	// RunLayerLoopChunkBatched mutate it in place, layer by layer, for the whole chunk at once.
 	const WorkspaceLayout layout = ws ? ComputeWorkspaceLayout(model, ws->config) : WorkspaceLayout{};
-	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes;
+	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes &&
+	                        layout.embed_codes_bytes >=
+	                            static_cast<size_t>(n) * static_cast<size_t>(c.hidden_size);
 	std::vector<int8_t> embed_codes_fallback;
 	int8_t* embed_codes;
 	if (ws_usable) {
 		embed_codes = reinterpret_cast<int8_t*>(static_cast<uint8_t*>(ws->buf) +
 		                                         layout.embed_codes_offset);
 	} else {
-		embed_codes_fallback.assign(c.hidden_size, 0);
+		embed_codes_fallback.assign(static_cast<size_t>(n) * static_cast<size_t>(c.hidden_size), 0);
 		embed_codes = embed_codes_fallback.data();
 	}
 	std::vector<superslm::LayerWeights> layers_scratch;
 	const superslm::LayerWeights* layers = ResolveLayers(model, adapter, &layers_scratch);
+
+	if (n == 0) return SSLM_OK;
+
+	// --- T-2147 (design §15.3): admission pre-scan, before any forward-pass compute --------
+	// Three independent stopping conditions, checked in the SAME priority order the pre-fold
+	// per-token loop checked them in (token-id domain, then context-cap headroom, then -- only
+	// over the range both of those already admit -- the DFA reachability walk): each names the
+	// first index it would itself reject at; the smallest of the three is the admitted prefix
+	// length, and which one produced it is the status this call returns when it is less than
+	// `n`. This reproduces PrefillWholeTokensImpl's own pre-existing per-token, first-failure-
+	// wins behaviour exactly, computed up front so the (expensive) batched forward pass below
+	// runs ONLY over tokens already known to be admitted (§15.3's "a rejected token and
+	// everything after it costs zero forward-pass compute" contract, extended from status/
+	// consumption to compute cost).
+	int32_t admit_id = n;
 	for (int32_t i = 0; i < n; ++i) {
 		const int32_t token = tokens[i];
 		if (token < 0 || static_cast<uint32_t>(token) >= c.vocab_size) {
-			return SSLM_TOKEN_ID_OUT_OF_RANGE;
+			admit_id = i;
+			break;
 		}
-		if (state.context_length >= static_cast<int64_t>(c.context_cap)) {
-			return SSLM_CONTEXT_CAP_EXCEEDED;
-		}
-
-		// G5-4 (design Sec6/Sec14.3, D-SLM3478 -- RULED design text as of this fold, Claude/
-		// Poirot/9bc9ec6-t2132-g5-arc-review.md S5): the reachability check runs BEFORE this
-		// token's forward pass, so the REJECTED token itself never advances layer_index/
-		// context_length/kv content -- its own walk-state transition, forward pass, and
-		// `++(*consumed)` are all skipped. That is the only thing "unmoved." Sec6 G5-4's own text
-		// says only that an unreachable span "is a defined rejection (dim 5), not a silent
-		// mismatch" -- it never claimed the whole call, or the sequence as a whole, stays
-		// unmoved, and Sec14.3 rules explicitly (reading this same loop at source) that it is
-		// NOT, for a multi-token span: every token STRICTLY BEFORE the rejected one is fully,
-		// permanently admitted in this same call -- forward pass run, KV written, dfa_walk_state/
-		// forced_token_count advanced, `*consumed` incremented -- exactly as if that prefix had
-		// been submitted alone and accepted in full. This is PARTIAL CONSUMPTION, not atomic
-		// rejection, matching `sslm_prefill`'s own established non-schema shape, pinned by
-		// dim5_failure_red.cpp's own TestDim5_M5 cell against the actual post-rejection state of
-		// a multi-token partial span.
-		uint32_t next_walk_state = 0;
-		if (schema_entry) {
-			if (!model->schemas.Transition(*schema_entry, *walk_state, static_cast<uint32_t>(token),
-			                                &next_walk_state)) {
-				return SSLM_SCHEMA_SPAN_UNREACHABLE;
-			}
-		}
-
-		superslm::CarriedScale embed_scale{};
-		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
-		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
-		    model->engine.embed_site_constant, embed_codes, &embed_scale);
-		if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
-		for (uint32_t k = 0; k < c.hidden_size; ++k) state.hidden_codes[k] = embed_codes[k];
-		state.hidden_scale = embed_scale;
-		state.layer_index = 0;
-
-		const superslm::SslmForwardStatus st = superslm::RunLayerLoop(
-		    state, layers, c.num_hidden_layers,
-		    /*layer_budget=*/c.num_hidden_layers, c.hidden_size, c.head_dim,
-		    c.num_key_value_heads, c.intermediate_size, c.context_cap, model->view.rope_tables,
-		    kv_block, block_size, /*site_prefix=*/{}, /*token_index=*/0, nullptr);
-		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
-		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
-		// 0" -- RunLayerLoop, given the full layer_budget above, leaves layer_index at
-		// num_hidden_layers on success; reset to the resting convention before the next token.
-		state.layer_index = 0;
-		if (schema_entry) {
-			*walk_state = next_walk_state;
-			if (forced_token_count) ++(*forced_token_count);
-		}
-		++(*consumed);
-		if (out_last_token) *out_last_token = token;
 	}
-	return SSLM_OK;
+	const int64_t cap_headroom = static_cast<int64_t>(c.context_cap) - state.context_length;
+	const int32_t admit_cap = cap_headroom <= 0
+	                               ? 0
+	                               : (cap_headroom >= n ? n : static_cast<int32_t>(cap_headroom));
+	const int32_t admit_idcap = admit_id < admit_cap ? admit_id : admit_cap;
+
+	// G5-4 (design Sec6/Sec14.3, D-SLM3478): the reachability walk is a cheap, sequential,
+	// O(1)-per-token CSR-table lookup (design §15.3) -- run here, over exactly the
+	// already-id/cap-admitted prefix, BEFORE the GEMM-heavy batched forward pass below ever
+	// issues. `dim5_failure_red.cpp`'s own TestDim5_M5 cell (partial-consumption against the
+	// actual post-rejection state of a multi-token span) is unaffected: every token strictly
+	// before the rejected one is still fully, permanently admitted by this same call.
+	int32_t admit_schema = admit_idcap;
+	uint32_t schema_walk_state_after = walk_state ? *walk_state : 0;
+	if (schema_entry) {
+		uint32_t w = *walk_state;
+		for (int32_t i = 0; i < admit_idcap; ++i) {
+			uint32_t next_w = 0;
+			if (!model->schemas.Transition(*schema_entry, w, static_cast<uint32_t>(tokens[i]),
+			                                &next_w)) {
+				admit_schema = i;
+				break;
+			}
+			w = next_w;
+		}
+		schema_walk_state_after = w;
+	}
+	const int32_t admit_count = admit_schema;  // <= admit_idcap <= admit_id, admit_cap
+
+	sslm_status stop_status = SSLM_OK;
+	if (admit_count < n) {
+		if (admit_schema < admit_idcap) {
+			stop_status = SSLM_SCHEMA_SPAN_UNREACHABLE;
+		} else if (admit_id <= admit_cap) {
+			stop_status = SSLM_TOKEN_ID_OUT_OF_RANGE;
+		} else {
+			stop_status = SSLM_CONTEXT_CAP_EXCEEDED;
+		}
+	}
+
+	// --- T-2147 (design §15.1): the chunk-batched forward pass, over exactly `admit_count` ---
+	// admitted tokens -- zero forward-pass compute for anything past the admitted prefix,
+	// matching §15.3's own extension of the partial-consumption contract to compute cost.
+	if (admit_count > 0) {
+		std::vector<superslm::CarriedScale> hidden_scales(static_cast<size_t>(admit_count));
+		for (int32_t i = 0; i < admit_count; ++i) {
+			superslm::CarriedScale embed_scale{};
+			const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+			    tokens[i], static_cast<int32_t>(c.vocab_size), model->engine.embed_weights,
+			    c.hidden_size, model->engine.embed_site_constant,
+			    embed_codes + static_cast<size_t>(i) * c.hidden_size, &embed_scale);
+			if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
+			hidden_scales[static_cast<size_t>(i)] = embed_scale;
+		}
+
+		const superslm::SslmForwardStatus st = superslm::RunLayerLoopChunkBatched(
+		    embed_codes, hidden_scales.data(), static_cast<size_t>(admit_count), layers,
+		    c.num_hidden_layers, c.hidden_size, c.head_dim, c.num_key_value_heads,
+		    c.intermediate_size, c.context_cap, state.context_length, model->view.rope_tables,
+		    kv_block, block_size, /*option_g_fused_k_landing=*/false, &state.kv_saturation_count,
+		    /*site_prefix=*/{}, nullptr);
+		if (st != superslm::SslmForwardStatus::Ok) return MapForwardStatus(st);
+
+		// forward_sites.h: "a sequence resting between whole tokens carries a marker at layer
+		// 0" -- the batched call above leaves every admitted token's own layer stack fully run;
+		// `state` rests at the LAST admitted token's own final hidden state, exactly what the
+		// pre-existing per-token loop left there after its own last iteration (the per-token
+		// intermediate hidden states for tokens before the last are never independently
+		// observed -- each token started fresh from its own EmbedEntry, never from the previous
+		// token's hidden_codes; only the K/V store carries state between tokens).
+		for (uint32_t k = 0; k < c.hidden_size; ++k) {
+			state.hidden_codes[k] =
+			    embed_codes[static_cast<size_t>(admit_count - 1) * c.hidden_size + k];
+		}
+		state.hidden_scale = hidden_scales[static_cast<size_t>(admit_count - 1)];
+		state.layer_index = 0;
+		state.context_length += admit_count;
+
+		if (schema_entry) {
+			*walk_state = schema_walk_state_after;
+			if (forced_token_count) *forced_token_count += admit_count;
+		}
+		*consumed += admit_count;
+		if (out_last_token) *out_last_token = tokens[admit_count - 1];
+	}
+
+	return stop_status;
 }
 
 sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
