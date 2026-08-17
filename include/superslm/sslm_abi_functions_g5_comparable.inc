@@ -20,6 +20,23 @@
  * comparison surface until/unless either invented type gains a second, independent definition
  * to compare against -- the same residual Gate C's own construction states for these two types.
  */
+/* Exception-boundary contract (D-SLM3464, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md
+ * Sec6, fold 2026-08-17 second pass -- matching this file's own N4 per-declaration convention,
+ * Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): this verb's real call path is fronted
+ * by SslmModel::Load's public entry (model.h/model.cpp), which is itself wrapped in
+ * internal::WrapBadAllocContract (src/bad_alloc_wrap.h) -- pre-existing, independently-governed
+ * S-HARDEN-7 machinery this ABI does not own. WrapBadAllocContract narrows every internal
+ * std::exception-derived failure OTHER than std::bad_alloc itself (std::length_error,
+ * std::runtime_error, std::logic_error, and every other standard or user-defined std::exception
+ * subtype) to std::bad_alloc before this ABI's own extern "C" boundary can classify it. This
+ * verb's own delivered contract is therefore: any std::exception-derived internal cause surfaces
+ * as SSLM_ALLOCATION_FAILED -- not narrowed to true allocation/size exhaustion the way the
+ * general catch(bad_alloc)/catch(length_error)/catch(...) split (src/sslm_abi.cpp,
+ * CatchAllocationFailure) is elsewhere in this file. SSLM_ARTIFACT_REJECTED still fires from this
+ * verb's own catch(...) arm, but only for a throw NOT derived from std::exception at all (a
+ * foreign type, or a non-class throw), which WrapBadAllocContract does not narrow and lets
+ * through unmolested. Proven by real fault injection through this exact call path
+ * (tools/t2139_f2_length_error_pin.cpp's own kRuntimeError cell). */
 sslm_status sslm_model_map(const void* data, size_t size, sslm_model* out);
 sslm_status sslm_model_unmap(sslm_model model);
 
@@ -56,6 +73,11 @@ sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* b
                               sslm_seq* out);
 sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter);
 
+/* Exception-boundary contract (D-SLM3464) -- identical to sslm_model_map's own comment above:
+ * this verb is also fronted by SslmModel::Load's public entry, so the same WrapBadAllocContract
+ * narrowing applies -- any std::exception-derived internal cause surfaces as
+ * SSLM_ALLOCATION_FAILED, and this verb's own catch(...) arm returns SSLM_ARTIFACT_REJECTED only
+ * for a throw not derived from std::exception at all. */
 sslm_status sslm_adapter_map(const void* data, size_t size, sslm_model base, sslm_adapter* out);
 sslm_status sslm_adapter_release(sslm_adapter adapter);
 size_t      sslm_adapter_residency(sslm_adapter adapter);

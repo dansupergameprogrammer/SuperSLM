@@ -617,6 +617,30 @@ if defined T2139_MODEL (
 	echo t2139_n3_bad_alloc_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run^)
 )
 
+rem D-SLM3464 pin (Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6, fold
+rem 2026-08-17 second pass): sslm_model_map/sslm_adapter_map return SSLM_ARTIFACT_REJECTED, not
+rem SSLM_ALLOCATION_FAILED and not UB, when a throw NOT derived from std::exception (ForeignFault)
+rem crosses the real SslmModel::Load-fronted call path -- the one class WrapBadAllocContract's own
+rem narrowing does not intercept. Same seam/build convention as the N3 pin above. Usage:
+rem out\t2139_d3464_foreignfault_pin.exe ^<model.sslm^> [adapter.sslm].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2139_d3464_foreignfault_pin.cpp /Fo:out\t2139\ /Fe:out\t2139_d3464_foreignfault_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+rem Sequential-guard form (see the C6-smoke fix above) -- the adapter arg is OPTIONAL for this
+rem pin (sslm_model_map's own cell runs with T2139_MODEL alone), so this is a plain single-var
+rem gate, not a chained one; wired the same way regardless, for consistency.
+if defined T2139_MODEL (
+	out\t2139_d3464_foreignfault_pin.exe %T2139_MODEL% %T2139_ADAPTER%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2139_d3464_foreignfault_pin: built, NOT run ^(set T2139_MODEL=path\to\real.sslm to run; optionally also T2139_ADAPTER=path\to\real-adapter.sslm^)
+)
+
 rem S-FREEZE-EXAMPLE (design Sec9's own gate, D-SLM13): builds with NO internal include path --
 rem /Iinclude ONLY, the frozen public header, no /Itests, no /Isrc-internal, no Unreal, no
 rem test-harness affordance. Uses every verb C1-C7 ship, real text I/O (D-SLM3452), explicit

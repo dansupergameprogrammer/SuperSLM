@@ -366,6 +366,19 @@ bool RoundUpToAlignment(size_t offset, size_t alignment, size_t* out) {
 //     establishes for every SslmForwardStatus cause this ABI's own closed taxonomy does not
 //     separately enumerate, extended here to the identical `catch (...)`-boundary shape rather
 //     than inventing a second mechanism for the same decision.
+//
+// SCOPE (FOLD RULING, second pass, D-SLM3464): the two rules above hold for THIS helper --
+// `CatchAllocationFailure` itself, and every call site that goes through it (`BuildEngineCache`'s
+// own wrap inside `sslm_model_map`, and every sizing/construction verb's own wrap). They do NOT
+// describe `sslm_model_map`'s or `sslm_adapter_map`'s own bare `try { SslmModel::Load(...); }
+// catch (...) { ... }` blocks (this file, their own definitions) -- those two are fronted by
+// `SslmModel::Load`'s public entry, `internal::WrapBadAllocContract` (src/bad_alloc_wrap.h),
+// which narrows every non-bad_alloc `std::exception` to `std::bad_alloc` before either of THOSE
+// try/catch blocks ever runs. Their own delivered contract is narrower and documented at their
+// own definitions, not here: any `std::exception`-derived internal cause -> `SSLM_ALLOCATION_FAILED`,
+// `catch (...)` -> `SSLM_ARTIFACT_REJECTED` live only for non-`std::exception`-derived throws.
+// `WrapBadAllocContract` is independently-governed S-HARDEN-7 machinery this ABI does not own and
+// is ruled out of scope for a rewrite (D-SLM3464) -- see the two call sites' own comments.
 template <typename Fn>
 sslm_status CatchAllocationFailure(Fn&& fn) {
 	try {
@@ -869,14 +882,41 @@ extern "C" sslm_status sslm_model_map(const void* data, size_t size, sslm_model*
 		// exception types this family is defined to cover.
 		return SSLM_ALLOCATION_FAILED;
 	} catch (const std::length_error&) {
+		// FOLD RULING, second pass, on D-SLM3464 (design Sec6, design commit dated 2026-08-17):
+		// this clause is written for symmetry with CatchAllocationFailure's own three-way split,
+		// but on THIS call path it is dead in practice -- `SslmModel::Load`'s own public entry is
+		// `internal::WrapBadAllocContract` (src/bad_alloc_wrap.h), whose own
+		// `catch (const std::exception&) { throw std::bad_alloc{}; }` narrows every non-bad_alloc
+		// `std::exception` -- `std::length_error` included -- to `std::bad_alloc` BEFORE it ever
+		// reaches this try/catch. A real `std::length_error` from inside `Load` is therefore
+		// caught by the `bad_alloc` clause above, not this one; this clause exists only in case a
+		// future caller of THIS try/catch (were one ever added) throws `length_error` directly,
+		// bypassing `Load`. Kept for the same reason `MapForwardStatus`-style completeness is kept
+		// elsewhere: the shape stays exhaustive over `sslm_status`'s own resource-exhaustion
+		// family even where one arm is currently unreachable through the one real caller.
 		return SSLM_ALLOCATION_FAILED;
 	} catch (...) {
-		// The true, unconditional boundary -- every exception type NOT caught above, including
-		// non-`std::exception`-derived ones and non-class throws, which the previous
-		// `catch (const std::exception&)` here let cross this extern "C" boundary as real,
-		// observed undefined behavior (F2's compiled probe). No new ordinal minted;
-		// SSLM_ARTIFACT_REJECTED is the existing "internal rejection, no dedicated status"
-		// family (MapForwardStatus, below, this file, is the existing precedent).
+		// The true, unconditional boundary -- every exception type NOT caught above.
+		//
+		// FOLD RULING, second pass, on D-SLM3464: on THIS specific call path (fronted by
+		// `SslmModel::Load`'s own `WrapBadAllocContract`), this arm is NARROWER than
+		// `CatchAllocationFailure`'s own general `catch (...)` -> `SSLM_ARTIFACT_REJECTED` rule.
+		// `WrapBadAllocContract` narrows every `std::exception`-derived throw (bad_alloc,
+		// length_error, runtime_error, logic_error, every other standard or user-defined
+		// std::exception subtype) to `std::bad_alloc`, so none of them ever reach this line --
+		// they are all caught by the `bad_alloc` clause above instead, and this verb's own
+		// DELIVERED contract for any std::exception-derived internal cause is
+		// `SSLM_ALLOCATION_FAILED`, not `SSLM_ARTIFACT_REJECTED` (proven by real fault injection,
+		// `tools/t2139_f2_length_error_pin.cpp`'s own `kRuntimeError` cell). This arm stays live
+		// and correct for exactly the one class `WrapBadAllocContract` does not narrow: a throw
+		// NOT derived from `std::exception` at all (a foreign type, or a non-class throw like
+		// `throw int`), which matches neither of `WrapBadAllocContract`'s own two catch clauses
+		// and propagates through it unmolested, reaching this boundary exactly as it does on
+		// every other verb. No new ordinal minted; `SSLM_ARTIFACT_REJECTED` is the existing
+		// "internal rejection, no dedicated status" family (`MapForwardStatus`, below, this file,
+		// is the existing precedent). Do not "fix" this by rewriting `WrapBadAllocContract` --
+		// D-SLM3464 rules against that (src/bad_alloc_wrap.h is independently-governed S-HARDEN-7
+		// machinery, a 20-site house-wide contract this ABI does not own).
 		return SSLM_ARTIFACT_REJECTED;
 	}
 	if (st != superslm::SslmModelStatus::Ok) {
@@ -1833,8 +1873,16 @@ extern "C" sslm_status sslm_adapter_map(const void* data, size_t size, sslm_mode
 		// CatchAllocationFailure's own comment for the full reasoning.
 		return SSLM_ALLOCATION_FAILED;
 	} catch (const std::length_error&) {
+		// FOLD RULING, second pass, D-SLM3464 -- see sslm_model_map's own identical comment: dead
+		// in practice on this call path, same `WrapBadAllocContract` narrowing reason (this verb
+		// is also fronted by `SslmModel::Load`'s own public entry).
 		return SSLM_ALLOCATION_FAILED;
 	} catch (...) {
+		// FOLD RULING, second pass, D-SLM3464 -- see sslm_model_map's own identical comment: this
+		// verb's own delivered contract for any std::exception-derived internal cause is
+		// SSLM_ALLOCATION_FAILED (WrapBadAllocContract's narrowing, proven by real fault injection
+		// against this exact call path), narrower than CatchAllocationFailure's general rule; this
+		// arm stays live only for throws not derived from std::exception at all.
 		return SSLM_ARTIFACT_REJECTED;
 	}
 	if (load_st != superslm::SslmModelStatus::Ok) return SSLM_ARTIFACT_REJECTED;

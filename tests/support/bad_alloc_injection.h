@@ -29,6 +29,18 @@
 
 namespace superslm_test {
 
+// T-2133 fold, second pass (D-SLM3464, Claude/Vitruvius/
+// t2133-layer1-c-abi-design-2026-08-16.md Sec6): a std::exception-derived type (this seam's
+// three existing kinds below) is exactly the class WrapBadAllocContract (src/bad_alloc_wrap.h)
+// narrows to std::bad_alloc BEFORE the T-2139 ABI's own extern "C" boundary can classify it --
+// none of the existing kinds can exercise that boundary's own catch(...) arm through a real
+// Load-fronted call path (sslm_model_map/sslm_adapter_map). A throw NOT derived from
+// std::exception at all matches neither of WrapBadAllocContract's own two catch clauses
+// (catch (const std::bad_alloc&), catch (const std::exception&)) and propagates through it
+// unmolested -- ForeignFault below is exactly that: a minimal, deliberately NOT
+// std::exception-derived type, for the one class this seam previously had no way to inject.
+struct ForeignFault {};
+
 // Which non-bad_alloc exception type (or bad_alloc itself, for the
 // passthrough-branch cell) the seam should throw the next time a wrapped
 // site's *Impl body consults it. Single-shot: MaybeThrowInjectedFault()
@@ -39,6 +51,10 @@ enum class InjectThrowKind {
 	kRuntimeError,  // an arbitrary std::exception-derived type, for the "anything
 	                // else narrows to the promise" branch (design §3.1's wrap code)
 	kBadAlloc,      // std::bad_alloc itself -- the permitted-exception passthrough cell
+	kForeignFault,  // ForeignFault, above -- NOT std::exception-derived, T-2133 D-SLM3464:
+	                // the one class WrapBadAllocContract's own two catch clauses do not narrow,
+	                // for proving the T-2139 ABI boundary's own catch(...) arm through a real
+	                // Load-fronted call path (sslm_model_map/sslm_adapter_map).
 };
 
 inline thread_local InjectThrowKind g_inject_throw = InjectThrowKind::kNone;
@@ -73,6 +89,8 @@ inline void MaybeThrowInjectedFault() {
 			throw std::runtime_error("superslm_test: injected fault (runtime_error)");
 		case InjectThrowKind::kBadAlloc:
 			throw std::bad_alloc();
+		case InjectThrowKind::kForeignFault:
+			throw ForeignFault{};
 	}
 }
 
