@@ -206,4 +206,105 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
                               int32_t* out_ready,
                               SslmGpuStatus* out_status);
 
+/* ============================================================================
+ * G5: schema-constrained GPU decoding -- PROMOTED to this shipped surface (design Sec14.2,
+ * D-SLM3477, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S8). Built and proven
+ * (G5-5, T-2132) on include/superslm/gpu_1p0_g5_bridge.h, which stated it was NOT part of this
+ * shipped surface -- a genuine product capability (a real host wanting schema-constrained
+ * decoding on the GPU, the plan's own G-1 lineage) with proven bit-identical CPU/GPU parity (80
+ * decode steps, matching SHA-256, Claude/Brunel/t2132-g5-build-2026-08-16.md session 4) had no
+ * shipped entry point to reach it. Applying this design's own rung-7 precedent (Sec11.2: a
+ * genuine capability promotes to production; only a state no legitimate host call could ever
+ * reach stays test-only) points the opposite direction from the bridge's prior placement --
+ * D-SLM3443 (GPU parity REQUIRED, no dated deferral) independently forecloses staying test-only.
+ * Declarations below are UNCHANGED from gpu_1p0_g5_bridge.h's own signatures (a relocation, not a
+ * redesign) -- that header now includes this one for its remaining, non-verb content (the
+ * kSslmGpuDfaWalkStateUnused sentinel) and stays valid for every existing includer. Definitions
+ * are unchanged, src/gpu/gpu_1p0.cpp. Promotion mechanics beyond the declaration move (CMake
+ * install/export list inclusion, a dedicated declaration-parity gate against this surface's own
+ * suite mirror) are owed to the builder, not performed here -- this ruling authorizes exactly the
+ * declaration relocation and its suite-side mirror, per D-SLM3477's own "mechanics owed to the
+ * builder" text. --- */
+
+/* True iff `model`'s own mapped artifact carried a SchemaMasks (SCM1) section -- an artifact
+ * with none is a valid, unconstrained-only artifact (design Sec13.1), exactly the CPU ABI's own
+ * disposition; every schema-bound call below is meaningless against such a model. */
+bool SslmGpuModelHasSchemasForG5Bridge(SslmGpuModelHandle* model);
+
+/* Resolves a compiled schema by name against `model`'s own host-side parsed SchemaMasksTable
+ * (built once, at sslm_gpu_model_map time, from the SAME section bytes the CPU ABI parses) --
+ * the GPU-1.0 twin of `sslm_schema_lookup`. Returns the schema's own index (>= 0) on a match,
+ * -1 on no match. */
+int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* name);
+
+/* Binds `schema_index` (as returned by the lookup above; -1 unbinds, mirroring
+ * SSLM_SCHEMA_NONE) to `seq`, valid ONLY when `seq`'s own DFA-walk-state is at a fresh/reset
+ * start (mirrors `sslm_seq_set_schema`'s own "valid only when the sequence's DFA-walk state is
+ * at its start" precondition, design Sec5) -- returns SSLM_SEQUENCE_REJECTED on a non-fresh walk
+ * state. A caller-malformed handle (`seq`/`model` null, `ctx` mismatch) returns
+ * SSLM_SEQUENCE_KV_BUFFER_MISMATCH, the existing "malformed handle" bucket every 1.0 entry point
+ * already uses. */
+SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                              int32_t schema_index);
+
+/* Reads `seq`'s own current DFA-walk-state -- kSslmGpuDfaWalkStateUnused if no schema is bound. */
+uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
+
+/* The GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- the REQUIRED way to prime a
+ * fresh or reset sequence with a host prompt before decoding. Embeds and drives EVERY token in
+ * `tokens` (including the last) to full depth, no walk-state touch, no masking. On success
+ * (count > 0), sets an internal "ready for logits" flag mirroring `sslm_seq_s::ready_for_logits`
+ * (src/sslm_abi.cpp) EXACTLY -- a caller's own next `SslmGpuSeqDecodeStepForG5Bridge` call
+ * consumes this flag automatically. */
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                  const int32_t* tokens, int32_t count,
+                                                  uint32_t dispatch_budget);
+
+/* Finishes a token once `seq`'s own layer loop has reached full depth (caller-ensures: drained
+ * via `sslm_gpu_ready` to Idle, `seq`'s own layer_index == model->num_hidden_layers) -- runs
+ * final_norm + logits (the SAME `RmsNormSite`/`LogitsSite` calls sslm_decode_step's own
+ * finishing block uses) then, if a schema is bound, `superslm::ApplyMaskAndArgmax` indexed by
+ * `seq`'s own walk-state -- advances the walk-state via `SchemaMasksTable::Transition`, exactly
+ * `sslm_decode_step`'s own masked-argmax step. No schema bound: plain
+ * `ArgmaxLowestIndexTieBreak`, byte-for-byte the pre-G5 path. On success, `*out_token` is the
+ * produced token id and `seq`'s own layer_index resets to 0. Returns SSLM_SEQUENCE_REJECTED if
+ * the precondition (full depth reached) does not hold. */
+SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                int32_t* out_token);
+
+/* THE RECOMMENDED one-call-per-decode-step entry point -- the GPU-1.0 twin of
+ * `sslm_decode_step`'s own composition (embed-if-needed, layer-loop-to-depth, finish), including
+ * its `ready_for_logits` shortcut verbatim (src/sslm_abi.cpp): if a prior
+ * `SslmGpuSeqPrefillPromptForG5Bridge`/`SslmGpuSeqPrefillSchemaContentForG5Bridge` call left that
+ * flag set, `token_to_embed_if_needed` is IGNORED and this call finishes the already-computed
+ * residual directly (no embed, no layer loop); otherwise it embeds `token_to_embed_if_needed`,
+ * drives it to full depth, and finishes. A caller that always calls this once per decode step --
+ * rather than hand-composing embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/
+ * `SslmGpuSeqFinishTokenForG5Bridge` itself -- cannot reproduce the duplicate-KV-commit class of
+ * bug session 3/4 of the T-2132 build found and fixed, by construction. */
+SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                               int32_t token_to_embed_if_needed,
+                                               uint32_t dispatch_budget, int32_t* out_token);
+
+/* Jump-forward's own GPU twin. Drives `count` FORCED tokens (already known -- never chosen, no
+ * masking/argmax involved, exactly `PrefillWholeTokensImpl`'s own SSLM_SPAN_SCHEMA_CONTENT
+ * branch, src/sslm_abi.cpp) through the full embed -> layer-loop-to-depth -> commit sequence, ONE
+ * token at a time (each token issued as up to `dispatch_budget_per_token`-sized
+ * `sslm_decode_step_gpu` calls, internally). Reachability is checked BEFORE each token's own
+ * forward pass (`SchemaMasksTable::Transition` against `seq`'s own current walk-state) -- a
+ * token that leaves the DFA's language is rejected (SSLM_SEQUENCE_REJECTED). Only the REJECTED
+ * token's own effects are withheld: its own walk-state transition never applies, its own forward
+ * pass never runs, and `*consumed` is never incremented for it. Tokens admitted BEFORE it in the
+ * same call already had their walk-state advance, K/V write, and layer loop run for real, and
+ * `*consumed` already counts them -- the documented partial-consumption contract (matching
+ * `sslm_prefill`'s own shape), not full-call atomicity (design Sec14.3, D-SLM3478 -- RULED design
+ * text). Requires a schema already bound (SSLM_SEQUENCE_REJECTED otherwise). Sets the SAME
+ * "ready for logits" flag `SslmGpuSeqPrefillPromptForG5Bridge` sets whenever `*consumed > 0` --
+ * including on the rejection path, when earlier tokens in the same call were already admitted. */
+SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
+                                                          SslmGpuSequenceHandle* seq,
+                                                          const int32_t* tokens, int32_t count,
+                                                          uint32_t dispatch_budget_per_token,
+                                                          int32_t* consumed);
+
 #endif /* SSLM_GPU_1P0_H */

@@ -180,4 +180,49 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx,
                               int32_t* out_ready,
                               SslmGpuStatus* out_status);
 
+/* ============================================================================
+ * G5: schema-constrained GPU decoding -- PROMOTED to this shipped surface (T-2119 design
+ * Sec14.2, D-SLM3477, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S8). Mirrored here, in the
+ * SAME commit as the production header's own promotion (include/superslm/gpu_1p0.h), per this
+ * suite's own declaration-identical convention (this file's own top-of-file PROMOTION note) --
+ * these eight declarations were on include/superslm/gpu_1p0_g5_bridge.h, a non-shipping header
+ * this suite never mirrored (it was correctly outside the "declaration-identical to gpu_1p0.h"
+ * contract while it stayed off the shipped surface); now that they are part of gpu_1p0.h, they
+ * are part of what this file mirrors too. Declarations transcribed verbatim from
+ * gpu_1p0_g5_bridge.h -- unchanged by the promotion, a relocation not a redesign.
+ * ============================================================================ */
+
+/* Sentinel matching the CPU ABI's own `kDfaWalkStateUnused` (src/sslm_abi.cpp) -- "no schema
+ * ever bound" on a freshly-created sequence handle. NOT part of gpu_1p0.h's own promoted verb
+ * set (it stayed on gpu_1p0_g5_bridge.h, D-SLM3477's own scope is the eight functions only);
+ * mirrored here anyway so a suite TU that needs it has one declared source, matching this
+ * header's own "one canonical copy" discipline. */
+constexpr uint32_t kSslmGpuDfaWalkStateUnused = 0xFFFFFFFFu;
+
+bool SslmGpuModelHasSchemasForG5Bridge(SslmGpuModelHandle* model);
+
+int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* name);
+
+SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                              int32_t schema_index);
+
+uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
+
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                  const int32_t* tokens, int32_t count,
+                                                  uint32_t dispatch_budget);
+
+SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                int32_t* out_token);
+
+SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                               int32_t token_to_embed_if_needed,
+                                               uint32_t dispatch_budget, int32_t* out_token);
+
+SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
+                                                          SslmGpuSequenceHandle* seq,
+                                                          const int32_t* tokens, int32_t count,
+                                                          uint32_t dispatch_budget_per_token,
+                                                          int32_t* consumed);
+
 #endif /* SSLM_GPU_1P0_H */
