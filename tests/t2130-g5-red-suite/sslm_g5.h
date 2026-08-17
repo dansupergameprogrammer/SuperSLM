@@ -60,31 +60,28 @@ typedef struct sslm_schema_s*   sslm_schema;      /* NEW, design Sec5 */
 typedef struct sslm_kv_pool_s*  sslm_kv_pool;
 typedef struct sslm_workspace_s* sslm_workspace;
 
-/* --- status enum, RECONCILED (Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6's
- * ruling, Wizard repo, "sslm_status ordinal reconciliation"): design T-2133's Sec6 taxonomy is
- * the single authority. This enum previously interleaved the plan's own Sec9/Sec12 pre-G5 names
- * (ordinals 1-5) with G5's own Sec5/Sec7 dim5 additions (ordinals 6-12) in authorship order, with
- * no organizing principle; the ruling found three names this enum and T-2133 Sec6 both declared
- * at DIFFERENT ordinals (SSLM_ADAPTER_MODEL_MISMATCH 3->5, SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED
- * 4->11, SSLM_RESTORE_MODEL_MISMATCH 5->6) and one identical-rejection concept named under two
- * different identifiers (this enum's SSLM_MODEL_MAP_REJECTED == T-2133 Sec6's
- * SSLM_ARTIFACT_REJECTED, ordinal 4). T-2133 Sec6 governs on three independent grounds the ruling
- * states: authority and completeness (this header's own prior comment already called its pre-G5
- * subset "named, not enumerated exhaustively" -- never meant to be authoritative), structural
- * coherence (T-2133 Sec6 is organized by cause-family: argument/precondition, artifact/content,
- * lifecycle/precondition-on-state, numeric/domain -- this enum's prior authorship-order
- * interleaving had no such principle), and the append-only/stable-ordinal law not yet binding
- * either side (this header is RED BY LINK -- nothing has ever linked against either taxonomy, so
- * this is the one moment renumbering is free). The result is ONE 25-enumerator sslm_status:
- * T-2133 Sec6's own 18 base enumerators at ordinals 0-17 exactly as that design states (17 at
- * this fold's own first pass, plus SSLM_TOKEN_ID_UNMAPPED appended at 17 in a follow-up base
- * revision, design commit 212de7742c, Brunel T-2139, executed SuperSLM@f9a0065 -- see that
- * enumerator's own comment below), G5's own 7 schema-specific enumerators APPENDED at ordinals
- * 18-24, shifted from their prior 17-23 position to stay clear of the base's own growth,
- * preserving their existing relative order among themselves (G5's own internal ordering is
- * design T-2119's call, not T-2133's).
- * Gate C's sslm_status exclusion lifts once this lands (T-2133 Sec6/Sec9) -- the per-enumerator
- * check now runs unconditionally over the full, reconciled enum. */
+/* --- status enum, MIRRORED verbatim from Sec6's complete ordinal registry (design commit
+ * 4f4eb23896, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6 GOVERNANCE RULING:
+ * "Sec6 is the COMPLETE ordinal registry for sslm_status; sslm_g5.h mirrors it verbatim rather
+ * than owning a block", Poirot confirmation-pass casebook 2c18dab-t2139-abi-build-review.md
+ * Sec7.4/P2, folded). This supersedes the prior "base low 0-17, G5 appended above at 18-24"
+ * reconciliation (still visible in the per-enumerator comments below, which record each entry's
+ * own history) -- SSLM_ALLOCATION_FAILED's ratification at ordinal 25 (past the 0-24 range, the
+ * append-only law's own correct reasoning at the time) left the base family non-contiguous
+ * (0-17 and 25) with G5's block (18-24) sitting INSIDE that range rather than cleanly above it,
+ * and nothing governed who takes the next ordinal (26) from two independently-numbered blocks.
+ * Sec6 closes this by becoming the single ordinal-allocation authority for BOTH families: base
+ * enumerators and G5's schema enumerators alike are entries in one registry, assigned by Sec6
+ * alone, never self-numbered by either header independently. Semantic ownership is unchanged --
+ * G5 (design T-2119) still owns the MEANING of its own schema statuses; only ordinal allocation
+ * centralizes. All 26 registry entries are carried here, verbatim, including
+ * SSLM_ALLOCATION_FAILED at 25 (a prior gap in this header, closed this fold). Next-free ordinal
+ * per the registry: 26 -- requested from and assigned by Sec6, whichever side needs it next.
+ * Gate C's sslm_status exclusion lifted at the prior reconciliation and stays lifted -- the
+ * per-enumerator check runs unconditionally over the full, reconciled enum; Gate C's own retired
+ * "highest base enumerator strictly below first G5-only enumerator" ordering sentinel (false on
+ * its own terms once SSLM_ALLOCATION_FAILED landed at 25) is superseded by full mirroring, not
+ * this header's concern to re-implement. */
 typedef enum sslm_status {
     SSLM_OK = 0,                              /* the only non-error value */
 
@@ -189,9 +186,24 @@ typedef enum sslm_status {
                                                 * which the planner has since ruled on
                                                 * (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md,
                                                 * Wizard repo, ruling 1). */
-    SSLM_SCHEMA_UNSATISFIABLE = 24              /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
+    SSLM_SCHEMA_UNSATISFIABLE = 24,             /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
                                                 * CPU/converter-side, listed here for completeness;
                                                 * the C++ decode-time surface never emits it */
+
+    /* --- Resource-exhaustion rejection (T-2133 Sec6, RATIFIED Brunel T-2139 Sec19/N3; registry
+     * entry per Sec6's GOVERNANCE RULING, design commit 4f4eb23896) -- process-level allocation
+     * failure, distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory exhaustion, an
+     * entirely different cause). Seven verbs (sslm_workspace_create, sslm_kv_pool_create,
+     * sslm_model_map, sslm_prefix_begin, sslm_seq_create, sslm_seq_restore, sslm_adapter_map)
+     * carry a small number of remaining internal std::vector/SslmModel::Load allocations this
+     * ABI layer cannot eliminate; each catches std::bad_alloc at its own extern "C" boundary
+     * (undefined behavior to let it cross, under this codebase's own /EHc build flags) and
+     * returns this status instead. Ordinal 25 -- appended past the entire already-coordinated
+     * 0-24 range at ratification time (the append-only law's own correct reasoning then); this
+     * header previously did not carry it at all (0 occurrences, closed this fold). */
+    SSLM_ALLOCATION_FAILED = 25                 /* the next-free registry ordinal is 26 -- Sec6
+                                                * assigns it, whichever side (base or G5) needs it
+                                                * next; neither header self-numbers independently */
 } sslm_status;
 
 /* --- G5's own span-kind discriminator -- design Sec5, THE REPAIR (Sec10.2). The single
