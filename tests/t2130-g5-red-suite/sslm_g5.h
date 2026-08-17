@@ -83,10 +83,10 @@ typedef struct sslm_workspace_s* sslm_workspace;
  * its own terms once SSLM_ALLOCATION_FAILED landed at 25) was NOT left retired -- FOLD RULING
  * 2026-08-17 (design Sec6, on Poirot's third confirmation casebook 4466666-t2139-third-
  * confirmation-review.md F1) reinstated a structural version of it: both this header and
- * include/superslm/sslm_abi.h gain a final enumerator, SSLM_STATUS__NEXT_FREE, with no explicit
+ * include/superslm/sslm_abi.h gain a final enumerator, SSLM_STATUS_NEXT_FREE, with no explicit
  * value, so it auto-values one past whichever header's own last explicit member and moves itself
  * whenever either side appends -- see the enum body below, and Gate C's own generated per-name
- * checks plus the SSLM_STATUS__NEXT_FREE-pair static_assert this header's addition now makes
+ * checks plus the SSLM_STATUS_NEXT_FREE-pair static_assert this header's addition now makes
  * possible on the library side. */
 typedef enum sslm_status {
     SSLM_OK = 0,                              /* the only non-error value */
@@ -225,7 +225,7 @@ typedef enum sslm_status {
      * explicit value, so it auto-values to one past whichever entry above it is this header's own
      * last explicit member, and moves itself automatically on either header's own next append.
      * Paired with include/superslm/sslm_abi.h's identical last member via Gate C's own
-     * static_assert(SSLM_STATUS__NEXT_FREE == SSLM_STATUS__NEXT_FREE) sentinel check -- catches a
+     * static_assert(SSLM_STATUS_NEXT_FREE == SSLM_STATUS_NEXT_FREE) sentinel check -- catches a
      * shared ordinal claimed by two different names (F1's own Probe C), which the per-name checks
      * structurally cannot see. Never referenced as a valid status value by any call; it exists
      * only for this comparison. */

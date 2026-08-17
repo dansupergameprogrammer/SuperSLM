@@ -4,7 +4,7 @@
 // artifact/content(4) + lifecycle/precondition-on-state(7) + numeric/domain(3) = 18) -- the
 // registry has since grown to 26 entries total across both real headers (Sec6's GOVERNANCE
 // RULING, design commit 4f4eb23896): G5's own 7 schema statuses (18-24), SSLM_ALLOCATION_FAILED
-// (25), and the SSLM_STATUS__NEXT_FREE sentinel are covered by Gate C's own construction, not by
+// (25), and the SSLM_STATUS_NEXT_FREE sentinel are covered by Gate C's own construction, not by
 // this dimension's cells, which stay scoped to the base family this suite's own sslm_abi.h
 // declares functionally. Cells NOT already exercised elsewhere are authored here; the rest are
 // cross-cited so no enumerator is asserted twice under a different name:
