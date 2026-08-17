@@ -209,21 +209,13 @@ set_tests_properties(t2139_gate_a_must_reject_fails_to_compile PROPERTIES WILL_F
 add_test(NAME t2139_gate_c_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_reject --config $<CONFIG>)
 set_tests_properties(t2139_gate_c_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
-# Gate C must-accept: P2 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, third
-# confirmation pass) re-opened this -- N3's own SSLM_ALLOCATION_FAILED addition interleaved the
-# ordinal space again, so this target is CORRECTLY, currently expected to fail to compile, for a
-# specific, disclosed reason (see tools/t2139_gate_c_type_identity_check.cpp's own assertion
-# comment). A plain WILL_FAIL TRUE here would be N1's own exact bug in miniature -- a static flag
-# that goes stale the instant the underlying condition changes and nobody is watching. Routed
-# through a small CMake script instead (tools/ci/check_gate_c_known_block.cmake) that checks the
-# compiler's own output for the specific "ordinal collision" marker: passes only when that marker
-# is present, fails loudly if the compile starts succeeding (the enum-governance ruling landing)
-# OR fails for any OTHER reason -- so this test cannot go silently stale in either direction.
-add_test(NAME t2139_gate_c_must_accept_known_ordinal_interleaving
-	COMMAND ${CMAKE_COMMAND}
-	        -DBUILD_DIR=${CMAKE_BINARY_DIR}
-	        -DCONFIG=$<CONFIG>
-	        -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/check_gate_c_known_block.cmake)
+# Gate C must-accept: a plain must-pass compile check, matching its Gate A sibling. The known
+# ordinal-interleaving block this entry previously disclosed (P2, Claude/Poirot/
+# 2c18dab-t2139-abi-build-review.md Sec7.4) closed when sslm_g5.h took the T-2133 Sec6 registry
+# mirror (curie/t2130-g5-red-suite@52dc6cd): sslm_g5.h now mirrors sslm_status's full 26-entry
+# ordinal registry verbatim, so the type-identity construction compiles and this entry must pass.
+add_test(NAME t2139_gate_c_must_accept_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the
