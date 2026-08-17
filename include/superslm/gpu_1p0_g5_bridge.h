@@ -64,6 +64,24 @@ SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenc
 // Reads `seq`'s own current DFA-walk-state -- kSslmGpuDfaWalkStateUnused if no schema is bound.
 uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
 
+// G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): the
+// GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- the REQUIRED way to prime a fresh
+// or reset sequence with a host prompt before decoding. Embeds and drives EVERY token in `tokens`
+// (including the last) to full depth, no walk-state touch, no masking (design Sec5's own "never
+// advances the DFA walk, whatever schema is bound"). On success (count > 0), sets an internal
+// "ready for logits" flag mirroring `sslm_seq_s::ready_for_logits` (src/sslm_abi.cpp) EXACTLY --
+// this is the fix for a real, diagnosed bug (session 3): the first parity harness this bridge
+// shipped with re-embedded the prompt's own last token for its first decode call, committing a
+// duplicate KV row (GPU one context position ahead of CPU from decode step 0 onward) that
+// eventually flipped a produced token 19 real steps later. A caller's own next
+// `SslmGpuSeqDecodeStepForG5Bridge` call (below) consumes this flag automatically -- there is no
+// way to reach this bug through the bridge's own recommended entry points anymore; it is reachable
+// only by hand-composing the granular embed/`sslm_decode_step_gpu`/`sslm_gpu_ready` primitives
+// directly and skipping this call, exactly as the original harness did before this fix.
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                  const int32_t* tokens, int32_t count,
+                                                  uint32_t dispatch_budget);
+
 // Finishes a token once `seq`'s own layer loop has reached full depth (caller-ensures: drained
 // via `sslm_gpu_ready` to Idle, `seq`'s own layer_index == model->num_hidden_layers -- the exact
 // precondition every existing 1.0 call in this file caller-ensures at its own layer, gpu_1p0.h's
@@ -82,6 +100,20 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
 SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                 int32_t* out_token);
 
+// G5-5 session 3 fix (T-2132, Brunel): THE RECOMMENDED one-call-per-decode-step entry point --
+// the GPU-1.0 twin of `sslm_decode_step`'s own composition (embed-if-needed, layer-loop-to-depth,
+// finish), including its `ready_for_logits` shortcut verbatim (src/sslm_abi.cpp:1708-1715): if a
+// prior `SslmGpuSeqPrefillPromptForG5Bridge`/`SslmGpuSeqPrefillSchemaContentForG5Bridge` call left
+// that flag set, `token_to_embed_if_needed` is IGNORED and this call finishes the already-computed
+// residual directly (no embed, no layer loop -- the ONE call that costs no layer work, matching
+// the CPU ABI's own identical comment); otherwise it embeds `token_to_embed_if_needed`, drives it
+// to full depth, and finishes. A caller that always calls this once per decode step -- rather than
+// hand-composing embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/`SslmGpuSeqFinishTokenForG5Bridge`
+// itself -- cannot reproduce session 3's own duplicate-KV-commit bug, by construction.
+SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                               int32_t token_to_embed_if_needed,
+                                               uint32_t dispatch_budget, int32_t* out_token);
+
 // Jump-forward's own GPU twin (design Sec6 G5-5's own "Builds: jump-forward's batched-prefill
 // K/V population issued as GPU dispatches under the existing bounded-dispatch-budget primitive
 // (sslm_decode_step_gpu)"). Drives `count` FORCED tokens (already known -- never chosen, no
@@ -97,7 +129,12 @@ SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSeque
 // walk-state is unmoved by the rejected call" contract) and `*consumed` reporting how many
 // tokens were admitted before the rejection -- matching `sslm_prefill`'s own partial-consumption
 // contract. Requires a schema already bound (SSLM_SEQUENCE_REJECTED otherwise -- the GPU twin of
-// SSLM_SCHEMA_SPAN_UNBOUND, no dedicated enumerator on this bridge's own small surface).
+// SSLM_SCHEMA_SPAN_UNBOUND, no dedicated enumerator on this bridge's own small surface). On
+// success (count > 0), sets the SAME "ready for logits" flag
+// `SslmGpuSeqPrefillPromptForG5Bridge` sets (session 3 fix, mirrors `sslm_prefill`'s own
+// unconditional `ready_for_logits = true` regardless of span kind, src/sslm_abi.cpp:1607) -- a
+// caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call (the "one ordinary masked step
+// run immediately after the forced chain") does not re-embed the chain's own last token.
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,

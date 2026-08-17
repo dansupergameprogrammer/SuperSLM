@@ -1,9 +1,20 @@
 // t2132_g5_gpu_parity_gpu.cpp -- G5-5 (T-2132, Brunel): the GPU-side driver for the GPU parity
 // tool's two gates. See t2132_g5_gpu_parity_shared.h for why this logic is split into its own
 // TU (the sslm_status/SslmGpuStatus global-enum collision). Includes ONLY gpu_1p0.h/
-// gpu_1p0_g5_bridge.h/gpu_1p0_bench_bridge.h/model.h -- never sslm_abi.h.
+// gpu_1p0_g5_bridge.h/model.h -- never sslm_abi.h.
+//
+// G5-5 session 3 fix (Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): this file's own
+// PREVIOUS `PrefillPrompt` + Gate-1 loop hand-composed embed/`sslm_decode_step_gpu`/
+// `sslm_gpu_ready` directly and re-embedded the prompt's own last token for its first decode
+// call, with no GPU-side equivalent of the CPU ABI's `ready_for_logits` shortcut -- committing a
+// duplicate KV row that grew `context_length` +1 from decode step 0 onward and eventually
+// flipped a produced token 19 real steps later (session 2's original finding). The fix landed in
+// the bridge itself (`gpu_1p0_g5_bridge.h`'s new `SslmGpuSeqPrefillPromptForG5Bridge`/
+// `SslmGpuSeqDecodeStepForG5Bridge`), not here, per the coordinator's own steer -- the bridge is
+// this session's own new surface, and a future consumer reaching for its recommended entry
+// points cannot re-trip the bug by construction. This driver now calls those entry points
+// exclusively; it no longer hand-composes the embed/drive/finish sequence at all.
 #include "superslm/gpu_1p0.h"
-#include "superslm/gpu_1p0_bench_bridge.h"  // SslmGpuSeqHandleLayerIndexForBench (read-only)
 #include "superslm/gpu_1p0_g5_bridge.h"
 #include "superslm/model.h"
 #include "t2132_g5_gpu_parity_shared.h"
@@ -16,39 +27,6 @@ void Check(G5ParityPathResult& r, bool cond, const char* msg) {
 		++r.failures;
 		if (r.last_error.empty()) r.last_error = msg;
 	}
-}
-
-// Drains one GPU sequence's own in-flight token to full depth -- possibly across several
-// sslm_decode_step_gpu calls, exactly the caller-driven dispatch-budget loop every 1.0 caller
-// runs (design Sec7).
-bool DriveToFullDepth(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, uint32_t num_hidden_layers,
-                       uint32_t dispatch_budget) {
-	uint32_t guard = 0;
-	while (*SslmGpuSeqHandleLayerIndexForBench(seq) < num_hidden_layers) {
-		if (sslm_decode_step_gpu(ctx, seq, /*adapter_or_null=*/nullptr, dispatch_budget) != SSLM_OK) {
-			return false;
-		}
-		int32_t ready = 0;
-		SslmGpuStatus drained = SSLM_OK;
-		if (sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &drained) != SSLM_OK) return false;
-		if (drained != SSLM_OK) return false;
-		if (++guard > 10000) return false;  // runaway-loop guard, never expected in practice.
-	}
-	return true;
-}
-
-// Embeds and drives every prompt token to full depth WITHOUT masking/argmax -- SSLM_SPAN_PROMPT
-// semantics (design Sec5: "never advances the DFA walk, whatever schema is bound") is exactly
-// the base substrate, mirroring PrefillWholeTokensImpl's own SSLM_SPAN_PROMPT branch on the CPU
-// side (schema_entry stays null there too).
-bool PrefillPrompt(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
-                    const std::vector<int32_t>& prompt_tokens, uint32_t num_hidden_layers,
-                    uint32_t dispatch_budget) {
-	for (int32_t tok : prompt_tokens) {
-		if (sslm_gpu_seq_embed_token(ctx, seq, tok) != SSLM_OK) return false;
-		if (!DriveToFullDepth(ctx, seq, num_hidden_layers, dispatch_budget)) return false;
-	}
-	return true;
 }
 
 }  // namespace
@@ -90,7 +68,6 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
 	Check(r, schema_index >= 0, "SslmGpuSchemaLookupForG5Bridge failed");
 
 	const int64_t context_cap = static_cast<int64_t>(view.config.context_cap);
-	const uint32_t num_hidden_layers = view.config.num_hidden_layers;
 
 	// ---- Gate 1: prompt-prefill + num_decode_steps ordinary masked decode calls. ----
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -99,22 +76,21 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
 	if (seq && schema_index >= 0) {
 		Check(r, SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, schema_index) == SSLM_OK,
 		      "SslmGpuSeqSetSchemaForG5Bridge (Gate 1) failed");
-		Check(r, PrefillPrompt(ctx, seq, prompt_tokens, num_hidden_layers, kDispatchBudget),
-		      "GPU prompt prefill (Gate 1) failed");
+		Check(r,
+		      SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, prompt_tokens.data(),
+		                                          static_cast<int32_t>(prompt_tokens.size()),
+		                                          kDispatchBudget) == SSLM_OK,
+		      "SslmGpuSeqPrefillPromptForG5Bridge (Gate 1) failed");
 
+		// Step 0's own token_to_embed_if_needed is IGNORED (the prefill call above left
+		// ready_for_logits set) -- it is supplied anyway, harmlessly, only so every iteration of
+		// this loop has the same shape; every step from 1 onward genuinely uses it.
 		int32_t current_token = prompt_tokens.empty() ? 0 : prompt_tokens.back();
 		for (int32_t step = 0; step < num_decode_steps; ++step) {
-			if (sslm_gpu_seq_embed_token(ctx, seq, current_token) != SSLM_OK) {
-				Check(r, false, "sslm_gpu_seq_embed_token (Gate 1) failed");
-				break;
-			}
-			if (!DriveToFullDepth(ctx, seq, num_hidden_layers, kDispatchBudget)) {
-				Check(r, false, "GPU layer loop (Gate 1) failed");
-				break;
-			}
 			int32_t out_token = -1;
-			if (SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, &out_token) != SSLM_OK) {
-				Check(r, false, "SslmGpuSeqFinishTokenForG5Bridge (Gate 1) failed");
+			if (SslmGpuSeqDecodeStepForG5Bridge(ctx, seq, current_token, kDispatchBudget,
+			                                     &out_token) != SSLM_OK) {
+				Check(r, false, "SslmGpuSeqDecodeStepForG5Bridge (Gate 1) failed");
 				break;
 			}
 			r.decoded_tokens.push_back(out_token);
@@ -132,8 +108,11 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
 		if (seq2) {
 			Check(r, SslmGpuSeqSetSchemaForG5Bridge(ctx, seq2, schema_index) == SSLM_OK,
 			      "SslmGpuSeqSetSchemaForG5Bridge (Gate 2) failed");
-			Check(r, PrefillPrompt(ctx, seq2, prompt_tokens, num_hidden_layers, kDispatchBudget),
-			      "GPU prompt re-prefill (Gate 2) failed");
+			Check(r,
+			      SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq2, prompt_tokens.data(),
+			                                          static_cast<int32_t>(prompt_tokens.size()),
+			                                          kDispatchBudget) == SSLM_OK,
+			      "SslmGpuSeqPrefillPromptForG5Bridge (Gate 2, re-prefill) failed");
 
 			int32_t forced_consumed = 0;
 			const bool prefill_ok = SslmGpuSeqPrefillSchemaContentForG5Bridge(
@@ -143,23 +122,16 @@ G5ParityPathResult RunGpuGates(const uint8_t* bytes, size_t byte_count,
 			Check(r, prefill_ok, "SslmGpuSeqPrefillSchemaContentForG5Bridge failed or short-consumed");
 			r.forced_consumed = forced_consumed;
 
-			// NO re-embed here: SslmGpuSeqPrefillSchemaContentForG5Bridge's own last forced
-			// token already ran its full layer loop and left `seq2`'s hidden_codes holding that
-			// token's complete final residual with layer_index at full depth (mirrors CPU's
-			// `ready_for_logits` shortcut exactly -- sslm_decode_step also does NOT re-embed
-			// after a prefill, see sslm_abi.cpp's own `seq->ready_for_logits` comment). Finishing
-			// THIS state directly is "one ordinary masked step run immediately after the forced
-			// chain" -- re-embedding the last forced token again here would silently double the
-			// forward pass on the same token and diverge from the CPU oracle's own behavior.
-			if (!DriveToFullDepth(ctx, seq2, num_hidden_layers, kDispatchBudget)) {
-				Check(r, false, "GPU layer loop (Gate 2, post-chain) failed");
+			// token_to_embed_if_needed is IGNORED here too -- the forced-chain prefill above left
+			// ready_for_logits set (session 3 fix), so this finishes the chain's own last token's
+			// already-computed residual directly: "one ordinary masked step run immediately after
+			// the forced chain," with no re-embed.
+			int32_t next_token = -1;
+			if (SslmGpuSeqDecodeStepForG5Bridge(ctx, seq2, forced_chain.back(), kDispatchBudget,
+			                                     &next_token) == SSLM_OK) {
+				r.post_forced_token = next_token;
 			} else {
-				int32_t next_token = -1;
-				if (SslmGpuSeqFinishTokenForG5Bridge(ctx, seq2, &next_token) == SSLM_OK) {
-					r.post_forced_token = next_token;
-				} else {
-					Check(r, false, "SslmGpuSeqFinishTokenForG5Bridge (Gate 2, post-chain) failed");
-				}
+				Check(r, false, "SslmGpuSeqDecodeStepForG5Bridge (Gate 2, post-chain) failed");
 			}
 			sslm_gpu_seq_release(ctx, seq2);
 		}
