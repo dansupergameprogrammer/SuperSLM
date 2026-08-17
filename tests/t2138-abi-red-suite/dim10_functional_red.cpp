@@ -11,6 +11,13 @@
 //   P4 -- S-FREEZE-EXAMPLE's own dim-10 shape: the full real-artifact, real-text, real-generation,
 //         real-persistence round trip through the frozen public header alone (design Sec9's own
 //         S-FREEZE-EXAMPLE slot, D-SLM3452/D-SLM3454 rulings applied).
+//
+// FIXTURE SPLIT (T-2139 build log Sec17, diagnosed and executed here): P2/P4 need a real
+// TOKENIZER-BEARING artifact (--modeltok=PATH); P3 needs an artifact whose content hash matches
+// what the real adapter was compiled against (--model=PATH) -- no artifact on this project's own
+// test machine satisfies both at once (the adapter-matching base carries no tokenizer). A
+// machine holding an artifact that satisfies both may pass --model and --modeltok pointing at
+// the SAME file. This suite's own dim8 M4 already established the identical split.
 // RED BY LINK.
 #include "fixture_common.h"
 
@@ -25,14 +32,21 @@ using namespace superslm;
 // needed, same bytes, new entry point"). sslm_tokenize's own output equals
 // TokenizerView::Encode's direct call, token for token, on the SAME real prompt string. ---
 static void TestDim10_P2_TokenizeGoldenParityWithTokenizerViewDirect() {
-	if (g_model_path.empty()) {
-		SKIP_MSG("real base artifact not supplied (--model=PATH) -- product cell not run");
+	// Needs a tokenizer-BEARING artifact, distinct from g_model_path (P3's own adapter-matching
+	// base, which commonly has no tokenizer bound -- house convention, build.bat's own
+	// T2139_MODEL/T2139_MODEL_TOK split; this suite's own --model/--modeltok split, dim8 M4's
+	// same fix). T-2139 build log Sec17: this file's own 27 failures traced to sharing ONE
+	// g_model_path across three cells with incompatible artifact needs -- fixed here by giving
+	// P2/P4 their own flag rather than overloading --model.
+	if (g_model_tok_path.empty()) {
+		SKIP_MSG("real tokenizer-bearing artifact not supplied (--modeltok=PATH) -- product cell "
+		         "not run");
 		return;
 	}
 	SslmModelView view;
 	std::vector<uint8_t> bytes;
 	std::string err;
-	if (!LoadRealModelView(g_model_path, &view, &bytes, &err)) {
+	if (!LoadRealModelView(g_model_tok_path, &view, &bytes, &err)) {
 		SKIP_MSG("could not load real artifact: %s", err.c_str());
 		return;
 	}
@@ -169,13 +183,15 @@ static void TestDim10_P3_AdapterDeltaGoldenReproductionThroughAbi() {
 // receive") -- every verb C1-C7 ship, composed in the exact sequence the design's own gate
 // names, nothing pre-tokenized, nothing test-harness-only. ---
 static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
-	if (g_model_path.empty()) {
-		SKIP_MSG("real base artifact not supplied (--model=PATH) -- S-FREEZE-shaped product "
-		         "cell not run");
+	// Needs the tokenizer-bearing artifact too (step 2 below tokenizes a real prompt string) --
+	// same --model/--modeltok split as P2, above.
+	if (g_model_tok_path.empty()) {
+		SKIP_MSG("real tokenizer-bearing artifact not supplied (--modeltok=PATH) -- S-FREEZE-"
+		         "shaped product cell not run");
 		return;
 	}
 	std::vector<uint8_t> bytes;
-	CHECK(ReadFileBytes(g_model_path, &bytes));
+	CHECK(ReadFileBytes(g_model_tok_path, &bytes));
 
 	// 1. Map.
 	sslm_model model = nullptr;
@@ -200,7 +216,7 @@ static void TestDim10_P4_SFreezeExampleShapeFullRealWorkflow() {
 	SslmModelView view;
 	std::vector<uint8_t> parse_bytes;
 	std::string err;
-	CHECK(LoadRealModelView(g_model_path, &view, &parse_bytes, &err));
+	CHECK(LoadRealModelView(g_model_tok_path, &view, &parse_bytes, &err));
 	const size_t kv_block_bytes = sslm_kv_block_size(model);
 	CHECK_MSG(kv_block_bytes > 0, "sslm_kv_block_size must be positive");
 	const uint32_t block_count = 2;  // seq + restored, concurrently live.
