@@ -773,8 +773,14 @@ extern "C" size_t sslm_seq_state_size(sslm_model model) {
 	// kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) + adapter_binding_id(8) +
 	// context_length(8) + layer_index(4) + current_token(4, design commit 9e2995f4e7's own
 	// amendment -- see the C5 block's own top comment) + hidden_scale(16, CarriedScale as two
-	// int64) + kv_saturation_count(8) + kv_block_count(4) = 104 bytes.
-	constexpr size_t kFixedHeaderBytes = 104;
+	// int64) + kv_saturation_count(8) + forced_token_count(8, design Sec7.3, D-SLM3486, 'SSB2' --
+	// see the C5 block's own top comment) + kv_block_count(4) = 112 bytes. THIS CONSTANT IS
+	// INDEPENDENT of the save/restore block's own kSeqBlobFixedHeaderBytes (108, which excludes
+	// kv_block_count, added separately at each of that block's own call sites) -- both name the
+	// same design Sec7.3 field list and must be kept in step by hand; there is no single shared
+	// constant between this function and sslm_seq_save/sslm_seq_restore (S4/M4 sweep,
+	// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md and the coordinator's own M4 follow-up brief).
+	constexpr size_t kFixedHeaderBytes = 112;
 	SaturatingAccumulator acc;
 	acc.value = kFixedHeaderBytes;
 	acc.AddProduct(1, static_cast<size_t>(c.hidden_size));  // residual_bytes, int8 codes
@@ -1991,11 +1997,27 @@ extern "C" sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out
 // shipped consumer's stored bytes this amendment could misread. The standing law resumes with
 // no further exceptions the instant this corrected 'SSB1' ships -- every subsequent field-layout
 // change, including one this small, gets a new, distinct magic.
+//
+// 'SSB2' (M4, D-SLM3486, design Sec7.3 -- the G5 blockers round's own M4, ruled): the standing
+// law above IS exercised here, not re-excepted. `forced_token_count` (int64_t, `sslm_stats_out`'s
+// own field, above) joins the blob -- it did not survive save/restore before this fold, silently
+// resetting to 0 on every restore, which the M4 finding named and correctly declined to fix
+// in-place (the current_token ruling's own closing sentence forecloses a second 'SSB1' amendment).
+// Placed after `kv_saturation_count`, grouped with the other fixed-width per-sequence scalar
+// counters it belongs with by kind -- Sec7.3 states plainly there is no safe-insertion-point
+// constraint to respect for a genuinely new format. Restore-side validation is the blob's own
+// existing size-sufficiency check only (no domain constraint narrower than "any non-negative
+// int64_t", matching `current_token`'s own precedent) -- see sslm_seq_restore's own magic check,
+// below, for the "reject 'SSB1' outright, never default the field" half of this ruling.
 // -----------------------------------------------------------------------------------------
 
 namespace {
 
-constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '1'};
+// D-SLM3486 (design Sec7.3, M4): magic bumped 'SSB1' -> 'SSB2' for forced_token_count joining the
+// blob -- the standing magic-per-version law, not a second in-place amendment. A 'SSB1'-magic blob
+// (or any other non-'SSB2' magic) is rejected outright on the memcmp check in sslm_seq_restore,
+// below, never parsed as SSB2 and never left to default the new field to 0.
+constexpr uint8_t kSeqBlobMagic[4] = {'S', 'S', 'B', '2'};
 constexpr int32_t kSeqBlobNoCurrentToken = -1;
 
 void WriteLE32(uint8_t* p, uint32_t v) {
@@ -2017,13 +2039,14 @@ uint64_t ReadLE64(const uint8_t* p) {
 	return v;
 }
 
-// Fixed-size prefix, magic through kv_saturation_count -- design Sec7.3's own field order
-// (current_token AMENDED IN, design commit 9e2995f4e7 -- see this block's own top comment):
+// Fixed-size prefix, magic through forced_token_count -- design Sec7.3's own field order
+// ('SSB2', D-SLM3486 -- see this block's own top comment; current_token AMENDED IN under 'SSB1',
+// design commit 9e2995f4e7):
 // magic(4) + model_hash(32) + kv_precision(4) + schema_name_hash(8) + dfa_walk_state(4) +
 // adapter_binding_id(8) + context_length(8) + layer_index(4) + current_token(4) +
-// hidden_scale(16) + kv_saturation_count(8) = 100 bytes, followed by the variable-length
-// residual, kv_block_count(4), then kv_blocks.
-constexpr size_t kSeqBlobFixedHeaderBytes = 100;
+// hidden_scale(16) + kv_saturation_count(8) + forced_token_count(8) = 108 bytes, followed by the
+// variable-length residual, kv_block_count(4), then kv_blocks.
+constexpr size_t kSeqBlobFixedHeaderBytes = 108;
 
 }  // namespace
 
@@ -2087,6 +2110,11 @@ extern "C" sslm_status sslm_seq_save(sslm_seq seq, void* buf, size_t* n) {
 	off += 8;
 	WriteLE64(p + off, seq->state.kv_saturation_count);
 	off += 8;
+	// forced_token_count (design Sec7.3, D-SLM3486, 'SSB2'): sslm_stats_out's own field,
+	// byte-identical semantics -- written verbatim, no domain narrowing (any non-negative int64_t
+	// is a legal value, matching current_token's own precedent).
+	WriteLE64(p + off, static_cast<uint64_t>(seq->forced_token_count));
+	off += 8;
 	if (residual_len > 0) {
 		std::memcpy(p + off, seq->hidden_codes_storage.data(), residual_len);
 	}
@@ -2117,6 +2145,13 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	// 2c18dab-t2139-abi-build-review.md): a bad magic is a malformed/foreign-format BLOB, not a
 	// model mismatch -- SSLM_INVALID_ARGUMENT states the actual cause (the blob itself is
 	// unusable) rather than sending the caller to re-check which MODEL it bound.
+	//
+	// D-SLM3486 (design Sec7.3, M4, 'SSB2'): this check is ALSO now the 'SSB1'-rejection --
+	// `kSeqBlobMagic` is 'SSB2', so a well-formed 'SSB1' blob (forced_token_count-less, 100-byte
+	// fixed header) fails this memcmp and is rejected right here, on the magic check alone, never
+	// parsed as SSB2 and never left to silently default forced_token_count to 0 while accepting
+	// the rest of an old-format blob. No 'SSB1'-to-'SSB2' upgrade path exists (design Sec7.3's own
+	// grounding: no genuinely-shipped 'SSB1' consumer exists to need one).
 	if (std::memcmp(p, kSeqBlobMagic, 4) != 0) return SSLM_INVALID_ARGUMENT;
 
 	std::array<uint8_t, 32> saved_hash{};
@@ -2179,6 +2214,11 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	const int64_t hidden_scale_m = static_cast<int64_t>(ReadLE64(p + 76));
 	const int64_t hidden_scale_e = static_cast<int64_t>(ReadLE64(p + 84));
 	const uint64_t kv_saturation_count = ReadLE64(p + 92);
+	// forced_token_count (design Sec7.3, D-SLM3486, 'SSB2'): read verbatim -- no domain
+	// constraint beyond the blob's own existing size-sufficiency check (below), matching
+	// current_token's own precedent (see this function's own magic-check comment, above, for the
+	// 'SSB1'-rejection half of this ruling).
+	const int64_t saved_forced_token_count = static_cast<int64_t>(ReadLE64(p + 100));
 
 	const superslm::SslmModelConfig& c = model->view.config;
 	const bool mid_token = layer_index != 0;
@@ -2253,6 +2293,10 @@ extern "C" sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, co
 	h->state.layer_index = layer_index;
 	h->state.kv_saturation_count = kv_saturation_count;
 	h->state.context_length = context_length;
+	// forced_token_count (design Sec7.3, D-SLM3486, 'SSB2'): restored verbatim, bit-equal --
+	// closes M4 (Claude/Brunel/t2132-g5-build-2026-08-16.md), which found this counter silently
+	// reset to 0 on every restore. Proven by tools/t2132_m4_forced_token_count_pin.cpp.
+	h->forced_token_count = saved_forced_token_count;
 	// G5 (design Sec5/Sec13.4, T-2132): the binding/walk-state resolved above -- restored
 	// verbatim, bit-equal (design Sec7 dim9's own round-trip cell).
 	h->bound_schema = resolved_schema;

@@ -984,6 +984,26 @@ if defined T2132_G5_FIXTURE (
 	echo t2132_s4_leak_guard_mutation_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
 
+rem M4 pin (design Sec7.3, D-SLM3486, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md):
+rem forced_token_count now survives save/restore under the 'SSB2' blob format, proven for a
+rem sequence with REAL jump-forward-admitted tokens against the real fixture; also pins the
+rem 'SSB1'-rejection half (a hand-built pre-fold-shaped blob rejects outright on the magic check).
+rem Usage: out\t2132_m4_forced_token_count_pin.exe ^<g5-fixture.sslm^> [schema_name].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2132_m4_forced_token_count_pin.cpp /Fo:out\t2139\ /Fe:out\t2132_m4_forced_token_count_pin.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2132_m4_forced_token_count_pin.exe %T2132_G5_FIXTURE%
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2132_m4_forced_token_count_pin: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
 rem T-2113 (B9, design Sec10 B9/Sec11 dim7): the compile-the-declared-interface check
 rem (tests\t2112-gpu-1p0-red-suite\interface_probe\build_probe.bat), promoted from a T-2111
 rem strike instrument to a standing suite fixture (design Sec10 B9) and wired here as a real
