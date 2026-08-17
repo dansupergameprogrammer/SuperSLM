@@ -69,8 +69,23 @@ static void TestDim7_M2_ForcedSpanChunkedAndStatsCounterReportsActualNotCeiling(
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim7_M1_UnconstrainedDecodeByteIdenticalToPreG5Golden; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim7_M2_ForcedSpanChunkedAndStatsCounterReportsActualNotCeiling; (void)addr_1;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	if (have_model) {
+		TestDim7_M1_UnconstrainedDecodeByteIdenticalToPreG5Golden(model);
+	} else {
+		SKIP_MSG("real 1.5B artifact not supplied (--model1p5b=PATH) -- mechanism cell 1 not run");
+	}
+	sslm_schema schema_ref = nullptr;
+	const bool have_schema_ref =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+	if (have_schema_ref) {
+		TestDim7_M2_ForcedSpanChunkedAndStatsCounterReportsActualNotCeiling(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- mechanism cell 2 "
+		         "not run");
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

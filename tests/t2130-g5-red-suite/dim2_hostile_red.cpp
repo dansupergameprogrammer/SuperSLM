@@ -79,10 +79,25 @@ static void TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(sslm_model model
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim2_M1_CorruptMaskPageSectionRejectedBeforeMap; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim2_M2_OutOfRangeSchemaIndexRejectedBeforeMap; (void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim2_M3_MaskPageWidthVocabMismatchRejectedBeforeMap; (void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding; (void)addr_3;
+	TestDim2_M1_CorruptMaskPageSectionRejectedBeforeMap();
+	TestDim2_M2_OutOfRangeSchemaIndexRejectedBeforeMap();
+	TestDim2_M3_MaskPageWidthVocabMismatchRejectedBeforeMap();
+
+	std::vector<uint8_t> model_a_bytes, model_b_bytes;
+	sslm_model model_a = nullptr, model_b = nullptr;
+	const bool have_model_a = TryMapRealModel(g_model_1p5b_path, &model_a_bytes, &model_a);
+	const bool have_model_b =
+	    TryMapRealModel(g_model_1p5b_variant_path, &model_b_bytes, &model_b);
+	sslm_schema schema_only_on_a = nullptr;
+	const bool have_schema_on_a =
+	    have_model_a && TryLookupSchema(model_a, g_reference_schema_name.c_str(), &schema_only_on_a);
+	if (have_model_a && have_model_b && have_schema_on_a) {
+		TestDim2_M4_RestoreRejectsUnresolvableSchemaBinding(model_a, model_b, schema_only_on_a);
+	} else {
+		SKIP_MSG("two real artifacts sharing a base content hash (--model1p5b=PATH, "
+		         "--model1p5b_variant=PATH), the second lacking the first's schema, not "
+		         "supplied -- mechanism cell 4 not run");
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

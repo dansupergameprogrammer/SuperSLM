@@ -119,9 +119,29 @@ static void TestDim1_P1_MidForcedChainSaveRestoreEquivalence(sslm_model model,
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim1_M1_ResetClearsDfaWalkStateNoLeak; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim1_M2_InterleavedBatchDoesNotCorruptWalkState; (void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim1_P1_MidForcedChainSaveRestoreEquivalence; (void)addr_2;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_ref = nullptr, schema_secondary = nullptr;
+	const bool have_schema_ref =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+	const bool have_schema_secondary =
+	    have_model && TryLookupSchema(model, g_secondary_schema_name.c_str(), &schema_secondary);
+
+	if (have_schema_ref) {
+		TestDim1_M1_ResetClearsDfaWalkStateNoLeak(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema set not supplied (--model1p5b=PATH), "
+		         "or the reference schema did not resolve -- mechanism cell 1 not run");
+	}
+	if (have_schema_ref && have_schema_secondary) {
+		TestDim1_M2_InterleavedBatchDoesNotCorruptWalkState(model, schema_ref, schema_secondary);
+	} else {
+		SKIP_MSG("real 1.5B artifact with two distinct compiled schemas not supplied -- "
+		         "mechanism cell 2 not run");
+	}
+	// Self-skips via g_model_1p5b_path.empty() before touching model/schema.
+	TestDim1_P1_MidForcedChainSaveRestoreEquivalence(model, schema_ref);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

@@ -95,10 +95,26 @@ static void TestDim4_P1_GpuParitySchemaConstrainedAndJumpForward(sslm_model mode
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim4_M1_MinimalOneFieldSchemaConstrainsCorrectly; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim4_M2_ReferenceSchemaResolvesAndStateCountMatchesCompiler; (void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim4_M3_AdversarialDeepSchemaAndForcedSpanLengthExtremes; (void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim4_P1_GpuParitySchemaConstrainedAndJumpForward; (void)addr_3;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	if (have_model) {
+		TestDim4_M1_MinimalOneFieldSchemaConstrainsCorrectly(model);
+		TestDim4_M2_ReferenceSchemaResolvesAndStateCountMatchesCompiler(model);
+	} else {
+		SKIP_MSG("real 1.5B artifact not supplied (--model1p5b=PATH) -- mechanism cells 1-2 "
+		         "not run");
+	}
+	// M3 self-skips on g_adversarial_schema_model_path.empty() before touching `model`; the
+	// adversarial artifact is a DIFFERENT model than --model1p5b (its own dedicated corpus).
+	std::vector<uint8_t> model_adv_bytes;
+	sslm_model model_adv = nullptr;
+	TryMapRealModel(g_adversarial_schema_model_path, &model_adv_bytes, &model_adv);
+	TestDim4_M3_AdversarialDeepSchemaAndForcedSpanLengthExtremes(model_adv);
+	// P1 self-skips on g_model_1p5b_path.empty() before touching either argument.
+	sslm_schema schema_ref = nullptr;
+	if (have_model) TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+	TestDim4_P1_GpuParitySchemaConstrainedAndJumpForward(model, schema_ref);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

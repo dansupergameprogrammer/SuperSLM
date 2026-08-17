@@ -123,9 +123,31 @@ static void TestDim8_P1_AdapterSchemaGpuDispatchBudgetTriple(sslm_model model,
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim8_M1_AdapterCrossedSchemaAndJumpForward; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary; (void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim8_P1_AdapterSchemaGpuDispatchBudgetTriple; (void)addr_2;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_ref = nullptr;
+	const bool have_schema_ref =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+
+	// M1 needs a real sslm_adapter handle; sslm_g5.h declares sslm_seq_set_adapter but no
+	// sslm_adapter-map verb under the sslm_ prefix at all (the only shipped map verb is
+	// sslm_gpu_adapter_map, a different, incompatible handle type) -- a fixture this suite
+	// genuinely cannot construct, not a fixture merely unsupplied on this invocation. SKIP
+	// unconditionally rather than pass a null adapter into a cell with no internal skip check;
+	// owed as a design/build-time gap, not papered over here.
+	SKIP_MSG("no sslm_adapter fixture is constructible -- design Sec5's ABI (sslm_g5.h) "
+	         "declares no sslm_adapter-map verb under the sslm_ prefix -- mechanism cell 1 "
+	         "not run");
+	if (have_schema_ref) {
+		TestDim8_M2_PrefixSharingCrossedWithSchemaAndJumpForwardAtBoundary(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- mechanism cell 2 "
+		         "not run");
+	}
+	// P1 self-skips on g_model_1p5b_path.empty() || g_adapter_path.empty() before touching any
+	// argument, including the adapter this main() cannot itself construct.
+	TestDim8_P1_AdapterSchemaGpuDispatchBudgetTriple(model, schema_ref, nullptr);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

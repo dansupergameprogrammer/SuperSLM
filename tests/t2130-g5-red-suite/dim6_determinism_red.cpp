@@ -51,8 +51,13 @@ static void TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain;
-	(void)addr_0;
+	// Self-skips via g_model_1p5b_path.empty() before touching either argument.
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_ref = nullptr;
+	if (have_model) TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+	TestDim6_P1_TemplateFillFixedSpansByteIdenticalAcrossToolchain(model, schema_ref);
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

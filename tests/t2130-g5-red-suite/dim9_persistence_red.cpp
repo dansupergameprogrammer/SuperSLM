@@ -57,7 +57,18 @@ static void TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual; (void)addr_0;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_ref = nullptr;
+	const bool have_schema_ref =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+	if (have_schema_ref) {
+		TestDim9_M1_SaveBlobSchemaBindingAndWalkStateRoundTripBitEqual(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- mechanism cell 1 "
+		         "not run");
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

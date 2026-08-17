@@ -59,9 +59,20 @@ static void TestDim3_M1_ConcurrentMixedSchemaDecodeNoRaceAndSoloEquivalence(
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 =
-	    (void*)&TestDim3_M1_ConcurrentMixedSchemaDecodeNoRaceAndSoloEquivalence;
-	(void)addr_0;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_a = nullptr, schema_b = nullptr;
+	const bool have_schema_a =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_a);
+	const bool have_schema_b =
+	    have_model && TryLookupSchema(model, g_secondary_schema_name.c_str(), &schema_b);
+	if (have_schema_a && have_schema_b) {
+		TestDim3_M1_ConcurrentMixedSchemaDecodeNoRaceAndSoloEquivalence(model, schema_a, schema_b);
+	} else {
+		SKIP_MSG("real 1.5B artifact with two distinct compiled schemas not supplied -- "
+		         "mechanism cell 1 not run");
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

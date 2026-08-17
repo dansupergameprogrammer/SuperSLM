@@ -53,7 +53,7 @@ static void TestDim11_M1_RuntimeAllMaskedNegativeControlHasNoSubject() {
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim11_M1_RuntimeAllMaskedNegativeControlHasNoSubject; (void)addr_0;
+	TestDim11_M1_RuntimeAllMaskedNegativeControlHasNoSubject();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

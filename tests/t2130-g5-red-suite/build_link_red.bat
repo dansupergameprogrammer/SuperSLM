@@ -11,6 +11,17 @@ rem sslm_g5.h) and then link is attempted into a throwaway .exe (proving no impl
 rem exists yet). Exit code is 1 (red) until the build seat lands G5's own .cpp; this script's
 rem own exit code inverts to 0 ONLY once linking succeeds, at which point this suite has gone
 rem from red to buildable and the individual CHECK/FAIL output governs pass/fail from then on.
+rem
+rem T-2132 harness fix (Curie, 2026-08-17): src\sslm_abi.cpp -- the file that already defines
+rem sslm_model_map/sslm_seq_create/sslm_prefill/sslm_decode_step/etc, shipped under T-2139 --
+rem is now on this link line, matching the source list the repo root build.bat's own C2/C3/...
+rem tool builds use for the identical ABI file. Before this fix, every one of this suite's 12
+rem binaries reported LNK2019 on ALREADY-SHIPPED pre-G5 symbols (sslm_seq_create, sslm_prefill,
+rem sslm_decode_step, sslm_seq_save, sslm_seq_restore, ...) that src\sslm_abi.cpp defines --
+rem captured, evidenced, in obj\*.log at main@aea6116 with NO G5 code written -- so this script
+rem could never distinguish "G5's own verbs are unbuilt" from "the pre-G5 ABI this script never
+rem linked". Landing every G5-2..G5-6 symbol perfectly would not have moved this script's exit
+rem code without this fix, because the file that defines them was never on its own link line.
 setlocal enabledelayedexpansion
 set HEREDIR=%~dp0
 set ENG=%HEREDIR%..\..
@@ -26,6 +37,7 @@ for %%f in (dim1_lifetime_red.cpp dim2_hostile_red.cpp dim3_concurrency_red.cpp 
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
         %ENG%\src\forward\forward_sites.cpp %ENG%\src\decode_digest.cpp %ENG%\src\gpu\superslm_gpu.cpp ^
+        %ENG%\src\sslm_abi.cpp ^
         "%%f" /Fo:"obj\\" /Fe:"obj\%%~nf.exe" ^
         /link d3d12.lib dxgi.lib dxguid.lib > "obj\%%~nf.log" 2>&1
     findstr /C:"error C" "obj\%%~nf.log" >nul

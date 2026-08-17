@@ -146,10 +146,29 @@ static void TestDim10_D_TemplateFillFixedSpansVerbatimPlusSchemaValidHoleFill(
 
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim10_A_SchemaConstrainedDecodeYieldsSchemaValidOutput; (void)addr_0;
-	volatile void* addr_1 = (void*)&TestDim10_B_JumpForwardEquivalentToFullForwardTokenAndKvBitForBit; (void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim10_C_AdapterCrossedSchemaValidOutput_CrossCitedToDim8; (void)addr_2;
-	volatile void* addr_3 = (void*)&TestDim10_D_TemplateFillFixedSpansVerbatimPlusSchemaValidHoleFill; (void)addr_3;
+	std::vector<uint8_t> model_bytes;
+	sslm_model model = nullptr;
+	const bool have_model = TryMapRealModel(g_model_1p5b_path, &model_bytes, &model);
+	sslm_schema schema_ref = nullptr;
+	const bool have_schema_ref =
+	    have_model && TryLookupSchema(model, g_reference_schema_name.c_str(), &schema_ref);
+
+	if (have_schema_ref) {
+		TestDim10_A_SchemaConstrainedDecodeYieldsSchemaValidOutput(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- oracle (a) not run");
+	}
+	if (have_schema_ref) {
+		TestDim10_B_JumpForwardEquivalentToFullForwardTokenAndKvBitForBit(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- oracle (b) not run");
+	}
+	TestDim10_C_AdapterCrossedSchemaValidOutput_CrossCitedToDim8();
+	if (have_schema_ref) {
+		TestDim10_D_TemplateFillFixedSpansVerbatimPlusSchemaValidHoleFill(model, schema_ref);
+	} else {
+		SKIP_MSG("real 1.5B artifact with a compiled schema not supplied -- oracle (d) not run");
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
