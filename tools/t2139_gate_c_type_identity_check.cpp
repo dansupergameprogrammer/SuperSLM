@@ -150,15 +150,25 @@ SSLM_STATUS_ENUM_LIST(T2139_GATE_C_STATUS_CHECK_GEN_)
 // still caught by those checks failing value equality, and a one-sided append -- the exact
 // mechanics P2 first found and F1 proved the old assertion could not re-catch -- now fails here
 // because the two sentinels no longer agree. ---
+// M1 (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md): the message below names what
+// THIS file actually compares -- t2139_gate_c_suite_side's own transcription (above), not
+// tests/t2130-g5-red-suite/sslm_g5.h itself. The prior wording claimed the real suite header,
+// which was false of this construction (this file has never included sslm_g5.h) and is exactly
+// the class the fourth casebook's M1 named. tools/t2139_gate_c_real_suite_side_check.cpp is the
+// TU that compares against the REAL sslm_g5.h directly; this assertion's own job is confirming
+// the transcription above still agrees with the real library header, which is a narrower and
+// different claim.
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_STATUS_NEXT_FREE) ==
                   static_cast<int>(::SSLM_STATUS_NEXT_FREE),
-              "registry-top divergence: sslm_g5.h's mirror of the Sec6 registry does not top out "
-              "at the same SSLM_STATUS_NEXT_FREE sentinel sslm_abi.h declares -- one side has "
-              "appended an enumerator the other has not taken (the exact one-sided-append "
-              "mechanics of P2, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec7.4, and of "
-              "F1's Probe C, Claude/Poirot/4466666-t2139-third-confirmation-review.md); reconcile "
-              "both to design Sec6, the single-authority complete ordinal registry (T-2133 "
-              "ruling, design commit 4f4eb23896)");
+              "registry-top divergence: this file's own transcription of sslm_g5.h's Sec6 "
+              "registry mirror does not top out at the same SSLM_STATUS_NEXT_FREE sentinel "
+              "sslm_abi.h declares -- one side has appended an enumerator the other has not taken "
+              "(the exact one-sided-append mechanics of P2, Claude/Poirot/"
+              "2c18dab-t2139-abi-build-review.md Sec7.4, and of F1's Probe C, Claude/Poirot/"
+              "4466666-t2139-third-confirmation-review.md); reconcile both to design Sec6, the "
+              "single-authority complete ordinal registry (T-2133 ruling, design commit "
+              "4f4eb23896). tools/t2139_gate_c_real_suite_side_check.cpp checks the SAME class "
+              "against the REAL sslm_g5.h directly, not a transcription of it");
 
 // --- sslm_span_kind: per-shared-enumerator-name value equality ---
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_SPAN_PROMPT) ==

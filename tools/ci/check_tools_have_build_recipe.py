@@ -59,18 +59,39 @@ def load_allowlist():
     return allow
 
 
+def _strip_comment_lines(text, comment_prefixes):
+    """Drop every line whose trimmed form begins with one of comment_prefixes before matching.
+    A basename mentioned only in a rem-line, a `::`-line, or a `#`-line is not a recipe -- it is
+    prose about a recipe (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S1: a `rem`
+    line satisfied the old bare-substring match, which is precisely the shape the checker exists
+    to close). Kept lines are joined back so a real recipe line elsewhere in the file still
+    matches normally."""
+    kept = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        stripped_lower = stripped.lower()
+        if any(stripped_lower.startswith(p) for p in comment_prefixes):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def recipe_texts():
     texts = []
     build_bat = REPO_ROOT / "build.bat"
     if build_bat.exists():
-        texts.append(build_bat.read_text(encoding="utf-8", errors="replace"))
+        texts.append(_strip_comment_lines(
+            build_bat.read_text(encoding="utf-8", errors="replace"), ("rem ", "::")))
     cmakelists = REPO_ROOT / "CMakeLists.txt"
     if cmakelists.exists():
-        texts.append(cmakelists.read_text(encoding="utf-8", errors="replace"))
+        texts.append(_strip_comment_lines(
+            cmakelists.read_text(encoding="utf-8", errors="replace"), ("#",)))
     for p in (REPO_ROOT / "tests").glob("*/build_link_red.bat"):
-        texts.append(p.read_text(encoding="utf-8", errors="replace"))
+        texts.append(_strip_comment_lines(
+            p.read_text(encoding="utf-8", errors="replace"), ("rem ", "::")))
     for p in TOOLS_DIR.glob("build_*.bat"):
-        texts.append(p.read_text(encoding="utf-8", errors="replace"))
+        texts.append(_strip_comment_lines(
+            p.read_text(encoding="utf-8", errors="replace"), ("rem ", "::")))
     return texts
 
 

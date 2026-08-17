@@ -333,7 +333,16 @@ if not errorlevel 1 (
 	echo Gate C X-macro must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_xmacro_negative.log
 	popd & exit /b 1
 )
-echo Gate C X-macro must-reject construction correctly failed to compile ^(see out\t2139\gate_c_xmacro_negative.log^)
+rem T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S3):
+rem a compile failure alone is not proof the INTENDED assertion fired -- findstr the log this step
+rem already writes for the construction's own marker text, so a failure for the wrong reason (a
+rem stray syntax error, a missing header) does not read as "correctly failed."
+findstr /C:"SSLM_ARTIFACT_REJECTED diverges" out\t2139\gate_c_xmacro_negative.log >nul
+if errorlevel 1 (
+	echo Gate C X-macro must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_xmacro_negative.log
+	popd & exit /b 1
+)
+echo Gate C X-macro must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_xmacro_negative.log^)
 
 rem Gate C must-reject, SENTINEL IDENTITY mechanism specifically (S4): MUST fail to compile.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_sentinel_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_sentinel_negative.exe >out\t2139\gate_c_sentinel_negative.log 2>&1
@@ -341,7 +350,18 @@ if not errorlevel 1 (
 	echo Gate C sentinel must-reject construction COMPILED CLEAN -- Gate C has regressed, see out\t2139\gate_c_sentinel_negative.log
 	popd & exit /b 1
 )
-echo Gate C sentinel must-reject construction correctly failed to compile ^(see out\t2139\gate_c_sentinel_negative.log^)
+rem Same marker-text treatment as the X-macro negative above (S3): this is the exact gap the
+rem fifth confirmation review found live -- one governed append to both real headers desynchronizes
+rem this construction's own extra enumerator from the real sentinels, so it still fails to compile,
+rem but for an unrelated C2039 name-lookup reason, and this step's own exit-code-only check kept
+rem reporting "correctly failed" with nothing showing the sentinel mechanism itself had stopped
+rem firing.
+findstr /C:"SSLM_STATUS_NEXT_FREE sentinels no longer agree" out\t2139\gate_c_sentinel_negative.log >nul
+if errorlevel 1 (
+	echo Gate C sentinel must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_sentinel_negative.log
+	popd & exit /b 1
+)
+echo Gate C sentinel must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_sentinel_negative.log^)
 
 rem count_abi_verbs.sh's own cited figure (design Sec4): 29. Checked only when bash is on PATH
 rem (git-bash on a typical Windows dev box) -- non-fatal if absent, matching this script's own

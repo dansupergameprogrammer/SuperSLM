@@ -187,6 +187,12 @@ typedef struct sslm_stats_out {
  * implementation. */
 #define SSLM_ABI_ALIGNMENT_BYTES 64u
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* SUPERSLM_INCLUDE_SSLM_ABI_H */
+
 /* ============================================================================
  * model lifecycle -- design Sec8: 3 args, NO config parameter (sslm_g5.h:149, verbatim).
  * DEFINED (C2, src/sslm_abi.cpp).
@@ -194,25 +200,44 @@ typedef struct sslm_stats_out {
  *
  * SUPERSLM_ABI_ENUM_ONLY (owed remedy 5, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
  * review.md S1): #define this BEFORE including this header to suppress the function-declaration
- * include below -- every type/enum/struct above it (including sslm_status and the
- * SSLM_STATUS_ENUM_LIST macro itself) still declares normally. This is Gate C's OWN escape
- * hatch (tools/t2139_gate_c_real_suite_side_check.cpp): its real-suite-side TU needs the REAL
- * tests/t2130-g5-red-suite/sslm_g5.h's own function declarations visible at the SAME scope this
- * header's own functions would otherwise occupy, and two extern "C" declarations of the same
- * function name with different parameter types is ill-formed ([dcl.link]) regardless of C++
- * namespace (C linkage collides by name only, ignoring the enclosing namespace) -- so the two
- * real headers' FUNCTIONS cannot both be visible in one TU no matter how they are namespaced.
- * Suppressing this header's own functions (which the enum-only gate does not need) removes the
- * only thing that would collide, while keeping SSLM_STATUS_ENUM_LIST -- the single generation
- * source both this enum body and Gate C's own per-name checks re-expand -- available exactly as
- * before. No consumer outside this one gate TU ever defines this macro; every ordinary include of
- * this header (the frozen public S-FREEZE surface, D-SLM13) is completely unaffected. */
-#ifndef SUPERSLM_ABI_ENUM_ONLY
-#include "superslm/sslm_abi_functions.inc"
+ * include below -- every type/enum/struct above (including sslm_status and the
+ * SSLM_STATUS_ENUM_LIST macro itself) still declares normally, since that whole section is
+ * governed by the SUPERSLM_INCLUDE_SSLM_ABI_H guard above and closes before this section starts.
+ * This is Gate C's OWN escape hatch (tools/t2139_gate_c_real_suite_side_check.cpp): its
+ * real-suite-side TU needs the REAL tests/t2130-g5-red-suite/sslm_g5.h's own function
+ * declarations visible at the SAME scope this header's own functions would otherwise occupy, and
+ * two extern "C" declarations of the same function name with different parameter types is
+ * ill-formed ([dcl.link]) regardless of C++ namespace (C linkage collides by name only, ignoring
+ * the enclosing namespace) -- so the two real headers' FUNCTIONS cannot both be visible in one TU
+ * no matter how they are namespaced. Suppressing this header's own functions (which the enum-only
+ * gate does not need) removes the only thing that would collide, while keeping
+ * SSLM_STATUS_ENUM_LIST -- the single generation source both this enum body and Gate C's own
+ * per-name checks re-expand -- available exactly as before. No consumer outside this one gate TU
+ * ever defines this macro; every ordinary include of this header (the frozen public S-FREEZE
+ * surface, D-SLM13) is completely unaffected.
+ *
+ * This section carries its OWN guard (SUPERSLM_ABI_FUNCTIONS_INCLUDED_), independent of and
+ * outside SUPERSLM_INCLUDE_SSLM_ABI_H above (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-
+ * review.md S2): the enum-only pass sets the outer guard but must NOT be able to claim it also
+ * satisfies this one, or a later plain #include of this header in the SAME TU becomes a silent
+ * no-op -- the outer guard is already defined, so nothing past it re-runs, and the functions this
+ * plain include was relying on to appear never do (executed: MSVC C3861 'sslm_model_map':
+ * identifier not found, at the call site three includes away from the actual cause). With the
+ * function section's guard independent of the outer one, an enum-only include followed by a
+ * plain include in the same TU declares the functions on the SECOND include, exactly once,
+ * because the type section is already satisfied and skips, while the function section's own
+ * guard is still unset. */
+#if !defined(SUPERSLM_ABI_ENUM_ONLY) && !defined(SUPERSLM_ABI_FUNCTIONS_INCLUDED_)
+#define SUPERSLM_ABI_FUNCTIONS_INCLUDED_
+
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+#include "superslm/sslm_abi_functions.inc"
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SUPERSLM_INCLUDE_SSLM_ABI_H */
+#endif /* SUPERSLM_ABI_FUNCTIONS_INCLUDED_ */

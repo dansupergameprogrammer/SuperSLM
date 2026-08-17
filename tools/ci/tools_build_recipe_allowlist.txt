@@ -10,3 +10,14 @@
 # the checker treats that glob as a fourth checked location rather than allowlisting all four).
 #
 # A genuine future exception goes here, one line, with its own justification -- never silently.
+#
+# T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S1) --
+# after the comment-stripping fix, the checker names t1657_load_harness.cpp: its only mention in
+# any recipe location is a `rem` line (build.bat:45) naming it as precedent, and it has no real
+# recipe anywhere. Confirmed genuinely correct rather than a missed recipe: the file's own header
+# comment states "Not part of the build.bat/CMake build graph -- compiled and run directly for
+# this session's own verification" (T-1657/T-1663 throwaway harness, requires a real .sslm
+# artifact on disk this build does not assume exists). This is the precedent build.bat's own C5
+# comment already cites for tools/t2039_c5_harness.cpp's build-but-manual-invoke shape; unlike
+# t2039_c5_harness.cpp, this one was never wired into build.bat because it was never meant to be.
+t1657_load_harness.cpp  # throwaway T-1657/T-1663 harness, explicitly outside the build graph by its own file header; needs a real .sslm artifact on disk and is built-and-run manually per precedent

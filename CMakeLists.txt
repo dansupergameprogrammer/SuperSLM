@@ -245,12 +245,27 @@ add_test(NAME t2139_gate_c_real_suite_side_check_compiles
 
 # S4's owed must-reject constructions: both MUST fail to compile, same convention as
 # t2139_gate_c_must_reject_fails_to_compile above.
+#
+# T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S3):
+# a plain WILL_FAIL entry only inverts the build's exit code -- it cannot tell the construction's
+# own assertion firing apart from any other compile failure, and the sentinel construction proved
+# this live (one governed append to both real headers desynchronizes its own extra enumerator from
+# the real sentinels, so it still fails to compile, but for an unrelated C2039 name-lookup reason,
+# with WILL_FAIL still reporting green). tools/ci/check_negative_compile_marker.cmake requires BOTH
+# the build failing AND the target's own static_assert marker text appearing in the captured
+# output, so a degeneration of the underlying mechanism is a hard ctest failure instead of a silent
+# pass. No WILL_FAIL here -- the script's own exit code is already correct (0 only when both
+# conditions hold).
 add_test(NAME t2139_gate_c_xmacro_must_reject_fails_to_compile
-	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_xmacro_must_reject --config $<CONFIG>)
-set_tests_properties(t2139_gate_c_xmacro_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_xmacro_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 add_test(NAME t2139_gate_c_sentinel_must_reject_fails_to_compile
-	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_sentinel_must_reject --config $<CONFIG>)
-set_tests_properties(t2139_gate_c_sentinel_must_reject_fails_to_compile PROPERTIES WILL_FAIL TRUE)
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_sentinel_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_STATUS_NEXT_FREE\ sentinels\ no\ longer\ agree
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the
