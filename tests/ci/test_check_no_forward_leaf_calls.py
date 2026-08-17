@@ -210,6 +210,155 @@ def test_nested_leaf_call_inside_an_expression_is_still_found():
         assert leaves_hit == ["NormalizeScale", "RequantTokenCode"]
 
 
+# --- T-2125: the scan is comment-aware -- a leaf name mentioned only in prose is not a
+# call site and must not be reported (module docstring's own CORRECTED paragraph). ---
+
+
+def test_a_leaf_name_inside_a_line_comment_is_not_flagged():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "// this function uses the same facility RequantTokenCode already uses internally\n"
+            "int64_t Quiet(int64_t x) { return x; }\n",
+        )
+        assert cnfl.find_banned_leaf_uses(path) == []
+
+
+def test_a_leaf_name_inside_a_block_comment_is_not_flagged_and_line_numbers_after_it_stay_correct():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "/* explains why this forwards to the same facility\n"
+            "   RequantTokenCode/IExpEvaluate already use internally, across\n"
+            "   several lines */\n"
+            "auto d = NormalizeScale(d_prime);\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(4, "NormalizeScale")], (
+            f"the real call on line 4 must still be caught, at its real line number, "
+            f"unaffected by the leaf name sitting inside the block comment above it: {hits}"
+        )
+
+
+def test_a_leaf_name_in_code_is_still_flagged_when_a_trailing_comment_shares_its_line():
+    # Line-shape awareness, not merely "any comment anywhere in the file blanks the whole
+    # scan": a real call and a trailing `//` comment on the SAME line must still report the
+    # call -- only the comment's own portion of the line is blanked.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "auto d = NormalizeScale(d_prime);  // NormalizeScale, called directly, on purpose\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(1, "NormalizeScale")], (
+            f"expected exactly one real hit from the code portion of the line, not a second "
+            f"spurious hit from the trailing comment's own repetition of the name: {hits}"
+        )
+
+
+def test_a_leaf_name_inside_a_string_literal_is_still_flagged_the_documented_residual():
+    # The module docstring's own named residual: comments are stripped, string literals are
+    # not -- this is what keeps that claim honest rather than aspirational.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            'const char* msg = "calls RequantTokenCode internally";\n',
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(1, "RequantTokenCode")], (
+            "a leaf name inside a string literal remains a reported (accepted, documented) "
+            f"over-approximation: {hits}"
+        )
+
+
+# --- T-2125 fix round (Poirot 242dc12-t2125-ci-drift-review.md, Significant 1, Significant 2):
+# the comment stripper above traded the T-2125 false positive for a false negative -- a comment
+# marker sitting inside a string or char literal was misread as a real comment opener, and
+# `stripped.splitlines()` shifted line numbers on a byte the file's own numbering does not treat
+# as a newline. Both reproduced live by the review; pinned here with the review's own two
+# adversarial fixtures plus a splitlines()-vs-split("\n") divergence case. ---
+
+
+def test_a_double_slash_inside_a_string_literal_does_not_hide_a_real_call_on_the_same_line():
+    # Poirot's own executed adversarial case 1: "scheme://host" must not be read as opening a
+    # line comment -- the real NormalizeScale call after it, on the same line, must still be
+    # caught.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            'const char* u = "scheme://host"; auto d = NormalizeScale(x);\n',
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(1, "NormalizeScale")], (
+            f"a `//` inside a string literal must not blank the rest of its line: {hits}"
+        )
+
+
+def test_a_slash_star_pair_split_across_two_string_literals_does_not_swallow_a_real_call_between_them():
+    # Poirot's own executed adversarial case 2: two SEPARATE string literals, "/*" and "*/", each
+    # a complete, self-contained string -- not a real block comment. The real call on the middle
+    # line must not be swallowed as though the two literals opened and closed one.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            'const char* u = "/*";\n'
+            "auto d = NormalizeScale(x);\n"
+            'const char* v = "*/";\n',
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(2, "NormalizeScale")], (
+            f"a string literal's own content must never open a real block comment: {hits}"
+        )
+
+
+def test_a_form_feed_byte_does_not_shift_line_numbers_reported_after_it():
+    # str.splitlines() treats \x0c (form feed) as a line break; the file's own line numbering
+    # does not. A hit after one must still carry its real line number.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "int64_t Quiet(int64_t x) { return x; }\x0c// padding on line 1\n"
+            "auto d = NormalizeScale(x);\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(2, "NormalizeScale")], (
+            f"a form-feed byte on line 1 must not shift a line-2 hit to line 3: {hits}"
+        )
+
+
+def test_a_digit_separator_is_not_mistaken_for_a_char_literal_opener():
+    # A C++14 digit separator (1'000) is a bare `'` immediately between two digits -- not a
+    # char-literal opener. Misreading it as one would open an unterminated "char literal" that
+    # swallows every real call after it to end of file (the exact defect this repo's own
+    # T-1381/T-1383 sweep found in a sibling hand-rolled stripper).
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "int64_t Quiet(int64_t x) { return x + 1'000; }\n"
+            "auto d = NormalizeScale(x);\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(2, "NormalizeScale")], (
+            f"a digit separator must not be read as an unterminated char literal: {hits}"
+        )
+
+
+def test_a_real_char_literal_containing_a_comment_marker_does_not_open_a_comment():
+    # A genuine char literal, '/', is not preceded by an alphanumeric -- it IS a char-literal
+    # opener, and its content ('/' -- half of a "/*" digraph) must not be read as opening a
+    # block comment that swallows the real call on the next line.
+    with tempfile.TemporaryDirectory() as tmp:
+        path = _write(
+            tmp, "src/forward/site.cpp",
+            "char c = '/';\n"
+            "auto d = NormalizeScale(x);\n",
+        )
+        hits = cnfl.find_banned_leaf_uses(path)
+        assert hits == [(2, "NormalizeScale")], (
+            f"a `/` inside a real char literal must not open a block comment: {hits}"
+        )
+
+
 # --- Present truth: the real forward directory, now that it exists. ---
 
 

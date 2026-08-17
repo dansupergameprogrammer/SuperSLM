@@ -92,11 +92,21 @@ int64_t FloorDivI64(int64_t a, int64_t b);
 // design-2026-07-28.md §4.1). They default to an empty site, index 0, and
 // nullptr so every existing call compiles unchanged and emits no trace record
 // (RequantChainChecked's own default-argument convention, extended here).
+// `external_wide_scratch`, trailing, defaulted to nullptr (T-2139 closing round, coordinator's
+// own "eliminate it honestly (into the workspace or off the path)" instruction, curie/
+// t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a cell): when non-null, MUST point at
+// `hidden_size` writable `int64_t` elements -- this call's own `wide` intermediate is written
+// there instead of a freshly heap-allocated std::vector, letting a caller that already owns a
+// correctly-sized scratch region (the sslm_* consumer ABI's own workspace, src/sslm_abi.cpp) make
+// this call with zero allocations of its own. nullptr (every existing call site, unchanged) keeps
+// the original internally-allocated behavior exactly as before -- this is additive, not a
+// behavior change for any caller that does not pass it.
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale incoming_scale, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site = {}, size_t token_index = 0,
-                               SslmTraceHookState* trace_hook_state = nullptr);
+                               SslmTraceHookState* trace_hook_state = nullptr,
+                               int64_t* external_wide_scratch = nullptr);
 
 // C24/C25's WSC1 fold-apply dispatch (§4.3, §6.2 step 2/6/10/12): `identity == 1`
 // is the true pass-through (returns `acc` unchanged — no multiply, no shift);

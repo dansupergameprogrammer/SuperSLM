@@ -18,3 +18,12 @@ tests/golden/**  -text
 # eol=lf, not tool-native. A bare `text` checks out CRLF on Windows and the pin
 # (computed on Linux/LF) fails there. (S-HARDEN-5 provenance, bench 2026-07-24.)
 *.py   text eol=lf
+
+# cmd.exe batch files mis-seek around multi-line parenthesized blocks when the
+# working copy's line endings are LF-only (a tool-written LF copy bypasses the
+# checkout smudge core.autocrlf=true would otherwise apply) -- the interpreter
+# eats the first character of a subsequent command and the script fails with
+# spurious "'x' is not recognized" errors. Pinned to CRLF explicitly rather than
+# left to core.autocrlf so a tool-written LF working copy cannot recur.
+# (Claude/Bach/t2139-battery-varsunset-failure-2026-08-16.md, Wizard repo.)
+*.bat  text eol=crlf

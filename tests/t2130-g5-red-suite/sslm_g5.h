@@ -60,32 +60,130 @@ typedef struct sslm_schema_s*   sslm_schema;      /* NEW, design Sec5 */
 typedef struct sslm_kv_pool_s*  sslm_kv_pool;
 typedef struct sslm_workspace_s* sslm_workspace;
 
-/* --- status enum. Pre-G5 members are the plan's own Sec9/Sec12 taxonomy (named, not
- * enumerated exhaustively there); G5's own additions are transcribed verbatim from design
- * Sec5/Sec7 dim5. --- */
+/* --- status enum, MIRRORED verbatim from Sec6's complete ordinal registry (design commit
+ * 4f4eb23896, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec6 GOVERNANCE RULING:
+ * "Sec6 is the COMPLETE ordinal registry for sslm_status; sslm_g5.h mirrors it verbatim rather
+ * than owning a block", Poirot confirmation-pass casebook 2c18dab-t2139-abi-build-review.md
+ * Sec7.4/P2, folded). This supersedes the prior "base low 0-17, G5 appended above at 18-24"
+ * reconciliation (still visible in the per-enumerator comments below, which record each entry's
+ * own history) -- SSLM_ALLOCATION_FAILED's ratification at ordinal 25 (past the 0-24 range, the
+ * append-only law's own correct reasoning at the time) left the base family non-contiguous
+ * (0-17 and 25) with G5's block (18-24) sitting INSIDE that range rather than cleanly above it,
+ * and nothing governed who takes the next ordinal (26) from two independently-numbered blocks.
+ * Sec6 closes this by becoming the single ordinal-allocation authority for BOTH families: base
+ * enumerators and G5's schema enumerators alike are entries in one registry, assigned by Sec6
+ * alone, never self-numbered by either header independently. Semantic ownership is unchanged --
+ * G5 (design T-2119) still owns the MEANING of its own schema statuses; only ordinal allocation
+ * centralizes. All 26 registry entries are carried here, verbatim, including
+ * SSLM_ALLOCATION_FAILED at 25 (a prior gap in this header, closed this fold). Next-free ordinal
+ * per the registry: 26 -- requested from and assigned by Sec6, whichever side needs it next.
+ * Gate C's sslm_status exclusion lifted at the prior reconciliation and stays lifted -- the
+ * per-enumerator check runs unconditionally over the full, reconciled enum. Gate C's own retired
+ * "highest base enumerator strictly below first G5-only enumerator" ordering sentinel (false on
+ * its own terms once SSLM_ALLOCATION_FAILED landed at 25) was NOT left retired -- FOLD RULING
+ * 2026-08-17 (design Sec6, on Poirot's third confirmation casebook 4466666-t2139-third-
+ * confirmation-review.md F1) reinstated a structural version of it: both this header and
+ * include/superslm/sslm_abi.h gain a final enumerator, SSLM_STATUS_NEXT_FREE, with no explicit
+ * value, so it auto-values one past whichever header's own last explicit member and moves itself
+ * whenever either side appends -- see the enum body below, and Gate C's own generated per-name
+ * checks plus the SSLM_STATUS_NEXT_FREE-pair static_assert this header's addition now makes
+ * possible on the library side. */
 typedef enum sslm_status {
-    SSLM_OK = 0,
-    SSLM_INVALID_ARGUMENT,
-    SSLM_MODEL_MAP_REJECTED,
-    SSLM_ADAPTER_MODEL_MISMATCH,             /* plan Sec12 */
-    SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED,      /* plan Sec12, sslm_seq_set_adapter */
-    SSLM_RESTORE_MODEL_MISMATCH,              /* plan Sec12 (cited by design Sec5 as the
-                                                * existing precedent SSLM_RESTORE_SCHEMA_MISMATCH
-                                                * is symmetric with) */
+    SSLM_OK = 0,                              /* the only non-error value */
 
-    /* --- G5, design Sec5 / Sec7 dim5 (verbatim) --- */
-    SSLM_SCHEMA_NOT_FOUND,                    /* sslm_schema_lookup: unknown name, design Sec5 */
-    SSLM_SCHEMA_BIND_REJECTED,                /* sslm_seq_set_schema on a non-fresh walk state,
+    /* --- Argument/precondition rejections (T-2133 Sec6) --- */
+    SSLM_INVALID_ARGUMENT = 1,                /* the one broad catch-all this taxonomy keeps --
+                                                * only for malformed calls with no differentiated
+                                                * remedy (a null required pointer, a negative
+                                                * count, an out-of-range enum) */
+    SSLM_BUFFER_TOO_SMALL = 2,                /* a caller-supplied buffer (workspace, KV pool,
+                                                * save blob, sslm_seq_state_size-sized state) is
+                                                * smaller than the artifact-derived requirement --
+                                                * remedy: allocate the size the sizing function
+                                                * reports */
+    SSLM_MISALIGNED_BUFFER = 3,               /* a caller-supplied buffer's address does not meet
+                                                * the artifact's declared alignment */
+
+    /* --- Artifact/content rejections (T-2133 Sec6, Sec17 dim2 trust-boundary) --- */
+    SSLM_ARTIFACT_REJECTED = 4,               /* RENAMED from SSLM_MODEL_MAP_REJECTED this fold --
+                                                * the identical rejection T-2133 Sec6 names under
+                                                * this identifier: the underlying SslmModel::Load
+                                                * rejected the container or a section */
+    SSLM_ADAPTER_MODEL_MISMATCH = 5,          /* RENUMBERED 3->5 this fold. plan Sec12's existing
+                                                * name, kept -- op-set/dims/base-hash mismatch */
+    SSLM_RESTORE_MODEL_MISMATCH = 6,          /* RENUMBERED 5->6 this fold. plan Sec12 (cited by
+                                                * design Sec5 as the existing precedent
+                                                * SSLM_RESTORE_SCHEMA_MISMATCH is symmetric with) */
+    SSLM_RESTORE_KV_MISMATCH = 7,             /* a save-blob's kv_precision does not match the
+                                                * target model/pool, Sec17 dim9 N2 */
+
+    /* --- Lifecycle/precondition-on-state rejections (T-2133 Sec6) --- */
+    SSLM_MODEL_HAS_LIVE_SEQUENCES = 8,        /* sslm_model_unmap while a live sslm_seq/
+                                                * sslm_prefix/sslm_adapter still references it */
+    SSLM_POOL_HAS_LIVE_HANDLES = 9,           /* sslm_kv_pool_destroy while a live sequence or
+                                                * prefix still holds blocks from it */
+    SSLM_ADAPTER_HAS_LIVE_SEQUENCES = 10,     /* sslm_adapter_release while a live sslm_seq still
+                                                * points at it */
+    SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED = 11, /* RENUMBERED 4->11 this fold. plan Sec12's existing
+                                                * name, kept -- sslm_seq_set_adapter against a
+                                                * non-zero mid-token residual marker */
+    SSLM_SEQ_RESET_MIDTOKEN_REJECTED = 12,    /* plan Sec17's lifecycle addendum:
+                                                * sslm_seq_reset against a non-zero residual
+                                                * marker */
+    SSLM_PREFIX_FROZEN_REJECTED = 13,         /* sslm_prefix_prefill called on a prefix past
+                                                * sslm_prefix_freeze, or already released */
+    SSLM_KV_POOL_EXHAUSTED = 14,              /* sslm_seq_create/sslm_prefix_begin: no free block
+                                                * in the pool -- Sec17 dim5's "defined, resumable
+                                                * failure" */
+    SSLM_TOKEN_ID_OUT_OF_RANGE = 15,          /* a token id outside [0, vocab_size) reaching
+                                                * sslm_prefill/sslm_decode_step's input, mirroring
+                                                * the GPU ABI's own B3.5 addition, D-SLM3367 */
+    SSLM_CONTEXT_CAP_EXCEEDED = 16,           /* a prefill/decode_step call that would push
+                                                * context_length past the artifact's context_cap */
+    SSLM_TOKEN_ID_UNMAPPED = 17,              /* NEW, appended this fold (design commit
+                                                * 212de7742c, the padded-vocabulary ruling, Brunel
+                                                * T-2139, executed SuperSLM@f9a0065): the base
+                                                * taxonomy's numeric/domain group gains this
+                                                * enumerator at ordinal 17, the next free base
+                                                * ordinal, per the append-only reconciliation law --
+                                                * never inserted within the group's own prior
+                                                * position, even though it is semantically a
+                                                * numeric/domain rejection, because ordinal
+                                                * stability for every already-reconciled enumerator
+                                                * wins. sslm_detokenize_stream's own rejection for a
+                                                * decode-output token id in [tok_vocab, cfg_vocab) --
+                                                * a legal decode output with no tokenizer entry
+                                                * (the padded-vocabulary case
+                                                * ValidateTokenizerVocabSizeJoin's loosening admits,
+                                                * src/model.cpp), distinct from
+                                                * SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never
+                                                * a legal decode output at all). This closed the
+                                                * base family's own contiguous 0-17 run of 18
+                                                * enumerators AT THE TIME; the registry has since
+                                                * grown past that shape entirely -- Sec6's
+                                                * GOVERNANCE RULING (below) makes this a single
+                                                * 26-entry registry, one interleaved ordinal
+                                                * sequence spanning base (0-17, then 25) and G5
+                                                * (18-24) together, not two independently-counted
+                                                * blocks. G5's own seven sit at 18-24, immediately
+                                                * below. */
+
+    /* --- G5, design Sec5 / Sec7 dim5 -- APPENDED at 18-24, existing relative order preserved
+     * per the ruling's own append-only reasoning (G5's own internal ordering is T-2119's call,
+     * not T-2133's). SHIFTED 17-23 -> 18-24 this fold to make room for
+     * SSLM_TOKEN_ID_UNMAPPED's own base-taxonomy insertion at 17, above. --- */
+    SSLM_SCHEMA_NOT_FOUND = 18,                /* sslm_schema_lookup: unknown name, design Sec5 */
+    SSLM_SCHEMA_BIND_REJECTED = 19,            /* sslm_seq_set_schema on a non-fresh walk state,
                                                 * design Sec5 */
-    SSLM_SCHEMA_SPAN_UNBOUND,                 /* sslm_prefill(..., SSLM_SPAN_SCHEMA_CONTENT, ...)
+    SSLM_SCHEMA_SPAN_UNBOUND = 20,             /* sslm_prefill(..., SSLM_SPAN_SCHEMA_CONTENT, ...)
                                                 * against an unbound sequence, design Sec5/Sec10.2 */
-    SSLM_PREFIX_SCHEMA_MISMATCH,              /* sslm_seq_adopt_prefix: real schema-content walk
+    SSLM_PREFIX_SCHEMA_MISMATCH = 21,          /* sslm_seq_adopt_prefix: real schema-content walk
                                                 * progress against a mismatched or unbound sequence,
                                                 * design Sec5 (stated exhaustively, both branches) */
-    SSLM_RESTORE_SCHEMA_MISMATCH,             /* sslm_seq_restore: bound schema does not resolve
+    SSLM_RESTORE_SCHEMA_MISMATCH = 22,         /* sslm_seq_restore: bound schema does not resolve
                                                 * against the currently-mapped artifact's schema set,
                                                 * design Sec5 / Sec7 dim2/dim9 */
-    SSLM_SCHEMA_SPAN_UNREACHABLE,             /* G5-4, design Sec6: a host-declared "fixed" span
+    SSLM_SCHEMA_SPAN_UNREACHABLE = 23,         /* G5-4, design Sec6: a host-declared "fixed" span
                                                 * that is not actually reachable under the active
                                                 * schema's DFA from the sequence's current walk-
                                                 * state -- "a span that leaves the DFA's language
@@ -99,9 +197,39 @@ typedef enum sslm_status {
                                                 * which the planner has since ruled on
                                                 * (Claude/Vitruvius/t2119-rung7-fold-2026-08-16.md,
                                                 * Wizard repo, ruling 1). */
-    SSLM_SCHEMA_UNSATISFIABLE                 /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
+    SSLM_SCHEMA_UNSATISFIABLE = 24,             /* G5-1 compiler rejection, design Sec3/Sec6 G-7a --
                                                 * CPU/converter-side, listed here for completeness;
                                                 * the C++ decode-time surface never emits it */
+
+    /* --- Resource-exhaustion rejection (T-2133 Sec6, RATIFIED Brunel T-2139 Sec19/N3; registry
+     * entry per Sec6's GOVERNANCE RULING, design commit 4f4eb23896) -- process-level allocation
+     * failure, distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory exhaustion, an
+     * entirely different cause). Eight verbs plus two shared internal helpers (the swept set,
+     * Claude/Poirot/4466666-t2139-third-confirmation-review.md Sec2/O2 -- a superset of the seven
+     * originally named, corrected to the actual swept scope) carry a small number of remaining
+     * internal std::vector/SslmModel::Load allocations this ABI layer cannot eliminate. FOLD
+     * RULING 2026-08-17 (design Sec6, on the same casebook's F2) narrowed the boundary catch to
+     * exactly two exception types for this status -- catch (const std::bad_alloc&) and
+     * catch (const std::length_error&), the only causes this family is defined to cover -- with a
+     * final catch (...) closing the extern "C" boundary unconditionally and returning
+     * SSLM_ARTIFACT_REJECTED instead (no new ordinal minted; MapForwardStatus's own existing
+     * "no dedicated status" mapping, extended). Ordinal 25 -- appended past the entire
+     * already-coordinated 0-24 range at ratification time (the append-only law's own correct
+     * reasoning then); this header previously did not carry it at all (0 occurrences, closed that
+     * fold). */
+    SSLM_ALLOCATION_FAILED = 25,                /* see catch-split above; the resource-exhaustion
+                                                * cause alone, never a wrapper for a cause that
+                                                * already has its own status */
+
+    /* Sentinel, FOLD RULING 2026-08-17 (design Sec6, on F1) -- the enum's own final member, no
+     * explicit value, so it auto-values to one past whichever entry above it is this header's own
+     * last explicit member, and moves itself automatically on either header's own next append.
+     * Paired with include/superslm/sslm_abi.h's identical last member via Gate C's own
+     * static_assert(SSLM_STATUS_NEXT_FREE == SSLM_STATUS_NEXT_FREE) sentinel check -- catches a
+     * shared ordinal claimed by two different names (F1's own Probe C), which the per-name checks
+     * structurally cannot see. Never referenced as a valid status value by any call; it exists
+     * only for this comparison. */
+    SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
 /* --- G5's own span-kind discriminator -- design Sec5, THE REPAIR (Sec10.2). The single

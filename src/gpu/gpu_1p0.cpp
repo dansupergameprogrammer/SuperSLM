@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -200,7 +201,24 @@ struct SslmGpuModelHandle {
 	// sequence that ever transitions to Submitted is, by construction, still bound to exactly the
 	// model it was created against (a sequence's own `model` pointer never changes across its
 	// lifetime) -- so this count is always a count of THIS model's own Submitted sequences.
-	int64_t submitted_sequences = 0;
+	//
+	// T-2124 (D-SLM3446 S2, Claude/Poirot/435f730-t2124-adapter-uaf-review.md): `std::atomic`, not
+	// a plain `int64_t` -- design Sec5.4 blesses two threads each driving a DIFFERENT sequence
+	// handle concurrently, and Sec6.2's own Submit/Finish split is built precisely so the submit
+	// (writer: SubmitOneSequenceDecode) and the drain (writer: sslm_gpu_ready) can happen on
+	// different threads. A plain `+= 1`/`-= 1` is a non-atomic read-modify-write; two sequences
+	// sharing one model, driven from two threads, can race it -- a lost increment reopens the
+	// model-handle analogue of this ticket's own adapter UAF class (the guard below reads 0 while
+	// a sequence is genuinely Submitted), a lost decrement makes the model permanently un-unmappable.
+	// `seq_cst` (the type's own default for every operator used below: `+=`, `-=`, `> 0`, `load()`)
+	// is kept deliberately rather than relaxed to `acquire`/`release`: this counter gates a
+	// correctness precondition (whether it is safe to free device memory the GPU may still read),
+	// not a performance-sensitive hot path -- one Submit/Finish pair per decode step, not per
+	// dispatch -- so there is no measured cost this file's own conventions (Sec12, performance
+	// claims anchored to execution) would accept trading away the simplest-to-reason-about ordering
+	// for. A weaker order would need its own argued happens-before edge to the buffer-free this
+	// counter gates; none is on record, so none is assumed.
+	std::atomic<int64_t> submitted_sequences{0};
 
 	// T-2113 (B3.5, design Sec5.1's own amendment / Sec5.3a): host-side metadata
 	// sslm_gpu_seq_embed_token needs for its whole lifetime -- NOT new GPU residency (the
@@ -278,6 +296,30 @@ struct SslmGpuAdapterHandle {
 	std::vector<std::array<AdapterProjSlot, 7>> slots;
 	uint32_t rank = 0;
 
+	// T-2124 (D-SLM3446 P0-3): count of currently-Submitted sequences whose in-flight decode call
+	// bound this adapter -- the adapter-handle analogue of SslmGpuModelHandle::submitted_sequences
+	// above (identical Busy-precedence shape, D-SLM3417). `mutable`: written through the const
+	// SslmGpuAdapterHandle* every decode-step call receives (design Sec5.2's own "checked at every
+	// call" contract keeps that pointer const at the public boundary), unlike the model handle's
+	// own field, which SubmitOneSequenceDecode already holds through a non-const `model` local.
+	// See sslm_gpu_adapter_unmap's own header comment for why this exists: the command list a
+	// decode-step call records reads this handle's own lora_ab_buf/fold_buf via root descriptors
+	// and returns before the fence signals, so deleting this handle while any count above zero is
+	// outstanding would free a buffer the GPU may still be reading from.
+	//
+	// `mutable` is a DELIBERATE weakening of the published `const SslmGpuAdapterHandle*` contract
+	// every public decode signature (include/superslm/gpu_1p0.h) presents to a caller -- not merely
+	// a consequence of that pointer's constness. A caller reasoning from the header's `const` sees a
+	// handle safe to share read-only across threads (design Sec5.4's own claim); this field is the
+	// one piece of state that call actually writes through that same const pointer. Named here
+	// explicitly (T-2124 S2, Claude/Poirot/435f730-t2124-adapter-uaf-review.md) because the prior
+	// wording of this comment described only the mechanism and not the contract it weakens, which is
+	// what let the concurrency consequence (S2, below) go unexamined at authoring time. `std::atomic`
+	// (not a plain `int64_t`): see SslmGpuModelHandle::submitted_sequences' own comment, above, for
+	// the race this closes and the memory-order justification -- identical reasoning, restated there
+	// rather than duplicated here since this field mirrors that one's shape exactly.
+	mutable std::atomic<int64_t> submitted_sequences{0};
+
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field, above --
 	// identical disposition here.
 	bool destroyed = false;
@@ -340,6 +382,15 @@ struct SslmGpuSequenceHandle {
 	// The in-flight token between a Submitted sslm_decode_step_gpu call and the
 	// sslm_gpu_ready call that finishes it -- null whenever this handle is Idle/Completed.
 	superslm_gpu::GpuLayerLoopInFlight* in_flight = nullptr;
+
+	// T-2124 (D-SLM3446 P0-3): the adapter bound at this handle's own currently-in-flight
+	// submission, null when no adapter was bound or nothing is in flight -- set in
+	// SubmitOneSequenceDecode alongside `in_flight` above, cleared and used to decrement the
+	// adapter's own `submitted_sequences` count in sslm_gpu_ready the instant this sequence
+	// collapses back to Idle. An adapter is a per-CALL argument (sslm_decode_step_gpu's own
+	// `adapter_or_null`), never state a sequence handle otherwise retains, so this is the one
+	// place a submitted call's own adapter binding needs remembering between Submit and Finish.
+	const SslmGpuAdapterHandle* in_flight_adapter = nullptr;
 
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field
 	// (gpu_1p0.cpp) -- identical disposition here.
@@ -579,10 +630,26 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 // Submitted sequence bound returns `Busy`; only once that count is zero does the broader
 // `live_sequences` (any state) check run.
 SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
-	(void)ctx;  // T-2114 (M3): live_handles is decremented via model->ctx below, never this
-	            // parameter -- see that line's own comment.
 	if (!model) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_context_destroy(nullptr).
+	}
+	// T-2124 (D-SLM3446 P1-4): validate this handle was actually mapped against `ctx` -- the
+	// external-review gap: this function used to ignore `ctx` entirely (a bare `(void)ctx`, now
+	// removed since the parameter is read below and by the decrement further down) and act purely
+	// off `model->ctx`, so a caller passing a DIFFERENT (but live) context here was never rejected
+	// -- a sequence could be created on one context against a model mapped on another, binding
+	// resources from different D3D12 devices (see sslm_gpu_seq_create's own identical fix for the
+	// sequence-creation half of this same gap).
+	if (model->ctx != ctx) {
+		return SSLM_DEVICE_LOST;  // same "no more specific status" disposition sslm_gpu_model_map
+		                          // already uses for a malformed/foreign-context argument.
+		                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST):
+		                          // this rejects a PERMANENT caller-contract violation (a foreign
+		                          // handle never becomes valid by retrying) through a status §9
+		                          // classifies transient/recoverable -- routing left as-is per
+		                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2 (a new
+		                          // enumerator is out of this ticket's scope), flagged here so the
+		                          // P1-6 taxonomy pass (S-FREEZE) finds this site.
 	}
 	if (model->submitted_sequences > 0) {
 		return SSLM_BUSY;  // design Sec9's own Busy-precedence, D-SLM3417.
@@ -591,12 +658,11 @@ SslmGpuStatus sslm_gpu_model_unmap(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 		return SSLM_MODEL_HAS_LIVE_SEQUENCES;
 	}
 	// T-2114 (M3, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): decrement the
-	// handle's OWN stored context (`model->ctx`, set once at map() time), never the `ctx`
-	// parameter -- every handle already carries the context it was created against for
-	// exactly this reason (design Sec5.1's own per-handle ownership), and a caller passing a
-	// DIFFERENT (but live) context pointer here used to corrupt that OTHER context's own
-	// live_handles count silently while leaving the real owning context's count wrong too.
-	if (model->ctx && model->ctx->live_handles > 0) {
+	// handle's OWN stored context (`model->ctx`, set once at map() time) -- now provably equal to
+	// `ctx` by the check above too, kept as `model->ctx` unchanged since every handle already
+	// carries the context it was created against for exactly this reason (design Sec5.1's own
+	// per-handle ownership).
+	if (model->ctx->live_handles > 0) {
 		model->ctx->live_handles -= 1;
 	}
 	model->destroyed = true;
@@ -626,6 +692,16 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	                                             // used to carry was dead on a live handle and
 	                                             // UB on a released one -- removed, see
 	                                             // SslmGpuModelHandle's own field comment.
+		return SSLM_DEVICE_LOST;
+	}
+	if (model->ctx != ctx) {  // T-2124 (D-SLM3446 P1-4): cross-context validation -- a model
+	                          // handle mapped against a different context names a different
+	                          // D3D12 device; same disposition as the malformed-argument case above.
+	                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST): this
+	                          // rejects a PERMANENT caller-contract violation through a status §9
+	                          // classifies transient/recoverable -- routing left as-is per
+	                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2, flagged for
+	                          // the P1-6 taxonomy pass (S-FREEZE).
 		return SSLM_DEVICE_LOST;
 	}
 
@@ -741,18 +817,53 @@ SslmGpuStatus sslm_gpu_adapter_map(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 	return SSLM_OK;
 }
 
-// Design Sec5.2: "releases the adapter's own residency and returns Ok. ... carries no Busy
+// Design Sec5.2 states "releases the adapter's own residency and returns Ok ... carries no Busy
 // precondition of its own (unlike model/sequence release) because an adapter handle holds no
-// in-flight GPU work." A sequence still bound to `adapter` continues decoding against whatever
-// its own buffers still contain until that sequence's next call rebinds or releases -- the
-// documented residual design Sec5.2 names explicitly, not a guarded case this call adds one for.
+// in-flight GPU work." T-2124 (D-SLM3446 P0-3, external review): that premise is FALSE on the
+// async submit/finish split (design Sec6.2/B5). `sslm_decode_step_gpu`'s own submission path
+// (SubmitOneSequenceDecode, this file) passes this handle's `lora_ab_buf`/`fold_buf` into the
+// recorded command list via root descriptors (`adapter_bridge.lora_ab_resident`/`fold_resident`)
+// and returns BEFORE the fence signals -- unlike every OTHER per-call GPU resource
+// (`GpuLayerLoopInFlight`, superslm_gpu.cpp), nothing kept these two buffers alive past that
+// return. Deleting this handle here while such a submission is still in flight frees them out
+// from under a command list the GPU may still be executing: a real use-after-free/device-removal
+// hazard, the exact class `GpuLayerLoopInFlight`'s own header comment already documents being
+// reproduced by execution once (T-2039) for the other resident buffers this same split shares.
+//
+// Fixed the same way `sslm_gpu_model_unmap` already fixes the identical class of gap for MODEL
+// handles (design Sec9's own Busy-precedence row, D-SLM3417): `submitted_sequences` (this
+// handle's own field, above) is checked before any release proceeds -- an adapter bound to at
+// least one Submitted sequence returns Busy, exactly like a model does. Chosen over retaining
+// ComPtr copies inside `GpuLayerLoopInFlight` (the alternative this design's own nearest
+// precedent, T-2039's fix, would suggest) because Busy-accounting mirrors the model-unmap
+// precedent exactly and keeps this call's contract legible at the call site (a caller sees WHY
+// release did not happen), rather than adding a second, adapter-shaped retention mechanism next
+// to the per-call-resource one `GpuLayerLoopInFlight` already carries.
+//
+// A sequence still bound to `adapter` in the IDLE state (no submission currently in flight)
+// continues decoding against whatever its own buffers still contain until that sequence's next
+// call rebinds or releases -- the documented residual design Sec5.2 already names explicitly,
+// unaffected by this fix, not a guarded case this call adds one for.
 SslmGpuStatus sslm_gpu_adapter_unmap(SslmGpuContext* ctx, SslmGpuAdapterHandle* adapter) {
-	(void)ctx;  // T-2114 (M3): live_handles is decremented via adapter->ctx below, never this
-	            // parameter -- see sslm_gpu_model_unmap's own identical fix and comment.
 	if (!adapter) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_model_unmap(nullptr).
 	}
-	if (adapter->ctx && adapter->ctx->live_handles > 0) {
+	// T-2124 (D-SLM3446 P1-4): validate this handle was actually mapped against `ctx` -- see
+	// sslm_gpu_model_unmap's own identical check and comment.
+	if (adapter->ctx != ctx) {
+		return SSLM_DEVICE_LOST;  // same "no more specific status" disposition sslm_gpu_adapter_map
+		                          // already uses for a malformed/foreign-context argument.
+		                          // P1-6 (external review, status-ABI collapse to DEVICE_LOST): this
+		                          // rejects a PERMANENT caller-contract violation through a status
+		                          // §9 classifies transient/recoverable -- routing left as-is per
+		                          // Claude/Poirot/435f730-t2124-adapter-uaf-review.md M2, flagged
+		                          // for the P1-6 taxonomy pass (S-FREEZE).
+	}
+	if (adapter->submitted_sequences > 0) {
+		return SSLM_BUSY;  // T-2124 (D-SLM3446 P0-3): Busy-precedence, mirroring
+		                    // sslm_gpu_model_unmap's own D-SLM3417 fix above.
+	}
+	if (adapter->ctx->live_handles > 0) {
 		adapter->ctx->live_handles -= 1;
 	}
 	adapter->destroyed = true;
@@ -834,7 +945,12 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 		                                           // parameter cases in B1/B2 above.
 	}
 	*out_seq = nullptr;
-	if (!ctx || !model) {  // T-2114 (S2): ->destroyed read removed, see model handle's own comment.
+	if (!ctx || !model || model->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see model
+	                                             // handle's own comment. T-2124 (D-SLM3446 P1-4):
+	                                             // `model->ctx != ctx` -- a model mapped on a
+	                                             // different context names a different D3D12
+	                                             // device; a sequence created here would bind
+	                                             // resources across two contexts.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	if (context_cap < 1) {
@@ -924,11 +1040,15 @@ SslmGpuStatus sslm_gpu_seq_create(SslmGpuContext* ctx, SslmGpuModelHandle* model
 // (not reimplemented as "always proceed"), so B5's own async lifecycle needs no change
 // here when it starts setting `state = Submitted` for real.
 SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
-	(void)ctx;  // T-2114 (M3): live_handles is decremented via seq->ctx below, never this
-	            // parameter -- see sslm_gpu_model_unmap's own identical fix and comment.
 	if (!seq) {
 		return SSLM_OK;  // same null-is-a-no-op reasoning as sslm_gpu_context_destroy/
 		                  // sslm_gpu_model_unmap(nullptr) above.
+	}
+	// T-2124 (D-SLM3446 P1-4): validate this handle was actually created against `ctx` -- see
+	// sslm_gpu_model_unmap's own identical check and comment. `(void)ctx` (previously here) is
+	// removed since the parameter is now read both here and by the decrement further down.
+	if (seq->ctx != ctx) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
 	if (!superslm_gpu::CallProceedsOrBusy_SeqRelease(is_submitted)) {
@@ -937,7 +1057,7 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	if (seq->model && seq->model->live_sequences > 0) {
 		seq->model->live_sequences -= 1;
 	}
-	if (seq->ctx && seq->ctx->live_handles > 0) {
+	if (seq->ctx->live_handles > 0) {
 		seq->ctx->live_handles -= 1;
 	}
 	seq->destroyed = true;
@@ -956,8 +1076,9 @@ SslmGpuStatus sslm_gpu_seq_release(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 // caller driving this call pair reproduces that closure's own output byte-for-byte.
 SslmGpuStatus sslm_gpu_seq_embed_token(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                         int32_t token_id) {
-	if (!ctx || !seq || !seq->model) {  // T-2114 (S2): ->destroyed reads removed, see the
-	                                     // sequence/model handles' own field comments.
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed reads
+	                                     // removed, see the sequence/model handles' own field
+	                                     // comments. T-2124 (D-SLM3446 P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 		                                           // at this call, same "no more specific
 		                                           // status" disposition every other
@@ -1130,6 +1251,16 @@ SslmGpuStatus SubmitOneSequenceDecode(SslmGpuContext* ctx, SslmGpuSequenceHandle
 	// T-2113 (design Sec4.2/Sec9, D-SLM3417): model's own Busy-precedence count -- see
 	// SslmGpuModelHandle::submitted_sequences' own field comment, above.
 	model->submitted_sequences += 1;
+	// T-2124 (D-SLM3446 P0-3): the adapter-handle analogue of the line above -- see
+	// SslmGpuAdapterHandle::submitted_sequences' own field comment. `seq->in_flight_adapter`
+	// remembers which adapter (if any) this in-flight submission bound, so sslm_gpu_ready knows
+	// which adapter's count to decrement once this sequence collapses back to Idle -- the adapter
+	// binding is a per-call argument, not state this function's own caller otherwise retains on
+	// `seq`.
+	seq->in_flight_adapter = adapter_or_null;
+	if (adapter_or_null != nullptr) {
+		adapter_or_null->submitted_sequences += 1;
+	}
 	return SSLM_OK;
 }
 }  // namespace
@@ -1152,8 +1283,9 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	// dispatch-recording path this call submits through (RunLayerLoopGpuSubmit) now reads the
 	// adapter's own resident buffers when `adapter_or_null` validates -- the GEMM-site
 	// delta-application dispatches, via the GpuAdapterBridge built below.
-	if (!ctx || !seq || !seq->model) {  // T-2114 (S2): ->destroyed reads removed, see the
-	                                     // sequence/model handles' own field comments.
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed reads
+	                                     // removed, see the sequence/model handles' own field
+	                                     // comments. T-2124 (D-SLM3446 P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 		                                           // at this call besides the structural-
 		                                           // invariant status (same "no more specific
@@ -1163,6 +1295,12 @@ SslmGpuStatus sslm_decode_step_gpu(SslmGpuContext* ctx, SslmGpuSequenceHandle* s
 	                                                                  // read removed.
 		return SSLM_ADAPTER_MODEL_MISMATCH;  // design Sec5.2/Sec9: pointer-equality against the
 		                                      // model handle each side already carries.
+	}
+	if (adapter_or_null && adapter_or_null->ctx != ctx) {  // T-2124 (D-SLM3446 P1-4): a bound
+	                                                        // adapter mapped against a different
+	                                                        // context names a different device.
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // same "no channel exists for a malformed
+		                                           // handle" disposition as the seq check above.
 	}
 	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
 	if (!superslm_gpu::CallProceedsOrBusy_DecodeStepGpu(is_submitted)) {
@@ -1273,14 +1411,21 @@ SslmGpuStatus sslm_decode_step_batch_gpu(SslmGpuContext* ctx, SslmGpuSequenceHan
 		// failure... skips that sequence's own remaining dispatches, and continues recording
 		// the next sequence") -- `continue` to seqs[i+1], remaining_budget UNCHANGED (a
 		// rejected sequence consumes no budget, since nothing was recorded for it).
-		if (!seq || !seq->model) {  // T-2114 (S2): ->destroyed reads removed, see the
-		                            // sequence/model handles' own field comments.
+		if (!seq || !seq->model || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed reads removed,
+		                            // see the sequence/model handles' own field comments.
+		                            // T-2124 (D-SLM3446 P1-4): `seq->ctx != ctx`.
 			out_statuses[i] = SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 			continue;
 		}
 		if (adapter_or_null && adapter_or_null->model != seq->model) {  // T-2114 (S2): ->destroyed
 		                                                                 // read removed.
 			out_statuses[i] = SSLM_ADAPTER_MODEL_MISMATCH;
+			continue;
+		}
+		if (adapter_or_null && adapter_or_null->ctx != ctx) {  // T-2124 (D-SLM3446 P1-4): a bound
+		                                                        // adapter mapped against a
+		                                                        // different context.
+			out_statuses[i] = SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 			continue;
 		}
 		const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
@@ -1377,7 +1522,9 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
                               int32_t* out_ready, SslmGpuStatus* out_status) {
 	if (out_ready) *out_ready = 0;
 	if (out_status) *out_status = SSLM_OK;
-	if (!ctx || !seq) {  // T-2114 (S2): ->destroyed read removed, see sequence handle's own field comment.
+	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
+	                                         // handle's own field comment. T-2124 (D-SLM3446
+	                                         // P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;  // no channel exists for a malformed handle
 	}
 	if (seq->state != superslm_gpu::SslmSequenceGpuState::Submitted) {
@@ -1407,6 +1554,15 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 	if (seq->model && seq->model->submitted_sequences > 0) {
 		seq->model->submitted_sequences -= 1;
 	}
+	// T-2124 (D-SLM3446 P0-3): the adapter-handle analogue -- the symmetric twin of
+	// SubmitOneSequenceDecode's own `adapter_or_null->submitted_sequences += 1` above. The fence
+	// has now signaled (this is only reached once `ready` is true), so the GPU is provably done
+	// reading the adapter's own lora_ab_buf/fold_buf for this submission -- safe for
+	// sslm_gpu_adapter_unmap to proceed once this count reaches zero.
+	if (seq->in_flight_adapter && seq->in_flight_adapter->submitted_sequences > 0) {
+		seq->in_flight_adapter->submitted_sequences -= 1;
+	}
+	seq->in_flight_adapter = nullptr;
 	seq->hidden_scale = seq->live_state.hidden_scale;
 	seq->layer_index = seq->live_state.layer_index;
 	seq->kv_saturation_count = seq->live_state.kv_saturation_count;
@@ -1424,7 +1580,9 @@ SslmGpuStatus sslm_gpu_ready(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq, in
 // header comment on the pair for the current contract.
 SslmGpuStatus sslm_gpu_seq_save(SslmGpuContext* ctx, const SslmGpuSequenceHandle* seq,
                                  void* out_blob, size_t* out_blob_size) {
-	if (!ctx || !seq) {  // T-2114 (S2): ->destroyed read removed, see sequence handle's own field comment.
+	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
+	                                         // handle's own field comment. T-2124 (D-SLM3446
+	                                         // P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;
@@ -1457,7 +1615,10 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	*out_seq = nullptr;
-	if (!ctx || !model || !blob) {  // T-2114 (S2): ->destroyed read removed, see model handle's own field comment.
+	if (!ctx || !model || !blob || model->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed,
+	                                                       // see model handle's own field comment.
+	                                                       // T-2124 (D-SLM3446 P1-4):
+	                                                       // `model->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	// Design Sec4.2/Sec21 (T-2114 N1, corrected 2026-08-15, routing
@@ -1594,7 +1755,9 @@ SslmGpuStatus sslm_gpu_seq_restore(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 }
 
 SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq) {
-	if (!ctx || !seq) {  // T-2114 (S2): ->destroyed read removed, see sequence handle's own field comment.
+	if (!ctx || !seq || seq->ctx != ctx) {  // T-2114 (S2): ->destroyed read removed, see sequence
+	                                         // handle's own field comment. T-2124 (D-SLM3446
+	                                         // P1-4): `seq->ctx != ctx`.
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
 	const bool is_submitted = seq->state == superslm_gpu::SslmSequenceGpuState::Submitted;

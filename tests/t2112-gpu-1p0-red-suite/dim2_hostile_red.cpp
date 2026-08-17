@@ -3,7 +3,11 @@
 // `TestDim2_P2_ForeignBlobRestoreModelMismatch`/`TestDim2_P3_SameShapeDifferentContentRestore
 // ModelMismatch`) -- authored by THIS BUILD SEAT per the design fold's own explicit instruction
 // ("the build seat owes ... the two new dim-2 cells in the T-2112 suite"), the one named exception
-// to Brunel's own "does not author the test suite" boundary.
+// to Brunel's own "does not author the test suite" boundary. +1 (T-2124, D-SLM3446 P1-4,
+// `TestDim2_M4_CrossContextHandleRejectedAtEveryBoundary`) -- the external-review cross-context
+// validation gap, authored by the build seat under the SAME routed exception this file's own P2/P3
+// cells already establish (a fix round routes its own pin in the same round, per this project's
+// standing rule).
 // RED BY LINK (see dim1_lifetime_red.cpp's own header for the shared explanation).
 #include "fixture_common.h"
 #include "../sslm_model_hostile_fixtures.h"
@@ -53,6 +57,76 @@ static void TestDim2_M2_OneRepresentativeGuardCarriedForwardThroughDecodeStepGpu
 	// scope than this repair pass, a follow-up coverage task for whoever next extends this file.
 	CHECK(sslm_decode_step_gpu(ctx, seq_with_oversized_context, nullptr, /*dispatch_budget=*/1u) ==
 	      SSLM_DISPATCH_BUDGET_TOO_SMALL);
+}
+
+// --- Mechanism cell 4 (T-2124, D-SLM3446 P1-4, external review): every public entry point that
+// takes both a context and a handle validates the handle was actually created/mapped against THAT
+// context -- before this fix, `model->ctx == ctx` (and the adapter/sequence analogues) was never
+// checked anywhere, so a caller could bind a sequence to a model mapped on a DIFFERENT context (a
+// different D3D12 device) with no rejection. `ctx_b`/`model_b` are a second, independent context
+// and its own model handle, real but otherwise unused by this cell -- every call below passes
+// `ctx_b` alongside a handle that belongs to `ctx_a`, and every one must reject through the same
+// disposition that call already uses for a malformed/null handle (never a new status, per this
+// call's own routing). `seq_a`/`model_a` are left live and unmodified by every rejected call --
+// checked at the end by a real, successful call against the CORRECT context, proving no rejected
+// call corrupted the handle it was wrongly aimed at. ---
+static void TestDim2_M4_CrossContextHandleRejectedAtEveryBoundary(
+    SslmGpuContext* ctx_a, SslmGpuContext* ctx_b, SslmGpuModelHandle* model_a,
+    SslmGpuSequenceHandle* seq_a, SslmGpuAdapterHandle* adapter_a,
+    const SslmModelView* adapter_artifact, uint32_t num_hidden_layers) {
+	// sslm_gpu_model_unmap: model_a belongs to ctx_a, called with ctx_b.
+	CHECK(sslm_gpu_model_unmap(ctx_b, model_a) == SSLM_DEVICE_LOST);
+	// sslm_gpu_adapter_unmap: adapter_a belongs to ctx_a, called with ctx_b.
+	CHECK(sslm_gpu_adapter_unmap(ctx_b, adapter_a) == SSLM_DEVICE_LOST);
+	// sslm_gpu_seq_create: model_a belongs to ctx_a, called with ctx_b.
+	SslmGpuSequenceHandle* rejected_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx_b, model_a, 64, &rejected_seq) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	CHECK(rejected_seq == nullptr);
+	// sslm_gpu_seq_release: seq_a belongs to ctx_a, called with ctx_b -- must NOT delete seq_a
+	// (checked below by a real, successful call against ctx_a).
+	CHECK(sslm_gpu_seq_release(ctx_b, seq_a) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_gpu_seq_embed_token: seq_a belongs to ctx_a, called with ctx_b.
+	CHECK(sslm_gpu_seq_embed_token(ctx_b, seq_a, 5) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_decode_step_gpu: seq_a belongs to ctx_a, called with ctx_b.
+	CHECK(sslm_decode_step_gpu(ctx_b, seq_a, nullptr, 24u) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_decode_step_batch_gpu: the per-sequence channel (out_statuses[0]), never the call-level
+	// return value (design Sec4.3) -- seq_a belongs to ctx_a, the batch called with ctx_b.
+	SslmGpuSequenceHandle* const seqs_one[] = {seq_a};
+	SslmGpuStatus out_statuses[1] = {SSLM_OK};
+	CHECK(sslm_decode_step_batch_gpu(ctx_b, seqs_one, nullptr, 1u, 24u, out_statuses) == SSLM_OK);
+	CHECK(out_statuses[0] == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_gpu_ready: seq_a belongs to ctx_a, called with ctx_b.
+	int32_t ready = 0;
+	SslmGpuStatus ready_status = SSLM_OK;
+	CHECK(sslm_gpu_ready(ctx_b, seq_a, /*block=*/0, &ready, &ready_status) ==
+	      SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_gpu_seq_save: seq_a belongs to ctx_a, called with ctx_b -- the ctx check is the first
+	// thing this call does (before the blob is ever touched), so a dummy 1-byte buffer suffices.
+	uint8_t save_probe = 0;
+	size_t save_size = sizeof(save_probe);
+	CHECK(sslm_gpu_seq_save(ctx_b, seq_a, &save_probe, &save_size) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_gpu_seq_restore: model_a belongs to ctx_a, called with ctx_b -- the ctx check runs
+	// before the blob header is parsed, so a dummy non-null blob pointer suffices.
+	uint8_t restore_probe = 0;
+	SslmGpuSequenceHandle* restored = nullptr;
+	CHECK(sslm_gpu_seq_restore(ctx_b, model_a, &restore_probe, sizeof(restore_probe), &restored) ==
+	      SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	CHECK(restored == nullptr);
+	// sslm_gpu_seq_reset: seq_a belongs to ctx_a, called with ctx_b.
+	CHECK(sslm_gpu_seq_reset(ctx_b, seq_a) == SSLM_SEQUENCE_KV_BUFFER_MISMATCH);
+	// sslm_gpu_adapter_map: model_a belongs to ctx_a, called with ctx_b -- the real adapter
+	// artifact's own content is irrelevant here (the ctx check runs before it is read, same
+	// ordering as every other malformed-input check this call already has).
+	SslmGpuAdapterHandle* rejected_adapter = nullptr;
+	CHECK(sslm_gpu_adapter_map(ctx_b, model_a, adapter_artifact, &rejected_adapter) ==
+	      SSLM_DEVICE_LOST);
+	CHECK(rejected_adapter == nullptr);
+
+	// Every rejected call above must have left model_a/seq_a/adapter_a completely unmodified --
+	// proven by a real, successful call against the CORRECT context (ctx_a) for each. Uses
+	// FullTokenBudget (not a bare per-layer 24u), matching this suite's own established
+	// adapter-bound decode convention (dim8_composition_red.cpp's own RunFullTokenStep calls).
+	CHECK(RunFullTokenStep(ctx_a, seq_a, adapter_a, num_hidden_layers, 5));
 }
 
 // --- Product cell: a real adapter artifact with a declared rank exceeding its own tensor's shape
@@ -314,6 +388,8 @@ int main(int argc, char** argv) {
 	volatile void* addr_4 = (void*)&TestDim2_P2_ForeignBlobRestoreModelMismatch; (void)addr_4;
 	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
 	volatile void* addr_5 = (void*)&TestDim2_P3_SameShapeDifferentContentRestoreModelMismatch; (void)addr_5;
+	// Force emission (StandardsDocument.md Sec5.4): see the pattern above.
+	volatile void* addr_6 = (void*)&TestDim2_M4_CrossContextHandleRejectedAtEveryBoundary; (void)addr_6;
 
 	// S3's own cell is fully synthetic (no real artifact needed) -- run it unconditionally,
 	// including when no --model*/--adapter args are supplied, rather than gating it behind the
@@ -388,6 +464,29 @@ int main(int argc, char** argv) {
 		CHECK(sslm_gpu_seq_release(ctx, seq) == SSLM_OK);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		CHECK(sslm_gpu_context_destroy(ctx) == SSLM_OK);
+	}
+
+	// M4 (T-2124, D-SLM3446 P1-4): two independent real contexts, ctx_a owns model_a/seq_a/adapter_a,
+	// ctx_b is the foreign context every call below is wrongly aimed at.
+	{
+		SslmGpuContext* ctx_a = nullptr;
+		SslmGpuContext* ctx_b = nullptr;
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx_a) == SSLM_OK);
+		CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx_b) == SSLM_OK);
+		SslmGpuModelHandle* model_a = nullptr;
+		CHECK(sslm_gpu_model_map(ctx_a, &view_1p5b, GpuResidencyConfig{}, &model_a) == SSLM_OK);
+		SslmGpuSequenceHandle* seq_a = nullptr;
+		CHECK(sslm_gpu_seq_create(ctx_a, model_a, 64, &seq_a) == SSLM_OK);
+		SslmGpuAdapterHandle* adapter_a = nullptr;
+		CHECK(sslm_gpu_adapter_map(ctx_a, model_a, &view_adapter, &adapter_a) == SSLM_OK);
+		TestDim2_M4_CrossContextHandleRejectedAtEveryBoundary(
+		    ctx_a, ctx_b, model_a, seq_a, adapter_a, &view_adapter,
+		    view_1p5b.config.num_hidden_layers);
+		CHECK(sslm_gpu_seq_release(ctx_a, seq_a) == SSLM_OK);
+		CHECK(sslm_gpu_adapter_unmap(ctx_a, adapter_a) == SSLM_OK);
+		CHECK(sslm_gpu_model_unmap(ctx_a, model_a) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx_a) == SSLM_OK);
+		CHECK(sslm_gpu_context_destroy(ctx_b) == SSLM_OK);
 	}
 
 	// P2 (design Sec22): foreign-blob rejection -- 0.5B save, restore against the real 1.5B model.

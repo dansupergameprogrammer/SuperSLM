@@ -354,16 +354,14 @@ _PROJECTION_FULL_PATH = {
     "gate_proj": "mlp.gate_proj", "up_proj": "mlp.up_proj", "down_proj": "mlp.down_proj",
 }
 
-_SPIKE_ROOT = r"D:\Wizard\Tools"
-
 
 def _load_spike():
-    """Lazy cross-tree import, matching `convert_model.py`'s own `_load_spike` -- keeps this
-    module importable (and its 22 existing B0 unit tests fast/dependency-free) on a bare
-    checkout; only the writer/CLI functions below ever call this."""
-    if _SPIKE_ROOT not in sys.path:
-        sys.path.insert(0, _SPIKE_ROOT)
-    from superslm_spike import pipeline  # noqa: E402
+    """Lazy import (T-2123/T-2137: `reference_pipeline`, vendored in-tree at
+    tools/reference_pipeline/ -- no longer a cross-tree import), matching `convert_model.py`'s
+    own `_load_spike` -- keeps this module importable (and its 22 existing B0 unit tests
+    fast/dependency-free) on a bare checkout; only the writer/CLI functions below ever call
+    this."""
+    from reference_pipeline import pipeline  # noqa: E402
     return pipeline
 
 

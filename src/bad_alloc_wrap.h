@@ -3,8 +3,10 @@
 // point in the "throws only std::bad_alloc" contract's derived population
 // wraps itself with. std::bad_alloc crosses unchanged; every other
 // std::exception-derived type narrows to std::bad_alloc. This is a
-// rename-and-wrap, not a rewrite -- the nineteen sites' own validation logic
-// is unchanged; only renamed to a *Impl-suffixed inner call and wrapped.
+// rename-and-wrap, not a rewrite -- each derived member's own validation
+// logic is unchanged; only renamed to a *Impl-suffixed inner call and
+// wrapped. (tests/ci/bad_alloc_membership_expected.txt is this population's
+// own source of truth for its current size; not repeated here.)
 //
 // tools/ci/check_bad_alloc_contract.py's "check wrapping" step looks for
 // exactly this shape (a call to WrapBadAllocContract wrapping a *Impl call)
@@ -42,12 +44,13 @@ namespace internal {
 // callable's return type via `decltype(fn())`, which covers `void` the same
 // way it covers every other return type (a `return` statement of a void
 // expression inside a void-returning function is well-formed) -- one shape
-// for all nineteen sites' return types (SslmStatus, SslmModelStatus, bool,
-// std::string, std::vector<T>, void; JsonEscape's std::string is already an
-// instantiated case) -- matching design Sec3.1's "two handling shapes...
-// covering all eighteen sites with one helper" (a verbatim quote of the
-// design text as authored; the design's own table is owed a matching
-// amendment to nineteen, T-1475).
+// for every derived member's own return type (SslmStatus, SslmModelStatus,
+// bool, std::string, std::vector<T>, void; JsonEscape's std::string is
+// already an instantiated case) -- matching design Sec3.1's "two handling
+// shapes... covering all eighteen sites with one helper" (a verbatim quote
+// of the design text as authored; the design's own table is owed a matching
+// amendment to the population's current size, tracked at
+// tests/ci/bad_alloc_membership_expected.txt, T-1475/T-2125).
 template <typename Fn>
 auto WrapBadAllocContract(Fn&& fn) -> decltype(fn()) {
 	try {
@@ -72,6 +75,20 @@ auto WrapBadAllocContract(Fn&& fn) -> decltype(fn()) {
 inline void MaybeThrowInjectedBadAllocFault() {
 #ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
 	superslm_test::MaybeThrowInjectedFault();
+#endif
+}
+
+// D-SLM3466's owed pin (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S2/S3):
+// consults the SEPARATE, independent post-load-region slot (tests/support/bad_alloc_injection.h)
+// -- never the plain slot MaybeThrowInjectedBadAllocFault() above consults. Called ONLY from
+// sslm_model_map's BuildEngineCache step and sslm_adapter_map's PopulateAdapterFromView step
+// (src/sslm_abi.cpp), both of which run AFTER SslmModel::Load's own *Impl consultation (which
+// still calls the plain MaybeThrowInjectedBadAllocFault() above, unchanged) -- arming this slot
+// and calling either verb reaches THIS consultation point specifically, closing the isolation gap
+// the N3 pin's own header comment (tools/t2139_n3_bad_alloc_pin.cpp) named as unclosed.
+inline void MaybeThrowInjectedBadAllocFaultPostLoadRegion() {
+#ifdef SUPERSLM_ENABLE_BAD_ALLOC_INJECTION
+	superslm_test::MaybeThrowInjectedFaultPostLoadRegion();
 #endif
 }
 

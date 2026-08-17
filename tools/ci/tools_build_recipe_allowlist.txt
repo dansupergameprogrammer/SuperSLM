@@ -1,0 +1,23 @@
+# T-2139 Finding 3 (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md S3) --
+# tools/ci/check_tools_have_build_recipe.py's own allowlist. Format: `<basename.cpp>  # <reason>`.
+#
+# Starts EMPTY (validated against an independently-found population, StandardsDocument Sec4, run
+# BEFORE this round's own new tool files gained their recipes below -- the checker found exactly
+# six files missing a recipe, all six this round's own new deliverables, and all six were WIRED
+# rather than allowlisted; the four pre-existing tools/*.cpp files that first looked recipe-less by
+# a narrower 3-location grep (sslm_inspect.cpp, sslm_layer_trace.cpp, sslm_lora_switch_demo.cpp,
+# tok_verify.cpp) all turned out to have real, working recipes in tools/build_*.bat, which is why
+# the checker treats that glob as a fourth checked location rather than allowlisting all four).
+#
+# A genuine future exception goes here, one line, with its own justification -- never silently.
+#
+# T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S1) --
+# after the comment-stripping fix, the checker names t1657_load_harness.cpp: its only mention in
+# any recipe location is a `rem` line (build.bat:45) naming it as precedent, and it has no real
+# recipe anywhere. Confirmed genuinely correct rather than a missed recipe: the file's own header
+# comment states "Not part of the build.bat/CMake build graph -- compiled and run directly for
+# this session's own verification" (T-1657/T-1663 throwaway harness, requires a real .sslm
+# artifact on disk this build does not assume exists). This is the precedent build.bat's own C5
+# comment already cites for tools/t2039_c5_harness.cpp's build-but-manual-invoke shape; unlike
+# t2039_c5_harness.cpp, this one was never wired into build.bat because it was never meant to be.
+t1657_load_harness.cpp  # throwaway T-1657/T-1663 harness, explicitly outside the build graph by its own file header; needs a real .sslm artifact on disk and is built-and-run manually per precedent

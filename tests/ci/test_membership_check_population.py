@@ -66,23 +66,32 @@ def _keyset(pop: list[dict]) -> set[tuple[str, int, str]]:
 
 
 @requires_clang
-def test_pinned_oracle_has_nineteen_sites():
+def test_pinned_oracle_has_twenty_sites():
     """T-1475: proof_manifest.h's JsonEscape was promoted out of its
     anonymous namespace and into the header (T-1449), making it the
-    membership rule's 19th derived member -- confirmed by executing the
-    corrected rule (see derive_bad_alloc_membership.py's -std=c++20 fix,
-    T-1476) against the real headers on disk, not asserted. Design Sec3.1's
+    membership rule's 19th derived member. T-2125: SslmAmplifyingFoldScaleView
+    <Kind>::Parse (model.h) -- the T-2021/T-2029 B0b runtime-additive-LoRA
+    adapter view's own parse entry point -- is the 20th; found by this suite's
+    own regression pin (test_per_header_scan_matches_pinned_oracle) reddening
+    against the real header with zero test-side change, confirmed a real,
+    legitimate population growth (not a stale checker), and closed by a
+    rename-and-wrap fix in src/model.h/model.cpp in the same round (the
+    member was calling its own parse logic directly, with no
+    WrapBadAllocContract around it, despite its own header comment already
+    claiming the S-HARDEN-7 convention). Confirmed by executing the corrected
+    rule against the real headers on disk, not asserted. Design Sec3.1's
     table itself (Claude/Vitruvius/SuperSLM_SHARDEN678_Bundle_Design-
     2026-07-23.md) still states eighteen as of this change and is owed a
     matching amendment outside this suite's writable surface; this pin
     tracks the mechanically-derived population, which is the number this
     gate and the oracle file must agree on."""
     oracle = _load_pinned_oracle()
-    assert len(oracle) == 19, (
-        f"the pinned oracle should carry the nineteen sites the corrected rule "
-        f"derives as of T-1475 (JsonEscape's promotion into proof_manifest.h); "
-        f"has {len(oracle)} -- regenerate tests/ci/bad_alloc_membership_expected.txt "
-        f"only after confirming the design's own table changed, never silently"
+    assert len(oracle) == 20, (
+        f"the pinned oracle should carry the twenty sites the corrected rule "
+        f"derives as of T-2125 (SslmAmplifyingFoldScaleView<Kind>::Parse joining "
+        f"proof_manifest.h's own JsonEscape-era nineteen); has {len(oracle)} -- "
+        f"regenerate tests/ci/bad_alloc_membership_expected.txt only after "
+        f"confirming the design's own table changed, never silently"
     )
 
 
@@ -101,6 +110,31 @@ def test_per_header_scan_matches_pinned_oracle():
         f"extra {extra}. If this is an intentional header change, regenerate "
         f"tests/ci/bad_alloc_membership_expected.txt and update design Sec3.1's "
         f"table in the same change."
+    )
+
+
+@requires_clang
+def test_derived_population_list_length_matches_the_oracle():
+    """T-2125 fix round (Poirot 242dc12-t2125-ci-drift-review.md, Significant
+    4): `test_per_header_scan_matches_pinned_oracle` above compares KEYSETS --
+    (header, line, name) triples -- so it stayed green even while
+    `_dedup_sort`'s old key silently stopped deduplicating a class template's
+    own member: `derive_population_per_header()` returned 22 entries for this
+    20-site population (one row per `ClassTemplateSpecializationDecl` Clang
+    emits for `SslmAmplifyingFoldScaleView<Kind>::Parse`'s two real
+    instantiations plus the primary template's own declaration), and nothing
+    here compared the LIST's own length against the oracle it is regenerated
+    from. `python tests/ci/derive_bad_alloc_membership.py` is the command the
+    oracle file's own header names as its regeneration command; this pins
+    that the number that command prints is the population's true size, not
+    the instantiation count of whichever member happens to be a template."""
+    oracle = _load_pinned_oracle()
+    derived = dbam.derive_population_per_header()
+    assert len(derived) == len(oracle), (
+        f"derive_population_per_header() returned {len(derived)} entries for "
+        f"a {len(oracle)}-site pinned oracle -- the list is no longer the same "
+        f"size as its own deduplicated keyset, which means _dedup_sort's key "
+        f"is admitting more than one row per (header, line, name)"
     )
 
 
@@ -144,18 +178,20 @@ def test_artifact_move_special_members_are_excluded_under_every_strategy():
 
 
 @requires_clang
-def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
+def test_vitality_injected_twenty_first_function_is_flagged(tmp_path):
     """Guard-vitality cell (design Sec3.2, "New cell -- the membership-check
     job's own discriminating power"): a throwaway function satisfying the
     rule, added to a scratch copy of the include tree, must be flagged; once
-    removed, the population returns to exactly the pinned nineteen (T-1475
+    removed, the population returns to exactly the pinned twenty (T-1475
     renumbered this from eighteen to nineteen when JsonEscape was promoted
-    into proof_manifest.h; the injected function was, and remains, one past
-    the pinned oracle's own count, whatever that count is). Proves THIS
-    reference tool's own discriminating power -- StandardsDocument Sec4's "a
-    check that has never been shown able to fail is not shown to cover
-    anything," applied to the independent derivation tool itself, ahead of
-    the production CI gate that must reproduce it."""
+    into proof_manifest.h; T-2125 renumbered it again, nineteen to twenty,
+    when SslmAmplifyingFoldScaleView<Kind>::Parse joined -- the injected
+    function was, and remains, one past the pinned oracle's own count,
+    whatever that count is). Proves THIS reference tool's own discriminating
+    power -- StandardsDocument Sec4's "a check that has never been shown able
+    to fail is not shown to cover anything," applied to the independent
+    derivation tool itself, ahead of the production CI gate that must
+    reproduce it."""
     import shutil
 
     scratch_include = tmp_path / "include"
@@ -163,7 +199,7 @@ def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
 
     artifact_h = scratch_include / "superslm" / "artifact.h"
     original = artifact_h.read_text(encoding="utf-8")
-    assert "SUPERSLM_TEST_INJECTED_TWENTIETH_FUNCTION" not in original
+    assert "SUPERSLM_TEST_INJECTED_TWENTY_FIRST_FUNCTION" not in original
 
     injected = original.replace(
         "} // namespace superslm",
@@ -171,7 +207,7 @@ def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
         "// non-noexcept, non-deleted static function taking a\n"
         "// (const uint8_t*, size_t) pair -- condition 4(a) satisfied,\n"
         "// deliberately left unwrapped. Must be flagged by the derivation.\n"
-        "struct SUPERSLM_TEST_INJECTED_TWENTIETH_FUNCTION {\n"
+        "struct SUPERSLM_TEST_INJECTED_TWENTY_FIRST_FUNCTION {\n"
         "\tstatic SslmStatus Probe(const uint8_t* data, size_t size);\n"
         "};\n"
         "} // namespace superslm",
@@ -189,14 +225,14 @@ def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
     assert injected_hits[0]["header"] == "artifact.h"
 
     # Every other site must be unaffected -- the injected function adds
-    # exactly one member, it does not perturb the other nineteen.
+    # exactly one member, it does not perturb the other twenty.
     oracle = _load_pinned_oracle()
     derived_without_probe = {
         (m["header"], m["line"], m["name"]) for m in population_with_injection if m["name"] != "Probe"
     }
     assert derived_without_probe == oracle
 
-    # Restore and confirm the population returns to exactly the pinned nineteen.
+    # Restore and confirm the population returns to exactly the pinned twenty.
     artifact_h.write_text(original, encoding="utf-8")
     population_restored = _keyset(dbam.derive_population_from_headers_dir(str(tmp_path)))
     assert population_restored == oracle
@@ -205,8 +241,10 @@ def test_vitality_injected_twentieth_function_is_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 # The production gate (design Sec3.1: "tools/ci/check_bad_alloc_contract.py")
 # is built, and design Sec3.3's rename-and-wrap has landed for every one of
-# the nineteen derived members (src/bad_alloc_wrap.h's WrapBadAllocContract,
-# included by all five src/*.cpp files the population's members live in). The
+# the twenty derived members (src/bad_alloc_wrap.h's WrapBadAllocContract,
+# included by all five src/*.cpp files the population's members live in;
+# T-2125 closed the twentieth, SslmAmplifyingFoldScaleView<Kind>::Parse,
+# found unwrapped by this suite's own regression pin). The
 # reference tool above (derive_bad_alloc_membership.py) proves the POPULATION
 # is derivable and stable; the cells below confirm the CI GATE that reproduces
 # that population reports it correctly and, now that every member is wrapped,
@@ -234,7 +272,7 @@ def test_production_membership_check_tool_exists():
 
 @requires_clang
 def test_production_membership_check_reports_zero_unwrapped_members():
-    """S-HARDEN-7's rename-and-wrap has landed for every one of the nineteen
+    """S-HARDEN-7's rename-and-wrap has landed for every one of the twenty
     sites, so the gate's own --list-unwrapped must report none, and exit 0."""
     repo_root = dbam._REPO_ROOT
     tool_path = os.path.join(repo_root, "tools", "ci", "check_bad_alloc_contract.py")

@@ -61,7 +61,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, int x) {
 
 _GPU_FIXTURE = """\
 namespace superslm_gpu {
-superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq, int x) {
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(superslm::SequenceLayerState& seq, int x) {
 	if (x == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (x < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
 	if (x == 2) {
@@ -77,9 +77,19 @@ superslm::SslmForwardStatus RunLayerLoopGpu(superslm::SequenceLayerState& seq, i
 	// the check, which is why the repaired derivation raises instead of falling back.
 	const bool weights_resident = g_resident_weights.valid;
 	g_last_weight_upload_was_skipped = weights_resident;
-	// the real function ends via `return DecodeStickyTag(sticky_tag);` --
-	// not a literal `return SslmForwardStatus::X;` -- so this fixture ends
-	// the same unmatched way, never contributing a spurious status.
+	// the real function ends via `RunLayerLoopGpuFinish`'s own
+	// `return DecodeStickyTag(sticky_tag);` -- not here. T-2113 (B5): Submit's own
+	// success path is now a real early return handing the caller an in-flight token,
+	// `Ok` (subtracted back out by GPU_BELOW_LADDER_STATUSES, same as the pre-split
+	// fixture's unmatched DecodeStickyTag call never contributed a spurious status).
+	return superslm::SslmForwardStatus::Ok;
+}
+
+superslm::SslmForwardStatus RunLayerLoopGpuFinish(superslm::SequenceLayerState& seq, int x) {
+	// T-2113 (B5): the fence-wait/readback half. Runs only once Submit's own residency
+	// decision has already returned, so every return here is "after" by construction --
+	// this fixture's own single terminal return, the real function's sticky-tag-decoded
+	// destination.
 	return DecodeStickyTag(sticky_tag);
 }
 }  // namespace superslm_gpu
@@ -1058,27 +1068,31 @@ def test_derive_lwuws_before_decision_count_matches_the_gpu_fixture():
     assert chk.derive_lwuws_before_decision_count(_GPU_FIXTURE) == 4
 
 
-def test_derive_lwuws_after_decision_count_is_one_on_the_gpu_fixture():
-    assert chk.derive_lwuws_after_decision_count(_GPU_FIXTURE) == 1
+def test_derive_lwuws_after_decision_count_is_two_on_the_gpu_fixture():
+    # T-2113 (B5): one in Submit (the new terminal Ok return) + one in Finish (the
+    # DecodeStickyTag-decoded terminal return) = 2, split across the two functions the way
+    # the real gpu_port.h prose now describes for the production body (five members there,
+    # scaled down here to this fixture's own two-function miniature).
+    assert chk.derive_lwuws_after_decision_count(_GPU_FIXTURE) == 2
 
 
 def test_check_lwuws_path_count_claim_passes_when_the_words_match_real_structure():
-    gph = "// catch, four\n// paths in all\n// alike, five paths' own destination in\n// total, ..."
+    gph = "// catch, four\n// paths in all\n// alike, six paths' own destination in\n// total, ..."
     assert chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE) == []
 
 
 def test_check_lwuws_path_count_claim_reddens_when_the_before_word_is_wrong():
-    gph = "// catch, three\n// paths in all\n// alike, five paths' own destination in\n// total, ..."
+    gph = "// catch, three\n// paths in all\n// alike, six paths' own destination in\n// total, ..."
     failures = chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE)
     assert failures, "a wrong before-decision word must redden"
     assert "'3'" in failures[0] and "4" in failures[0]
 
 
 def test_check_lwuws_path_count_claim_reddens_when_the_total_word_is_wrong():
-    gph = "// catch, four\n// paths in all\n// alike, six paths' own destination in\n// total, ..."
+    gph = "// catch, four\n// paths in all\n// alike, seven paths' own destination in\n// total, ..."
     failures = chk.check_lwuws_path_count_claim(gph, _GPU_FIXTURE)
     assert failures, "a wrong total word must redden"
-    assert "'6'" in failures[0]
+    assert "'7'" in failures[0]
 
 
 def test_check_lwuws_path_count_claim_reddens_when_only_the_english_word_is_wrong_structure_untouched():
@@ -1337,7 +1351,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, sixteen", "alike, twenty", 1)
+        corrupted = real_text.replace("alike, twenty", "alike, nineteen", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:

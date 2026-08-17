@@ -372,8 +372,11 @@ jobs:
 
   # S-HARDEN-7 (F5, design Sec3.1, T-411): the "throws only std::bad_alloc"
   # contract's `membership-check` job. Mechanically, on every run: derives the
-  # nineteen-site population (T-1475: JsonEscape's promotion into
-  # proof_manifest.h made it the 19th; design Sec3.1's table itself still
+  # twenty-site population (T-1475: JsonEscape's promotion into
+  # proof_manifest.h made it the 19th; T-2125: SslmAmplifyingFoldScaleView<Kind>::
+  # Parse (model.h), the T-2021/T-2029 B0b runtime-additive-LoRA adapter view,
+  # made it the 20th -- found unwrapped by this job, rename-and-wrap fixed in
+  # the same change, model.h/model.cpp; design Sec3.1's table itself still
   # states eighteen and is owed a matching amendment) from the nine
   # include/superslm/*.h headers via a Clang AST walk
   # (tests/ci/derive_bad_alloc_membership.py's corrected, four-condition
@@ -549,7 +552,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: pip install numpy pytest
+      # T-2137 (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): this job now collects
+      # tools/test_calibrate_checkpoint.py, tools/test_reference_pipeline_b1a_reproducibility.py,
+      # and tools/test_reference_pipeline_b1b_composition_cell.py (none carries
+      # @pytest.mark.upstream, so none is deselected), which reach tokenizers directly
+      # (tools/_calibrate_checkpoint_fixture.py) and transformers via
+      # reference_pipeline.pipeline.load_model -- both declared in requirements.txt.
+      - run: pip install -r requirements.txt
       # T-407: assert the Python<->Unicode coupling the comment above only documents, at setup,
       # so a runner drift fails loud HERE instead of deep inside the pytest run as an opaque
       # UnicodeVersionMismatch. Compares the running interpreter against the single pinned source

@@ -2,13 +2,14 @@
 
 Builds a tiny synthetic calibrated model directly (a `types.SimpleNamespace`
 satisfying the same attribute contract `build_sections` reads) rather than
-importing convert_model.py or the cross-tree spike -- convert_model.py
-unconditionally imports `superslm_spike` from `D:\\Wizard\\Tools` at module
-scope, which a clean checkout of this repository does not have (the same
-constraint .github/workflows/tests.yml's own `generators` job comment
-documents for gen_intmath_fixtures.py/gen_matmul_fixtures.py). This keeps
-every test below runnable in CI on a bare checkout, with numpy the only
-dependency.
+importing convert_model.py or reference_pipeline -- convert_model.py's own
+`_fold_ops_tensor`/`_ctx_fold_tensor` defaults reach `reference_pipeline`
+(vendored in-tree at `tools/reference_pipeline/`, T-2123/T-2137; no longer a
+cross-tree `D:\\Wizard\\Tools` import as of B5) only through a LAZY import,
+triggered by those default functions actually being called -- which this
+suite avoids entirely by supplying its own fold functions, keeping every test
+below dependency-light and independent of whether `transformers`/`tokenizers`
+are installed, with numpy the only dependency this file itself needs.
 
 Each rejection test asserts the SPECIFIC `.code` that fired -- the
 S-HARDEN-2 review's lesson, restated in this slot's own brief: "a rejection

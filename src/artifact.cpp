@@ -196,7 +196,10 @@ RequiredSectionSpan RequiredSectionsForVersion(uint32_t version) noexcept {
 // (include/superslm/artifact.h's `friend struct SslmArtifactAccess;`) --
 // declared and defined only here, never in the header, so the
 // membership-check AST walk (which scans headers only) never sees it and
-// the population it derives stays exactly the nineteen public entry points,
+// the population it derives stays exactly the public entry points
+// (tests/ci/bad_alloc_membership_expected.txt is the count's own source of
+// truth, T-2125 -- not repeated here, so a future member joining or leaving
+// the population never leaves this comment transcribing a stale number),
 // not the private *Impl bodies behind them.
 struct SslmArtifactAccess {
 	static SslmStatus OpenFromMemoryImpl(const uint8_t* data, size_t size,

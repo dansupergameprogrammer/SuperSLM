@@ -20,7 +20,6 @@ int8 [-128,127] silently — this module's own defect finding.
 
 import argparse
 import os
-import sys
 
 import numpy as np
 
@@ -31,21 +30,18 @@ import sslm_model_writer as W  # noqa: E402
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The spike (calibrated-model loader + the offline fold pipeline) lives in the Wizard
-# records tree; this is build-time tooling, so a cross-tree import is fine (nothing
-# ships) -- but it is a LAZY import (S-HARDEN-3), triggered only when the real
-# `_fold_ops_tensor`/`_ctx_fold_tensor` defaults below are actually called, not at
-# module load. This is what keeps convert_model.py's own `build_sections`/`main`
-# importable on a bare checkout (no D:\Wizard sibling) for tests and CI that supply
-# their own fold functions -- the same constraint sslm_convert_validate.py's module
-# docstring documents for every other test module in this slot.
-_SPIKE_ROOT = r"D:\Wizard\Tools"
+# The reference forward pass + calibration (T-2123/T-2137: vendored in-tree at
+# tools/reference_pipeline/, no longer an out-of-tree cross-repo import) is a LAZY
+# import (S-HARDEN-3), triggered only when the real `_fold_ops_tensor`/`_ctx_fold_tensor`
+# defaults below are actually called, not at module load. This is what keeps
+# convert_model.py's own `build_sections`/`main` importable on a bare checkout for tests
+# and CI that supply their own fold functions -- the same constraint
+# sslm_convert_validate.py's module docstring documents for every other test module in
+# this slot.
 
 
 def _load_spike():
-    if _SPIKE_ROOT not in sys.path:
-        sys.path.insert(0, _SPIKE_ROOT)
-    from superslm_spike import artifact_cache, pipeline  # noqa: E402
+    from reference_pipeline import artifact_cache, pipeline  # noqa: E402
     return artifact_cache, pipeline
 
 
