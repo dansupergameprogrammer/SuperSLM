@@ -346,6 +346,25 @@ if errorlevel 1 (
 )
 echo Gate C real-suite-side construction: PASS
 
+rem T-2139 sixth confirmation review O1 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md):
+rem the third TU just proven above is must-accept-only -- nothing else in this battery proves it
+rem CAN fail. This scripted mutate-compile-revert probe closes that gap as a repeatable step rather
+rem than something re-derived by hand each round: it mutates a SCRATCH copy of the header only (a
+rem one-sided append, under out\ which is gitignored and never touches the tracked file), confirms
+rem the real third TU then fails to compile for its own registry-top sentinel reason, and reverts
+rem the scratch tree, asserting git status is clean before and after. Guarded by `where python`
+rem below (non-fatal skip if absent, same convention as the other python checkers this file runs).
+where python >nul 2>nul
+if not errorlevel 1 (
+	python tools\ci\gate_c_third_tu_can_fail_probe.py
+	if errorlevel 1 (
+		echo gate_c_third_tu_can_fail_probe.py FAILED -- see output above
+		popd & exit /b 1
+	)
+) else (
+	echo python not found on PATH -- skipping tools\ci\gate_c_third_tu_can_fail_probe.py ^(non-fatal^)
+)
+
 rem Gate C must-reject, X-MACRO GENERATION mechanism specifically (S4): MUST fail to compile.
 cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2139_gate_c_xmacro_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2139_gate_c_xmacro_check_negative.exe >out\t2139\gate_c_xmacro_negative.log 2>&1
 if not errorlevel 1 (
