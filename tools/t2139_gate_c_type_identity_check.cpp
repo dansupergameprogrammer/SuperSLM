@@ -17,14 +17,13 @@
 // The OTHER half -- two headers assigning the SAME ordinal to DIFFERENT enumerator names, which
 // a per-shared-NAME check structurally cannot see -- is closed by one more assertion below: the
 // library's own highest base ordinal must be STRICTLY BELOW the suite's first G5-only ordinal.
-// That assertion is expected to FAIL to compile right now: sslm_abi.h's own SSLM_TOKEN_ID_UNMAPPED
-// (added this same fix round, ordinal 17) and tests/t2130-g5-red-suite/sslm_g5.h's own
-// SSLM_SCHEMA_NOT_FOUND (G5's first schema-scope enumerator, ALSO ordinal 17) now collide -- the
-// exact drift S8 found already in the tree. Reconciling sslm_g5.h itself is suite ownership
-// (design Sec6's own coordination note, sslm_abi.h's header comment, StandardsDocument Sec6.4) --
-// not performed here. This gate is therefore CORRECTLY red until that reconciliation lands; build
-// tooling driving this file records that as a known, disclosed, cross-suite-coordination block,
-// never silences the assertion to force a green.
+// This assertion WAS expected to fail to compile (sslm_abi.h's own new SSLM_TOKEN_ID_UNMAPPED at
+// 17 collided with tests/t2130-g5-red-suite/sslm_g5.h's own then-current SSLM_SCHEMA_NOT_FOUND,
+// ALSO 17) -- the exact drift S8 found already in the tree. RECONCILED (curie/
+// t2130-g5-red-suite@59e26ff, the closing-round coordination this gate's own red state named):
+// sslm_g5.h now carries SSLM_TOKEN_ID_UNMAPPED at 17 with its own seven G5 additions shifted to
+// 18-24. This gate is GREEN for real now -- both the per-name check (below) and the
+// ordinal-disjointness assertion compile clean against the reconciled real header.
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -54,13 +53,17 @@ typedef enum sslm_status {
 	SSLM_KV_POOL_EXHAUSTED = 14,
 	SSLM_TOKEN_ID_OUT_OF_RANGE = 15,
 	SSLM_CONTEXT_CAP_EXCEEDED = 16,
-	SSLM_SCHEMA_NOT_FOUND = 17,
-	SSLM_SCHEMA_BIND_REJECTED = 18,
-	SSLM_SCHEMA_SPAN_UNBOUND = 19,
-	SSLM_PREFIX_SCHEMA_MISMATCH = 20,
-	SSLM_RESTORE_SCHEMA_MISMATCH = 21,
-	SSLM_SCHEMA_SPAN_UNREACHABLE = 22,
-	SSLM_SCHEMA_UNSATISFIABLE = 23
+	// SSLM_TOKEN_ID_UNMAPPED reconciled in at 17 (curie/t2130-g5-red-suite@59e26ff, closing the
+	// coordination this file's own top comment named) -- G5's own seven additions shifted 17-23
+	// -> 18-24 to make room, base ordinal stability preserved for every enumerator above.
+	SSLM_TOKEN_ID_UNMAPPED = 17,
+	SSLM_SCHEMA_NOT_FOUND = 18,
+	SSLM_SCHEMA_BIND_REJECTED = 19,
+	SSLM_SCHEMA_SPAN_UNBOUND = 20,
+	SSLM_PREFIX_SCHEMA_MISMATCH = 21,
+	SSLM_RESTORE_SCHEMA_MISMATCH = 22,
+	SSLM_SCHEMA_SPAN_UNREACHABLE = 23,
+	SSLM_SCHEMA_UNSATISFIABLE = 24
 } sslm_status;
 
 typedef enum sslm_span_kind {
@@ -102,10 +105,10 @@ T2139_GATE_C_STATUS_CHECK(SSLM_PREFIX_FROZEN_REJECTED);
 T2139_GATE_C_STATUS_CHECK(SSLM_KV_POOL_EXHAUSTED);
 T2139_GATE_C_STATUS_CHECK(SSLM_TOKEN_ID_OUT_OF_RANGE);
 T2139_GATE_C_STATUS_CHECK(SSLM_CONTEXT_CAP_EXCEEDED);
-// SSLM_TOKEN_ID_UNMAPPED (library ordinal 17, this fix round) is deliberately NOT checked here
-// per-name -- sslm_g5.h has no enumerator of that name yet (design's own coordination note,
-// sslm_abi.h's header comment). The ordinal-disjointness assertion below is what stands in for
-// it until the suite's own reconciliation lands.
+// RECONCILED (curie/t2130-g5-red-suite@59e26ff, closing the coordination this file's own top
+// comment named): sslm_g5.h now carries SSLM_TOKEN_ID_UNMAPPED at 17, matching sslm_abi.h.
+// Checked per-name now, same as every other base enumerator above.
+T2139_GATE_C_STATUS_CHECK(SSLM_TOKEN_ID_UNMAPPED);
 #undef T2139_GATE_C_STATUS_CHECK
 
 // --- S8's own second half: no ordinal is claimed by both sides under DIFFERENT names. A
@@ -113,16 +116,16 @@ T2139_GATE_C_STATUS_CHECK(SSLM_CONTEXT_CAP_EXCEEDED);
 // share a numeric value but not a name never appear in the same T2139_GATE_C_STATUS_CHECK call.
 // Stated as "the library's highest base ordinal is strictly below the suite's first G5-only
 // ordinal" (design Sec6's own reconciled-shape statement: this design's base occupies low
-// ordinals, G5's own additions are appended above all of them, never interleaved). EXPECTED TO
-// FAIL TO COMPILE right now (see this file's own top comment): sslm_abi.h's SSLM_TOKEN_ID_UNMAPPED
-// = 17 and sslm_g5.h's own first G5 enumerator, SSLM_SCHEMA_NOT_FOUND, are ALSO = 17 today. That
-// is not a defect in this assertion -- it is this assertion doing its job. ---
+// ordinals, G5's own additions are appended above all of them, never interleaved). PREVIOUSLY,
+// CORRECTLY, RED (this fix round's own first pass): sslm_abi.h's SSLM_TOKEN_ID_UNMAPPED = 17 and
+// sslm_g5.h's own first G5 enumerator, SSLM_SCHEMA_NOT_FOUND, were ALSO = 17 before the suite-side
+// reconciliation above landed. Now GREEN for real, not silenced -- the reconciliation is real
+// (SSLM_SCHEMA_NOT_FOUND is now 18), so this assertion passing reflects the closed coordination,
+// not a loosened check. ---
 static_assert(static_cast<int>(::SSLM_TOKEN_ID_UNMAPPED) <
                   static_cast<int>(t2139_gate_c_suite_side::SSLM_SCHEMA_NOT_FOUND),
               "ordinal collision: sslm_abi.h's highest base enumerator is not strictly below "
-              "sslm_g5.h's first G5-only enumerator -- sslm_g5.h needs SSLM_TOKEN_ID_UNMAPPED "
-              "reconciled in at ordinal 17 with its own G5 additions shifted to 18-24 (design "
-              "Sec6's own coordination note; suite ownership, not performed by this gate)");
+              "sslm_g5.h's first G5-only enumerator");
 
 // --- sslm_span_kind: per-shared-enumerator-name value equality ---
 static_assert(static_cast<int>(t2139_gate_c_suite_side::SSLM_SPAN_PROMPT) ==

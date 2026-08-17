@@ -165,6 +165,29 @@ int main(int argc, char** argv) {
 	}
 	std::printf("sslm_seq_reset: PASS\n");
 
+	// S1 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md; closed per the coordinator's own
+	// closing-round follow-up list): a reset sequence must not be able to emit from a zeroed
+	// residual -- sslm_seq_reset now clears ready_for_logits, so decode_step's own validation
+	// (layer_index==0, current_token<0, !ready_for_logits) correctly rejects a decode attempt on
+	// a just-reset, never-reprefilled sequence.
+	{
+		sslm_decode_params params{};
+		params.layer_budget = 1;
+		int32_t out_token = 0;
+		sslm_seq batch[1] = {seq};
+		const sslm_status reset_decode_st =
+		    sslm_decode_step(model, batch, 1, &params, nullptr, &out_token);
+		if (reset_decode_st != SSLM_INVALID_ARGUMENT) {
+			std::fprintf(stderr,
+			             "FAIL: sslm_decode_step(just-reset sequence) returned %d, expected "
+			             "SSLM_INVALID_ARGUMENT (S1 pin)\n",
+			             static_cast<int>(reset_decode_st));
+			return 1;
+		}
+		std::printf("S1 pin (decode_step on a just-reset sequence): PASS (SSLM_INVALID_ARGUMENT "
+		            "fired as designed)\n");
+	}
+
 	st = sslm_seq_release(seq);
 	if (st != SSLM_OK) {
 		std::fprintf(stderr, "FAIL: sslm_seq_release returned %d\n", static_cast<int>(st));

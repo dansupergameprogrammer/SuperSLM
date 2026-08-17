@@ -94,6 +94,26 @@ int main(int argc, char** argv) {
 		             static_cast<int>(st));
 		return 1;
 	}
+	// S4 pin (Claude/Poirot/2c18dab-t2139-abi-build-review.md; closed per the coordinator's own
+	// closing-round follow-up list): a negative caller-supplied *out_n capacity must be rejected
+	// outright, not silently cast to a huge unsigned value and passed through.
+	{
+		sslm_detok_state state_neg = {0};
+		char neg_buf[16];
+		int32_t out_n_neg = -1;
+		const sslm_status neg_st =
+		    sslm_detokenize_stream(model, &state_neg, tokens.data(), n, neg_buf, &out_n_neg);
+		if (neg_st != SSLM_INVALID_ARGUMENT || out_n_neg != 0) {
+			std::fprintf(stderr,
+			             "FAIL: sslm_detokenize_stream(*out_n=-1) returned %d, out_n=%d -- "
+			             "expected SSLM_INVALID_ARGUMENT, out_n=0 (S4 pin)\n",
+			             static_cast<int>(neg_st), out_n_neg);
+			return 1;
+		}
+		std::printf("S4 pin (sslm_detokenize_stream negative capacity): PASS "
+		            "(SSLM_INVALID_ARGUMENT fired as designed)\n");
+	}
+
 	const std::string decoded_single(buf_single.data(), static_cast<size_t>(out_n_single));
 	if (decoded_single != text) {
 		std::fprintf(stderr,

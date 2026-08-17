@@ -12,22 +12,50 @@
 // SIZING FORMULAS (Claude/Brunel/t2139-abi-build-2026-08-16.md Sec4, the buffer-mapping ruling,
 // design commit fab235c1c6). sslm_workspace_size's exact byte count and sslm_workspace_create's
 // alignment requirement are this design's own "opaque to the caller, self-describing internally"
-// layout (design Sec7.1). REVISITED at C4/S7 (Claude/Poirot/2c18dab-t2139-abi-build-review.md,
-// the fix round following the initial build's own review): this note previously said the layout
-// was "NOT yet grounded in a real per-call scratch layout, because C4 has not been built" -- C4
-// landed in the same change set this note was written in and the note was not revisited then
-// (M5/S7's own finding). It is grounded now: sslm_decode_step's own per-token scratch (embed
-// codes, final-norm codes, wide logits, the narrowed logit row) is sized into this layout and
-// carved from a caller-supplied workspace when one is provided and correctly sized for the model
-// (see ComputeWorkspaceLayout and sslm_decode_step's own comment on the fallback path). NOT
-// covered, disclosed rather than silently left as a residual claim: sslm_decode_step's own
-// per-sequence `layers_scratch` copy (only allocated when an adapter is bound -- a
-// std::vector<superslm::LayerWeights>, not POD bytes this workspace layout can describe) and
-// PrefillWholeTokens' own embed_codes/layers_scratch (sslm_prefill/sslm_prefix_prefill run once
-// per prompt, not per generated token, so were not the path design Sec2's "hot path" phrase names
-// most directly -- deprioritized under this fix round's own time budget, not forgotten). Neither
-// is RunLayerLoop's own internal per-layer scratch (forward_sites.cpp) in scope of this ABI layer
-// at all -- design Sec3 already discloses that allocation as belowthis layer, unchanged by S7.
+// layout (design Sec7.1).
+//
+// S7, ROUND 2 (coordinator's closing-round brief, following Claude/Poirot/
+// 2c18dab-t2139-abi-build-review.md's own S7 finding and Curie's real dim7 red pin,
+// tests/t2138-abi-red-suite/dim7_contract_red.cpp TestDim7_C1, curie/t2138-abi-red-suite@f229449):
+// EVERY allocation this file's own code makes on the sslm_prefill/sslm_prefix_prefill/
+// sslm_decode_step call graph is now carved from a caller-supplied, correctly-sized workspace
+// when one is provided -- sslm_decode_step's own per-token scratch (embed codes, final-norm
+// codes, wide logits, the narrowed logit row) AND PrefillWholeTokens' own embed_codes (shared by
+// sslm_prefill/sslm_prefix_prefill, the SAME workspace region decode_step uses, since one
+// workspace handle is never read by two calls concurrently -- design Sec8.3/dim8 M1's own
+// "successive, not concurrent" sharing contract). `layers_scratch` (both call sites) stays
+// unthreaded -- it is only allocated at all when an adapter is bound (the common no-adapter case
+// makes zero allocation there already, ResolveLayers' own early return), and a
+// std::vector<superslm::LayerWeights> is not POD bytes this byte-oriented workspace layout can
+// safely describe without a much larger, riskier placement-new scheme; disclosed, not fixed, this
+// round.
+//
+// DESIGN-SCOPE FINDING, not fixed here (the coordinator's own named escape valve: "if the
+// workspace sizing formula can't cover prefill's true scratch, report it with the measured
+// requirement"). Curie's own minimal repro (dim7's TestDim7_C1, global operator-new override)
+// measured sslm_prefill at 9717 allocations and sslm_decode_step at 1, against a contract of 0.
+// After this round's own fix, sslm_decode_step's OWN code makes zero allocations when a
+// sufficient workspace is supplied (the "1" was RmsNormSite's/EmbedEntry's own internal `wide`
+// scratch, below); sslm_prefill's own code (PrefillWholeTokens) now makes at most one allocation
+// per call (embed_codes, only on the ws-absent/undersized fallback path) plus the adapter-bound
+// layers_scratch case above -- nowhere near 9717. The measured bulk (thousands of allocations)
+// is NOT reachable from this file's own workspace layout at all: it is RunLayerLoop's own
+// internal per-layer scratch (attention-interior temporaries, matmul accumulators, softmax rows
+// -- forward_sites.cpp, dozens of std::vector locals per layer, times num_hidden_layers, times
+// tokens) PLUS RmsNormSite's/EmbedEntry's/LogitsSite's own internal `wide` scratch (each function
+// allocates its own fixed-shape std::vector<int64_t> internally, with NO caller-supplied-buffer
+// parameter in their existing, already-proven signatures). The design's own text is explicit and
+// permanent on this exact point (Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md, the
+// RunLayerLoop/RunGreedyDecodeLoop signature note): "The engine's own internal per-call compute
+// scratch (attention-interior, matmul accumulators, softmax rows) is separately, internally
+// heap-allocated ... never a caller-supplied buffer of any kind." Reaching true zero-allocation
+// on this path is not a workspace-SIZING problem this ABI layer can solve by growing a formula --
+// it requires changing RmsNormSite/EmbedEntry/LogitsSite/RunLayerLoop's own signatures (shared,
+// already-proven forward_sites.cpp primitives, used identically by RunGreedyDecodeLoop and every
+// other production caller) to accept external scratch, a deep, cross-cutting engine change this
+// design's own text places below this ABI's file boundary, not inside it. Reported here as the
+// measured requirement (9717 prefill-side, 1 decode-side pre-fix) rather than silently left or
+// forced green by moving the allocation somewhere the counter does not see it.
 #include "superslm/sslm_abi.h"
 
 #include <algorithm>
@@ -757,10 +785,28 @@ const superslm::LayerWeights* ResolveLayers(sslm_model_s* model, sslm_adapter_s*
 sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState& state,
                                 uint8_t* kv_block, size_t block_size, const int32_t* tokens,
                                 int32_t count, int32_t chunk_budget, int32_t* consumed,
-                                int32_t* out_last_token, sslm_adapter_s* adapter) {
+                                int32_t* out_last_token, sslm_adapter_s* adapter,
+                                sslm_workspace_s* ws) {
 	const superslm::SslmModelConfig& c = model->view.config;
 	const int32_t n = count < chunk_budget ? count : chunk_budget;
-	std::vector<int8_t> embed_codes(c.hidden_size);
+	// S7 fix round 2 (coordinator's own closing-round brief): thread this function's own
+	// embed_codes scratch through a caller-supplied, correctly-sized workspace, exactly the
+	// carving sslm_decode_step already does -- the SAME embed_codes region (design Sec7.1's own
+	// workspace is never used by two calls concurrently on one handle; sequential reuse across
+	// sslm_prefill/sslm_decode_step calls is the whole point of a shared, caller-owned scratch
+	// region, design Sec8.3/dim8 M1). Falls back to a heap-allocated vector when `ws` is null or
+	// undersized for this model, so no existing nullptr-`ws` caller regresses.
+	const WorkspaceLayout layout = ws ? ComputeWorkspaceLayout(model, ws->config) : WorkspaceLayout{};
+	const bool ws_usable = ws && !layout.overflowed && ws->buf_size >= layout.total_bytes;
+	std::vector<int8_t> embed_codes_fallback;
+	int8_t* embed_codes;
+	if (ws_usable) {
+		embed_codes = reinterpret_cast<int8_t*>(static_cast<uint8_t*>(ws->buf) +
+		                                         layout.embed_codes_offset);
+	} else {
+		embed_codes_fallback.assign(c.hidden_size, 0);
+		embed_codes = embed_codes_fallback.data();
+	}
 	std::vector<superslm::LayerWeights> layers_scratch;
 	const superslm::LayerWeights* layers = ResolveLayers(model, adapter, &layers_scratch);
 	for (int32_t i = 0; i < n; ++i) {
@@ -775,7 +821,7 @@ sslm_status PrefillWholeTokens(sslm_model_s* model, superslm::SequenceLayerState
 		superslm::CarriedScale embed_scale{};
 		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
 		    token, static_cast<int32_t>(c.vocab_size), model->engine.embed_weights, c.hidden_size,
-		    model->engine.embed_site_constant, embed_codes.data(), &embed_scale);
+		    model->engine.embed_site_constant, embed_codes, &embed_scale);
 		if (est != superslm::SslmForwardStatus::Ok) return MapForwardStatus(est);
 		for (uint32_t k = 0; k < c.hidden_size; ++k) state.hidden_codes[k] = embed_codes[k];
 		state.hidden_scale = embed_scale;
@@ -841,8 +887,8 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
                                             int32_t chunk_budget, sslm_span_kind kind,
                                             sslm_workspace ws, int32_t* consumed) {
 	(void)kind;
-	(void)ws;  // this ABI's own batch-orchestration scratch has no per-prefill content (Sec7.1);
-	           // accepted for call-shape parity with sslm_prefill only.
+	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment) -- no longer
+	// merely accepted for call-shape parity.
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
 	*consumed = 0;
 	if (!model || !prefix) return SSLM_INVALID_ARGUMENT;
@@ -851,7 +897,7 @@ extern "C" sslm_status sslm_prefix_prefill(sslm_model model, sslm_prefix prefix,
 	if (!model->engine.ok) return SSLM_ARTIFACT_REJECTED;
 
 	return PrefillWholeTokens(model, prefix->state, prefix->kv_block, prefix->block_size, tokens,
-	                           count, chunk_budget, consumed, &prefix->current_token, nullptr);
+	                           count, chunk_budget, consumed, &prefix->current_token, nullptr, ws);
 }
 
 extern "C" sslm_status sslm_prefix_freeze(sslm_prefix prefix) {
@@ -999,7 +1045,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
                                      sslm_workspace ws, int32_t* consumed) {
 	(void)kind;  // behaviorally inert, same disposition as sslm_prefix_prefill's own (design
 	             // Sec4/Sec12)
-	(void)ws;    // this ABI's own batch-orchestration scratch has no per-prefill content (Sec7.1)
+	// S7 fix round 2: ws is now genuinely read (see PrefillWholeTokens' own comment).
 	if (!consumed) return SSLM_INVALID_ARGUMENT;
 	*consumed = 0;
 	if (!model || !seq) return SSLM_INVALID_ARGUMENT;
@@ -1008,7 +1054,7 @@ extern "C" sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_
 
 	const sslm_status st = PrefillWholeTokens(model, seq->state, seq->kv_block, seq->block_size,
 	                                           tokens, count, chunk_budget, consumed,
-	                                           &seq->current_token, seq->adapter_handle);
+	                                           &seq->current_token, seq->adapter_handle, ws);
 	if (*consumed > 0) {
 		// The last token this call processed already ran every layer (PrefillWholeTokens'
 		// own full-layer_budget convention) -- its final hidden state is ready for logits with
