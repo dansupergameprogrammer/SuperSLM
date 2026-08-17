@@ -161,7 +161,16 @@ inline int64_t DotRowAvx2(const int8_t* activations, const int8_t* weights,
 	int64_t acc64 = 0;
 	__m256i acc32 = _mm256_setzero_si256();  // 8 int32 lanes
 
+	// T-2146 (Popper, DEBUNK PROBE ONLY -- not product, not merged). The flush
+	// window is overridable so an independent commissioning pass can scale the
+	// candidate's error along the production data path and find the window at
+	// which the `identity` instrument stops rejecting. Default is the production
+	// value, so an unset probe build is byte-equivalent to the packet's avx2.
+#if defined(SUPERSLM_T2146_WINDOW)
+	constexpr size_t kFlushBlocks = SUPERSLM_T2146_WINDOW;
+#else
 	constexpr size_t kFlushBlocks = 16384;  // identical window to the SSE2 path
+#endif
 
 	size_t k = 0;
 	size_t blocks_since_flush = 0;
@@ -183,11 +192,19 @@ inline int64_t DotRowAvx2(const int8_t* activations, const int8_t* weights,
 			blocks_since_flush = 0;
 		}
 	}
+	// T-2146 (Popper, DEBUNK PROBE ONLY). Second independent must-reject, on a
+	// different axis from the flush window: drop the final pre-tail fold of the
+	// int32 accumulator. This is the shape a refactor produces when it assumes
+	// the in-loop flush covers every block, and it is reachable on EVERY real
+	// model width (1536/16 = 96 blocks never reaches a 16384-block flush), so
+	// the defect is producible by the instrument's real data path.
+#if !defined(SUPERSLM_T2146_DROP_FINAL_FOLD)
 	{
 		alignas(32) int32_t lanes[8];
 		_mm256_store_si256(reinterpret_cast<__m256i*>(lanes), acc32);
 		for (int32_t v : lanes) acc64 += static_cast<int64_t>(v);
 	}
+#endif
 
 	for (; k < in_channels; ++k) {  // scalar tail remainder
 		acc64 += static_cast<int64_t>(activations[k]) * static_cast<int64_t>(weights[k]);
