@@ -32,3 +32,11 @@ t1657_load_harness.cpp  # throwaway T-1657/T-1663 harness, explicitly outside th
 t2132_diag_layer_bisect.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
 t2132_diag_layer_bisect_cpu.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
 t2132_diag_layer_bisect_gpu.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
+
+# T-2132 (Claude/Brunel/t2132-g5-build-2026-08-16.md, G5-6 mechanism-cell-2 investigation):
+# disposable diagnostic that isolates the dim8_composition_red.cpp mechanism cell 2 FAIL to a
+# pool-history-dependent poison-fill (0xCD) vs pool-init-zero (0x00) artifact in unused KV
+# capacity, proving the K/V computation itself is byte-identical between the prefix-adopt and
+# direct-prefill paths. Real build recipe is tools\t2132_dim8m2_diag_build.bat, same
+# not-matched-by-the-`tools/build_*.bat`-glob precedent as t2132_diag_layer_bisect*.cpp above.
+t2132_dim8m2_diag.cpp  # T-2132 diagnostic tool -- see tools\t2132_dim8m2_diag_build.bat

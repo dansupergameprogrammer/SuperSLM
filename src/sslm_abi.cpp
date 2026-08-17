@@ -1121,12 +1121,34 @@ namespace {
 // Draws one free block from `pool`. SSLM_KV_POOL_EXHAUSTED if none remain -- design Sec7.2's
 // ruled exhaustion timing: fires at draw time (sslm_seq_create/sslm_prefix_begin), never
 // mid-prefill (a block, once drawn, is never re-drawn mid-construction).
+//
+// Zero-fills the drawn block before handing it back (T-2132 M2 fix, Claude/Curie/
+// t2130-g5-red-suite-composition-joins-2026-08-17.md): a block's own not-yet-written region
+// (padding within a per-token K/V span, or any capacity a given write path never touches) was
+// previously left holding whatever the block last contained -- either ReturnBlock's own 0xCD
+// poison (a block that was drawn, used, and released before) or the pool's own untouched
+// creation-time content (0x00 for a block never drawn before this call, in every configuration
+// this build observed; not itself a documented guarantee of the caller-owned buf, which is why
+// this call defines the state explicitly rather than relying on it). `sslm_seq_save` (below)
+// memcpy's the ENTIRE block, so an unwritten byte is as observable to a caller as a written
+// one -- content-identical sequences must therefore start from a content-identical block,
+// regardless of the pool's own draw/return history. Zeroing here (at the single point every
+// draw site funnels through) rather than the whole pool at `sslm_kv_pool_create` time means the
+// cost is paid once per live block, not once per pool byte, and a block a caller immediately
+// overwrites in full (the common case) pays nothing extra beyond the memset itself. This does
+// not weaken ReturnBlock's own poison-fill leak-check (Sec17 dim1): that obligation is "no
+// content from the PRIOR sequence survives release," which a defined post-draw zero state
+// still proves -- if prior content leaked through, the drawn block would read non-zero at a
+// position no write touched, exactly as detectable as it was against the poison pattern.
 sslm_status DrawBlock(sslm_kv_pool_s* pool, uint32_t* out_block_index) {
 	std::lock_guard<std::mutex> lock(pool->mutex);
 	if (pool->free_list.empty()) return SSLM_KV_POOL_EXHAUSTED;
-	*out_block_index = pool->free_list.back();
+	const uint32_t block_index = pool->free_list.back();
 	pool->free_list.pop_back();
 	pool->live_refs.fetch_add(1, std::memory_order_acq_rel);
+	std::memset(static_cast<uint8_t*>(pool->buf) + static_cast<size_t>(block_index) * pool->block_size,
+	            0, pool->block_size);
+	*out_block_index = block_index;
 	return SSLM_OK;
 }
 
@@ -1472,7 +1494,16 @@ extern "C" sslm_status sslm_seq_set_schema(sslm_seq seq, sslm_schema schema) {
 extern "C" sslm_status sslm_seq_reset(sslm_seq seq) {
 	if (!seq) return SSLM_INVALID_ARGUMENT;
 	if (seq->state.layer_index != 0) return SSLM_SEQ_RESET_MIDTOKEN_REJECTED;
-	std::memset(seq->kv_block, 0xCD, seq->block_size);
+	// T-2132 M2 fix (same class as DrawBlock's own zero-fill, above): reset re-exposes this
+	// block's not-yet-written region to the NEXT generation exactly the way a fresh draw does --
+	// left at 0xCD (the poison this call used before this fix), a reset-and-reused sequence's
+	// save-blob would disagree with a content-identical freshly-drawn sequence's, at whatever
+	// bytes neither generation's own writes touch, breaking the same determinism law DrawBlock's
+	// comment states. Zero (DrawBlock's own defined post-draw state) is the correct target here,
+	// not the pre-fix poison value: the leak this memset guards against -- the PRIOR generation's
+	// real K/V content surviving into the next one -- is caught exactly as well by a defined zero
+	// as by 0xCD (either one is trivially distinct from real, non-degenerate model output).
+	std::memset(seq->kv_block, 0, seq->block_size);
 	seq->state.context_length = 0;
 	seq->state.kv_saturation_count = 0;
 	seq->state.layer_index = 0;
