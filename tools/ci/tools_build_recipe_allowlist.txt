@@ -21,3 +21,14 @@
 # comment already cites for tools/t2039_c5_harness.cpp's build-but-manual-invoke shape; unlike
 # t2039_c5_harness.cpp, this one was never wired into build.bat because it was never meant to be.
 t1657_load_harness.cpp  # throwaway T-1657/T-1663 harness, explicitly outside the build graph by its own file header; needs a real .sslm artifact on disk and is built-and-run manually per precedent
+
+# T-2132 session 3 (Claude/Brunel/t2132-g5-build-2026-08-16.md session 3, commit 74bd443):
+# disposable diagnostic instrumentation that localized the GPU parity divergence to a step-0 KV
+# duplication -- deliberately "not wired into build.bat, since it is disposable" (the session's own
+# commit message). Their real build recipe is tools\t2132_diag_build.bat, a dedicated script this
+# checker's own four checked locations do not recognize (the `tools/build_*.bat` glob matches a
+# `build_` prefix, not `t2132_diag_build.bat`'s own name) -- allowlisted here rather than renamed,
+# since renaming another session's own disposable files is out of this session's own scope.
+t2132_diag_layer_bisect.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
+t2132_diag_layer_bisect_cpu.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
+t2132_diag_layer_bisect_gpu.cpp  # T-2132 session 3 diagnostic tool -- see tools\t2132_diag_build.bat
