@@ -25,8 +25,10 @@ static void TestDim11_M1_ModelUnmapGuardFiresBeforeAnyTeardownStep(const void* a
                                                                     size_t artifact_size) {
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(artifact_bytes, artifact_size, &model) == SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 	int32_t prompt[2] = {0, 1};
 	int32_t consumed_before = 0;
 	CHECK(sslm_prefill(model, seq, prompt, 2, 8, SSLM_SPAN_PROMPT, nullptr, &consumed_before) ==
@@ -37,15 +39,23 @@ static void TestDim11_M1_ModelUnmapGuardFiresBeforeAnyTeardownStep(const void* a
 	// FEATURE ORACLE: the model handle is still fully live and functional after the rejected
 	// unmap -- a FRESH sequence can still be created against it, and the original sequence can
 	// still decode -- proving no teardown step (partial or otherwise) began before the guard's
-	// own check rejected the call.
+	// own check rejected the call. A second, DEDICATED pool for the fresh sequence, since the
+	// first pool (block_count=1) is already fully drawn by `seq`.
+	SinglePool sp2;
+	CHECK(MakeSinglePool(model, &sp2));
 	sslm_seq seq2 = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq2) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp2.pool, &seq2) == SSLM_OK);
 	int32_t out_token = 0;
 	sslm_decode_params params{};
+	params.layer_budget = 1;  // any positive value in [1, num_hidden_layers] is a valid domain
+	                          // point here -- this cell's own subject is "the sequence is still
+	                          // usable," not a full-token comparison.
 	sslm_seq batch[1] = {seq};
 	CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 	CHECK(sslm_seq_release(seq2) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp2.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
@@ -70,8 +80,10 @@ static void TestDim11_P1_AdapterGuardReachedThroughOrdinaryRealArtifactSequencin
 	sslm_adapter adapter = nullptr;
 	CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model, &adapter) ==
 	      SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 	// The ordinary sequence a real consumer writes: bind, generate a little, THEN (forgetting
 	// to unbind first, an ordinary caller mistake, not a hand-built violation) try to release
 	// the adapter.
@@ -88,16 +100,23 @@ static void TestDim11_P1_AdapterGuardReachedThroughOrdinaryRealArtifactSequencin
 	CHECK(sslm_seq_set_adapter(seq, nullptr) == SSLM_OK);
 	CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. Both cells
+// are self-contained (M1 takes raw bytes, P1 loads its own artifacts) -- SKIPs internally when
+// their own fixtures are absent.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim11_M1_ModelUnmapGuardFiresBeforeAnyTeardownStep;
-	(void)addr_0;
-	volatile void* addr_1 =
-	    (void*)&TestDim11_P1_AdapterGuardReachedThroughOrdinaryRealArtifactSequencing;
-	(void)addr_1;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim11 M1 not run");
+	} else {
+		std::vector<uint8_t> bytes;
+		CHECK(ReadFileBytes(g_model_path, &bytes));
+		TestDim11_M1_ModelUnmapGuardFiresBeforeAnyTeardownStep(bytes.data(), bytes.size());
+	}
+	TestDim11_P1_AdapterGuardReachedThroughOrdinaryRealArtifactSequencing();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

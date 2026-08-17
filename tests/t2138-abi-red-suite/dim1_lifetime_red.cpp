@@ -16,9 +16,6 @@ static void TestDim1_M1_WorkspaceCreateDestroyRecreateSameAddressReusesCleanly(
 	const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
 	const size_t required = sslm_workspace_size(model, &config);
 	CHECK_MSG(required > 0, "a valid sslm_config must report a positive workspace size");
-	// S2/S3 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_workspace_create/
-	// sslm_kv_pool_create both check alignment now -- AlignedBuffer (fixture_common.h) replaces
-	// a plain std::vector<uint8_t> wherever this suite expects SSLM_OK from either verb.
 	AlignedBuffer buf(required);
 	sslm_workspace ws1 = nullptr;
 	CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws1) == SSLM_OK);
@@ -94,9 +91,12 @@ static void TestDim1_M3_ModelUnmapRemapReusesFreedLifecycleBookkeeping(
     const void* artifact_bytes, size_t artifact_size) {
 	sslm_model model1 = nullptr;
 	CHECK(sslm_model_map(artifact_bytes, artifact_size, &model1) == SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model1, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model1, /*pool=*/nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model1, &sp.pool, &seq) == SSLM_OK);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model1) == SSLM_OK);
 
 	sslm_model model2 = nullptr;
@@ -130,8 +130,10 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	// Warm sequence: short generation (3 tokens), then long (12), then short again (3),
 	// interleaved with sslm_seq_reset between phases (design Sec12's own reset-as-restart
 	// symmetry) so the "warm" handle genuinely re-enters a fresh walk each phase.
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq warm = nullptr;
-	CHECK(sslm_seq_create(model, /*pool=*/nullptr, &warm) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &warm) == SSLM_OK);
 	int32_t phase_a[3] = {0, 1, 2};
 	int32_t phase_b[12] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 	int32_t phase_c[3] = {0, 1, 2};
@@ -146,8 +148,13 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	      SSLM_OK);
 	int32_t warm_out[1] = {0};
 	sslm_decode_params params{};
+	// A FULL-TOKEN budget is required here, not any positive value: this cell's own oracle
+	// comparison (below) is against RunGreedyOracle's own per-token output, which only matches a
+	// decode call that completes a whole token, not a partial-layer step.
+	params.layer_budget = static_cast<int32_t>(view.config.num_hidden_layers);
 	CHECK(sslm_decode_step(model, &warm, 1, &params, nullptr, warm_out) == SSLM_OK);
 	CHECK(sslm_seq_release(warm) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 
 	// FEATURE ORACLE: a FRESH handle running phase_c alone (never touched by phase_a/phase_b)
 	// produces the identical decoded token -- proving the warm handle's own reset between
@@ -170,16 +177,15 @@ static void TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle() {
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
-// S6 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): main() previously only took
-// the address of each Test* function (the RED-BY-LINK-phase convention, this file's own top
-// comment) -- necessary to force linking while the ABI was undeclared, but never updated once it
-// landed, so linking clean never actually RAN a single cell (checks=0 unconditionally). Now that
-// src/sslm_abi.cpp is wired into build_link_red.bat's own source list (S6's own literal remedy)
-// and this suite links against the real implementation, main() drives every cell for real.
+// REAL INVOCATION DRIVER (house pattern, tests/t2112-gpu-1p0-red-suite/dim1_lifetime_red.cpp):
+// builds real fixtures through the production ABI and calls every Test* function above --
+// superseding the RED-BY-LINK-phase address-only convention now that a real implementation
+// exists to link against and run (Claude/Poirot/2c18dab-t2139-abi-build-review.md S6). A cell
+// whose own fixture requirement is unmet SKIPs, never silently passes.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	if (g_model_path.empty()) {
-		SKIP_MSG("--model=PATH not supplied -- dim1 mechanism cells (M1-M3) not run");
+		SKIP_MSG("--model=PATH not supplied -- dim1 M1-M3 not run");
 	} else {
 		SslmModelView view;
 		std::vector<uint8_t> bytes;
@@ -198,6 +204,7 @@ int main(int argc, char** argv) {
 			SKIP_MSG("could not load real artifact: %s", err.c_str());
 		}
 	}
+	// P1 is self-contained (loads g_model_path itself) -- SKIPs internally if absent.
 	TestDim1_P1_WarmSequenceShortLongShortMatchesFreshHandle();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;

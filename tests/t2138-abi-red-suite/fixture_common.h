@@ -28,9 +28,9 @@
 #ifndef SSLM_T2138_FIXTURE_COMMON_H
 #define SSLM_T2138_FIXTURE_COMMON_H
 
-#include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <string>
 #include <vector>
@@ -45,30 +45,19 @@
 // sslm_abi.h's own header comment.
 #include "sslm_abi.h"
 
-// S2 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_kv_pool_create now checks
-// its caller-supplied buffer's alignment the same way sslm_workspace_create already did
-// (SSLM_ABI_ALIGNMENT_BYTES, include/superslm/sslm_abi.h) -- a plain std::vector<uint8_t>::data()
-// carries no alignment guarantee past whatever the allocator happens to return. Every fixture in
-// this suite (and the T-2139 smokes that share this header) that previously passed a
-// std::vector<uint8_t> buffer to sslm_kv_pool_create or sslm_workspace_create now uses this
-// instead -- same data()/size() interface, so the call sites this round touches are a type swap,
+// T-2139 fix round S2/S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_kv_pool_create
+// now checks its caller-supplied buffer's alignment the same way sslm_workspace_create already
+// did (SSLM_ABI_ALIGNMENT_BYTES, this suite's own sslm_abi.h, reconciled this revision) -- a
+// plain std::vector<uint8_t>::data() carries no alignment guarantee past whatever the allocator
+// happens to return. Every fixture in this suite that constructs a workspace or pool buffer now
+// uses this instead -- same data()/size() interface, so the affected call sites are a type swap,
 // not a rewrite.
-//
-// The literal 64 here (not the SSLM_ABI_ALIGNMENT_BYTES macro) is deliberate: this suite includes
-// its OWN promoted copy of sslm_abi.h (this directory, suite ownership -- see this file's own
-// header comment above), which does not yet carry that macro (it was added to the real
-// include/superslm/sslm_abi.h this same fix round). Reconciling the promoted copy is suite
-// ownership, not performed here; this constant is kept in exact sync with the real header's own
-// value by a comment on each side, matching the discipline already used for the two headers'
-// declaration-shape parity generally.
-constexpr size_t kAlignedBufferAlignment = 64;
-
 struct AlignedBuffer {
 	explicit AlignedBuffer(size_t n)
 	    : bytes_(n),
-	      storage_(n > 0 ? ::operator new(n, std::align_val_t(kAlignedBufferAlignment)) : nullptr) {}
+	      storage_(n > 0 ? ::operator new(n, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES)) : nullptr) {}
 	~AlignedBuffer() {
-		if (storage_) ::operator delete(storage_, std::align_val_t(kAlignedBufferAlignment));
+		if (storage_) ::operator delete(storage_, std::align_val_t(SSLM_ABI_ALIGNMENT_BYTES));
 	}
 	AlignedBuffer(const AlignedBuffer&) = delete;
 	AlignedBuffer& operator=(const AlignedBuffer&) = delete;
@@ -80,6 +69,70 @@ struct AlignedBuffer {
 	size_t bytes_;
 	void* storage_;
 };
+
+// T-2139 fix round S6/nullptr-pool sweep: sslm_seq_create/sslm_prefix_begin/sslm_seq_restore
+// all require a REAL, bound sslm_kv_pool since design commit fab235c1c6 (the buffer-mapping
+// ruling) -- a literal `nullptr` pool argument is a suite-authored convenience that predates
+// that ruling and is itself rejected (SSLM_INVALID_ARGUMENT: no pool pointer at all, not "no
+// pool needed"). Every cell that previously hardcoded `nullptr` for its own pool argument now
+// builds one of these instead. Owns both the pool handle and its backing storage so the caller
+// need only keep this object alive for the pool's own lifetime -- block_count=1, the
+// single-sequence case design Sec7.2's own sizing recipe names.
+struct SinglePool {
+	std::unique_ptr<AlignedBuffer> buf;
+	sslm_kv_pool pool = nullptr;
+};
+
+// Leaves a REAL sequence genuinely mid-token (layer_index != 0, current_token pending) --
+// house precedent tools/t2139_c6_smoke.cpp's own comment: "the FIRST decode_step call after a
+// completed prefill is always the free ready_for_logits step -- no RunLayerLoop work, so a real
+// token completes in one call regardless of layer_budget. A SECOND, bounded call is what
+// genuinely starts a new token and leaves it mid-token." Every cell in this suite that needs a
+// mid-token precondition (SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, SSLM_SEQ_RESET_MIDTOKEN_REJECTED,
+// a mid-token save/restore) calls this rather than re-deriving the two-call shape per file.
+// Returns true iff the sequence is confirmed pending (out_token < 0) after the second call.
+inline bool EnterMidToken(sslm_model model, sslm_seq seq) {
+	sslm_decode_params params{};
+	params.layer_budget = 1;
+	sslm_seq batch[1] = {seq};
+	int32_t out_token = 0;
+	if (sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) != SSLM_OK) return false;
+	out_token = 0;
+	if (sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) != SSLM_OK) return false;
+	return out_token < 0;
+}
+
+// A real save/restore blob buffer, sized from sslm_seq_state_size(model) -- NOT a fixed 64 KiB
+// stand-in. The blob carries the sequence's own full KV block content (design Sec7.3:
+// "kv_blocks: kv_block_count * sslm_kv_block_size(model) bytes"), which is the same
+// hundreds-of-MB-per-sequence figure sslm_kv_block_size itself reports (design Sec7.2, revised
+// buffer model) -- a fixed-size stand-in silently BUFFER_TOO_SMALLs against any real artifact.
+struct SeqBlobBuffer {
+	std::vector<uint8_t> bytes;
+	size_t size = 0;
+	explicit SeqBlobBuffer(sslm_model model) : bytes(sslm_seq_state_size(model)), size(bytes.size()) {}
+	void ResetSize() { size = bytes.size(); }
+};
+
+inline bool MakeSinglePool(sslm_model model, SinglePool* out) {
+	const uint32_t block_count = 1;
+	const size_t block_bytes = sslm_kv_block_size(model);
+	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+	out->buf = std::make_unique<AlignedBuffer>(block_count * block_bytes + overhead);
+	return sslm_kv_pool_create(model, out->buf->data(), out->buf->size(), block_count,
+	                            &out->pool) == SSLM_OK;
+}
+
+// The N-block generalization of SinglePool/MakeSinglePool -- for cells that need more than one
+// block concurrently live (e.g. a save/restore cell whose original handle is still held when the
+// restored one is created).
+inline bool MakePool(sslm_model model, uint32_t block_count, SinglePool* out) {
+	const size_t block_bytes = sslm_kv_block_size(model);
+	const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
+	out->buf = std::make_unique<AlignedBuffer>(block_count * block_bytes + overhead);
+	return sslm_kv_pool_create(model, out->buf->data(), out->buf->size(), block_count,
+	                            &out->pool) == SSLM_OK;
+}
 
 static int GChecks = 0;
 static int GFailures = 0;
@@ -125,6 +178,13 @@ static std::string g_model_variant_path;  // a second real artifact, same tier, 
 static std::string g_adapter_path;        // real LoRA adapter artifact (shopkeeper-v2), for C6/dim8/dim10
 static std::string g_foreign_model_path;  // a real artifact of a DIFFERENT shape (e.g. the
                                            // 0.5B tier) -- dim2's foreign-blob/shape-mismatch cell
+static std::string g_model_tok_path;      // a SEPARATE real artifact carrying a bound tokenizer
+                                           // (house convention: build.bat's own T2139_MODEL vs
+                                           // T2139_MODEL_TOK split) -- g_model_path is the base
+                                           // the real adapter was compiled against and often has
+                                           // NO tokenizer bound; text-I/O cells (sslm_tokenize/
+                                           // sslm_detokenize_stream) need this one instead. Empty
+                                           // means "not supplied" -- a cell needing it SKIPs.
 
 // Reads a whole file into memory, no parsing -- the shape sslm_model_map/sslm_adapter_map take
 // directly (const void* data, size_t size), distinct from LoadRealModel below which ALSO
@@ -165,8 +225,8 @@ inline bool LoadRealModelView(const std::string& path, superslm::SslmModelView* 
 }
 
 // Parses this suite's own argv convention: <binary> [--model=PATH] [--modelvariant=PATH]
-// [--adapter=PATH] [--foreignmodel=PATH]. Every flag optional; a cell whose fixture is missing
-// SKIPs rather than asserting against nothing.
+// [--adapter=PATH] [--foreignmodel=PATH] [--modeltok=PATH]. Every flag optional; a cell whose
+// fixture is missing SKIPs rather than asserting against nothing.
 inline void ParseFixtureArgs(int argc, char** argv) {
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
@@ -178,6 +238,7 @@ inline void ParseFixtureArgs(int argc, char** argv) {
 		else if (const char* v = take("--modelvariant=")) g_model_variant_path = v;
 		else if (const char* v = take("--adapter=")) g_adapter_path = v;
 		else if (const char* v = take("--foreignmodel=")) g_foreign_model_path = v;
+		else if (const char* v = take("--modeltok=")) g_model_tok_path = v;
 	}
 }
 

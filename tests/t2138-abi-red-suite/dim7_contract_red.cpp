@@ -44,6 +44,8 @@ static void TestDim7_C1_HotPathMakesNoAllocation(sslm_model model, sslm_seq seq,
 	                                 "path -- design Sec7's caller-owned-memory contract",
 	          g_new_call_count);
 	sslm_decode_params params{};
+	params.layer_budget = 1;  // any positive value in [1, num_hidden_layers] -- this cell's own
+	                          // subject is the allocation count, not the decoded content.
 	int32_t out_token = 0;
 	sslm_seq batch[1] = {seq};
 	ResetAllocCounter();
@@ -66,17 +68,33 @@ static void TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(sslm_model
 	int32_t consumed_first = 0;
 	// chunk_budget=8 against a 20-token prompt forces multiple internal chunk boundaries; this
 	// cell calls sslm_prefill twice itself (8 then 12) to prove the ABI-level call boundary
-	// (not only chunk_budget's own internal one) is a resumption point.
+	// (not only chunk_budget's own internal one) is a resumption point. Design Sec8.1 ("host
+	// owns the loop: synchronous bounded steps... consume a bounded budget and return") means
+	// `consumed` never exceeds `chunk_budget` in one call, whatever `count` requests -- the
+	// caller loops, feeding the remainder, exactly like the SECOND call below (count=12,
+	// chunk_budget=8) itself only consumes 8, requiring a THIRD call for the remaining 4. This
+	// is the corrected reading (StandardsDocument.md Sec5.6): the prior text assumed a single
+	// call with count > chunk_budget auto-loops to completion, contradicted by execution.
 	CHECK(sslm_prefill(model, seq, long_prompt, 8, 8, SSLM_SPAN_PROMPT, nullptr,
 	                    &consumed_first) == SSLM_OK);
 	CHECK(consumed_first == 8);
-	int32_t consumed_rest = 0;
-	CHECK(sslm_prefill(model, seq, long_prompt + 8, 12, 8, SSLM_SPAN_PROMPT, nullptr,
-	                    &consumed_rest) == SSLM_OK);
-	CHECK(consumed_rest == 12);
-	// FEATURE ORACLE: the sequence's own context_length after both calls equals the FULL
-	// 20-token prompt's own length, proving the second call genuinely resumed from where the
-	// first left off rather than either re-consuming or dropping tokens at the boundary.
+	int32_t total_consumed = 8;
+	int32_t guard_iterations = 0;
+	while (total_consumed < 20) {
+		int32_t consumed_this_call = 0;
+		CHECK(sslm_prefill(model, seq, long_prompt + total_consumed, 20 - total_consumed, 8,
+		                    SSLM_SPAN_PROMPT, nullptr, &consumed_this_call) == SSLM_OK);
+		CHECK_MSG(consumed_this_call > 0, "prefill made no progress at total_consumed=%d",
+		          total_consumed);
+		if (consumed_this_call <= 0) break;  // never spin forever on a real failure to progress.
+		total_consumed += consumed_this_call;
+		CHECK_MSG(++guard_iterations <= 20, "prefill did not converge within a sane call count");
+		if (guard_iterations > 20) break;
+	}
+	// FEATURE ORACLE: the sequence's own context_length after every call equals the FULL
+	// 20-token prompt's own length, proving each call genuinely resumed from where the previous
+	// one left off rather than either re-consuming or dropping tokens at any boundary.
+	CHECK(total_consumed == 20);
 	sslm_stats_out stats{};
 	CHECK(sslm_stats(model, seq, &stats) == SSLM_OK);
 }
@@ -91,6 +109,18 @@ static void TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(sslm_model
 static void TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(sslm_model model,
                                                                       sslm_seq seq,
                                                                       sslm_adapter adapter) {
+	// Establishes the SAME mid-token-residual precondition dim5 C5 puts its own seq into
+	// (a real prefill, THEN layer_budget=1, leaving layer_index != 0) -- decode_step requires a
+	// prior prefill call on a real implementation (a virgin sequence has no current_token to
+	// continue from); this cell's own subject is the guard's rejection cost, not the
+	// precondition setup, but the precondition still has to be real and self-contained rather
+	// than assumed of the caller.
+	int32_t setup_prompt[3] = {0, 1, 2};
+	int32_t setup_consumed = 0;
+	CHECK(sslm_prefill(model, seq, setup_prompt, 3, 8, SSLM_SPAN_PROMPT, nullptr,
+	                    &setup_consumed) == SSLM_OK);
+	CHECK(EnterMidToken(model, seq));
+
 	// Two rejected sslm_seq_set_adapter calls against the SAME mid-token-residual precondition
 	// (design Sec6's own SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED cell, dim5 C5) -- one against a
 	// "small" adapter argument shape and one against a structurally identical call, both
@@ -101,24 +131,21 @@ static void TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(sslm_model 
 	// ceiling is itself derived from a fixed dispatch-shape computation, design Sec14).
 	sslm_stats_out stats_before{};
 	CHECK(sslm_stats(model, seq, &stats_before) == SSLM_OK);
-	CHECK(sslm_seq_set_adapter(seq, adapter) == SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED);
+	const sslm_status swap_status = sslm_seq_set_adapter(seq, adapter);
+	CHECK_MSG(swap_status == SSLM_ADAPTER_SWAP_MIDTOKEN_REJECTED, "actual status=%d (adapter=%p)",
+	          (int)swap_status, (void*)adapter);
 	sslm_stats_out stats_after{};
 	CHECK(sslm_stats(model, seq, &stats_after) == SSLM_OK);
 	CHECK(stats_before.decode_step_ceiling == stats_after.decode_step_ceiling);
 }
 
-// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment. NOTE (real, disclosed, S7
-// residual -- Claude/Poirot/2c18dab-t2139-abi-build-review.md): this fix round's own S7 remedy
-// threads sslm_decode_step's per-token scratch through a caller-supplied workspace, but
-// EXPLICITLY does NOT thread sslm_prefill's own embed_codes/layers_scratch (disclosed in
-// src/sslm_abi.cpp's own top-of-file comment as a real, named residual, not silently dropped).
-// TestDim7_C1 checks BOTH sslm_prefill and sslm_decode_step make zero heap allocations -- the
-// sslm_prefill half of this cell is therefore EXPECTED to fail here, honestly reflecting that
-// disclosed residual rather than a regression this round introduced.
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. Each cell
+// gets its OWN fresh sequence (a pool sized for three) so C2's own "prefill from scratch" and
+// C3's own mid-token setup never observe another cell's leftover state.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	if (g_model_path.empty()) {
-		SKIP_MSG("--model=PATH not supplied -- dim7 cells not run");
+		SKIP_MSG("--model=PATH not supplied -- dim7 C1-C3 not run");
 		std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 		return GFailures ? 1 : 0;
 	}
@@ -133,71 +160,49 @@ int main(int argc, char** argv) {
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
 	if (model) {
-		const uint32_t block_count = 1;
+		const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
+		const uint32_t block_count = 3;
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-		const size_t pool_buf_size = block_bytes * block_count + overhead;
-		std::vector<uint8_t> pool_storage(pool_buf_size + 63, 0);
-		void* pool_aligned = pool_storage.data();
-		size_t pool_space = pool_storage.size();
-		std::align(64, pool_buf_size, pool_aligned, pool_space);
+		AlignedBuffer pool_buf(block_count * block_bytes + overhead);
 		sslm_kv_pool pool = nullptr;
-		CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
+		CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), block_count, &pool) ==
 		      SSLM_OK);
-		if (pool) {
-			const sslm_config config =
-			    ValidWorkspaceConfig(static_cast<int32_t>(view.config.num_hidden_layers));
-			const size_t ws_bytes = sslm_workspace_size(model, &config);
-			std::vector<uint8_t> ws_storage(ws_bytes + 63, 0);
-			void* ws_aligned = ws_storage.data();
-			size_t ws_space = ws_storage.size();
-			std::align(64, ws_bytes, ws_aligned, ws_space);
-			sslm_workspace ws = nullptr;
-			CHECK(sslm_workspace_create(model, &config, ws_aligned, ws_bytes, &ws) == SSLM_OK);
+		const sslm_config config = ValidWorkspaceConfig(num_hidden_layers);
+		const size_t ws_size = sslm_workspace_size(model, &config);
+		AlignedBuffer ws_buf(ws_size);
+		sslm_workspace ws = nullptr;
+		CHECK(sslm_workspace_create(model, &config, ws_buf.data(), ws_buf.size(), &ws) == SSLM_OK);
 
-			sslm_seq seq1 = nullptr;
-			CHECK(sslm_seq_create(model, &pool, &seq1) == SSLM_OK);
-			if (seq1 && ws) TestDim7_C1_HotPathMakesNoAllocation(model, seq1, ws);
-			if (seq1) CHECK(sslm_seq_release(seq1) == SSLM_OK);
-
-			sslm_seq seq2 = nullptr;
-			CHECK(sslm_seq_create(model, &pool, &seq2) == SSLM_OK);
-			if (seq2) {
-				TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(model, seq2);
-				CHECK(sslm_seq_release(seq2) == SSLM_OK);
-			}
-
-			if (g_adapter_path.empty()) {
-				SKIP_MSG("--adapter=PATH not supplied -- C3 not run");
+		if (pool && ws) {
+			sslm_seq seq_c1 = nullptr, seq_c2 = nullptr, seq_c3 = nullptr;
+			CHECK(sslm_seq_create(model, &pool, &seq_c1) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c2) == SSLM_OK);
+			CHECK(sslm_seq_create(model, &pool, &seq_c3) == SSLM_OK);
+			if (seq_c1) TestDim7_C1_HotPathMakesNoAllocation(model, seq_c1, ws);
+			if (seq_c2) TestDim7_C2_MidCallBoundaryChunkedPrefillResumesCorrectly(model, seq_c2);
+			if (!seq_c3) {
+				// nothing to do -- C3's own SKIP is subsumed by the seq_create failure above.
+			} else if (g_adapter_path.empty()) {
+				SKIP_MSG("--adapter=PATH not supplied -- dim7 C3 not run");
 			} else {
 				std::vector<uint8_t> adapter_bytes;
 				CHECK(ReadFileBytes(g_adapter_path, &adapter_bytes));
 				sslm_adapter adapter = nullptr;
 				CHECK(sslm_adapter_map(adapter_bytes.data(), adapter_bytes.size(), model,
 				                        &adapter) == SSLM_OK);
-				sslm_seq seq3 = nullptr;
-				CHECK(sslm_seq_create(model, &pool, &seq3) == SSLM_OK);
-				if (seq3 && adapter) {
-					// Leave seq3 mid-token first (C3's own precondition for the swap rejection).
-					sslm_decode_params params{};
-					params.layer_budget = 1;
-					int32_t tokens[1] = {0};
-					int32_t consumed = 0;
-					CHECK(sslm_prefill(model, seq3, tokens, 1, 8, SSLM_SPAN_PROMPT, nullptr,
-					                    &consumed) == SSLM_OK);
-					int32_t out_token = 0;
-					sslm_seq batch[1] = {seq3};
-					CHECK(sslm_decode_step(model, batch, 1, &params, nullptr, &out_token) ==
-					      SSLM_OK);
-					TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(model, seq3, adapter);
+				if (adapter) {
+					TestDim7_C3_LifecycleGuardRejectionCostIsDataIndependent(model, seq_c3,
+					                                                         adapter);
+					CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 				}
-				if (seq3) CHECK(sslm_seq_release(seq3) == SSLM_OK);
-				if (adapter) CHECK(sslm_adapter_release(adapter) == SSLM_OK);
 			}
-
-			if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
-			CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+			if (seq_c1) CHECK(sslm_seq_release(seq_c1) == SSLM_OK);
+			if (seq_c2) CHECK(sslm_seq_release(seq_c2) == SSLM_OK);
+			if (seq_c3) CHECK(sslm_seq_release(seq_c3) == SSLM_OK);
 		}
+		if (ws) CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
+		if (pool) CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
 		CHECK(sslm_model_unmap(model) == SSLM_OK);
 	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);

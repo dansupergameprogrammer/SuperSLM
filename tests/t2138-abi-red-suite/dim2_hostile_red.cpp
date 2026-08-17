@@ -189,9 +189,6 @@ static void AssertConfigHostileContrast(sslm_model model, const sslm_config& bas
 	CHECK_MSG(valid_size > 0, "baseline sslm_config (mutating %s) reported size 0 -- baseline "
 	                          "itself must be accepted",
 	          field_name);
-	// S2/S3 fix round (Claude/Poirot/2c18dab-t2139-abi-build-review.md): sslm_workspace_create
-	// now checks alignment -- AlignedBuffer (fixture_common.h) for the ACCEPT half, since a
-	// plain std::vector<uint8_t> carries no alignment guarantee.
 	AlignedBuffer valid_buf(valid_size);
 	sslm_workspace valid_ws = nullptr;
 	CHECK_MSG(sslm_workspace_create(model, &baseline, valid_buf.data(), valid_buf.size(),
@@ -205,7 +202,7 @@ static void AssertConfigHostileContrast(sslm_model model, const sslm_config& bas
 	CHECK_MSG(hostile_size == 0, "hostile sslm_config.%s was NOT signaled by sslm_workspace_size "
 	                             "(returned %zu, expected 0)",
 	          field_name, hostile_size);
-	std::vector<uint8_t> hostile_buf(valid_size > 0 ? valid_size : 4096);
+	AlignedBuffer hostile_buf(valid_size > 0 ? valid_size : 4096);
 	sslm_workspace hostile_ws = nullptr;
 	const sslm_status hostile_status = sslm_workspace_create(
 	    model, &hostile, hostile_buf.data(), hostile_buf.size(), &hostile_ws);
@@ -261,14 +258,11 @@ static void TestDim2_M8e_ConfigReservedNonzeroRejected(sslm_model model,
 	AssertConfigHostileContrast(model, baseline, hostile, "reserved(=1)");
 }
 
-// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment for why this now calls every
-// Test* function for real instead of merely taking its address.
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	TestDim2_M5_ModelMapHostileArtifactRejected();
-	TestDim2_M6_AdapterMapBaseMismatchRejected();
 	if (g_model_path.empty()) {
-		SKIP_MSG("--model=PATH not supplied -- dim2 mechanism cells M1-M4, M7-M8e not run");
+		SKIP_MSG("--model=PATH not supplied -- dim2 M1-M4/M7-M8e not run");
 	} else {
 		SslmModelView view;
 		std::vector<uint8_t> bytes;
@@ -277,7 +271,8 @@ int main(int argc, char** argv) {
 			sslm_model model = nullptr;
 			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
 			if (model) {
-				const int32_t num_hidden_layers = static_cast<int32_t>(view.config.num_hidden_layers);
+				const int32_t num_hidden_layers =
+				    static_cast<int32_t>(view.config.num_hidden_layers);
 				TestDim2_M1_WorkspaceCreateTooSmallBufferRejected(model, num_hidden_layers);
 				TestDim2_M2_WorkspaceCreateMisalignedBufferRejected(model, num_hidden_layers);
 				TestDim2_M3_KvPoolCreateTooSmallBufferRejected(model);
@@ -288,28 +283,17 @@ int main(int argc, char** argv) {
 				TestDim2_M8d_ConfigMaxLayerBudgetZeroAndOverCapRejected(model, num_hidden_layers);
 				TestDim2_M8e_ConfigReservedNonzeroRejected(model, num_hidden_layers);
 
-				// M7 needs one real, live sequence (design's own decode_step hostile-params
-				// call shape) -- built here rather than threaded as a parameter default, using
-				// a pool sized generously for this file's own single-sequence need.
-				const uint32_t block_count = 1;
-				const size_t block_bytes = sslm_kv_block_size(model);
-				const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
-				const size_t pool_buf_size = block_bytes * block_count + overhead;
-				std::vector<uint8_t> pool_storage(pool_buf_size + 63);
-				void* pool_aligned = pool_storage.data();
-				size_t pool_space = pool_storage.size();
-				std::align(64, pool_buf_size, pool_aligned, pool_space);
-				sslm_kv_pool pool = nullptr;
-				CHECK(sslm_kv_pool_create(model, pool_aligned, pool_buf_size, block_count, &pool) ==
-				      SSLM_OK);
-				if (pool) {
+				SinglePool sp;
+				if (MakeSinglePool(model, &sp)) {
 					sslm_seq seq = nullptr;
-					CHECK(sslm_seq_create(model, &pool, &seq) == SSLM_OK);
+					CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 					if (seq) {
 						TestDim2_M7_DecodeParamsHostileLayerBudgetRejected(model, seq);
 						CHECK(sslm_seq_release(seq) == SSLM_OK);
 					}
-					CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+					CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
+				} else {
+					SKIP_MSG("dim2 M7 needs a real pool/sequence -- not run");
 				}
 				CHECK(sslm_model_unmap(model) == SSLM_OK);
 			}
@@ -317,6 +301,9 @@ int main(int argc, char** argv) {
 			SKIP_MSG("could not load real artifact: %s", err.c_str());
 		}
 	}
+	// M5/M6 are self-contained -- M6 SKIPs internally if its own fixtures are absent.
+	TestDim2_M5_ModelMapHostileArtifactRejected();
+	TestDim2_M6_AdapterMapBaseMismatchRejected();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

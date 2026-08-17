@@ -79,9 +79,13 @@ typedef struct sslm_detok_state {
     uint8_t pending_count;     /* how many of pending_bytes[] are valid, in [0, 3] */
 } sslm_detok_state;
 
-/* status enum -- design Sec6's full per-cause taxonomy, 17 enumerators (design Sec10 dim5's own
- * reconciled count: 1 + 3 + 4 + 7 + 2 = 17). SSLM_RESTORE_SCHEMA_MISMATCH is explicitly NOT one
- * of these (design Sec10 dim5, Sec7.3) -- it is G5's own status, reserved-but-unbuilt here. */
+/* status enum -- design Sec6's full per-cause taxonomy, 18 enumerators (design Sec10 dim5's own
+ * reconciled count: 1 + 3 + 4 + 7 + 3 = 18, RECONCILED against the shipped
+ * include/superslm/sslm_abi.h and tests/t2130-g5-red-suite/sslm_g5.h@curie/
+ * t2130-g5-red-suite@59e26ff -- SSLM_TOKEN_ID_UNMAPPED appended at ordinal 17, design commit
+ * 212de7742c, the padded-vocabulary ruling, Brunel T-2139). SSLM_RESTORE_SCHEMA_MISMATCH is
+ * explicitly NOT one of these (design Sec10 dim5, Sec7.3) -- it is G5's own status,
+ * reserved-but-unbuilt here. */
 typedef enum sslm_status {
     SSLM_OK = 0,
 
@@ -107,8 +111,21 @@ typedef enum sslm_status {
 
     /* numeric/domain rejections (design Sec6) */
     SSLM_TOKEN_ID_OUT_OF_RANGE,
-    SSLM_CONTEXT_CAP_EXCEEDED
+    SSLM_CONTEXT_CAP_EXCEEDED,
+
+    /* NEW, appended at ordinal 17 (design commit 212de7742c, never inserted above -- append-only
+     * reconciliation law): sslm_detokenize_stream's own rejection for a decode-output token id in
+     * [tok_vocab, cfg_vocab) -- a legal decode-output id with no tokenizer entry (the
+     * padded-vocabulary case ValidateTokenizerVocabSizeJoin's loosening admits, src/model.cpp).
+     * Distinct from SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output). */
+    SSLM_TOKEN_ID_UNMAPPED
 } sslm_status;
+
+/* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create AND
+ * sslm_kv_pool_create both require of their caller-supplied buf, on pain of
+ * SSLM_MISALIGNED_BUFFER -- exported so a caller can pass it directly to std::align rather than
+ * transcribe it from the implementation, matching include/superslm/sslm_abi.h's own export. */
+#define SSLM_ABI_ALIGNMENT_BYTES 64u
 
 /* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
  * Sec5" -- transcribed here from tests/t2130-g5-red-suite/sslm_g5.h (the same source Sec8
@@ -139,6 +156,9 @@ sslm_status sslm_model_unmap(sslm_model model);
  * sizing (design Sec7) -- pure functions of an already-loaded sslm_model.
  * ============================================================================ */
 size_t sslm_workspace_size(sslm_model model, const sslm_config* config);
+/* one WHOLE sequence's entire KV footprint across every layer (design Sec7.2, RULED, commit
+ * fab235c1c6), never a sub-sequence PagedAttention page -- num_hidden_layers * context_cap *
+ * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. */
 size_t sslm_kv_block_size(sslm_model model);
 size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
 size_t sslm_seq_state_size(sslm_model model);
@@ -151,11 +171,14 @@ sslm_status sslm_workspace_create(sslm_model model, const sslm_config* config,
                                    void* buf, size_t buf_size, sslm_workspace* out);
 sslm_status sslm_workspace_destroy(sslm_workspace ws);
 
-/* block_count is explicit, no convenience default (D-SLM3454). Sizing recipe (design Sec7.2):
- * for N sequences concurrently resident at up to L tokens of context each,
- *   block_count = ceil((N * L) / sslm_kv_block_size(model))
- * -- single sequence (N=1, L=context_cap) reduces to ceil(context_cap / kv_block_size(model));
- * a shared prefix's tokens count once, not once per adopting sequence. */
+/* block_count is explicit, no convenience default (D-SLM3454); it is a COUNT OF SEQUENCES this
+ * pool can back, not a token count (design Sec7.2, RULED, commit fab235c1c6 -- sslm_kv_block_size
+ * is now one WHOLE sequence's own entire KV footprint, never a sub-sequence page). Sizing recipe:
+ * for N sequences the caller wants concurrently resident, block_count = N -- the single-sequence
+ * case (N=1, the shape the S-FREEZE example uses) is block_count = 1. A prefix under construction
+ * also draws exactly one whole block. Prefix adoption COPIES the prefix's own occupied bytes into
+ * the adopting sequence's own block (Sec7.2's copy-on-adopt ruling) -- it does not extend how many
+ * blocks the cohort needs beyond one per adopting sequence, since sharing is not physical. */
 sslm_status sslm_kv_pool_create(sslm_model model, void* buf, size_t buf_size,
                                  uint32_t block_count, sslm_kv_pool* out);
 sslm_status sslm_kv_pool_destroy(sslm_kv_pool pool);

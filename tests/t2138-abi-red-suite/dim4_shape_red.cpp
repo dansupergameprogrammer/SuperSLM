@@ -30,7 +30,7 @@ static void TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(
 	}
 	{
 		AlignedBuffer buf(exact + 4096);  // oversized -- must still be accepted, never
-		                                          // rejected for being "too large".
+		                                   // rejected for being "too large".
 		sslm_workspace ws = nullptr;
 		CHECK(sslm_workspace_create(model, &config, buf.data(), buf.size(), &ws) == SSLM_OK);
 		CHECK(sslm_workspace_destroy(ws) == SSLM_OK);
@@ -41,14 +41,18 @@ static void TestDim4_M1_WorkspaceBufferSizeBoundaryExactAndOversizedAccepted(
 // large-but-legitimate CONCURRENT-SEQUENCE count, each correctly sized against
 // sslm_kv_pool_overhead_size's own reported requirement for THAT block_count (the overhead is
 // O(block_count), design Sec7.2, so a buffer sized for one block_count is not automatically
-// sufficient for another). Sweep values revised against the whole-block buffer model (commit
-// fab235c1c6): `block_count` is now a count of CONCURRENT SEQUENCES, each backed by one whole
-// sequence's own KV footprint (potentially tens of MB, design Sec7.2's own cost cell) -- 1/8/64
-// is the realistic small/typical/plausible-many-agent-cohort sweep (design Sec7.2's own N=50
-// example), not 1/64/4096, which would size a buffer for 4096 whole sequences and make this
-// cell unrunnable once built rather than merely slow. ---
+// sufficient for another). Sweep values revised twice against the whole-block buffer model
+// (commit fab235c1c6): `block_count` is now a count of CONCURRENT SEQUENCES, each backed by one
+// whole sequence's own KV footprint -- MEASURED real (Claude/Poirot/
+// 2c18dab-t2139-abi-build-review.md C2): 192 MB/sequence (0.5B tier), 448 MB/sequence (1.5B
+// tier), not "tens of MB" as this cell's own prior estimate assumed. 1/2/4 is the sweep that
+// stays inside a few GB even on the 1.5B tier -- 1/8/64 (the design's own N=50 many-agent-cohort
+// framing, taken literally) would allocate 12-28 GB for the top of the sweep alone and make this
+// cell unrunnable once built rather than merely slow; the many-agent cohort SIZE claim itself is
+// unaffected, since this cell's own subject is "the overhead formula is correct at more than one
+// block_count," not "the design's own N=50 example is reproduced literally." ---
 static void TestDim4_M2_KvPoolBlockCountSweptOneTypicalLarge(sslm_model model) {
-	const uint32_t sweep[3] = {1, 8, 64};
+	const uint32_t sweep[3] = {1, 2, 4};
 	for (uint32_t block_count : sweep) {
 		const size_t block_bytes = sslm_kv_block_size(model);
 		const size_t overhead = sslm_kv_pool_overhead_size(model, block_count);
@@ -112,7 +116,7 @@ static void TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape() {
 	CHECK(sslm_model_unmap(model_b) == SSLM_OK);
 }
 
-// S6 fix round -- see dim1_lifetime_red.cpp's own main() comment.
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	if (g_model_path.empty()) {
@@ -134,6 +138,7 @@ int main(int argc, char** argv) {
 			SKIP_MSG("could not load real artifact: %s", err.c_str());
 		}
 	}
+	// M3 is self-contained (loads both --model=PATH and --foreignmodel=PATH itself).
 	TestDim4_M3_SizingFunctionsVaryWithRealArtifactShape();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;

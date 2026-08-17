@@ -56,8 +56,10 @@ static void TestDim3_M2_UnmapWhileAnotherThreadHoldsLiveSeqIsRejectionNotRace(
     const void* artifact_bytes, size_t artifact_size) {
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(artifact_bytes, artifact_size, &model) == SSLM_OK);
+	SinglePool sp;
+	CHECK(MakeSinglePool(model, &sp));
 	sslm_seq seq = nullptr;
-	CHECK(sslm_seq_create(model, nullptr, &seq) == SSLM_OK);
+	CHECK(sslm_seq_create(model, &sp.pool, &seq) == SSLM_OK);
 
 	sslm_status unmap_status = SSLM_OK;
 	std::thread unmapper([&]() { unmap_status = sslm_model_unmap(model); });
@@ -67,6 +69,7 @@ static void TestDim3_M2_UnmapWhileAnotherThreadHoldsLiveSeqIsRejectionNotRace(
 	// still-referenced handle) and never a crash/UB from an unsynchronized counter read.
 	CHECK(unmap_status == SSLM_MODEL_HAS_LIVE_SEQUENCES);
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
+	CHECK(sslm_kv_pool_destroy(sp.pool) == SSLM_OK);
 	CHECK(sslm_model_unmap(model) == SSLM_OK);
 }
 
@@ -107,15 +110,63 @@ static void TestDim3_M3_PoolBlockAllocFreeRacesUnderParallelSeqChurn(sslm_model 
 	CHECK(thread_b_status == SSLM_OK);
 }
 
+// REAL INVOCATION DRIVER (house pattern) -- supersedes the address-only convention. The
+// builder's own ad-hoc driver crashed (STATUS_HEAP_CORRUPTION, root cause unisolated) and was
+// reverted to link-only (Claude/Brunel/t2139-abi-build-2026-08-16.md S6). Authored fresh here,
+// carefully: each cell gets its OWN dedicated pool (never shared across cells, so one cell's own
+// state cannot bleed into another's if a real concurrency defect exists), M1/M3 run BEFORE M2
+// tears its own model down, and every pool is sized (block_count=2) for exactly the two
+// concurrent draws each cell's own two threads can make at once.
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
-	volatile void* addr_0 = (void*)&TestDim3_M1_DisjointSequencesDecodeInParallelNoCorruption;
-	(void)addr_0;
-	volatile void* addr_1 =
-	    (void*)&TestDim3_M2_UnmapWhileAnotherThreadHoldsLiveSeqIsRejectionNotRace;
-	(void)addr_1;
-	volatile void* addr_2 = (void*)&TestDim3_M3_PoolBlockAllocFreeRacesUnderParallelSeqChurn;
-	(void)addr_2;
+	if (g_model_path.empty()) {
+		SKIP_MSG("--model=PATH not supplied -- dim3 M1/M3 not run");
+	} else {
+		std::vector<uint8_t> bytes;
+		CHECK(ReadFileBytes(g_model_path, &bytes));
+
+		// M1: its own model handle + pool(2).
+		{
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				const uint32_t bc = 2;
+				const size_t block_bytes = sslm_kv_block_size(model);
+				AlignedBuffer pool_buf(bc * block_bytes + sslm_kv_pool_overhead_size(model, bc));
+				sslm_kv_pool pool = nullptr;
+				CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc, &pool) ==
+				      SSLM_OK);
+				if (pool) {
+					TestDim3_M1_DisjointSequencesDecodeInParallelNoCorruption(model, &pool);
+					CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+				}
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		}
+
+		// M3: its own model handle + pool(2).
+		{
+			sslm_model model = nullptr;
+			CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
+			if (model) {
+				const uint32_t bc = 2;
+				const size_t block_bytes = sslm_kv_block_size(model);
+				AlignedBuffer pool_buf(bc * block_bytes + sslm_kv_pool_overhead_size(model, bc));
+				sslm_kv_pool pool = nullptr;
+				CHECK(sslm_kv_pool_create(model, pool_buf.data(), pool_buf.size(), bc, &pool) ==
+				      SSLM_OK);
+				if (pool) {
+					TestDim3_M3_PoolBlockAllocFreeRacesUnderParallelSeqChurn(model, &pool);
+					CHECK(sslm_kv_pool_destroy(pool) == SSLM_OK);
+				}
+				CHECK(sslm_model_unmap(model) == SSLM_OK);
+			}
+		}
+
+		// M2 is self-contained (maps/unmaps its own dedicated model handle).
+		TestDim3_M2_UnmapWhileAnotherThreadHoldsLiveSeqIsRejectionNotRace(bytes.data(),
+		                                                                  bytes.size());
+	}
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
