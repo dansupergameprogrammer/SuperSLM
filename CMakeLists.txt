@@ -184,20 +184,19 @@ endif()
 # T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
 # (Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md): the AVX2/AVX-512 matmul tiers,
 # the cached CPUID dispatch (DetectBestDotRowTier), and the four-macro force selection
-# (SUPERSLM_FORCE_{SCALAR,SSE2,AVX2,AVX512}_MATMUL, design §6.1) do not exist yet -- this
-# option is OFF by default so the red suite's tier-dependent cells (dispatch-cache
-# lifetime, first-call-race concurrency; design §10 dimensions 1/3) stay excluded from
-# compilation and the existing 34184/0 battery (D-SLM3496) is unaffected. Whoever builds
-# the design's §11 step 1 turns this ON (and, for step 5/7's new forced test executables,
-# additionally propagates the corresponding SUPERSLM_FORCE_*_MATMUL definition to each
-# forced `superslm_tests_*_forced` executable's own compile of tests/test_main.cpp --
-# PUBLIC on the forced library, or an explicit target_compile_definitions on the forced
-# executable target itself -- so the dispatch-cache cell's "== 0 in each forced binary"
-# half, gated the same way, can see which tier it was built for; see the red-suite
-# casebook §"Dimension 1" for the exact contract).
+# (SUPERSLM_FORCE_{SCALAR,SSE2,AVX2,AVX512}_MATMUL, design §6.1) now exist (design §11
+# step 1, landed). Default flipped ON (T-2159 §11 steps 7-10 close): the option's own
+# prior comment named this flip as owed the moment step 1 landed ("whoever builds step 1
+# turns this ON") -- until it happened, the two T-2158 red-suite cells that depend on it
+# (dispatch-cache lifetime, first-call-race concurrency; design §10 dimensions 1/3)
+# compiled into nothing anywhere in CI, a guard that could not fire (StandardsDocument.md
+# §5.4's guard-vitality rule). ON by default now exercises both cells in every one of the
+# ten pre-existing, non-forced CI legs (design §17.2 Population B rows 1-10) without
+# editing .github/workflows/tests.yml at all. OFF remains available for anyone who needs
+# to build the pre-T-2149 test-suite shape for comparison or bisection.
 option(SUPERSLM_T2149_AVX_TIERS_BUILT
-	"T-2149: the AVX2/AVX-512 matmul tiers and cached dispatch exist in src/matmul.cpp. OFF (default) keeps T-2158's tier-dependent red-suite cells out of the build so main stays green with the feature unbuilt."
-	OFF)
+	"T-2149: the AVX2/AVX-512 matmul tiers and cached dispatch exist in src/matmul.cpp. ON (default) builds T-2158's tier-dependent red-suite cells (dispatch-cache lifetime, first-call race) into every non-forced and forced-tier test/digest binary. OFF reproduces the pre-T-2149 test-suite shape."
+	ON)
 if(SUPERSLM_T2149_AVX_TIERS_BUILT)
 	target_compile_definitions(superslm_test_injection PUBLIC
 		SUPERSLM_T2149_AVX_TIERS_BUILT
@@ -222,6 +221,34 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	add_library(superslm_${_sslm_tier_lower}_forced STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE_SOURCES})
 	target_include_directories(superslm_${_sslm_tier_lower}_forced PUBLIC include)
 	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_FORCE_${_sslm_tier}_MATMUL)
+	# S-HARDEN-7's bad-alloc-injection seam (src/bad_alloc_wrap.h) is what
+	# superslm_test_injection's own PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION (above) wires
+	# in, and tests/test_main.cpp's twenty-site injection suite runs unconditionally, not
+	# gated on whether the linked library defines the seam -- a forced-tier library built
+	# without it left the seam "not consulted" (26 real check failures, found by the first
+	# actual execution of these three binaries to completion, T-2159 §11 step 10). Every
+	# forced-tier full-suite binary needs the identical seam superslm_test_injection has.
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PRIVATE SUPERSLM_ENABLE_BAD_ALLOC_INJECTION)
+	# Both the bad-alloc-injection seam above (src/bad_alloc_wrap.h) and the dispatch-
+	# instrument seam below (src/matmul.cpp) #include "support/*.h" headers that resolve
+	# against a "tests" search directory -- the same PRIVATE include superslm_test_injection
+	# already carries for the identical reason. Unconditional (not nested in the option
+	# check below): the bad-alloc seam is unconditional too.
+	target_include_directories(superslm_${_sslm_tier_lower}_forced PRIVATE tests)
+	# The dispatch-cache cell's "== 0 in each forced binary" half (design §10 dimension 1,
+	# tests/test_main.cpp's TestMatmulDotRowTierProbeSelectedOnceAndReusedAcrossCalls) is
+	# gated behind SUPERSLM_T2149_AVX_TIERS_BUILT the same way the non-forced binary's "== 1"
+	# half is -- without this, that function does not compile into any forced binary at all
+	# and the "== 0" assertion never exists to run. PUBLIC so it reaches
+	# superslm_tests_${_sslm_tier_lower}_forced's own compile of tests/test_main.cpp exactly
+	# as SUPERSLM_FORCE_${_sslm_tier}_MATMUL already does, below. Follows the same option
+	# gate as superslm_test_injection above so `-DSUPERSLM_T2149_AVX_TIERS_BUILT=OFF`
+	# reproduces the pre-T-2149 shape uniformly across every binary, not only the default one.
+	if(SUPERSLM_T2149_AVX_TIERS_BUILT)
+		target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC
+			SUPERSLM_T2149_AVX_TIERS_BUILT
+			SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
+	endif()
 	if(MSVC)
 		target_compile_options(superslm_${_sslm_tier_lower}_forced PRIVATE /W4 /fp:precise)
 	else()

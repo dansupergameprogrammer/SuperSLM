@@ -30,9 +30,12 @@
 #ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
 // T-2158 red suite test-only seam (design §10 dimensions 1/3) -- mirrors
 // src/bad_alloc_wrap.h's own SUPERSLM_ENABLE_BAD_ALLOC_INJECTION convention exactly.
-// Only the superslm_test_injection library target (under SUPERSLM_T2149_AVX_TIERS_BUILT)
-// defines this macro; the production superslm library, sslm_verify, and every forced
-// tier library never do, so a release build never references tests/support/* at all.
+// The superslm_test_injection library target and the three SSE2/AVX2/AVX512 *_forced
+// library targets (all under SUPERSLM_T2149_AVX_TIERS_BUILT, CMakeLists.txt) define this
+// macro so both halves of the dispatch-cache cell -- "== 1" in the non-forced binary,
+// "== 0" in each forced binary -- exist and run (design §10 dimension 1); the production
+// superslm library and sslm_verify never do, so a release build never references
+// tests/support/* at all.
 #include "support/matmul_dispatch_instrument.h"
 #endif
 

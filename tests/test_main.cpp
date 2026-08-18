@@ -26241,7 +26241,22 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
 #if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
 	TestMatmulDotRowTierProbeSelectedOnceAndReusedAcrossCalls();
+	// T-2159 (build, closing design §11 steps 7-10, D-SLM3552): registration gap found by
+	// the first actual execution of the SSE2/AVX2/AVX-512-forced full-suite binaries to
+	// completion (this build's own step 10 verification) -- design §10 dimension 3's own
+	// fold-round-2 text already rules "this fixture is built into the non-forced
+	// (dispatch-live) test binary specifically ... no forced-binary variant of this cell is
+	// meaningful and none is added," because DetectBestDotRowTier() is never called at all
+	// in a forced binary (compile-time resolution), so no first-call race can exist to
+	// observe there. The single shared #if above compiled this call into every forced
+	// binary too once SUPERSLM_T2149_AVX_TIERS_BUILT reached the three forced-tier
+	// libraries (this same build's own CMakeLists.txt fix, needed for this test's own
+	// sibling above, whose "== 0 in each forced binary" branch is correct and unaffected).
+	// This inner guard completes the already-ratified scope rather than deciding a new one.
+#if !defined(SUPERSLM_FORCE_SCALAR_MATMUL) && !defined(SUPERSLM_FORCE_SSE2_MATMUL) && \
+    !defined(SUPERSLM_FORCE_AVX2_MATMUL) && !defined(SUPERSLM_FORCE_AVX512_MATMUL)
 	TestMatmulFirstCallDispatchRaceUnderConcurrency();
+#endif
 #endif
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
 	TestS2Point5SixCaseAcceptanceGateMeasurement();

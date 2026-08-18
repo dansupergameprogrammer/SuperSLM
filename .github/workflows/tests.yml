@@ -93,6 +93,61 @@ jobs:
       - run: cmake --build build --target superslm_tests
       - run: ./build/superslm_tests
 
+  # T-2149 design §8.1, §11 step 7 (fold round 2 adds the SSE2 leg): the three forced
+  # full-suite executables (design §11 step 5, CMakeLists.txt's SSE2/AVX2/AVX512 foreach
+  # block, EXCLUDE_FROM_ALL) get the SAME 34000+-check suite superslm_tests already gets,
+  # once per tier -- the existing suite becomes each tier's own dispatch-cache/bit-identity
+  # proof for free, no new test code (design §8.1). x64-pinned (ubuntu-latest), Clang 18
+  # (matching the local mutation-vitality proof already run against this exact toolchain --
+  # the existing scalar-forced digest job's own stated reasoning, reused unchanged).
+  linux-x64-clang-sse2-forced:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target superslm_tests_sse2_forced
+      - run: ./build/superslm_tests_sse2_forced
+
+  # AVX2 is assumed present on any GH-hosted x86-64 runner (design §1) but the job still
+  # defensively probes before running, so an unexpected absence reports SKIPPED rather than
+  # crashing the job (design §8.1) -- this leg IS expected to always run in practice. The
+  # probe reads a CPU flag from /proc/cpuinfo, never executes an AVX2 instruction itself, so
+  # it is safe before AVX2 presence is confirmed.
+  linux-x64-clang-avx2-forced:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target superslm_tests_avx2_forced
+      - name: Probe for AVX2 and run the forced suite if present
+        run: |
+          if grep -qw avx2 /proc/cpuinfo; then
+            ./build/superslm_tests_avx2_forced
+          else
+            echo "AVX2-SKIPPED: runner lacks AVX2"
+          fi
+
+  # The AVX-512 leg runtime-probes hardware support before running (design §8.1/§8.3):
+  # SIGILL is not a catchable, portable C++ exception, so the check happens using only
+  # baseline (non-AVX-512) instructions before a single AVX-512 instruction executes.
+  # SKIPPED is the expected, non-failing outcome on most GH-hosted runs (design §1's
+  # grounded finding); RAN is informative whenever GitHub happens to schedule the job onto
+  # AVX-512-capable hardware -- this is the CI half of design §8.4's must-fire gap, closed
+  # for real only by the manual hardware run named at design §11 step 9 (D-SLM3511).
+  linux-x64-clang-avx512-forced:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target superslm_tests_avx512_forced
+      - name: Probe for AVX-512F+BW and run the forced suite if present
+        run: |
+          if grep -qw avx512f /proc/cpuinfo && grep -qw avx512bw /proc/cpuinfo; then
+            ./build/superslm_tests_avx512_forced
+          else
+            echo "AVX512-SKIPPED: runner lacks AVX-512F/BW"
+          fi
+
   # S-HARDEN-6 components 2/3 (F4, design Sec2.1, T-410, T-180): the
   # cross-toolchain / cross-optimization digest-and-compare pattern Laplace
   # finding 2 names as entirely absent from CI ("no job compares its output
@@ -127,11 +182,13 @@ jobs:
         run: |
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
-          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+          mkdir -p artifact_out
+          grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+          echo RAN > artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-gcc
-          path: global_digest.txt
+          path: artifact_out
 
   linux-x64-clang-digest:
     runs-on: ubuntu-latest
@@ -143,11 +200,13 @@ jobs:
         run: |
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
-          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+          mkdir -p artifact_out
+          grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+          echo RAN > artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-clang
-          path: global_digest.txt
+          path: artifact_out
 
   windows-msvc-digest:
     runs-on: windows-latest
@@ -161,11 +220,13 @@ jobs:
           $out = & build/Release/sslm_axis_digest.exe
           $out | Out-File -Encoding ascii axis_output.txt
           if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
-          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-windows-msvc
-          path: global_digest.txt
+          path: artifact_out
 
   windows-clangcl-digest:
     runs-on: windows-latest
@@ -179,11 +240,13 @@ jobs:
           $out = & build/Release/sslm_axis_digest.exe
           $out | Out-File -Encoding ascii axis_output.txt
           if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
-          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
+          New-Item -ItemType Directory -Force -Path artifact_out | Out-Null
+          ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii artifact_out/global_digest.txt
+          "RAN" | Out-File -Encoding ascii artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-windows-clangcl
-          path: global_digest.txt
+          path: artifact_out
 
   # Ratified into this slot's scope (Sec7.1, D-SLM170): the first executed
   # x64-vs-ARM comparison this plan's own text (SuperSLM_Plan.md:1436, T-182)
@@ -200,11 +263,13 @@ jobs:
         run: |
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
-          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+          mkdir -p artifact_out
+          grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+          echo RAN > artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-macos-arm64
-          path: global_digest.txt
+          path: artifact_out
 
   # Component 3 (T-180): the scalar-forced axis, Clang/Linux (matches the
   # local mutation-vitality proof already run against this exact toolchain).
@@ -218,11 +283,92 @@ jobs:
         run: |
           ./build/sslm_axis_digest_scalar_forced | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
-          grep '^GLOBAL ' axis_output.txt > global_digest.txt
+          mkdir -p artifact_out
+          grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+          echo RAN > artifact_out/status.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-clang-scalar-forced
-          path: global_digest.txt
+          path: artifact_out
+
+  # T-2149 design §8.3, §11 step 7 (fold round 2, D-SLM3514): the SSE2-forced digest axis.
+  # SSE2 is the guaranteed x86-64 architectural floor, so unlike the AVX2/AVX-512 legs below
+  # there is no runner population on which this leg can lack its target instruction set --
+  # runs unconditionally, no probe, no skip path, always uploads status RAN with a digest,
+  # grouped with the seven other always-RAN legs above design §8.3 names.
+  linux-x64-clang-sse2-forced-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target sslm_axis_digest_sse2_forced
+      - name: Run and extract the GLOBAL digest
+        run: |
+          ./build/sslm_axis_digest_sse2_forced | tee axis_output.txt
+          grep -q '^local_invariant_failures 0$' axis_output.txt
+          mkdir -p artifact_out
+          grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+          echo RAN > artifact_out/status.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-linux-x64-clang-sse2-forced
+          path: artifact_out
+
+  # T-2149 design §8.3, §11 step 7: the AVX2-forced digest axis. AVX2 is assumed present on
+  # any GH-hosted x86-64 runner (design §1) but is still defensively probed first, so an
+  # unexpected absence reports SKIPPED (no digest uploaded, status SKIPPED) rather than
+  # crashing the job -- this leg IS expected to always run in practice.
+  linux-x64-clang-avx2-forced-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target sslm_axis_digest_avx2_forced
+      - name: Probe for AVX2, run and extract the GLOBAL digest if present
+        run: |
+          mkdir -p artifact_out
+          if grep -qw avx2 /proc/cpuinfo; then
+            ./build/sslm_axis_digest_avx2_forced | tee axis_output.txt
+            grep -q '^local_invariant_failures 0$' axis_output.txt
+            grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+            echo RAN > artifact_out/status.txt
+          else
+            echo "AVX2-SKIPPED: runner lacks AVX2"
+            echo "SKIPPED: runner lacks AVX2" > artifact_out/status.txt
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-linux-x64-clang-avx2-forced
+          path: artifact_out
+
+  # T-2149 design §8.3, §11 step 7: the AVX-512-forced digest axis. Probes AVX512F+BW (and,
+  # per design §6.2's corrected gate, the same instruction population the runtime dispatch
+  # probe checks) before running -- SKIPPED is the expected, non-failing outcome on most
+  # GH-hosted runs (design §1), RAN is informative whenever GitHub happens to schedule the
+  # job onto AVX-512-capable hardware. This is the digest half of design §8.4's must-fire
+  # gap; the manual hardware run at design §11 step 9 (D-SLM3511) is what closes it for real.
+  linux-x64-clang-avx512-forced-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+      - run: cmake --build build --target sslm_axis_digest_avx512_forced
+      - name: Probe for AVX-512F+BW, run and extract the GLOBAL digest if present
+        run: |
+          mkdir -p artifact_out
+          if grep -qw avx512f /proc/cpuinfo && grep -qw avx512bw /proc/cpuinfo; then
+            ./build/sslm_axis_digest_avx512_forced | tee axis_output.txt
+            grep -q '^local_invariant_failures 0$' axis_output.txt
+            grep '^GLOBAL ' axis_output.txt > artifact_out/global_digest.txt
+            echo RAN > artifact_out/status.txt
+          else
+            echo "AVX512-SKIPPED: runner lacks AVX-512F/BW"
+            echo "SKIPPED: runner lacks AVX-512F/BW" > artifact_out/status.txt
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: axis-digest-linux-x64-clang-avx512-forced
+          path: artifact_out
 
   # The missing half Laplace finding 2 names: "no CI job compares its output
   # to any other job's." Downloads every digest artifact above and fails if
@@ -231,6 +377,19 @@ jobs:
   # T-182), and the SIMD-vs-scalar axis (component 3) in one comparison,
   # since a correct build's GLOBAL hash does not depend on which of these a
   # conformant build chose (design Sec4's associativity argument).
+  #
+  # T-2149 design §8.3, §11 step 7: extended with the status-file convention -- every leg
+  # (RAN or SKIPPED) satisfies `needs` (a job that completes successfully either way), so a
+  # SKIPPED leg never blocks this job from running. Every leg's own status.txt is read; RAN
+  # legs' digests are compared for equality exactly as before, SKIPPED legs are reported by
+  # name in the job summary rather than silently absent (design §8.3's own "absence is a
+  # stated decision" discipline applied to a CI report). A build where the AVX-512 leg (and
+  # only the AVX-512 leg) is SKIPPED is still green -- SSE2 and AVX2 are never both absent on
+  # any GH-hosted x86-64 runner (design §1), so only the AVX-512 leg carries a designed skip
+  # path; a SKIPPED SSE2 or AVX2 leg is unexpected and is reported the same as any other, but
+  # does not by itself fail this job (the underlying full-suite/digest job for that leg is
+  # what would have already failed if the runner genuinely lacked SSE2, which is architecturally
+  # impossible on x86-64).
   axis-digest-compare:
     needs:
       - linux-x64-gcc-digest
@@ -239,32 +398,55 @@ jobs:
       - windows-clangcl-digest
       - macos-arm64-digest
       - linux-x64-clang-scalar-forced-digest
+      - linux-x64-clang-sse2-forced-digest
+      - linux-x64-clang-avx2-forced-digest
+      - linux-x64-clang-avx512-forced-digest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: axis-digest-*
           path: digests
-      - name: Compare every axis's GLOBAL digest
+      - name: Compare every RAN leg's GLOBAL digest; report every SKIPPED leg by name
         run: |
           set -e
-          files=$(find digests -name global_digest.txt | sort)
-          echo "Comparing:"; cat $files
+          status_files=$(find digests -name status.txt | sort)
           first=""
-          for f in $files; do
-            # Strip CR: the Windows axis writes its digest via Out-File (CRLF),
-            # the Linux axes via grep>file (LF). A byte-identical digest then
-            # differs only by a trailing \r and falsely trips the mismatch.
-            hash=$(tr -d '\r' < "$f")
-            if [ -z "$first" ]; then
-              first="$hash"
-              first_file="$f"
-            elif [ "$hash" != "$first" ]; then
-              echo "MISMATCH: $f ($hash) != $first_file ($first)"
-              exit 1
+          skipped_count=0
+          ran_count=0
+          for s in $status_files; do
+            leg_dir=$(dirname "$s")
+            leg=$(basename "$leg_dir")
+            status=$(tr -d '\r' < "$s")
+            if [ "$status" = "RAN" ]; then
+              ran_count=$((ran_count + 1))
+              f="$leg_dir/global_digest.txt"
+              if [ ! -f "$f" ]; then
+                echo "MISSING DIGEST: $leg reports RAN but has no global_digest.txt"
+                exit 1
+              fi
+              # Strip CR: the Windows axes write via Out-File (CRLF), the Linux/macOS
+              # axes via grep>file (LF). A byte-identical digest then differs only by a
+              # trailing \r and falsely trips the mismatch.
+              hash=$(tr -d '\r' < "$f")
+              echo "RAN     $leg: $hash"
+              if [ -z "$first" ]; then
+                first="$hash"
+                first_leg="$leg"
+              elif [ "$hash" != "$first" ]; then
+                echo "MISMATCH: $leg ($hash) != $first_leg ($first)"
+                exit 1
+              fi
+            else
+              skipped_count=$((skipped_count + 1))
+              echo "SKIPPED $leg: $status"
             fi
           done
-          echo "All $(echo "$files" | wc -l) axis digests agree: $first"
+          if [ -z "$first" ]; then
+            echo "No leg reported RAN -- nothing to compare"
+            exit 1
+          fi
+          echo "$ran_count leg(s) RAN and agree on $first; $skipped_count leg(s) SKIPPED (reported above)."
 
   # S-HARDEN-8 (F12, design Sec4.1, Sec4.3): source-only LLVM branch coverage
   # over src/ and include/superslm/ (tests/ and tools/ excluded from the
