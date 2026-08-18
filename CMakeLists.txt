@@ -221,6 +221,23 @@ add_executable(t2139_gate_c_sentinel_must_reject EXCLUDE_FROM_ALL
 	tools/t2139_gate_c_sentinel_negative.cpp)
 target_include_directories(t2139_gate_c_sentinel_must_reject PRIVATE include)
 
+# T-2141 (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md O3; Claude/Zelda/Board.md
+# T-2141 row): the t2138 red suite's own sslm_abi.h enum copy (tests/t2138-abi-red-suite/
+# sslm_abi.h) was guarded only by the 564-cell link, never by a compile-time parity check --
+# that file's own header comment names the gap. This must-accept/must-reject pair closes it for
+# sslm_status, same generated-per-name-plus-sentinel shape as t2139_gate_c_type_identity_check
+# above, but reading the REAL suite header (namespaced, to avoid the extern "C" function-name
+# collision the real library header's own SUPERSLM_ABI_ENUM_ONLY escape hatch exists for --
+# executed and confirmed, see tools/t2141_gate_c_t2138_suite_side_check.cpp's own header
+# comment for the exact collision this construction hit and routed around).
+add_executable(t2141_gate_c_t2138_suite_side_must_accept EXCLUDE_FROM_ALL
+	tools/t2141_gate_c_t2138_suite_side_check.cpp)
+target_include_directories(t2141_gate_c_t2138_suite_side_must_accept PRIVATE include tests)
+
+add_executable(t2141_gate_c_t2138_suite_side_must_reject EXCLUDE_FROM_ALL
+	tools/t2141_gate_c_t2138_suite_side_check_negative.cpp)
+target_include_directories(t2141_gate_c_t2138_suite_side_must_reject PRIVATE include)
+
 enable_testing()
 add_test(NAME t2139_gate_a_must_accept_compiles
 	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_accept --config $<CONFIG>)
@@ -232,11 +249,13 @@ add_test(NAME t2139_gate_a_must_accept_compiles
 add_test(NAME t2139_gate_a_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND}
 		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_a_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DSOURCE_FILE=tools/t2139_gate_a_header_parity_check_negative.cpp
 		-DMARKER_TEXT=sslm_model_map:\ library\ signature\ diverges\ from\ tests/t2130-g5-red-suite/sslm_g5.h
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 add_test(NAME t2139_gate_c_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND}
 		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DSOURCE_FILE=tools/t2139_gate_c_type_identity_check_negative.cpp
 		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 # Gate C must-accept: a plain must-pass compile check, matching its Gate A sibling. The known
@@ -268,15 +287,40 @@ add_test(NAME t2139_gate_c_real_suite_side_check_compiles
 # pass. WILL_FAIL must never be set on an entry that invokes this script -- see the script's own
 # header comment for why (T-2139 sixth confirmation review S2): the script's exit code is already
 # correct (0 only when both conditions hold), and WILL_FAIL on top of it inverts the check.
+# T-2142 (Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md M1, the residual half): both
+# MARKER_TEXT values below were TRUNCATED fragments of their construction's own full
+# static_assert message until this fix -- reproduced and confirmed before fixing
+# (tools/ci/verify_negative_compile_marker_source.py against each source file with the OLD
+# truncated text: FAILED, correctly). The xmacro entry was missing its macro-generated suffix
+# " (deliberate corruption, must-reject construction)"; the sentinel entry was missing its
+# literal prefix "registry-top divergence (deliberate one-sided append, must-reject
+# construction): the two ". Both passed the compiler-output substring check vacuously the whole
+# time -- a truncated fragment of a real message IS a substring of that message -- which is
+# exactly the class check_negative_compile_marker.cmake's own new SOURCE_FILE argument now closes
+# structurally rather than by a fourth careful transcription.
 add_test(NAME t2139_gate_c_xmacro_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND}
 		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_xmacro_must_reject -DBUILD_CONFIG=$<CONFIG>
-		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
+		-DSOURCE_FILE=tools/t2139_gate_c_xmacro_check_negative.cpp
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges\ \(deliberate\ corruption,\ must-reject\ construction\)
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 add_test(NAME t2139_gate_c_sentinel_must_reject_fails_to_compile
 	COMMAND ${CMAKE_COMMAND}
 		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_sentinel_must_reject -DBUILD_CONFIG=$<CONFIG>
-		-DMARKER_TEXT=SSLM_STATUS_NEXT_FREE\ sentinels\ no\ longer\ agree
+		-DSOURCE_FILE=tools/t2139_gate_c_sentinel_negative.cpp
+		"-DMARKER_TEXT=registry-top divergence (deliberate one-sided append, must-reject construction): the two SSLM_STATUS_NEXT_FREE sentinels no longer agree"
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
+
+# T-2141's must-accept/must-reject pair (see the add_executable block above for the construction
+# itself): must-accept is a plain must-pass compile check, matching every Gate A/C sibling's own
+# convention; must-reject goes through the same marker script as every other must-reject entry.
+add_test(NAME t2141_gate_c_t2138_suite_side_must_accept_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2141_gate_c_t2138_suite_side_must_accept --config $<CONFIG>)
+add_test(NAME t2141_gate_c_t2138_suite_side_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2141_gate_c_t2138_suite_side_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DSOURCE_FILE=tools/t2141_gate_c_t2138_suite_side_check_negative.cpp
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges\ \(deliberate\ corruption,\ must-reject\ construction\)
 		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
