@@ -759,7 +759,7 @@ struct LayerWeights {
 // for the context accumulate -- §6.2 step 5; no separate named site exists
 // for this composition anywhere in this tree, so RunLayerLoop is where it is
 // first composed, matching §3.4 of the plan's own text: "No C++ code in
-// D:\SuperSLM performs... an attention pass... S3a is the first slot with a
+// this repository performs... an attention pass... S3a is the first slot with a
 // forward pass in it") -> the ctx_fold dispatch (ApplyWeightScaleFold) ->
 // o_proj (as q_proj) -> attn_residual (ResidualReconcileSite) -> mlp_norm ->
 // gate/up projections -> MlpActSite -> down_proj -> mlp_residual
