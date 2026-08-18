@@ -76,10 +76,12 @@ enum class MatmulAccumWidth : int32_t { Int32 = 0, Int64 = 1 };
 
 // design §5 -- the scalar reference construction, exposed for verification only. The
 // shipping dispatch (matmul.cpp's internal DotRow) never calls this on an x64 build --
-// it unconditionally selects the SSE2 specialization there, since every x64 chip has
-// SSE2 and no runtime CPUID dispatch is needed. This declaration makes the normative
-// scalar path reachable from a test so scalar == SIMD == oracle can be asserted
-// directly (design §11 item 4) instead of only transitively through GemmInt8Accumulate.
+// x64 builds runtime-dispatch among SSE2 (the unconditional architectural floor), AVX2,
+// and AVX-512 by cached CPUID+XGETBV probe (T-2149 design §6.2), or resolve one tier at
+// compile time when a SUPERSLM_FORCE_*_MATMUL macro pins it (design §6.1). This
+// declaration makes the normative scalar path reachable from a test so scalar == SIMD ==
+// oracle can be asserted directly (design §11 item 4) instead of only transitively
+// through GemmInt8Accumulate.
 // Same contract as the row dot product inside GemmInt8AccumulateRow: `activations` and
 // `weights` each have `in_channels` elements; every intermediate is int64, both int8
 // factors widened to int64 before the multiply, no saturation, no rounding.
