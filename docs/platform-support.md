@@ -50,8 +50,9 @@ artifact, decoding through the `SslmGpu*` API described in
 | Host CPU, same machine | 4.5–6.3 | 8.91 |
 
 **Reproducing these numbers:** `build.bat` compiles `tools/t2100_gpu_throughput.cpp`
-into `out\t2100_gpu_throughput.exe` on every Windows build with
-`SUPERSLM_BUILD_GPU` support (the harness needs a real `.sslm` model
+into `out\t2100_gpu_throughput.exe` on every Windows run of that
+script, unconditionally — `SUPERSLM_BUILD_GPU` is the separate CMake-side option
+and does not govern this tool (the harness needs a real `.sslm` model
 artifact on disk, so it is built but not auto-run). Invoke it directly:
 `out\t2100_gpu_throughput.exe <model.sslm> [steps] [token_id]` — it runs N
 successive decode steps through the same `SslmGpu*` entry points a real
