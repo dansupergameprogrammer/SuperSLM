@@ -26,9 +26,14 @@ WHAT THIS CHECK ACTUALLY DOES. Extracts the DISTINCT `SslmForwardStatus`
 values returned from three places -- (a) `RunLayerLoopImpl`'s own FULL body
 in `forward_sites.cpp` (from the function's own opening brace to its own
 real, brace-matched closing brace -- `extract_function_body`/`cpu_guard_
-status_set` below -- with the six per-site arithmetic-rejection statuses
+status_set` below -- with the four per-site arithmetic-rejection statuses
 that legitimately live below the entry guards, plus `Ok`, subtracted back
-out; corrected 2026-08-14, T-2062, S2, from an earlier cut that stopped at
+out (T-2152 outside strike item 3a: two of the original six, `OptionGWide
+RopeMagnitudeOutOfDomain`/`OptionGFusedLandingExponentOutOfDomain`, moved
+into their own function, `LandTokenKVRow`, and are no longer text `RunLayer
+LoopImpl`'s own body contains at all -- see `CPU_BELOW_GUARD_ARITHMETIC_
+STATUSES`'s own header comment below for the full account); corrected
+2026-08-14, T-2062, S2, from an earlier cut that stopped at
 the first occurrence of `const int64_t position = seq.context_length;`,
 a text marker a guard placed below it could silently exit past), (b)
 `RunLayerLoopGpu`'s own FULL body in `superslm_gpu.cpp` (the symmetric twin
@@ -127,7 +132,7 @@ review to rediscover the shape of (the failure this finding is about is the
 overclaim, not the apparatus, and restating that overclaim about THIS check
 would be the same mistake with a seventh author): **a tenth CPU guard, or a
 new GPU-side rejection, that returns a status ALREADY in the derived set --
-including any of the six `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names or
+including any of the four `CPU_BELOW_GUARD_ARITHMETIC_STATUSES` names or
 either `GPU_BELOW_LADDER_STATUSES` name, now that both are subtracted rather
 than out of scan range entirely -- would not change the set, and this check
 would stay green.** The set-equality comparison this module performs cannot
@@ -260,20 +265,33 @@ CPU_GUARD_REGION_END_MARKER = "const int64_t position = seq.context_length;"
 # returns BELOW `CPU_GUARD_REGION_END_MARKER` -- one status per per-site
 # arithmetic/domain rejection inside the per-layer loop body (never a host-
 # visible entry guard), plus `Ok` itself at the function's own end. Named at
-# source, not derived: `OptionGWideRopeMagnitudeOutOfDomain` (RoPE rotation
-# overflow), `OptionGFusedLandingExponentOutOfDomain` (post-rotation landing
-# magnitude), `CarriedScaleMantissaOutOfDomain` (two sites, C26's own
-# combine step), `IExpScaleDerivationOutOfDomain` (the per-kv-head i-exp
+# source, not derived: `CarriedScaleMantissaOutOfDomain` (two sites, C26's
+# own combine step), `IExpScaleDerivationOutOfDomain` (the per-kv-head i-exp
 # derivation), `SoftmaxKernelRefusedAfterGateAccepted` (the softmax kernel's
-# own post-gate refusal). Stable across this arc's every round to date
-# (T-2062, Claude/Poirot/a3d44e7-gpu-serial-port-ship-confirmation-
-# review.md, S2's own remedy) -- a name added to CPU's per-layer body that
-# is NOT on this list surfaces as a real set disagreement, exactly like a
-# guard would; only these six are treated as "known, non-guard, below-the-
-# guards" statuses.
+# own post-gate refusal) -- a name added to CPU's per-layer body that is NOT
+# on this list surfaces as a real set disagreement, exactly like a guard
+# would; only these four are treated as "known, non-guard, below-the-guards"
+# statuses.
+#
+# T-2152 (outside strike item 3a, re-derived against the real tree, not
+# renumbered): `OptionGWideRopeMagnitudeOutOfDomain` and `OptionGFusedLanding
+# ExponentOutOfDomain` REMOVED from this set. Both are still real, live
+# statuses `forward_sites.cpp` returns (`LandTokenKVRow`, lines ~1371/1391)
+# -- production behavior is unchanged -- but `LandTokenKVRow` is now its own
+# function, extracted out of `RunLayerLoopImpl`'s own body (verified at
+# source: `RunLayerLoopImpl` calls it at line ~1730 and forwards the result
+# through a local variable, `const SslmForwardStatus land_status = LandToken
+# KVRow(...); if (land_status != SslmForwardStatus::Ok) return land_status;`
+# -- a call-through-a-variable, not a literal `return SslmForwardStatus::X;`,
+# exactly the shape this module's own docstring already names as invisible
+# to `_STATUS_RETURN_RE` on either side). `RunLayerLoopImpl`'s own real body
+# therefore no longer contains either name as text at all, in any position --
+# keeping them in this subtraction set was silently correct only because
+# they were also absent from the raw extracted set, not because they were
+# present and legitimately subtracted; asserting they are found and
+# subtracted (as `test_check_gpu_guard_status_parity.py`'s own real-tree
+# cell now does) caught the drift the set membership alone did not.
 CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
-    "OptionGWideRopeMagnitudeOutOfDomain",
-    "OptionGFusedLandingExponentOutOfDomain",
     "CarriedScaleMantissaOutOfDomain",
     "IExpScaleDerivationOutOfDomain",
     "SoftmaxKernelRefusedAfterGateAccepted",

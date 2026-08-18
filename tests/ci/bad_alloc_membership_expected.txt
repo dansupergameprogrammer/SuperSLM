@@ -15,20 +15,27 @@
 # src/model.h/model.cpp). Clang attributes all instantiations of a template
 # member to its one declaration site, so this member's line (387) appears
 # once here regardless of how many Kind values instantiate it.
-artifact.h:188:OpenFromMemory
-artifact.h:194:OpenFromFile
-artifact.h:213:FingerprintHex
-model.h:281:Parse
-model.h:331:Parse
-model.h:387:Parse
-model.h:461:ParseConfig
-model.h:484:ParseSigmoidLut
-model.h:744:Load
-proof_manifest.h:52:JsonEscape
-proof_manifest.h:101:ComputeTensorEvidence
-proof_manifest.h:117:ComputeWeightScaleEvidence
-proof_manifest.h:124:HashSectionHex
-proof_manifest.h:151:BuildProofManifestJson
+#
+# T-2152 (outside strike item 3c): still 20 sites, same 20 names -- only line
+# numbers moved (artifact.h/model.h -2 lines each, proof_manifest.h -12
+# lines), regenerated against the real headers on disk (`python tests/ci/
+# derive_bad_alloc_membership.py`, SUPERSLM_CLANGXX="C:\Program Files\LLVM\
+# bin\clang++.exe") rather than hand-adjusted, same discipline the T-2125
+# note above already names.
+artifact.h:186:OpenFromMemory
+artifact.h:192:OpenFromFile
+artifact.h:211:FingerprintHex
+model.h:279:Parse
+model.h:329:Parse
+model.h:385:Parse
+model.h:459:ParseConfig
+model.h:482:ParseSigmoidLut
+model.h:742:Load
+proof_manifest.h:40:JsonEscape
+proof_manifest.h:89:ComputeTensorEvidence
+proof_manifest.h:105:ComputeWeightScaleEvidence
+proof_manifest.h:112:HashSectionHex
+proof_manifest.h:139:BuildProofManifestJson
 sha256.h:20:Update
 sha256.h:41:Sha256Hash
 sha256.h:45:ToHex
