@@ -538,8 +538,14 @@ if(TARGET superslm_gpu)
 	)
 endif()
 
+# T-2150 (D-SLM3423 scrub gate, P2-8): gpu_1p0_bench_bridge.h is a build-seat-only bench
+# accessor header (its own banner: "NOT part of the shipped 1.0 API surface"; its only
+# intended includers are tools/t2113_b3_sequence_smoke.cpp and the other in-tree diagnostic/
+# bench tools, none of which are installed) -- it stays in the source tree for those tools to
+# include, but is excluded from the public install surface.
 install(DIRECTORY include/superslm/
 	DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/superslm
+	PATTERN "gpu_1p0_bench_bridge.h" EXCLUDE
 )
 
 install(EXPORT superslmTargets
