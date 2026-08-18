@@ -39,6 +39,7 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/checked_chain_funnel.cpp
 	src/forward/forward_sites.cpp
 	src/decode_digest.cpp
+	src/sslm_abi.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
@@ -158,6 +159,125 @@ if(MSVC)
 else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
+
+# C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate
+# C's own must-accept/must-reject constructions (tools/t2139_gate_a_header_parity_check*.cpp,
+# tools/t2139_gate_c_type_identity_check*.cpp) were previously compiled ONLY by build.bat (MSVC
+# x64) -- the design's own stated CI-matrix closure mechanism ("re-run as part of every real
+# slot's CI build across that matrix") did not exist for either gate. Wired here as CMake targets
+# so `cmake --build` on ANY configured toolchain (not only build.bat's MSVC x64) exercises them.
+#
+# EXCLUDE_FROM_ALL: none of these four is meant to LINK into anything or run as a program (Gate A
+# is compile-only by design Sec9's own construction; Gate C the same) -- they are pure
+# compilation checks, so they are built on demand by the ctest entries below rather than by every
+# plain `cmake --build`. The must-reject targets are EXPECTED TO FAIL TO COMPILE; the must-accept
+# targets are expected to succeed, both of them -- Gate C's own sslm_g5.h ordinal-17 collision
+# (SSLM_TOKEN_ID_UNMAPPED vs SSLM_SCHEMA_NOT_FOUND) reconciled at curie/t2130-g5-red-suite@59e26ff,
+# closing S8 for real.
+#
+# N1 (Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3): the WILL_FAIL TRUE below on Gate C's
+# own must-accept entry was written when the reconciliation above was still pending, with a comment
+# saying to flip it once reconciliation landed -- reconciliation landed two rounds later and the
+# flag was never revisited (the exact rule-enforced-by-memory class this arc has been fighting
+# elsewhere). Left in place, this ctest entry inverts: it reports FAILURE (ctest exit 8) on a
+# healthy tree, and would report SUCCESS the day Gate C genuinely regresses -- the one entry whose
+# whole job is catching header drift silently saying the opposite of what it finds. Fixed here:
+# WILL_FAIL removed (the target now must actually compile, matching its Gate A sibling), and the
+# entry renamed off its own now-false "known_pending" name.
+add_executable(t2139_gate_a_must_accept EXCLUDE_FROM_ALL
+	tools/t2139_gate_a_header_parity_check.cpp)
+target_include_directories(t2139_gate_a_must_accept PRIVATE include tests)
+
+add_executable(t2139_gate_a_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_a_header_parity_check_negative.cpp)
+target_include_directories(t2139_gate_a_must_reject PRIVATE include tools tests)
+
+add_executable(t2139_gate_c_must_accept EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_type_identity_check.cpp)
+target_include_directories(t2139_gate_c_must_accept PRIVATE include)
+
+add_executable(t2139_gate_c_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_type_identity_check_negative.cpp)
+target_include_directories(t2139_gate_c_must_reject PRIVATE include)
+
+# S1's structural remedy (Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md, owed remedy
+# 5): the THIRD Gate C TU -- includes the REAL tests/t2130-g5-red-suite/sslm_g5.h directly (not a
+# transcription) alongside the library's own SSLM_STATUS_ENUM_LIST expansion, so a divergence in
+# the real suite header itself (not just a stale hand-transcription of it) fails here. Needs
+# `tests` on its include path to resolve the real suite header (matching Gate A's own convention).
+add_executable(t2139_gate_c_real_suite_side_check EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_real_suite_side_check.cpp)
+target_include_directories(t2139_gate_c_real_suite_side_check PRIVATE include tests)
+
+# S4's owed must-reject constructions (same casebook): one per NEW mechanism this round's own Gate
+# C remedy added, each exercising the REAL SSLM_STATUS_ENUM_LIST/SSLM_STATUS_NEXT_FREE machinery
+# rather than a toy hand-written enum (tools/t2139_gate_c_type_identity_check_negative.cpp's own
+# sibling, unchanged, still covers the generic "does static_assert work" case).
+add_executable(t2139_gate_c_xmacro_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_xmacro_check_negative.cpp)
+target_include_directories(t2139_gate_c_xmacro_must_reject PRIVATE include)
+
+add_executable(t2139_gate_c_sentinel_must_reject EXCLUDE_FROM_ALL
+	tools/t2139_gate_c_sentinel_negative.cpp)
+target_include_directories(t2139_gate_c_sentinel_must_reject PRIVATE include)
+
+enable_testing()
+add_test(NAME t2139_gate_a_must_accept_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_a_must_accept --config $<CONFIG>)
+# T-2139 sixth confirmation review (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md S1):
+# these two were still WILL_FAIL-only (exit-code-only) after S3 gave the X-macro/sentinel pair
+# below the marker-text discrimination -- the same class the fifth casebook's S3 named in class
+# terms, not instance terms. Both now go through tools/ci/check_negative_compile_marker.cmake with
+# their own static_assert marker text, matching their two siblings' convention.
+add_test(NAME t2139_gate_a_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_a_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=sslm_model_map:\ library\ signature\ diverges\ from\ tests/t2130-g5-red-suite/sslm_g5.h
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
+add_test(NAME t2139_gate_c_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
+# Gate C must-accept: a plain must-pass compile check, matching its Gate A sibling. The known
+# ordinal-interleaving block this entry previously disclosed (P2, Claude/Poirot/
+# 2c18dab-t2139-abi-build-review.md Sec7.4) closed when sslm_g5.h took the T-2133 Sec6 registry
+# mirror (curie/t2130-g5-red-suite@52dc6cd): sslm_g5.h now mirrors sslm_status's full 26-entry
+# ordinal registry verbatim, so the type-identity construction compiles and this entry must pass.
+add_test(NAME t2139_gate_c_must_accept_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_must_accept --config $<CONFIG>)
+
+# S1's structural remedy: the third TU is a plain must-pass compile check, matching its two
+# siblings above.
+add_test(NAME t2139_gate_c_real_suite_side_check_compiles
+	COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --target t2139_gate_c_real_suite_side_check --config $<CONFIG>)
+
+# S4's owed must-reject constructions: both MUST fail to compile, same convention as
+# t2139_gate_a_must_reject_fails_to_compile and t2139_gate_c_must_reject_fails_to_compile above
+# (all four negative-compile constructions now run through the marker script; see S1 comment
+# above them for the finding that made this true of all four rather than just these two).
+#
+# T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-review.md S3):
+# a plain WILL_FAIL entry only inverts the build's exit code -- it cannot tell the construction's
+# own assertion firing apart from any other compile failure, and the sentinel construction proved
+# this live (one governed append to both real headers desynchronizes its own extra enumerator from
+# the real sentinels, so it still fails to compile, but for an unrelated C2039 name-lookup reason,
+# with WILL_FAIL still reporting green). tools/ci/check_negative_compile_marker.cmake requires BOTH
+# the build failing AND the target's own static_assert marker text appearing in the captured
+# output, so a degeneration of the underlying mechanism is a hard ctest failure instead of a silent
+# pass. WILL_FAIL must never be set on an entry that invokes this script -- see the script's own
+# header comment for why (T-2139 sixth confirmation review S2): the script's exit code is already
+# correct (0 only when both conditions hold), and WILL_FAIL on top of it inverts the check.
+add_test(NAME t2139_gate_c_xmacro_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_xmacro_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_ARTIFACT_REJECTED\ diverges
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
+add_test(NAME t2139_gate_c_sentinel_must_reject_fails_to_compile
+	COMMAND ${CMAKE_COMMAND}
+		-DBUILD_DIR=${CMAKE_BINARY_DIR} -DBUILD_TARGET=t2139_gate_c_sentinel_must_reject -DBUILD_CONFIG=$<CONFIG>
+		-DMARKER_TEXT=SSLM_STATUS_NEXT_FREE\ sentinels\ no\ longer\ agree
+		-P ${CMAKE_SOURCE_DIR}/tools/ci/check_negative_compile_marker.cmake)
 
 # T-2115 (D-SLM3432): the GPU acceleration target (src/gpu/gpu_1p0.cpp,
 # src/gpu/superslm_gpu.cpp) is D3D12/HLSL and Windows-only -- build.bat is the

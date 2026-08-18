@@ -411,7 +411,8 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
                                CarriedScale /*incoming_scale*/, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site, size_t token_index,
-                               SslmTraceHookState* trace_hook_state) {
+                               SslmTraceHookState* trace_hook_state,
+                               int64_t* external_wide_scratch) {
 	// C31 (§5.1, §6.2 step 1/9): sumsq -> ISqrt(FloorDivI64(...)) ->
 	// max(root,1) -> per-element FloorDivI64(h[i]<<2*NORM_FRAC_BITS, root)*g[i]
 	// -> the funnel, with the incoming span EMPTY. `incoming_scale` is accepted
@@ -427,7 +428,19 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 	    ISqrt(FloorDivI64(sumsq << (2 * kNormFracBits), static_cast<int64_t>(hidden_size)));
 	root = root > 1 ? root : 1;
 
-	std::vector<int64_t> wide(hidden_size);
+	// T-2139 closing round (curie/t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a cell):
+	// `external_wide_scratch`, when the caller supplies one, replaces this call's own internal
+	// heap allocation -- the ONLY change from the pre-existing behavior (see this function's own
+	// header-comment addition, forward_sites.h) is WHERE `wide` lives, never what it holds or how
+	// it's computed below.
+	std::vector<int64_t> wide_fallback;
+	int64_t* wide;
+	if (external_wide_scratch) {
+		wide = external_wide_scratch;
+	} else {
+		wide_fallback.assign(hidden_size, 0);
+		wide = wide_fallback.data();
+	}
 	for (size_t i = 0; i < hidden_size; ++i) {
 		const int64_t hi = static_cast<int64_t>(h[i]);
 		wide[i] = FloorDivI64(hi << (2 * kNormFracBits), root) * static_cast<int64_t>(g[i]);
@@ -438,7 +451,7 @@ SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_s
 	// composition serves every RMSNorm instance in the per-layer forward), so
 	// the caller's own site string, token index, and model-handle hook state
 	// are exactly what reaches the funnel's own emission seam.
-	const ChainResult result = RequantChainChecked(wide.data(), hidden_size,
+	const ChainResult result = RequantChainChecked(wide, hidden_size,
 	                                                std::span<const CarriedScale>{}, site_constant,
 	                                                out_codes, out_scale, site, token_index,
 	                                                trace_hook_state);
@@ -1089,16 +1102,57 @@ void AddAmplifyingLoraDelta(const int8_t* in_codes, size_t in_channels,
 	}
 }
 
-// One projection: GemmInt8AccumulateRow -> the shared WSC1 fold -> T-2021/T-2029's runtime-
-// additive LoRA delta-add (design Sec3, gated no-op when unadapted) -> C28's optional bias
-// reconciliation -> the funnel. §6.2 step 2's own shape, and q_proj/o_proj/gate_proj/
-// up_proj/down_proj all have it -- they differ only in weights, incoming scale, site
-// constant, and (T-1656) bias, never in construction. `bias` defaults to nullptr so
-// every pre-existing call (o/gate/up/down) compiles unchanged and gets no bias term,
-// matching today's behaviour exactly; the q_proj call site passes `lw.q_bias`. `adapter`
-// defaults to nullptr and `rank` to 0 so a base-only call site (none remain after this build's
-// own five call sites are updated, but the default keeps the signature change additive) gets
-// no delta term, byte-identical to before this build.
+// T-2147 (design §15.1/§15.2, D-SLM3481/D-SLM3482): extracted from what was ProjectAndFunnel's
+// own tail -- the post-GEMM composition every projection site shares once `acc` already holds
+// the raw accumulator for ONE row: the WSC1 fold -> T-2021/T-2029's runtime-additive LoRA
+// delta-add (gated no-op when unadapted) -> C28's optional bias reconciliation -> the funnel.
+// Factored out, unchanged in its own math, so the chunk-batched path (which fills `acc` via ONE
+// GemmInt8Accumulate call for the whole chunk instead of one GemmInt8AccumulateRow call per row,
+// ProjectAndFunnelBatched below) executes the IDENTICAL row expression ProjectAndFunnel always
+// has -- design §15.2's bit-identity-by-construction argument, held at the code level by literal
+// sharing rather than by two independently-written copies that happen to agree.
+SslmForwardStatus FunnelProjectedRow(int64_t* acc, const int8_t* in_codes, CarriedScale in_scale,
+                                      size_t in_channels, size_t out_channels,
+                                      const int32_t* identity, const int32_t* mult,
+                                      const int32_t* shift, CarriedScale site_constant,
+                                      const int64_t* bias, int8_t* out_codes,
+                                      CarriedScale* out_scale, std::string_view site,
+                                      size_t token_index, SslmTraceHookState* trace_hook_state,
+                                      const LayerAdapterProjection* adapter,
+                                      uint32_t adapter_rank) {
+	// T-1666: identity/mult/shift are per-channel arrays -- one distinct fold
+	// triple per output channel, read at the same index i this loop already
+	// computes (design §5, cells 1-7 pin this at every projection).
+	for (size_t i = 0; i < out_channels; ++i) {
+		acc[i] = ApplyWeightScaleFold(acc[i], identity[i], mult[i], shift[i]);
+	}
+	// T-2021/T-2029 B1a (design Sec3): the runtime-additive LoRA delta-add, inserted between
+	// the WSC1 fold loop above and BIA1's bias reconciliation below -- gated no-op when
+	// `adapter` is absent or this projection is unadapted (AddAmplifyingLoraDelta's own gate).
+	AddAmplifyingLoraDelta(in_codes, in_channels, adapter, adapter_rank, out_channels, acc);
+	// T-1656/D-SLM642, §5.3: inserted between the WSC1 fold loop above and the funnel
+	// call below -- the exact composition slot the reference's `biased_fold_row`
+	// occupies between `_fold_rows` and `_chain_record_vec`.
+	if (bias != nullptr) {
+		const SslmForwardStatus bias_status =
+		    ApplyBiasReconcileRow(acc, out_channels, bias, in_scale.m, in_scale.e);
+		if (bias_status != SslmForwardStatus::Ok) return bias_status;
+	}
+	const CarriedScale incoming[1] = {in_scale};
+	const ChainResult result = RequantChainChecked(
+	    acc, out_channels, std::span<const CarriedScale>{incoming, 1}, site_constant,
+	    out_codes, out_scale, site, token_index, trace_hook_state);
+	return result.status;
+}
+
+// One projection: GemmInt8AccumulateRow -> FunnelProjectedRow's shared post-GEMM composition.
+// §6.2 step 2's own shape, and q_proj/o_proj/gate_proj/up_proj/down_proj all have it -- they
+// differ only in weights, incoming scale, site constant, and (T-1656) bias, never in
+// construction. `bias` defaults to nullptr so every pre-existing call (o/gate/up/down) compiles
+// unchanged and gets no bias term, matching today's behaviour exactly; the q_proj call site
+// passes `lw.q_bias`. `adapter` defaults to nullptr and `rank` to 0 so a base-only call site
+// (none remain after this build's own five call sites are updated, but the default keeps the
+// signature change additive) gets no delta term, byte-identical to before this build.
 SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale,
                                     const int8_t* weight, size_t in_channels, size_t out_channels,
                                     const int32_t* identity, const int32_t* mult, const int32_t* shift,
@@ -1110,29 +1164,42 @@ SslmForwardStatus ProjectAndFunnel(const int8_t* in_codes, CarriedScale in_scale
                                     uint32_t adapter_rank = 0) {
 	std::vector<int64_t> acc(out_channels);
 	GemmInt8AccumulateRow(in_codes, weight, in_channels, out_channels, acc.data());
-	// T-1666: identity/mult/shift are per-channel arrays -- one distinct fold
-	// triple per output channel, read at the same index i this loop already
-	// computes (design §5, cells 1-7 pin this at every projection).
-	for (size_t i = 0; i < out_channels; ++i) {
-		acc[i] = ApplyWeightScaleFold(acc[i], identity[i], mult[i], shift[i]);
+	return FunnelProjectedRow(acc.data(), in_codes, in_scale, in_channels, out_channels, identity,
+	                           mult, shift, site_constant, bias, out_codes, out_scale, site,
+	                           token_index, trace_hook_state, adapter, adapter_rank);
+}
+
+// T-2147 (design §15.1, D-SLM3481): the chunk-batched sibling of ProjectAndFunnel. Streams
+// `weight` ONCE via GemmInt8Accumulate across `chunk_tokens` stacked rows of `in_codes_chunk`
+// (row-major, `in_channels` per row) instead of once per row via GemmInt8AccumulateRow, then
+// applies FunnelProjectedRow -- the SAME per-row post-GEMM function ProjectAndFunnel itself
+// calls -- to each row in turn. `in_scales`/`out_codes_chunk`/`out_scales` are one entry/row per
+// token, in the same row order as `in_codes_chunk`. No new arithmetic: GemmInt8Accumulate's own
+// row loop (matmul.cpp) computes each row identically to GemmInt8AccumulateRow called on that
+// row alone (design §15.2), and FunnelProjectedRow is the literal function ProjectAndFunnel
+// already runs per row -- this function differs from `chunk_tokens` calls to ProjectAndFunnel
+// only in how many times `weight` is streamed, never in what any row computes.
+SslmForwardStatus ProjectAndFunnelBatched(const int8_t* in_codes_chunk, const CarriedScale* in_scales,
+                                           size_t chunk_tokens, const int8_t* weight,
+                                           size_t in_channels, size_t out_channels,
+                                           const int32_t* identity, const int32_t* mult,
+                                           const int32_t* shift, CarriedScale site_constant,
+                                           const int64_t* bias, int8_t* out_codes_chunk,
+                                           CarriedScale* out_scales, std::string_view site,
+                                           SslmTraceHookState* trace_hook_state,
+                                           const LayerAdapterProjection* adapter = nullptr,
+                                           uint32_t adapter_rank = 0) {
+	std::vector<int64_t> acc(chunk_tokens * out_channels);
+	GemmInt8Accumulate(in_codes_chunk, weight, chunk_tokens, in_channels, out_channels, acc.data());
+	for (size_t t = 0; t < chunk_tokens; ++t) {
+		const SslmForwardStatus st = FunnelProjectedRow(
+		    acc.data() + t * out_channels, in_codes_chunk + t * in_channels, in_scales[t],
+		    in_channels, out_channels, identity, mult, shift, site_constant, bias,
+		    out_codes_chunk + t * out_channels, &out_scales[t], site, /*token_index=*/t,
+		    trace_hook_state, adapter, adapter_rank);
+		if (st != SslmForwardStatus::Ok) return st;
 	}
-	// T-2021/T-2029 B1a (design Sec3): the runtime-additive LoRA delta-add, inserted between
-	// the WSC1 fold loop above and BIA1's bias reconciliation below -- gated no-op when
-	// `adapter` is absent or this projection is unadapted (AddAmplifyingLoraDelta's own gate).
-	AddAmplifyingLoraDelta(in_codes, in_channels, adapter, adapter_rank, out_channels, acc.data());
-	// T-1656/D-SLM642, §5.3: inserted between the WSC1 fold loop above and the funnel
-	// call below -- the exact composition slot the reference's `biased_fold_row`
-	// occupies between `_fold_rows` and `_chain_record_vec`.
-	if (bias != nullptr) {
-		const SslmForwardStatus bias_status =
-		    ApplyBiasReconcileRow(acc.data(), out_channels, bias, in_scale.m, in_scale.e);
-		if (bias_status != SslmForwardStatus::Ok) return bias_status;
-	}
-	const CarriedScale incoming[1] = {in_scale};
-	const ChainResult result = RequantChainChecked(
-	    acc.data(), out_channels, std::span<const CarriedScale>{incoming, 1}, site_constant,
-	    out_codes, out_scale, site, token_index, trace_hook_state);
-	return result.status;
+	return SslmForwardStatus::Ok;
 }
 
 // Per-layer site names ("layer3.attn_norm"), built here because only the loop
@@ -1199,6 +1266,155 @@ int8_t* MutableValueRow(uint8_t* workspace, uint32_t layer, int64_t context_cap,
                          int64_t position) noexcept {
 	return const_cast<int8_t*>(
 	    ValueRow(workspace, layer, context_cap, num_kv_heads, head_dim, kv_head, position));
+}
+
+// T-2147 (design §15.1/§15.2, D-SLM3481/D-SLM3482): extracted from what was RunLayerLoopImpl's
+// own K/V landing block -- everything AFTER the k_weight/v_weight GEMM (WSC1 fold, T-2021/
+// T-2029's LoRA delta-add, C28's optional bias reconciliation, the per-(head, projection)
+// landing rescale+clamp, Option-G's fused rotate-then-land) -- unchanged in its own math, taking
+// the raw GEMM accumulators `kacc`/`vacc` as input rather than computing them itself. Both the
+// single-token path (RunLayerLoopImpl, which fills `kacc`/`vacc` via two GemmInt8AccumulateRow
+// calls immediately before calling this) and the chunk-batched path (which fills them via one
+// GemmInt8Accumulate call per layer across the whole chunk, then calls this once per token in
+// position order) call the SAME function -- literal code sharing, not two copies reasoned to
+// agree (design §15.2's construction argument, held at the code level).
+SslmForwardStatus LandTokenKVRow(int64_t* kacc, int64_t* vacc, const int8_t* normed_row,
+                                  CarriedScale normed_scale, const LayerWeights& lw,
+                                  size_t hidden_size, size_t kv_hidden_size,
+                                  size_t num_key_value_heads, size_t head_dim, uint32_t layer,
+                                  int64_t position, int64_t context_cap,
+                                  const SslmTensorManifest& rope_tables, uint8_t* workspace,
+                                  bool option_g_fused_k_landing, uint64_t* kv_saturation_count) {
+	// T-1666: per-channel indexed read, the K/V-landing sibling of
+	// ProjectAndFunnel's loop above (design §5, cells 6-7).
+	for (size_t i = 0; i < kv_hidden_size; ++i) {
+		kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[i], lw.k_fold_mult[i],
+		                               lw.k_fold_shift[i]);
+		vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[i], lw.v_fold_mult[i],
+		                               lw.v_fold_shift[i]);
+	}
+	// T-2021/T-2029 B1a (design Sec3/Sec8): the runtime-additive LoRA delta-add, at the
+	// K/V landing block's own copy of design Sec3's insertion point -- inserted between
+	// the WSC1 fold loop above and BIA1's bias reconciliation below, gated no-op when
+	// `lw.adapter` is absent or k_proj/v_proj is unadapted (AddAmplifyingLoraDelta's own
+	// gate). `kacc[]`/`vacc[]` are already fully composed by this point, before the
+	// option_g_fused_k_landing branch point below -- the plain and Option G branches
+	// diverge only downstream of here (design Sec3's own D-SLM2886 finding).
+	AddAmplifyingLoraDelta(normed_row, hidden_size,
+	                       lw.adapter != nullptr ? &lw.adapter->k : nullptr,
+	                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
+	                       kacc);
+	AddAmplifyingLoraDelta(normed_row, hidden_size,
+	                       lw.adapter != nullptr ? &lw.adapter->v : nullptr,
+	                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
+	                       vacc);
+	// T-1656/D-SLM642, §5.3: the identical bias insertion ProjectAndFunnel's
+	// q_proj call site carries, written a second time here -- a separate
+	// location that does not call ProjectAndFunnel, keyed on
+	// `normed_scale.e`/`normed_scale.m` rather than `in_scale.e`/`in_scale.m`.
+	// Applied to the whole folded row before any element lands, so a
+	// rejection here leaves `workspace`/`seq` untouched (kacc/vacc are local
+	// temporaries; no landing write has happened yet).
+	if (lw.k_bias != nullptr) {
+		const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
+		    kacc, kv_hidden_size, lw.k_bias, normed_scale.m, normed_scale.e);
+		if (bias_status != SslmForwardStatus::Ok) return bias_status;
+	}
+	if (lw.v_bias != nullptr) {
+		const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
+		    vacc, kv_hidden_size, lw.v_bias, normed_scale.m, normed_scale.e);
+		if (bias_status != SslmForwardStatus::Ok) return bias_status;
+	}
+
+	// T-1894 (design Sec31.2, D-SLM2355/D-SLM2356): when Option G is on,
+	// resolve the (position, head_dim) RoPE table row ONCE for the whole
+	// K/V landing block -- every kv_head below rotates against the SAME
+	// row. When the flag is off, no table read happens here at all --
+	// this whole block is behind the flag, so a flags==0 artifact's
+	// landing arithmetic is byte-identical to the pre-existing,
+	// unmodified code path (D-SLM2358).
+	OptionGRopeTableRow option_g_table;
+	if (option_g_fused_k_landing) {
+		const SslmForwardStatus resolve_status =
+		    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables,
+		                                &option_g_table);
+		if (resolve_status != SslmForwardStatus::Ok) return resolve_status;
+	}
+
+	for (size_t h = 0; h < num_key_value_heads; ++h) {
+		int8_t* const k_row = MutableKeyRow(workspace, layer, context_cap,
+		                                    num_key_value_heads, head_dim, h, position);
+		int8_t* const v_row = MutableValueRow(workspace, layer, context_cap,
+		                                      num_key_value_heads, head_dim, h, position);
+		if (option_g_fused_k_landing) {
+			// T-1894 (design Sec31.2's own construction, carried from
+			// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
+			// pre-landing K accumulator pairwise at this token's own
+			// position, THEN land ONCE -- K carries one int8-narrowing
+			// boundary instead of two. V and Q are unaffected by this
+			// branch.
+			for (size_t p = 0; p < option_g_table.pairs; ++p) {
+				const size_t i0 = h * head_dim + 2 * p;
+				const size_t i1 = i0 + 1;
+				const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+				    option_g_table.cos->data, option_g_table.row_offset + p));
+				const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
+				    option_g_table.sin->data, option_g_table.row_offset + p));
+				bool rot_in_domain = false;
+				const RopePairWide rotated =
+				    RopeApplyPairWide(kacc[i0], kacc[i1], cos_q30, sin_q30, &rot_in_domain);
+				// Refuse, not wrap: a rotation can raise a pair's
+				// magnitude by up to sqrt(2), and at this domain's own
+				// extreme the rotated-and-rounded result can exceed
+				// int64_t.
+				if (!rot_in_domain) {
+					return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
+				}
+				// T-1894 (design Sec31.2.2, the T-1898 round-3 repair,
+				// D-SLM2384/D-SLM2385/D-SLM2388): `LandingRescale`'s own
+				// `out_magnitude_exceeded_int64` output, checked
+				// UNCONDITIONALLY, on EVERY element, with NO condition
+				// on `kv_landing_e_t_k[h]` or any other static value --
+				// no early-exit of any kind. Correctness rests only on
+				// this per-element, already-computed result; the
+				// pre-existing, pre-Option-G load-time floor
+				// (`kKvLandingExponentMin = -60`, model.cpp) is
+				// unmodified and untouched by this branch.
+				bool exceeded0 = false, exceeded1 = false;
+				const int64_t raw0 = LandingRescale(
+				    rotated.x, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded0);
+				const int64_t raw1 = LandingRescale(
+				    rotated.y, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+				    lw.kv_landing_e_t_k[h], kv_saturation_count, &exceeded1);
+				if (exceeded0 || exceeded1) {
+					return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;
+				}
+				k_row[2 * p] = static_cast<int8_t>(ClampRopeCode(raw0));
+				k_row[2 * p + 1] = static_cast<int8_t>(ClampRopeCode(raw1));
+			}
+		} else {
+			for (size_t d = 0; d < head_dim; ++d) {
+				const size_t i = h * head_dim + d;
+				// §8.1's clamp is this call site's own (LandingRescale's
+				// header states the clamp is the caller's); reuses
+				// ClampRopeCode for the pinned [-127, 127] code range it
+				// already implements. T-518's saturation counter (§8.2) is
+				// wired into seq's own per-sequence accumulator, the one
+				// call in this tree that composes the landing.
+				k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+				    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
+				    lw.kv_landing_e_t_k[h], kv_saturation_count)));
+			}
+		}
+		for (size_t d = 0; d < head_dim; ++d) {
+			const size_t i = h * head_dim + d;
+			v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
+			    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
+			    lw.kv_landing_e_t_v[h], kv_saturation_count)));
+		}
+	}
+	return SslmForwardStatus::Ok;
 }
 
 // T-1894 (design Sec31.2): the real body both public RunLayerLoop overloads
@@ -1495,146 +1711,27 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, const LayerWe
 		// `position`, never a whole-hidden_size flat write (§9.4's real
 		// per-(layer, head)-major, position-minor layout).
 		{
-			// T-1654 (S3.8a): the K/V landing write's loop bound narrows from
-			// `num_heads` to `num_key_value_heads` -- this is a resize, not a
-			// substitution, because `kacc`/`vacc` only have `kv_hidden_size`
-			// elements once the GEMM calls below are corrected; there is no `h`
-			// beyond `num_key_value_heads` to index.
+			// T-1654 (S3.8a): kacc/vacc are `kv_hidden_size`-wide, not `hidden_size`-wide -- the
+			// K/V store holds one row per KV head, never per query head.
+			//
+			// T-2147 (design §15.1, D-SLM3481): the base-weight GEMM is the ONE call-count
+			// change this fold makes here -- still GemmInt8AccumulateRow, one row, because
+			// RunLayerLoopImpl is the single-token path (unchanged); the chunk-batched path
+			// (RunLayerLoopChunkBatched, below) fills the same-shaped kacc/vacc via one
+			// GemmInt8Accumulate call per layer across the whole chunk instead. Everything
+			// after the GEMM -- WSC1 fold, LoRA delta-add, bias, per-head landing, Option-G's
+			// fused rotate-then-land -- is LandTokenKVRow, shared verbatim by both paths.
 			const size_t kv_hidden_size = num_key_value_heads * head_dim;
 			std::vector<int64_t> kacc(kv_hidden_size), vacc(kv_hidden_size);
 			GemmInt8AccumulateRow(normed.data(), lw.k_weight, hidden_size, kv_hidden_size,
 			                      kacc.data());
 			GemmInt8AccumulateRow(normed.data(), lw.v_weight, hidden_size, kv_hidden_size,
 			                      vacc.data());
-			// T-1666: per-channel indexed read, the K/V-landing sibling of
-			// ProjectAndFunnel's loop above (design §5, cells 6-7).
-			for (size_t i = 0; i < kv_hidden_size; ++i) {
-				kacc[i] = ApplyWeightScaleFold(kacc[i], lw.k_fold_identity[i], lw.k_fold_mult[i],
-				                               lw.k_fold_shift[i]);
-				vacc[i] = ApplyWeightScaleFold(vacc[i], lw.v_fold_identity[i], lw.v_fold_mult[i],
-				                               lw.v_fold_shift[i]);
-			}
-			// T-2021/T-2029 B1a (design Sec3/Sec8): the runtime-additive LoRA delta-add, at the
-			// K/V landing block's own copy of design Sec3's insertion point -- inserted between
-			// the WSC1 fold loop above and BIA1's bias reconciliation below, gated no-op when
-			// `lw.adapter` is absent or k_proj/v_proj is unadapted (AddAmplifyingLoraDelta's own
-			// gate). `kacc[]`/`vacc[]` are already fully composed by this point, before the
-			// option_g_fused_k_landing branch point below -- the plain and Option G branches
-			// diverge only downstream of here (design Sec3's own D-SLM2886 finding).
-			AddAmplifyingLoraDelta(normed.data(), hidden_size,
-			                       lw.adapter != nullptr ? &lw.adapter->k : nullptr,
-			                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
-			                       kacc.data());
-			AddAmplifyingLoraDelta(normed.data(), hidden_size,
-			                       lw.adapter != nullptr ? &lw.adapter->v : nullptr,
-			                       lw.adapter != nullptr ? lw.adapter->rank : 0, kv_hidden_size,
-			                       vacc.data());
-			// T-1656/D-SLM642, §5.3: the identical bias insertion ProjectAndFunnel's
-			// q_proj call site carries, written a second time here -- a separate
-			// location that does not call ProjectAndFunnel, keyed on
-			// `normed_scale.e`/`normed_scale.m` rather than `in_scale.e`/`in_scale.m`.
-			// Applied to the whole folded row before any element lands, so a
-			// rejection here leaves `workspace`/`seq` untouched (kacc/vacc are local
-			// temporaries; no landing write has happened yet).
-			if (lw.k_bias != nullptr) {
-				const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
-				    kacc.data(), kv_hidden_size, lw.k_bias, normed_scale.m, normed_scale.e);
-				if (bias_status != SslmForwardStatus::Ok) return bias_status;
-			}
-			if (lw.v_bias != nullptr) {
-				const SslmForwardStatus bias_status = ApplyBiasReconcileRow(
-				    vacc.data(), kv_hidden_size, lw.v_bias, normed_scale.m, normed_scale.e);
-				if (bias_status != SslmForwardStatus::Ok) return bias_status;
-			}
-
-			// T-1894 (design Sec31.2, D-SLM2355/D-SLM2356): when Option G is on,
-			// resolve the (position, head_dim) RoPE table row ONCE for the whole
-			// K/V landing block -- every kv_head below rotates against the SAME
-			// row. When the flag is off, no table read happens here at all --
-			// this whole block is behind the flag, so a flags==0 artifact's
-			// landing arithmetic is byte-identical to the pre-existing,
-			// unmodified code path (D-SLM2358).
-			OptionGRopeTableRow option_g_table;
-			if (option_g_fused_k_landing) {
-				const SslmForwardStatus resolve_status =
-				    ResolveOptionGRopeTableRow(position, context_cap, head_dim, rope_tables,
-				                                &option_g_table);
-				if (resolve_status != SslmForwardStatus::Ok) return resolve_status;
-			}
-
-			for (size_t h = 0; h < num_key_value_heads; ++h) {
-				int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
-				                                    num_key_value_heads, head_dim, h, position);
-				int8_t* const v_row = MutableValueRow(workspace, l, context_cap,
-				                                      num_key_value_heads, head_dim, h, position);
-				if (option_g_fused_k_landing) {
-					// T-1894 (design Sec31.2's own construction, carried from
-					// T-1891 Sec2, confirmed sound by T-1892): rotate the WIDE
-					// pre-landing K accumulator pairwise at this token's own
-					// position, THEN land ONCE -- K carries one int8-narrowing
-					// boundary instead of two. V and Q are unaffected by this
-					// branch.
-					for (size_t p = 0; p < option_g_table.pairs; ++p) {
-						const size_t i0 = h * head_dim + 2 * p;
-						const size_t i1 = i0 + 1;
-						const int32_t cos_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
-						    option_g_table.cos->data, option_g_table.row_offset + p));
-						const int32_t sin_q30 = static_cast<int32_t>(ReadRopeTableEntryI64(
-						    option_g_table.sin->data, option_g_table.row_offset + p));
-						bool rot_in_domain = false;
-						const RopePairWide rotated =
-						    RopeApplyPairWide(kacc[i0], kacc[i1], cos_q30, sin_q30, &rot_in_domain);
-						// Refuse, not wrap: a rotation can raise a pair's
-						// magnitude by up to sqrt(2), and at this domain's own
-						// extreme the rotated-and-rounded result can exceed
-						// int64_t.
-						if (!rot_in_domain) {
-							return SslmForwardStatus::OptionGWideRopeMagnitudeOutOfDomain;
-						}
-						// T-1894 (design Sec31.2.2, the T-1898 round-3 repair,
-						// D-SLM2384/D-SLM2385/D-SLM2388): `LandingRescale`'s own
-						// `out_magnitude_exceeded_int64` output, checked
-						// UNCONDITIONALLY, on EVERY element, with NO condition
-						// on `kv_landing_e_t_k[h]` or any other static value --
-						// no early-exit of any kind. Correctness rests only on
-						// this per-element, already-computed result; the
-						// pre-existing, pre-Option-G load-time floor
-						// (`kKvLandingExponentMin = -60`, model.cpp) is
-						// unmodified and untouched by this branch.
-						bool exceeded0 = false, exceeded1 = false;
-						const int64_t raw0 = LandingRescale(
-						    rotated.x, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count, &exceeded0);
-						const int64_t raw1 = LandingRescale(
-						    rotated.y, normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count, &exceeded1);
-						if (exceeded0 || exceeded1) {
-							return SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;
-						}
-						k_row[2 * p] = static_cast<int8_t>(ClampRopeCode(raw0));
-						k_row[2 * p + 1] = static_cast<int8_t>(ClampRopeCode(raw1));
-					}
-				} else {
-					for (size_t d = 0; d < head_dim; ++d) {
-						const size_t i = h * head_dim + d;
-						// §8.1's clamp is this call site's own (LandingRescale's
-						// header states the clamp is the caller's); reuses
-						// ClampRopeCode for the pinned [-127, 127] code range it
-						// already implements. T-518's saturation counter (§8.2) is
-						// wired into seq's own per-sequence accumulator, the one
-						// call in this tree that composes the landing.
-						k_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-						    kacc[i], normed_scale.m, lw.kv_landing_r_t_k[h], normed_scale.e,
-						    lw.kv_landing_e_t_k[h], &seq.kv_saturation_count)));
-					}
-				}
-				for (size_t d = 0; d < head_dim; ++d) {
-					const size_t i = h * head_dim + d;
-					v_row[d] = static_cast<int8_t>(ClampRopeCode(LandingRescale(
-					    vacc[i], normed_scale.m, lw.kv_landing_r_t_v[h], normed_scale.e,
-					    lw.kv_landing_e_t_v[h], &seq.kv_saturation_count)));
-				}
-			}
+			const SslmForwardStatus land_status = LandTokenKVRow(
+			    kacc.data(), vacc.data(), normed.data(), normed_scale, lw, hidden_size,
+			    kv_hidden_size, num_key_value_heads, head_dim, l, position, context_cap,
+			    rope_tables, workspace, option_g_fused_k_landing, &seq.kv_saturation_count);
+			if (land_status != SslmForwardStatus::Ok) return land_status;
 		}
 
 		// RoPE on q and on the just-landed k, per head (§6.2 step 3). k is
@@ -1961,6 +2058,348 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
 	                        token_index, trace_hook_state);
 }
 
+// T-2147 (design §15.1/§15.2/§15.3, D-SLM3479/D-SLM3481/D-SLM3482/D-SLM3483): the chunk-batched
+// prefill entry point. Runs `chunk_tokens` ALREADY-EMBEDDED tokens through every layer of the
+// stack, streaming each layer's weight matrix ONCE across the chunk for the seven weight-heavy
+// projection sites (q/o/gate/up/down/k/v) via GemmInt8Accumulate/ProjectAndFunnelBatched,
+// instead of once per token via GemmInt8AccumulateRow/ProjectAndFunnel -- no new arithmetic,
+// only a different call-count around the identical per-row expression (design §15.1). Every
+// non-GEMM step -- RmsNormSite, RoPE, K/V landing's rescale+clamp (LandTokenKVRow), attention --
+// stays per-token/per-position, in position order, unchanged, calling the SAME site functions
+// RunLayerLoopImpl calls, with the same arguments per row -- bit-identical to `RunLayerLoop`
+// called once per token, by construction (design §15.2).
+//
+// `hidden_codes_chunk` is `chunk_tokens` rows of `hidden_size` int8 codes, row-major -- row t is
+// token t's current hidden state; the caller has already embedded every row (e.g. via
+// EmbedEntry) before the first call. `hidden_scales` is one CarriedScale per row, updated in
+// place layer by layer. `context_length_start` is the position token 0 of the chunk lands at;
+// token t lands at `context_length_start + t`, so tokens land, and attend, in strictly
+// increasing position order exactly as the per-token path already does -- attention for token t
+// reads K/V at every position in `[0, context_length_start + t]`, which is either already
+// resident from a prior call or was landed earlier in THIS call, for a smaller t, in this same
+// layer's own per-token stage below. `kv_saturation_count` is the SAME per-sequence running
+// counter `SequenceLayerState::kv_saturation_count` is; threaded through so its final value
+// (order-independent -- a sum of independent per-element saturation events, design §15.2) is
+// identical regardless of whether tokens are grouped by layer (here) or by token (RunLayerLoop).
+//
+// Runs every layer to completion for every token, or returns non-Ok having advanced no LAYER
+// past the one that rejected -- there is no partial/resumable layer_budget in this path
+// (PrefillWholeTokensImpl's own per-token RunLayerLoop call always passed the FULL
+// layer_budget; this preserves that: every token completes every layer, or the call fails).
+// PrefillWholeTokensImpl itself decides `admit_count` (this function's own `chunk_tokens`)
+// BEFORE calling this, via the DFA reachability pre-scan (design §15.3) -- this function is
+// never itself asked to reject for a schema reason mid-chunk; a non-Ok return here is a genuine
+// domain/geometry/magnitude rejection, the kind this project's own real-artifact fixtures never
+// exercise in practice, and this project's own existing per-token path does not roll back a
+// partially-advanced token on such a rejection either (§9.3 commits per LAYER, not per
+// whole-call) -- this function matches that same granularity, extended across tokens: a
+// rejection while processing token j at layer L leaves every token fully committed through
+// layer L-1, and token j (only) left at whatever partial state its own failing step reached.
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                            size_t chunk_tokens, const LayerWeights* layers,
+                                            uint32_t num_hidden_layers, size_t hidden_size,
+                                            size_t head_dim, size_t num_key_value_heads,
+                                            size_t intermediate_size, int64_t context_cap,
+                                            int64_t context_length_start,
+                                            const SslmTensorManifest& rope_tables,
+                                            uint8_t* workspace, size_t workspace_size,
+                                            bool option_g_fused_k_landing,
+                                            uint64_t* kv_saturation_count,
+                                            std::string_view site_prefix,
+                                            SslmTraceHookState* trace_hook_state) {
+	// The same domain guards RunLayerLoopImpl's own top-of-function block performs (§9.3),
+	// restated here because this path has no single `SequenceLayerState` to validate against --
+	// `chunk_tokens` tokens share one `context_cap`/geometry, not `chunk_tokens` independent
+	// calls each re-deriving the identical answer.
+	if (chunk_tokens == 0) return SslmForwardStatus::InvalidLayerBudget;
+	if (context_cap < 1) return SslmForwardStatus::InvalidContextCap;
+	const size_t num_heads = head_dim == 0 ? 0 : hidden_size / head_dim;
+	if (num_heads == 0 || num_heads * head_dim != hidden_size) {
+		return SslmForwardStatus::HeadDimGeometryMismatch;
+	}
+	if (num_key_value_heads == 0 || num_key_value_heads > num_heads ||
+	    num_heads % num_key_value_heads != 0) {
+		return SslmForwardStatus::KvHeadGeometryMismatch;
+	}
+	const size_t group = num_heads / num_key_value_heads;
+	if (hidden_codes_chunk == nullptr || hidden_scales == nullptr) {
+		return SslmForwardStatus::InvalidHiddenCodes;
+	}
+	if (context_length_start < 0) return SslmForwardStatus::PositionOverCap;
+	// Every token in the chunk must land inside the cache -- the last token's own position is
+	// the binding one, matching RunLayerLoopImpl's own per-call `context_length >= context_cap`
+	// check, extended across the whole chunk up front rather than re-checked per token (the
+	// per-token path re-derives the same true/false on every one of its own separate calls).
+	if (context_length_start >
+	    static_cast<int64_t>(context_cap) - static_cast<int64_t>(chunk_tokens)) {
+		return SslmForwardStatus::KvCapacityExhausted;
+	}
+	const size_t kv_hidden_size = num_key_value_heads * head_dim;
+	// RunLayerLoopImpl's own `kv_bytes_needed` derivation (S3.7/§9.4), restated here for the
+	// identical reason the guards above are: this path validates the shared K/V workspace once,
+	// up front, rather than `chunk_tokens` times.
+	if (workspace == nullptr) return SslmForwardStatus::WorkspaceTooSmall;
+	size_t kv_bytes_needed = static_cast<size_t>(num_hidden_layers);
+	const size_t kv_factors[] = {static_cast<size_t>(context_cap), num_key_value_heads, head_dim, 2u};
+	for (size_t factor : kv_factors) {
+		if (factor != 0 && kv_bytes_needed > SIZE_MAX / factor) {
+			return SslmForwardStatus::InvalidContextCap;
+		}
+		kv_bytes_needed *= factor;
+	}
+	if (workspace_size < kv_bytes_needed) return SslmForwardStatus::WorkspaceTooSmall;
+
+	std::vector<int8_t> normed(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> normed_scale(chunk_tokens);
+	std::vector<int8_t> q_codes(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> q_scale(chunk_tokens);
+	std::vector<int8_t> ctx_codes(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> ctx_scale(chunk_tokens);
+	std::vector<int8_t> o_codes(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> o_scale(chunk_tokens);
+	std::vector<int8_t> attn_stream(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> attn_stream_scale(chunk_tokens);
+	std::vector<int8_t> mlp_normed(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> mlp_normed_scale(chunk_tokens);
+	std::vector<int8_t> gate_codes(chunk_tokens * intermediate_size);
+	std::vector<CarriedScale> gate_scale(chunk_tokens);
+	std::vector<int8_t> up_codes(chunk_tokens * intermediate_size);
+	std::vector<CarriedScale> up_scale(chunk_tokens);
+	std::vector<int8_t> act_codes(chunk_tokens * intermediate_size);
+	std::vector<CarriedScale> act_scale(chunk_tokens);
+	std::vector<int8_t> down_codes(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> down_scale(chunk_tokens);
+	std::vector<int8_t> stream_next(chunk_tokens * hidden_size);
+	std::vector<CarriedScale> stream_scale(chunk_tokens);
+
+	for (uint32_t l = 0; l < num_hidden_layers; ++l) {
+		const LayerWeights& lw = layers[l];
+		SslmForwardStatus st;
+
+		// --- attention half (§6.2), attn_norm + q/k/v: per-token norm, batched GEMM ----------
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			st = RmsNormSite(hidden_codes_chunk + t * hidden_size, lw.attn_norm_gain, hidden_size,
+			                 hidden_scales[t], lw.attn_norm_site_constant, normed.data() + t * hidden_size,
+			                 &normed_scale[t], LayerSite(site_prefix, l, "attn_norm"), t,
+			                 trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+
+		st = ProjectAndFunnelBatched(normed.data(), normed_scale.data(), chunk_tokens, lw.q_weight,
+		                             hidden_size, hidden_size, lw.q_fold_identity, lw.q_fold_mult,
+		                             lw.q_fold_shift, lw.q_site_constant, lw.q_bias, q_codes.data(),
+		                             q_scale.data(), LayerSite(site_prefix, l, "q_proj.requant"),
+		                             trace_hook_state,
+		                             lw.adapter != nullptr ? &lw.adapter->q : nullptr,
+		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		// T-2147 (design §15.1, D-SLM3481): the batched sibling of RunLayerLoopImpl's own
+		// k_weight/v_weight GemmInt8AccumulateRow pair -- ONE GemmInt8Accumulate call each,
+		// across the whole chunk, instead of `chunk_tokens` separate row calls.
+		std::vector<int64_t> kacc_all(chunk_tokens * kv_hidden_size);
+		std::vector<int64_t> vacc_all(chunk_tokens * kv_hidden_size);
+		GemmInt8Accumulate(normed.data(), lw.k_weight, chunk_tokens, hidden_size, kv_hidden_size,
+		                   kacc_all.data());
+		GemmInt8Accumulate(normed.data(), lw.v_weight, chunk_tokens, hidden_size, kv_hidden_size,
+		                   vacc_all.data());
+
+		// --- per-token, in position order: land K/V, RoPE, attention -------------------------
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			const int64_t position = context_length_start + static_cast<int64_t>(t);
+			const size_t width = static_cast<size_t>(position) + 1;
+
+			// LandTokenKVRow is the SAME function RunLayerLoopImpl calls -- identical WSC1
+			// fold, LoRA delta-add, bias, and per-head landing (design §15.2's shared-code
+			// argument).
+			st = LandTokenKVRow(kacc_all.data() + t * kv_hidden_size, vacc_all.data() + t * kv_hidden_size,
+			                    normed.data() + t * hidden_size, normed_scale[t], lw, hidden_size,
+			                    kv_hidden_size, num_key_value_heads, head_dim, l, position,
+			                    context_cap, rope_tables, workspace, option_g_fused_k_landing,
+			                    kv_saturation_count);
+			if (st != SslmForwardStatus::Ok) return st;
+
+			std::vector<int8_t> q_rot(hidden_size), k_rot(hidden_size);
+			for (size_t h = 0; h < num_heads; ++h) {
+				st = RopeApplySite(q_codes.data() + t * hidden_size + h * head_dim, head_dim,
+				                   position, context_cap, rope_tables, q_rot.data() + h * head_dim);
+				if (st != SslmForwardStatus::Ok) return st;
+				if (option_g_fused_k_landing) continue;
+				const size_t kv_head = h / group;
+				const int8_t* const k_row_before_rotate = KeyRow(
+				    workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, position);
+				st = RopeApplySite(k_row_before_rotate, head_dim, position, context_cap,
+				                   rope_tables, k_rot.data() + h * head_dim);
+				if (st != SslmForwardStatus::Ok) return st;
+			}
+			if (!option_g_fused_k_landing) {
+				for (size_t h = 0; h < num_heads; ++h) {
+					const size_t kv_head = h / group;
+					int8_t* const k_row = MutableKeyRow(workspace, l, context_cap,
+					                                    num_key_value_heads, head_dim, kv_head,
+					                                    position);
+					for (size_t d = 0; d < head_dim; ++d) k_row[d] = k_rot[h * head_dim + d];
+				}
+			}
+
+			// Attention proper (§6.2 step 5) -- the identical composition RunLayerLoopImpl's
+			// own attention block performs, per token, in the same position order.
+			{
+				std::vector<int64_t> khead_q_ln2(num_key_value_heads), khead_q_b(num_key_value_heads),
+				    khead_q_c(num_key_value_heads);
+				std::vector<bool> khead_derived(num_key_value_heads, false);
+				std::vector<int64_t> ctx_wide(hidden_size);
+				for (size_t h = 0; h < num_heads; ++h) {
+					std::vector<int64_t> scores(width), probs(width), ctx_acc(head_dim);
+					const size_t kv_head = h / group;
+
+					if (!khead_derived[kv_head]) {
+						const int64_t sm_khead_m = lw.iexp_softmax_khead_m[kv_head];
+						const int64_t sm_khead_e = lw.iexp_softmax_khead_e[kv_head];
+						const bool q_scale_in_domain =
+						    q_scale[t].m >= static_cast<int64_t>(kInt32Min) &&
+						    q_scale[t].m <= static_cast<int64_t>(kInt32Max);
+						const bool khead_in_domain =
+						    sm_khead_m >= static_cast<int64_t>(kInt32Min) &&
+						    sm_khead_m <= static_cast<int64_t>(kInt32Max);
+						if (!q_scale_in_domain || !khead_in_domain) {
+							return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
+						}
+						const CarriedScale sm =
+						    CombineCarriedScale(q_scale[t], CarriedScale{sm_khead_m, sm_khead_e});
+						if (sm.m < static_cast<int64_t>(kInt32Min) ||
+						    sm.m > static_cast<int64_t>(kInt32Max)) {
+							return SslmForwardStatus::CarriedScaleMantissaOutOfDomain;
+						}
+						int64_t derived_q_ln2 = 0, derived_q_b = 0, derived_q_c = 0;
+						const IExpScaleDomain scale_domain = IExpScaleConstants(
+						    sm.m, sm.e, kIExpLn2Q, 30, kIExpBQ, 30, kIExpCaQ, 30, &derived_q_ln2,
+						    &derived_q_b, &derived_q_c);
+						if (scale_domain != IExpScaleDomain::kOk) {
+							return SslmForwardStatus::IExpScaleDerivationOutOfDomain;
+						}
+						khead_q_ln2[kv_head] = derived_q_ln2;
+						khead_q_b[kv_head] = derived_q_b;
+						khead_q_c[kv_head] = derived_q_c;
+						khead_derived[kv_head] = true;
+					}
+
+					st = CheckSoftmaxRowWidthDomain(khead_q_b[kv_head], khead_q_c[kv_head], width);
+					if (st != SslmForwardStatus::Ok) return st;
+
+					const int8_t* const k_rows_base =
+					    KeyRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
+					GemmInt8AccumulateRow(q_rot.data() + h * head_dim, k_rows_base, head_dim, width,
+					                      scores.data());
+					if (!SoftmaxRowQ15(scores.data(), width, khead_q_ln2[kv_head], khead_q_b[kv_head],
+					                   khead_q_c[kv_head], probs.data())) {
+						return SslmForwardStatus::SoftmaxKernelRefusedAfterGateAccepted;
+					}
+					const int8_t* const v_rows_base =
+					    ValueRow(workspace, l, context_cap, num_key_value_heads, head_dim, kv_head, 0);
+					GemmProbQ15Accumulate(probs.data(), v_rows_base, width, head_dim, ctx_acc.data());
+					for (size_t d = 0; d < head_dim; ++d) {
+						ctx_wide[h * head_dim + d] = ApplyWeightScaleFold(
+						    ctx_acc[d], lw.ctx_fold_identity[h], lw.ctx_fold_mult[h],
+						    lw.ctx_fold_shift[h]);
+					}
+				}
+				const ChainResult ctx_result = RequantChainChecked(
+				    ctx_wide.data(), hidden_size, std::span<const CarriedScale>{},
+				    lw.ctx_fold_site_constant, ctx_codes.data() + t * hidden_size, &ctx_scale[t],
+				    LayerSite(site_prefix, l, "attn_ctx"), t, trace_hook_state);
+				if (ctx_result.status != SslmForwardStatus::Ok) return ctx_result.status;
+			}
+		}
+
+		// --- o_proj: batched GEMM across every token's ctx_codes -----------------------------
+		st = ProjectAndFunnelBatched(ctx_codes.data(), ctx_scale.data(), chunk_tokens, lw.o_weight,
+		                             hidden_size, hidden_size, lw.o_fold_identity, lw.o_fold_mult,
+		                             lw.o_fold_shift, lw.o_site_constant, /*bias=*/nullptr,
+		                             o_codes.data(), o_scale.data(),
+		                             LayerSite(site_prefix, l, "o_proj.requant"), trace_hook_state,
+		                             lw.adapter != nullptr ? &lw.adapter->o : nullptr,
+		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			st = ResidualReconcileSite(o_codes.data() + t * hidden_size, o_scale[t],
+			                           hidden_codes_chunk + t * hidden_size, hidden_scales[t],
+			                           hidden_size, lw.attn_residual_site_constant,
+			                           attn_stream.data() + t * hidden_size, &attn_stream_scale[t],
+			                           LayerSite(site_prefix, l, "attn_residual"), t, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+
+		// --- MLP half (§6.3): per-token norm, batched gate/up GEMM ----------------------------
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			st = RmsNormSite(attn_stream.data() + t * hidden_size, lw.mlp_norm_gain, hidden_size,
+			                 attn_stream_scale[t], lw.mlp_norm_site_constant,
+			                 mlp_normed.data() + t * hidden_size, &mlp_normed_scale[t],
+			                 LayerSite(site_prefix, l, "mlp_norm"), t, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+
+		st = ProjectAndFunnelBatched(mlp_normed.data(), mlp_normed_scale.data(), chunk_tokens,
+		                             lw.gate_weight, hidden_size, intermediate_size,
+		                             lw.gate_fold_identity, lw.gate_fold_mult, lw.gate_fold_shift,
+		                             lw.gate_site_constant, /*bias=*/nullptr, gate_codes.data(),
+		                             gate_scale.data(), LayerSite(site_prefix, l, "gate_proj.requant"),
+		                             trace_hook_state,
+		                             lw.adapter != nullptr ? &lw.adapter->gate : nullptr,
+		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return st;
+		st = ProjectAndFunnelBatched(mlp_normed.data(), mlp_normed_scale.data(), chunk_tokens,
+		                             lw.up_weight, hidden_size, intermediate_size,
+		                             lw.up_fold_identity, lw.up_fold_mult, lw.up_fold_shift,
+		                             lw.up_site_constant, /*bias=*/nullptr, up_codes.data(),
+		                             up_scale.data(), LayerSite(site_prefix, l, "up_proj.requant"),
+		                             trace_hook_state,
+		                             lw.adapter != nullptr ? &lw.adapter->up : nullptr,
+		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			st = MlpActSite(gate_codes.data() + t * intermediate_size, gate_scale[t],
+			                up_codes.data() + t * intermediate_size, up_scale[t], intermediate_size,
+			                kSiluLutCanonicalTable, lw.mlp_act_site_constant,
+			                act_codes.data() + t * intermediate_size, &act_scale[t],
+			                LayerSite(site_prefix, l, "mlp_act"), t, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+
+		st = ProjectAndFunnelBatched(act_codes.data(), act_scale.data(), chunk_tokens,
+		                             lw.down_weight, intermediate_size, hidden_size,
+		                             lw.down_fold_identity, lw.down_fold_mult, lw.down_fold_shift,
+		                             lw.down_site_constant, /*bias=*/nullptr, down_codes.data(),
+		                             down_scale.data(), LayerSite(site_prefix, l, "down_proj.requant"),
+		                             trace_hook_state,
+		                             lw.adapter != nullptr ? &lw.adapter->down : nullptr,
+		                             lw.adapter != nullptr ? lw.adapter->rank : 0);
+		if (st != SslmForwardStatus::Ok) return st;
+
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			st = ResidualReconcileSite(down_codes.data() + t * hidden_size, down_scale[t],
+			                           attn_stream.data() + t * hidden_size, attn_stream_scale[t],
+			                           hidden_size, lw.mlp_residual_site_constant,
+			                           stream_next.data() + t * hidden_size, &stream_scale[t],
+			                           LayerSite(site_prefix, l, "mlp_residual"), t, trace_hook_state);
+			if (st != SslmForwardStatus::Ok) return st;
+		}
+
+		// The commit point for the whole layer, across every token -- matching
+		// RunLayerLoopImpl's own single commit point, extended across the chunk.
+		for (size_t t = 0; t < chunk_tokens; ++t) {
+			for (size_t i = 0; i < hidden_size; ++i) {
+				hidden_codes_chunk[t * hidden_size + i] = stream_next[t * hidden_size + i];
+			}
+			hidden_scales[t] = stream_scale[t];
+		}
+	}
+
+	return SslmForwardStatus::Ok;
+}
+
 // Master plan §6.4 steps 14-15's real two-step composition (T-1389; built
 // against Claude/Curie/superslm-s3.6-head-and-greedy-decode-test-design-
 // 2026-07-31.md's red suite, replacing the WorkspaceTooSmall stub the
@@ -1995,6 +2434,18 @@ int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n) {
 		}
 	}
 	return best_index;
+}
+
+// G5-2/G5-5 (T-2132): see this function's own declaration (forward_sites.h) for why this is the
+// ONE mask-application primitive both the CPU and GPU constrained-decode paths call. Body moved
+// here verbatim from sslm_abi.cpp's own file-local ApplyMaskAndArgmaxImpl (G5-2, unchanged
+// bits) -- no new arithmetic, per design Sec4's own "no new arithmetic" architecture claim.
+void ApplyMaskAndArgmax(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
+                          int32_t* out_token_id) {
+	for (int32_t t = 0; t < vocab_size; ++t) {
+		if (!((mask[t >> 3] >> (t & 7)) & 1u)) logits[t] = INT32_MIN;
+	}
+	*out_token_id = ArgmaxLowestIndexTieBreak(logits, static_cast<size_t>(vocab_size));
 }
 
 // §9.1's real prefill-then-repeat composition (T-1389; built against

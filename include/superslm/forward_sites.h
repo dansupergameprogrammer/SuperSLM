@@ -92,11 +92,21 @@ int64_t FloorDivI64(int64_t a, int64_t b);
 // design-2026-07-28.md §4.1). They default to an empty site, index 0, and
 // nullptr so every existing call compiles unchanged and emits no trace record
 // (RequantChainChecked's own default-argument convention, extended here).
+// `external_wide_scratch`, trailing, defaulted to nullptr (T-2139 closing round, coordinator's
+// own "eliminate it honestly (into the workspace or off the path)" instruction, curie/
+// t2138-abi-red-suite@11e7182's own recalibrated dim7 C1a cell): when non-null, MUST point at
+// `hidden_size` writable `int64_t` elements -- this call's own `wide` intermediate is written
+// there instead of a freshly heap-allocated std::vector, letting a caller that already owns a
+// correctly-sized scratch region (the sslm_* consumer ABI's own workspace, src/sslm_abi.cpp) make
+// this call with zero allocations of its own. nullptr (every existing call site, unchanged) keeps
+// the original internally-allocated behavior exactly as before -- this is additive, not a
+// behavior change for any caller that does not pass it.
 SslmForwardStatus RmsNormSite(const int8_t* h, const int32_t* g, size_t hidden_size,
                                CarriedScale incoming_scale, CarriedScale site_constant,
                                int8_t* out_codes, CarriedScale* out_scale,
                                std::string_view site = {}, size_t token_index = 0,
-                               SslmTraceHookState* trace_hook_state = nullptr);
+                               SslmTraceHookState* trace_hook_state = nullptr,
+                               int64_t* external_wide_scratch = nullptr);
 
 // C24/C25's WSC1 fold-apply dispatch (§4.3, §6.2 step 2/6/10/12): `identity == 1`
 // is the true pass-through (returns `acc` unchanged — no multiply, no shift);
@@ -916,6 +926,31 @@ SslmForwardStatus RunLayerLoop(SequenceLayerState& seq, const LayerWeights* laye
                                  std::string_view site_prefix = {}, size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
+// T-2147 (design §15.1/§15.2/§15.3, D-SLM3479/D-SLM3481/D-SLM3482/D-SLM3483): the chunk-batched
+// prefill entry point -- runs `chunk_tokens` already-embedded tokens through every layer,
+// streaming each layer's weight matrix ONCE across the chunk for the seven weight-heavy
+// projection sites (q/o/gate/up/down/k/v), instead of once per token. Every non-GEMM step stays
+// per-token/per-position, in position order, unchanged -- bit-identical to `RunLayerLoop` called
+// once per token, by construction (design §15.2; see forward_sites.cpp's own header comment on
+// this function for the full contract). `hidden_codes_chunk` is `chunk_tokens` rows of
+// `hidden_size` int8 codes, row-major, already embedded by the caller; `hidden_scales` is one
+// CarriedScale per row. `context_length_start` is the position token 0 of the chunk lands at.
+// `kv_saturation_count` is the same per-sequence running counter
+// `SequenceLayerState::kv_saturation_count` is. There is no partial/resumable layer_budget in
+// this path -- every layer runs to completion for every token, or the call returns non-Ok.
+SslmForwardStatus RunLayerLoopChunkBatched(int8_t* hidden_codes_chunk, CarriedScale* hidden_scales,
+                                            size_t chunk_tokens, const LayerWeights* layers,
+                                            uint32_t num_hidden_layers, size_t hidden_size,
+                                            size_t head_dim, size_t num_key_value_heads,
+                                            size_t intermediate_size, int64_t context_cap,
+                                            int64_t context_length_start,
+                                            const SslmTensorManifest& rope_tables,
+                                            uint8_t* workspace, size_t workspace_size,
+                                            bool option_g_fused_k_landing,
+                                            uint64_t* kv_saturation_count,
+                                            std::string_view site_prefix = {},
+                                            SslmTraceHookState* trace_hook_state = nullptr);
+
 // T-1899 (design Sec31.2's own "int64-input, __int128-intermediate sibling of
 // the RoPE pair primitive, Q2.30 tables unchanged" -- Sec12 "Wide-RoPE
 // overflow domain"). The rotated wide pair -- matches `RopePair`'s own shape
@@ -1042,6 +1077,31 @@ SslmForwardStatus LogitsSite(const int8_t* final_codes, size_t hidden_size,
 // running maximum never replaces it, which is what makes the tie-break
 // lowest-index rather than last-write-wins or highest-index.
 int32_t ArgmaxLowestIndexTieBreak(const int32_t* logits, size_t n);
+
+// G5-2/G5-5 (T-2132, Brunel): the ONE mask-application-before-argmax primitive design Sec4's
+// architecture table names ("Table lookup + bitmask AND, int32 logits, pre-argmax") -- every
+// caller that needs a schema-constrained token, CPU (`sslm_decode_step`'s own masked-argmax
+// step, src/sslm_abi.cpp) or GPU (G5-5's parity bridge, src/gpu/gpu_1p0.cpp), calls this exact
+// function on its own hidden-state-derived logits, never a parallel reimplementation --
+// StandardsDocument.md Sec5.4's "one implementation, not two copies that could drift"
+// discipline, applied here the same way D-SLM3352 already applied it to weight packing.
+// Extracted from sslm_abi.cpp's own file-local ApplyMaskAndArgmaxImpl (G5-2) so a second TU
+// (gpu_1p0.cpp) can call the identical bits rather than a lookalike -- bit-parity between the
+// CPU and GPU constrained-decode paths is achievable BY CONSTRUCTION only if both feed their
+// own (bit-identical, by the base kernel set's own already-proven GPU parity) hidden state
+// through this SAME function, never through two independently-authored copies of it.
+//
+// `mask` is `entry`'s own page for the sequence's current DFA-walk-state (state_count *
+// mask_page_bytes bytes total per schema, schema_masks.h) -- caller-selects the right page;
+// this function does the table lookup ONLY in the sense of "look up whether bit t is set,"
+// never in the sense of picking which page. Masked-out positions (bit not set) are forced to
+// INT32_MIN so ArgmaxLowestIndexTieBreak's own lowest-index tie-break can never select them.
+// NO defensive check for an all-masked page (D-SLM40's own positive requirement, design Sec3/
+// Sec7 dim11) -- an all-zero mask degrades to picking the lowest index, exactly dim11's own
+// negative-control cell. Mutates `logits` in place; caller-ensures `vocab_size >= 1` (the same
+// caller-ensures convention ArgmaxLowestIndexTieBreak's own `n >= 1` already documents).
+void ApplyMaskAndArgmax(int32_t* logits, const uint8_t* mask, int32_t vocab_size,
+                          int32_t* out_token_id);
 
 // §9.1's two terminal reasons a greedy decode loop stops for a reason OTHER
 // than a rejection. Distinct from SslmForwardStatus (checked_chain_funnel.h),

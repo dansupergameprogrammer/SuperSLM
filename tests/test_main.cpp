@@ -4754,21 +4754,35 @@ static void TestLoadMovedFromViewIsInertAndCarriesNoDanglingSigmoidLut() {
 // bare-sub-parser assertion could not detect a MISSING join by construction.
 // ---------------------------------------------------------------------------
 
-static void TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch() {
+// LOOSENED (Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md, design commit
+// 212de7742c -- the padded-vocabulary ruling, Brunel T-2139): the join's own domain is now
+// tok_vocab <= cfg_vocab, not exact equality -- real Qwen2.5 checkpoints pad the embedding
+// table past the tokenizer's own real vocabulary (config vocab_size 151936 vs tokenizer
+// 151665), and exact equality rejected every real Qwen2.5 combined artifact. This cell now
+// drives the check's own REAL remaining hazard -- tok_vocab > cfg_vocab, one past the ruled
+// boundary -- rather than an arbitrary inequality the loosened domain no longer rejects.
+static void TestLoadRejectsTokenizerVocabCountExceedingConfigVocabSize() {
 	using namespace superslm_test;
 	auto tok1 = MakeMinimalValidTok1();       // vocab_count == 5
 	auto uni1 = MakeMinimalValidUni1();
-	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/999);  // deliberately != 5
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/4);  // one PAST
+	                                                                                        // the
+	                                                                                        // boundary:
+	                                                                                        // tok_vocab
+	                                                                                        // (5) >
+	                                                                                        // cfg_vocab
+	                                                                                        // (4)
 
 	SslmModelView view;
 	std::string err;
 	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
 	CHECK_MSG(status == SslmModelStatus::TokenizerVocabSizeMismatch,
-	          "F18 join (S-HARDEN-2): TOK1.vocab_count=5, CFG1.vocab_size=999, through SslmModel::Load: "
+	          "F18 join (S-HARDEN-2, loosened domain tok_vocab <= cfg_vocab): TOK1.vocab_count=5, "
+	          "CFG1.vocab_size=4 (one past the boundary), through SslmModel::Load: "
 	          "got %s, want TokenizerVocabSizeMismatch (%s)",
 	          SslmModelStatusName(status), err.c_str());
-	CHECK_MSG(!view.has_tokenizer, "a mismatched-vocab-size artifact must not expose a tokenizer view");
-	CHECK_MSG(err.find("5") != std::string::npos && err.find("999") != std::string::npos,
+	CHECK_MSG(!view.has_tokenizer, "a tok_vocab > cfg_vocab artifact must not expose a tokenizer view");
+	CHECK_MSG(err.find("5") != std::string::npos && err.find("4") != std::string::npos,
 	          "diagnostic does not name both declared sizes: \"%s\"", err.c_str());
 }
 
@@ -4791,6 +4805,35 @@ static void TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize() {
 	// The exposed view is a working tokenizer, not merely a bookkeeping flag.
 	std::vector<int32_t> ids = view.tokenizer.Encode("cat");
 	CHECK(view.tokenizer.Decode(ids) == "cat");
+}
+
+// NEW (design commit 212de7742c, Brunel T-2139): the padded-vocabulary positive cell --
+// tok_vocab < cfg_vocab now ACCEPTS (the boundary widening's own load-bearing case; this is
+// exactly the shape a real Qwen2.5 combined artifact has -- 151665 < 151936). Reuses the
+// PRIOR (pre-loosening) test's own fixture values, which used to prove a rejection and now
+// prove the opposite -- the same construction, the domain around it changed, per the ruling.
+static void TestLoadAcceptsPaddedVocabTokenizerVocabCountBelowConfigVocabSize() {
+	using namespace superslm_test;
+	auto tok1 = MakeMinimalValidTok1();  // vocab_count == 5
+	auto uni1 = MakeMinimalValidUni1();
+	auto built = BuildTokenizerArtifactForLoad(tok1.bytes, uni1.bytes, /*vocab_size=*/999);  // padded:
+	                                                                                          // tok_vocab
+	                                                                                          // (5) <
+	                                                                                          // cfg_vocab
+	                                                                                          // (999)
+
+	SslmModelView view;
+	std::string err;
+	SslmModelStatus status = SslmModel::Load(built.bytes.data(), built.bytes.size(), view, &err);
+	CHECK_MSG(status == SslmModelStatus::Ok,
+	          "padded vocab (tok_vocab=5 < cfg_vocab=999) must now be accepted (design commit "
+	          "212de7742c): got %s (%s)",
+	          SslmModelStatusName(status), err.c_str());
+	if (status != SslmModelStatus::Ok) return;
+	CHECK(view.has_tokenizer);
+	CHECK(view.tokenizer.Ok());
+	CHECK(view.tokenizer.VocabSize() == 5);
+	CHECK(view.config.vocab_size == 999u);
 }
 
 static void TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables() {
@@ -9946,9 +9989,9 @@ static void TestIndependentReaderFlagsHandCorruptedBia1TensorWithoutGoingThrough
 }
 
 // Cell 3: the tokenizer-drive half of the TOK1 x CFG1 join. The load-time
-// rejection half (a mismatched CFG1.vocab_size/TOK1.vocab_count pair,
-// TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch above,
-// S-HARDEN-2) is already closed pre-S3a -- this cell owes only the live
+// rejection half (tok_vocab exceeding cfg_vocab, the join's own real remaining hazard since
+// design commit 212de7742c's loosening -- TestLoadRejectsTokenizerVocabCountExceedingConfigVocabSize
+// above, S-HARDEN-2) is already closed pre-S3a -- this cell owes only the live
 // half: on a conformant artifact, every id the tokenizer's OWN Encode() can
 // emit is driven through the embed site (EmbedEntry) and asserted to
 // address its OWN, correct embedding row -- never TokenIdOutOfRange, and
@@ -25957,8 +26000,9 @@ int main(int argc, char** argv) {
 	// --- S-HARDEN-2's tokenizer join (F18, §17.3 cell 3): TOK1.vocab_count x
 	//     CFG1.vocab_size enforced at SslmModel::Load, following the S-HARDEN-1
 	//     boundary-gate pattern. ---
-	TestLoadRejectsTokenizerVocabCountVsConfigVocabSizeMismatch();
+	TestLoadRejectsTokenizerVocabCountExceedingConfigVocabSize();
 	TestLoadAcceptsMatchingTokenizerVocabCountAndConfigVocabSize();
+	TestLoadAcceptsPaddedVocabTokenizerVocabCountBelowConfigVocabSize();
 	TestLoadRejectsArtifactWithTokenizerSectionButNoUnicodeTables();
 	TestLoadRejectsArtifactWithUnicodeTablesSectionButNoTokenizer();
 	TestLoadAcceptsArtifactWithNeitherTokenizerSection();

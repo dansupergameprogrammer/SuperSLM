@@ -100,13 +100,17 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
 |    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
-|    30 | `SchemaMasks`           | `Raw`        | S5   | reserved — compiled DFA mask pages                 |
+|    30 | `SchemaMasks`           | `Raw`        | S5   | compiled DFA mask pages — an `SCM1` keyed-by-name blob (§ "SchemaMasks sub-format"); **optional** |
 |    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band (§8.3) — a `KVC1` keyed blob; **optional** |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
-**reserved for S5** — a v1 artifact may carry it and it is parsed structurally, but the
-runtime does not yet interpret it. `CalibrationBand` (31) is optional at the current
-container version — a new section type, not a version bump or a CFG1 extension; its
+**optional at the current container version** (T-2132, design Claude/Vitruvius/
+t2119-g5-constrained-decoding-design-2026-08-16.md §13, Wizard repo, D-SLM3474) — a v2
+artifact carrying zero compiled schemas omits the section entirely, and every loader
+accepts that identically to before this type existed; one carrying it must satisfy the
+`SCM1` sub-format's own structural and cross-check rejections (§ "SchemaMasks
+sub-format", below) before the runtime uses it. `CalibrationBand` (31) is optional at the
+current container version — a new section type, not a version bump or a CFG1 extension; its
 absence loads exactly as it did before this type existed. Types outside this table are
 rejected.
 
@@ -357,6 +361,109 @@ All little-endian; total is exactly **`16 + 1025·4 = 4116` bytes**.
 §11 reject-over-degrade law. Nodes are read with the byte-assembly reader (`SigmoidLutValue`), never a
 cast (the payload is not guaranteed `int32`-aligned). The runtime lookup over the table lives in
 `include/superslm/silu_lut.h` (index derivation + interpolation, division-free), not in the parse.
+
+### SchemaMasks sub-format — `SCM1` (T-2132)
+
+The `SchemaMasks` section (type 30, dtype `Raw`, **optional**) carries a **table of named,
+independently-compiled schemas** (design Claude/Vitruvius/
+t2119-g5-constrained-decoding-design-2026-08-16.md §13, Wizard repo, D-SLM3474) — the
+`sslm_schema_lookup`/`sslm_schema_count`/`sslm_schema_name` ABI is lookup-by-name over a set,
+not a single schema. Mirrors the `KVC1` keyed-blob shape (fixed header, fixed-size descriptor
+table, name blob, then payload) for the same reason `KVC1` uses it — this table has to be
+addressed by name, not position. All offsets below are **relative to the start of the
+section** (the magic byte), little-endian, read by explicit byte assembly (never a struct
+cast), matching every other sub-format in this file.
+
+**Fixed header — 24 bytes, at section offset 0:**
+
+| Offset | Type | Field | Constraint |
+|-------:|------|-------|------------|
+| 0  | `u8[4]` | magic | `'SCM1'` |
+| 4  | `u32` | version | `1` |
+| 8  | `u32` | schema_count | `> 0`; `<= 65536` |
+| 12 | `u32` | vocab_size | `> 0`; must equal `Config.vocab_size` |
+| 16 | `u32` | name_blob_len | byte length of the name blob |
+| 20 | `u32` | reserved | `== 0` |
+
+`vocab_size` is carried here, redundantly with `Config`, so this section's own structural
+parse can compute every mask-page width without depending on section-table parse order
+(unconstrained, per "Byte layout" above) — the redundancy is then closed by an explicit
+equality check, never trusted.
+
+**Schema descriptor table — `schema_count` × 56 bytes, at section offset 24:**
+
+| Offset | Type | Field | Constraint |
+|-------:|------|-------|------------|
+| 0  | `u32` | name_off | `name_off + name_len <= name_blob_len` |
+| 4  | `u32` | name_len | `> 0`; unique across the table (byte-exact, case-sensitive) |
+| 8  | `u32` | state_count | `> 0`; `<= 1048576`; state ids are `[0, state_count)`, state `0` is start |
+| 12 | `u32` | accepting_count | `<= state_count` |
+| 16 | `u32` | transition_count | `<= 16777216` |
+| 20 | `u32` | reserved | `== 0` |
+| 24 | `u64` | mask_pages_off | section-relative, this schema's mask-page block |
+| 32 | `u64` | state_offsets_off | section-relative, this schema's CSR state-offset array |
+| 40 | `u64` | accepting_off | section-relative, this schema's accepting-state-id array |
+| 48 | `u64` | transitions_off | section-relative, this schema's flattened transition array |
+
+The name blob begins at `24 + schema_count*56`; every per-schema data block must start at or
+past `24 + schema_count*56 + name_blob_len`.
+
+**Per-schema data blocks (four per schema, addressed by the descriptor's four offsets):**
+
+1. **Mask pages**, `state_count * mask_page_bytes` bytes, `mask_page_bytes = ceil(vocab_size / 8)`.
+   Page `i` is a packed bitmask, one bit per vocabulary token id, LSB-first within each byte:
+   bit `(token_id & 7)` of byte `i*mask_page_bytes + (token_id >> 3)` is `1` iff `token_id` is a
+   valid continuation at state `i`. An accepting state's page may legitimately be all-zero.
+2. **State-offset array (CSR)**, `(state_count + 1) * 4` bytes, `u32[state_count+1]`.
+   `state_offsets[i]` indexes into the transition array where state `i`'s row begins; state
+   `i`'s edges span `[state_offsets[i], state_offsets[i+1])`. `state_offsets[0] == 0` and
+   `state_offsets[state_count] == transition_count`.
+3. **Accepting-state-id array**, `accepting_count * 4` bytes, `u32[accepting_count]`, strictly
+   ascending, every value `< state_count`.
+4. **Transition array**, `transition_count * 8` bytes, `(u32 token_id, u32 next_state)[transition_count]`,
+   flattened in state order; within each state's own row, `token_id` entries are strictly
+   ascending.
+
+**ABI binding:** `sslm_schema_count` returns `schema_count`. `sslm_schema_name(index, ...)`
+returns descriptor-table row `index`'s own `[name_off, name_off+name_len)` name-blob slice —
+index order is descriptor-table order, not sorted. `sslm_schema_lookup(name, ...)` scans the
+name blob for a byte-exact match (linear scan — the realistic `schema_count` this format ever
+carries makes this the correct "smallest sound thing," not a gap).
+
+**Loader rejections (structural, this section's own bytes):** truncated below the 24-byte
+header; bad magic/version/reserved; `schema_count` zero or over its bound (a present-but-empty
+section is a defect, not a legal degrade — an artifact with no schemas omits the section
+entirely); `vocab_size` zero; the manifest (header + descriptor table + name blob) overflowing
+or exceeding the section; a bad/duplicate schema name; `state_count`/`accepting_count`/
+`transition_count` violating their own bound or relationship; any per-schema data block
+overflowing, starting before the manifest, exceeding the section, or overlapping another block
+(including the manifest region itself); a malformed CSR state-offset array; a malformed or
+out-of-range accepting-state array; a malformed or out-of-range/non-ascending transition table.
+**Cross-check, the one rejection this format adds beyond direct precedent:** for every state
+`i` and every `token_id`, bit `token_id` of that state's mask page must be set **if and only
+if** `token_id` appears in that state's own CSR row — a mask page and a transition table that
+disagree about the same `(state, token)` pair encode the same compiler fact in two different
+wire representations, and letting them diverge would mask-permit a token the walk cannot
+actually advance on (or vice versa), a "wrong but deterministic" hazard a consistency-only
+check cannot see.
+
+**Loader rejections (semantic, requires `Config` already parsed):** `SchemaMasks.vocab_size !=
+Config.vocab_size`.
+
+**Explicitly NOT a load-time check, by design:** the loader does not verify that every
+reachable non-accepting state has a non-empty valid-token set — that proof belongs to the
+schema compiler (`tools/sslm_convert_schema.py`), made once, at compile time; a schema that
+fails it is never written into an `SCM1` section in the first place. Adding a runtime re-check
+here would make the compiler's own guard redundant rather than load-bearing (design §7 dim 11's
+guard-vitality discipline).
+
+**Save-blob binding (the sequence-level, not artifact-level, half — `SslmModel`'s own C5
+save/restore blob, `src/sslm_abi.cpp`, unrelated to this file's own container format above):** a
+saved sequence's bound schema is identified by `Fnv1a64` of its own name (the project's house
+64-bit name-hash convention, `tools/sslm_layer_trace.cpp`) — `0` means no schema bound. Restore
+resolves this hash against the target artifact's own `SCM1` name set; no match (including no
+`SchemaMasks` section at all) is a defined rejection (`SSLM_RESTORE_SCHEMA_MISMATCH`), checked
+after the existing model/kv-precision validation and before any block is drawn from the pool.
 
 ## Versioning
 

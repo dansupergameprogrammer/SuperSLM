@@ -41,9 +41,12 @@
 
 #include "d3d12_harness.h"
 #include "superslm/adapter_marshal.h"  // T-2113 B6: LoadAdapterArtifact (relocated, tools/sslm_adapter_loader.h)
+#include "superslm/gpu_1p0_g5_bridge.h"  // G5-5 (T-2132): the build-seat-owned schema/parity bridge
 #include "superslm/gpu_port.h"       // T-2113 B2: GpuLayerLayout/ComputeLayerLayout/PackLayerWeightsBytes
 #include "superslm/layer_marshal.h"  // T-2113 B2: MarshalLayer/LayerBacking (relocated, tools/sslm_marshal.h)
 #include "superslm/model.h"          // T-2113 B2: the REAL superslm::SslmModelView this TU needs by value
+#include "superslm/schema_masks.h"   // G5-5 (T-2132): SchemaMasksTable -- the SAME SCM1 reader the CPU
+                                      // ABI (sslm_abi.cpp) already uses, reused here, not re-derived.
 
 // The real SslmGpuContext this handle type opaquely names to every 1.0 API caller.
 // Owns everything B1's own gate requires be OWNED rather than reached through a
@@ -236,6 +239,36 @@ struct SslmGpuModelHandle {
 	superslm::CarriedScale embed_site_constant{};
 	int32_t vocab_size = 0;
 
+	// G5-5 (T-2132, Brunel): mask-page residency on device (design Sec6 G5-5's own "Builds"
+	// list, VRAM, alongside weights/scales per the existing GPU-tenancy model, Sec8.4) --
+	// uploaded, read-only, once here, the same UploadResidentBufferSync three-step shape
+	// weights_buf/rope_cos_buf/rope_sin_buf already use above. Empty/null when this model's
+	// artifact carries no SchemaMasks section (an unconstrained-only artifact, design Sec13.1) --
+	// the same "absence loads exactly as before this section type existed" disposition the CPU
+	// ABI's own sslm_model_map already applies (src/sslm_abi.cpp).
+	Microsoft::WRL::ComPtr<ID3D12Resource> mask_pages_buf;
+	// Host-owned copy of the SchemaMasks section's own bytes -- `schemas`'s own SchemaEntry
+	// pointers point INTO this vector (schema_masks.h's own "entries point into section_data,
+	// the caller must keep the bytes alive" contract), so this handle owns them for its whole
+	// lifetime, exactly the "copied rather than pointed at `base`" reasoning this file's own
+	// embed_weights capture (B3.5, above) already documents for the identical caller-view-
+	// lifetime hazard.
+	std::vector<uint8_t> schema_section_bytes;
+	// The SAME SchemaMasksTable reader the CPU ABI parses this model's own SchemaMasks section
+	// with (schema_masks.h) -- reused, not re-derived, so a schema's mask pages/CSR transitions
+	// mean the identical bits on both paths. Count()==0 when this model carries no schema.
+	superslm::SchemaMasksTable schemas;
+	// G5-5's own final_norm+logits capture (design's "no new arithmetic" claim: the GPU-1.0
+	// substrate's job is the layer loop only, design Sec4/Sec12's own established scope -- the
+	// finish-token bridge below needs these three host-resident facts to run the SAME
+	// RmsNormSite/LogitsSite calls sslm_decode_step's own finishing block already runs, on this
+	// model's own GPU-derived hidden state). Mirrors embed_weights/embed_site_constant's own
+	// capture immediately above -- read from `*base` once, at map time, never re-read from the
+	// caller's view afterward (the identical caller-view-lifetime reasoning).
+	std::vector<int32_t> final_norm_gain;
+	superslm::CarriedScale final_norm_site_constant{};
+	std::vector<int8_t> head_weights;
+
 	// T-2114 (S2, Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md): set at the START
 	// of unmap(), before `delete this`, matching `SslmGpuContext::destroyed`'s own established
 	// disposition (this file, above) -- defensive documentation of "this object's own release
@@ -391,6 +424,33 @@ struct SslmGpuSequenceHandle {
 	// `adapter_or_null`), never state a sequence handle otherwise retains, so this is the one
 	// place a submitted call's own adapter binding needs remembering between Submit and Finish.
 	const SslmGpuAdapterHandle* in_flight_adapter = nullptr;
+
+	// G5-5 (T-2132, Brunel): the GPU-1.0 twin of `sslm_seq_s::bound_schema`/`dfa_walk_state`
+	// (src/sslm_abi.cpp) -- a sibling scalar pair on this wrapper handle, NEVER folded into
+	// `live_state`/`SequenceLayerState` above, mirroring the CPU ABI's own established shape
+	// exactly (SequenceLayerState is `forward_sites.h`'s own pinned "closed unit," §13 dim 9 --
+	// design Sec6 G5-5's own "the sequence's own state, resident wherever the sequence's other
+	// GPU-side state already lives" is satisfied by this handle, not by widening the shared
+	// layer-loop struct every RunLayerLoop call already guards by exact field count). `-1` ==
+	// no schema bound (this bridge's own int32_t index convention,
+	// gpu_1p0_g5_bridge.h); `dfa_walk_state` stays kSslmGpuDfaWalkStateUnused until a schema
+	// binds, matching `kDfaWalkStateUnused`'s identical CPU-side semantics.
+	int32_t bound_schema_index = -1;
+	uint32_t dfa_walk_state = kSslmGpuDfaWalkStateUnused;
+
+	// G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3):
+	// the GPU-1.0 twin of `sslm_seq_s::ready_for_logits` (src/sslm_abi.cpp) -- session 3's own
+	// diagnosis found the parity harness's own prompt-to-decode transition re-embedding the
+	// prompt's last token (no GPU-side shortcut existed), committing a duplicate KV row and
+	// running `context_length` +1 from decode step 0 onward, silently, until it flipped an
+	// argmax pick 19 steps later. This field, set by `SslmGpuSeqPrefillPromptForG5Bridge`/
+	// `SslmGpuSeqPrefillSchemaContentForG5Bridge` on success and consumed (cleared) by
+	// `SslmGpuSeqDecodeStepForG5Bridge`, is the real fix: it gives the bridge -- not each
+	// caller's own ad hoc composition -- the authority to skip re-embedding a token whose final
+	// residual a prefill call already computed, mirroring `sslm_decode_step`'s own
+	// `ready_for_logits` branch (src/sslm_abi.cpp:1708) exactly. `sslm_gpu_seq_reset` clears it,
+	// mirroring `sslm_seq_reset`'s own identical clear (src/sslm_abi.cpp:1488).
+	bool ready_for_logits = false;
 
 	// T-2114 (S2): see SslmGpuModelHandle's own comment on its `destroyed` field
 	// (gpu_1p0.cpp) -- identical disposition here.
@@ -577,11 +637,64 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 		                          // every other marshal failure in this function already uses.
 	}
 
+	// G5-5 (T-2132, Brunel): final_norm.gain + head (lm_head or tied embed) -- the SAME two
+	// tensor lookups sslm_abi.cpp's own BuildEngineCache already runs (src/sslm_abi.cpp), read
+	// here directly from `*base` since this TU has no engine-cache object of its own. Required
+	// for the finish-token bridge's own final_norm+logits step; a malformed artifact missing
+	// either takes the same "no more specific status than DeviceLost" disposition every other
+	// marshal failure in this function already uses.
+	const superslm::SslmTensorView* final_gain_w = base->weights.Tensor("final_norm.gain");
+	if (!final_gain_w) {
+		return SSLM_DEVICE_LOST;
+	}
+	bool final_norm_scale_ok = true;
+	const superslm::CarriedScale final_norm_site_constant = superslm_marshal::ReadCarriedScale(
+	    base->composition_constants, "final_norm", &final_norm_scale_ok);
+	if (!final_norm_scale_ok) {
+		return SSLM_DEVICE_LOST;
+	}
+	const superslm::SslmTensorView* head_w = nullptr;
+	if (base->config.tie_word_embeddings) {
+		head_w = embed_w;  // tied embeddings: the head IS the embedding matrix, CPU precedent.
+	} else {
+		head_w = base->weights.Tensor("lm_head");
+		if (!head_w) {
+			return SSLM_DEVICE_LOST;
+		}
+	}
+	const size_t head_bytes_needed = static_cast<size_t>(vocab_size) * static_cast<size_t>(H);
+	if (head_w->elem_count < static_cast<uint64_t>(head_bytes_needed)) {
+		return SSLM_DEVICE_LOST;  // same bounded-copy discipline the embed check above applies.
+	}
+
+	// G5-5 (T-2132, Brunel): this artifact's own SchemaMasks/SCM1 section, if present -- absence
+	// is a valid, unconstrained-only artifact (design Sec13.1), the SAME disposition the CPU
+	// ABI's own sslm_model_map already applies (src/sslm_abi.cpp). Parsed against a HOST-OWNED
+	// copy of the section bytes (schema_section_bytes, below) rather than `base`'s own pointer,
+	// since `base`'s own lifetime is caller-owned and this handle must serve every schema-bound
+	// call for its OWN whole lifetime -- the identical caller-view-lifetime reasoning B3.5's own
+	// embed_weights capture (this function, above) already documents.
+	const superslm::SslmSectionView* schema_section =
+	    base->Section(superslm::SslmSectionType::SchemaMasks);
+	std::vector<uint8_t> schema_section_bytes;
+	if (schema_section) {
+		schema_section_bytes.assign(schema_section->data,
+		                             schema_section->data + schema_section->byte_size);
+	}
+
 	std::unique_ptr<SslmGpuModelHandle> h(new SslmGpuModelHandle());
 	try {
 		h->weights_buf = UploadResidentBufferSync(ctx->device, lw_bytes.data(), lw_bytes.size());
 		h->rope_cos_buf = UploadResidentBufferSync(ctx->device, cos_bytes.data(), cos_bytes.size());
 		h->rope_sin_buf = UploadResidentBufferSync(ctx->device, sin_bytes.data(), sin_bytes.size());
+		if (!schema_section_bytes.empty()) {
+			// G5-5's own "Builds: mask-page residency on device" (design Sec6 G5-5, VRAM,
+			// alongside weights/scales per the existing GPU-tenancy model, Sec8.4) -- the whole
+			// SCM1 section, uploaded read-only, the SAME UploadResidentBufferSync three-step
+			// shape weights/rope use immediately above.
+			h->mask_pages_buf = UploadResidentBufferSync(ctx->device, schema_section_bytes.data(),
+			                                              schema_section_bytes.size());
+		}
 	} catch (const std::exception&) {
 		return SSLM_DEVICE_LOST;
 	}
@@ -594,6 +707,28 @@ SslmGpuStatus sslm_gpu_model_map(SslmGpuContext* ctx, const SslmModelView* base,
 	                         reinterpret_cast<const int8_t*>(embed_w->data) + embed_bytes_needed);
 	h->embed_site_constant = embed_site_constant;
 	h->vocab_size = vocab_size;
+	h->final_norm_gain = superslm_marshal::WidenGainToInt32(*final_gain_w);
+	h->final_norm_site_constant = final_norm_site_constant;
+	h->head_weights.assign(reinterpret_cast<const int8_t*>(head_w->data),
+	                        reinterpret_cast<const int8_t*>(head_w->data) + head_bytes_needed);
+
+	// G5-5: parse the host-owned copy (schema_section_bytes, moved into the handle here) --
+	// `schemas`'s own SchemaEntry pointers point INTO `h->schema_section_bytes`, never the local
+	// `schema_section_bytes`/`base`'s own view, so they stay valid for this handle's whole
+	// lifetime. A structurally-invalid SchemaMasks section is a malformed artifact -- same
+	// "no more specific status than DeviceLost" disposition every other marshal failure in this
+	// function already uses (mirrors sslm_abi.cpp's own SSLM_ARTIFACT_REJECTED-for-any-Sec13.3-
+	// violation collapse, translated to this file's own DeviceLost convention).
+	if (!schema_section_bytes.empty()) {
+		h->schema_section_bytes = std::move(schema_section_bytes);
+		std::string schema_err;
+		if (!superslm::SchemaMasksTable::Parse(h->schema_section_bytes.data(),
+		                                        h->schema_section_bytes.size(),
+		                                        static_cast<uint32_t>(vocab_size), h->schemas,
+		                                        &schema_err)) {
+			return SSLM_DEVICE_LOST;
+		}
+	}
 
 	h->ctx = ctx;
 	h->content_hash = base->RawIntegrityHash();
@@ -1774,6 +1909,18 @@ SslmGpuStatus sslm_gpu_seq_reset(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq
 	seq->live_state.kv_saturation_count = 0;
 	seq->live_state.context_length = 0;
 	std::fill(seq->host_kv_mirror.begin(), seq->host_kv_mirror.end(), 0);
+	// G5-5 (T-2132, Brunel): mirrors `sslm_seq_reset`'s own extension (design Sec5,
+	// src/sslm_abi.cpp) -- reset clears the DFA-walk-state back to the bound schema's own start
+	// state (0) but PRESERVES the schema binding itself (`bound_schema_index` untouched); a
+	// sequence with no schema bound stays at the unused sentinel, exactly the CPU ABI's own
+	// disposition.
+	if (seq->bound_schema_index >= 0) {
+		seq->dfa_walk_state = 0u;
+	}
+	// G5-5 session 3 fix (T-2132, Brunel): mirrors `sslm_seq_reset`'s own identical
+	// `ready_for_logits = false` clear (src/sslm_abi.cpp:1488) -- a reset sequence must not carry
+	// a stale "finish without embedding" flag into whatever decode call comes next.
+	seq->ready_for_logits = false;
 	return SSLM_OK;
 }
 
@@ -1812,4 +1959,297 @@ size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq) {
 // the property a red cell needs a real accessor, not a hardcoded assumption, to check.
 int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq) {
 	return seq ? seq->context_cap : 0;
+}
+
+// -----------------------------------------------------------------------------------------
+// G5-5 (T-2132, Brunel): gpu_1p0_g5_bridge.h's own body -- see that header for the full
+// contract each function below implements. "No new arithmetic" (design Sec4) is enforced by
+// construction here: every logits/mask/argmax step below is a direct call into
+// superslm::RmsNormSite/LogitsSite/ApplyMaskAndArgmax/ArgmaxLowestIndexTieBreak
+// (forward_sites.h) -- the SAME functions sslm_decode_step's own finishing block
+// (src/sslm_abi.cpp) calls on its own hidden state, never a parallel reimplementation.
+// -----------------------------------------------------------------------------------------
+
+bool SslmGpuModelHasSchemasForG5Bridge(SslmGpuModelHandle* model) {
+	return model != nullptr && model->schemas.Count() > 0;
+}
+
+int32_t SslmGpuSchemaLookupForG5Bridge(SslmGpuModelHandle* model, const char* name) {
+	if (!model || !name) return -1;
+	size_t index = 0;
+	if (!model->schemas.ByName(name, &index)) return -1;
+	return static_cast<int32_t>(index);
+}
+
+SslmGpuStatus SslmGpuSeqSetSchemaForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                              int32_t schema_index) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	// Mirrors `sslm_seq_set_schema`'s own precondition (src/sslm_abi.cpp): valid ONLY when the
+	// sequence's own DFA-walk-state is at its start -- kSslmGpuDfaWalkStateUnused (never bound)
+	// or 0 (bound, unadvanced). SSLM_SEQUENCE_REJECTED is the closest existing per-sequence
+	// structural-rejection disposition this bridge's own small surface has (gpu_1p0.h's own
+	// SSLM_SEQUENCE_REJECTED comment; the CPU ABI's distinct SSLM_SCHEMA_BIND_REJECTED has no
+	// counterpart on this file's own SslmGpuStatus enum, which this header deliberately does
+	// not extend).
+	if (seq->dfa_walk_state != kSslmGpuDfaWalkStateUnused && seq->dfa_walk_state != 0u) {
+		return SSLM_SEQUENCE_REJECTED;
+	}
+	if (schema_index < 0) {
+		seq->bound_schema_index = -1;
+		seq->dfa_walk_state = kSslmGpuDfaWalkStateUnused;
+		return SSLM_OK;
+	}
+	if (static_cast<size_t>(schema_index) >= seq->model->schemas.Count()) {
+		return SSLM_SEQUENCE_REJECTED;
+	}
+	seq->bound_schema_index = schema_index;
+	seq->dfa_walk_state = 0u;
+	return SSLM_OK;
+}
+
+uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq) {
+	return seq ? seq->dfa_walk_state : kSslmGpuDfaWalkStateUnused;
+}
+
+SslmGpuStatus SslmGpuSeqFinishTokenForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                int32_t* out_token) {
+	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*out_token = -1;
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) {
+		return SSLM_BUSY;  // an in-flight Submitted call must be drained (sslm_gpu_ready) first.
+	}
+	SslmGpuModelHandle* model = seq->model;
+	if (seq->layer_index != model->num_hidden_layers) {
+		// This token's own layer loop has not reached full depth yet -- the caller's own
+		// dispatch-budget loop must submit more sslm_decode_step_gpu calls first. No dedicated
+		// enumerator exists for "not ready yet" on this bridge's own small surface; same
+		// "no more specific status" disposition the whole production file already uses.
+		return SSLM_SEQUENCE_REJECTED;
+	}
+
+	// final_norm + logits -- the EXACT two calls sslm_decode_step's own finishing block makes
+	// (src/sslm_abi.cpp), on this sequence's own GPU-derived, already-read-back hidden_codes
+	// (`seq->hidden_codes` -- `live_state.hidden_codes` aliases it directly, so sslm_gpu_ready's
+	// own readback already landed here, no separate sync needed).
+	std::vector<int8_t> final_codes(model->hidden_size);
+	superslm::CarriedScale final_scale{};
+	superslm::SslmForwardStatus fst = superslm::RmsNormSite(
+	    seq->hidden_codes.data(), model->final_norm_gain.data(), model->hidden_size,
+	    seq->hidden_scale, model->final_norm_site_constant, final_codes.data(), &final_scale,
+	    "final_norm", /*token_index=*/0, /*trace_hook_state=*/nullptr,
+	    /*external_wide_scratch=*/nullptr);
+	if (fst != superslm::SslmForwardStatus::Ok) return MapDecodedStatusToGpuStatus(fst);
+
+	std::vector<int64_t> wide_logits(static_cast<size_t>(model->vocab_size));
+	std::vector<int32_t> logit_row(static_cast<size_t>(model->vocab_size));
+	fst = superslm::LogitsSite(final_codes.data(), model->hidden_size, model->head_weights.data(),
+	                            model->vocab_size, wide_logits.data(), logit_row.data());
+	if (fst != superslm::SslmForwardStatus::Ok) return MapDecodedStatusToGpuStatus(fst);
+
+	// G5-5: masking applies to int32 logits BEFORE argmax, indexed by this sequence's own
+	// DFA-walk-state -- SAME code (superslm::ApplyMaskAndArgmax) as the CPU path's masked-argmax
+	// step; no schema bound is byte-for-byte the pre-G5 path (plain ArgmaxLowestIndexTieBreak),
+	// exactly the base-level GPU parity this bridge extends.
+	int32_t produced = 0;
+	if (seq->bound_schema_index >= 0) {
+		const superslm::SchemaEntry* entry =
+		    model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
+		if (!entry) return SSLM_SEQUENCE_REJECTED;
+		const uint8_t* page = entry->mask_pages +
+		                       static_cast<size_t>(seq->dfa_walk_state) * model->schemas.MaskPageBytes();
+		superslm::ApplyMaskAndArgmax(logit_row.data(), page, model->vocab_size, &produced);
+		uint32_t next_state = seq->dfa_walk_state;
+		model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(produced),
+		                           &next_state);
+		seq->dfa_walk_state = next_state;
+	} else {
+		produced = superslm::ArgmaxLowestIndexTieBreak(logit_row.data(),
+		                                                static_cast<size_t>(model->vocab_size));
+	}
+	*out_token = produced;
+	// Resting convention -- matches CPU's identical `seq->state.layer_index = 0` reset
+	// (sslm_decode_stepImpl, src/sslm_abi.cpp) so the next embed starts a fresh token boundary.
+	seq->layer_index = 0;
+	seq->live_state.layer_index = 0;
+	return SSLM_OK;
+}
+
+namespace {
+// G5-5 session 3 fix (T-2132, Brunel): the SAME "drive one token's own layer loop to full depth,
+// possibly across several sslm_decode_step_gpu calls" loop every bridge entry point below needs
+// -- extracted once here (internal linkage) so `SslmGpuSeqPrefillPromptForG5Bridge` and
+// `SslmGpuSeqDecodeStepForG5Bridge` (below) share one implementation rather than each hand-rolling
+// its own copy, which is exactly the shape of duplication that let the ready_for_logits gap slip
+// past this ticket's own first parity harness (session 2/3's own finding: the harness's `tools/
+// t2132_g5_gpu_parity_gpu.cpp` had its own private copy of this loop, and its own private, buggy
+// prompt-prefill composition around it).
+bool DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                        uint32_t dispatch_budget) {
+	SslmGpuModelHandle* model = seq->model;
+	uint32_t guard = 0;
+	while (seq->layer_index < model->num_hidden_layers) {
+		if (sslm_decode_step_gpu(ctx, seq, /*adapter_or_null=*/nullptr, dispatch_budget) != SSLM_OK) {
+			return false;
+		}
+		int32_t ready = 0;
+		SslmGpuStatus drained = SSLM_OK;
+		if (sslm_gpu_ready(ctx, seq, /*block=*/1, &ready, &drained) != SSLM_OK) return false;
+		if (drained != SSLM_OK) return false;
+		if (++guard > 10000) return false;  // runaway-loop guard, never expected in practice.
+	}
+	return true;
+}
+}  // namespace
+
+// G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): the
+// GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- embeds and drives EVERY token in
+// `tokens` (including the last) to full depth, exactly `PrefillWholeTokensImpl`'s own
+// SSLM_SPAN_PROMPT branch (no walk-state touch, no masking -- design Sec5: "never advances the
+// DFA walk, whatever schema is bound"). On success, sets `seq->ready_for_logits = true`,
+// mirroring `sslm_prefill`'s own unconditional set on any successful prefill
+// (src/sslm_abi.cpp:1607) -- this is the fix: a caller that then calls
+// `SslmGpuSeqDecodeStepForG5Bridge` (below) for its first post-prompt decode step gets the SAME
+// "reuse the already-computed final residual, do not re-embed" shortcut the CPU ABI already gives
+// every real caller, closing the exact duplicate-KV-commit gap session 3 diagnosed in this
+// bridge's own prior caller (`tools/t2132_g5_gpu_parity_gpu.cpp`'s hand-rolled `PrefillPrompt`).
+SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                                  const int32_t* tokens, int32_t count,
+                                                  uint32_t dispatch_budget) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || (count > 0 && !tokens) || count < 0 ||
+	    dispatch_budget < 1) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	for (int32_t i = 0; i < count; ++i) {
+		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, tokens[i]);
+		if (st != SSLM_OK) return st;
+		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+	}
+	if (count > 0) seq->ready_for_logits = true;
+	return SSLM_OK;
+}
+
+// G5-5 session 3 fix (T-2132, Brunel): the recommended one-call-per-step entry point -- the GPU-
+// 1.0 twin of `sslm_decode_step`'s own composition (embed-if-needed, layer-loop-to-depth, finish),
+// including its `ready_for_logits` shortcut (src/sslm_abi.cpp:1708-1715) verbatim: when a prior
+// `SslmGpuSeqPrefillPromptForG5Bridge`/`SslmGpuSeqPrefillSchemaContentForG5Bridge` call left this
+// flag set, `token_to_embed_if_needed` is IGNORED and this call jumps straight to finishing the
+// already-computed residual -- no embed, no layer loop, matching the CPU ABI's own "this is the
+// ONE call that costs no layer work" comment exactly. Otherwise embeds `token_to_embed_if_needed`
+// and drives it to full depth first. Either way, finishes via `SslmGpuSeqFinishTokenForG5Bridge`
+// (masking if a schema is bound, walk-state advance, plain argmax otherwise). This is the shape a
+// future bridge consumer should reach for FIRST -- the granular
+// embed/`sslm_decode_step_gpu`/`sslm_gpu_ready`/finish primitives stay available (this bridge/
+// `gpu_1p0.h` do not remove them) for a caller that genuinely needs to interleave other GPU work
+// between layers, but composing them by hand is exactly what re-trips this session's own bug.
+SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
+                                               int32_t token_to_embed_if_needed,
+                                               uint32_t dispatch_budget, int32_t* out_token) {
+	if (!out_token) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*out_token = -1;
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || dispatch_budget < 1) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->ready_for_logits) {
+		// This sequence's hidden_codes already hold a fully-computed final hidden state (from a
+		// prior prefill call) -- no embed, no layer loop this call; jump straight to finishing,
+		// exactly sslm_decode_step's own ready_for_logits branch (src/sslm_abi.cpp:1708-1715).
+		seq->ready_for_logits = false;
+	} else {
+		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, token_to_embed_if_needed);
+		if (st != SSLM_OK) return st;
+		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+	}
+	return SslmGpuSeqFinishTokenForG5Bridge(ctx, seq, out_token);
+}
+
+SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
+                                                          SslmGpuSequenceHandle* seq,
+                                                          const int32_t* tokens, int32_t count,
+                                                          uint32_t dispatch_budget_per_token,
+                                                          int32_t* consumed) {
+	if (!consumed) return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	*consumed = 0;
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || (count > 0 && !tokens) || count < 0 ||
+	    dispatch_budget_per_token < 1) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	if (seq->bound_schema_index < 0) {
+		return SSLM_SEQUENCE_REJECTED;  // the GPU twin of SSLM_SCHEMA_SPAN_UNBOUND.
+	}
+	SslmGpuModelHandle* model = seq->model;
+	const superslm::SchemaEntry* entry =
+	    model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
+	if (!entry) return SSLM_SEQUENCE_REJECTED;
+
+	for (int32_t i = 0; i < count; ++i) {
+		const int32_t token = tokens[i];
+		// design Sec6 G5-3/G5-5's own "the reachability check runs BEFORE this token's forward
+		// pass" (src/sslm_abi.cpp's PrefillWholeTokensImpl, mirrored here verbatim): the
+		// REJECTED token's own effects never land -- its walk-state transition is never applied,
+		// its forward pass never runs, `*consumed` is never incremented for it. That is the only
+		// thing left "unmoved." Tokens admitted BEFORE the rejected one in this same call already
+		// had their walk-state advance, K/V write, and layer loop run for real, and `*consumed`
+		// already counts them (design Sec14.3, D-SLM3478 -- RULED design text as of this fold,
+		// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S5): this is not full-span atomicity, it is
+		// the documented partial-consumption contract, matching `sslm_prefill`'s own shape.
+		uint32_t next_state = 0;
+		if (!model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(token),
+		                                &next_state)) {
+			// S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): CPU/GPU ready_for_logits parity
+			// on the partial-rejection path -- the CPU ABI is the reference
+			// (src/sslm_abi.cpp's sslm_prefill: `if (*consumed > 0) seq->ready_for_logits =
+			// true;`, unconditional on the returned status). When earlier tokens in this call
+			// were already admitted, the last admitted token's own forward pass already ran to
+			// full depth and its hidden_codes already hold the finished residual -- exactly the
+			// condition ready_for_logits exists to record, whether this call as a whole succeeds
+			// or a later token in it rejects. Before this fix the GPU bridge returned
+			// SSLM_SEQUENCE_REJECTED without ever reaching the `ready_for_logits = true` set at
+			// this function's tail, so a caller's next `SslmGpuSeqDecodeStepForG5Bridge` call
+			// would wrongly re-embed the already-finished last admitted token, diverging from the
+			// CPU ABI's behaviour on the exact same input.
+			if (*consumed > 0) seq->ready_for_logits = true;
+			return SSLM_SEQUENCE_REJECTED;
+		}
+		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) {
+			return SSLM_BUSY;
+		}
+		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, token);
+		if (st != SSLM_OK) return st;
+		// Drive this ONE forced token's own layer loop to full depth -- possibly across
+		// multiple sslm_decode_step_gpu calls, the caller's own dispatch_budget_per_token
+		// governing how many layers land per submission, exactly the existing bounded-
+		// dispatch-budget primitive design Sec6 G5-5 names ("issued as GPU dispatches under
+		// the existing bounded-dispatch-budget primitive, sslm_decode_step_gpu"). Shared with
+		// SslmGpuSeqPrefillPromptForG5Bridge/SslmGpuSeqDecodeStepForG5Bridge (above) -- ONE
+		// implementation, per session 3's own finding that a private copy of this loop is
+		// exactly the shape that let the ready_for_logits gap slip past this bridge's first
+		// caller.
+		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget_per_token)) {
+			return SSLM_DEVICE_LOST;
+		}
+		// No masking/argmax here -- `token` is FORCED (already known), never chosen, exactly
+		// PrefillWholeTokensImpl's own SSLM_SPAN_SCHEMA_CONTENT branch. The token this token's
+		// own forward pass just committed IS `token` itself (not an argmax result) -- only the
+		// walk-state advances.
+		seq->dfa_walk_state = next_state;
+		++(*consumed);
+	}
+	// G5-5 session 3 fix (T-2132, Brunel): mirrors `sslm_prefill`'s own `if (*consumed > 0)
+	// seq->ready_for_logits = true;` (src/sslm_abi.cpp) -- the last ADMITTED token already ran
+	// its full layer loop above; a caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call
+	// (the "one ordinary masked step run immediately after the forced chain") must not re-embed
+	// it. S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): keyed on `*consumed`, not `count`,
+	// to match the CPU ABI's own condition exactly -- on this all-admitted success path the two
+	// are equal, but keeping the same predicate as the rejection-path fix above (which can only
+	// test `*consumed`) keeps this one function internally consistent rather than using two
+	// different truths for the same flag.
+	if (*consumed > 0) seq->ready_for_logits = true;
+	return SSLM_OK;
 }
