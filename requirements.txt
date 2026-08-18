@@ -23,3 +23,8 @@ transformers~=5.13.1
 # it directly (`from tokenizers import Tokenizer, decoders, pre_tokenizers`) to build B1's
 # on-disk fixture checkpoint's tokenizer -- a real, direct dependency, not an inherited one.
 tokenizers~=0.22.2
+# T-2152 matrix fallout (first uncapped Actions run, 2026-08-18): transformers'
+# apply_chat_template requires jinja2 at call time and does not declare it as a hard
+# install dependency in this configuration -- calibrate_checkpoint.py's chat-template
+# path is core converter behavior, so the dependency is declared directly.
+jinja2~=3.1.4
