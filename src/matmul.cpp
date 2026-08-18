@@ -51,14 +51,12 @@
        "not a silent substitution."
 #endif
 
-// T-2149 design §6.1: compile-time capability -- renames the old SUPERSLM_MATMUL_HAVE_SSE2
-// to a wider name with the same condition. Unconditional (not gated by any force macro):
-// this is a fact about the target, never about which tier a build has chosen to pin.
-#if defined(_M_X64) || defined(__x86_64__)
-#define SUPERSLM_MATMUL_HAVE_SIMD_X64 1
-#else
-#define SUPERSLM_MATMUL_HAVE_SIMD_X64 0
-#endif
+// T-2149 design §6.1: compile-time capability -- SUPERSLM_MATMUL_HAVE_SIMD_X64 (renamed
+// from the old SUPERSLM_MATMUL_HAVE_SSE2, same condition) is defined once, in
+// include/superslm/matmul.h, so the T-2158 test seam can scope its own coverage cells
+// to the identical condition (fold round 4, D-SLM3568) rather than maintain a second
+// copy. Unconditional (not gated by any force macro): this is a fact about the target,
+// never about which tier a build has chosen to pin.
 
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
 #include <emmintrin.h>   // SSE2
@@ -77,9 +75,12 @@
 // AVX-512" requirement for everything else this file compiles -- confirmed standing,
 // unconditional, by tools/ci/check_matmul_avx_isolation.py, design §10 dimension 7d).
 // MSVC does not gate intrinsic use by /arch at all (documented MSVC behavior, design
-// §6.4) -- DotRowAvx2/DotRowAvx512 need no attribute there; ClangCL follows MSVC's
-// driver conventions for this same reason.
-#if defined(__GNUC__) && !defined(_MSC_VER)
+// §6.4) -- DotRowAvx2/DotRowAvx512 need no attribute there. ClangCL follows MSVC's
+// command-line conventions but its code generator is LLVM's, which gates AVX2/AVX-512
+// intrinsics on target features exactly as Clang does on Linux (design §6.4, corrected
+// fold round 4, D-SLM3567) -- clang-cl also does not define __GNUC__, so it needs the
+// attributed path for two independent reasons.
+#if defined(__clang__) || (defined(__GNUC__) && !defined(_MSC_VER))
 #define SUPERSLM_AVX2_TARGET __attribute__((target("avx2")))
 #define SUPERSLM_AVX512_TARGET __attribute__((target("avx512f,avx512bw")))
 #else

@@ -5639,13 +5639,16 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
 	}
-#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
 	// T-2158 red suite for T-2149, design §10 dimension 3 (D-SLM3509): a FRESH process
 	// that has never touched DotRow before racing kThreads first-touch calls into
 	// DetectBestDotRowTier()'s magic-static initializer simultaneously. Every thread
 	// checks its own result against a fixed, hand-computed oracle (not against the other
 	// threads), and the probe reports the seam's own call count -- both read back and
 	// asserted by the parent, TestMatmulFirstCallDispatchRaceUnderConcurrency above.
+	// Guarded by SUPERSLM_MATMUL_HAVE_SIMD_X64 (fold round 4, D-SLM3568) alongside the
+	// two cells above -- this probe body is the same reference to
+	// g_dot_row_tier_probe_invocations that does not exist on a non-x64 build.
 	if (name == "matmul_first_call_race") {
 		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
 		std::fflush(stdout);
@@ -6719,12 +6722,14 @@ static void TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded() {
 
 // --- T-2158 red suite for T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md;
 //     Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md). Both cells below are gated
-//     behind SUPERSLM_T2149_AVX_TIERS_BUILT (CMakeLists.txt, OFF by default) because they
-//     depend on DetectBestDotRowTier() (design §6.2) and its test-only call-count seam
-//     (tests/support/matmul_dispatch_instrument.h), neither of which exists in
-//     src/matmul.cpp yet -- authored gated-red per this suite's own casebook, not
-//     compiled at all until the option is turned on. ---
-#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+//     behind SUPERSLM_T2149_AVX_TIERS_BUILT (CMakeLists.txt, ON by default) AND
+//     SUPERSLM_MATMUL_HAVE_SIMD_X64 (include/superslm/matmul.h) -- they depend on
+//     DetectBestDotRowTier() (design §6.2) and its test-only call-count seam
+//     (tests/support/matmul_dispatch_instrument.h), and both compile only where that
+//     function itself compiles: x64. Corrected fold round 4 (D-SLM3568; code review
+//     T-2170, Finding 2 found the option-only guard let both cells reach a non-x64
+//     target where the counter is declared but never incremented, e.g. macos-arm64). ---
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 // design §10 dimension 1 (re-specified fold round 2, D-SLM3515): the cached tier
 // selection is chosen exactly once per process and reused across every subsequent
@@ -26239,7 +26244,7 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights();
 	TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange();
 	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
-#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT) && SUPERSLM_MATMUL_HAVE_SIMD_X64
 	TestMatmulDotRowTierProbeSelectedOnceAndReusedAcrossCalls();
 	// T-2159 (build, closing design §11 steps 7-10, D-SLM3552): registration gap found by
 	// the first actual execution of the SSE2/AVX2/AVX-512-forced full-suite binaries to

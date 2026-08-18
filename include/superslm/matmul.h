@@ -15,6 +15,20 @@
 #include <cstddef>
 #include <cstdint>
 
+// T-2149 design §6.1: compile-time capability -- the same fact about the target that
+// gates matmul.cpp's own SIMD dispatch (DotRow/DetectBestDotRowTier only exist under
+// this condition). Declared here, not privately inside matmul.cpp, because the T-2158
+// test-only seam (tests/support/matmul_dispatch_instrument.h) and its two coverage
+// cells (design §10 dimensions 1/3) need the identical condition to scope themselves
+// out on a non-x64 target where the mechanism under test does not exist (fold round 4,
+// D-SLM3568) -- a second, independently-maintained copy of this condition is exactly
+// the drift the design's own standards forbid (StandardsDocument.md §4).
+#if defined(_M_X64) || defined(__x86_64__)
+#define SUPERSLM_MATMUL_HAVE_SIMD_X64 1
+#else
+#define SUPERSLM_MATMUL_HAVE_SIMD_X64 0
+#endif
+
 namespace superslm {
 
 // C17/C19-C22 -- raw int8x8 matmul accumulate: one activation row (int8 codes, in

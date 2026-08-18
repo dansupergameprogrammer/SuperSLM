@@ -5,29 +5,39 @@
 // unit, tests/test_main.cpp, includes every seam header directly -- no new build-system
 // entry is needed for the header itself).
 //
-// THE COUNTER IS NOT YET WIRED INTO PRODUCTION as of this header's authoring -- the same
-// gap tests/support/bad_alloc_injection.h's own header comment named before S-HARDEN-7's
-// rename-and-wrap landed. `src/matmul.cpp`'s `DetectBestDotRowTier()` (design §6.2, not yet
-// built) is expected to increment `superslm_test::g_dot_row_tier_probe_invocations` exactly
-// once, from inside its own C++11 magic-static initializer body -- so the increment runs
-// under the same happens-before guarantee the initializer itself carries, which is the
-// property design §10 dimension 1's "selected exactly once per process" claim and dimension
-// 3's first-call-race cell both need observed -- and ONLY when
+// Current state, corrected fold round 4 (D-SLM3572; code review T-2170, Finding 6 found
+// this comment describing a world that no longer existed at the reviewed commit): the
+// counter IS wired into production -- `src/matmul.cpp`'s `DetectBestDotRowTier()` (design
+// §6.2, built at `src/matmul.cpp:317-347`) increments
+// `superslm_test::g_dot_row_tier_probe_invocations` exactly once, from inside its own
+// C++11 magic-static initializer body -- so the increment runs under the same
+// happens-before guarantee the initializer itself carries, which is the property design
+// §10 dimension 1's "selected exactly once per process" claim and dimension 3's
+// first-call-race cell both need observed -- and ONLY when
 // SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT is defined. CMakeLists.txt defines that macro
-// (alongside SUPERSLM_T2149_AVX_TIERS_BUILT) for the `superslm_test_injection` library target
-// only, under the `SUPERSLM_T2149_AVX_TIERS_BUILT` option (OFF by default) -- never for the
-// production `superslm` library, `sslm_verify`, or any other consumer -- matching
+// (alongside SUPERSLM_T2149_AVX_TIERS_BUILT) for the `superslm_test_injection` library
+// target AND the three SSE2/AVX2/AVX512 `*_forced` library targets, under the
+// `SUPERSLM_T2149_AVX_TIERS_BUILT` option (ON by default) -- never for the production
+// `superslm` library, `sslm_verify`, or any other consumer -- matching
 // SUPERSLM_ENABLE_BAD_ALLOC_INJECTION's own isolation (src/bad_alloc_wrap.h's header
 // comment): a release build never references tests/support/* and the seam compiles to
 // nothing (Layer 1 stays independently embeddable, D-SLM13).
 //
-// Until DetectBestDotRowTier() exists and is wired to this seam, every red-suite cell built
-// against this header is itself gated behind `#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)`
-// (tests/test_main.cpp) -- the option stays OFF until the design's §11 build-decomposition
-// step 1 lands, so this header, the cells that include it, and this seam all compile to
-// nothing today, keeping the existing 34184/0 battery (D-SLM3496) unaffected.
+// This header, the two cells that include it (design §10 dimensions 1/3,
+// `tests/test_main.cpp`), and the production increment site all compile into every
+// binary in the option-ON matrix, x64 and non-x64 alike -- the option being ON is not by
+// itself a non-x64 no-op. The declaration below and the two cells that read it are
+// additionally scoped to `SUPERSLM_MATMUL_HAVE_SIMD_X64` (include/superslm/matmul.h),
+// exactly the guard `DetectBestDotRowTier()` itself compiles under (fold round 4,
+// D-SLM3568; code review T-2170, Finding 2): on a non-x64 target the counter, the
+// increment site, and both test cells do not exist to assert anything -- there is no
+// mechanism there for them to observe.
 #ifndef SUPERSLM_TESTS_SUPPORT_MATMUL_DISPATCH_INSTRUMENT_H
 #define SUPERSLM_TESTS_SUPPORT_MATMUL_DISPATCH_INSTRUMENT_H
+
+#include "superslm/matmul.h"
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 #include <atomic>
 
@@ -46,5 +56,7 @@ namespace superslm_test {
 inline std::atomic<long long> g_dot_row_tier_probe_invocations{0};
 
 }  // namespace superslm_test
+
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 #endif  // SUPERSLM_TESTS_SUPPORT_MATMUL_DISPATCH_INSTRUMENT_H
