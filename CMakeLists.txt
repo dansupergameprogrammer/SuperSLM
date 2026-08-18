@@ -204,6 +204,61 @@ if(SUPERSLM_T2149_AVX_TIERS_BUILT)
 		SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
 endif()
 
+# T-2149 design §8.1/§8.3, §11 step 5 (fold round 3, D-SLM3520): three new forced
+# full-suite libraries+executables and three new forced digest executables, mirroring
+# superslm_scalar_forced/sslm_axis_digest_scalar_forced's own shape exactly (above) --
+# with one stated deviation, audited against the sibling per StandardsDocument.md §7:
+# each of these nine targets carries EXCLUDE_FROM_ALL. superslm_scalar_forced correctly
+# has no such guard (DotRowScalar compiles on every platform); these nine compile leaf
+# functions declared only under the x64 SIMD gate (src/matmul.cpp), so an unqualified
+# `cmake --build build` on a non-x64 target (macos-arm64 CI, .github/workflows/tests.yml)
+# must never attempt them. EXCLUDE_FROM_ALL does not protect a non-excluded target that
+# links an excluded one, so each *_forced library and its dependent test/digest
+# executable both carry the guard (design §8.1's own note; the t2139_gate_* targets
+# below are this codebase's own precedent for this exact mechanism).
+foreach(_sslm_tier SSE2 AVX2 AVX512)
+	string(TOLOWER "${_sslm_tier}" _sslm_tier_lower)
+
+	add_library(superslm_${_sslm_tier_lower}_forced STATIC EXCLUDE_FROM_ALL ${SUPERSLM_CORE_SOURCES})
+	target_include_directories(superslm_${_sslm_tier_lower}_forced PUBLIC include)
+	target_compile_definitions(superslm_${_sslm_tier_lower}_forced PUBLIC SUPERSLM_FORCE_${_sslm_tier}_MATMUL)
+	if(MSVC)
+		target_compile_options(superslm_${_sslm_tier_lower}_forced PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(superslm_${_sslm_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+
+	# The forced full-suite executable: a fresh compile of tests/test_main.cpp (not
+	# only the library) linked against the corresponding forced library, so the ENTIRE
+	# 34184-check suite becomes this tier's own proof for free (design §8.1). The
+	# SUPERSLM_FORCE_*_MATMUL definition must reach test_main.cpp's OWN compile too
+	# (T-2158 casebook §2 item 4) -- PUBLIC on the forced library already propagates it
+	# to any target linking that library, which satisfies this without a second
+	# target_compile_definitions call.
+	add_executable(superslm_tests_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tests/test_main.cpp)
+	target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
+	target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE tests)
+	if(MSVC)
+		target_compile_options(superslm_tests_${_sslm_tier_lower}_forced PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(superslm_tests_${_sslm_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+	if(WIN32)
+		target_sources(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu/superslm_gpu.cpp)
+		target_include_directories(superslm_tests_${_sslm_tier_lower}_forced PRIVATE src/gpu)
+		target_link_libraries(superslm_tests_${_sslm_tier_lower}_forced PRIVATE d3d12 dxgi dxguid)
+	endif()
+
+	# The forced digest executable (design §8.3), mirroring sslm_axis_digest_scalar_forced.
+	add_executable(sslm_axis_digest_${_sslm_tier_lower}_forced EXCLUDE_FROM_ALL tools/ci/sslm_axis_digest.cpp)
+	target_link_libraries(sslm_axis_digest_${_sslm_tier_lower}_forced PRIVATE superslm_${_sslm_tier_lower}_forced)
+	if(MSVC)
+		target_compile_options(sslm_axis_digest_${_sslm_tier_lower}_forced PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(sslm_axis_digest_${_sslm_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+endforeach()
+
 # T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
 # AVX-isolation claim (design §6.4) -- no target_compile_options call anywhere in this
 # file may set a translation-unit-wide AVX2/AVX-512 flag (see
