@@ -49,6 +49,15 @@ artifact, decoding through the `SslmGpu*` API described in
 | Batched, 4 concurrent sequences | not separately measured | 59.68–61.78 |
 | Host CPU, same machine | 4.5–6.3 | 8.91 |
 
+**Reproducing these numbers:** `build.bat` compiles `tools/t2100_gpu_throughput.cpp`
+into `out\t2100_gpu_throughput.exe` on every Windows build with
+`SUPERSLM_BUILD_GPU` support (the harness needs a real `.sslm` model
+artifact on disk, so it is built but not auto-run). Invoke it directly:
+`out\t2100_gpu_throughput.exe <model.sslm> [steps] [token_id]` — it runs N
+successive decode steps through the same `SslmGpu*` entry points a real
+generation loop calls, one warmup step discarded, and reports the mean
+tokens/second over the timed steps.
+
 The 2080 SUPER's context-length curve declines roughly 3–4% across a 16x
 growth in context length. Determinism: on both GPUs, every decoded token
 and every layer's key/value state is bit-identical to the CPU reference,
