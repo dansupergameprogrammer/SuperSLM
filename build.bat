@@ -460,6 +460,21 @@ rem and this step does not want to turn on globally -- goto/labels sidestep it i
 where bash >nul 2>nul
 if errorlevel 1 goto :t2139_verb_count_skip
 bash -c "cat include/superslm/sslm_abi_functions.inc include/superslm/sslm_abi_functions_g5_comparable.inc | grep -oE '\bsslm_[a-z0-9_]+\s*\(' | sed -E 's/\s*\($//' | sort -u | wc -l" > out\t2139\verb_count.txt
+rem T-2152 (outside strike item 7): `where bash` finding bash on PATH is not proof the
+rem command above RAN successfully -- a missing cat/grep/sed/sort/wc inside a minimal
+rem git-bash install, a bad working directory, or any other bash-side failure previously
+rem fell straight through to the count comparison below, which reports whatever landed in
+rem verb_count.txt (often empty, or "0" from a pipe with no input) as if it were a real,
+rem measured verb count that happens to differ from 34 -- "verb count drifted" is the WRONG
+rem diagnosis for "bash itself failed to run its command," and sends whoever reads it
+rem hunting through include/superslm/*.inc for an ABI change that never happened. bash's own
+rem exit status is checked FIRST, immediately after the command that produced it (same
+rem reason the count read below stays outside a parenthesized block -- %ERRORLEVEL%/errorlevel
+rem here reflects the bash invocation, not a later command).
+if errorlevel 1 (
+	echo count_abi_verbs.sh: bash was found on PATH but its own command failed ^(exit %errorlevel%^) -- this is a broken git-bash/coreutils install, not a verb-count drift; see out\t2139\verb_count.txt for whatever partial output it produced
+	popd & exit /b 1
+)
 set /p T2139_VERB_COUNT=<out\t2139\verb_count.txt
 if "%T2139_VERB_COUNT%"=="34" goto :t2139_verb_count_ok
 echo count_abi_verbs.sh reports %T2139_VERB_COUNT%, expected 34 -- verb count drifted, see design Sec4 / T-2132
@@ -468,7 +483,7 @@ popd & exit /b 1
 echo count_abi_verbs.sh: 34 verbs, matches T-2139 Sec4's 29 plus T-2132/G5's five new verbs
 goto :t2139_verb_count_done
 :t2139_verb_count_skip
-echo bash not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal^)
+echo bash ^(git-bash^) not found on PATH -- skipping count_abi_verbs.sh ^(non-fatal: this build does not require bash. NOTE, read at source rather than assumed -- no other check in this tree re-derives the 34-verb ABI surface count, so skipping here leaves that specific invariant unchecked on this run, same as every other `where ^<tool^>`-guarded optional step in this script^)
 :t2139_verb_count_done
 
 rem C2's own Gate B smoke: maps a real artifact, exercises C1's own construction verbs against
