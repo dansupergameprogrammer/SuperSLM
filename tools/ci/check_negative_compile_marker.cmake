@@ -21,12 +21,26 @@
 # PASS, and a healthy tree (this script exits 0) would report FAIL. See CMakeLists.txt's own
 # add_test entries for this script -- none of them set WILL_FAIL, and none of them ever should.
 #
+# SOURCE_FILE (T-2142, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md M1, the
+# residual half): "a marker must match its construction's own full static_assert text, not any
+# substring of it." MARKER_TEXT alone, checked only against the compiler's OWN output, cannot
+# tell a complete message from a truncated fragment of it -- a truncated fragment IS a substring
+# of the real message, so it passes the compiler-output check vacuously too. This is not
+# hypothetical: two of this file's own four callers carried exactly this mangling in HEAD before
+# this fix (CMakeLists.txt's xmacro/sentinel entries were missing their construction's own
+# macro-generated suffix and literal prefix respectively). SOURCE_FILE names the .cpp the target
+# actually compiles; tools/ci/verify_negative_compile_marker_source.py reads it and requires
+# MARKER_TEXT to equal one of the COMPLETE static_assert messages that file can produce, source-
+# derived rather than compiler-output-derived, closing the truncation class the empty-string
+# guard below does not reach.
+#
 # Invocation (see CMakeLists.txt's own add_test entries for the exact arguments):
 #   cmake -DBUILD_DIR=<binary dir> -DBUILD_TARGET=<target> -DBUILD_CONFIG=<config>
-#         -DMARKER_TEXT=<substring of the target's own static_assert message> -P
+#         -DSOURCE_FILE=<path to the target's own .cpp, relative to CMAKE_SOURCE_DIR>
+#         -DMARKER_TEXT=<the target's own COMPLETE static_assert message text> -P
 #         tools/ci/check_negative_compile_marker.cmake
-if(NOT DEFINED BUILD_DIR OR NOT DEFINED BUILD_TARGET OR NOT DEFINED MARKER_TEXT)
-	message(FATAL_ERROR "check_negative_compile_marker.cmake: BUILD_DIR, BUILD_TARGET, and MARKER_TEXT are all required -DVAR=... arguments")
+if(NOT DEFINED BUILD_DIR OR NOT DEFINED BUILD_TARGET OR NOT DEFINED SOURCE_FILE OR NOT DEFINED MARKER_TEXT)
+	message(FATAL_ERROR "check_negative_compile_marker.cmake: BUILD_DIR, BUILD_TARGET, SOURCE_FILE, and MARKER_TEXT are all required -DVAR=... arguments")
 endif()
 # T-2139 sixth confirmation review M1 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-review.md):
 # -DMARKER_TEXT= (empty string) satisfies NOT DEFINED above (it IS defined, just empty), and
@@ -38,6 +52,32 @@ if(MARKER_TEXT STREQUAL "")
 endif()
 if(NOT DEFINED BUILD_CONFIG OR BUILD_CONFIG STREQUAL "")
 	set(BUILD_CONFIG "Debug")
+endif()
+
+# Source-derived completeness check (M1's residual half, see the SOURCE_FILE comment above):
+# runs BEFORE the build, cheap, and independent of the compiler's own output -- a mangled marker
+# is rejected here even if it would also happen to appear as a substring of whatever the compiler
+# prints, which is exactly the failure mode a compiler-output-only check cannot see.
+#
+# CMAKE_SOURCE_DIR is NOT set in `cmake -P` script mode (this script's own invocation shape) --
+# it silently expands empty, which previously resolved SOURCE_FILE relative to ctest's own
+# working directory (BUILD_DIR) instead of the repo root, "file not found" on every caller.
+# CMAKE_CURRENT_LIST_DIR IS set in script mode (this listfile's own directory, tools/ci/) and is
+# the anchor every path below is computed from instead.
+get_filename_component(SSLM_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+find_program(PYTHON_EXECUTABLE NAMES python python3)
+if(NOT PYTHON_EXECUTABLE)
+	message(FATAL_ERROR "check_negative_compile_marker.cmake: no python/python3 on PATH -- cannot run the SOURCE_FILE marker-completeness check (tools/ci/verify_negative_compile_marker_source.py). This is a hard requirement, not a skip: the class this check closes (a truncated marker passing vacuously) is exactly what happened in HEAD before it existed.")
+endif()
+execute_process(
+	COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/verify_negative_compile_marker_source.py" "${SSLM_REPO_ROOT}/${SOURCE_FILE}" "${MARKER_TEXT}"
+	RESULT_VARIABLE MARKER_SOURCE_RESULT
+	OUTPUT_VARIABLE MARKER_SOURCE_STDOUT
+	ERROR_VARIABLE MARKER_SOURCE_STDERR
+)
+if(NOT MARKER_SOURCE_RESULT EQUAL 0)
+	message(FATAL_ERROR
+		"${BUILD_TARGET}: MARKER_TEXT failed the source-completeness check against ${SOURCE_FILE}:\n${MARKER_SOURCE_STDOUT}${MARKER_SOURCE_STDERR}")
 endif()
 
 execute_process(

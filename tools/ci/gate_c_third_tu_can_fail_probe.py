@@ -25,8 +25,28 @@ tools/t2139_gate_c_real_suite_side_check.cpp:88-93) -- not merely any failure, t
 marker-text discrimination this round's S1/S3 fix requires of the CMake-side negatives. A clean
 compile means the third TU's only can-it-fail evidence has regressed; a failure without the marker
 means it failed for an unrelated reason. Either is reported as a hard failure. The scratch tree is
-removed afterward regardless of outcome, and `git status --porcelain` is asserted empty both before
-mutating and after cleanup, so this step can never leave the tracked tree dirty.
+removed afterward regardless of outcome.
+
+T-2142 (S3, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md): this script previously
+REFUSED TO RUN unless `git status --porcelain` was already empty BEFORE it touched anything, and
+build.bat treated that refusal as fatal to the whole 892-line battery -- one untracked scratch
+file anywhere in the repo aborted every real-artifact tool, the unit suite, and every other
+checker after it (line ~362 of 892), which is the state a builder is in whenever a builder is
+mid-edit -- the ordinary "edit, build, see if it worked" workflow this repo's own build.bat exists
+for. Executed: one untracked file at the repo root reproduced the abort exactly.
+
+The stated justification did not hold up under its own claim ("this probe's own revert-and-verify
+contract depends on knowing what state was clean"): the probe never writes to the TRACKED tree at
+all -- the scratch header goes under out/t2139/gate_c_third_tu_mutation_probe/ and the compiled
+artifacts under out/, both covered by .gitignore:2. Knowing what was clean never required that
+EVERYTHING was. The fix replaces the precondition with the property the probe actually needs and
+can honestly assert: a snapshot of `git status --porcelain` taken before this script does
+anything, compared against the same command taken after cleanup -- fails only on a DIFFERENCE
+(this script itself changed something in the tracked tree), never on pre-existing, unrelated
+dirt. This is strictly stronger than the old "must start clean" gate (it also catches a leak the
+old gate could not: this script dirtying the tree while some OTHER file was already dirty, which
+the old precondition would have refused to even attempt) and it passes on an ordinary dirty
+working tree, which is the whole point.
 """
 import pathlib
 import shutil
@@ -56,11 +76,11 @@ INSERTED = (
 )
 
 
-def git_status_clean():
+def git_status_snapshot():
     result = subprocess.run(
         ["git", "status", "--porcelain"], cwd=REPO_ROOT, capture_output=True, text=True
     )
-    return result.stdout.strip() == ""
+    return result.stdout
 
 
 def run_cl(extra_include_dirs):
@@ -83,11 +103,11 @@ def main():
         print("gate_c_third_tu_can_fail_probe.py: source files not found -- skipping (non-fatal)")
         return 0
 
-    if not git_status_clean():
-        print("gate_c_third_tu_can_fail_probe.py FAILED -- git status is not clean BEFORE this "
-              "probe touched anything; refusing to run against a dirty tree (this probe's own "
-              "revert-and-verify contract depends on knowing what state was clean).")
-        return 1
+    # T-2142 S3: snapshot, don't refuse. This script's own writes all go under out/ (gitignored)
+    # -- it needs to know it did not perturb the TRACKED tree, not that the tree started
+    # spotless. Any pre-existing dirt (unrelated to this script) is none of this script's
+    # business and must never abort the battery around it.
+    before_status = git_status_snapshot()
 
     if SCRATCH_ROOT.exists():
         shutil.rmtree(SCRATCH_ROOT)
@@ -141,9 +161,18 @@ def main():
         obj = PROBE_EXE.parent / (PROBE_SOURCE.stem + ".obj")
         if obj.exists():
             obj.unlink()
-        if not git_status_clean():
-            print("gate_c_third_tu_can_fail_probe.py: WARNING -- git status is not clean AFTER "
-                  "cleanup. Tracked-tree revert may have failed.")
+        # T-2142 S3: compare against the BEFORE snapshot, not against "empty" -- this script's
+        # own contract is "I did not perturb the tracked tree," which a pre-existing, unrelated
+        # dirty file satisfies just as well as a spotless one. Only a DIFFERENCE from the
+        # before-snapshot means this script itself left something behind.
+        after_status = git_status_snapshot()
+        if after_status != before_status:
+            print("gate_c_third_tu_can_fail_probe.py: WARNING -- git status changed during this "
+                  "run (this script's own writes all go under out/, gitignored -- a change here "
+                  "means the tracked tree was perturbed). Before:")
+            print(before_status if before_status else "  (clean)")
+            print("After:")
+            print(after_status if after_status else "  (clean)")
             sys.exit(1)
 
 

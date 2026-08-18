@@ -375,7 +375,14 @@ rem T-2139 fifth confirmation review (Claude/Poirot/ce5aff2-t2139-fifth-confirma
 rem a compile failure alone is not proof the INTENDED assertion fired -- findstr the log this step
 rem already writes for the construction's own marker text, so a failure for the wrong reason (a
 rem stray syntax error, a missing header) does not read as "correctly failed."
-findstr /C:"SSLM_ARTIFACT_REJECTED diverges" out\t2139\gate_c_xmacro_negative.log >nul
+rem T-2142 (M1, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md): this marker was
+rem TRUNCATED here until this fix -- "SSLM_ARTIFACT_REJECTED diverges" is a genuine PREFIX of the
+rem construction's own full static_assert message, missing the macro-generated suffix
+rem " (deliberate corruption, must-reject construction)". A truncated fragment of a real message
+rem IS a substring of that message, so it passed findstr vacuously the whole time -- reproduced
+rem against this exact log with the old text before fixing it. Full text now, matching
+rem CMakeLists.txt's own -DMARKER_TEXT= fix for the same target.
+findstr /C:"SSLM_ARTIFACT_REJECTED diverges (deliberate corruption, must-reject construction)" out\t2139\gate_c_xmacro_negative.log >nul
 if errorlevel 1 (
 	echo Gate C X-macro must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_xmacro_negative.log
 	popd & exit /b 1
@@ -394,12 +401,48 @@ rem this construction's own extra enumerator from the real sentinels, so it stil
 rem but for an unrelated C2039 name-lookup reason, and this step's own exit-code-only check kept
 rem reporting "correctly failed" with nothing showing the sentinel mechanism itself had stopped
 rem firing.
-findstr /C:"SSLM_STATUS_NEXT_FREE sentinels no longer agree" out\t2139\gate_c_sentinel_negative.log >nul
+rem T-2142 (M1, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md): TRUNCATED here too
+rem until this fix -- the old text dropped the construction's own literal prefix
+rem "registry-top divergence (deliberate one-sided append, must-reject construction): the two ".
+rem Same class as the X-macro fix above, same fix (full text, matching CMakeLists.txt).
+findstr /C:"registry-top divergence (deliberate one-sided append, must-reject construction): the two SSLM_STATUS_NEXT_FREE sentinels no longer agree" out\t2139\gate_c_sentinel_negative.log >nul
 if errorlevel 1 (
 	echo Gate C sentinel must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\gate_c_sentinel_negative.log
 	popd & exit /b 1
 )
 echo Gate C sentinel must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\gate_c_sentinel_negative.log^)
+
+rem T-2141 (Claude/Zelda/Board.md T-2141 row; Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
+rem review.md O3): the t2138 red suite's OWN sslm_abi.h enum copy was guarded only by the
+rem 564-cell link -- no compile-time parity check anywhere referenced it. This pair closes that
+rem for sslm_status: must-accept reads the REAL tests\t2138-abi-red-suite\sslm_abi.h directly
+rem (namespaced, per-name plus sentinel, same shape as Gate C's own type-identity check above);
+rem must-reject proves the per-name generation mechanism itself can fail (see the .cpp files'
+rem own header comments for the exact extern "C" collision this construction hit and routed
+rem around via SUPERSLM_ABI_ENUM_ONLY).
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude /Itests tools\t2141_gate_c_t2138_suite_side_check.cpp /Fo:out\t2139\ /Fe:out\t2141_gate_c_t2138_suite_side_check.exe >out\t2139\t2141_must_accept.log 2>&1
+if errorlevel 1 (
+	echo T-2141 t2138-suite-side must-accept construction FAILED TO COMPILE -- this is a real regression, not expected -- see out\t2139\t2141_must_accept.log
+	type out\t2139\t2141_must_accept.log
+	popd & exit /b 1
+)
+out\t2141_gate_c_t2138_suite_side_check.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+echo T-2141 t2138-suite-side must-accept construction: PASS
+
+cl /nologo /std:c++20 /O2 /W4 /EHsc /Iinclude tools\t2141_gate_c_t2138_suite_side_check_negative.cpp /Fo:out\t2139\ /Fe:out\t2141_gate_c_t2138_suite_side_check_negative.exe >out\t2139\t2141_negative.log 2>&1
+if not errorlevel 1 (
+	echo T-2141 t2138-suite-side must-reject construction COMPILED CLEAN -- has regressed, see out\t2139\t2141_negative.log
+	popd & exit /b 1
+)
+findstr /C:"SSLM_ARTIFACT_REJECTED diverges (deliberate corruption, must-reject construction)" out\t2139\t2141_negative.log >nul
+if errorlevel 1 (
+	echo T-2141 t2138-suite-side must-reject construction failed to compile, but NOT for its own assertion -- see out\t2139\t2141_negative.log
+	popd & exit /b 1
+)
+echo T-2141 t2138-suite-side must-reject construction correctly failed to compile, for its own reason ^(marker text confirmed, see out\t2139\t2141_negative.log^)
 
 rem count_abi_verbs.sh's own cited figure (T-2139 design Sec4): 29, for the C1-C7 scope alone.
 rem RAISED to 34 (T-2132, G5-2): five new production verbs landed in
@@ -1044,6 +1087,18 @@ if not %probe_ec%==0 (
 	popd & exit /b 1
 )
 
+rem BASELINE DISCLOSURE (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md): this
+rem build's own non-zero-exit paths, named so "build.bat exits 1" is never read as "no code
+rem defect" without checking WHICH path fired --
+rem   1. out\superslm_tests.exe's own exit code, below -- the pre-existing RoPE@k=3/6/7 baseline
+rem      (three failures, no test_main.cpp/src\gpu\ change carries this build past that count).
+rem   2. tools\ci\check_abi_header_inventory.py, further down -- environment-dependent: a real
+rem      identifier missing its Sec8 inventory line (a genuine content defect) OR, before T-2142's
+rem      S1 fix, the records repo's mtime-selected copy resolving to one with no '## 8.' section
+rem      (an apparatus defect, not a code defect -- now a SKIP, exit 0, never this path).
+rem   3. tools\ci\gate_c_third_tu_can_fail_probe.py, above -- before T-2142's S3 fix, ANY dirty
+rem      working tree aborted this path regardless of what was dirty or why (an apparatus defect,
+rem      not a code defect); now compares before/after and only fires on a real regression.
 out\superslm_tests.exe
 set ec=%errorlevel%
 if not %b1_ec%==0 set ec=%b1_ec%
@@ -1087,12 +1142,19 @@ if not errorlevel 1 (
 	rem T-2139 sixth confirmation review item 5 (Claude/Poirot/5fbd04d-t2139-sixth-confirmation-
 	rem review.md, ruled in Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec8's
 	rem "structural half" paragraph): M3's class-closer -- extracts every #define/#ifndef/
-	rem #if !defined identifier from include/superslm/sslm_abi.h and fails when one has no Sec8
-	rem inventory line (a code-block-only mention does not count), same allowlist-escape-hatch
-	rem shape as check_tools_have_build_recipe.py above. SKIPS gracefully, loudly, if the Wizard
-	rem records repo (a different repository, holding the design document) is not checked out
-	rem alongside this one -- this script's own population source is a cross-repo input, not
-	rem something a code-repo-only build can always satisfy.
+	rem #if !defined identifier from include/superslm/sslm_abi.h AND every first-party .inc it
+	rem transitively includes (M2), and fails when one has no Sec8 inventory line as a WHOLE,
+	rem WORD-BOUNDARY-MATCHED token (S2 -- a bare substring test reported false accounted-for on
+	rem any new identifier that is a PREFIX of an already-narrated one) outside a code block, same
+	rem allowlist-escape-hatch shape as check_tools_have_build_recipe.py above. Population source
+	rem is resolved from a COMMITTED GIT REF of the Wizard records repo -- SSLM_ABI_DESIGN_DOC_REPO
+	rem (repo path, default: sibling-checkout search) and SSLM_ABI_DESIGN_DOC_REF (ref, default
+	rem "develop") -- never filesystem mtime (S1: mtime tracks when a worktree was last WRITTEN
+	rem to, never whether its content was ratified). SKIPS gracefully, loudly -- exit 0, never a
+	rem build failure -- both when the records repo cannot be found at all, and when the document
+	rem resolves but carries no '## 8.' section at the ref read (S1: that state is the same as no
+	rem document, so landing Sec8 for the first time is never blocked by a check that depends on
+	rem it existing).
 	python tools\ci\check_abi_header_inventory.py
 	if errorlevel 1 (
 		echo check_abi_header_inventory.py FAILED -- see output above
