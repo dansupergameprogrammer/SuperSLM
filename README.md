@@ -15,10 +15,11 @@ once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
 **Status: pre-1.0.** Every capability below — including schema-constrained
-generation — is built and measured on the platforms named. The one item
-remaining before the 1.0 tag is the AMD leg of the schema-constrained-decoding
-GPU parity check: that same check already passed bit-identical on the
-certified NVIDIA GPU (see [Certified platforms](#certified-platforms)).
+generation — is built and measured on the platforms named, on both certified
+GPUs: the schema-constrained-decoding GPU parity check passed bit-identical
+on the certified NVIDIA GPU, and passed bit-identical on the certified AMD
+GPU as well (measured 2026-08-17 on the Radeon RX 7900 XTX; see
+[Certified platforms](#certified-platforms)).
 
 ## Capabilities
 
@@ -87,8 +88,7 @@ reported, not enforced, since that is a property of your schema's meaning
 rather than its shape.
 
 Schema-constrained decoding is proven bit-identical between the CPU and GPU
-paths on the certified NVIDIA GPU; the same check against the certified AMD
-GPU is the one item outstanding before the 1.0 tag (see
+paths on both certified GPUs — NVIDIA and AMD (see
 [Certified platforms](#certified-platforms)). The mechanism, the artifact
 format it relies on, and the full CPU consumer ABI it ships through are
 documented in [docs/api.md](docs/api.md) and
@@ -103,14 +103,20 @@ that same run.
 | Platform | CPU inference | GPU inference |
 |---|---|---|
 | Windows x64 | Certified | Certified — NVIDIA Turing (measured on RTX 2080 SUPER) and AMD RDNA3 (measured on Radeon RX 7900 XTX) |
-| Linux x64 | CI extent — built and the full test suite passes on every push, GCC and Clang | Not built (the GPU backend is D3D12, Windows-only) |
-| macOS (Apple Silicon) | CI extent — built and the full test suite passes on every push | Not built |
+| Linux x64 | CI extent (see note below) — GCC and Clang | Not built (the GPU backend is D3D12, Windows-only) |
+| macOS (Apple Silicon) | CI extent (see note below) | Not built |
 
-"CI extent" means the platform is exercised by the project's own continuous
-integration on every change, and no further hardware-specific measurement
-has been made beyond what that gives. See
-[docs/platform-support.md](docs/platform-support.md) for the full table,
-every measured number, and where each one was measured.
+"CI extent" means the platform is exercised by this project's own continuous
+integration matrix, and no further hardware-specific measurement has been
+made beyond what that gives. The workflows exist and define the full
+matrix ([.github/workflows/tests.yml](.github/workflows/tests.yml):
+windows-x64, linux-x64, linux-x64-asan, macos-arm64) — **hosted runs on
+GitHub Actions are currently capped by the account's spending limit** and
+have not executed since 2026-07-23; today, the verification path a
+consumer can actually run is the local one: the [Building](#building)
+section's `cmake`+`ctest` matrix on any platform, and `build.bat` on
+Windows. See [docs/platform-support.md](docs/platform-support.md) for the
+full table, every measured number, and where each one was measured.
 
 GPU determinism is scoped to the certified adapters above: an AMD
 integrated GPU on the same RDNA3 test machine passes the direct-dispatch
@@ -145,25 +151,36 @@ cmake -B build && cmake --build build && ctest --test-dir build
 ```
 
 This builds the CPU-only product library (`superslm`), the public headers,
-and the test suite — no third-party runtime dependency, standard library
-only. GPU support is a separate, opt-in CMake target for Windows/MSVC:
+and the test suite. On Linux and macOS this is standard-library only, no
+third-party runtime dependency, and works from CMake 3.16. On Windows, the
+test suite's own T-2019 GPU-serial-port section calls the D3D12 GPU path
+directly and unconditionally, so `superslm_tests` also compiles and links
+`src/gpu/superslm_gpu.cpp` and its compiled shaders on every Windows
+configure — this needs CMake 3.20+ and the DirectX Shader Compiler
+(`dxc.exe`, from the Windows SDK), matching `build.bat`'s own long-standing
+requirement below; a Windows configure without `dxc.exe` fails at
+`cmake -B build` with a one-line diagnostic naming what is missing, rather
+than at link time. The public, installable GPU library is a separate,
+opt-in CMake target on top of that (Windows/MSVC only):
 
 ```
 cmake -B build -DSUPERSLM_BUILD_GPU=ON && cmake --build build --target superslm_gpu
 ```
 
-This requires CMake 3.20+ (the CPU-only build above works from CMake 3.16)
-and the DirectX Shader Compiler (`dxc.exe`, from the Windows SDK) to compile
-the GPU kernels. The `superslm_tests` target does not yet link
-`superslm_gpu` — GPU-path correctness is exercised by a separate, locally-run
-test suite rather than through `ctest` today; that wiring is a known,
-tracked gap.
+This is for a consumer who wants the GPU acceleration library itself
+installed and exported via `find_package(superslm)`; it reuses the same
+shader compilation the default Windows configure already performs above,
+and needs nothing further.
 
 On Windows with Visual Studio installed, `build.bat` is a one-shot MSVC
 build that compiles the full local development suite, GPU included (it
 requires the Windows SDK for `dxc.exe`, same as above). The test suite is
 standard-library only and prints a `checks / failures` summary; a nonzero
-exit means a failure.
+exit means a failure. `build.bat` also runs a small number of optional
+local checks (an ABI verb-count re-derivation, a couple of Python-based
+CI-source checks) when `bash`/`python` happen to be on `PATH`; each is a
+loud, named, non-fatal skip when its tool is absent — none is required to
+build or to pass the suite.
 
 ## Layout
 

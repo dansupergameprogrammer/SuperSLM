@@ -54,8 +54,7 @@ number and where it was measured.
   ("jump-forward"), under the same determinism guarantee as unconstrained
   decoding. Shipped on both the CPU consumer ABI and the GPU handle API —
   see [docs/api.md](docs/api.md). The GPU path is proven bit-identical to
-  the CPU reference on the certified NVIDIA GPU; the same check on the
-  certified AMD GPU is the one item outstanding before the 1.0 tag.
+  the CPU reference on both certified GPUs, NVIDIA and AMD.
 
 ### Runtime-switchable LoRA adapters
 
@@ -79,13 +78,6 @@ number and where it was measured.
 
 ### Known gaps, tracked
 
-- The AMD leg of the schema-constrained-decoding GPU parity check has not
-  been run yet — the one item outstanding before the 1.0 tag. The
-  equivalent NVIDIA check is green; the base (unconstrained) determinism
-  guarantee on both certified GPUs is unaffected.
-- The CMake `superslm_tests` target does not yet link the GPU library;
-  GPU-path testing runs through a separate, locally-run suite rather than
-  through `ctest`.
 - Linux and macOS are exercised at continuous-integration extent only —
   CPU inference, no GPU backend (GPU is D3D12, Windows-only), and no
   dedicated throughput measurement published for either.
