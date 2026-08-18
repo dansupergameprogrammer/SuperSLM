@@ -24,7 +24,8 @@ Both real hidden_size values (1536, 960) and both real intermediate_size values 
 2560) — all block-aligned at the common SIMD widths, so on their own they never exercise a
 remainder — plus two deliberately non-block-aligned synthetic lengths (tails of 5 and 7),
 the int8-extremes row at both operands' limits, the in_channels=1 architectural floor,
-THREE 132,105-deep cases, and TWO 524,289-deep cases (added fold round 4, D-SLM3571).
+THREE 132,105-deep cases, and TWO 4,194,305-deep cases (added fold round 4, D-SLM3571;
+depth corrected from an initial 524,289 -- see below).
 
 The shared accumulator flush window (src/matmul.cpp's kFlushBlocks, a single literal
 value) trips at a per-tier ELEMENT count that is NOT the same figure across tiers, because
@@ -37,9 +38,35 @@ and deep_beyond_i32_pos (single-signed, sums outside int32) discriminate SSE2's 
 mechanism, but a flush-block deletion on AVX2 or AVX-512 at this depth is bit-identical to
 the unmutated kernel (code review, Finding 5) -- 132,105 never reaches either window.
 deep_flush_lcg_132105 escapes neither int32 nor either wider window: an LCG fill's mixed
-signs cancel and its largest accumulator is 3,027,949, comfortably inside int32. The two
-524,289-deep cases (deep_beyond_all_windows_neg/_pos, single-signed, one element past all
-three windows at once) close the AVX2/AVX-512 mapping from a single case.
+signs cancel and its largest accumulator is 3,027,949, comfortably inside int32.
+
+CROSSING A TIER'S FLUSH TRIP POINT IS NOT THE SAME AS FORCING GENUINE OVERFLOW WITHOUT IT.
+The trip point is the depth at which the periodic flush code path executes at least once;
+whether DELETING that flush changes the result depends on whether the per-lane int32
+partial sum, left unflushed for the WHOLE call, actually escapes int32 -- and the flush
+window (kFlushBlocks=16384 iterations) was deliberately chosen with a 4x safety margin
+(536,870,912 against INT32_MAX's 2,147,483,647, src/matmul.cpp's own comment), so a depth
+that crosses the trip point by one element leaves an unflushed partial sum still
+comfortably inside int32. This first surfaced as a design-side claim (an initial fixture
+at 524,289 -- one element past AVX-512's own 524,288 trip point -- was believed sufficient
+to discriminate all three tiers "from a single case") and was found wrong by EXECUTION,
+not by re-reasoning: a standalone harness linking the real kernel with each tier's
+periodic-flush block deleted was run directly against 524,289 elements and matched the
+oracle exactly on both SSE2 and AVX2 -- no discrimination at all. A depth sweep against
+both mutant kernels found the true break points empirically: SSE2 first mismatches
+between 524,289 and 1,048,576 elements; AVX2 first mismatches between 1,048,577 and
+2,097,152. 4,194,305 -- one past 2^22, comfortably beyond both measured break points --
+was then confirmed to mismatch on both tiers at that depth and deeper (3,000,000;
+4,200,000; 5,000,000 all also mismatch). AVX-512's own break point was NOT executed (no
+AVX-512 hardware on this build machine, standing per design §8.4); by the same doubling
+pattern the two measured tiers show (each wider lane width roughly doubles the element
+depth needed for the same ~65,536-iteration overflow threshold), 4,194,305 is expected,
+not verified, to also exceed AVX-512's own break point -- flagged underived for that one
+tier specifically, per StandardsDocument.md §5.4.
+
+The two 4,194,305-deep cases (deep_beyond_all_windows_neg/_pos, single-signed) close the
+SSE2/AVX2 mapping from a single case, verified; AVX-512's own mapping remains unverified
+by execution, standing alongside its other §8.4 gaps.
 
 That distinction is the whole point of this set and was got wrong once already. The first
 version of this golden had a single LCG-filled deep case and claimed it carried sums outside
@@ -134,12 +161,22 @@ CASES = [
     # code review (T-2170, Finding 5) executed a flush-block deletion against
     # DotRowAvx2 at this depth and found it bit-identical to the unmutated kernel, so
     # the AVX2/AVX-512 flush mechanism was unfalsifiable by this golden's own cases at
-    # the time of that review. This pair, at 524,289 -- one element past ALL THREE
-    # windows at once -- closes the mapping for all three SIMD tiers from a single
-    # case (the same reasoning that makes 132,105 the SSE2-window witness above,
-    # carried one window further).
-    ("deep_beyond_all_windows_neg", 0, 524289, 1, 1, KIND_EXTREME_NEG, False),
-    ("deep_beyond_all_windows_pos", 0, 524289, 1, 1, KIND_EXTREME_POS, False),
+    # the time of that review. An initial pair at 524,289 -- one element past AVX-512's
+    # own 524,288 trip point -- turned out NOT to discriminate either tier: crossing the
+    # trip point only means the periodic flush code path executes at least once, not
+    # that deleting it forces genuine int32 overflow, and kFlushBlocks was deliberately
+    # chosen with a 4x safety margin (module docstring above). A standalone harness with
+    # each tier's flush block deleted, run directly (not via the full suite), matched
+    # the oracle exactly at 524,289 on both SSE2 and AVX2, then a depth sweep found the
+    # real break points: SSE2 between 524,289 and 1,048,576; AVX2 between 1,048,577 and
+    # 2,097,152. This pair, at 4,194,305 (2^22 + 1) -- confirmed by the same harness to
+    # mismatch on both SSE2 and AVX2, and comfortably past the doubling pattern the two
+    # measured break points show -- closes the SSE2/AVX2 mapping from a single case.
+    # AVX-512's own break point is NOT verified by execution (no AVX-512 hardware on the
+    # build machine, standing per design §8.4) -- expected, not confirmed, to also
+    # exceed this depth by the same pattern.
+    ("deep_beyond_all_windows_neg", 0, 4194305, 1, 1, KIND_EXTREME_NEG, False),
+    ("deep_beyond_all_windows_pos", 0, 4194305, 1, 1, KIND_EXTREME_POS, False),
 ]
 
 # The two single-signed deep cases are the ONLY ones whose sums leave int32:
