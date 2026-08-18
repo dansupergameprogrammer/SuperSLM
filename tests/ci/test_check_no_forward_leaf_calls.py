@@ -2254,7 +2254,7 @@ def test_fixture_family_convention_matches_its_stated_convention(name, on_conven
     `_T1_CONTAINER_NAME_PATTERN` line, the file's full suite run, and the
     file restored and SHA-256-verified afterward: the three
     `Claude/Poirot/8762a30-t1517-t1518-confirmation-2026-07-31.md`
-    Significant 1 names -- `^(_POPULATION_CASES|_T\\d+_(NEW|RENAMED)_
+    Significant 1 (closed, T-1518) names -- `^(_POPULATION_CASES|_T\\d+_(NEW|RENAMED)_
     SHAPES)$`, `^(_POPULATION_CASES|_T\\d+_NEW_SHAPES|_CONTROL_CASES)$`, and
     `^(_POPULATION_CASES|_T\\d+_NEW_SHAPES|_PHANTOM_CASES)$` -- each admit
     exactly one of `_T9999_RENAMED_SHAPES`, `_CONTROL_CASES`, or

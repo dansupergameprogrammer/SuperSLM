@@ -70,7 +70,7 @@ _TOOLS_DIR = str(Path(__file__).resolve().parent)
 if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 
-import layer_bisection_report as lbr  # noqa: E402  -- red-unimplemented: module does not exist yet
+lbr = pytest.importorskip("layer_bisection_report")  # needs scipy; skips where the diagnostic's own dependency is absent (e.g. the converter-validate CI env)
 
 
 # --- dump format round-trips (design §4.1 step 5, §4.2 step 4) --------------

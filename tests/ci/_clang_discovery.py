@@ -17,7 +17,7 @@ needs -- so every invocation picks a usable clang++ up on its own: a bare
 (`.github/workflows/tests.yml`), a future seat's ad-hoc run, and the
 wrapper script alike (which still has a role: it prints what it found and
 lets a caller point at an explicit path or exact command). It also removes
-Significant 1's defect class outright (a PowerShell scalar-indexing bug
+Significant 1's defect class outright (closed here -- same casebook, T-1494) (a PowerShell scalar-indexing bug
 that corrupted the exported path to a single character): there is nothing
 here for a wrapper to corrupt, because nothing external sets the variable
 that decides.
