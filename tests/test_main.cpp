@@ -23382,9 +23382,30 @@ static void TestT2019_B11_SequenceLayerStateComplete_Rope() {
 		gpu_seq.hidden_scale = CarriedScale{INT64_C(1073741824), 0};
 		gpu_seq.layer_index = 0;
 		std::vector<uint8_t> gpu_ws(8 * kWsPerLayer, 0);
-		const auto gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
-		    gpu_seq, fixture.layers, 8, /*layer_budget=*/8, 2, 2, 1, 2, /*context_cap=*/1,
-		    bad_view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		// FIXED (T-2153 root cause -> Curie fix): a single layer_budget=8 call hands
+		// `bad_view.rope_tables` -- model-wide for the whole call -- to EVERY layer's
+		// RoPE dispatch, not just layer k, so GPU rejected at layer 0 on every k
+		// (confirmed by execution: RoPE@k=3/6/7 red, GPU's own state census showing
+		// layer_index==0/kv_saturation_count==0, the untouched seed, for all three).
+		// This is the SAME two-phase resumed construction RunResumedToRejection
+		// already uses for the CPU oracle above (and the cell's own comment at
+		// line ~23047 already names: "RoPE's own guard needs a per-CALL table swap,
+		// not a per-layer weights mutation, since rope_tables is shared model-wide --
+		// Curie casebook Sec6") -- good table through layer k-1 (resuming from
+		// gpu_seq.layer_index, superslm_gpu.cpp:2124's own resume contract, mirrored
+		// by every other RunLayerLoopGpu call in this suite), then the bad table for
+		// exactly layer k, layer_budget=1.
+		SslmForwardStatus gpu = SslmForwardStatus::Ok;
+		if (k > 0) {
+			gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+			    gpu_seq, fixture.layers, 8, /*layer_budget=*/k, 2, 2, 1, 2, /*context_cap=*/1,
+			    fixture.view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		}
+		if (gpu == SslmForwardStatus::Ok) {
+			gpu = superslm_gpu::RunLayerLoopGpu(  // LINK-RED
+			    gpu_seq, fixture.layers, 8, /*layer_budget=*/1, 2, 2, 1, 2, /*context_cap=*/1,
+			    bad_view.rope_tables, gpu_ws.data(), gpu_ws.size());
+		}
 		int fields_compared = 0;
 		const bool state_ok =
 		    CompareSequenceLayerStateComplete(cpu_seq, gpu_seq, &fields_compared);

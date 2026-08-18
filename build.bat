@@ -1087,11 +1087,16 @@ if not %probe_ec%==0 (
 	popd & exit /b 1
 )
 
-rem BASELINE DISCLOSURE (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md): this
-rem build's own non-zero-exit paths, named so "build.bat exits 1" is never read as "no code
-rem defect" without checking WHICH path fired --
-rem   1. out\superslm_tests.exe's own exit code, below -- the pre-existing RoPE@k=3/6/7 baseline
-rem      (three failures, no test_main.cpp/src\gpu\ change carries this build past that count).
+rem NON-ZERO-EXIT PATHS (O2, Claude/Poirot/aea6116-t2139-seventh-confirmation-review.md; RoPE
+rem baseline retired T-2153, Claude/Curie/t2153-rope-fix-2026-08-17.md): this build's own
+rem non-zero-exit paths, named so "build.bat exits 1" is never read as "no code defect" without
+rem checking WHICH path fired --
+rem   1. out\superslm_tests.exe's own exit code, below -- the suite is expected FULLY GREEN
+rem      (34184 checks, 0 failures at T-2153's close; the prior RoPE@k=3/6/7 "pre-existing
+rem      baseline" of three permanently-red cells was a cell-construction defect in
+rem      TestT2019_B11_SequenceLayerStateComplete_Rope itself, not a product defect --
+rem      root-caused and fixed T-2153 -- so this build no longer carries a disclosed, accepted
+rem      failure count; ANY nonzero exit here is a real regression).
 rem   2. tools\ci\check_abi_header_inventory.py, further down -- environment-dependent: a real
 rem      identifier missing its Sec8 inventory line (a genuine content defect) OR, before T-2142's
 rem      S1 fix, the records repo's mtime-selected copy resolving to one with no '## 8.' section
