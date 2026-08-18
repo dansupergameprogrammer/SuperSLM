@@ -54,6 +54,7 @@ Run the built-in round-trip proof:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -69,9 +70,12 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):  # non-reconfigurable stream; nothing to do
         pass
 
-DEFAULT_TOKENIZER = Path(
-    r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v1-merged"
-)
+# T-2152 (outside strike item 6): no private filesystem path baked in as a default --
+# an absent SUPERSLM_TOKENIZER_DIR leaves this unset, and build_parser()'s own --tokenizer
+# default (below) resolves to None; _load_tokenizer's caller checks for that and raises a
+# clear, actionable error rather than silently trying to open a path that only ever existed
+# on one machine.
+DEFAULT_TOKENIZER = os.environ.get("SUPERSLM_TOKENIZER_DIR")
 
 # The set of strings the round-trip proof runs. Chosen to cover the classes
 # of input that break a subtly wrong bridge: plain ASCII, punctuation,
@@ -343,8 +347,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tokenizer",
-        default=str(DEFAULT_TOKENIZER),
-        help=f"path to a local HF tokenizer directory (default: {DEFAULT_TOKENIZER})",
+        default=DEFAULT_TOKENIZER,
+        help="path to a local HF tokenizer directory (default: the SUPERSLM_TOKENIZER_DIR "
+             "environment variable; required, one way or the other, if that variable is unset)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -375,6 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not args.tokenizer:
+        parser.error(
+            "no tokenizer directory given -- pass --tokenizer <path> or set "
+            "SUPERSLM_TOKENIZER_DIR"
+        )
     return args.func(args)
 
 

@@ -171,7 +171,9 @@ def qwen3b_checkpoint():
     import os
     import pathlib
 
-    for root in (os.environ.get("HF_HOME"), r"D:\hf_cache"):
+    # T-2152 (outside strike item 6): no private filesystem path fallback -- HF_HOME is the
+    # standard HuggingFace cache location env var; an unset one means this opt-in test skips.
+    for root in (os.environ.get("HF_HOME"),):
         if not root:
             continue
         found = sorted(pathlib.Path(root).glob(

@@ -29,6 +29,7 @@ baseline's own dispersion and both sides' repeat-vs-repeat resolving power
 from __future__ import annotations
 
 import argparse
+import os
 import struct
 import subprocess
 import sys
@@ -56,11 +57,13 @@ for _stream in (sys.stdout, sys.stderr):
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVER_EXE = REPO_ROOT / "out" / "sslm_layer_trace.exe"
-MODEL_PATH = Path(r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm")
+# T-2152 (outside strike item 6): no private filesystem paths baked in as defaults --
+# required via environment variables, checked loudly in main() before anything runs.
+MODEL_PATH = Path(os.environ["SUPERSLM_MODEL_PATH"]) if os.environ.get("SUPERSLM_MODEL_PATH") else None
 TOKENIZER_PATH = REPO_ROOT / "tests" / "fixtures" / "qwen2.5-1.5b.tok.sslm"
-FLOAT_MODEL_PATH = Path(
-    r"D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots"
-    r"\989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
+FLOAT_MODEL_PATH = (
+    Path(os.environ["SUPERSLM_FLOAT_MODEL_PATH"])
+    if os.environ.get("SUPERSLM_FLOAT_MODEL_PATH") else None
 )
 SYSTEM_PROMPT = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
@@ -343,6 +346,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out-dir", default=str(REPO_ROOT / "out" / "t1683"))
     args = parser.parse_args(argv)
+
+    if MODEL_PATH is None or FLOAT_MODEL_PATH is None:
+        missing = [
+            name for name, val in (
+                ("SUPERSLM_MODEL_PATH", MODEL_PATH),
+                ("SUPERSLM_FLOAT_MODEL_PATH", FLOAT_MODEL_PATH),
+            ) if val is None
+        ]
+        raise SystemExit(
+            f"required environment variable(s) not set: {', '.join(missing)} -- this tool "
+            "compares the int8 engine's own .sslm artifact against the original HF float "
+            "checkpoint and needs both paths named explicitly, not defaulted to one machine's "
+            "own layout"
+        )
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

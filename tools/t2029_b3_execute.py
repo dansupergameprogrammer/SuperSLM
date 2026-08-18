@@ -28,6 +28,7 @@ hidden.
 
 import json
 import math
+import os
 import statistics
 import sys
 from pathlib import Path
@@ -38,9 +39,12 @@ from safetensors import safe_open
 sys.path.insert(0, str(Path(__file__).parent))
 import sslm_convert_adapter as A  # noqa: E402
 
-ADAPTER_DIR = Path(r"D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-shopkeeper-lora-v1\final")
-BASE_MODEL_PATH = Path(
-    r"D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots\989aa7980e4cf806f80c7fef2b1adb7bc71aa306\model.safetensors"
+# T-2152 (outside strike item 6): no private filesystem paths baked in as defaults --
+# required via environment variables, checked loudly in main() before anything runs.
+ADAPTER_DIR = Path(os.environ["SUPERSLM_ADAPTER_DIR"]) if os.environ.get("SUPERSLM_ADAPTER_DIR") else None
+BASE_MODEL_PATH = (
+    Path(os.environ["SUPERSLM_BASE_MODEL_PATH"])
+    if os.environ.get("SUPERSLM_BASE_MODEL_PATH") else None
 )
 LAYER = 0
 PROJECTION = "self_attn.q_proj"
@@ -273,6 +277,18 @@ def stat(gaps, z=Z_95_ONE_SIDED):
 
 
 def main():
+    if ADAPTER_DIR is None or BASE_MODEL_PATH is None:
+        missing = [
+            name for name, val in (
+                ("SUPERSLM_ADAPTER_DIR", ADAPTER_DIR),
+                ("SUPERSLM_BASE_MODEL_PATH", BASE_MODEL_PATH),
+            ) if val is None
+        ]
+        raise SystemExit(
+            f"required environment variable(s) not set: {', '.join(missing)} -- this tool "
+            "compares a real LoRA adapter conversion against the original HF base checkpoint "
+            "and needs both paths named explicitly, not defaulted to one machine's own layout"
+        )
     print(f"B3 first real execution -- adapter: {ADAPTER_DIR}")
     print(f"base checkpoint: {BASE_MODEL_PATH}")
     print(f"layer={LAYER} projection={PROJECTION}")

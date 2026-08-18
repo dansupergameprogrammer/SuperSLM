@@ -28,7 +28,9 @@ cases; raise it if an answer is being cut off mid-sentence.
 The system prompt. Defaults to the checkpoint's own conventional one.
 
 .PARAMETER Model
-Path to the .sslm model artifact.
+Path to the .sslm model artifact. Required, either as this parameter or via the
+SUPERSLM_ASK_MODEL environment variable (T-2152 outside strike item 6: no default
+private filesystem path is baked in).
 
 .PARAMETER ShowIds
 Also print the raw prompt and output token ids.
@@ -49,7 +51,7 @@ param(
 
     [string]$System = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
 
-    [string]$Model = "D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm",
+    [string]$Model = $env:SUPERSLM_ASK_MODEL,
 
     [string]$Tokenizer = "tests\fixtures\qwen2.5-1.5b.tok.sslm",
 
@@ -65,6 +67,9 @@ try {
         Write-Host "building the decode driver (one time)..." -ForegroundColor DarkGray
         & (Join-Path $root "tools\build_generate.bat") 2>&1 | Out-Null
         if (-not (Test-Path $exe)) { throw "driver build failed; run tools\build_generate.bat directly to see why" }
+    }
+    if ([string]::IsNullOrEmpty($Model)) {
+        throw "no model artifact path given -- pass -Model <path> or set SUPERSLM_ASK_MODEL"
     }
     if (-not (Test-Path $Model)) { throw "model artifact not found: $Model" }
 

@@ -579,7 +579,9 @@ def cached_config_path(name):
     repo = {"Qwen2.5-1.5B": "models--Qwen--Qwen2.5-1.5B-Instruct",
             "OLMo-2-1B": "models--allenai--OLMo-2-0425-1B-Instruct",
             "SmolLM2-360M": "models--HuggingFaceTB--SmolLM2-360M-Instruct"}[name]
-    for root in [os.environ.get("HF_HOME"), r"D:\hf_cache"]:
+    # T-2152 (outside strike item 6): no private filesystem path fallback -- HF_HOME is the
+    # standard HuggingFace cache location env var; an unset one means this opt-in test skips.
+    for root in [os.environ.get("HF_HOME")]:
         if not root:
             continue
         found = sorted(pathlib.Path(root).glob(f"hub/{repo}/snapshots/*/config.json"))
@@ -1363,7 +1365,9 @@ UPSTREAM_PROMPTS = (
 
 def qwen_checkpoint():
     """The cached Qwen2.5-1.5B snapshot, or None. §16's spike nominee."""
-    for root in (os.environ.get("HF_HOME"), r"D:\hf_cache"):
+    # T-2152 (outside strike item 6): no private filesystem path fallback -- HF_HOME is the
+    # standard HuggingFace cache location env var; an unset one means this opt-in test skips.
+    for root in (os.environ.get("HF_HOME"),):
         if not root:
             continue
         found = sorted(pathlib.Path(root).glob(

@@ -66,11 +66,11 @@ param(
 
     [string]$System = "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
 
-    [string]$Model = "D:\hf_cache\superslm_artifacts\qwen2.5-1.5b-instruct.sslm",
+    [string]$Model = $env:SUPERSLM_MODEL_PATH,
 
     [string]$Tokenizer = "tests\fixtures\qwen2.5-1.5b.tok.sslm",
 
-    [string]$RefModel = "D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct"
+    [string]$RefModel = $env:SUPERSLM_FLOAT_REF_MODEL
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,6 +90,12 @@ try {
         Write-Host "building the decode driver (one time)..." -ForegroundColor DarkGray
         & (Join-Path $root "tools\build_generate.bat") 2>&1 | Out-Null
         if (-not (Test-Path $exe)) { throw "driver build failed; run tools\build_generate.bat directly to see why" }
+    }
+    if ([string]::IsNullOrEmpty($Model)) {
+        throw "no model artifact path given -- pass -Model <path> or set SUPERSLM_MODEL_PATH"
+    }
+    if ([string]::IsNullOrEmpty($RefModel)) {
+        throw "no float reference model path given -- pass -RefModel <path> or set SUPERSLM_FLOAT_REF_MODEL"
     }
     if (-not (Test-Path $Model)) { throw "model artifact not found: $Model" }
 
