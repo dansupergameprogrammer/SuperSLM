@@ -6,8 +6,7 @@
  * Split out so this file, unlike the whole of sslm_abi_functions.inc, can be included in a
  * translation unit where only sslm_g5.h's own types are visible. Two of this design's own
  * invented types have no counterpart anywhere in sslm_g5.h at all -- the caller-memory
- * call-shape struct and the incremental-detokenize state struct, Claude/Vitruvius/
- * t2133-layer1-c-abi-design-2026-08-16.md Sec9's own residual d -- and every declaration whose
+ * call-shape struct and the incremental-detokenize state struct -- and every declaration whose
  * signature names either of those two types is excluded from this file, staying directly in
  * sslm_abi_functions.inc instead: the two workspace-sizing declarations that take the call-shape
  * struct, and the one text-I/O declaration that takes the detokenize-state struct.
@@ -20,11 +19,9 @@
  * comparison surface until/unless either invented type gains a second, independent definition
  * to compare against -- the same residual Gate C's own construction states for these two types.
  */
-/* Exception-boundary contract (D-SLM3464, Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md
- * Sec6, fold 2026-08-17 second pass -- matching this file's own N4 per-declaration convention,
- * Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3), SCOPED to this verb's OWN
- * SslmModel::Load call specifically (S2, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-review.md
- * -- the prior wording here stated this as the whole verb's contract; it is not): the Load call
+/* Exception-boundary contract (design Sec6, fold 2026-08-17 second pass -- matching this
+ * file's own per-declaration convention), SCOPED to this verb's OWN
+ * SslmModel::Load call specifically -- not the whole verb's contract: the Load call
  * is fronted by SslmModel::Load's public entry (model.h/model.cpp), which is itself wrapped in
  * internal::WrapBadAllocContract (src/bad_alloc_wrap.h) -- pre-existing, independently-governed
  * S-HARDEN-7 machinery this ABI does not own. WrapBadAllocContract narrows every internal
@@ -54,7 +51,7 @@ sslm_status sslm_model_unmap(sslm_model model);
 
 /* sslm_kv_block_size (design Sec7.2, RULED design commit fab235c1c6): one WHOLE sequence's
  * entire KV footprint across every layer, never a sub-sequence PagedAttention page (that
- * indirection is committed post-1.0 work, D-SLM3457) -- num_hidden_layers * context_cap *
+ * indirection is committed post-1.0 work) -- num_hidden_layers * context_cap *
  * num_key_value_heads * head_dim * 2 (K+V) * kv_precision_width. */
 size_t sslm_kv_block_size(sslm_model model);
 size_t sslm_kv_pool_overhead_size(sslm_model model, uint32_t block_count);
@@ -85,7 +82,7 @@ sslm_status sslm_seq_restore(sslm_model model, sslm_kv_pool* pool, const void* b
                               sslm_seq* out);
 sslm_status sslm_seq_set_adapter(sslm_seq seq, sslm_adapter adapter);
 
-/* Exception-boundary contract (D-SLM3464) -- identical to sslm_model_map's own comment above,
+/* Exception-boundary contract -- identical to sslm_model_map's own comment above,
  * SCOPED THE SAME WAY (S2): this verb's own SslmModel::Load call is also fronted by
  * WrapBadAllocContract, so the same narrowing applies to that call specifically -- any
  * std::exception-derived internal cause reaching the Load call surfaces as SSLM_ALLOCATION_FAILED,
@@ -103,7 +100,7 @@ size_t      sslm_adapter_residency(sslm_adapter adapter);
 sslm_status sslm_prefill(sslm_model model, sslm_seq seq, const int32_t* tokens, int32_t count,
                           int32_t chunk_budget, sslm_span_kind kind, sslm_workspace ws,
                           int32_t* consumed);
-/* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2): out_tokens[i]
+/* design Sec14.1: out_tokens[i]
  * reserves TWO sentinels, not one -- the existing -1 ("pending, mid-token, call again with the
  * same layer_budget-carried state") and -2 ("this sequence's schema-bound walk reached a state
  * with NO legal continuation at all -- the argmax-selected token has no matching CSR transition
@@ -120,11 +117,11 @@ sslm_status sslm_tokenize(sslm_model model, const char* utf8, int32_t* tokens, i
 
 sslm_status sslm_stats(sslm_model model, sslm_seq seq, sslm_stats_out* out);
 
-/* G5 (T-2119 design Sec5, T-2132 build): schema lookup, read-only, no map/release verb.
- * Unknown name is SSLM_SCHEMA_NOT_FOUND. Lookup-by-name, D-SLM3442. */
+/* G5 (design Sec5): schema lookup, read-only, no map/release verb.
+ * Unknown name is SSLM_SCHEMA_NOT_FOUND. Lookup-by-name. */
 sslm_status sslm_schema_lookup(sslm_model model, const char* name, sslm_schema* out);
 size_t      sslm_schema_count(sslm_model model);
-/* M2 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): *n query/fill shape matches sslm_tokenize's
+/* *n query/fill shape matches sslm_tokenize's
  * own established convention (call with buf==nullptr or *n too small to get the required byte
  * count in *n via SSLM_BUFFER_TOO_SMALL, then call again with a buffer of that size). buf is
  * filled with EXACTLY *n bytes on success -- the schema's own name bytes, NOT NUL-terminated

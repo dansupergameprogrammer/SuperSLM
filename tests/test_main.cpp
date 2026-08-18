@@ -45,7 +45,16 @@
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
 #include "../tools/sslm_adapter_loader.h"
+// T-2152 (outside strike item 1): the GPU-serial-port harness is D3D12/Windows-only
+// (src/gpu/d3d12_harness.h pulls in <windows.h>/<d3d12.h>/<dxgi1_6.h>) -- guarded so this
+// single test_main.cpp still compiles on the Linux/macOS CI legs, which never link the GPU
+// sources. Every direct `superslm_gpu::*`/`harness::*` cell below is guarded the same way;
+// see the CMakeLists.txt comment on the superslm_tests target for the matching WIN32-only
+// link step (build.bat's own recipe already does this unconditionally, being Windows-only
+// itself -- this is the CMake side gaining the same shape).
+#ifdef _WIN32
 #include "../src/gpu/d3d12_harness.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -5791,6 +5800,9 @@ static int RunCrashProbe(const std::string& name) {
 	// rope-table content -- only a well-formed call shape that reaches it
 	// (valid layer_budget/context_cap/geometry/workspace); `layers=nullptr`
 	// is never dereferenced before guard 9 rejects.
+#ifdef _WIN32
+	// T-2152 (outside strike item 1): this probe drives superslm_gpu::RunLayerLoopGpu, which
+	// only exists on the WIN32/D3D12 build (see the include guard at this file's own top).
 	if (name == "gpu_null_hidden_codes") {
 		superslm::SequenceLayerState seq{};  // hidden_codes left at its own default: nullptr
 		seq.hidden_scale = superslm::CarriedScale{INT64_C(1073741824), 0};
@@ -5810,6 +5822,7 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH (status=%s)\n", superslm::SslmForwardStatusName(st));
 		return 0;
 	}
+#endif  // _WIN32
 	std::printf("PROBE DID NOT CRASH (unknown probe name: %s)\n", name.c_str());
 	return 2;
 }
@@ -5886,6 +5899,11 @@ static void TestRowBoundsWideZeroLenNullPtrDoesNotCrash() {
 // never-committed scratch run at the pre-guard-9 commit (36b9327), quoted in
 // the casebook's own T-2053 section rather than re-incurred here; this cell
 // itself only needs to assert what the FIXED build must do.
+//
+// T-2152 (outside strike item 1): WIN32-only, matching the "gpu_null_hidden_codes" probe
+// branch this cell drives (RunCrashProbe, above) -- both sides of the same GPU-only
+// mechanism, guarded together.
+#ifdef _WIN32
 static void TestT2053_M1_NullHiddenCodesRejectedNotCrashed() {
 	static const char* kProbeName = "gpu_null_hidden_codes";
 	std::string tail;
@@ -5902,6 +5920,7 @@ static void TestT2053_M1_NullHiddenCodesRejectedNotCrashed() {
 		          tail.c_str());
 	}
 }
+#endif  // _WIN32
 
 // N5, second half (Poirot 380b75f review): "the crash probe covers RowBoundsWide
 // directly; nothing drives NarrowRowChecked(nullptr, 0, out), which is the caller
@@ -22655,6 +22674,15 @@ static void TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly
 	          "base-only -- got identical [%d,%d] on both", seq.hidden_codes[0], seq.hidden_codes[1]);
 }
 
+// T-2152 (outside strike item 1): everything from here through the end of this file's own
+// GPU-serial-port section (immediately before `int main`) is WIN32/D3D12-only -- it calls
+// `superslm_gpu::*`/`harness::*` directly, whose only definitions are src/gpu/superslm_gpu.cpp
+// (compiled and linked into superslm_tests on WIN32 only; see CMakeLists.txt). Guarded here so
+// the same test_main.cpp still compiles clean on the Linux/macOS CI legs, which never link the
+// GPU sources -- matching build.bat's own Windows-only recipe rather than papering over the
+// non-Windows build with a stub.
+#ifdef _WIN32
+
 // ---------------------------------------------------------------------------
 // T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port: base-only
 // single-sequence forward on D3D12/HLSL). Realizes Sec10's Coverage Model and
@@ -25629,6 +25657,8 @@ static void TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected() {
 	          d.init_error.c_str());
 }
 
+#endif  // _WIN32
+
 int main(int argc, char** argv) {
 	GSelfPath = (argc > 0 && argv[0] != nullptr) ? argv[0] : "superslm_tests";
 	if (argc > 1) {
@@ -25893,7 +25923,9 @@ int main(int argc, char** argv) {
 	//     S4 red; the two S9 cells already green at review time. ---
 	TestMaxAbsReduceWideInt64MinElementReportsOutOfC29Domain();
 	TestRowBoundsWideZeroLenNullPtrDoesNotCrash();
+#ifdef _WIN32
 	TestT2053_M1_NullHiddenCodesRejectedNotCrashed();
+#endif  // _WIN32
 	TestRequantChainCheckedOutScaleLeftAssociatedFoldPinnedAgainstVendoredReference();
 	TestRequantChainCheckedHookInstalledProducesIdenticalOutputs();
 	TestRequantChainCheckedRejectedCallEmitsNoTraceRecordsEvenWithHookInstalled();
@@ -26431,6 +26463,10 @@ int main(int argc, char** argv) {
 	TestAdapterLoaderPopulatedHandleDrivesRunLayerLoopBitIdenticalToHandWiredFixture();
 	TestSslmGenerateAdapterFlagSequenceEndToEndChangesOutputFromBaseOnly();
 
+	// T-2152 (outside strike item 1): every cell called through the end of this block is
+	// defined only under #ifdef _WIN32 above (the GPU-serial-port suite) -- guarded the same
+	// way here so the call list matches what actually exists in a non-Windows build.
+#ifdef _WIN32
 	// T-2019/T-2024 -- Curie's red suite for T-1986 (GPU-serial port), amended
 	// design commit 2de2e388a6. See this file's own T-2019/T-2024 section above;
 	// Claude/Curie/t2019-gpu-serial-red-suite-2026-08-13.md (records worktree)
@@ -26518,6 +26554,7 @@ int main(int argc, char** argv) {
 	TestAdapterIndexNegativeRefusesSilentFallback();
 	TestAdapterIndexTooLongRefusesRatherThanParsingTruncatedValue();
 	TestAdapterIndexSoftwareAdapterRefusedNotSilentlySelected();
+#endif  // _WIN32
 
 	std::printf("superslm tests: %d checks, %d failures\n", GChecks, GFailures);
 	return GFailures == 0 ? 0 : 1;

@@ -25,7 +25,7 @@ typedef struct sslm_adapter_s*   sslm_adapter;
 typedef struct sslm_kv_pool_s*   sslm_kv_pool;
 typedef struct sslm_workspace_s* sslm_workspace;
 
-/* G5 (T-2119 design Sec5, T-2132 build): the schema handle -- transcribed verbatim from
+/* G5 (design Sec5): the schema handle -- transcribed verbatim from
  * tests/t2130-g5-red-suite/sslm_g5.h, the same declaration-shape-parity convention this
  * whole file's own header comment states for every type here. No map/release verb -- a schema
  * is already resident wherever the model is (Sec5). SSLM_SCHEMA_NONE is the unconstrained
@@ -57,7 +57,7 @@ typedef struct sslm_detok_state {
 /* status enum -- FULL-REGISTRY MIRROR, design Sec6's own single-authority complete ordinal
  * registry, 26 entries (0-25) plus one auto-valued sentinel (design Sec6 GOVERNANCE RULING,
  * design commit 4f4eb23896; symmetric-mirroring FOLD RULING on the third confirmation pass's F1,
- * design commit dated 2026-08-17, Claude/Poirot/4466666-t2139-third-confirmation-review.md).
+ * design commit dated 2026-08-17).
  *
  * Prior to this fold this header declared only 19 of the 26 registry entries (ordinals 0-17 and
  * 25) -- G5's own schema block (18-24) existed only in tests/t2130-g5-red-suite/sslm_g5.h. F1
@@ -68,7 +68,7 @@ typedef struct sslm_detok_state {
  * enum verbatim, including the other side's block as enumerator VALUES this header's own C1-C7
  * build does not yet exercise functionally -- exactly the relationship sslm_g5.h already had to
  * SSLM_ALLOCATION_FAILED (25) before its own mirroring fold. Ordinal allocation stays Sec6's
- * alone; semantic ownership of G5's own schema-cause meanings (18-24) stays G5's (T-2119) --
+ * alone; semantic ownership of G5's own schema-cause meanings (18-24) stays G5's --
  * only which header's enum body carries which NAMES changed.
  *
  * SSLM_STATUS_NEXT_FREE -- the enum's final member, auto-valued (no explicit numeric value:
@@ -119,7 +119,7 @@ typedef struct sslm_detok_state {
      * id with no tokenizer entry (padded-vocabulary case, src/model.cpp). Distinct from
      * SSLM_TOKEN_ID_OUT_OF_RANGE (id >= cfg_vocab, never a legal decode output at all). */ \
     X(SSLM_TOKEN_ID_UNMAPPED) /* 17 */ \
-    /* G5's own schema block (design Sec5, T-2119) -- ordinals 18-24 ALLOCATED by Sec6, MEANING
+    /* G5's own schema block (design Sec5) -- ordinals 18-24 ALLOCATED by Sec6, MEANING
      * owned by G5; mirrored here verbatim, same convention sslm_g5.h already used for
      * SSLM_ALLOCATION_FAILED before this fold. Not exercised by this header's own C1-C7 build --
      * declared so the registry is complete and Gate C's per-name checks have something to
@@ -131,7 +131,7 @@ typedef struct sslm_detok_state {
     X(SSLM_RESTORE_SCHEMA_MISMATCH) /* 22 -- sslm_seq_restore schema does not resolve */ \
     X(SSLM_SCHEMA_SPAN_UNREACHABLE) /* 23 -- a fixed span not reachable under the DFA */ \
     X(SSLM_SCHEMA_UNSATISFIABLE) /* 24 -- G5-1 compiler rejection, CPU/converter-side */ \
-    /* resource-exhaustion rejection (design Sec6, RATIFIED Brunel T-2139 Sec19/N3; FOLD RULING
+    /* resource-exhaustion rejection (design Sec6; FOLD RULING
      * on the third confirmation pass's F2, design commit dated 2026-08-17) -- process-level
      * allocation failure, distinct from SSLM_KV_POOL_EXHAUSTED (caller-supplied-memory
      * exhaustion). The boundary catch (src/sslm_abi.cpp, CatchAllocationFailure and both
@@ -153,8 +153,8 @@ typedef enum sslm_status {
     SSLM_STATUS_NEXT_FREE
 } sslm_status;
 
-/* design Sec8: "carried unchanged from t2119-g5-constrained-decoding-design-2026-08-16.md
- * Sec5" -- transcribed here verbatim, since this design does not restate G5's own struct
+/* design Sec8: carried unchanged from the G5 constrained-decoding design's own Sec5 --
+ * transcribed here verbatim, since this design does not restate G5's own struct
  * bodies. */
 typedef enum sslm_span_kind {
     SSLM_SPAN_PROMPT = 0,
@@ -170,7 +170,7 @@ typedef struct sslm_stats_out {
     int64_t decode_step_actual;
     int64_t forced_token_count;
     int32_t kv_blocks_resident;
-    /* D-SLM3476 (design Sec14.1, Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S2): 1 iff the
+    /* (design Sec14.1): 1 iff the
      * sequence's current dfa_walk_state is a member of its bound schema's accept set
      * (accepting_le/accepting_count, design Sec13.2); 0 when it is not, and 0 when no schema is
      * bound (SSLM_SCHEMA_NONE) -- a host never needs to special-case whether a schema is even
@@ -181,7 +181,7 @@ typedef struct sslm_stats_out {
     int32_t schema_accepting;
 } sslm_stats_out;
 
-/* S3 (Claude/Poirot/2c18dab-t2139-abi-build-review.md): the alignment sslm_workspace_create and
+/* The alignment sslm_workspace_create and
  * sslm_kv_pool_create both require of their caller-supplied `buf`, on pain of
  * SSLM_MISALIGNED_BUFFER -- previously an anonymous-namespace constant inside src/sslm_abi.cpp
  * with no counterpart in this frozen header, so a consumer holding only this header (the
@@ -202,8 +202,7 @@ typedef struct sslm_stats_out {
  * DEFINED (C2, src/sslm_abi.cpp).
  * ============================================================================
  *
- * SUPERSLM_ABI_ENUM_ONLY (owed remedy 5, Claude/Poirot/3bcbe43-t2139-fourth-confirmation-
- * review.md S1): #define this BEFORE including this header to suppress the function-declaration
+ * SUPERSLM_ABI_ENUM_ONLY: #define this BEFORE including this header to suppress the function-declaration
  * include below -- every type/enum/struct above (including sslm_status and the
  * SSLM_STATUS_ENUM_LIST macro itself) still declares normally, since that whole section is
  * governed by the SUPERSLM_INCLUDE_SSLM_ABI_H guard above and closes before this section starts.
@@ -218,11 +217,10 @@ typedef struct sslm_stats_out {
  * SSLM_STATUS_ENUM_LIST -- the single generation source both this enum body and Gate C's own
  * per-name checks re-expand -- available exactly as before. No consumer outside this one gate TU
  * ever defines this macro; every ordinary include of this header (the frozen public S-FREEZE
- * surface, D-SLM13) is completely unaffected.
+ * surface) is completely unaffected.
  *
  * This section carries its OWN guard (SUPERSLM_ABI_FUNCTIONS_INCLUDED_), independent of and
- * outside SUPERSLM_INCLUDE_SSLM_ABI_H above (Claude/Poirot/ce5aff2-t2139-fifth-confirmation-
- * review.md S2): the enum-only pass sets the outer guard but must NOT be able to claim it also
+ * outside SUPERSLM_INCLUDE_SSLM_ABI_H above: the enum-only pass sets the outer guard but must NOT be able to claim it also
  * satisfies this one, or a later plain #include of this header in the SAME TU becomes a silent
  * no-op -- the outer guard is already defined, so nothing past it re-runs, and the functions this
  * plain include was relying on to appear never do (executed: MSVC C3861 'sslm_model_map':

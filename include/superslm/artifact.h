@@ -25,7 +25,7 @@ namespace superslm {
 
 // Bumped on any field-layout change, new required section, or integrity-hash change.
 // v2 (S2.4): adds the required SigmoidLut (SIL1) section — the forward has no i-exp-sigmoid
-// fallback once C10 is the LUT (D-SLM68), so a v1 artifact lacks a required section and a v2
+// fallback once C10 is the LUT, so a v1 artifact lacks a required section and a v2
 // loader rejects it (UnsupportedVersion), never a silent degrade (docs/sslm_format.md Versioning).
 inline constexpr uint32_t kArtifactFormatVersion = 2;
 
@@ -50,7 +50,7 @@ enum class SslmSectionType : uint32_t {
 	KvLandingReciprocals = 9,
 	Calibration = 10,
 	GoldenHashes = 11,
-	SigmoidLut = 12,    // S2: fixed-point SiLU sigmoid LUT (SIL1); required from v2 (C10, D-SLM68)
+	SigmoidLut = 12,    // S2: fixed-point SiLU sigmoid LUT (SIL1); required from v2 (C10)
 	Tokenizer = 20,     // S1: byte-BPE vocab + merges + special tokens
 	ChatTemplate = 21,  // S1: chat template + special-token metadata (JSON)
 	UnicodeTables = 22, // S1: pinned NFC + \p{L}/\p{N}/\s tables
@@ -62,12 +62,12 @@ enum class SslmSectionType : uint32_t {
 	// current container version, not a CFG1 extension and not a version
 	// bump -- absence loads exactly as before this type existed.
 	CalibrationBand = 31,
-	// T-2021/T-2029 B0b (design Sec9/Sec11, D-SLM3093/D-SLM3094): the two new runtime-additive-
-	// LoRA adapter arrays (design Sec4, D-SLM2915) get their OWN, distinct section types --
+	// The two new runtime-additive-
+	// LoRA adapter arrays (design Sec4) get their OWN, distinct section types --
 	// never WeightScales'/WSC1's own type or magic -- so a genuine WSC1 section and a genuine
 	// DeltaFoldScales/UFoldScales section are structurally different from the moment the
 	// artifact's top-level section table is walked, before any triple's values are ever read
-	// (closing the loader-confusion hazard D-SLM2970/D-SLM2984 named: both array kinds share
+	// (closing the loader-confusion hazard: both array kinds share
 	// WSC1's own [count,3] int32 storage shape, but are domain-incompatible -- WSC1's triple is
 	// unsigned [0,31], these two are signed [-31,31] and consumed by a different runtime
 	// primitive, ApplyAmplifyingWeightScaleFold, design Sec4). Values chosen to sit past the
@@ -126,13 +126,12 @@ enum class SslmStatus {
 // Human-readable name for a status, for diagnostics and test messages.
 const char* SslmStatusName(SslmStatus s) noexcept;
 
-// T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2.1, D-SLM2355):
-// the production Option-G selection mechanism is a header `flags` bit, not an
+// The production Option-G selection mechanism is a header `flags` bit, not an
 // environment variable and not a format_version bump. Declared here (the
 // design's own exact value, not implementation logic) so the red suite can
 // reference the flag symbolically; `SslmArtifact::flags_`/
-// `OptionGFusedKLandingEnabled()` below are declared, not defined -- Brunel's
-// build (T-1894) loosens artifact.cpp's `flags != 0` check to
+// `OptionGFusedKLandingEnabled()` below are declared, not defined -- the
+// build loosens artifact.cpp's `flags != 0` check to
 // `flags & ~kKnownArtifactFlagsMask` and wires `flags_`/the accessor for
 // real. `kKnownArtifactFlagsMask` is every bit a legal artifact may set
 // (currently just the one flag); an unknown bit stays a BadHeader rejection
@@ -195,7 +194,7 @@ public:
 	uint32_t FormatVersion() const noexcept { return format_version_; }
 	uint64_t FileBytes() const noexcept { return file_bytes_; }
 
-	// T-2021/T-2029 B0b (design Sec9, D-SLM3093's "base-hash" validation): the raw 32-byte
+	// (design Sec9's "base-hash" validation): the raw 32-byte
 	// integrity hash `FingerprintHex()` already hex-encodes, exposed as bytes so a
 	// DeltaFoldScales/UFoldScales section's own declared base-artifact hash (design Sec9 item
 	// (d)) can be compared against the ACTUALLY-mapped base's own hash without a hex
@@ -215,18 +214,15 @@ public:
 	// The section of the given type, or nullptr if absent.
 	const SslmSectionView* Section(SslmSectionType type) const noexcept;
 
-	// T-1899 (Curie, red suite for T-1894 -- design Sec31.2.1/Sec31.2.5,
-	// D-SLM2355/D-SLM2363): true iff this artifact's header `flags` field sets
+	// (design Sec31.2.1/Sec31.2.5): true iff this artifact's header `flags` field sets
 	// `kOptionGFusedKLandingFlag` -- the ONE dispatch point
-	// `RunLayerLoop`'s two fused K-landing call sites read (replacing T-1891's
+	// `RunLayerLoop`'s two fused K-landing call sites read (replacing an earlier
 	// spike-only env-var gate). Declared, not defined: `flags_` (below) is
-	// never written by this header's own unmodified `artifact.cpp` (Curie's
-	// write scope is declaration, not the loader body), so calling this
-	// accessor link-fails until Brunel's build wires both. Convention: this
+	// never written by this header's own unmodified `artifact.cpp` (a test-design
+	// seat's write scope is declaration, not the loader body), so calling this
+	// accessor link-fails until the build wires both. Convention: this
 	// suite's own established declare-and-stub practice (RopeApplySite's own
-	// history, this file's sibling forward_sites.h; T-1839's own
-	// IsPeelParamsAdmissibleAtN precedent, Claude/Curie/t1832-...-red-suite-
-	// test-design-2026-08-08.md Sec9.5).
+	// history, this file's sibling forward_sites.h).
 	bool OptionGFusedKLandingEnabled() const noexcept;
 
 private:
@@ -246,7 +242,7 @@ private:
 	bool ok_ = false;
 	uint32_t format_version_ = 0;
 	uint64_t file_bytes_ = 0;
-	// T-1899 (design Sec31.2.1): the raw header `flags` field. Default-
+	// (design Sec31.2.1): the raw header `flags` field. Default-
 	// initialized to 0 so every EXISTING construction path (this class's
 	// default constructor; every artifact this campaign has ever loaded,
 	// which per the current strict `flags != 0` check can only ever be 0)

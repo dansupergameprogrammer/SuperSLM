@@ -86,7 +86,7 @@ struct LayerBacking {
 	std::vector<int64_t> kv_r_t_k, kv_e_t_k, kv_r_t_v, kv_e_t_v;
 	std::vector<int64_t> iexp_m, iexp_e;
 	std::vector<int32_t> ctx_identity, ctx_mult, ctx_shift;
-	// T-1666: one (identity, mult, shift) array per output channel, per
+	// One (identity, mult, shift) array per output channel, per
 	// projection -- the per-channel WSC1 fold backing this driver marshals
 	// from the artifact's own WSC1 rows (see this file's header comment).
 	std::vector<int32_t> q_fold_identity, q_fold_mult, q_fold_shift;
@@ -104,8 +104,7 @@ struct LayerBacking {
 // blob"); `channels` is the exact output-channel count ProjectAndFunnel/the
 // k-v-landing loop will index these arrays at (forward_sites.cpp). Returns
 // false and a diagnostic in `*err` if the tensor is missing or its row count
-// does not match `channels` -- this is the structural check T-1664's driver
-// used to fail loudly on; now it is the input-shape check the per-channel
+// does not match `channels` -- the input-shape check the per-channel
 // marshal itself performs before trusting the artifact's row count.
 inline bool MarshalProjectionFold(const superslm::SslmTensorView* t, uint64_t channels,
                                    const std::string& label, std::vector<int32_t>& id,
@@ -174,7 +173,7 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.attn_norm_gain = backing.attn_norm_gain.data();
 	out.mlp_norm_gain = backing.mlp_norm_gain.data();
 
-	// --- WSC1 per-output-channel fold (T-1666): one (identity, mult, shift)
+	// --- WSC1 per-output-channel fold: one (identity, mult, shift)
 	// array per output channel, per projection. Channel counts match exactly
 	// what ProjectAndFunnel/the k-v-landing fold loop index these arrays at
 	// (forward_sites.cpp): hidden_size for q/o/down, num_key_value_heads *
@@ -227,7 +226,7 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.down_fold_shift = backing.down_fold_shift.data();
 
 	// --- ctx_fold (WSC1, per-head -- LayerWeights already carries this as an
-	// array, T-518/D-SLM57) ------------------------------------------------
+	// array) ------------------------------------------------------------------
 	const superslm::SslmTensorView* ctx_wsc = Wsc("ctx_fold");
 	if (!ctx_wsc || ctx_wsc->elem_count != static_cast<uint64_t>(num_heads) * 3) {
 		*err = prefix + ".ctx_fold: missing or wrong-sized WSC1 tensor";
@@ -245,7 +244,7 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.ctx_fold_mult = backing.ctx_mult.data();
 	out.ctx_fold_shift = backing.ctx_shift.data();
 
-	// --- biases (BIA1, int64; T-1656/D-SLM642) -----------------------------
+	// --- biases (BIA1, int64) -----------------------------------------------
 	const superslm::SslmTensorView* qb = Bia("q_proj");
 	const superslm::SslmTensorView* kb = Bia("k_proj");
 	const superslm::SslmTensorView* vb = Bia("v_proj");
@@ -281,8 +280,8 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 	out.kv_landing_r_t_v = backing.kv_r_t_v.data();
 	out.kv_landing_e_t_v = backing.kv_e_t_v.data();
 
-	// --- per-query i-exp composition inputs (KVC1 composition_constants,
-	// T-1655/D-SLM620) -------------------------------------------------------
+	// --- per-query i-exp composition inputs (KVC1 composition_constants)
+	// -------------------------------------------------------------------------
 	backing.iexp_m.resize(num_key_value_heads);
 	backing.iexp_e.resize(num_key_value_heads);
 	for (uint32_t h = 0; h < num_key_value_heads; ++h) {
@@ -323,9 +322,8 @@ inline bool MarshalLayer(const superslm::SslmModelView& view, uint32_t l, uint32
 }
 
 // Scans every layer's WSC1 fold tensor for every one of the seven
-// projections BEFORE any per-layer marshaling is attempted -- the same
-// "scanned independently, not assumed from one element" discipline T-1652's
-// build log applied to the BIA1 defect it found. Prints the full extent
+// projections BEFORE any per-layer marshaling is attempted -- scanned
+// independently, never assumed from one element. Prints the full extent
 // (layers affected, worst-case row counts) so the report below is grounded
 // in the whole artifact, not a sample.
 inline void PreflightScanWscFolds(const superslm::SslmModelView& view) {
@@ -349,7 +347,7 @@ inline void PreflightScanWscFolds(const superslm::SslmModelView& view) {
 	             "preflight: %u/%u layers carry a non-degenerate (per-output-channel) WSC1 fold "
 	             "tensor on at least one of q/k/v/o/gate/up/down_proj; worst case %llu rows in a "
 	             "single tensor (LayerWeights now carries one fold triple per output channel per "
-	             "projection, T-1666; MarshalLayer marshals every row)\n",
+	             "projection; MarshalLayer marshals every row)\n",
 	             layers_affected, view.config.num_hidden_layers,
 	             static_cast<unsigned long long>(max_rows_seen));
 }

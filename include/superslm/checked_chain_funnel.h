@@ -64,21 +64,20 @@ struct CarriedScale {
 // model.h), neither of which this design touches. §13 dim 5 names most of these
 // members as owed by S3.1 or the sub-slots immediately after it; several are declared
 // here for completeness ahead of the sub-slot that first produces them, per that
-// section's own note (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
-// 2026-07-28.md §4.6).
+// section's own note (§4.6).
 enum class SslmForwardStatus {
 	Ok = 0,
 	ChainInputOutOfDomain,                   // C29 (§7.2 step 3): D' > 2^31 in RequantChainChecked
-	LogitNarrowingOverflow,                  // C35 (§5.5, T-1254): NarrowRowChecked's asymmetric int32 domain check
+	LogitNarrowingOverflow,                  // C35 (§5.5): NarrowRowChecked's asymmetric int32 domain check
 	IExpConstantsOutOfDomain,                // C30 (§7.2): IExpConstantsInDomain rejects the derived i-exp constants
 	CarriedScaleMantissaOutOfDomain,         // ac34677 S5 / 380b75f N1: an incoming/site/running CarriedScale.m does not fit int32_t
 	SiluCompositionScaleOutOfDomain,         // C34 (§5.4): CheckSiluCompositionScaleDomain rejects the derived (m,e)
 	RoundingDivideByPotExponentOutOfDomain,  // C28 (§7.2, §4.4) — S3.2's own build
-	SoftmaxRowWidthOutOfDomain,              // C32/D-SLM366 (§7.2 second limb) — S3.3's own build, §11 S3.3 §6.2
+	SoftmaxRowWidthOutOfDomain,              // C32 (§7.2 second limb) — S3.3's own build, §11 S3.3 §6.2
 	TokenIdOutOfRange,                       // owed by S3.6 (§9.1) — declared here for completeness
 	PositionOverCap,                         // CheckPositionOverCap (this file) declares the predicate, S3.3;
 	                                          // RopeApplySite (forward_sites.h) wires it in as its first act --
-	                                          // S3.3's own job, not S3.6's (D-SLM376, D-SLM383, T-1308)
+	                                          // S3.3's own job, not S3.6's
 	WorkspaceTooSmall,                       // owed by a later sub-slot
 	KvCapacityExhausted,                     // owed by S3.7 (§9.4) — defined and resumable
 	KvPrecisionUnsupported,                  // owed by S3.7 (§14.4)
@@ -92,8 +91,7 @@ enum class SslmForwardStatus {
 	                                          // names this enumerator directly, while §11 S3.6's
 	                                          // sub-slot text (C16, §9.1) never mentions the
 	                                          // budget axis at all -- corrected by the S3.5
-	                                          // test-design pass (Claude/Curie/superslm-s3.5-
-	                                          // residual-and-layer-loop-test-design-2026-07-29.md)
+	                                          // test-design pass
 	// --- Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md ---
 	RopeTableTensorMissing,                  // Critical 1: RopeApplySite's ROP1 manifest carries no
 	                                          // "cos" or no "sin" tensor -- SslmTensorManifest::Tensor
@@ -122,7 +120,7 @@ enum class SslmForwardStatus {
 	                                          // a CFG1 geometry fact, mirroring HeadDimGeometryMismatch's
 	                                          // own class; checked immediately after it, on the query
 	                                          // head count HeadDimGeometryMismatch's own check has just
-	                                          // proven in-domain (T-1654, S3.8a).
+	                                          // proven in-domain (S3.8a).
 	SequenceAlreadyComplete,                  // Significant 6: `seq.layer_index >= num_hidden_layers`
 	                                          // at entry -- there are no more layers to advance
 	                                          // through for this token, whether because the sequence
@@ -138,7 +136,7 @@ enum class SslmForwardStatus {
 	                                          // this loop used to report instead, sending a host
 	                                          // debugging `SoftmaxRowWidthOutOfDomain` to inspect a
 	                                          // width that is already in domain.
-	// --- T-1377 / D-SLM457 (SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.2b, Sec14.14) ---
+	// --- (SuperSLM_S3a_WalkingSkeleton_Plan.md Sec7.2b, Sec14.14) ---
 	ResidualReconciliationMagnitudeOutOfDomain,  // C26's residual-reconciliation site
 	                                          // (ResidualReconcileSite, forward_sites.h/.cpp): the
 	                                          // true 128-bit magnitude `LandingRescale` computes for
@@ -154,7 +152,7 @@ enum class SslmForwardStatus {
 	                                          // is C27's own and stays coupled to that caller's clamp
 	                                          // range.
 	// --- Poirot cd2e75a-t1585-t1587-t1588-confirmation-2026-07-31.md ---
-	InvalidHiddenCodes,                       // T-1590: RunLayerLoop's `seq.hidden_codes == nullptr`
+	InvalidHiddenCodes,                       // RunLayerLoop's `seq.hidden_codes == nullptr`
 	                                          // -- a caller-restored `SequenceLayerState` carries no
 	                                          // provenance guarantee (§13 dim 9's own addressable-as-
 	                                          // a-unit save/restore), the same argument that motivated
@@ -167,8 +165,8 @@ enum class SslmForwardStatus {
 	                                          // struct's own default member initializer, and was
 	                                          // previously dereferenced unconditionally at this loop's
 	                                          // first read of it.
-	// --- T-1655/T-1656 (D-SLM620/D-SLM622), design superslm-t1655-t1656-iexp-and-bias-design ---
-	IExpScaleDerivationOutOfDomain,           // T-1655/D-SLM620, §4.6: C30's derivation site
+	// --- design superslm-t1655-t1656-iexp-and-bias-design ---
+	IExpScaleDerivationOutOfDomain,           // §4.6: C30's derivation site
 	                                          // (RunLayerLoop's per-kv_head IExpScaleConstants call)
 	                                          // found NO triple could be formed at all --
 	                                          // IExpScaleConstants returned other than kOk. Distinct
@@ -177,13 +175,13 @@ enum class SslmForwardStatus {
 	                                          // status answers "no triple could be formed", C30's own
 	                                          // upstream construction domain
 	                                          // (kBadCoefficient/kNegativeShift/kNotRepresentable).
-	BiasReconcileProductOutOfDomain,          // T-1656/T-1657/T-1663, D-SLM642/645/674: the
+	BiasReconcileProductOutOfDomain,          // the
 	                                          // magnitude-domain guard at the C28 bias-reconciliation
 	                                          // call sites (ProjectAndFunnel's q_proj insertion and
 	                                          // the k/v landing path's identical insertion) found
 	                                          // either BiasReconcile's own rounded, divided RESULT
 	                                          // (intmath.h's BiasReconcileWide) does not fit
-	                                          // int64_t, or -- T-1657 Poirot Critical C-1 -- that
+	                                          // int64_t, or -- a separate finding -- that
 	                                          // result, though itself representable, does not fit
 	                                          // int64_t once added to the call site's own running
 	                                          // acc[i], the composed quantity the site actually
@@ -191,19 +189,17 @@ enum class SslmForwardStatus {
 	                                          // Both conditions are checked before either loop body
 	                                          // in ApplyBiasReconcileRow applies anything, so a
 	                                          // rejection for either reason leaves acc untouched.
-	// --- T-1899 (Curie, red suite for T-1894 -- T-1822 design Sec31.2.2/
-	// Sec12 "Option G's own coverage") ---
-	OptionGWideRopeMagnitudeOutOfDomain,      // T-1822 design Sec31.2's own wide-RoPE-pair
+	// --- (design Sec31.2.2/Sec12 "Option G's own coverage") ---
+	OptionGWideRopeMagnitudeOutOfDomain,      // design Sec31.2's own wide-RoPE-pair
 	                                          // primitive (RopeApplyPairWide, forward_sites.h,
 	                                          // this fold): refuse, not wrap, whenever either
 	                                          // rotated component's ROUNDED value does not fit
-	                                          // int64_t (T-1892 Minor 1's own correction -- checked
+	                                          // int64_t (checked
 	                                          // on the value AFTER C3 rounding, never an unrounded
 	                                          // "true" value the primitive never materializes).
 	                                          // Mirrors the spike's own gate G2
 	                                          // (option_g_spike.h), now production-named.
-	OptionGFusedLandingExponentOutOfDomain,   // T-1822 design Sec31.2.2 (D-SLM2356/D-SLM2384/
-	                                          // D-SLM2385, the round-3 repair): `LandingRescale`'s
+	OptionGFusedLandingExponentOutOfDomain,   // design Sec31.2.2 (the round-3 repair): `LandingRescale`'s
 	                                          // own `out_magnitude_exceeded_int64` output, checked
 	                                          // UNCONDITIONALLY at both fused K-landing call sites,
 	                                          // on EVERY element, with no skip condition on any
@@ -214,9 +210,8 @@ enum class SslmForwardStatus {
 	                                          // already-shipped LandingRescale, called on the
 	                                          // rotation's own in-domain output) lose magnitude" --
 	                                          // two different arithmetic stages, two different
-	                                          // guards, per the design's own T-1898-repaired text.
-	// --- T-2057 (Claude/Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md
-	// §22, D-SLM3190/D-SLM3191): the GPU-serial port's recording-window catch
+	                                          // guards, per the design's own repaired text.
+	// --- (design §22): the GPU-serial port's recording-window catch
 	// (superslm_gpu.cpp, RunLayerLoopGpu) used to reuse KvPrecisionUnsupported
 	// for "an allocation inside the command-list recording window threw" --
 	// already carrying two other meanings on that leg (no device at all;
@@ -227,9 +222,9 @@ enum class SslmForwardStatus {
 	// HRESULT payload) and never encoded into the GPU-side sticky-tag space
 	// DecodeStickyTag decodes (superslm_gpu.cpp) -- appending here is
 	// ABI-safe by every constraint this tree enforces or has planned
-	// (D-SLM3190 §22.2: no fixed underlying values beyond Ok=0, never
+	// (§22.2: no fixed underlying values beyond Ok=0, never
 	// serialized, no shipped sslm_status C-ABI type exists yet to freeze). ---
-	GpuAllocationFailed,                      // T-2057 (D-SLM3191): a device allocation, or any
+	GpuAllocationFailed,                      // a device allocation, or any
 	                                          // other command-recording-window D3D12 operation,
 	                                          // failed while the device is CONFIRMED STILL PRESENT
 	                                          // (GetDeviceRemovedReason() == S_OK). Transient and
@@ -240,7 +235,7 @@ enum class SslmForwardStatus {
 	                                          // HeadDimGeometryMismatch/WorkspaceTooSmall history
 	                                          // documents as a defect when the wrong status sends
 	                                          // the host down the wrong recovery path).
-	GpuDeviceRemoved,                         // T-2057 (D-SLM3191): the GPU device itself was
+	GpuDeviceRemoved,                         // the GPU device itself was
 	                                          // removed, reset, or hung
 	                                          // (GetDeviceRemovedReason() != S_OK) during a
 	                                          // recording-window operation. The device object is no
@@ -252,7 +247,7 @@ enum class SslmForwardStatus {
 	                                          // meanings (this device WAS usable a moment ago and
 	                                          // may be again after recreation -- neither a
 	                                          // permanent-hardware nor a size-dependent condition).
-	                                          // Named residual (D-SLM3191): GetDeviceRemovedReason()
+	                                          // Named residual: GetDeviceRemovedReason()
 	                                          // answers "is the device gone right now," not "did
 	                                          // removal cause THIS call's throw" -- an allocation
 	                                          // failure racing an unrelated, asynchronous device
@@ -260,8 +255,7 @@ enum class SslmForwardStatus {
 	                                          // direction (an unneeded device-recreation costs less
 	                                          // than an unneeded retry against a device that is
 	                                          // actually gone).
-	GpuGemmGroupArithmeticInvalid,             // T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-
-	                                          // review.md, confirmation pass @ f7026db): the
+	GpuGemmGroupArithmeticInvalid,             // the
 	                                          // multi-group GEMM dispatch's own standing guard
 	                                          // (`ComputeGpuGemmSiteGroupPlan`, superslm_gpu.cpp) found
 	                                          // a group count that does not cover its own output
@@ -306,7 +300,7 @@ struct ChainResult {
 //      not depend on each other's output and a fold rejection must leave out_codes
 //      untouched, which is only true if the fold runs first
 //   6. RequantTokenCodeWide(x_i, r, s) per element, directly on the int64 row — the
-//      row is NEVER narrowed to int32 (T-1254's fold; NarrowAccumulatorToI32 does not
+//      row is NEVER narrowed to int32 (NarrowAccumulatorToI32 does not
 //      appear in this list)
 // `wide_row` has `n` elements. `incoming` is C26's left-associated product inputs so
 // far; `site_constant` is the artifact's KVC1 entry for this site. On Ok, `out_codes`
@@ -318,7 +312,7 @@ struct ChainResult {
 // so every existing call compiles unchanged; a caller that wants trace coverage
 // passes its real site name and token index.
 //
-// `trace_hook_state` (D-SLM353's corrected storage) is the caller's own model
+// `trace_hook_state` is the caller's own model
 // handle's trace-hook state (SslmModelView::trace_hook, model.h) -- never a
 // process-wide static. It defaults to nullptr so every existing call compiles
 // unchanged and gets no tracing; a caller that wants trace coverage passes
@@ -334,8 +328,8 @@ struct ChainResult {
 // *out_scale as not installing it (§10.3's instrumentation axis). Because the
 // state lives on the model handle the caller passes in, two callers driving two
 // different handles never observe or disturb each other's hook.
-// The ONE door a site may use to obtain C19's reciprocal of a carried mantissa
-// (T-1357, D-SLM433). §7.3's invariant is that no site re-derives the chain's
+// The ONE door a site may use to obtain C19's reciprocal of a carried mantissa.
+// §7.3's invariant is that no site re-derives the chain's
 // own arithmetic, enforced by banning eight leaf names outside this file's own
 // translation unit. That invariant was written when every site-level reciprocal
 // was either artifact-carried (C27's landing takes `r_t` as a parameter) or
@@ -351,10 +345,10 @@ struct ChainResult {
 // property that stops a site from reassembling the chain. Neither relocating
 // the site into this TU nor allowlisting its call site preserves that property:
 // the first converts a function-level rule into a file-level exemption, and the
-// second removes the wall at one point permanently. D-SLM433.
+// second removes the wall at one point permanently.
 //
 // **`DynamicScaleReciprocal`'s `(2^31, 2^32]` ceiling holds only for a canonical
-// `Dn ∈ [2^30, 2^31)` -- the range `NormalizeScale` produces (T-1657, D-SLM641/645).**
+// `Dn ∈ [2^30, 2^31)` -- the range `NormalizeScale` produces.**
 // This door forwards to it on whatever mantissa the caller supplies, which is not
 // required to be canonical (`CombineCarriedScale`'s own renormalization does not
 // guarantee it). A caller reasoning about the reciprocal's maximum on a
@@ -366,7 +360,7 @@ struct ChainResult {
 // caller does with it downstream.**
 int64_t CarriedScaleReciprocal(int64_t m);
 
-// T-1655/D-SLM620, §4.3: the second door this design opens, onto C26's own carried-scale
+// §4.3: the second door this design opens, onto C26's own carried-scale
 // combine step (`carried_scale_product` of exactly two factors). `CombineCarriedScale`
 // itself is unchanged (its body stays in checked_chain_funnel.cpp, only its linkage
 // changes from anonymous-namespace-private to this header's declared surface) -- this is
@@ -384,7 +378,7 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
                                  std::string_view site = {}, size_t token_index = 0,
                                  SslmTraceHookState* trace_hook_state = nullptr);
 
-// The funnel's second entry point (§7.2, T-1254): the one narrowing genuinely owed —
+// The funnel's second entry point (§7.2): the one narrowing genuinely owed —
 // the head's int32 logits (C16's tie-break, §10.1's digest format). Performs, in this
 // order and no other:
 //   1. RowBoundsWide(wide_row, n) -> the row's signed max and min. MaxAbsReduceWide is
@@ -402,15 +396,15 @@ ChainResult RequantChainChecked(const int64_t* wide_row, size_t n,
 // review N4: a parameter a caller can set with no effect and no diagnostic is
 // worse than no parameter at all). When S3.3 gives this entry point a trace
 // emission, the parameter is added then, threaded through the caller's own
-// model handle the same way RequantChainChecked's already is (D-SLM353) --
+// model handle the same way RequantChainChecked's already is --
 // not before, and not as a knob that does nothing in the meantime.
 SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* out_i32);
 
-// T-1657 Poirot N-4 (confirmation pass 5156477): `[[nodiscard]]` added here and on
+// `[[nodiscard]]` added here and on
 // CheckSiluCompositionScaleDomain, CheckRoundingDivideByPotExponentDomain,
 // CheckSoftmaxRowWidthDomain, and CheckPositionOverCap below -- the five `Check*`
-// siblings in this file that had not yet been swept when M-1 (T-1657 Poirot Minor 1,
-// above) fixed only the two bias predicates it was flagged against. `intmath.h`
+// siblings in this file that had not yet been swept when an earlier pass
+// fixed only the two bias predicates it was flagged against. `intmath.h`
 // states the doctrine this sweep completes: "[[nodiscard]] is load-bearing, not
 // decoration". Every `Check*` predicate declared in this file now carries it.
 //
@@ -421,10 +415,9 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // on the four values and maps a false result to IExpConstantsOutOfDomain, nothing
 // else.
 //
-// **D-SLM348 (2026-07-28) settled the apparent disagreement between the design's
+// **This (2026-07-28) settled the apparent disagreement between the design's
 // textual domain rule (§7.2's table, "e >= -60, or e = -61 with m >= 1,268,234,713")
-// and `IExpConstantsInDomain`, which disagree at 79 of 198 swept points (Claude/Curie/
-// superslm-s3.1-checked-chain-funnel-test-design-2026-07-28.md §5): the shipped
+// and `IExpConstantsInDomain`, which disagree at 79 of 198 swept points (§5): the shipped
 // predicate is correct, and the design's prose over-generalized the underflow tail
 // (`e in [-31, +8]`) where the predicate's genuine divide-by-zero rejection reads as
 // an extra restriction but is not one, verified against an arbitrary-precision
@@ -435,7 +428,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
                                              int64_t q_c);
 
 // C34's derived-operand predicate (§7.2 second limb, §5.4). The SwiGLU activation
-// site (S3.4, forward_sites.h's MlpActSite, built and green as of T-1345) forms
+// site (S3.4, forward_sites.h's MlpActSite) forms
 // the per-token gate scale (m, e) at runtime — never
 // artifact-carried, so no load-time gate stands behind it — and calls this before
 // `SiluSigmoidQ15` (silu_lut.h:61). Encodes the runtime no-UB domain directly:
@@ -447,7 +440,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // (model.cpp) use, so neither side can drift from the primitive without failing a
 // compile.
 //
-// **The relation to S-HARDEN-1's load-time descriptor (D-SLM142) is CONTAINMENT, not
+// **The relation to S-HARDEN-1's load-time descriptor is CONTAINMENT, not
 // equality, and is deliberate**: every (m, e) the loader accepts is accepted here, and
 // this predicate's domain is strictly wider on the upper branch — `e = 8` is the one
 // point of difference (§5.4, executed), accepted here and rejected at load time. The
@@ -467,28 +460,27 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 //
 // Re-staged unchanged from its original declaration at commit 32aca0c (removed the
 // same day, f98eee9, as belonging to S3.2 rather than S3.1) -- see the file header
-// comment above. T-1657 Poirot N-5 (confirmation pass 5156477, D-SLM676): the real
+// comment above. The real
 // 0 <= q_B + 62 + e_a <= 63 comparison now lives in
 // RoundingDivideByPotComposedExponentInDomain (src/intmath.cpp); this function
 // (src/forward/checked_chain_funnel.cpp, S3.2's green phase) only delegates to it.
 [[nodiscard]] SslmForwardStatus CheckRoundingDivideByPotExponentDomain(int64_t q_B, int64_t e_a);
 
-// C28's magnitude domain predicate (T-1657/T-1663, D-SLM621/641/642/645). Exactly
+// C28's magnitude domain predicate. Exactly
 // `BiasReconcileWide(b, q_b, r_a, e_a, &unused) == true` -- it validates the SAME
 // domain `BiasReconcile` itself computes over, never a second derivation of it
 // (the `IExpConstantsInDomain` precedent this predicate follows exactly:
 // intmath.h, "this predicate is exactly IExpConstruct(...) == kOk"). Reuses the
-// existing `BiasReconcileProductOutOfDomain` status (D-SLM642) -- what changed is
+// existing `BiasReconcileProductOutOfDomain` status -- what changed is
 // the CONDITION that produces it, not the status's own meaning: it now answers
 // whether the rounded, divided C28 RESULT fits int64_t, not whether the raw
 // product does. That is a strictly weaker, strictly more permissive condition
-// (T-1657 §4): every input the retired `BiasReconcileProductFitsInt64` guard
+// every input the retired `BiasReconcileProductFitsInt64` guard
 // accepted is accepted here too, and some inputs whose raw product overflows
 // int64_t but whose rounded result does not -- which the retired guard wrongly
-// rejected -- are accepted here as well. T-1657 Poirot N-1 (confirmation pass
-// 5156477): because this predicate is exactly `BiasReconcileWide(...) == true`, and
+// rejected -- are accepted here as well. Because this predicate is exactly `BiasReconcileWide(...) == true`, and
 // that function now checks the composed exponent domain itself before it checks the
-// magnitude (D-SLM676), this predicate ALSO rejects an out-of-domain exponent -- but
+// magnitude, this predicate ALSO rejects an out-of-domain exponent -- but
 // reports it as `BiasReconcileProductOutOfDomain`, the identical status an
 // in-domain-exponent magnitude failure produces. It does not distinguish the two.
 // `CheckRoundingDivideByPotExponentDomain` is unchanged and still required first, at
@@ -496,8 +488,8 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // skips it and reads this predicate's status alone will attribute an
 // exponent-domain rejection to the magnitude.
 //
-// T-1657 Poirot Minor 1: `[[nodiscard]]`, restored. The retired
-// `BiasReconcileProductFitsInt64` (T-1656) carried the sole `[[nodiscard]]` in this
+// `[[nodiscard]]`, restored. The retired
+// `BiasReconcileProductFitsInt64` carried the sole `[[nodiscard]]` in this
 // header at the time; this predicate matched its `Check*` siblings -- at the time,
 // none of which had it -- rather than the guard it replaced, silently propagating
 // the weaker convention onto a guard predicate whose return value being dropped is a
@@ -508,7 +500,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 [[nodiscard]] SslmForwardStatus CheckBiasReconcileMagnitudeDomain(int64_t b, int64_t q_b,
                                                                    int64_t r_a, int64_t e_a);
 
-// C28's accumulate domain predicate (T-1657 Poirot Critical C-1, D-SLM674). The line
+// C28's accumulate domain predicate. The line
 // this guards -- forward_sites.cpp's ApplyBiasReconcileRow, `acc[i] += BiasReconcile(...)`
 // -- forms `acc[i] + result`, not `result` alone.
 // `CheckBiasReconcileMagnitudeDomain` proves the second term of that sum representable;
@@ -519,29 +511,29 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // terms of the sum -- the existing per-term magnitude domain (unchanged, computed here
 // via the same BiasReconcileWide call `CheckBiasReconcileMagnitudeDomain` uses) AND the
 // addition against the caller's own accumulator. Reuses `BiasReconcileProductOutOfDomain`
-// (D-SLM642) for both failure conditions, since the status already means "the C28 site's
+// for both failure conditions, since the status already means "the C28 site's
 // own composed quantity does not fit int64_t" and the accumulate is that quantity's next
-// term, not a new one. T-1657 Poirot N-1 (confirmation pass 5156477): this predicate calls
+// term, not a new one. This predicate calls
 // `BiasReconcileWide` too, so it inherits the same conflation `CheckBiasReconcileMagnitudeDomain`
 // carries -- an out-of-domain exponent is ALSO rejected here, reported as the same
 // `BiasReconcileProductOutOfDomain` an in-domain-exponent magnitude or accumulate
 // failure produces. `CheckRoundingDivideByPotExponentDomain` is unchanged and still
 // required first, at the call site, exactly as it was for `CheckBiasReconcileMagnitudeDomain`
 // -- skipping it and reading this predicate's status alone misattributes the rejection.
-// `[[nodiscard]]` for the same reason as that predicate's own (T-1657 Poirot Minor 1).
+// `[[nodiscard]]` for the same reason as that predicate's own.
 [[nodiscard]] SslmForwardStatus CheckBiasAccumulateMagnitudeDomain(int64_t acc_i, int64_t b,
                                                                     int64_t q_b, int64_t r_a,
                                                                     int64_t e_a);
 
-// C32/D-SLM366's own numerator ceiling (§7.2 second limb; §14.1; §11 S3.3 §6.2,
-// §3; T-1304, D-SLM365/366/367). D-SLM365 derives a softmax row's largest i-exp
+// C32's own numerator ceiling (§7.2 second limb; §14.1; §11 S3.3 §6.2,
+// §3). This derives a softmax row's largest i-exp
 // value in closed form as `M = q_b*q_b + q_c` (the value at `q = 0`, where
-// `ShiftByMax` puts the row maximum); D-SLM366 finds the shipped
+// `ShiftByMax` puts the row maximum); this finding shows the shipped
 // `IExpConstantsInDomain` does not cover the numerator/sum widths this needs.
 //
-// **RULED BY DAN (D-SLM367, 2026-07-28): `2^47` on every path** —
+// **RULED BY DAN (2026-07-28): `2^47` on every path** —
 // `(2**62) >> PROB_FRAC_BITS`, the value `Tools/superslm_spike/pipeline.py`'s
-// own `_guard_probability_width` already enforced (option C over D-SLM365's
+// own `_guard_probability_width` already enforced (option C over the closed form's
 // own `INT64_MAX >> PROB_FRAC_BITS` = 2^48-1, and over shipping 2^47 without
 // touching the Python reference). Both Python paths now refuse against one
 // named constant, `pipeline.PROB_WIDTH_CEILING`; this is the C++ side's own
@@ -549,7 +541,7 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // C++/Python language boundary** — the tie this tree's `static_assert`
 // convention (kRoundingDivideByPotExponentMaxI64, kSiluLutTermLeftShiftOverflow
 // Exponent) uses is unavailable here, so the tie is BY NAME AND CITATION only:
-// this constant's own name and its D-SLM367 citation, kept in step with
+// this constant's own name, kept in step with
 // `pipeline.PROB_WIDTH_CEILING` by hand. A future edit to either side is not
 // caught by this build; it is caught only by re-reading this comment.
 // `kProbFracBits` (intmath.h) is PROB_FRAC_BITS itself, so the derivation
@@ -557,14 +549,14 @@ SslmForwardStatus NarrowRowChecked(const int64_t* wide_row, size_t n, int32_t* o
 // verified equal to 2^47 at authoring (2^62 >> 15 == 2^47, exactly).
 inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kProbFracBits;
 
-// C32/D-SLM366's own derived-operand predicate (§7.2 second limb; §11 S3.3
+// C32's own derived-operand predicate (§7.2 second limb; §11 S3.3
 // §6.2). The built C32 softmax row kernel (SoftmaxRowQ15, intmath.h) calls
-// this before evaluating a row: `M = q_b*q_b + q_c` (D-SLM365's closed form,
+// this before evaluating a row: `M = q_b*q_b + q_c` (the closed form,
 // the row's own i-exp value at the shifted-max element) must satisfy
 // `q_c >= 0`, `M <= kSoftmaxRowMaxSafeExponent` (the numerator), AND
 // `width * M <= INT64_MAX` (the sum). `M` is formed and judged at 128-bit
 // width (Poirot 2026-07-28 finding 1) rather than in int64, which is the
-// exact re-derivation intmath.h:391-395 names as unsafe (D-SLM81).
+// exact re-derivation intmath.h:391-395 names as unsafe.
 //
 // **`q_c >= 0` (Popper 2026-07-28 Null 2, both bullets), and it is
 // necessary but not sufficient.** With `q_c` non-negative, `M = q_b*q_b + q_c`
@@ -588,19 +580,18 @@ inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kPro
 // (`m == 0 || width <= static_cast<size_t>(INT64_MAX / m)`). Returns
 // SoftmaxRowWidthOutOfDomain on any failure, Ok otherwise.
 //
-// **`width == 0` is rejected outright (T-1411, whole-tree review b9dcbe0
-// Significant 1).** `ShiftByMax` (intmath.h) documents its own `n >= 1`
+// **`width == 0` is rejected outright.** `ShiftByMax` (intmath.h) documents its own `n >= 1`
 // precondition ("Undefined on an empty sequence (n >= 1)"), and
 // `SoftmaxRowQ15`'s width-gated compute path calls it under that contract --
 // so this gate, which exists to certify a width safe for that compute path,
 // cannot answer Ok at a width the compute path is not defined for.
-// (`SoftmaxRowQ15` also guards `width == 0` inside the kernel itself,
-// D-SLM497; this gate's rejection is independently required under
+// (`SoftmaxRowQ15` also guards `width == 0` inside the kernel itself;
+// this gate's rejection is independently required under
 // reject-over-degrade and is unchanged by that guard.)
 [[nodiscard]] SslmForwardStatus CheckSoftmaxRowWidthDomain(int64_t q_b, int64_t q_c, size_t width);
 
 // C33's own position-cap guard (§11 S3.3's own gate line: "a position ==
-// context_cap is rejected before a table read"; Board T-1308). `position` is
+// context_cap is rejected before a table read"). `position` is
 // a host/runtime-supplied sequence position; `context_cap` is the artifact's
 // own config field (model.h). Rejects when `position` is outside
 // `[0, context_cap)` -- the cap is an EXCLUSIVE upper bound, matching the
@@ -610,8 +601,8 @@ inline constexpr int64_t kSoftmaxRowMaxSafeExponent = (int64_t{1} << 62) >> kPro
 // can attach a red cell against a real, callable symbol rather than the bare
 // `PositionOverCap` enumerator this tree carried with no function behind it.
 // Wiring this into an actual forward call site is S3.3's own job, not S3.6's
-// (D-SLM376, 2026-07-28; this exact paragraph was found, per D-SLM383, still
-// routing the wiring to S3.6 a day after the ruling overturned it, and is
+// (this exact paragraph was found, a day after the ruling overturned it, still
+// routing the wiring to S3.6, and is
 // corrected here as part of the site's own build rather than as a separate
 // pass): forward_sites.h's RopeApplySite calls this predicate first, before
 // any ROP1 table read, exactly the ordering §11 S3.3's own gate line names.

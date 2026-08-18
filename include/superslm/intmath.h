@@ -45,7 +45,7 @@ inline constexpr int32_t kInt32Max = 2147483647;       //  2^31 - 1
 // exact result exceeds INT32_MAX, and it saturates to INT32_MAX.
 int32_t SaturatingRoundingDoublingHighMul(int32_t a, int32_t b);
 
-// RoundingDivideByPOT's documented exponent domain, named (S-HARDEN-1, D-SLM142) so a
+// RoundingDivideByPOT's documented exponent domain, named so a
 // caller-side bound — e.g. the load-time schema-value gate's WSC1 `shift` domain and the
 // KVC1 `e` no-UB floor's right-branch reach, both in src/model.cpp — can be pinned to this
 // primitive's actual domain by `static_assert` rather than by a duplicated numeric literal
@@ -73,7 +73,7 @@ int64_t RoundingDivideByPOT(int64_t x, int exponent);
 // `RoundingDivideByPOT(SaturatingRoundingDoublingHighMul(x, m), shift)`.
 int32_t MultiplyByQuantizedMultiplier(int32_t x, int32_t quantized_multiplier, int shift);
 
-// T-2021/T-2029 (design Sec4, D-SLM2915): `x << shift`, widened to int64_t before the shift
+// (design Sec4): `x << shift`, widened to int64_t before the shift
 // (never itself unsafe -- `x` is 32-bit-bounded and `shift` is checked in [0,31] by the caller's
 // own domain contract below, so the widened shift cannot overflow int64_t), then saturated into
 // int32_t range. A five-line, TOTAL function -- no precondition to violate, unlike a raw
@@ -130,7 +130,7 @@ inline constexpr int DYNAMIC_RECIPROCAL_CORRECTION_STEPS = 2;
 // reaching output-exactness is conformant.
 int64_t DynamicScaleReciprocal(int64_t dn);
 
-// C22 — per-token requant composition, the "127 scale wrapper" (D-SLM52), R-composed:
+// C22 — per-token requant composition, the "127 scale wrapper", R-composed:
 // q_i = clamp(round_half_away_from_zero((x_i · 127 · R) / 2^(62 − s)), −127, 127),
 // with R from C19 and s from C21. Ties away from zero (C3's direction — the composite IS
 // a rounding divide by a power of two). `|x_i · 127 · R|` reaches ~2^70 (a token containing
@@ -138,14 +138,14 @@ int64_t DynamicScaleReciprocal(int64_t dn);
 // Returns the int8 code in [−127, 127].
 int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 
-// C28's widened bias-reconciliation core (T-1657, D-SLM621/641/645/676): forms B*R_a and
+// C28's widened bias-reconciliation core: forms B*R_a and
 // divides by 2^exponent in the SAME portable 128-bit facility RequantTokenCode/
 // IExpEvaluate already use internally. TOTAL over the full int64_t domain of b and
 // r_a, and over exponent in [kRoundingDivideByPotExponentMinI64,
 // kRoundingDivideByPotExponentMaxI64] -- unchanged from RoundingDivideByPOT's own
 // existing int64 domain; this function widens the NUMERATOR, not the exponent's own
 // range. This function checks the composed exponent q_B + 62 + e_a itself
-// (RoundingDivideByPotComposedExponentInDomain, D-SLM676) before it forms 2^exponent
+// (RoundingDivideByPotComposedExponentInDomain) before it forms 2^exponent
 // to divide by. CheckBiasReconcileMagnitudeDomain (checked_chain_funnel.h) is exactly
 // `BiasReconcileWide(...) == true`. CheckBiasAccumulateMagnitudeDomain calls
 // BiasReconcileWide FIRST and inherits the same exponent rejection, but is NOT equivalent
@@ -153,11 +153,10 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 // `acc_i + result` representable in int64_t, and rejects when that sum overflows. The two
 // therefore disagree on real inputs -- pinned by execution at b = INT64_MAX, q_b = -62,
 // r_a = 1, e_a = 0, acc_i = 1, where the first returns Ok and the second rejects
-// (tests/test_main.cpp, T-1678; the claim that they are identical was written and
+// (tests/test_main.cpp; the claim that they are identical was written and
 // corrected four times before a cell was made to hold it). Both report an exponent-domain
 // failure as BiasReconcileProductOutOfDomain -- the identical status an
-// in-domain-exponent magnitude failure produces (T-1657 Poirot N-9, confirmation pass
-// 3f37ba2, N-17 at 53de03e). CheckRoundingDivideByPotExponentDomain
+// in-domain-exponent magnitude failure produces. CheckRoundingDivideByPotExponentDomain
 // (checked_chain_funnel.h) is unchanged and still required at the call site for a
 // diagnosis that names the right mechanism -- a caller that skips it and reads either
 // magnitude predicate's status alone will attribute an exponent-domain rejection to the
@@ -173,7 +172,7 @@ int8_t RequantTokenCode(int32_t x_i, int64_t r, int s);
 //     away from zero) result to *out and returns true.
 bool BiasReconcileWide(int64_t b, int64_t q_b, int64_t r_a, int64_t e_a, int64_t* out);
 
-// T-1657 Poirot Significant 3 (D-SLM676): the ONE derivation of C28's composed exponent
+// The ONE derivation of C28's composed exponent
 // domain, `0 <= q_B + 62 + e_a <= 63`, that both `BiasReconcileWide` above and
 // `CheckRoundingDivideByPotExponentDomain` (checked_chain_funnel.h) call, rather than
 // each computing `q_B + 62 + e_a` as plain int64_t arithmetic independently. Plain
@@ -194,8 +193,7 @@ bool RoundingDivideByPotComposedExponentInDomain(int64_t q_B, int64_t e_a, int64
 //
 // The declarations below are the funnel's approved API surface (§7.2, §5.5, §4.7's
 // correction). Bodies are real, bit-exact ports in intmath.cpp, green in the
-// standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-test-design-
-// 2026-07-28.md §4/§8).
+// standing suite.
 //
 // These three, plus RequantChainChecked/NarrowRowChecked (checked_chain_funnel.h),
 // are the funnel's leaf set: §7.3's CI source check bans every call to them outside
@@ -224,7 +222,7 @@ bool RoundingDivideByPotComposedExponentInDomain(int64_t q_B, int64_t e_a, int64
 // misread as in-domain.
 int64_t MaxAbsReduceWide(const int64_t* x, size_t n);
 
-// New (§5.5, T-1254) — the row's signed max and min, order-free (max and min are each
+// New (§5.5) — the row's signed max and min, order-free (max and min are each
 // associative and commutative). Distinct from MaxAbsReduceWide: int32 narrowing
 // (NarrowRowChecked, checked_chain_funnel.h) depends on the row's SIGNED extremes,
 // not its magnitude — a magnitude bound cannot express int32's asymmetric
@@ -244,8 +242,8 @@ void RowBoundsWide(const int64_t* x, size_t n, int64_t* out_max, int64_t* out_mi
 // C22/F-S3-7 — RequantTokenCode's already-pinned formula, unchanged, at int64 input
 // width (§4.7's correction): q_i = clamp(round_half_away_from_zero((x_i * 127 * R) /
 // 2^(62 - s)), -127, 127). Same 128-bit-intermediate construction as the int32-input
-// overload above; only the input width changes, because the funnel (§7.2's fold,
-// T-1254) never narrows the composition's wide row to int32 before this step.
+// overload above; only the input width changes, because the funnel (§7.2's fold)
+// never narrows the composition's wide row to int32 before this step.
 //
 // **Total over its whole documented parameter space: every `int64_t x_i` is safe**
 // (ac34677 O1) — the 128-bit composite `|x_i| * 127 * R` overflows into the `> 127`
@@ -322,7 +320,7 @@ void ShiftByMax(const int64_t* logits, size_t n, int64_t* out);
 // strips executed no undefined behaviour before this slot and produced values, by accident rather
 // than by promise: `0 < q < q_ln2`, where `(−q)/q_ln2` truncates to `z == 0`; and `q_ln2 <= −1`,
 // where the clip bound goes positive and `z` lands on `I_EXP_CLIP_N`. Both are now refused. The
-// preserved property is the one D-SLM80 actually states — **behaviour-preserving INSIDE the
+// preserved property is the one this design actually states — **behaviour-preserving INSIDE the
 // domain** — and inside the domain every value is bit-identical, including the wrapped results of
 // `kNotRepresentable`. Outside it, a documented precondition that a release build silently
 // tolerated is now enforced; nothing depended on the tolerance.
@@ -431,7 +429,7 @@ private:
 //
 // Evaluating a construction from a `kNotRepresentable` outcome is **legal and defined**: the low 64
 // bits are kept and the result can be NEGATIVE. That is the exact value the pre-S-HARDEN-0 code
-// returned for the same constants and a committed golden pins it (D-SLM80). A caller that does not
+// returned for the same constants and a committed golden pins it. A caller that does not
 // want it was told so by the outcome.
 int64_t IExpEvaluate(const IExpConstruction& c);
 
@@ -452,7 +450,7 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // The test is performed in the 128-bit domain internally **because a caller cannot safely
 // perform it**: the obvious check, `base² + q_c <= INT64_MAX`, squares `base` in int64 and
 // itself overflows once `q_b` exceeds ~3.04e9 — reproducing the defect in the guard
-// (D-SLM81). Callers therefore use this predicate; they do not re-derive it.
+// (the same overflow class this predicate exists to close). Callers therefore use this predicate; they do not re-derive it.
 //
 // **This predicate is TOTAL (S-HARDEN-0, F21).** It is exactly
 // `IExpConstruct(q, q_ln2, q_b, q_c, nullptr) == IExpDomain::kOk`, so it validates `q`,
@@ -466,7 +464,7 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // stating "unchanged wherever the old predicate was defined" here would contradict that, and did.
 // Use `IExpConstruct` directly when the reason for a rejection matters.
 //
-// **Cost note (D-SLM83) — read the condition, it is load-bearing.** `base = q_p + q_b`
+// **Cost note — read the condition, it is load-bearing.** `base = q_p + q_b`
 // varies with `q` even at a fixed `z`, so this predicate is **not** `q`-invariant in
 // general: at `q_ln2 = 4000000000, q_b = 1, q_c = 0`, `q = 0` answers `true` while
 // `q = −3999999999` — same triple, same `z = 0` — answers `false`.
@@ -486,7 +484,7 @@ int64_t IExpEvaluate(const IExpConstruction& c);
 // one that makes the parent return a wrapped negative under `NDEBUG`.
 [[nodiscard]] bool IExpConstantsInDomain(int64_t q, int64_t q_ln2, int64_t q_b, int64_t q_c);
 
-// C30 — the offline derivation `iexp_scale_constants`, now ported (T-1655, D-SLM620): forms
+// C30 — the offline derivation `iexp_scale_constants`, now ported: forms
 // the per-query (q_ln2, q_b, q_c) triple `IExpConstruct`/`IExpEvaluate` consume, from a
 // canonical carried scale `(m, e)` and the format-30 coefficient triple. TOTAL over every
 // int64_t argument, mirroring IExpConstruct's own standard (S-HARDEN-0): every step is
@@ -507,8 +505,8 @@ enum class IExpScaleDomain : int {
     int64_t ln2_q, int ln2_fmt, int64_t b_q, int b_fmt, int64_t ca_q, int ca_fmt,
     int64_t* out_q_ln2, int64_t* out_q_b, int64_t* out_q_c);
 
-// C30's pinned, per-artifact-independent format-30 coefficient triple (T-1655,
-// D-SLM620): the SAME (ln2_q, b_q, ca_q) `iexp_scale_constants`/
+// C30's pinned, per-artifact-independent format-30 coefficient triple:
+// the SAME (ln2_q, b_q, ca_q) `iexp_scale_constants`/
 // `tests/gen_s3_1_c30_iexp_domain_sweep_fixtures.py` derive from the pinned
 // reference's own `_POLY_A`/`_POLY_B`/`_POLY_C` and the pinned ln2 double
 // (`tests/reference/superslm_spike/rope_tables_pinned.json`, "ln2":
@@ -537,8 +535,8 @@ inline constexpr int64_t kIExpCaQ = static_cast<int64_t>(
 inline constexpr int ROPE_FRAC_BITS = 30;                 // Q2.30 fixed point
 inline constexpr int32_t ROPE_ONE = 1 << ROPE_FRAC_BITS;  // 1.0 in Q2.30 (2^30)
 
-// C28's bias Q-format (T-1656, D-SLM622, §5.2): the format's bias codes are stored at a
-// fixed q_B = 30 (docs/sslm_format.md, D-SLM621's own text) -- not an artifact-carried,
+// C28's bias Q-format (§5.2): the format's bias codes are stored at a
+// fixed q_B = 30 (docs/sslm_format.md's own text) -- not an artifact-carried,
 // per-tensor value, the same convention this file's other Q-format constants already
 // use. If a future artifact revision carries a per-tensor q_B, this constant is the
 // single edit point.
@@ -563,7 +561,7 @@ RopePair RopeApplyPair(int32_t x, int32_t y, int32_t cos_q30, int32_t sin_q30);
 // --- §6.2/§5.2 C32 softmax row (arm A) ----------------------------------------
 //
 // The runtime primitive only. C30's derivation site (the not-yet-built call
-// forming (q_ln2, q_b, q_c) from a per-query carried scale) and C32/D-SLM366's
+// forming (q_ln2, q_b, q_c) from a per-query carried scale) and C32's
 // own width predicate (CheckSoftmaxRowWidthDomain, checked_chain_funnel.h) are
 // declared elsewhere; this is the row kernel the funnel's own predicate gates.
 
@@ -587,10 +585,8 @@ inline constexpr int kProbFracBits = 15;
 // width upper bound of its own. `scores`/`out_probs` each have `width`
 // elements.
 //
-// **`width == 0` is guarded in the kernel itself, returning `true`** (D-SLM497;
-// T-1411, whole-tree review b9dcbe0 Significant 1;
-// Claude/Poirot/9b0f938-t1411-t1415-t1416-t1386-t1388-confirmation-2026-07-31.md
-// Significant 1). Below, `ShiftByMax`'s own `n >= 1` precondition (above: "Undefined
+// **`width == 0` is guarded in the kernel itself, returning `true`**.
+// Below, `ShiftByMax`'s own `n >= 1` precondition (above: "Undefined
 // on an empty sequence (n >= 1)") is honoured by never calling it at `width == 0`:
 // this kernel returns before touching `scores` or `out_probs` -- vacuous
 // well-formedness over zero row elements, matching this function's own "whether
@@ -640,7 +636,7 @@ inline constexpr int kProbFracBits = 15;
 // in int64_t, `<= 0`, or exceeding `kSoftmaxRowMaxSafeExponent`) makes every
 // element of that row untrustworthy, since there is then no bound left to
 // check against. **The third condition is enforced by this kernel itself**
-// (D-SLM409, plan Sec14.1), not merely relied upon from the gate, so the
+// (plan Sec14.1), not merely relied upon from the gate, so the
 // `exps[k] << kProbFracBits` numerator shift below cannot overflow
 // UNCONDITIONALLY -- for any element this kernel keeps, `M <=
 // kSoftmaxRowMaxSafeExponent` gives `exps[k] << kProbFracBits <= 2^47 << 15

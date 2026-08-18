@@ -221,5 +221,6 @@ always uses it (rather than hand-composing the lower-level embed/decode/ready
 calls) cannot reproduce a class of duplicate-KV-commit bug this project's own
 build process found and fixed while landing this surface.
 
-The same check against the certified AMD GPU is the one item outstanding
-before the 1.0 tag — see [Certified platforms](platform-support.md).
+The same check passed bit-identical on the certified AMD GPU as well
+(measured 2026-08-17 on the Radeon RX 7900 XTX) — see
+[Certified platforms](platform-support.md).

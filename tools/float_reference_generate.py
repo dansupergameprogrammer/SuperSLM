@@ -37,6 +37,7 @@ Prints, one field per line, machine-parseable by the PowerShell wrapper:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -47,10 +48,9 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-DEFAULT_MODEL = Path(
-    r"D:\hf_cache\hub\models--Qwen--Qwen2.5-1.5B-Instruct\snapshots"
-    r"\989aa7980e4cf806f80c7fef2b1adb7bc71aa306"
-)
+# T-2152 (outside strike item 6): no private filesystem path baked in as a default --
+# an absent SUPERSLM_FLOAT_REF_MODEL leaves this unset; main() checks and raises loudly.
+DEFAULT_MODEL = os.environ.get("SUPERSLM_FLOAT_REF_MODEL")
 
 
 def _resolve_default_model(p: Path) -> Path:
@@ -78,8 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-new", type=int, default=256, dest="max_new")
     parser.add_argument(
         "--model",
-        default=str(DEFAULT_MODEL),
-        help="path to a local HF checkpoint directory (weights + tokenizer)",
+        default=DEFAULT_MODEL,
+        help="path to a local HF checkpoint directory (weights + tokenizer); default: the "
+             "SUPERSLM_FLOAT_REF_MODEL environment variable (required if unset)",
     )
     parser.add_argument(
         "--stop",
@@ -89,6 +90,10 @@ def main(argv: list[str] | None = None) -> int:
         help="stop token ids (default: <|im_end|>, <|endoftext|>)",
     )
     args = parser.parse_args(argv)
+    if not args.model:
+        parser.error(
+            "no model path given -- pass --model <path> or set SUPERSLM_FLOAT_REF_MODEL"
+        )
 
     model_path = _resolve_default_model(Path(args.model))
     if not model_path.exists():

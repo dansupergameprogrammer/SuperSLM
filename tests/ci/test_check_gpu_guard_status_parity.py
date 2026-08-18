@@ -812,11 +812,19 @@ def test_real_tree_status_set_is_the_named_nine():
 
 
 def test_real_tree_cpu_full_body_raw_set_before_subtraction_matches_the_review_own_enumeration():
-    # The review's own S2 finding enumerated, at source, the six statuses
+    # The review's own S2 finding enumerated, at source, six statuses
     # legitimately returned below the old marker (five per-site arithmetic
-    # rejections plus Ok). Confirmed here against the real file: the RAW
+    # rejections plus Ok). T-2152 (outside strike item 3a, re-derived
+    # against the real tree): two of those six -- OptionGWideRopeMagnitude
+    # OutOfDomain/OptionGFusedLandingExponentOutOfDomain -- moved into their
+    # own function, LandTokenKVRow, which RunLayerLoopImpl now calls and
+    # forwards through a local variable rather than returning either name
+    # as literal text; RunLayerLoopImpl's own real body no longer contains
+    # either name at all, in any position. CPU_BELOW_GUARD_ARITHMETIC_
+    # STATUSES was updated to the current four (see its own header comment
+    # for the full account); confirmed here against the real file: the RAW
     # (pre-subtraction) set over the whole function body is exactly the
-    # named nine guards plus those six.
+    # named nine guards plus those four.
     with open(chk.FORWARD_SITES_CPP, "r", encoding="utf-8") as f:
         cpu_text = f.read()
     body = chk.extract_function_body(cpu_text, chk.CPU_FUNC_SIGNATURE, label="forward_sites.cpp")
@@ -827,7 +835,7 @@ def test_real_tree_cpu_full_body_raw_set_before_subtraction_matches_the_review_o
         "SequenceAlreadyComplete", "PositionOverCap", "KvCapacityExhausted",
     }
     assert raw & chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES == chk.CPU_BELOW_GUARD_ARITHMETIC_STATUSES, (
-        "every one of the six named below-guard statuses must actually appear at source -- "
+        "every one of the four named below-guard statuses must actually appear at source -- "
         "an unused name in the subtraction list would silently widen the residual for nothing"
     )
 

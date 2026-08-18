@@ -3,19 +3,24 @@
 "Certified" in this document means: built and run on that exact hardware,
 with every determinism check (bit-identical output against the CPU
 reference, at every layer-budget granularity the engine supports) passing
-on that run. "CI extent" means the platform is built and tested on every
-change by the project's continuous integration, and no measurement beyond
-that has been made. Every number below states the device, the artifact,
-and the surface it was measured through — a number without that context is
-not included here.
+on that run. "CI extent" means the platform is exercised by this project's
+continuous integration matrix, which exists and defines the full build +
+test job for each platform below — **GitHub Actions hosted runs are
+currently capped by the account's spending limit and have not executed
+since 2026-07-23**; today, the same matrix each job runs is reproducible
+locally (this project's own `cmake`+`ctest`, per platform) and that local
+run is the verification path CI extent below stands on until hosted runs
+resume. Every number below states the device, the artifact, and the
+surface it was measured through — a number without that context is not
+included here.
 
 ## CPU inference
 
 | Platform | Status | How it's exercised |
 |---|---|---|
-| Windows x64 | Certified | Local build + full test suite; continuous integration |
-| Linux x64 | CI extent | GitHub Actions (`ubuntu-latest`), GCC and Clang toolchains — build + full test suite |
-| macOS (Apple Silicon, arm64) | CI extent | GitHub Actions (`macos-latest`) — build + full test suite |
+| Windows x64 | Certified | Local build + full test suite; CI job defined, hosted runs currently capped |
+| Linux x64 | CI extent | `cmake`+`ctest` (GCC and Clang toolchains) — locally reproducible; GitHub Actions (`ubuntu-latest`) job defined, hosted runs currently capped |
+| macOS (Apple Silicon, arm64) | CI extent | `cmake`+`ctest` — locally reproducible; GitHub Actions (`macos-latest`) job defined, hosted runs currently capped |
 
 Cross-toolchain determinism at the primitive level (the SiLU
 lookup-table and integer matmul kernels) is checked by comparing a digest
@@ -75,13 +80,15 @@ faster, with the base model's resident weights untouched by the switch.
 ### Schema-constrained decoding on the GPU
 
 The GPU twin of schema-constrained decoding (see [api.md](api.md)) is
-proven bit-identical to the CPU reference on the certified NVIDIA GPU: 80
-real decode steps against a real schema and a real model, matching SHA-256
-digest between the two paths. The identical check against the certified
-AMD GPU has not been run yet — it is the one item outstanding before the
-1.0 tag. This is a narrower, additional check on top of the base
-(unconstrained) determinism guarantee both certified GPUs already carry
-above; it does not affect that guarantee.
+proven bit-identical to the CPU reference on both certified GPUs: real
+decode steps against a real schema and a real model, matching SHA-256
+digest between the two paths at 18, 24, and 80 steps. Measured on the
+NVIDIA RTX 2080 SUPER, and again on the AMD Radeon RX 7900 XTX
+(2026-08-17), with the identical digest at every step count between the
+two vendors as well as between each vendor's own CPU/GPU paths. This is a
+narrower, additional check on top of the base (unconstrained) determinism
+guarantee both certified GPUs already carry above; it does not affect that
+guarantee.
 
 ### The integrated GPU: known, scoped divergence
 
@@ -98,9 +105,7 @@ certified GPUs above, never to "GPUs" unqualified.
 
 ## What's next
 
-Running the schema-constrained-decoding parity check (above) on the
-certified AMD GPU is the one item remaining before the 1.0 tag itself, not
-post-1.0 work. Extending GPU certification to a newer NVIDIA generation
-(Blackwell) and to integrated GPUs (pending the divergence investigation
-above), and measuring macOS beyond what GitHub's own CI runners can
-exercise, are committed post-1.0 work — see the README's roadmap section.
+Extending GPU certification to a newer NVIDIA generation (Blackwell) and
+to integrated GPUs (pending the divergence investigation above), and
+measuring macOS beyond what GitHub's own CI runners can exercise, are
+committed post-1.0 work — see the README's roadmap section.

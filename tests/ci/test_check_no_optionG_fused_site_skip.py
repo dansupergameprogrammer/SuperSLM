@@ -80,10 +80,20 @@ def _replace_once(path: str, old: str, new: str) -> None:
 # `src/forward/forward_sites.cpp`'s own fused K-landing loop. If a future
 # edit changes this block's own text, `_replace_once`'s count assertion
 # fails loudly (not silently vacuous) rather than mutating nothing.
+#
+# T-2152 (outside strike item 3b, re-derived against the real tree, not
+# hand-adjusted): re-transcribed at four tabs of indentation, down from six.
+# The block itself is unchanged text -- `LandTokenKVRow` (src/forward/
+# forward_sites.cpp) was extracted out of `RunLayerLoopImpl`'s own body
+# since this fixture was last transcribed, which removed two enclosing
+# scopes (no longer nested inside `RunLayerLoopImpl`'s own outer per-layer/
+# per-token loop) and re-indented every line inside it by exactly two tab
+# stops; `_replace_once`'s own count assertion caught the drift (count was 0
+# against the six-tab transcription) rather than silently mutating nothing.
 _REAL_REFUSAL_BLOCK = (
-    "\t\t\t\t\t\tif (exceeded0 || exceeded1) {\n"
-    "\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
-    "\t\t\t\t\t\t}"
+    "\t\t\t\tif (exceeded0 || exceeded1) {\n"
+    "\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+    "\t\t\t\t}"
 )
 
 
@@ -149,11 +159,11 @@ def test_real_file_copy_with_injected_exponent_skip_is_caught():
     with tempfile.TemporaryDirectory() as tmp:
         path = _copy_real_forward_sites(tmp)
         mutated = (
-            "\t\t\t\t\t\tif (lw.kv_landing_e_t_k[h] < -40) {\n"
-            "\t\t\t\t\t\t\tif (exceeded0 || exceeded1) {\n"
-            "\t\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
-            "\t\t\t\t\t\t\t}\n"
-            "\t\t\t\t\t\t}"
+            "\t\t\t\tif (lw.kv_landing_e_t_k[h] < -40) {\n"
+            "\t\t\t\t\tif (exceeded0 || exceeded1) {\n"
+            "\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t}"
         )
         _replace_once(path, _REAL_REFUSAL_BLOCK, mutated)
         skip_hits = chk.find_dynamic_gate_skip_conditions(path)
@@ -170,7 +180,7 @@ def test_real_file_copy_with_refusal_deleted_outright_is_caught():
     assertion (`find_missing_anchors`), not the wrapping one."""
     with tempfile.TemporaryDirectory() as tmp:
         path = _copy_real_forward_sites(tmp)
-        _replace_once(path, _REAL_REFUSAL_BLOCK, "\t\t\t\t\t\t(void)exceeded0; (void)exceeded1;")
+        _replace_once(path, _REAL_REFUSAL_BLOCK, "\t\t\t\t(void)exceeded0; (void)exceeded1;")
         skip_hits = chk.find_dynamic_gate_skip_conditions(path)
         missing_hits = chk.find_missing_anchors([path])
         assert skip_hits == [], (
@@ -198,10 +208,10 @@ def test_real_file_copy_with_hoisted_local_exponent_skip_is_caught():
     with tempfile.TemporaryDirectory() as tmp:
         path = _copy_real_forward_sites(tmp)
         mutated = (
-            "\t\t\t\t\t\tconst bool gate_active = lw.kv_landing_e_t_k[h] < -40;\n"
-            "\t\t\t\t\t\tif (gate_active && (exceeded0 || exceeded1)) {\n"
-            "\t\t\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
-            "\t\t\t\t\t\t}"
+            "\t\t\t\tconst bool gate_active = lw.kv_landing_e_t_k[h] < -40;\n"
+            "\t\t\t\tif (gate_active && (exceeded0 || exceeded1)) {\n"
+            "\t\t\t\t\treturn SslmForwardStatus::OptionGFusedLandingExponentOutOfDomain;\n"
+            "\t\t\t\t}"
         )
         _replace_once(path, _REAL_REFUSAL_BLOCK, mutated)
         skip_hits = chk.find_dynamic_gate_skip_conditions(path)

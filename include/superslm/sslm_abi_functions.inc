@@ -3,8 +3,7 @@
  * extern "C" block, after defining every type the declarations reference (sslm_model,
  * sslm_status, sslm_config, sslm_detok_state, etc.).
  *
- * Split into two pieces (Claude/Brunel/t2139-abi-build-2026-08-16.md, the Gate C sslm_status
- * finding's own sibling): sslm_abi_functions_g5_comparable.inc holds every verb whose signature
+ * Split into two pieces: sslm_abi_functions_g5_comparable.inc holds every verb whose signature
  * uses ONLY types tests/t2130-g5-red-suite/sslm_g5.h itself defines -- included here AND,
  * separately, from tools/t2139_gate_a_header_parity_check.cpp (macro-renamed) so Gate A checks
  * the declarations this library actually ships, not a hand-maintained copy of them. The two
@@ -20,7 +19,7 @@
 /* Takes the caller-memory call-shape struct (design Sec7.1) -- not part of the g5-comparable
  * subset (see above).
  *
- * Concurrency (N4, Claude/Poirot/2c18dab-t2139-abi-build-review.md Sec6.3, matching
+ * Concurrency (matching
  * include/superslm/gpu_1p0.h's own per-declaration thread-safety convention): a single
  * sslm_workspace returned by sslm_workspace_create is reusable across an arbitrary SEQUENCE of
  * calls (design Sec7.1), but is NOT safe to pass to two calls running concurrently -- the
