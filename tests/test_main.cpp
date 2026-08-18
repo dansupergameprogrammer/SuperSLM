@@ -44,6 +44,7 @@
 #include "sslm_tokenizer_fixtures.h"
 #include "sslm_tokenizer_hostile_fixtures.h"
 #include "support/bad_alloc_injection.h"
+#include "support/matmul_dispatch_instrument.h"
 #include "../tools/sslm_adapter_loader.h"
 // T-2152 (outside strike item 1): the GPU-serial-port harness is D3D12/Windows-only
 // (src/gpu/d3d12_harness.h pulls in <windows.h>/<d3d12.h>/<dxgi1_6.h>) -- guarded so this
@@ -5638,6 +5639,41 @@ static int RunCrashProbe(const std::string& name) {
 		std::printf("PROBE DID NOT CRASH\n");
 		return 0;
 	}
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+	// T-2158 red suite for T-2149, design §10 dimension 3 (D-SLM3509): a FRESH process
+	// that has never touched DotRow before racing kThreads first-touch calls into
+	// DetectBestDotRowTier()'s magic-static initializer simultaneously. Every thread
+	// checks its own result against a fixed, hand-computed oracle (not against the other
+	// threads), and the probe reports the seam's own call count -- both read back and
+	// asserted by the parent, TestMatmulFirstCallDispatchRaceUnderConcurrency above.
+	if (name == "matmul_first_call_race") {
+		std::printf("%s\n", CrashProbeBeganMarker(name).c_str());
+		std::fflush(stdout);
+		constexpr int kThreads = 8;
+		constexpr size_t kInChannels = 4;
+		static const int8_t kActs[kInChannels] = {1, 2, 3, 4};
+		static const int8_t kWgts[kInChannels] = {5, 6, 7, 8};
+		std::vector<int64_t> results(static_cast<size_t>(kThreads), INT64_MIN);
+		std::vector<std::thread> threads;
+		threads.reserve(static_cast<size_t>(kThreads));
+		for (int i = 0; i < kThreads; ++i) {
+			threads.emplace_back([i, &results]() {
+				int64_t out = 0;
+				GemmInt8AccumulateRow(kActs, kWgts, kInChannels, /*out_channels=*/1, &out);
+				results[static_cast<size_t>(i)] = out;
+			});
+		}
+		for (auto& t : threads) t.join();
+		for (int i = 0; i < kThreads; ++i) {
+			std::printf("THREAD_RESULT:%d:%lld\n", i,
+			            static_cast<long long>(results[static_cast<size_t>(i)]));
+		}
+		std::printf("PROBE_INVOCATIONS:%lld\n",
+		            static_cast<long long>(superslm_test::g_dot_row_tier_probe_invocations.load()));
+		std::fflush(stdout);
+		return 0;
+	}
+#endif  // SUPERSLM_T2149_AVX_TIERS_BUILT
 	// S3 (Poirot review ac34677, 2026-07-28): RowBoundsWide (src/intmath.cpp:
 	// 279-280) reads x[0] before testing n at all -- with a null data pointer
 	// and n == 0 this is a null-pointer dereference, and the reviewer's own
@@ -6680,6 +6716,118 @@ static void TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded() {
 	          "single-threaded baseline",
 	          total_mismatches, kThreads * static_cast<int>(calls_per_thread), calls_per_thread);
 }
+
+// --- T-2158 red suite for T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md;
+//     Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md). Both cells below are gated
+//     behind SUPERSLM_T2149_AVX_TIERS_BUILT (CMakeLists.txt, OFF by default) because they
+//     depend on DetectBestDotRowTier() (design §6.2) and its test-only call-count seam
+//     (tests/support/matmul_dispatch_instrument.h), neither of which exists in
+//     src/matmul.cpp yet -- authored gated-red per this suite's own casebook, not
+//     compiled at all until the option is turned on. ---
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+
+// design §10 dimension 1 (re-specified fold round 2, D-SLM3515): the cached tier
+// selection is chosen exactly once per process and reused across every subsequent
+// DotRow call. Realized as two assertions about two DISTINCT kinds of binary this
+// process might be: in the non-forced (dispatch-live) build, the magic-static
+// initializer inside DetectBestDotRowTier() has run by the time this cell executes
+// (this test runs after every earlier matmul cell in main()'s fixed order, all of which
+// already called GemmInt8AccumulateRow/GemmInt8Accumulate), so the seam's counter must
+// read exactly 1 -- selected once, never re-selected on any later call. In a forced
+// binary (any of SUPERSLM_FORCE_{SCALAR,SSE2,AVX2,AVX512}_MATMUL defined), DotRow
+// resolves its tier entirely at compile time via #if/#elif and never calls
+// DetectBestDotRowTier() at all, so the counter must read exactly 0 -- the strike's own
+// executed measurement (design §16.3) is the ground truth this assertion's two
+// expected values are drawn from, not an assumption.
+static void TestMatmulDotRowTierProbeSelectedOnceAndReusedAcrossCalls() {
+	using namespace superslm_test;
+	const long long invocations = g_dot_row_tier_probe_invocations.load();
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL) || defined(SUPERSLM_FORCE_SSE2_MATMUL) || \
+    defined(SUPERSLM_FORCE_AVX2_MATMUL) || defined(SUPERSLM_FORCE_AVX512_MATMUL)
+	CHECK_MSG(invocations == 0,
+	          "forced-tier binary: DetectBestDotRowTier() call count == %lld, want 0 -- a "
+	          "forced build resolves DotRow's tier entirely at compile time and must never "
+	          "call the runtime probe at all (design §10 dimension 1, D-SLM3515)",
+	          invocations);
+#else
+	CHECK_MSG(invocations == 1,
+	          "non-forced (dispatch-live) binary: DetectBestDotRowTier() call count == "
+	          "%lld, want exactly 1 -- the cached tier selection must be chosen once per "
+	          "process and reused across every subsequent DotRow call, never re-selected "
+	          "(design §10 dimension 1, D-SLM3515)",
+	          invocations);
+#endif
+}
+
+// design §10 dimension 3 (construction corrected fold round 1, D-SLM3509): the magic-
+// static's first-touch initialization under real thread contention -- NOT an extension
+// of TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded above, which by this
+// suite's own fixed execution order already warmed the cache long before this point and
+// cannot observe a first-call race. Uses the existing child-process re-exec convention
+// (GSelfPath/crash-probe, tests/test_main.cpp:5433-5544, precedent at
+// TestGemmInt8AccumulateRowAssertsOnZeroInChannelsContractViolation, 5830): a FRESH
+// process that has never touched DotRow before spinning up kThreads racing first-touch
+// calls. A feature oracle, not a consistency oracle (Curie's own dimension-10
+// discipline, applied here to the initialization race): every thread's own result is
+// checked against a fixed, hand-computed expected value (1*5 + 2*6 + 3*7 + 4*8 = 70),
+// not merely against each other -- a race that produces a consistent-but-wrong answer on
+// every thread cannot pass this the way it would a thread-to-thread-only comparison. The
+// probe additionally reports the seam's call count so this cell ALSO closes dimension
+// 1's "exactly once, even under first-call contention" half directly, rather than
+// inferring it from the steady-state cell above.
+static void TestMatmulFirstCallDispatchRaceUnderConcurrency() {
+	using namespace superslm_test;
+	std::string tail;
+	CrashProbeOutcome outcome = RunsCrashProbeAndCrashes("matmul_first_call_race", &tail);
+	CHECK_MSG(outcome == CrashProbeOutcome::kRanNoCrash,
+	          "matmul_first_call_race probe outcome == %s, want ran-no-crash (a crash here "
+	          "under the TSan leg means a genuine data race was detected on "
+	          "DetectBestDotRowTier()'s own first-touch initialization) -- child output: %s",
+	          CrashProbeOutcomeName(outcome), tail.c_str());
+	if (outcome != CrashProbeOutcome::kRanNoCrash) return;
+
+	constexpr int kThreads = 8;  // mirrors TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded's own 8-thread shape (test_main.cpp:6644)
+	constexpr int64_t kExpected = 70;  // 1*5 + 2*6 + 3*7 + 4*8, hand-computed, independent of any implementation
+	int found_thread_results = 0;
+	for (int i = 0; i < kThreads; ++i) {
+		char marker[64];
+		std::snprintf(marker, sizeof(marker), "THREAD_RESULT:%d:", i);
+		size_t pos = tail.find(marker);
+		CHECK_MSG(pos != std::string::npos,
+		          "matmul_first_call_race probe output is missing THREAD_RESULT:%d: -- "
+		          "child output: %s",
+		          i, tail.c_str());
+		if (pos == std::string::npos) continue;
+		++found_thread_results;
+		const long long got = std::strtoll(tail.c_str() + pos + std::strlen(marker), nullptr, 10);
+		CHECK_MSG(got == kExpected,
+		          "matmul_first_call_race probe: thread %d result == %lld, want %lld "
+		          "(the fixed, hand-computed oracle) -- a race on the tier-selection cache "
+		          "producing a consistent-but-wrong answer on every thread must still fail "
+		          "here, since this checks against the independent oracle, not thread-to-"
+		          "thread equality",
+		          i, got, static_cast<long long>(kExpected));
+	}
+	CHECK(found_thread_results == kThreads);
+
+	size_t inv_pos = tail.find("PROBE_INVOCATIONS:");
+	CHECK_MSG(inv_pos != std::string::npos,
+	          "matmul_first_call_race probe output is missing PROBE_INVOCATIONS: -- child "
+	          "output: %s",
+	          tail.c_str());
+	if (inv_pos != std::string::npos) {
+		const long long inv = std::strtoll(
+		    tail.c_str() + inv_pos + std::strlen("PROBE_INVOCATIONS:"), nullptr, 10);
+		CHECK_MSG(inv == 1,
+		          "matmul_first_call_race probe: DetectBestDotRowTier() call count under "
+		          "kThreads-way first-touch contention == %lld, want exactly 1 -- the "
+		          "magic-static initializer body must run exactly once even when every "
+		          "racing thread reaches it simultaneously (design §10 dimensions 1 and 3)",
+		          inv);
+	}
+}
+
+#endif  // SUPERSLM_T2149_AVX_TIERS_BUILT
 
 // --- S12 dim 8, S11 item 3: composition regression. NarrowAccumulatorToI32's output,
 //     fed into the already-shipped MaxAbsReduce/NormalizeScale/DynamicScaleReciprocal/
@@ -26088,6 +26236,10 @@ int main(int argc, char** argv) {
 	TestGemmInt8AccumulateRowWarmObjectManyTokensAgainstSameWeights();
 	TestGemmInt8AccumulateScratchBufferNoStaleByteCarryoverAcrossShapeChange();
 	TestGemmInt8AccumulateRowConcurrentReadsMatchSingleThreaded();
+#if defined(SUPERSLM_T2149_AVX_TIERS_BUILT)
+	TestMatmulDotRowTierProbeSelectedOnceAndReusedAcrossCalls();
+	TestMatmulFirstCallDispatchRaceUnderConcurrency();
+#endif
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
 	TestS2Point5SixCaseAcceptanceGateMeasurement();
 	TestDotRowScalarRefMatchesShippingSse2PathAndOracle();

@@ -181,6 +181,48 @@ else()
 	target_compile_options(sslm_axis_digest_scalar_forced PRIVATE -Wall -Wextra -ffp-contract=off)
 endif()
 
+# T-2149 (Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md) / T-2158 red suite
+# (Claude/Curie/t2158-t2149-avx-red-suite-2026-08-18.md): the AVX2/AVX-512 matmul tiers,
+# the cached CPUID dispatch (DetectBestDotRowTier), and the four-macro force selection
+# (SUPERSLM_FORCE_{SCALAR,SSE2,AVX2,AVX512}_MATMUL, design §6.1) do not exist yet -- this
+# option is OFF by default so the red suite's tier-dependent cells (dispatch-cache
+# lifetime, first-call-race concurrency; design §10 dimensions 1/3) stay excluded from
+# compilation and the existing 34184/0 battery (D-SLM3496) is unaffected. Whoever builds
+# the design's §11 step 1 turns this ON (and, for step 5/7's new forced test executables,
+# additionally propagates the corresponding SUPERSLM_FORCE_*_MATMUL definition to each
+# forced `superslm_tests_*_forced` executable's own compile of tests/test_main.cpp --
+# PUBLIC on the forced library, or an explicit target_compile_definitions on the forced
+# executable target itself -- so the dispatch-cache cell's "== 0 in each forced binary"
+# half, gated the same way, can see which tier it was built for; see the red-suite
+# casebook §"Dimension 1" for the exact contract).
+option(SUPERSLM_T2149_AVX_TIERS_BUILT
+	"T-2149: the AVX2/AVX-512 matmul tiers and cached dispatch exist in src/matmul.cpp. OFF (default) keeps T-2158's tier-dependent red-suite cells out of the build so main stays green with the feature unbuilt."
+	OFF)
+if(SUPERSLM_T2149_AVX_TIERS_BUILT)
+	target_compile_definitions(superslm_test_injection PUBLIC
+		SUPERSLM_T2149_AVX_TIERS_BUILT
+		SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT)
+endif()
+
+# T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
+# AVX-isolation claim (design §6.4) -- no target_compile_options call anywhere in this
+# file may set a translation-unit-wide AVX2/AVX-512 flag (see
+# tools/ci/check_matmul_avx_isolation.py's own header for the full argument and its
+# mutation-vitality proof, executed and recorded in the T-2158 casebook). Runs today,
+# unconditionally, independent of SUPERSLM_T2149_AVX_TIERS_BUILT: the claim it protects
+# ("only two function-attributed sites may use these instructions") is already true
+# (vacuously, since neither attributed site exists yet) and stays true once they land --
+# this is exactly the guard design §10 dimension 7 commissions as a standing check, not a
+# one-time build-time probe like its dimension-7c/7g siblings (§11 steps 4b/4d).
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+	add_test(NAME check_matmul_avx_isolation
+		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ci/check_matmul_avx_isolation.py
+			--cmakelists ${CMAKE_SOURCE_DIR}/CMakeLists.txt)
+else()
+	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation ctest entry not added (the script itself is still committed and runnable directly).")
+endif()
+
 # C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate
 # C's own must-accept/must-reject constructions (tools/t2139_gate_a_header_parity_check*.cpp,
 # tools/t2139_gate_c_type_identity_check*.cpp) were previously compiled ONLY by build.bat (MSVC
