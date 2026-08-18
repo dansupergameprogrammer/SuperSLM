@@ -2,15 +2,15 @@
 
 A `.sslm` file is a converted, quantized SuperSLM model: a versioned header, a
 section table, and a sequence of aligned sections. It is the boundary between the
-offline converter (build-time Python, `SuperSLM_Plan.md` §11) and the runtime C++
-loader. This document is the normative spec; `include/superslm/artifact.h` is the
-machine-readable contract and must agree with it byte-for-byte.
+offline converter (build-time Python) and the runtime C++ loader. This document is
+the normative spec; `include/superslm/artifact.h` is the machine-readable contract
+and must agree with it byte-for-byte.
 
 The format is designed to be **memory-mappable** (every section is aligned so it
 can be consumed in place) and **integrity-checked** (a hash over the whole file
-detects any corruption or truncation). The loader is a **trust boundary**
-(§17 dim 2): it treats the entire file as hostile input and validates every field
-against declared bounds before any byte of a section is read.
+detects any corruption or truncation). The loader is a **trust boundary**: it
+treats the entire file as hostile input and validates every field against
+declared bounds before any byte of a section is read.
 
 ## Load-bearing choices (called out for review)
 
@@ -18,16 +18,16 @@ These are the decisions a builder must not make silently. Each is fixed for v1:
 
 1. **Little-endian, fixed.** Every multi-byte integer is stored little-endian,
    independent of host. x86 and ARM are both little-endian; fixing it makes the
-   artifact bytes host-independent, which the §11 reproducibility formula requires.
+   artifact bytes host-independent, which reproducibility across machines requires.
    The loader reads each field with explicit little-endian byte assembly — it never
    `reinterpret_cast`s a struct over untrusted bytes (that would import host padding
    and endianness into a security boundary).
 2. **Integrity hash = SHA-256 over the whole file with the hash field zeroed.**
    The 32 hash bytes in the header are treated as zero while hashing, then compared
    to the stored value. This covers the header, the section table, and every
-   section — one check proves the whole artifact is intact. It is also the artifact's
-   identity (the spike's `source_fingerprint`, `artifact_cache.py`).
-3. **Reject over degrade (§11).** Any deviation — bad magic,
+   section — one check proves the whole artifact is intact. It also serves as the
+   artifact's content-addressed identity.
+3. **Reject over degrade.** Any deviation — bad magic,
    unsupported version, an out-of-bounds/overlapping/misaligned section, an unknown
    section type, a size that disagrees with its dtype, a hash mismatch — is a
    **rejection with a versioned diagnostic**, never a silent partial load.
@@ -41,7 +41,7 @@ These are the decisions a builder must not make silently. Each is fixed for v1:
    type carries exactly one dtype (the "dtype" column of the section-types table
    below is normative, not documentation). A section whose type is known but whose
    dtype is not the one that type requires is rejected (`SectionDtypeMismatch`) — the
-   reject-over-degrade law (§11) applied to the descriptor, so a consumer that reads
+   reject-over-degrade rule above, applied to the descriptor, so a consumer that reads
    a section by type can trust its element width without re-checking.
 
 ## Byte layout
@@ -85,23 +85,23 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 | Value | Name                    | dtype        | Slot | Notes                                              |
 |------:|-------------------------|--------------|------|----------------------------------------------------|
 |     0 | `Config`                | `Raw`        | S0   | model config — a fixed `CFG1` binary struct (§ "Config blob"); **required** |
-|     1 | `Provenance`            | `Json`       | S0   | checkpoint name, license id, source hash (§11)     |
+|     1 | `Provenance`            | `Json`       | S0   | checkpoint name, license id, source hash           |
 |     2 | `Weights`               | `Int8`       | S0   | quantized weight blocks                            |
-|     3 | `Biases`                | `Int64`      | S0   | C28 dynamic-bias codes — a `BIA1` int64 tensor manifest (codes reach ~10¹⁴ at q_b=30) |
-|     4 | `RopeTables`            | `Int64`      | S0   | RoPE tables (§6.4)                                 |
+|     3 | `Biases`                | `Int64`      | S0   | dynamic-bias codes — a `BIA1` int64 tensor manifest (codes reach ~10¹⁴ at the widest observed shift) |
+|     4 | `RopeTables`            | `Int64`      | S0   | RoPE tables                                        |
 |     5 | `Scales`                | `Json`       | S0   | `StaticScales` (requant / rescale / nonlinear)     |
-|     6 | `WeightScales`          | `Int32`      | S0   | per-channel C24/C25 fold ops — a `WSC1` tensor manifest (§ "Weight-scale fold blob") |
-|     7 | `CompositionConstants`  | `Raw`        | S0   | pinned composition constants (§6.8) — a `KVC1` keyed blob |
-|     8 | `KvLandingScales`       | `Raw`        | S0   | per-head KV landing scales (C27) — a `KVC1` keyed blob    |
-|     9 | `KvLandingReciprocals`  | `Raw`        | S0   | per-head KV landing reciprocals (C27) — a `KVC1` keyed blob |
+|     6 | `WeightScales`          | `Int32`      | S0   | per-channel weight-scale fold ops — a `WSC1` tensor manifest (§ "Weight-scale fold blob") |
+|     7 | `CompositionConstants`  | `Raw`        | S0   | pinned composition constants — a `KVC1` keyed blob |
+|     8 | `KvLandingScales`       | `Raw`        | S0   | per-head KV landing scales — a `KVC1` keyed blob    |
+|     9 | `KvLandingReciprocals`  | `Raw`        | S0   | per-head KV landing reciprocals — a `KVC1` keyed blob |
 |    10 | `Calibration`           | `Json`       | S0   | calibration record                                 |
-|    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (§11 golden pack)            |
-|    12 | `SigmoidLut`            | `Int32`      | S2   | fixed-point SiLU sigmoid LUT — a `SIL1` fixed table (§ "Sigmoid-LUT blob"); **required from v2** (C10) |
+|    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (the golden pack)            |
+|    12 | `SigmoidLut`            | `Int32`      | S2   | fixed-point SiLU sigmoid LUT — a `SIL1` fixed table (§ "Sigmoid-LUT blob"); **required from v2** |
 |    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
-|    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
+|    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata             |
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
 |    30 | `SchemaMasks`           | `Raw`        | S5   | compiled DFA mask pages — an `SCM1` keyed-by-name blob (§ "SchemaMasks sub-format"); **optional** |
-|    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band (§8.3) — a `KVC1` keyed blob; **optional** |
+|    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band — a `KVC1` keyed blob; **optional** |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
 **optional at the current container version** — a v2
@@ -179,7 +179,7 @@ their concatenated tensor data, parsed by the runtime `ModelView` **after** the 
 has verified whole-file integrity. Like the tokenizer blobs (`TOK1`/`UNI1`), the parse
 then trusts the bytes are intact but still **fails closed** on a bad marker, an
 out-of-bounds range, or a descriptor that disagrees with its declared shape — the same
-hostile-input trust boundary the loader itself is (§17 dim 2).
+hostile-input trust boundary the loader itself is.
 All fields are little-endian and read by explicit byte assembly (never a struct cast over
 untrusted bytes). The converter that writes them is `tools/convert_model.py`.
 
@@ -238,7 +238,7 @@ converter packs them contiguously in descriptor order; the loader validates non-
 
 ### Keyed numeric-constant blob — `KVC1`
 
-The pinned integer composition constants (§6.8 C23–C30) live in three keyed sections, each
+The pinned integer composition constants live in three keyed sections, each
 mapping a string key to a fixed-width tuple of integers. They share one self-contained binary
 sub-format, `KVC1`, parsed by `ModelView` as a hostile-input trust boundary (the same bar as
 `WGT1`). Only the **magic is shared** (`'KVC1'`); the section type fixes how many integers each
@@ -249,7 +249,7 @@ entry carries (`value_words`), and the blob restates it so the parse can reject 
 | `CompositionConstants` (7)    | 2 | `(m, e)` — canonical carried scale (C26) |
 | `KvLandingScales` (8)         | 2 | `(m, e)` — per-head K/V landing target (C27) |
 | `KvLandingReciprocals` (9)    | 3 | `(m, e, R)` — the landing composite's offline reciprocal (C27) |
-| `CalibrationBand` (31)        | 2 | `(min, max)` — inclusive token-length calibration band (§8.3), entry named `token_length` |
+| `CalibrationBand` (31)        | 2 | `(min, max)` — inclusive token-length calibration band, entry named `token_length` |
 
 Every value is stored as a little-endian **`int64`**, including `e` (a small exponent that fits
 trivially) — one uniform layout serves both the 2-word and 3-word sections. All offsets are from
@@ -319,9 +319,9 @@ by a kernel). All little-endian; the total is exactly **84 bytes**.
 
 `ModelView` config parse rejects on: `byte_size != 84`; a wrong magic or version; any of the eight
 dimension fields **or `kv_block_size`** `== 0`; `tie_word_embeddings`/`kv_precision` outside their
-allowed set; a nonzero `reserved`. This is the §11 reject-over-degrade law applied to config — a zero dimension or a
+allowed set; a nonzero `reserved`. This is the reject-over-degrade rule (above) applied to config — a zero dimension or a
 defaulted field produces "a model that loads, runs, generates fluent text, and is not the source
-model" (§6.8 C15), so it is rejected, never repaired.
+model," so it is rejected, never repaired.
 
 ### Weight-scale fold blob — `WSC1` (reuses the tensor manifest)
 
@@ -357,7 +357,7 @@ All little-endian; total is exactly **`16 + 1025·4 = 4116` bytes**.
 `ModelView` SIL1 parse (`ParseSigmoidLut`) rejects (fails closed) on: `byte_size != 4116`
 (`BadSigmoidLutSize`); a wrong magic (`BadSigmoidLutMagic`) or version (`UnsupportedSigmoidLutVersion`);
 `entry_count != 1025` (`BadSigmoidLutCount`); a nonzero reserved field (`BadSigmoidLutReserved`) — the
-§11 reject-over-degrade law. Nodes are read with the byte-assembly reader (`SigmoidLutValue`), never a
+reject-over-degrade rule above. Nodes are read with the byte-assembly reader (`SigmoidLutValue`), never a
 cast (the payload is not guaranteed `int32`-aligned). The runtime lookup over the table lives in
 `include/superslm/silu_lut.h` (index derivation + interpolation, division-free), not in the parse.
 
@@ -452,8 +452,9 @@ Config.vocab_size`.
 reachable non-accepting state has a non-empty valid-token set — that proof belongs to the
 schema compiler (`tools/sslm_convert_schema.py`), made once, at compile time; a schema that
 fails it is never written into an `SCM1` section in the first place. Adding a runtime re-check
-here would make the compiler's own guard redundant rather than load-bearing (design §7 dim 11's
-guard-vitality discipline).
+here would make the compiler's own guard redundant rather than load-bearing — a check the
+runtime never exercises against a real failure is not proving anything, and this format
+deliberately keeps every check it declares reachable by a real rejection path.
 
 **Save-blob binding (the sequence-level, not artifact-level, half — `SslmModel`'s own C5
 save/restore blob, `src/sslm_abi.cpp`, unrelated to this file's own container format above):** a
