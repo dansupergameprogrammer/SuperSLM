@@ -27,7 +27,7 @@ These are the decisions a builder must not make silently. Each is fixed for v1:
    to the stored value. This covers the header, the section table, and every
    section — one check proves the whole artifact is intact. It is also the artifact's
    identity (the spike's `source_fingerprint`, `artifact_cache.py`).
-3. **Reject over degrade (§11, D-SLM-lineage).** Any deviation — bad magic,
+3. **Reject over degrade (§11).** Any deviation — bad magic,
    unsupported version, an out-of-bounds/overlapping/misaligned section, an unknown
    section type, a size that disagrees with its dtype, a hash mismatch — is a
    **rejection with a versioned diagnostic**, never a silent partial load.
@@ -96,7 +96,7 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |     9 | `KvLandingReciprocals`  | `Raw`        | S0   | per-head KV landing reciprocals (C27) — a `KVC1` keyed blob |
 |    10 | `Calibration`           | `Json`       | S0   | calibration record                                 |
 |    11 | `GoldenHashes`          | `Json`       | S0   | reference-pack hashes (§11 golden pack)            |
-|    12 | `SigmoidLut`            | `Int32`      | S2   | fixed-point SiLU sigmoid LUT — a `SIL1` fixed table (§ "Sigmoid-LUT blob"); **required from v2** (C10, D-SLM68) |
+|    12 | `SigmoidLut`            | `Int32`      | S2   | fixed-point SiLU sigmoid LUT — a `SIL1` fixed table (§ "Sigmoid-LUT blob"); **required from v2** (C10) |
 |    20 | `Tokenizer`             | `Raw`        | S1   | byte-BPE vocab + merges + special tokens (blob)    |
 |    21 | `ChatTemplate`          | `Json`       | S1   | chat template + special-token metadata (F-W3)      |
 |    22 | `UnicodeTables`         | `Raw`        | S1   | pinned NFC + `\p{L}`/`\p{N}`/`\s` tables (blob)     |
@@ -104,8 +104,7 @@ Each section's bytes live at `[offset, offset + byte_size)`, aligned as declared
 |    31 | `CalibrationBand`       | `Raw`        | S3.7 | token-length calibration band (§8.3) — a `KVC1` keyed blob; **optional** |
 
 The tokenizer types (20–22) are emitted and interpreted at S1. `SchemaMasks` (30) is
-**optional at the current container version** (T-2132, design Claude/Vitruvius/
-t2119-g5-constrained-decoding-design-2026-08-16.md §13, Wizard repo, D-SLM3474) — a v2
+**optional at the current container version** — a v2
 artifact carrying zero compiled schemas omits the section entirely, and every loader
 accepts that identically to before this type existed; one carrying it must satisfy the
 `SCM1` sub-format's own structural and cross-check rejections (§ "SchemaMasks
@@ -161,7 +160,7 @@ that writes them is `tools/convert_tokenizer.py` / `tools/unicode_tables.py`.
 Pinned Unicode data (version recorded in the `Config` section) for NFC and the
 `\p{L}`/`\p{N}`/`\s` classes. A range is an inclusive `(lo, hi)` codepoint pair.
 **Each of the three range tables (`letter`, `number`, `space`) must be sorted by `lo`,
-non-overlapping, and satisfy `lo <= hi` per range** (T-1416) — the loader rejects a
+non-overlapping, and satisfy `lo <= hi` per range** — the loader rejects a
 range table violating any of these at load time, so a producer must emit ranges in
 ascending, non-overlapping order.
 
@@ -180,7 +179,7 @@ their concatenated tensor data, parsed by the runtime `ModelView` **after** the 
 has verified whole-file integrity. Like the tokenizer blobs (`TOK1`/`UNI1`), the parse
 then trusts the bytes are intact but still **fails closed** on a bad marker, an
 out-of-bounds range, or a descriptor that disagrees with its declared shape — the same
-hostile-input trust boundary the loader itself is (§17 dim 2), certified to the T-129 bar.
+hostile-input trust boundary the loader itself is (§17 dim 2).
 All fields are little-endian and read by explicit byte assembly (never a struct cast over
 untrusted bytes). The converter that writes them is `tools/convert_model.py`.
 
@@ -227,8 +226,8 @@ span `[data_off, data_off + elem_count * element_size)`.
 
 The `ModelView` sub-parse rejects (fails closed, never a partial view) on any of: a short
 section (`byte_size < 16`); a wrong magic or version; `tensor_count > kMaxTensors`; the
-fixed header + descriptor table + name blob exceeding `byte_size` (computed in 64-bit — a
-32-bit product is the T-129 defect class); for **any** descriptor — a name range outside
+fixed header + descriptor table + name blob exceeding `byte_size` (computed in 64-bit, to
+avoid a 32-bit overflow on the product); for **any** descriptor — a name range outside
 the name blob, a duplicate name, `rank` outside `[1,4]`, a `shape` entry nonzero at or past
 `rank` or zero before it, an `elem_count` disagreeing with `product(shape)`, a `data_off`
 not element-aligned or below the data region, a data range exceeding `byte_size` or
@@ -249,7 +248,7 @@ entry carries (`value_words`), and the blob restates it so the parse can reject 
 |-------------------------------|:-------------:|-------|
 | `CompositionConstants` (7)    | 2 | `(m, e)` — canonical carried scale (C26) |
 | `KvLandingScales` (8)         | 2 | `(m, e)` — per-head K/V landing target (C27) |
-| `KvLandingReciprocals` (9)    | 3 | `(m, e, R)` — the landing composite's offline reciprocal (C27/D-SLM58) |
+| `KvLandingReciprocals` (9)    | 3 | `(m, e, R)` — the landing composite's offline reciprocal (C27) |
 | `CalibrationBand` (31)        | 2 | `(min, max)` — inclusive token-length calibration band (§8.3), entry named `token_length` |
 
 Every value is stored as a little-endian **`int64`**, including `e` (a small exponent that fits
@@ -276,7 +275,7 @@ overflow-prone product and is guarded); for **any** entry — a name range outsi
 zero-length name, a duplicate name, or a nonzero-reserved header. The integer values themselves are
 not range-checked here — the structural parse stays value-blind by design, so it does not couple
 this format to any one consumer's kernel domain. The obligation belongs to the load-time
-schema-value gate (`SslmModel::Load` + `ValidateSectionValues`, S-HARDEN-1, D-SLM141): each
+schema-value gate (`SslmModel::Load` + `ValidateSectionValues`): each
 consuming primitive documents its domain (e.g. `CompositionConstants`' `(m, e)` against
 `SiluSigmoidQ15`'s no-UB floor), and the gate declares that domain as data in a per-section
 descriptor table, checked once per artifact open before any typed view is exposed. This is what the
@@ -332,13 +331,13 @@ per-output-channel C24/C25 fold ops are `(identity, mult, shift)` int32 triples,
 `Weights`/`Biases`/`RopeTables`, with its own magic `'WSC1'` and element type `int32`; it is parsed
 by the same `SslmTensorManifest::Parse` (already certified, S2.0a). Column 0 of each row is the
 identity flag (`0`/`1`), column 1 the `mult`, column 2 the `shift`. The attention-context per-head
-fold (C27/D-SLM57) rides the same section under `{prefix}.ctx_fold_head{h}` keys. No parse code is
+fold (C27) rides the same section under `{prefix}.ctx_fold_head{h}` keys. No parse code is
 added — only the magic and the `int32` element type, per the tensor-manifest rules above.
 
 ### Sigmoid-LUT blob — `SIL1`
 
 The `SigmoidLut` section (type 12, dtype **`Int32`**, **required from v2**) carries the
-fixed-point SiLU sigmoid lookup table (C10, D-SLM68). Like `CFG1` it is a **fixed-layout**
+fixed-point SiLU sigmoid lookup table (C10). Like `CFG1` it is a **fixed-layout**
 section — the table geometry (`N` nodes over `x ∈ [-X, X]`, and the runtime sub-node index
 resolution) is a pinned build-time constant of the construction, **not** carried per-artifact —
 so the exact-size check gates every read. `N = 1024`, so the table has `N+1 = 1025` entries; the
@@ -362,11 +361,10 @@ All little-endian; total is exactly **`16 + 1025·4 = 4116` bytes**.
 cast (the payload is not guaranteed `int32`-aligned). The runtime lookup over the table lives in
 `include/superslm/silu_lut.h` (index derivation + interpolation, division-free), not in the parse.
 
-### SchemaMasks sub-format — `SCM1` (T-2132)
+### SchemaMasks sub-format — `SCM1`
 
 The `SchemaMasks` section (type 30, dtype `Raw`, **optional**) carries a **table of named,
-independently-compiled schemas** (design Claude/Vitruvius/
-t2119-g5-constrained-decoding-design-2026-08-16.md §13, Wizard repo, D-SLM3474) — the
+independently-compiled schemas** — the
 `sslm_schema_lookup`/`sslm_schema_count`/`sslm_schema_name` ABI is lookup-by-name over a set,
 not a single schema. Mirrors the `KVC1` keyed-blob shape (fixed header, fixed-size descriptor
 table, name blob, then payload) for the same reason `KVC1` uses it — this table has to be
@@ -471,8 +469,8 @@ after the existing model/kv-precision validation and before any block is drawn f
 rejects with a versioned diagnostic (`UnsupportedVersion`) — it never attempts a
 best-effort load. `ARTIFACT_FORMAT_VERSION` is currently **2**. A change to any field
 layout, a new required section, or a change to the integrity-hash construction bumps this
-number. **v1 → v2 (S2.4):** the required `SigmoidLut` (`SIL1`) section was added — once C10 is
-the LUT (D-SLM68) the forward has no i-exp-sigmoid fallback, so `SIL1` is a required section and
+number. **v1 → v2:** the required `SigmoidLut` (`SIL1`) section was added — once C10 is
+the LUT, the forward has no i-exp-sigmoid fallback, so `SIL1` is a required section and
 the bump follows the "new required section" rule. v1 and v2 artifacts are therefore mutually
 incompatible by the version check: a v2 loader rejects a v1 artifact (missing the required table),
 and a v1 loader rejects a v2 artifact — a rejection with a diagnostic, never a silent degrade.
@@ -482,8 +480,8 @@ additions — distinct from `format_version`.** A version bump is for a field-la
 change, a new required section, or an integrity-hash change; `flags` is for a
 capability that is optional (an old loader keeps working, unmodified, on an artifact
 that does not set the bit) and requires no new section or field. Bit 0
-(`kOptionGFusedKLandingFlag = 0x1`) selects Option-G fused post-RoPE K landing
-(T-1894, T-1822 design §31.2.1): the loader accepts `flags` values that set only
+(`kOptionGFusedKLandingFlag = 0x1`) selects Option-G fused post-RoPE K landing:
+the loader accepts `flags` values that set only
 known bits and rejects (`BadHeader`) any unknown bit, so a future artifact carrying a
 capability an older loader does not recognize is refused rather than silently
 mis-loaded. Every artifact produced before this bit existed has `flags == 0`, which
