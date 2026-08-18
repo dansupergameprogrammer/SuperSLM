@@ -39,13 +39,13 @@ inline constexpr uint8_t kBiasesMagic[4] = {'B', 'I', 'A', '1'};
 inline constexpr uint8_t kRopeMagic[4] = {'R', 'O', 'P', '1'};
 // WeightScales is a tensor manifest too (int32 (identity,mult,shift) fold ops); its magic.
 inline constexpr uint8_t kWeightScalesMagic[4] = {'W', 'S', 'C', '1'};
-// T-2021/T-2029 B0b (design Sec9, D-SLM3093): the two new runtime-additive-LoRA adapter arrays
+// The two new runtime-additive-LoRA adapter arrays
 // get their OWN magics, distinct from WSC1's -- never reused or aliased.
 inline constexpr uint8_t kDeltaFoldScalesMagic[4] = {'D', 'F', 'S', '1'};
 inline constexpr uint8_t kUFoldScalesMagic[4] = {'U', 'F', 'S', '1'};
 
 // WSC1's own unsigned shift domain (RoundingDivideByPOT's documented int32 exponent domain).
-// T-2041 (Poirot c81e48c review, Minor 1): this is now the ONLY definition of
+// This is the ONLY definition of
 // kWeightScaleShiftMin/Max -- a prior TU-internal copy in model.cpp was removed this build, so
 // there is nothing left for a static_assert to pin these two constants AGAINST each other; the
 // static_assert in model.cpp (src/model.cpp, "WSC1 shift's domain must equal RoundingDivideByPOT's
@@ -58,7 +58,7 @@ inline constexpr uint8_t kUFoldScalesMagic[4] = {'U', 'F', 'S', '1'};
 inline constexpr int32_t kWeightScaleShiftMin = 0;
 inline constexpr int32_t kWeightScaleShiftMax = 31;
 
-// The amplifying-fold triple's own signed domain (design Sec4/Sec9, D-SLM2917) --
+// The amplifying-fold triple's own signed domain (design Sec4/Sec9) --
 // ApplyAmplifyingWeightScaleFold's consumption shape, widened relative to WSC1's own unsigned
 // [kWeightScaleShiftMin=0, kWeightScaleShiftMax=31] (ApplyWeightScaleFold's domain, unchanged).
 inline constexpr int32_t kAmplifyingScaleExponentMin = -31;
@@ -171,7 +171,7 @@ enum class SslmModelStatus {
 	BadSigmoidLutCount,         // entry_count != kSigmoidLutEntries
 	BadSigmoidLutReserved,      // the SIL1 reserved field != 0
 	BadSigmoidLutContent,       // a node does not match the pinned canonical table (S-HARDEN-1, F20/F22)
-	// --- S-HARDEN-1 load-time schema-value gate (D-SLM141/D-SLM142) ---
+	// --- S-HARDEN-1 load-time schema-value gate ---
 	ArtifactRejected,            // SslmModel::Load: the outer SslmArtifact::OpenFromMemory rejected the
 	                              // container; the underlying SslmStatus is named in the diagnostic
 	CompositionScaleOutOfDomain, // KVC1 CompositionConstants (m,e) outside SiluSigmoidQ15's no-UB floor
@@ -180,15 +180,14 @@ enum class SslmModelStatus {
 	RopeTableEntryOutOfDomain,   // ROP1 element outside [-2^30, 2^30] (RopeApplyPair's yr-addition safety bound)
 	KvLandingScaleOutOfDomain,   // KvLandingScales entry's m_t (word 0) outside [kKvLandingScaleMantissaMin,
 	                              // kKvLandingScaleMantissaMax] (Sec7.2a third limb, S3.3). Its word 1
-	                              // (e_target) carries no check here -- pending-consumer per D-SLM142
-	                              // (Poirot a6d6728 second confirmation review, finding 1). Enforced by
+	                              // (e_target) carries no check here -- a documented pending-consumer
+	                              // field. Enforced by
 	                              // ValidateKvLandingScalesDomain (model.cpp), wired into
 	                              // ValidateSectionValues.
 	KvLandingReciprocalOutOfDomain, // KvLandingReciprocals entry's e_t (word 1) below kKvLandingExponentMin,
 	                              // OR its R_t (word 2) outside [kKvLandingReciprocalMin,
-	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3; Poirot 2026-07-28
-	                              // finding 3; confirmation review D-SLM372, correcting D-SLM370(c)'s wrong
-	                              // section name -- e_t is the field LandingRescale's composite actually
+	                              // kKvLandingReciprocalMax] (Sec7.2a third limb, S3.3) -- e_t is the
+	                              // field LandingRescale's composite actually
 	                              // reads from THIS section at runtime). Enforced by
 	                              // ValidateKvLandingReciprocalsDomain (model.cpp), wired into
 	                              // ValidateSectionValues.
@@ -196,13 +195,13 @@ enum class SslmModelStatus {
 	TokenizerRejected,           // SslmModel::Load: TOK1/UnicodeTables present but TokenizerView::Open rejected
 	                              // them (structurally, or exactly one of the two sections is present)
 	TokenizerVocabSizeMismatch,  // TOK1.vocab_count != CFG1.vocab_size -- the two blobs' declared sizes disagree
-	// --- Poirot fa3189a-s3.3-rope-site-and-c32-softmax-review-2026-07-28.md, Significant 5 ---
+	// --- head_dim parity ---
 	BadConfigHeadDimParity,      // CFG1 head_dim is odd -- RoPE pairs elements two at a time
 	                              // (forward_sites.h's own "head_dim odd is a load-time rejection",
 	                              // Sec6.2 step 3); ParseConfigImpl performed no parity check before
 	                              // this addition.
-	// --- S3.3, Sec11 S3.3 / Sec13.1 cell 4: config-geometry x tensor-shape join
-	// (D-SLM410, D-SLM421, D-SLM423, board T-1333). ValidateConfigGeometryJoin
+	// --- S3.3, Sec11 S3.3 / Sec13.1 cell 4: config-geometry x tensor-shape join.
+	// ValidateConfigGeometryJoin
 	// and ValidateRopeTablesShapeAgainstConfig (model.cpp), wired into
 	// ValidateSectionValues, reject a hostile artifact for each of the four
 	// relations below.
@@ -212,7 +211,7 @@ enum class SslmModelStatus {
 	RopeTablesShapeMismatchConfig,       // R4: a present ROP1 "cos"/"sin" tensor's elem_count !=
 	                                      // context_cap * (head_dim / 2), checked independently
 	                                      // per tensor -- the ROP1<->CFG1 join itself
-	// --- T-1415 (whole-tree review b9dcbe0, Minor 3) ---
+	// --- WSC1 triple-count validation ---
 	WeightScaleTripleCountInvalid,       // WSC1 tensor's elem_count % 3 != 0 -- the section stores
 	                                      // rows of (identity, mult, shift) int32 triples
 	                                      // (docs/sslm_format.md), and ValidateWeightScalesDomain's
@@ -223,7 +222,7 @@ enum class SslmModelStatus {
 	CalibrationBandOutOfDomain,          // a CalibrationBand entry's (min, max) violates min <= max,
 	                                      // min >= 0, or max > 0 -- ValidateCalibrationBandDomain
 	                                      // (model.cpp), wired into ValidateSectionValues.
-	// --- T-2021/T-2029 B0b (design Sec4/Sec9/Sec11 B0b, D-SLM3093/D-SLM3094): the two new
+	// --- The two new
 	// runtime-additive-LoRA adapter arrays (DeltaFoldScales/DFS1, UFoldScales/UFS1) ---
 	AmplifyingFoldSectionTypeMismatch,   // a section's DECLARED type does not match the wrapper
 	                                      // kind that attempted to parse it (design's own
@@ -237,7 +236,7 @@ enum class SslmModelStatus {
 	AmplifyingFoldIdentityNotBool,       // identity column not in {0,1}
 	AmplifyingFoldExponentOutOfDomain,   // exponent column outside the SIGNED
 	                                      // [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax]
-	                                      // = [-31,31] domain (design Sec4/Sec9, D-SLM2917;
+	                                      // = [-31,31] domain (design Sec4/Sec9;
 	                                      // WIDENED relative to WSC1's own unsigned [0,31] -- the
 	                                      // direction-(ii) swap mutation, a genuine delta/u-fold
 	                                      // section's negative exponent handed to WSC1's OWN
@@ -346,7 +345,7 @@ private:
 	std::vector<SslmConstantEntry> entries_;
 };
 
-// T-2021/T-2029 B0b (design Sec4/Sec9/Sec11 B0b, D-SLM3093/D-SLM3094): the two new
+// The two new
 // runtime-additive-LoRA adapter arrays this design's build adds -- `DeltaFoldScales`/`DFS1`
 // (design Sec4's own `delta_identity`/`delta_mult`/`delta_exponent`, one triple per adapted
 // output channel) and `UFoldScales`/`UFS1` (design Sec4's extension `u_identity`/`u_mult`/
@@ -397,7 +396,7 @@ public:
 	static int32_t Exponent(const SslmAmplifyingFoldEntry& entry, uint64_t row) noexcept;
 
 private:
-	// T-2125 (design Sec3.1): grants src/model.cpp's SslmAmplifyingFoldScaleViewAccess<Kind>
+	// (design Sec3.1): grants src/model.cpp's SslmAmplifyingFoldScaleViewAccess<Kind>
 	// (defined only there) access to entries_, so Parse's *Impl body can live entirely in the
 	// .cpp rather than as a private member declaration here -- a private member declaration
 	// would itself be picked up by the membership-check AST walk, which does not see access
@@ -422,7 +421,7 @@ const uint8_t* AmplifyingFoldMagicFor(SslmAmplifyingFoldKind kind) noexcept;
 // calls them, `sslm_adapter_map`, is outside this design's own B0-B9 scope, design Sec11's own
 // stated build boundary -- these are the checks that ABI will call, specified and tested here).
 
-// (b) signed domain (D-SLM2917, unchanged in value, run through this array kind's OWN dedicated
+// (b) signed domain (unchanged in value, run through this array kind's OWN dedicated
 // validator rather than WSC1's `ValidateWeightScalesDomain`): identity in {0,1}, exponent in
 // [kAmplifyingScaleExponentMin, kAmplifyingScaleExponentMax].
 SslmModelStatus ValidateAmplifyingFoldScalesDomain(const std::vector<SslmAmplifyingFoldEntry>& entries,
@@ -486,14 +485,14 @@ SslmModelStatus ParseSigmoidLut(const SslmSectionView& section, SslmSigmoidLut& 
 int32_t SigmoidLutValue(const SslmSigmoidLut& lut, uint32_t i) noexcept;
 
 // A fully composed, value-validated view of one `.sslm` artifact's model
-// sections, built only by SslmModel::Load. S-HARDEN-1 (D-SLM141): this is the
+// sections, built only by SslmModel::Load. This is the
 // one place that opens an artifact, drives every present section's
 // sub-parser, and then validates every section's carried VALUES against its
 // consumer's domain — the schema-value gate. A default instance is empty;
 // Load leaves it at defaults on any rejection (fail closed, never a partial
 // view).
 //
-// Ownership (T-403 lifetime-contract fix, 2026-07-22): the view is
+// Ownership: the view is
 // self-contained. It owns its backing store (`backing_`, populated only by
 // SslmModel::Load) and every pointer/`string_view` it exposes points into
 // storage the view itself keeps alive for exactly as long as the view lives
@@ -535,8 +534,8 @@ struct SslmModelView {
 	bool has_composition_constants = false;
 
 	// KvLandingScales/KvLandingReciprocals (C27): parsed structurally like
-	// every other keyed-constant section. S3.3 is the C27 consumer D-SLM142
-	// named ("a future slot adds their domain descriptor when the C27
+	// every other keyed-constant section. S3.3 is the C27 consumer slot
+	// ("a future slot adds their domain descriptor when the C27
 	// consumer lands") and closes it: their domain descriptors
 	// (KvLandingScaleOutOfDomain/KvLandingReciprocalOutOfDomain,
 	// ValidateKvLandingScalesDomain/ValidateKvLandingReciprocalsDomain,
@@ -556,7 +555,7 @@ struct SslmModelView {
 	SslmKeyedConstants calibration_band;
 	bool has_calibration_band = false;
 
-	// T-2041 (Poirot c81e48c review, Significant 2): DeltaFoldScales/UFoldScales -- B0b's own
+	// DeltaFoldScales/UFoldScales -- B0b's own
 	// section types (design Sec9), parsed structurally AND value-domain-validated at load time,
 	// the same two-phase gate every other typed section here already gets (WeightScales'
 	// ValidateWeightScalesDomain is the sibling). OPTIONAL: `has_* == false` is a valid artifact
@@ -580,7 +579,7 @@ struct SslmModelView {
 	TokenizerView tokenizer;
 	bool has_tokenizer = false;
 
-	// T-1894 (T-1822 design Sec31.2.1, round 4/D-SLM2423): the Option-G
+	// (design Sec31.2.1): the Option-G
 	// selection bit, a property of the artifact HEADER (not a section, so no
 	// `has_*` flag -- present, meaningfully, on every valid artifact, unlike
 	// a section which may be legitimately absent). Set by `LoadImpl`
@@ -591,11 +590,10 @@ struct SslmModelView {
 	// `SslmModelAccess` may touch.
 	bool option_g_fused_k_landing = false;
 
-	// The numeric-record trace hook's own state (D-SLM353): owned here, per
+	// The numeric-record trace hook's own state: owned here, per
 	// model handle, instead of a process-wide static -- the corrected reading
-	// of SuperSLM_S3a_WalkingSkeleton_Plan.md §3's Layer-1-wide no-global-state
-	// law applied to the mechanism trace_hook.h builds (Claude/Vitruvius/
-	// SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md). Not populated by
+	// of this project's own Layer-1-wide no-global-state
+	// law applied to the mechanism trace_hook.h builds. Not populated by
 	// SslmModel::Load and not gated by a `has_*` flag -- a default-constructed
 	// SslmTraceHookState{} is already a fully valid "no hook installed" state,
 	// not a partial-load state like the sections above.
@@ -631,7 +629,7 @@ struct SslmModelView {
 	SslmModelView(const SslmModelView&) = delete;
 	SslmModelView& operator=(const SslmModelView&) = delete;
 
-	// T-2104 (Poirot 8e07d0c review, Significant 2): trivial forwarders onto `backing_`, added so a
+	// Trivial forwarders onto `backing_`, added so a
 	// caller already holding a `SslmModelView` (a converted artifact's own loaded view) never needs
 	// a SECOND `SslmArtifact::OpenFromMemory` over the same bytes just to reach a raw section or the
 	// integrity hash -- the exact "lifted out rather than reaching into `backing_`" precedent
@@ -723,7 +721,7 @@ private:
 	SslmArtifact backing_;  // owns the file bytes every view above points into
 };
 
-// The load-time orchestration entry point (S-HARDEN-1, D-SLM141): the one
+// The load-time orchestration entry point (S-HARDEN-1): the one
 // call site that composes SslmArtifact::OpenFromMemory, every present
 // section's sub-parser, and the schema-value gate into a single pass. Throws
 // only std::bad_alloc (S-HARDEN-7, F5); `out` is left at SslmModelView{}
@@ -761,10 +759,10 @@ enum class SslmCalibrationBandVerdict : uint32_t {
 // container version -- **or when the section is present but carries no entry
 // of that name.** That second case is a deliberate, tested policy, not a
 // rejection: a present-but-misnamed CalibrationBand section is
-// indistinguishable from an absent one at this call (D-SLM563,
-// `TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown`,
+// indistinguishable from an absent one at this call
+// (`TestCalibrationBandMisnamedEntryLoadsOkAndReportsUnknown`,
 // `tests/test_main.cpp`); §8.3 does not define behaviour for that case, and
-// the D-SLM143 pattern every other section's hostile-value handling follows
+// the pattern every other section's hostile-value handling follows
 // would instead make it a load-time rejection. `min`/`max` are read as word
 // 0/word 1 of the entry (§8.3's inclusive-at-both-endpoints statement:
 // `token_length < min` is `BelowBand`, `token_length > max` is `AboveBand`,

@@ -35,8 +35,8 @@ namespace superslm_adapter {
 
 using superslm_marshal::ReadFile;
 
-// ADP1's 68-byte fixed prefix (tools/sslm_convert_adapter.py's write_adp1, design §24.2
-// D-SLM3158): magic(4)+version(4)+rank(4)+target_modules_mask(4)+base_artifact_hash(32)+
+// ADP1's 68-byte fixed prefix (tools/sslm_convert_adapter.py's write_adp1, design §24.2):
+// magic(4)+version(4)+rank(4)+target_modules_mask(4)+base_artifact_hash(32)+
 // lora_alpha(8,f64)+use_rslora(4)+reserved(4)+source_adapter_name_len(4), then the name bytes.
 inline constexpr size_t kAdp1FixedBytes = 68;
 inline constexpr uint8_t kAdp1Magic[4] = {'A', 'D', 'P', '1'};
@@ -89,13 +89,13 @@ enum class AdapterLoadStatus {
 	                          // Weights tensor
 	InvalidTargetModulesMask, // ADP1's target_modules_mask sets a bit at or past
 	                          // kPeftAdaptableProjections' own length -- an unknown target module
-	                          // (T-2104 M2: silently discarding it would load an adapter as though
+	                          // (silently discarding it would load an adapter as though
 	                          // the unknown module had never been declared)
-	LoraAWeightShapeMismatch, // T-2104 S1: a "<name>.lora_A" tensor's own rank/shape does not match
+	LoraAWeightShapeMismatch, // a "<name>.lora_A" tensor's own rank/shape does not match
 	                          // [ADP1's declared rank, this projection's in_channels] -- the FIRST
 	                          // of the two pointers AddAmplifyingLoraDelta actually walks that this
 	                          // loader had never checked
-	LoraBWeightShapeMismatch, // T-2104 S1: a "<name>.lora_B" tensor's own rank/shape does not match
+	LoraBWeightShapeMismatch, // a "<name>.lora_B" tensor's own rank/shape does not match
 	                          // [this projection's out_channels, ADP1's declared rank] -- the SECOND
 };
 
@@ -131,7 +131,7 @@ inline const char* AdapterLoadStatusName(AdapterLoadStatus s) noexcept {
 // model.h:433's kPeftAdaptableProjections, in ADP1's OWN bit order (tools/sslm_convert_adapter.py
 // PEFT_ADAPTABLE_PROJECTIONS, "the ONLY source of ADP1's target_modules_mask bit order") -- a
 // second, independent copy of the ARRAY would risk drifting from model.h's, so this file reads
-// model.h's own array directly. T-2104 (Poirot 8e07d0c review, Minor 2): the array's own LENGTH is
+// model.h's own array directly. The array's own LENGTH is
 // still read via `std::size`, never restated as a literal -- the original `for (i < 7)` was exactly
 // the restatement the header comment above claimed to avoid.
 inline std::vector<std::string_view> TargetModulesFromMask(uint32_t mask) {
@@ -142,7 +142,7 @@ inline std::vector<std::string_view> TargetModulesFromMask(uint32_t mask) {
 	return out;
 }
 
-// T-2104 (Poirot 8e07d0c review, Minor 2): true iff `mask` sets any bit at or past
+// True iff `mask` sets any bit at or past
 // kPeftAdaptableProjections' own length -- an ADP1 declaring a target module this build does not
 // know about. `TargetModulesFromMask` above silently drops such a bit (it can only ever push a
 // name for a bit it recognizes), which -- unchecked -- would load an adapter exactly as though the
@@ -191,7 +191,7 @@ inline uint64_t AdapterOutChannelsFor(const std::string& proj, uint64_t hidden_s
 	return 0;  // unreachable once ValidateAmplifyingFoldProjection has already accepted `proj`
 }
 
-// T-2104 (Poirot 8e07d0c review, Significant 1): this projection's own IN-channels -- the sibling
+// This projection's own IN-channels -- the sibling
 // `AdapterOutChannelsFor` above never had. Read from the SAME call sites `AddAmplifyingLoraDelta`
 // itself is invoked from (src/forward/forward_sites.cpp): `hidden_size` feeds q/o/gate/up/k/v_proj's
 // own delta-add (the q/o/gate/up calls each pass `hidden_size` as `in_channels`; the k/v calls pass
@@ -211,7 +211,7 @@ inline uint64_t AdapterInChannelsFor(const std::string& proj, uint64_t hidden_si
 }
 
 // Owns everything a bound adapter needs to stay alive: the ONE loaded, kept-alive model view
-// (`view_` -- T-2104 S2: no second, redundant parse; every typed field this loader reads,
+// (`view_` -- no second, redundant parse; every typed field this loader reads,
 // `weights`/`delta_fold_scales`/`u_fold_scales`, plus the raw Provenance section and the base hash
 // via `view_`'s own `Section()`/`RawIntegrityHash()` forwarders, comes from this ONE call to
 // `SslmModel::Load`), and one `LayerAdapter` per BASE-MODEL layer (`layer_adapters`, index l ==
@@ -249,7 +249,7 @@ struct BaseModelGeometry {
 	std::array<uint8_t, superslm::kIntegrityHashBytes> base_artifact_hash{};
 };
 
-// T-2113 (B6, D-SLM3368): extracted from `LoadAdapterArtifact` below (verbatim body, `out.view_`/
+// Extracted from `LoadAdapterArtifact` below (verbatim body, `out.view_`/
 // `out.meta`/`out.layer_adapters` renamed to this function's own parameters) so the 1.0 GPU API's
 // `sslm_gpu_adapter_map` (src/gpu/gpu_1p0.cpp) can validate/populate against a view it was ALREADY
 // handed (design Sec5.2's own `const SslmModelView* adapter_artifact` parameter -- an
@@ -306,7 +306,7 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 	meta.source_adapter_name.assign(reinterpret_cast<const char*>(prov->data + kAdp1FixedBytes),
 	                                     name_len);
 
-	// T-2104 (Poirot 8e07d0c review, Minor 2): reject a mask with any bit at or past
+	// Reject a mask with any bit at or past
 	// kPeftAdaptableProjections' own length -- an unknown target module must never load clean and
 	// be silently treated as though it had not been declared.
 	if (TargetModulesMaskHasUnknownBit(meta.target_modules_mask)) {
@@ -399,7 +399,7 @@ inline AdapterLoadStatus PopulateAdapterFromView(const superslm::SslmModelView& 
 			return AdapterLoadStatus::MissingWeightTensor;
 		}
 
-		// T-2104 (Poirot 8e07d0c review, Significant 1): the two pointers `AddAmplifyingLoraDelta`
+		// The two pointers `AddAmplifyingLoraDelta`
 		// actually walks (forward_sites.cpp) -- `a_weight` read for `in_channels * rank` bytes,
 		// `b_weight` for `rank * out_channels` -- validated against the SAME [rank, in_channels] /
 		// [out_channels, rank] shape PEFT's own orientation declares (forward_sites.h's own
@@ -465,7 +465,7 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 		return AdapterLoadStatus::FileReadFailed;
 	}
 
-	// T-2104 (Poirot 8e07d0c review, Significant 2): ONE parse. `SslmModel::Load` opens the
+	// ONE parse. `SslmModel::Load` opens the
 	// container, validates it, and parses every present section (Config/SigmoidLut/Weights/
 	// DeltaFoldScales/UFoldScales) into `out.view_`, which this handle keeps for its own lifetime --
 	// there is no second `SslmArtifact::OpenFromMemory` and no re-parse of any section this loader
@@ -477,7 +477,7 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 		if (st != superslm::SslmModelStatus::Ok) {
 			if (err) *err = std::string("adapter model rejected: ") +
 			                superslm::SslmModelStatusName(st) + " -- " + model_err;
-			// T-2104 (Poirot 7a0b6426 review, Minor 9): SslmModel::Load's own ArtifactRejected
+			// SslmModel::Load's own ArtifactRejected
 			// (model.h: "the outer SslmArtifact::OpenFromMemory rejected the container") is the
 			// SAME container-level rejection AdapterLoadStatus::ArtifactRejected was declared to
 			// name, back when this loader still opened its own separate SslmArtifact. That second
@@ -492,7 +492,7 @@ inline AdapterLoadStatus LoadAdapterArtifact(const std::string& path, const Base
 		}
 	}
 
-	// T-2113 (B6, D-SLM3368): the rest of this function is PopulateAdapterFromView, extracted
+	// The rest of this function is PopulateAdapterFromView, extracted
 	// above so sslm_gpu_adapter_map can call it directly against an already-parsed view.
 	return PopulateAdapterFromView(out.view_, base, out.meta, out.layer_adapters, err);
 }
