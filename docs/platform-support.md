@@ -62,6 +62,17 @@ already-resident model) was measured on the RTX 2080 SUPER against a real
 the model with a different adapter merged in at load time — about 58x
 faster, with the base model's resident weights untouched by the switch.
 
+### Schema-constrained decoding on the GPU
+
+The GPU twin of schema-constrained decoding (see [api.md](api.md)) is
+proven bit-identical to the CPU reference on the certified NVIDIA GPU: 80
+real decode steps against a real schema and a real model, matching SHA-256
+digest between the two paths. The identical check against the certified
+AMD GPU has not been run yet — it is the one item outstanding before the
+1.0 tag. This is a narrower, additional check on top of the base
+(unconstrained) determinism guarantee both certified GPUs already carry
+above; it does not affect that guarantee.
+
 ### The integrated GPU: known, scoped divergence
 
 The same RDNA3-generation machine's integrated GPU ("AMD Radeon Graphics")
@@ -77,7 +88,9 @@ certified GPUs above, never to "GPUs" unqualified.
 
 ## What's next
 
-Extending GPU certification to a newer NVIDIA generation (Blackwell) and
-to integrated GPUs (pending the divergence investigation above), and
-measuring macOS beyond what GitHub's own CI runners can exercise, are both
-committed post-1.0 work — see the README's roadmap section.
+Running the schema-constrained-decoding parity check (above) on the
+certified AMD GPU is the one item remaining before the 1.0 tag itself, not
+post-1.0 work. Extending GPU certification to a newer NVIDIA generation
+(Blackwell) and to integrated GPUs (pending the divergence investigation
+above), and measuring macOS beyond what GitHub's own CI runners can
+exercise, are committed post-1.0 work — see the README's roadmap section.

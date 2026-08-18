@@ -78,7 +78,9 @@ through a runtime-attached LoRA adapter (see step 5), `--stop a,b,c` for
 stop-token IDs, and `--dump-logits <path>` for raw logit inspection.
 
 The same walkthrough works through the [`sslm_*` C ABI](api.md) instead of
-this CLI tool for embedding the engine directly in another process.
+this CLI tool for embedding the engine directly in another process — including
+[schema-constrained generation](api.md#schema-constrained-generation), which
+this CLI tool does not currently expose a flag for.
 
 ## 5. Worked example: convert a LoRA adapter
 

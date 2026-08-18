@@ -26,6 +26,14 @@ number and where it was measured.
   a fixed-point SiLU activation, and quantized matrix multiplication),
   each proven identical between its scalar and SIMD implementations and
   across every measured compiler/toolchain axis.
+- Chunk-batched prompt prefill: a whole prefill chunk runs through the
+  matrix kernels in one call rather than one token at a time, proven
+  bit-identical to the per-token path at every chunk size and every
+  chunk-boundary split. Measured on a real artifact: a modest, real gain
+  (about 1.1x), because this workload turned out to be bound by the integer
+  kernel's own compute throughput rather than memory bandwidth — see
+  [docs/platform-support.md](docs/platform-support.md) and the README's
+  roadmap for the wider-vector kernel that targets the actual bottleneck.
 
 ### GPU acceleration
 
@@ -40,6 +48,14 @@ number and where it was measured.
   frame-time spike path.
 - Batched multi-sequence decoding, with per-sequence rejections that don't
   abort the rest of the batch.
+- Schema-constrained generation: a compiled schema forbids the model from
+  emitting a token that would break your output format, including on spans
+  the schema forces deterministically without a real decode step
+  ("jump-forward"), under the same determinism guarantee as unconstrained
+  decoding. Shipped on both the CPU consumer ABI and the GPU handle API —
+  see [docs/api.md](docs/api.md). The GPU path is proven bit-identical to
+  the CPU reference on the certified NVIDIA GPU; the same check on the
+  certified AMD GPU is the one item outstanding before the 1.0 tag.
 
 ### Runtime-switchable LoRA adapters
 
@@ -61,15 +77,12 @@ number and where it was measured.
   path — build, calibrate, convert, decode, convert an adapter — from a
   bare extraction of the repository with no development-tree dependency.
 
-### In development
-
-- **Schema-constrained generation** — grammar-guaranteed structured
-  output, integrated into the same determinism boundary as the rest of
-  decoding. This is the one capability remaining before the 1.0 tag; see
-  the README for its shipped form once it lands.
-
 ### Known gaps, tracked
 
+- The AMD leg of the schema-constrained-decoding GPU parity check has not
+  been run yet — the one item outstanding before the 1.0 tag. The
+  equivalent NVIDIA check is green; the base (unconstrained) determinism
+  guarantee on both certified GPUs is unaffected.
 - The CMake `superslm_tests` target does not yet link the GPU library;
   GPU-path testing runs through a separate, locally-run suite rather than
   through `ctest`.

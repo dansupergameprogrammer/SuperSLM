@@ -14,10 +14,11 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-**Status: pre-1.0.** Every capability below through cross-platform determinism
-and runtime adapter switching is built, measured, and certified on the
-platforms named. Schema-constrained generation (below) is still in
-development and is the one gate remaining before the 1.0 tag.
+**Status: pre-1.0.** Every capability below — including schema-constrained
+generation — is built and measured on the platforms named. The one item
+remaining before the 1.0 tag is the AMD leg of the schema-constrained-decoding
+GPU parity check: that same check already passed bit-identical on the
+certified NVIDIA GPU (see [Certified platforms](#certified-platforms)).
 
 ## Capabilities
 
@@ -54,20 +55,44 @@ will turn "designed to avoid spikes" into a measured frame-time result;
 today the guarantee is the mechanism the design relies on, proven at the
 engine level.
 
-## In development: schema-constrained generation
+Prompt prefill (processing the tokens you send in before decoding begins)
+batches an entire prefill chunk through the engine's matrix kernels in one
+pass on the CPU path, proven bit-identical to processing the same tokens one
+at a time at every chunk size and every chunk-boundary split. On the
+reference hardware this workload turned out to be bound by the integer
+kernel's own compute throughput rather than by memory bandwidth, so the
+batching gives a modest, real gain rather than a large one — see
+[the roadmap](#roadmap-beyond-10) for the wider-vector kernel that targets
+the actual bottleneck.
+
+### Schema-constrained generation
 
 Schema-constrained generation means your output format is always correct —
 the model cannot emit a token that breaks your schema, so the output always
-parses. The determinism guarantee above carries through even when the
-engine skips ahead through parts of the output your schema already
-dictates, so a schema-constrained decode is exactly as reproducible as an
-unconstrained one. Format — grammar and parse validity — is what this
-guarantees by construction; cross-field semantic validity (e.g. "this value
-must be less than that one") is reported, not enforced, since that is a
-property of your schema's meaning rather than its shape.
+parses. A compiled schema is a table of valid-token masks, one per parser
+state; the engine indexes into that table by the sequence's own parse state
+before every decode step and masks out any token that would break the
+schema, so an invalid token is never a candidate in the first place — not a
+post-hoc filter on the model's raw output.
 
-This is under active development and is the one capability standing between
-the current state of the repository and the 1.0 tag.
+The determinism guarantee above carries through even when the engine skips
+ahead through the parts of the output your schema already dictates (for
+example, a fixed key name or punctuation your schema forces regardless of
+what the model would otherwise produce) without running a real decode step
+for those tokens — a schema-constrained decode is exactly as reproducible,
+on the same certified platform, as an unconstrained one. Format — grammar
+and parse validity — is what this guarantees by construction; cross-field
+semantic validity (e.g. "this value must be less than that one") is
+reported, not enforced, since that is a property of your schema's meaning
+rather than its shape.
+
+Schema-constrained decoding is proven bit-identical between the CPU and GPU
+paths on the certified NVIDIA GPU; the same check against the certified AMD
+GPU is the one item outstanding before the 1.0 tag (see
+[Certified platforms](#certified-platforms)). The mechanism, the artifact
+format it relies on, and the full CPU consumer ABI it ships through are
+documented in [docs/api.md](docs/api.md) and
+[docs/sslm_format.md](docs/sslm_format.md).
 
 ## Certified platforms
 
@@ -152,9 +177,10 @@ exit means a failure.
 
 ## API surfaces
 
-Two public C APIs are documented in [docs/api.md](docs/api.md): the GPU
-handle-based API (`SslmGpu*`, shipped) and the CPU-side consumer API
-(`sslm_*`, under active development).
+Two public C APIs are documented in [docs/api.md](docs/api.md), both
+shipped: the GPU handle-based API (`SslmGpu*`) and the CPU-side, from-scratch
+consumer ABI (`sslm_*`) for embedding SuperSLM directly in another process
+without the GPU handle types.
 
 ## License
 
@@ -178,6 +204,12 @@ design and review loop when scheduled:
 - **Launch-floor reduction.** The fixed per-call GPU launch overhead
   (roughly 2.7 ms/token on the same hardware) has an identified, not-yet-
   built optimization path.
+- **A wider-vector CPU prefill kernel.** Prefill throughput on the CPU path
+  is bound by the scalar/SSE2 integer kernel's own instruction throughput,
+  not by memory bandwidth (measured on a real artifact: roughly 9.2 billion
+  multiply-adds/second sustained, well under the machine's memory-bandwidth
+  ceiling) — a wider-vector kernel (AVX2/AVX-512) is the identified lever
+  for a further speedup, not yet built.
 - **Flat-batch dispatch fusion and the remaining single-group tail sites.**
   Two named, scoped opportunities to close the gap between batched and
   single-sequence throughput further.
