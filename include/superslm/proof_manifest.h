@@ -26,7 +26,7 @@
 namespace superslm {
 
 // JSON string escaping -- the manifest carries tensor and section names, which
-// are UTF-8 but otherwise untrusted, and (T-1449) rejection diagnostics, which
+// are UTF-8 but otherwise untrusted, and rejection diagnostics, which
 // routinely quote a section/entry name (e.g. `entry "kv"`). Escapes the ASCII
 // control set and the two structural characters so any emitted document is
 // valid JSON regardless of what a hostile-but-Load-accepted name, or a
@@ -34,7 +34,7 @@ namespace superslm {
 // every JSON-emitting call site -- BuildProofManifestJson's own fields and
 // tools/sslm_verify.cpp's hand-assembled REJECTED-path manifests alike --
 // routes through the one implementation instead of a second, unescaped one.
-// Throws only std::bad_alloc (S-HARDEN-7, F5; wrapped T-1475 -- being
+// Throws only std::bad_alloc (being
 // declared here, rather than file-local, makes it a member of the "throws
 // only std::bad_alloc" contract's derived population).
 std::string JsonEscape(std::string_view s);
@@ -85,13 +85,13 @@ struct TensorEvidence {
 // Reads every tensor in a parsed manifest section (WGT1/BIA1/ROP1) and computes
 // its evidence. `dtype` fixes the signed range the min/max/saturation counters
 // are read against (matches the section's ExpectedDtype). Throws only
-// std::bad_alloc (S-HARDEN-7, F5).
+// std::bad_alloc.
 std::vector<TensorEvidence> ComputeTensorEvidence(const SslmTensorManifest& manifest, SslmDtype dtype);
 
 // WeightScales (WSC1) is itself a tensor manifest of (identity, mult, shift)
 // int32 triples, not a single-value tensor -- its evidence is the shift column's
 // margin against RoundingDivideByPOT's domain, not a raw int32 min/max (mult is
-// intentionally unbounded per D-SLM142; identity is a {0,1} flag). One row per
+// intentionally unbounded; identity is a {0,1} flag). One row per
 // (tensor, per-triple index).
 struct WeightScaleEvidence {
 	std::string tensor_name;
@@ -101,14 +101,14 @@ struct WeightScaleEvidence {
 	uint64_t identity_count = 0;   // rows with identity == 1
 };
 
-// Throws only std::bad_alloc (S-HARDEN-7, F5).
+// Throws only std::bad_alloc.
 std::vector<WeightScaleEvidence> ComputeWeightScaleEvidence(const SslmTensorManifest& weight_scales);
 
 // SHA-256 of one section's raw bytes, lowercase hex -- independent evidence per
 // section, distinct from the whole-artifact integrity hash SslmArtifact already
-// verifies (T-129: whole-file integrity proves bytes were not changed; it proves
+// verifies (whole-file integrity proves bytes were not changed; it proves
 // nothing about whether they are safe operands, which is what the evidence above
-// is for). Throws only std::bad_alloc (S-HARDEN-7, F5).
+// is for). Throws only std::bad_alloc.
 std::string HashSectionHex(const SslmSectionView& section);
 
 // Assembles the full proof-manifest JSON body for an artifact the caller has
@@ -119,23 +119,19 @@ std::string HashSectionHex(const SslmSectionView& section);
 // -- Config, geometry, and every tensor's evidence are (re-)parsed HERE, from
 // `artifact.Sections()`, not read from a previously-populated SslmModelView.
 //
-// This is deliberate, not merely independent-for-its-own-sake, but the reason is simpler than a
-// prior version of this comment claimed. CORRECTED (T-2104, Poirot 8e07d0c7/7a0b6426 review,
-// Significant 5 -- the tree-wide sweep for this exact false claim two rounds ago used the pattern
-// `dangle|dangles`, which cannot match "dangling," and missed this site and its sibling in
-// src/proof_manifest.cpp): this function's own signature takes only an `SslmArtifact&`, never an
+// This is deliberate, not merely independent-for-its-own-sake, but the reason is simpler than it
+// might look: this function's own signature takes only an `SslmArtifact&`, never an
 // `SslmModelView` -- there is no already-parsed view available here to read Config's plain-value
 // fields from in the first place, so re-parsing Config from `artifact` is the only source this
-// function has, not a workaround for a lifetime hazard. (For the record, since the claim was
-// asserted as established fact and is now known to be false: `SslmModelView`'s own `backing_`
-// member, include/superslm/model.h, OWNS the file bytes every pointer in the view points into: the
+// function has, not a workaround for a lifetime hazard. `SslmModelView`'s own `backing_`
+// member (include/superslm/model.h) OWNS the file bytes every pointer in the view points into: the
 // view is valid for its own lifetime, and reading a pointer-bearing field off an already-returned
-// view is exactly as safe as reading a plain-value one. There is no latent undefined behavior in
-// `SslmModel::Load` to route around, here or anywhere else.) The re-parse below is kept anyway, for
+// view is exactly as safe as reading a plain-value one -- there is no latent undefined behavior in
+// `SslmModel::Load` to route around, here or anywhere else. The re-parse below is kept anyway, for
 // an independent and real reason: every field this function reports is sourced the same way (fresh
 // from `artifact`, never from a second object with a different provenance), which is worth the one
 // cheap 84-byte re-parse regardless of what any caller's own view might already hold. Throws only
-// std::bad_alloc (S-HARDEN-7, F5).
+// std::bad_alloc.
 std::string BuildProofManifestJson(const SslmArtifact& artifact);
 
 }  // namespace superslm

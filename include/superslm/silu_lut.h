@@ -24,27 +24,27 @@ inline constexpr int kSiluLutX = 16;                       // domain half-width 
 inline constexpr int kSiluLutLog2K = 5;                    // k = log2(N / 2X) = log2(32); K = 2^k
 inline constexpr int kSiluLutQIdx = 12;                    // sub-node index fractional bits (§5, §7)
 
-// S-HARDEN-1 (D-SLM142): named so the KVC1 (m,e) no-UB floor's upper bound on `e`
+// Named so the KVC1 (m,e) no-UB floor's upper bound on `e`
 // (this header's own `kCompositionScaleMaxE`, below) can be pinned by `static_assert` to the exact
 // shift at which SiluSigmoidQ15's left branch (`term << shift`, src/silu_lut.cpp) overflows
 // int64 — 26, given |term| < 2^38 from |code| <= 127 (< 2^7) and |m| bounded by the floor's own
 // `kCompositionScaleMaxAbsM`. A prose-only bound (a comment citing "26") is checked by
 // nobody; this constant is what the pin in model.cpp compares against.
-// T-402 (Poirot Observation 3): `26` is hand-derived from |term| < 2^38 and int64's headroom.
-// If a future change (C29) widens the KVC1 m-domain past INT32_MAX, model.cpp's
+// `26` is hand-derived from |term| < 2^38 and int64's headroom.
+// If a future change widens the KVC1 m-domain past INT32_MAX, model.cpp's
 // `kCompositionScaleMaxAbsM == kInt32Max` static_assert fires first — but this constant must then
 // be RE-DERIVED, because the shift-side pin would still pass against a now-stale overflow point.
 inline constexpr int kSiluLutTermLeftShiftOverflowExponent = 26;
 
-// S-HARDEN-1's load-time no-UB floor for CompositionConstants (KVC1) (m, e)
-// (D-SLM141/D-SLM142), exact from source (silu_lut.cpp:20-39) and sufficient
+// The load-time no-UB floor for CompositionConstants (KVC1) (m, e),
+// exact from source (silu_lut.cpp:20-39) and sufficient
 // against all three of SiluSigmoidQ15's UB sites. Public (moved out of
-// src/model.cpp's anonymous namespace, ac34677 S11) so the runtime no-UB domain
+// src/model.cpp's anonymous namespace) so the runtime no-UB domain
 // predicate below (checked_chain_funnel.h's CheckSiluCompositionScaleDomain) can
 // pin its own ceiling against this one by static_assert rather than a duplicated
-// literal that could drift out of step with it silently. The tighter C29 swept
+// literal that could drift out of step with it silently. The tighter swept
 // envelope (`-shift in [15,19]`, i.e. `e in [-36,-32]`) is deliberately NOT
-// enforced here — S-HARDEN-1 ships the floor only.
+// enforced here -- this constant ships the floor only.
 inline constexpr int64_t kCompositionScaleMaxAbsM = (INT64_C(1) << 31) - 1;  // |m| <= 2^31-1
 inline constexpr int64_t kCompositionScaleMinE = -80;   // silu_lut.cpp:35 right branch, -shift <= 63
 inline constexpr int64_t kCompositionScaleMaxE = 7;     // silu_lut.cpp:35 left branch, term << shift exact

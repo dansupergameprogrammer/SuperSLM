@@ -73,7 +73,7 @@ struct SslmKvLandingTraceRecord {
 using SslmTraceHookFn = void (*)(const SslmChainTraceRecord*,
                                   const SslmKvLandingTraceRecord*, void* user);
 
-// Per-model trace-hook state (D-SLM353, corrected storage): a function
+// Per-model trace-hook state: a function
 // pointer + opaque user pointer, exactly the same pair the process-global it
 // replaces used to hold, now owned by the model handle instead of a file
 // static. Two model handles never share one instance -- each carries its own
