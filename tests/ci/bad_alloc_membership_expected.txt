@@ -22,20 +22,22 @@
 # derive_bad_alloc_membership.py`, SUPERSLM_CLANGXX="C:\Program Files\LLVM\
 # bin\clang++.exe") rather than hand-adjusted, same discipline the T-2125
 # note above already names.
-artifact.h:186:OpenFromMemory
-artifact.h:192:OpenFromFile
-artifact.h:211:FingerprintHex
-model.h:279:Parse
-model.h:329:Parse
-model.h:385:Parse
-model.h:459:ParseConfig
-model.h:482:ParseSigmoidLut
-model.h:742:Load
+# Line numbers re-derived 2026-08-18 after the T-2152 installed-header banner scrub
+# shortened every header's preamble (same 20-member set, names and files unchanged).
+artifact.h:185:OpenFromMemory
+artifact.h:191:OpenFromFile
+artifact.h:210:FingerprintHex
+model.h:278:Parse
+model.h:328:Parse
+model.h:384:Parse
+model.h:458:ParseConfig
+model.h:481:ParseSigmoidLut
+model.h:740:Load
 proof_manifest.h:40:JsonEscape
 proof_manifest.h:89:ComputeTensorEvidence
 proof_manifest.h:105:ComputeWeightScaleEvidence
 proof_manifest.h:112:HashSectionHex
-proof_manifest.h:139:BuildProofManifestJson
+proof_manifest.h:135:BuildProofManifestJson
 sha256.h:20:Update
 sha256.h:41:Sha256Hash
 sha256.h:45:ToHex

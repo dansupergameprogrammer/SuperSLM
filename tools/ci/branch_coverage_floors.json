@@ -1,0 +1,16 @@
+{
+  "include/superslm/adapter_marshal.h": 44.91525423728814,
+  "include/superslm/artifact.h": 100.0,
+  "include/superslm/layer_marshal.h": 40.0,
+  "include/superslm/model.h": 50.0,
+  "src/artifact.cpp": 84.12698412698413,
+  "src/decode_digest.cpp": 100.0,
+  "src/intmath.cpp": 87.93103448275862,
+  "src/matmul.cpp": 100.0,
+  "src/model.cpp": 68.26347305389223,
+  "src/proof_manifest.cpp": 63.013698630136986,
+  "src/sha256.cpp": 100.0,
+  "src/silu_lut.cpp": 100.0,
+  "src/tokenizer.cpp": 90.14778325123153,
+  "src/trace_hook.cpp": 50.0
+}
