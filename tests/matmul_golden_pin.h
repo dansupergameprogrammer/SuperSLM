@@ -43,6 +43,8 @@ inline constexpr MatmulGoldenCase kMatmulGoldenCases[] = {
 	{"deep_flush_lcg_132105", 8ull, 132105, 2, 1, 0, false},
 	{"deep_beyond_i32_neg", 0ull, 132105, 1, 1, 2, false},
 	{"deep_beyond_i32_pos", 0ull, 132105, 1, 1, 3, false},
+	{"deep_beyond_all_windows_neg", 0ull, 524289, 1, 1, 2, false},
+	{"deep_beyond_all_windows_pos", 0ull, 524289, 1, 1, 3, false},
 };
 
 // The generator's own first 16 bytes from seed 1. Pinned separately so a drift in the
@@ -51,13 +53,13 @@ inline constexpr uint8_t kMatmulGoldenLcgProbe[16] = {
 	108, 130, 165, 98, 203, 128, 141, 16, 214, 50, 190, 137, 200, 81, 62, 191,
 };
 
-inline constexpr size_t kMatmulGoldenTotalBytes = 44212;
+inline constexpr size_t kMatmulGoldenTotalBytes = 44244;
 
 // PINNED golden. A mismatch is a cross-platform/toolchain/ISA determinism break -- or an
 // intended construction change, in which case re-run tools/gen_matmul_golden.py
 // deliberately and review the diff.
 inline constexpr char kMatmulGoldenHash[] =
-    "a36aed3f32141b308e3a22a449b5c444cfcbb995b9c407e90a2c087fdab73de1";
+    "ffa034a7c097f970a556e6738ceb59fa6997ca2db2fcfff60f472a1c9f08f428";
 
 }  // namespace superslm_test
 

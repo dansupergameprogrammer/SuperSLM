@@ -23,15 +23,23 @@ WHAT THE CANONICAL SET COVERS (design §11 item 4)
 Both real hidden_size values (1536, 960) and both real intermediate_size values (8960,
 2560) — all block-aligned at the common SIMD widths, so on their own they never exercise a
 remainder — plus two deliberately non-block-aligned synthetic lengths (tails of 5 and 7),
-the int8-extremes row at both operands' limits, the in_channels=1 architectural floor, and
-THREE 132,105-deep cases.
+the int8-extremes row at both operands' limits, the in_channels=1 architectural floor,
+THREE 132,105-deep cases, and TWO 524,289-deep cases (added fold round 4, D-SLM3571).
 
-All three deep cases drive the shared accumulator flush window (src/matmul.cpp's
-kFlushBlocks trips at 131,072 elements -- the same literal, unchanged, across the SSE2,
-AVX2, and AVX-512 tiers, T-2149 design §5.2). Only the two single-signed ones — deep_beyond_i32_neg and
-deep_beyond_i32_pos — carry sums outside int32. deep_flush_lcg_132105 does NOT: an LCG
-fill's mixed signs cancel and its largest accumulator is 3,027,949, comfortably inside
-int32.
+The shared accumulator flush window (src/matmul.cpp's kFlushBlocks, a single literal
+value) trips at a per-tier ELEMENT count that is NOT the same figure across tiers, because
+each SIMD tier processes a different lane width per iteration: 131,072 elements on SSE2 (8
+lanes), 262,144 on AVX2 (16 lanes), 524,288 on AVX-512 (32 lanes) -- corrected fold round
+4 (D-SLM3572; code review T-2170, Finding 7 found the prior wording stated one shared
+trip-point figure, which is true of the literal and false of the per-tier element count it
+produces). The three 132,105-deep cases cross only the SSE2 window: deep_beyond_i32_neg
+and deep_beyond_i32_pos (single-signed, sums outside int32) discriminate SSE2's flush
+mechanism, but a flush-block deletion on AVX2 or AVX-512 at this depth is bit-identical to
+the unmutated kernel (code review, Finding 5) -- 132,105 never reaches either window.
+deep_flush_lcg_132105 escapes neither int32 nor either wider window: an LCG fill's mixed
+signs cancel and its largest accumulator is 3,027,949, comfortably inside int32. The two
+524,289-deep cases (deep_beyond_all_windows_neg/_pos, single-signed, one element past all
+three windows at once) close the AVX2/AVX-512 mapping from a single case.
 
 That distinction is the whole point of this set and was got wrong once already. The first
 version of this golden had a single LCG-filled deep case and claimed it carried sums outside
@@ -120,6 +128,18 @@ CASES = [
     ("deep_flush_lcg_132105",   8, 132105,    2, 1, KIND_LCG,      False),
     ("deep_beyond_i32_neg",     0, 132105,    1, 1, KIND_EXTREME_NEG, False),
     ("deep_beyond_i32_pos",     0, 132105,    1, 1, KIND_EXTREME_POS, False),
+    # T-2149 design §10 dimension 7 item (b), corrected fold round 4 (D-SLM3571): the
+    # three deep cases above are 132,105 elements, which crosses only the SSE2 flush
+    # window (131,072) and reaches neither AVX2's (262,144) nor AVX-512's (524,288) --
+    # code review (T-2170, Finding 5) executed a flush-block deletion against
+    # DotRowAvx2 at this depth and found it bit-identical to the unmutated kernel, so
+    # the AVX2/AVX-512 flush mechanism was unfalsifiable by this golden's own cases at
+    # the time of that review. This pair, at 524,289 -- one element past ALL THREE
+    # windows at once -- closes the mapping for all three SIMD tiers from a single
+    # case (the same reasoning that makes 132,105 the SSE2-window witness above,
+    # carried one window further).
+    ("deep_beyond_all_windows_neg", 0, 524289, 1, 1, KIND_EXTREME_NEG, False),
+    ("deep_beyond_all_windows_pos", 0, 524289, 1, 1, KIND_EXTREME_POS, False),
 ]
 
 # The two single-signed deep cases are the ONLY ones whose sums leave int32:
@@ -128,7 +148,10 @@ CASES = [
 # the accumulators it actually computes -- per case (each named case must really escape) and
 # over the whole set (at least one case must really escape, read from the computed values
 # and never from this literal, which is always truthy and would guard nothing).
-_I32_ESCAPE_CASES = {"deep_beyond_i32_neg", "deep_beyond_i32_pos"}
+_I32_ESCAPE_CASES = {
+    "deep_beyond_i32_neg", "deep_beyond_i32_pos",
+    "deep_beyond_all_windows_neg", "deep_beyond_all_windows_pos",
+}
 
 
 def build_inputs(seed, in_channels, out_channels, num_tokens, kind):
