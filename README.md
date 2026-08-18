@@ -198,18 +198,16 @@ design and review loop when scheduled:
   cohort of sequences that share a prompt prefix N-fold memory savings
   instead of each holding its own copy.
 - **Async-wrapper overhead reduction.** The 1.0 API's convenience wrapper
-  around the dispatch path costs roughly 5.3 ms/token versus the raw
-  dispatch path (measured on an NVIDIA RTX 2080 SUPER); closing that gap is
-  a named follow-on campaign.
-- **Launch-floor reduction.** The fixed per-call GPU launch overhead
-  (roughly 2.7 ms/token on the same hardware) has an identified, not-yet-
-  built optimization path.
+  around the dispatch path measurably costs throughput versus the raw
+  dispatch path — see the Direct dispatch vs. Async wrapper API rows in
+  [docs/platform-support.md](docs/platform-support.md#certified-gpu-measurements);
+  closing that gap is a named follow-on campaign.
+- **Launch-floor reduction.** The fixed per-call GPU launch overhead has an
+  identified, not-yet-built optimization path.
 - **A wider-vector CPU prefill kernel.** Prefill throughput on the CPU path
   is bound by the scalar/SSE2 integer kernel's own instruction throughput,
-  not by memory bandwidth (measured on a real artifact: roughly 9.2 billion
-  multiply-adds/second sustained, well under the machine's memory-bandwidth
-  ceiling) — a wider-vector kernel (AVX2/AVX-512) is the identified lever
-  for a further speedup, not yet built.
+  not by memory bandwidth — a wider-vector kernel (AVX2/AVX-512) is the
+  identified lever for a further speedup, not yet built.
 - **Flat-batch dispatch fusion and the remaining single-group tail sites.**
   Two named, scoped opportunities to close the gap between batched and
   single-sequence throughput further.
