@@ -7007,11 +7007,12 @@ static void TestS2Point5SixCaseAcceptanceGateMeasurement() {
 
 // --- S11 item 4 addendum -- closes Poirot's S2.5 review finding: the normative
 //     scalar reference (design S5) had zero committed exercise on x64 (DotRow
-//     dispatches unconditionally to SSE2 there, so DotRowScalarRef was reachable
-//     only from uncommitted scratch). This cell drives DotRowScalarRef and the
-//     shipping SSE2 path (GemmInt8AccumulateRow, which resolves to DotRowSse2 on
-//     this platform) as two INDEPENDENT calls against the SAME inputs, both
-//     asserted bit-for-bit equal to the arbitrary-precision oracle -- discharging
+//     runtime-dispatches among SSE2/AVX2/AVX-512 there, T-2149 design §6.2, so
+//     DotRowScalarRef was reachable only from uncommitted scratch). This cell drives
+//     DotRowScalarRef and the shipping dispatch path (GemmInt8AccumulateRow, which
+//     resolves to whichever tier this build/process selects) as two INDEPENDENT calls
+//     against the SAME inputs, both asserted bit-for-bit equal to the arbitrary-
+//     precision oracle -- discharging
 //     design S11 item 4's "SIMD == scalar bit-equal" claim directly, not only
 //     transitively through the row/composition/uniform cells above. Spread: the
 //     full existing row/composition/uniform fixture corpus (small random, int8
@@ -7033,11 +7034,11 @@ static void TestDotRowScalarRefMatchesShippingSse2PathAndOracle() {
 		          "%s (in_channels=%zu): DotRowScalarRef == %lld, oracle expects %lld", label,
 		          in_channels, static_cast<long long>(scalar), static_cast<long long>(oracle));
 		CHECK_MSG(simd == oracle,
-		          "%s (in_channels=%zu): shipping SSE2 path (GemmInt8AccumulateRow) == %lld, "
+		          "%s (in_channels=%zu): shipping dispatch path (GemmInt8AccumulateRow) == %lld, "
 		          "oracle expects %lld",
 		          label, in_channels, static_cast<long long>(simd), static_cast<long long>(oracle));
 		CHECK_MSG(scalar == simd,
-		          "%s (in_channels=%zu): scalar reference (%lld) != shipping SSE2 path (%lld) -- "
+		          "%s (in_channels=%zu): scalar reference (%lld) != shipping dispatch path (%lld) -- "
 		          "design S11 item 4's SIMD == scalar bit-equal claim violated",
 		          label, in_channels, static_cast<long long>(scalar), static_cast<long long>(simd));
 	};
@@ -7084,8 +7085,9 @@ static void TestDotRowScalarRefMatchesShippingSse2PathAndOracle() {
 // matmul kernel's outputs across a canonical input set. This is the cross-
 // platform/toolchain/ISA determinism gate — every platform in the CI matrix must
 // reproduce this exact hash bit-for-bit. macos-arm64 is the load-bearing member:
-// src/matmul.cpp's SSE2 specialization is x64-only, so that runner exercises the
-// scalar reference while the others exercise SSE2, and a matching hash across the
+// src/matmul.cpp's SSE2/AVX2/AVX-512 specializations are x64-only (T-2149 design §6.1),
+// so that runner exercises the scalar reference while x64 runners exercise whichever
+// tier their own runtime dispatch or force macro selects, and a matching hash across the
 // matrix IS the scalar ≡ SIMD cross-ISA proof rather than a repeated x64 result.
 //
 // The pinned hash is computed by tools/gen_matmul_golden.py in arbitrary-precision
@@ -7185,7 +7187,8 @@ static void TestMatmulGoldenHashCrossPlatform() {
 		}
 
 		// 1. Every int64 accumulator the shipping dispatch produces, row-major
-		//    [num_tokens, out_channels] -- SSE2 on x64, the scalar reference on arm64.
+		//    [num_tokens, out_channels] -- SSE2/AVX2/AVX-512 (whichever tier is selected)
+		//    on x64, the scalar reference on arm64.
 		std::vector<int64_t> wide(c.num_tokens * c.out_channels);
 		GemmInt8Accumulate(acts.data(), wgts.data(), c.num_tokens, c.in_channels, c.out_channels,
 		                   wide.data());

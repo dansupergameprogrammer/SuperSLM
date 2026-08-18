@@ -53,7 +53,7 @@ inline constexpr size_t kRowCasesCount = 4;
 
 // --- Tail-length sweep, in_channels 1..80, both sign extremes on both operands
 //     at every length (RowCase shape, out_channels always 1). Drives
-//     DotRowScalarRef directly against the shipping SSE2 path and this oracle --
+//     DotRowScalarRef directly against the shipping dispatch path and this oracle --
 //     see the S2.5 test-design record's addendum. ---
 
 inline constexpr int8_t kTailSweepActs0[] = {INT8_C(127)};  // tail_sweep_len_1

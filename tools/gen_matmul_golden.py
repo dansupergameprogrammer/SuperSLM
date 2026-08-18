@@ -26,8 +26,9 @@ remainder — plus two deliberately non-block-aligned synthetic lengths (tails o
 the int8-extremes row at both operands' limits, the in_channels=1 architectural floor, and
 THREE 132,105-deep cases.
 
-All three deep cases drive the SSE2 accumulator flush window (src/matmul.cpp's kFlushBlocks
-trips at 131,072 elements). Only the two single-signed ones — deep_beyond_i32_neg and
+All three deep cases drive the shared accumulator flush window (src/matmul.cpp's
+kFlushBlocks trips at 131,072 elements -- the same literal, unchanged, across the SSE2,
+AVX2, and AVX-512 tiers, T-2149 design §5.2). Only the two single-signed ones — deep_beyond_i32_neg and
 deep_beyond_i32_pos — carry sums outside int32. deep_flush_lcg_132105 does NOT: an LCG
 fill's mixed signs cancel and its largest accumulator is 3,027,949, comfortably inside
 int32.
@@ -44,7 +45,8 @@ Do not trim the two single-signed cases. main() asserts, from the accumulators i
 computes, that at least one case leaves int32; that guard fires if they go.
 
 The hash covers, per case: every int64 accumulator GemmInt8Accumulate produces (the shipping
-dispatch — SSE2 on x64, the scalar reference on arm64), the DotRowScalarRef value for row 0
+dispatch — SSE2, AVX2, or AVX-512 on x64 depending on the tier selected, the scalar
+reference on arm64), the DotRowScalarRef value for row 0
 (so the normative scalar construction is inside the golden even on x64, where the shipping
 dispatch never selects it), and NarrowAccumulatorToI32's int32 output for the cases whose
 declared MatmulAccumWidth is Int32 per §8's 131,071 bound.

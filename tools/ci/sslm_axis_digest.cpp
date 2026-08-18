@@ -524,10 +524,10 @@ void SectionSiluLut() {
 // --- 8. C17/C19-C22 matmul: the scalar-vs-SIMD A/B ------------------------------
 //
 // This is the section S-HARDEN-6's "scalar-forced vs SIMD-enabled" leg exists for.
-// On x64 the shipping DotRow ALWAYS takes the SSE2 path; DotRowScalarRef is the
-// normative scalar reference. Every case asserts they agree AND digests the SIMD
-// result, so a divergence shows up twice: as ok=false locally and as a hash mismatch
-// against any build where the two agree.
+// On x64 the shipping DotRow runtime-dispatches among SSE2/AVX2/AVX-512 (T-2149 design
+// §6.2); DotRowScalarRef is the normative scalar reference. Every case asserts they
+// agree AND digests the SIMD result, so a divergence shows up twice: as ok=false
+// locally and as a hash mismatch against any build where the two agree.
 void SectionMatmul() {
 	Section& sec = NewSection("c17_matmul");
 
@@ -651,8 +651,16 @@ void PrintBuildIdentity() {
 #else
 	std::printf("# ndebug: 0\n");
 #endif
-#if defined(_M_X64) || defined(__x86_64__)
-	std::printf("# arch: x86_64 (matmul SSE2 path active)\n");
+#if defined(SUPERSLM_FORCE_SCALAR_MATMUL)
+	std::printf("# arch: x86_64 (matmul scalar-forced)\n");
+#elif defined(SUPERSLM_FORCE_SSE2_MATMUL)
+	std::printf("# arch: x86_64 (matmul SSE2-forced)\n");
+#elif defined(SUPERSLM_FORCE_AVX2_MATMUL)
+	std::printf("# arch: x86_64 (matmul AVX2-forced)\n");
+#elif defined(SUPERSLM_FORCE_AVX512_MATMUL)
+	std::printf("# arch: x86_64 (matmul AVX512-forced)\n");
+#elif defined(_M_X64) || defined(__x86_64__)
+	std::printf("# arch: x86_64 (matmul dispatch runtime-selected: SSE2/AVX2/AVX-512)\n");
 #else
 	std::printf("# arch: other (matmul scalar fallback active)\n");
 #endif

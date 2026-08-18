@@ -336,11 +336,11 @@ assert _perm_expected == _perm_expected_reordered, (
 #     operands at every length (activations alternate +127/-127, weights
 #     alternate +127/-128 -- both extremes present from length 2 up). Closes
 #     the S2.5 coverage gap Poirot found: DotRowScalarRef (design S5's scalar
-#     reference) had zero committed exercise on x64, since DotRow dispatches
-#     unconditionally to SSE2 there. This sweep, plus the composition_cases'
-#     already-present non-block-aligned lengths (777, 4095), is what the new
-#     committed cell (test-design addendum, S2.5) drives through
-#     DotRowScalarRef directly AND through the shipping SSE2 path
+#     reference) had zero committed exercise on x64, since DotRow runtime-dispatches
+#     among SSE2/AVX2/AVX-512 there (T-2149 design S6.2). This sweep, plus the
+#     composition_cases' already-present non-block-aligned lengths (777, 4095), is
+#     what the new committed cell (test-design addendum, S2.5) drives through
+#     DotRowScalarRef directly AND through the shipping dispatch path
 #     (GemmInt8AccumulateRow), asserting both equal this oracle bit-for-bit.
 # ---------------------------------------------------------------------------
 
@@ -441,7 +441,7 @@ emit("")
 # --- Tail-length sweep cases (S11 item 4 addendum -- closes Poirot's S2.5 finding) ---
 emit("// --- Tail-length sweep, in_channels 1..80, both sign extremes on both operands")
 emit("//     at every length (RowCase shape, out_channels always 1). Drives")
-emit("//     DotRowScalarRef directly against the shipping SSE2 path and this oracle --")
+emit("//     DotRowScalarRef directly against the shipping dispatch path and this oracle --")
 emit("//     see the S2.5 test-design record's addendum. ---")
 emit("")
 for idx, c in enumerate(tail_sweep_cases):
