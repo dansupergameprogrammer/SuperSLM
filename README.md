@@ -14,7 +14,7 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-**Status: pre-1.0.** Every capability below — including schema-constrained
+**Status: 1.0.** Every capability below — including schema-constrained
 generation — is built and measured on the platforms named, on both certified
 GPUs: the schema-constrained-decoding GPU parity check passed bit-identical
 on the certified NVIDIA GPU, and passed bit-identical on the certified AMD
@@ -110,10 +110,10 @@ that same run.
 integration matrix, and no further hardware-specific measurement has been
 made beyond what that gives. The workflows exist and define the full
 matrix ([.github/workflows/tests.yml](.github/workflows/tests.yml):
-windows-x64, linux-x64, linux-x64-asan, macos-arm64) — **hosted runs on
-GitHub Actions are currently capped by the account's spending limit** and
-have not executed since 2026-07-23; today, the verification path a
-consumer can actually run is the local one: the [Building](#building)
+windows-x64, linux-x64, linux-x64-asan, macos-arm64), runs on every push,
+and is **fully green on the 1.0 release commit** — every platform leg,
+sanitizer leg, cross-toolchain digest leg, and CI checker. A consumer can
+reproduce the same verification locally: the [Building](#building)
 section's `cmake`+`ctest` matrix on any platform, and `build.bat` on
 Windows. See [docs/platform-support.md](docs/platform-support.md) for the
 full table, every measured number, and where each one was measured.

@@ -2,7 +2,7 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
-## [1.0.0-unreleased]
+## [1.0.0] - 2026-08-18
 
 This is the first public release line. Rather than a chronology of internal
 build steps, this entry summarizes what 1.0 delivers as a whole; see
