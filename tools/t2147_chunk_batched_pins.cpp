@@ -183,10 +183,12 @@ int main(int argc, char** argv) {
 	const char* prompt = argv[2];
 	bool do_speedup = false;
 	int32_t boundary_sweep = -1;  // -1 = every split point
+	std::string dump_blob_path;
 	for (int i = 3; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a == "--speedup") do_speedup = true;
 		else if (a.rfind("--boundary-sweep=", 0) == 0) boundary_sweep = std::atoi(a.c_str() + 18);
+		else if (a.rfind("--dump-blob=", 0) == 0) dump_blob_path = a.substr(12);
 	}
 
 	std::vector<uint8_t> bytes;
@@ -209,6 +211,21 @@ int main(int argc, char** argv) {
 	sslm_model_unmap(probe_model);
 	const int32_t N = token_count;
 	std::printf("prompt \"%s\" -> %d real tokens\n", prompt, N);
+
+	// T-2147 Cell (c) support: dump the chunk_budget=N single-call blob to a file and exit --
+	// used to diff this binary's own output against a binary built from a DIFFERENT source tree
+	// (a pre-T-2147 baseline checkout) for the SAME prompt/artifact, the actual cross-source-tree
+	// "reproduces the existing per-token path bit-for-bit" oracle (T-2133 §9 C4's own shape).
+	if (!dump_blob_path.empty()) {
+		const std::vector<int32_t> one_call_dump = {N};
+		const auto blob = PrefillAndSave(bytes, tokens.data(), N, one_call_dump, /*chunk_budget=*/N,
+		                                  SSLM_SPAN_PROMPT, nullptr, nullptr);
+		std::ofstream out(dump_blob_path, std::ios::binary);
+		if (!out) Fail("open dump-blob output", 0);
+		out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
+		std::printf("wrote %zu-byte blob to %s\n", blob.size(), dump_blob_path.c_str());
+		return 0;
+	}
 
 	// --- Cell (a): per-size --------------------------------------------------------------
 	std::printf("\n=== Cell (a): per-size (chunk_budget in {1, mid, N}) ===\n");
