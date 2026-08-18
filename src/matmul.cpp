@@ -150,14 +150,44 @@ void GemmInt8Accumulate(const int8_t* activations, const int8_t* weights,
                          size_t num_tokens, size_t in_channels, size_t out_channels,
                          int64_t* out_acc) {
 	assert(num_tokens > 0 && "GemmInt8Accumulate: num_tokens must be >= 1");
-	// Each row is independent (design §3/§9's "no cross-row reduction") -- literally
-	// GemmInt8AccumulateRow applied per row, stacked row-major [num_tokens,
-	// out_channels]. This is not an optimization shortcut; it is the construction
-	// design §3 specifies and design §12 dim 7's stacking-equivalence cell asserts
-	// against.
-	for (size_t t = 0; t < num_tokens; ++t) {
-		GemmInt8AccumulateRow(activations + t * in_channels, weights, in_channels, out_channels,
-		                      out_acc + t * out_channels);
+	// T-2147/D-SLM3488 (Vitruvius fold 2026-08-17, correcting D-SLM3481): this primitive has TWO
+	// independently-true properties, and they are not the same claim.
+	//
+	// (1) Row/cell independence (design §3/§9's "no cross-row reduction", extended one axis by
+	//     D-SLM3488 to "no cross-column reduction" either): cell (t, j)'s own value is
+	//     DotRow(activations[t], weights[j], in_channels) -- a scalar reduction over
+	//     in_channels that reads only row t's activations and row j's weights, sharing no
+	//     accumulator or state with any other cell in EITHER dimension. This means any traversal
+	//     order over the (t, j) grid -- t outer or j outer, any grouping, any split -- produces
+	//     bit-identical per-cell output, because every cell reduces to the identical DotRow
+	//     expression regardless of visit order. This is a CORRECTNESS property (which values may
+	//     be computed in which grouping), and design §12 dim 7's stacking-equivalence cell
+	//     asserts against it.
+	//
+	// (2) Memory-traffic behavior: which loop is OUTER determines how many times `weights` is
+	//     re-read from the start. j (out_channels) outer, t (num_tokens) inner means each
+	//     weight row (`weights + j*in_channels`, in_channels bytes) is read ONCE per call and
+	//     stays cache-resident across every token that consumes it -- weights streamed once per
+	//     CHUNK. The reverse nesting (t outer, j inner -- this function's own shape before
+	//     D-SLM3488) re-reads the FULL weight matrix from the start on every token, i.e. once
+	//     per TOKEN across a chunk, delivering zero weight-bandwidth amortization regardless of
+	//     num_tokens. D-SLM3481's original ruling asserted "streams that layer's weight matrix
+	//     once for the whole chunk" from property (1) alone, without reading this function's own
+	//     loop order at source -- false about (2), measured by T-2147's own 1.07x speedup
+	//       (Claude/Brunel/t2147-batched-prefill-2026-08-17.md), corrected by D-SLM3488.
+	//
+	// The loop nest below is j-outer, t-middle, k-innermost (DotRow's own reduction) --
+	// property (2)'s actual delivery mechanism. Property (1) makes this permutation free: no
+	// cell's own accumulation order changes (DotRow's k-ascending reduction is untouched), only
+	// which cells are visited in which order, so this is a pure traversal restructuring with
+	// zero new arithmetic (D-SLM3488's own "no new arithmetic" ruling).
+	for (size_t j = 0; j < out_channels; ++j) {
+		const int8_t* const weight_row = weights + j * in_channels;  // read ONCE per chunk here,
+		                                                              // held cache-resident across
+		                                                              // every token below
+		for (size_t t = 0; t < num_tokens; ++t) {
+			out_acc[t * out_channels + j] = DotRow(activations + t * in_channels, weight_row, in_channels);
+		}
 	}
 }
 
