@@ -843,6 +843,27 @@ if defined T2132_G5_FIXTURE (
 	echo t2132_g5_smoke: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
 )
 
+rem T-2147 (design Sec15.2, D-SLM3481/D-SLM3488): the chunk-batched prefill proof-cell +
+rem speedup-measurement tool -- per-size (a), boundary-split (b) bit-identity against the real
+rem G5 fixture, plus --speedup for the actual streamed-weight-bandwidth measurement and
+rem --dump-blob=PATH for cross-source-tree cell (c) comparisons. Same NOT-auto-run posture as
+rem t2132_g5_smoke.exe above (needs a real G5 fixture). Usage:
+rem out\t2147_chunk_batched_pins.exe ^<g5-fixture.sslm^> "prompt" [--speedup] [--boundary-sweep=K] [--dump-blob=PATH].
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\sslm_abi.cpp ^
+	tools\t2147_chunk_batched_pins.cpp /Fo:out\t2147\ /Fe:out\t2147_chunk_batched_pins.exe
+if errorlevel 1 (
+	popd & exit /b 1
+)
+if defined T2132_G5_FIXTURE (
+	out\t2147_chunk_batched_pins.exe %T2132_G5_FIXTURE% "Book me with Rin, Thursday afternoon."
+	if errorlevel 1 ( popd & exit /b 1 )
+) else (
+	echo t2147_chunk_batched_pins: built, NOT run ^(set T2132_G5_FIXTURE=path\to\a-g5-fixture.sslm to run^)
+)
+
 rem T-2132 (G5-5, Brunel, design Sec6 Slot G5-5 -- REQUIRED 1.0 gate, D-SLM3443): the executed
 rem CPU-vs-GPU parity proof for schema-constrained decode and jump-forward. Needs the SAME real
 rem G5 fixture as G5-2's own smoke above plus real D3D12 hardware -- built here (both the CPU ABI
