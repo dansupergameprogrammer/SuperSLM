@@ -2,6 +2,16 @@ name: tests
 
 on: [push, pull_request]
 
+# T-2152 (outside strike item 8, release hardening): the default GITHUB_TOKEN this workflow
+# would otherwise receive is read-write across the repository's own API surface (issues, PRs,
+# packages, ...) -- none of the jobs below need anything beyond reading the checked-out source
+# (every `uses: actions/checkout` here is a plain read; no job pushes a commit, opens a PR
+# comment, or publishes a release). Declared once, top-level, so every job inherits read-only
+# by default; a job that genuinely needs a broader scope in the future states it explicitly at
+# that job's own `permissions:` block rather than silently inheriting the wide default.
+permissions:
+  contents: read
+
 # S0 gate (SuperSLM_Plan.md §19): the loader coverage suite green on the full
 # matrix. The determinism cross-device hash gate over the kernel path arrives with
 # S2/S3; at S0 the matrix proves the artifact loader + format validation build and
@@ -10,7 +20,7 @@ jobs:
   windows-x64:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build
       - run: cmake --build build --config Release
       - shell: pwsh
@@ -22,7 +32,7 @@ jobs:
   linux-x64:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -30,7 +40,7 @@ jobs:
   linux-x64-asan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all"
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -38,7 +48,7 @@ jobs:
   macos-arm64:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -55,7 +65,7 @@ jobs:
   linux-x64-debug:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
       - run: cmake --build build
       - run: ./build/superslm_tests
@@ -78,7 +88,7 @@ jobs:
       CC: clang-18
       CXX: clang++-18
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS="-fsanitize=thread"
       - run: cmake --build build --target superslm_tests
       - run: ./build/superslm_tests
@@ -110,7 +120,7 @@ jobs:
   linux-x64-gcc-digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-13 -DCMAKE_CXX_COMPILER=g++-13
       - run: cmake --build build --target sslm_axis_digest
       - name: Run and extract the GLOBAL digest
@@ -118,7 +128,7 @@ jobs:
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
           grep '^GLOBAL ' axis_output.txt > global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-gcc
           path: global_digest.txt
@@ -126,7 +136,7 @@ jobs:
   linux-x64-clang-digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
       - run: cmake --build build --target sslm_axis_digest
       - name: Run and extract the GLOBAL digest
@@ -134,7 +144,7 @@ jobs:
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
           grep '^GLOBAL ' axis_output.txt > global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-clang
           path: global_digest.txt
@@ -142,7 +152,7 @@ jobs:
   windows-msvc-digest:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build
       - run: cmake --build build --config Release --target sslm_axis_digest
       - name: Run and extract the GLOBAL digest
@@ -152,7 +162,7 @@ jobs:
           $out | Out-File -Encoding ascii axis_output.txt
           if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
           ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-windows-msvc
           path: global_digest.txt
@@ -160,7 +170,7 @@ jobs:
   windows-clangcl-digest:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -T ClangCL
       - run: cmake --build build --config Release --target sslm_axis_digest
       - name: Run and extract the GLOBAL digest
@@ -170,7 +180,7 @@ jobs:
           $out | Out-File -Encoding ascii axis_output.txt
           if (-not ($out -match '^local_invariant_failures 0$')) { throw "local invariant failure" }
           ($out | Where-Object { $_ -match '^GLOBAL ' }) | Out-File -Encoding ascii global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-windows-clangcl
           path: global_digest.txt
@@ -183,7 +193,7 @@ jobs:
   macos-arm64-digest:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --target sslm_axis_digest
       - name: Run and extract the GLOBAL digest
@@ -191,7 +201,7 @@ jobs:
           ./build/sslm_axis_digest | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
           grep '^GLOBAL ' axis_output.txt > global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-macos-arm64
           path: global_digest.txt
@@ -201,7 +211,7 @@ jobs:
   linux-x64-clang-scalar-forced-digest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
       - run: cmake --build build --target sslm_axis_digest_scalar_forced
       - name: Run and extract the GLOBAL digest
@@ -209,7 +219,7 @@ jobs:
           ./build/sslm_axis_digest_scalar_forced | tee axis_output.txt
           grep -q '^local_invariant_failures 0$' axis_output.txt
           grep '^GLOBAL ' axis_output.txt > global_digest.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: axis-digest-linux-x64-clang-scalar-forced
           path: global_digest.txt
@@ -231,7 +241,7 @@ jobs:
       - linux-x64-clang-scalar-forced-digest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           pattern: axis-digest-*
           path: digests
@@ -295,7 +305,7 @@ jobs:
   branch-coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       - name: Build with source-coverage instrumentation
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -345,8 +355,8 @@ jobs:
   generators:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install numpy
@@ -403,8 +413,8 @@ jobs:
     env:
       SUPERSLM_CLANGXX: clang++-18
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install pytest
@@ -454,8 +464,8 @@ jobs:
     env:
       SUPERSLM_CLANGXX: clang++-18
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install pytest
@@ -491,8 +501,8 @@ jobs:
   present-tense-defect-comment-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install pytest
@@ -516,8 +526,8 @@ jobs:
   gpu-guard-status-parity-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       - run: pip install pytest
@@ -537,7 +547,7 @@ jobs:
   converter-validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
       # Pinned to 3.13, not the floating '3.x' every other job uses: CPython's
       # bundled unicodedata.unidata_version tracks the minor version
       # (confirmed by inspection: 3.9 -> 13.0.0, 3.11 -> 14.0.0, 3.13 -> 15.1.0),
@@ -549,7 +559,7 @@ jobs:
       # drifted to a Python whose unicodedata is 16.0.0 and failed the gate
       # (UnicodeVersionMismatch) even though the converter's rejection was
       # correct behavior, not a converter defect.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.13'
       # T-2137 (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): this job now collects

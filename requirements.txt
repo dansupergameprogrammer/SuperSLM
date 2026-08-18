@@ -4,14 +4,22 @@
 # (.github/workflows/tests.yml). This file supersedes those scattered declarations and gives
 # the clean-checkout gate's own `pip install -r requirements.txt` step (design §5 step 2) a
 # real target.
-numpy
-pytest
+#
+# T-2152 (outside strike item 8, release hardening): every entry pinned compatible-release
+# (`~=`, PEP 440 -- allows a patch/point update within the same minor, refuses a minor bump
+# that could silently change behavior) at the exact version this tree was verified against,
+# read from the environment (`python -m pip show <pkg>`) the full `pytest tests/ci` suite
+# (305 cases) last ran green against, 2026-08-17. An unpinned requirements.txt lets a future
+# install silently drift onto an untested transformers/tokenizers release; pinning trades that
+# for an explicit, dated bump the next time these are verified against a newer one.
+numpy~=2.5.1
+pytest~=8.2.0
 # reference_pipeline's Closure-B addition (design §2.2): AutoTokenizer only, for
 # calibrate_checkpoint.py's chat-template tokenization. torch is never imported by the
 # vendored reference pipeline.
-transformers
+transformers~=5.13.1
 # T-2137 fix round (Poirot casebook f83afe0-t2137-vendoring-review.md, C1): declared directly,
 # not left to transformers' own transitive pin. tools/_calibrate_checkpoint_fixture.py imports
 # it directly (`from tokenizers import Tokenizer, decoders, pre_tokenizers`) to build B1's
 # on-disk fixture checkpoint's tokenizer -- a real, direct dependency, not an inherited one.
-tokenizers
+tokenizers~=0.22.2
