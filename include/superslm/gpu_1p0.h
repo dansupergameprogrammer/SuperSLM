@@ -1,37 +1,22 @@
 #ifndef SSLM_GPU_1P0_H
 #define SSLM_GPU_1P0_H
-// T-2113 (B1): the production 1.0 GPU API surface.
+// SuperSLM GPU acceleration API (D3D12-backed) -- the public entry points for creating a GPU
+// context; mapping a model and its LoRA adapters into device residency; creating, saving,
+// restoring, and releasing per-sequence decode state; and running batched decode steps on the
+// GPU.
 //
-// This header's own DECLARATIONS -- opaque handle typedefs, the SslmGpuStatus enum (every
-// enumerator, same order, same values), the GpuContextConfig/GpuResidencyConfig struct
-// bodies, and every function signature -- match the red suite's own canonical copy
-// (D:\SuperSLM\.worktrees\t2112-red-suite\tests\t2112-gpu-1p0-red-suite\sslm_gpu_1p0.h,
-// promoted from the T-2111 strike probe, transcribed verbatim from
-// Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-14.md Sec4/Sec5, post-fold). The suite
-// includes ITS OWN copy, never this one -- the two must stay declaration-identical (checked at
-// every B-section checkpoint) so that the object files this header's own .cpp produces link
-// cleanly against the suite's call sites. **This is a declaration-shape parity, not a literal
-// whole-file `diff`**: each copy carries its own explanatory prose (this file narrates the
-// production build's own provenance per declaration; the suite's copy narrates the design
-// section and promotion history), so a raw `diff` between the two files shows comment lines
-// differing throughout by design -- corrected here (T-2114, M2,
-// Claude/Poirot/50f3d5d-t2113-1p0-gpu-core-build-review.md) after that comment's own literal
-// "checked... via diff" claim was found false: the suite's copy had GpuContextConfig/
-// GpuResidencyConfig as INCOMPLETE forward declarations while this header defines them
-// complete (by-value call parameters cannot be incomplete types), a real declaration-shape
-// divergence a real `diff` would have caught, not merely a stale sentence -- both now define
-// the same complete struct bodies. Every function below is declared at GLOBAL scope with
-// ordinary C++ linkage (not extern "C", not inside `namespace superslm_gpu`) because that is
-// what the suite's own header declares, and C++ link-name matching requires the definition to
-// share the caller's exact scope, not merely an equivalent signature in a different namespace.
+// Every fallible call returns an SslmGpuStatus; every value it produces (a handle, a ready
+// flag, a decoded status, a batch's per-sequence outcome) is delivered through an out-parameter,
+// never through the return value. Every function below is declared at global scope with
+// ordinary C++ linkage -- not extern "C", not inside a namespace -- and a caller linking
+// against this header's implementation must match that scope exactly.
 //
-// Every fallible call returns SslmGpuStatus; every value it produces (a handle, a ready
-// flag, a decoded status, a batch's per-sequence outcomes) is delivered through an
-// out-parameter, never through the return value (design Sec4.1.1, the T-2111 fold's own
-// repair). B-section provenance is noted per declaration; only B1's symbols
-// (sslm_gpu_context_create/destroy) are DEFINED as of this commit -- src/gpu/gpu_1p0.cpp.
-// Every other declaration below exists so later B-sections extend one already-complete,
-// already-reviewed header rather than re-declaring the surface piecemeal.
+// A per-sequence decode-time rejection (an out-of-domain input, a guard check failing on that
+// sequence's own step) is reported as SSLM_SEQUENCE_REJECTED, kept distinct from
+// SSLM_DEVICE_LOST: the device stays healthy and no other sequence in the same batch call is
+// affected. sslm_gpu_seq_restore additionally rejects a restore blob whose recorded
+// model-content hash does not match the target model handle (SSLM_RESTORE_MODEL_MISMATCH), so
+// a sequence saved from one model cannot be silently replayed against a different one.
 
 #include <stdint.h>
 #include <stddef.h>

@@ -1,20 +1,14 @@
-// SuperSLM raw int8x8 matmul accumulate (C17/C19-C22 site, S2.5).
+// SuperSLM raw int8x8 matmul accumulate.
 //
 // The raw int8-weight-matrix x int8-activation-row dot product that produces the wide
-// accumulator row the already-shipped C19-C22 per-token dynamic-scale requant chain
-// (intmath.h: MaxAbsReduce / NormalizeScale / DynamicScaleReciprocal / RequantTokenCode)
-// consumes. This header designs and declares the kernel; it pins no new requant
-// arithmetic -- every primitive downstream of NarrowAccumulatorToI32 is already
-// normative and unmodified (SuperSLM_matmul_subslot_design-2026-07-20.md §6).
+// accumulator row the per-token dynamic-scale requant chain (intmath.h) consumes. This header
+// declares the kernel only; it pins no new requant arithmetic -- every primitive downstream of
+// the accumulator narrowing step is already normative and unmodified elsewhere.
 //
-// Standard library only -- no float on the reproducible path (Layer 1, D-SLM13).
+// Standard library only -- no float on the reproducible path.
 //
-// The declarations below are the approved API surface (design §3). Every body
-// is a real construction, including the scalar reference (design §5), green
-// in the standing suite (S2.5). GemmProbQ15Accumulate is S3.3's own
-// construction (§4.6, §11 S3.3 §6.4; Claude/Curie/superslm-s3.3-attention-
-// interior-test-design-2026-07-28.md §6.4) — see its own declaration comment
-// and matmul.cpp.
+// The declarations below are the approved API surface. Every body, including the scalar
+// reference, is a real construction backed by matmul.cpp.
 #ifndef SUPERSLM_MATMUL_H
 #define SUPERSLM_MATMUL_H
 

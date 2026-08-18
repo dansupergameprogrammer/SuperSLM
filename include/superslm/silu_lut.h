@@ -1,16 +1,14 @@
-// SuperSLM SwiGLU SiLU via a fixed-point sigmoid LUT (C10, S2.4).
+// SuperSLM SwiGLU SiLU via a fixed-point sigmoid lookup table.
 //
-// The runtime half of the C10 construction (D-SLM68): map an int8 gate code plus its
-// per-token (m, e) carried scale to a position in a pinned Q15 sigmoid table, linearly
-// interpolate between the two nearest nodes, and round once (C3). Entirely integer, entirely
-// DIVISION-FREE — off §18's int64-division GPU-semantics row (SuperSLM_S2.4_SiLU_LUT_Design
-// §5, §6). The table itself is generated OFFLINE in double precision by the converter and
-// carried in the artifact's SIL1 section (model.h ParseSigmoidLut / SigmoidLutValue); this
-// header is the runtime lookup only.
+// The runtime half of the construction: map an int8 gate code plus its per-token carried scale
+// to a position in a pinned Q15 sigmoid table, linearly interpolate between the two nearest
+// nodes, and round once. Entirely integer, entirely division-free. The table itself is
+// generated offline in double precision by the converter and carried in the artifact's SIL1
+// section (model.h ParseSigmoidLut / SigmoidLutValue); this header is the runtime lookup only.
 //
-// Standard library only — no float on the reproducible path (Layer 1, D-SLM13). The two
-// roundings both reuse a shipped RoundingDivideByPOT primitive (int64 for the index placement,
-// int32 for the interpolation), so the tie rule (C3) is not re-implemented here.
+// Standard library only — no float on the reproducible path. Both roundings reuse the shipped
+// RoundingDivideByPOT primitive (int64 for the index placement, int32 for the interpolation),
+// so the tie rule is not re-implemented here.
 #ifndef SUPERSLM_SILU_LUT_H
 #define SUPERSLM_SILU_LUT_H
 

@@ -1,31 +1,14 @@
-// layer_marshal.h -- the shared "how an artifact becomes a LayerWeights[]" code.
+// layer_marshal.h -- the shared "how an artifact becomes a LayerWeights[]" code: parses a
+// loaded model artifact's tensor sections into the per-layer weight views the forward pass
+// consumes.
 //
-// Relocated here at T-2113 (B2, design Claude/Vitruvius/t2107-gpu-core-1p0-design-2026-08-
-// 14.md Sec10 B2) from tools/sslm_marshal.h, which is now a compatibility shim that includes
-// this header -- every existing `#include "sslm_marshal.h"` call site in tools/ and tests/
-// keeps working unchanged. The relocation exists because `sslm_gpu_model_map`
-// (src/gpu/gpu_1p0.cpp) is the first PRODUCTION call site that needs to marshal a
-// `SslmModelView` into a `LayerWeights[]` -- tools/sslm_marshal.h's own header comment
-// stated, correctly at the time, "this header is tools-only -- it is never included from
-// src/ or include/, and it changes no production code"; that boundary is what this move
-// crosses, deliberately, rather than duplicating ~350 lines of marshaling logic a second
-// time inside gpu_1p0.cpp (exactly the two-copies-that-can-silently-drift hazard this
-// header's own original T-1684 extraction was written to avoid in the first place).
+// This is production code: `sslm_gpu_model_map` (src/gpu/gpu_1p0.cpp) and the CPU-side
+// generation tools both marshal a `SslmModelView` into a `LayerWeights[]` through this one
+// shared implementation, so there is exactly one copy of the marshaling logic rather than two
+// that can silently drift apart.
 //
-// Original header (T-1684, design Claude/Vitruvius/superslm-t1683-layer-bisection-design-
-// 2026-08-02.md S4.1 step 1), preserved below verbatim except for this banner, the header
-// guard name, and the `inline`/`superslm::`-qualification note (both already true of the
-// pre-move file, restated here since they describe THIS file now): so tools/sslm_generate.cpp
-// and tools/sslm_layer_trace.cpp (T-1685) share exactly one copy of the artifact-to-
-// LayerWeights[] marshaling adapter, rather than two copies that can silently drift.
-// Everything below is a verbatim extraction of tools/sslm_generate.cpp's own marshaling
-// functions (ReadFile, RdI32, RdI64, WidenGainToInt32, ReadCarriedScale, LayerBacking,
-// MarshalProjectionFold, MarshalLayer, PreflightScanWscFolds), as they existed on
-// `main`@`aeb931e` -- every comment carried over unchanged alongside the code, plus `inline`
-// (a header, unlike a .cpp, needs it) and `superslm::` qualification (this header lives
-// outside that namespace, unlike the .cpp it was extracted from). The T-1684 red-first proof
-// is a byte-diff of tools/sslm_generate.exe's own stdout on a fixed prompt, captured before
-// and after this extraction -- see the T-1683 build log.
+// `tools/sslm_marshal.h` is a compatibility shim that includes this header, so existing
+// `#include "sslm_marshal.h"` call sites keep working unchanged.
 #ifndef SUPERSLM_INCLUDE_LAYER_MARSHAL_H
 #define SUPERSLM_INCLUDE_LAYER_MARSHAL_H
 

@@ -1,20 +1,18 @@
 // SuperSLM model view (`.sslm` model sections). Current format version is
 // superslm::kArtifactFormatVersion (artifact.h), the single source of
-// truth -- not restated as a number here (S-HARDEN-8; see artifact.h's
-// identical header-comment note).
+// truth -- not restated as a number here.
 //
 // The runtime typed view over a converted, quantized model's array sections. It sits
 // on top of SslmArtifact (include/superslm/artifact.h): SslmArtifact validates the
 // file's structure and whole-file integrity; SslmTensorManifest then parses one array
-// section's internal tensor manifest (WGT1/BIA1/ROP1, docs/sslm_format.md "Model
-// sub-formats"). Standard library only — Layer 1 is independently embeddable, no
-// third-party runtime dependency (SuperSLM_Plan.md §11, D-SLM13).
+// section's internal tensor manifest (docs/sslm_format.md "Model sub-formats"). Standard
+// library only — Layer 1 is independently embeddable, with no third-party runtime dependency.
 //
-// Like TokenizerView, the manifest sub-parse is a trust boundary held to the T-129 bar
-// (§17 dim 2): the artifact's integrity hash proves the bytes are intact, but a crafted
-// integrity-valid artifact can still carry a malformed manifest, so every descriptor
-// field is validated against the section's own bounds before any tensor byte is exposed.
-// Deviation is rejection with a status, never a silent partial view.
+// Like TokenizerView, the manifest sub-parse is itself a trust boundary: the artifact's
+// integrity hash proves the bytes are intact, but a crafted integrity-valid artifact can still
+// carry a malformed manifest, so every descriptor field is validated against the section's own
+// bounds before any tensor byte is exposed. Deviation is rejection with a status, never a
+// silent partial view.
 #ifndef SUPERSLM_MODEL_H
 #define SUPERSLM_MODEL_H
 

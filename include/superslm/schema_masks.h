@@ -1,45 +1,19 @@
-// schema_masks.h -- G5-2 (T-2132, Brunel): the SchemaMasks (SCM1) artifact-section reader.
+// schema_masks.h -- the SchemaMasks (SCM1) artifact-section reader for schema-constrained
+// decoding: the fixed header, the per-schema descriptor table, the name blob, and the four
+// per-schema data blocks (mask pages, CSR state-offset array, accepting-state array, flattened
+// transition array), plus every load-time structural and cross-check rejection the format
+// defines.
 //
-// Implements the byte format specified at spec level in Claude/Vitruvius/
-// t2119-g5-constrained-decoding-design-2026-08-16.md Sec13 (Wizard repo, D-SLM3474, rung-8
-// fold) -- the 24-byte fixed header, the 56-byte-per-schema descriptor table, the name blob,
-// and the four per-schema data blocks (mask pages, CSR state-offset array, accepting-state
-// array, flattened transition array), plus every load-time structural/cross-check rejection
-// Sec13.3 names.
+// Header-only: every function below is `inline`, defined here with no companion .cpp, so this
+// file compiles directly into whichever translation unit includes it.
 //
-// HEADER-ONLY (a deliberate, disclosed build-time decision): every function below is `inline`,
-// defined in this header, with no companion .cpp -- src/schema_masks.cpp was drafted and then
-// folded back in here because tests/t2130-g5-red-suite/build_link_red.bat (read-only per this
-// ticket's invocation contract) hard-codes its own engine-source link list and does not, and
-// per the contract cannot, gain a new .cpp file's .obj on that list. A new .cpp this header's
-// own sole consumer (src/sslm_abi.cpp) needed would silently break the suite's own build
-// (LNK2019 on every SchemaMasksTable member) with no ability to fix it from this side.
-// Header-only sidesteps the mismatch entirely: this file compiles directly into whichever
-// translation unit includes it (today, only src/sslm_abi.cpp), so no engine source list
-// anywhere needs to learn a new filename. build.bat's own root source lists are unaffected by
-// this same reasoning, disclosed here rather than silently relied on.
-//
-// SCOPING NOTE (a deliberate, disclosed build-time decision, not a silent shortcut): Sec13.3
-// asks that these rejections become new `SslmModelStatus` enumerators appended to
-// include/superslm/model.h's own closed, heavily-reviewed, gate-checked taxonomy
-// (Gates A/B/C, T-2139). This file's own `Parse` does NOT touch model.h/model.cpp at all --
-// SchemaMasks parsing runs entirely OUTSIDE `SslmModel::Load`'s own reviewed pipeline, called
-// separately from `sslm_model_map` (src/sslm_abi.cpp) against the already-validated
-// `SslmModelView::Section(SchemaMasks)` view (container-level integrity -- offset bounds,
-// alignment, non-overlap with every other section -- is already proven by
-// `SslmArtifact::OpenFromMemory` before this parse ever runs). Every structural/cross-check
-// rejection Sec13.3 names is still enforced (`Parse` returns false and a diagnostic string on
-// any violation, reject-over-degrade preserved); what is scoped down is the DIAGNOSTIC
-// GRANULARITY -- `sslm_model_map` maps every SchemaMasks rejection to the existing
-// `SSLM_ARTIFACT_REJECTED` status (the same family `MapForwardStatus`/the container-rejection
-// path already use for "this artifact's own content cannot be used as requested, no dedicated
-// status"), not to fifteen new `SslmModelStatus` enumerators threaded through
-// `ValidateSectionValues`/Gate A/Gate C. This keeps G5-2's own blast radius inside src/
-// sslm_abi.cpp + this new file, off the frozen S-FREEZE ABI surface (`SSLM_ARTIFACT_REJECTED`
-// is already public ABI) and off model.h's own independently-gated enum. Finer-grained
-// enumerators are a real, named, owed follow-up (see this ticket's build log), not a permanent
-// design decision -- Sec13.3's own naming convention is preserved in this file's own
-// `err` diagnostic strings so a future pass can promote them mechanically.
+// Every SchemaMasks structural or cross-check rejection is enforced -- `Parse` returns false
+// and a diagnostic string on any violation, never a silent partial parse. A caller mapping a
+// model (`sslm_model_map`) sees any SchemaMasks rejection surfaced as the existing
+// `SSLM_ARTIFACT_REJECTED` status, the same family used for "this artifact's content cannot be
+// used as requested, no more specific status applies" -- not a dedicated per-reason status.
+// The rejection's own diagnostic string still names the specific reason for a caller that logs
+// or displays it.
 #ifndef SUPERSLM_SCHEMA_MASKS_H
 #define SUPERSLM_SCHEMA_MASKS_H
 

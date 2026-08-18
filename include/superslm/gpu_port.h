@@ -1,42 +1,13 @@
 #pragma once
-// T-1986 GPU-serial port (Claude/Vitruvius/t1986-gpu-serial-port-design-2026-08-13.md,
-// commit 2de2e388a6 -- Sec10 Coverage Model, Sec11 B1-B12 build decomposition, Sec5.8
-// dispatch_budget contract, Sec5.9 asynchronous sequence lifecycle): the production
-// entry-point surface T-2024's re-derived red suite (Claude/Curie/
-// t2019-gpu-serial-red-suite-2026-08-13.md, dated section "T-2024 re-derivation")
-// gates the build against.
+// SuperSLM GPU-serial port — the lower-level GPU submission and layer-loop surface that
+// include/superslm/gpu_1p0.h's public API is built on top of: dispatch-budget accounting,
+// asynchronous per-sequence lifecycle, and the layer-loop guard ladder that maps a rejected
+// numeric/structural check to the correct status without conflating it with a real device
+// failure.
 //
-// THIS BANNER IS HISTORICAL, NOT CURRENT (corrected 2026-08-14, T-2055,
-// Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-review.md, Minor
-// 3, closing an M5/O10 finding this file carried across at least the
-// 82cfca7, 36b9327, and db73b22 reviews without ever being routed for a
-// fix): at this header's OWN origin (Sec11's B1-B12 decomposition, before any
-// build round landed) every symbol below really was declared and not
-// defined, exactly as the paragraph below states. It is false of the tree
-// today -- every function this header declares has its real definition in
-// `src/gpu/superslm_gpu.cpp` (T-2024 through T-2052 landed them one B-step at
-// a time), and this round added a construct, `enum class GpuLayerLoopGuard`
-// directly below this banner, that this banner's own claim cannot even be
-// true OF: an enum has no separate declaration/definition split to be
-// pending. Left below for its historical value (the precedent citation, and
-// what this file's role was AT ITS ORIGIN) -- read it as describing how this
-// header started, not its current link-completeness, which build.bat's own
-// green link proves every time it runs:
+// Every function this header declares has its definition in src/gpu/superslm_gpu.cpp.
 //
-// EVERY SYMBOL BELOW IS DECLARED, NOT DEFINED. This header exists so the red suite
-// compiles; it links to nothing until the build seat (Brunel, B1-B12) provides a
-// definition. This is test-authoring infrastructure -- the call SHAPE the suite
-// needs -- not the shipped design: the build seat's own dispatch recording,
-// descriptor-table binding, and D3D12 plumbing are unconstrained by this header
-// beyond the input/output contract each red-suite test asserts against. Mirrors the
-// precedent this project already used for the identical situation (T-1899's red
-// suite for T-1894 Option-G, `artifact.h`/`checked_chain_funnel.h`/`forward_sites.h`,
-// commit 7f55b9d): "contract extensions, declared not defined... link fails on
-// exactly these N symbols."
-//
-// Function groups below are named by the B-step (Sec11) whose gate they discharge.
-// Each one's own test cell(s) are filed in tests/test_main.cpp (search "T-2019") and
-// derived in full in the Curie casebook cited above.
+// Function groups below are named by the build step whose contract they discharge.
 
 #include <array>
 #include <cstddef>

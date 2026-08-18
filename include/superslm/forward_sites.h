@@ -1,51 +1,20 @@
-// SuperSLM S3.2/S3.3/S3.4 site compositions — the weightless/projection
-// sites, the attention-interior's landing/clamp sites, and the MLP half's
-// SwiGLU activation site
-// (SuperSLM_S3a_WalkingSkeleton_Plan.md §11 S3.2, §11 S3.3, §11 S3.4; C31,
-// C24/C25, C28, F-S3-8, C27, C33, C34).
+// SuperSLM forward-pass site compositions — the weightless/projection sites, the
+// attention-interior landing/clamp sites, and the MLP half's SwiGLU activation site.
 //
-// Declares the RMSNorm site (C31's floor-divide construction, §5.1), the WSC1
-// identity/near-identity fold-apply dispatch (C24/C25), the C28 bias-
-// reconciliation compute (§4.4), the embed entry with its host-supplied
-// token-id validation (F-S3-8, §4.8), the K/V landing composite's rescale
-// (C27, §8.1), C33's post-rotation clamp (§5.3), the RoPE application
-// site (§6.2 step 3, §11 S3.3's own gate line; D-SLM376, D-SLM383, D-SLM384),
-// and the SwiGLU activation site (§5.4, §6.3 step 11; T-1345). C28's own
-// (q_B, e_a) domain predicate, CheckRoundingDivideByPotExponentDomain, and
-// C32's own softmax-row width predicate, CheckSoftmaxRowWidthDomain, are
-// declared in checked_chain_funnel.h instead — both are derived-operand
-// predicates in the funnel's own §7.2 second-limb family, not site
-// compositions. C34's own derived-operand predicate,
-// CheckSiluCompositionScaleDomain, is likewise declared in
-// checked_chain_funnel.h and is already real and green (S3.1); MlpActSite
-// below is the site that calls it, not the predicate itself.
+// Declares the RMSNorm site, the weight-scale identity/near-identity fold-apply dispatch, the
+// bias-reconciliation compute, the embed entry with its host-supplied token-id validation, the
+// K/V landing composite's rescale, the post-rotation clamp, the RoPE application site, and the
+// SwiGLU activation site. The domain predicates these sites rely on for their runtime-derived
+// operands — the bias-reconciliation pair check, the softmax-row width check, and the SiLU
+// composition-scale check — are declared in checked_chain_funnel.h instead, since they are
+// derived-operand predicates rather than site compositions; MlpActSite below is the site that
+// calls the SiLU predicate, not the predicate itself.
 //
-// The S3.2 declarations' bodies (RmsNormSite, ApplyWeightScaleFold,
-// BiasReconcile, EmbedEntry, FloorDivI64) are the real green construction
-// (Claude/Curie/superslm-s3.2-weightless-and-projection-sites-test-design-
-// 2026-07-28.md §4/§9). The S3.3 declarations LandingRescale and ClampRopeCode
-// are likewise real green constructions, against
-// Claude/Curie/superslm-s3.3-attention-interior-test-design-2026-07-28.md
-// §6.1/§6.3/§11's own red suite. RopeApplySite below is likewise real and
-// green — CheckPositionOverCap first, then the ROP1 table read, then
-// RopeApplyPair+ClampRopeCode per pair — against
-// Claude/Curie/superslm-s3.3-rope-application-site-test-design-2026-07-28.md
-// §6's own red suite; D-SLM376 rules it is built here, in S3.3, as
-// CheckPositionOverCap's own first act. MlpActSite below is S3.4's own real
-// green construction — the four-step composition its doc comment states,
-// replacing the declare-and-stub landed with
-// Claude/Curie/superslm-s3.4-mlp-act-site-test-design-2026-07-29.md's red
-// suite (Claude/Brunel/superslm-s3.4-mlp-act-site-body-build-2026-07-29.md).
+// RopeApplySite calls CheckPositionOverCap (checked_chain_funnel.h) as its first act, before
+// any rotary-table read.
 //
-// PLACEMENT: this file's own translation unit now lives at
-// src/forward/forward_sites.cpp, under the directory glob
-// tests/ci/check_no_forward_leaf_calls.py's _DEFAULT_FORWARD_GLOBS already
-// scans (src/forward/**/*.cpp). The sibling glob entry that module carries
-// for this file's PRIOR path (src/forward_sites.cpp, a sibling of
-// src/model.cpp) is now redundant with the directory glob rather than wrong
-// (that module's own docstring names this outcome); no tests/ edit was
-// needed to land the move, and none happened here (tests/ is read-only to
-// this campaign).
+// Every declaration below is the approved API surface; every body is a real construction in
+// src/forward/forward_sites.cpp.
 #ifndef SUPERSLM_FORWARD_SITES_H
 #define SUPERSLM_FORWARD_SITES_H
 

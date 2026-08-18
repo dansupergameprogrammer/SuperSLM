@@ -1,29 +1,17 @@
-// The converter proof manifest and its independent checks (S-HARDEN-3, F13,
-// SuperSLM_Plan.md §13 item 7, §17.3 cell 4).
+// The converter proof manifest and its independent checks.
 //
-// convert_model.py's writer discharges its "must load Ok" contract by invoking
-// this project's own C++ loader (SslmModel::Load), not by asserting it. This
-// header is that independent check: it re-derives facts about an already-loaded
-// artifact (config-vs-tensor geometry, per-tensor extrema and saturation, section
-// and artifact hashes) from the artifact's own bytes, never from the Python
-// writer's intermediate arrays. `tools/sslm_verify.cpp` is the CLI that drives
-// this into a JSON manifest; the functions here are the independently unit-
-// tested core so the geometry cross-check (§17.3 cell 4, including its
-// zero-boundary rejection cells) is provable without shelling out to Python.
+// The Python converter's writer discharges its "must load Ok" contract by invoking this
+// project's own C++ loader (SslmModel::Load), not by asserting it. This header is that
+// independent check: it re-derives facts about an already-loaded artifact (config-vs-tensor
+// geometry, per-tensor extrema and saturation, section and artifact hashes) from the artifact's
+// own bytes, never from the Python writer's intermediate arrays. `tools/sslm_verify.cpp` is the
+// CLI that drives this into a JSON manifest; the functions here are the independently
+// unit-tested core, so the geometry cross-check is provable without shelling out to Python.
 //
-// §17.3 cell 4: "Config geometry x tensor shapes... Where these are
-// converter-only proofs they are recorded in the §13 item 7 manifest; where
-// runtime code depends on them they are rejected at load." S3.3 gave the
-// relation its runtime consumer, so as of b2a3a91 this geometry check IS wired
-// into SslmModel::Load, via ValidateConfigGeometryJoin in model.cpp (board
-// T-1335, D-SLM425). The functions here remain the independently unit-tested
-// core; the loader wraps them rather than re-deriving the arithmetic.
-//
-// This comment previously recorded that wiring it would reject artifacts built
-// from the S-HARDEN-1/-2 Cfg1Spec defaults, which did not satisfy
-// hidden_size == heads * head_dim. That forecast was correct: wiring it failed
-// 58 checks across ~45 call sites. The defaults were the defect and were
-// repaired at 905daf6 -- the check was not weakened (D-SLM426).
+// The config-geometry-vs-tensor-shape relation this file checks is also wired directly into
+// SslmModel::Load (via ValidateConfigGeometryJoin, model.cpp), so a loaded artifact is rejected
+// at load time if the two disagree; the functions here remain the independently unit-tested
+// core, and the loader wraps them rather than re-deriving the arithmetic.
 #ifndef SUPERSLM_PROOF_MANIFEST_H
 #define SUPERSLM_PROOF_MANIFEST_H
 

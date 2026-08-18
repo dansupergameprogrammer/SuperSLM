@@ -1,6 +1,6 @@
 // Minimal SHA-256 (FIPS 180-4), standard library only. Used for the artifact
 // integrity hash / fingerprint (docs/sslm_format.md). Layer 1 carries no
-// third-party dependency (DecisionLog D-SLM13), so the hash is in-tree.
+// third-party dependency, so the hash implementation is in-tree.
 #ifndef SUPERSLM_SHA256_H
 #define SUPERSLM_SHA256_H
 
