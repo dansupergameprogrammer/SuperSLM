@@ -1,55 +1,26 @@
-// SuperSLM checked chain funnel (SuperSLM_S3a_WalkingSkeleton_Plan.md §7, closing
-// T-200 and §17.3 cell 5; S3.1).
+// SuperSLM checked chain funnel.
 //
-// The single checked entry surface into the C19-C22 per-token dynamic-scale chain
+// The single checked entry surface into the per-token dynamic-scale requant chain
 // (intmath.h) at the composition's wide (int64) row width: RequantChainChecked and
-// NarrowRowChecked are the only two functions in the whole S3a forward permitted to
-// call MaxAbsReduce/MaxAbsReduceWide/RowBoundsWide/NormalizeScale/
-// DynamicScaleReciprocal/RequantTokenCode/RequantTokenCodeWide/NarrowAccumulatorToI32
-// directly — every other site routes through one of these two (§7.3's CI source check
-// enforces this structurally, banning the leaves from every other forward TU).
+// NarrowRowChecked are the only two functions in the forward pass permitted to call the
+// underlying max-abs-reduction, scale-normalization, reciprocal, and requant primitives
+// directly — every other site routes through one of these two, enforced structurally by a CI
+// source check that bans those primitives from every other forward translation unit.
 //
-// Also declares the funnel's status vocabulary (SslmForwardStatus) and the
-// derived-operand predicates §7.2's second limb names for the runtime-derived
-// operands with no domain predicate of their own: C30's (a call to the already-shipped
-// IExpConstantsInDomain, never an encoded threshold), C34's (the SwiGLU site's
-// runtime (m, e) gate scale, §5.4), C28's (the (q_B, e_a) pair check at the
-// bias-reconciliation site, §4.4), and C32/D-SLM366's (the softmax row's own
-// numerator/sum width check, §11 S3.3 §6.2, §3). C28's predicate was declared
-// once during S3.1's own header-contract commit (32aca0c) and deliberately
-// removed the same day (f98eee9) as belonging to S3.2 instead; it is
-// RE-STAGED here, unchanged from its original declaration, as part of S3.2's
-// own header contract (Claude/Curie/superslm-s3.2-weightless-and-projection-
-// sites-test-design-2026-07-28.md §9 item 4). C32's predicate
-// (CheckSoftmaxRowWidthDomain) and its named ceiling
-// (kSoftmaxRowMaxSafeExponent) are S3.3's own header contract (Claude/Curie/
-// superslm-s3.3-attention-interior-test-design-2026-07-28.md §6.2, §11); its
-// body is real, at 128-bit width (Poirot 2026-07-28 finding 1's fix, closing
-// the int64-overflow re-derivation the green-phase construction shipped
-// with). This file also declares CheckPositionOverCap (Board T-1308) --
-// its own body is real too (src/forward/checked_chain_funnel.cpp), a
-// standalone predicate for S3.3's own position-cap gate (§11 S3.3's gate
-// line). Wiring it into a real forward call site is S3.3's own job, not
-// S3.6's (D-SLM376, 2026-07-28, overturning this file's own prior routing;
-// the stale routing was itself caught and corrected per D-SLM383):
-// forward_sites.h's RopeApplySite calls this predicate as its own first act,
-// before any ROP1 table read.
-// The RMSNorm site, the WSC1 identity/near-identity fold-apply, the bias-
-// reconciliation compute, and the embed entry are S3.2's own site-composition
-// functions and are declared in include/superslm/forward_sites.h instead — not
-// here. Their translation unit, src/forward/forward_sites.cpp, now lives
-// under src/forward/ alongside this file's own — tests/ci/
-// check_no_forward_leaf_calls.py's _EXPECTED_REAL_FORWARD_FILES already named
-// that path as the expected post-move population, and its
-// _DEFAULT_FORWARD_GLOBS directory glob (src/forward/**/*.cpp) covers it
-// without needing to change.
+// Also declares the funnel's status vocabulary (SslmForwardStatus) and the domain predicates
+// for runtime-derived operands that have no domain check of their own: the SwiGLU site's
+// runtime gate scale, the bias-reconciliation site's operand pair, and the softmax row's
+// numerator/sum width. CheckSoftmaxRowWidthDomain's own bound check runs at 128-bit width to
+// avoid overflow when re-deriving it. This file also declares CheckPositionOverCap, a
+// standalone predicate for the position-cap gate that forward_sites.h's RopeApplySite calls as
+// its first act, before any rotary-table read.
 //
-// The declarations below are the approved API surface (§7.2, §5.5, §7.2's second
-// limb). Every body, including CheckSoftmaxRowWidthDomain (S3.3's own
-// construction, §6.2), is real in src/forward/checked_chain_funnel.cpp, green
-// in the standing suite (Claude/Curie/superslm-s3.1-checked-chain-funnel-
-// test-design-2026-07-28.md §4/§8; superslm-s3.3-attention-interior-test-
-// design-2026-07-28.md §6.2).
+// The RMSNorm site, the weight-scale fold-apply, the bias-reconciliation compute, and the
+// embed entry are separate site-composition functions declared in
+// include/superslm/forward_sites.h instead of here.
+//
+// The declarations below are the approved API surface; every body is real in
+// src/forward/checked_chain_funnel.cpp.
 #ifndef SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 #define SUPERSLM_CHECKED_CHAIN_FUNNEL_H
 

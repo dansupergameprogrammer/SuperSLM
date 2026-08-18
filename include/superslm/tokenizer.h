@@ -2,9 +2,9 @@
 //
 // Deterministic and dependency-free: NFC normalization and the \p{L}/\p{N}/\s
 // property classes come from the pinned Unicode tables in the artifact's
-// UnicodeTables section (never a platform Unicode or regex library — D-SLM13). The
+// UnicodeTables section, never a platform Unicode or regex library. The
 // algorithm mirrors tools/convert_tokenizer.py's reference encode(), which is proven
-// bit-for-bit against the upstream HF tokenizer (SuperSLM_Plan.md §10).
+// bit-for-bit against the upstream Hugging Face tokenizer.
 #ifndef SUPERSLM_TOKENIZER_H
 #define SUPERSLM_TOKENIZER_H
 

@@ -1,34 +1,30 @@
-// SuperSLM integer-arithmetic kernels — Layer-1 requant primitives and the
-// per-token dynamic-scale chain (SuperSLM_Plan.md §6.2, §6.8 C1/C2/C3 + C19–C22).
+// SuperSLM integer-arithmetic kernels — Layer-1 requant primitives and the per-token
+// dynamic-scale chain.
 //
-// This is the compiled C++ port of the offline reference `Tools/superslm_spike/
-// intmath.py`. Every function here is a bit-for-bit reimplementation of the pinned
-// reference: conformance is OUTPUT EXACTNESS against that reference over the whole
-// domain, never a blessing of any particular decomposition. Standard library only
-// (`<bit>` for the pinned scalar count-leading-zeros); no float on any reproducible
-// path — floats appear only as offline constants folded to integers by the converter,
-// never here.
+// This is a compiled C++ port of a pinned offline reference implementation. Every function
+// here is a bit-for-bit reimplementation of that reference: conformance is output exactness
+// against it over the whole domain, never a blessing of any particular decomposition. Standard
+// library only; no float on any reproducible path — floats appear only as offline constants
+// folded to integers by the converter, never here.
 //
 // The two families:
-//   * C1/C2/C3 — gemmlowp's fixed-point requant primitives
-//     (`SaturatingRoundingDoublingHighMul`, `RoundingDivideByPOT`) and their
-//     composition. Tie directions are pinned and opposite by design: the doubling
-//     high-mul rounds toward +infinity (C2), the divide-by-POT rounds away from zero
-//     (C3). §15 / D-SLM36.
-//   * C19/C20/C21/C22 — the rung-1 per-token dynamic quantizer: max-abs reduction
-//     (C20), scale normalization (C21), fixed-point reciprocal (C19, corrected Newton),
-//     and the per-token requant composition — the "127 scale wrapper" (C22, D-SLM52).
+//   * Fixed-point requant primitives (`SaturatingRoundingDoublingHighMul`,
+//     `RoundingDivideByPOT`) and their composition. Tie directions are pinned and opposite by
+//     design: the doubling high-mul rounds toward +infinity, the divide-by-POT rounds away
+//     from zero.
+//   * The per-token dynamic quantizer: max-abs reduction, scale normalization, a fixed-point
+//     reciprocal (corrected Newton), and the per-token requant composition (the "127 scale
+//     wrapper").
 //
-// Cost determinism (§14): every op count here is data-INDEPENDENT. The reciprocal runs
-// exactly 3 Newton iterations plus exactly 2 fixed-iteration-count correction steps;
-// normalization runs one bit-scan plus one shift plus one unconditional select. No early
-// exit, no data-dependent trip count. This property is a source obligation Poirot
-// verifies by reading the code, on top of the exhaustive value certification.
+// Cost determinism: every op count here is data-independent. The reciprocal runs exactly 3
+// Newton iterations plus exactly 2 fixed-iteration-count correction steps; normalization runs
+// one bit-scan plus one shift plus one unconditional select. No early exit, no data-dependent
+// trip count.
 //
-// Wide intermediates: C19's reciprocal Newton products and C22's `x_i · 127 · R`
-// (magnitude up to ~2^70) exceed int64. The port carries them in a portable 128-bit
-// intermediate (no reliance on a compiler `__int128`, which MSVC lacks). Conformance is
-// by output exactness against the pinned formula, not by the decomposition chosen.
+// Wide intermediates: the reciprocal's Newton products and the requant composition's widest
+// product (magnitude up to ~2^70) exceed int64. The port carries them in a portable 128-bit
+// intermediate (no reliance on a compiler `__int128`, which MSVC lacks). Conformance is by
+// output exactness against the pinned formula, not by the decomposition chosen.
 #ifndef SUPERSLM_INTMATH_H
 #define SUPERSLM_INTMATH_H
 

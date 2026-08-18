@@ -1,42 +1,20 @@
-// sslm_adapter_loader.h -- T-2102 (RESUME-2026-08-14-gpu-throughput.md §4, D-SLM3304): the
-// missing piece model.h:409 names out loud ("a future adapter-loader's own section-table walk").
-// The converter (tools/sslm_convert_adapter.py) writes a standalone adapter `.sslm` carrying
-// Config/SigmoidLut/Provenance(ADP1)/Weights(lora_A/lora_B)/DeltaFoldScales(DFS1)/
-// UFoldScales(UFS1); `RunLayerLoop` already applies `LayerWeights::adapter` if a caller sets it
-// (design Sec8/Sec11 B1a-B1c, T-2021/T-2029); nothing before this file ever set it from a loaded
-// artifact. This is that section-table walk.
+// adapter_marshal.h -- loads a standalone LoRA adapter `.sslm` artifact and exposes it as a
+// LayerAdapter/LayerAdapterProjection the forward pass can apply.
 //
-// Contract (T-2104, Poirot 8e07d0c review, Significant 2 -- corrected; the ORIGINAL text here
-// claimed "SslmModel::Load returns a view whose pointers dangle the instant Load returns," which is
-// false at source: SslmModelView's last member, `backing_`, OWNS the file bytes every pointer in the
-// view points into (model.h), and the view stays valid for its own lifetime -- both this file's own
-// production callers, sslm_generate.cpp and sslm_lora_switch_demo.cpp, read tensors off a model view
-// long after Load returns and generate from them, which is only sound because the claim was wrong.
-// The claim was inherited from tools/sslm_adapter_dump.cpp, corrected there too). `LoadAdapterArtifact`
-// calls `SslmModel::Load` exactly ONCE and KEEPS the resulting view (`AdapterHandle::view_`) for the
-// handle's own lifetime -- every pointer this loader hands back into LayerAdapter/LayerAdapterProjection
-// is read directly from that one already-parsed view (its `weights`/`delta_fold_scales`/
-// `u_fold_scales` members, and its own `Section()`/`RawIntegrityHash()` forwarders for the raw
-// Provenance section and the base-hash check) rather than a second, independent re-parse.
+// `LoadAdapterArtifact` calls `SslmModel::Load` exactly once and keeps the resulting view
+// (`AdapterHandle::view_`) for the handle's own lifetime -- every pointer this loader hands
+// back into LayerAdapter/LayerAdapterProjection is read directly from that one already-parsed
+// view, never from a second, independent re-parse. The view stays valid for its own lifetime
+// (its `backing_` member owns the underlying file bytes), so callers may read tensors off it
+// long after `Load` returns.
 //
-// What this file adds beyond SslmModel::Load's existing gate -- design Sec9's four explicit B0b
-// validations model.h declares and documents as "the checks the [as yet unbuilt] adapter-loading
-// ABI will call" (AmplifyingFoldDimensionMismatch, AmplifyingFoldProjectionInvalid,
-// AmplifyingFoldBaseHashMismatch, plus this file's own ADP1 payload parse and per-entry
-// "layer<N>.<proj>" name resolution): this is the first caller that wires
-// ValidateAmplifyingFoldDimension/ValidateAmplifyingFoldProjection/ValidateAmplifyingFoldBaseHash
-// for real, against a converted artifact's own DeltaFoldScales/UFoldScales entries.
+// Beyond the loader's own structural validation, this file additionally validates an adapter's
+// amplifying-fold dimension, projection, and base-hash against the target model's own tensors
+// before the adapter is usable -- a converted artifact that fails any of these checks is
+// rejected rather than silently mismatched against the base model.
 //
-// RELOCATED (T-2113 B6, D-SLM3368, the identical move D-SLM3351 made for sslm_marshal.h at B2):
-// this body used to be tools-only (`tools/sslm_adapter_loader.h`, "never included from src/ or
-// include/"). The 1.0 GPU API's own `sslm_gpu_adapter_map` (src/gpu/gpu_1p0.cpp) needs this same
-// parse/validate logic to load a real adapter artifact on the device side (design Sec5.2: "mirrors
-// the CPU-side LoadAdapterArtifact/AdapterHandle shape exactly") -- production code, which an
-// include/-only header can be included from and a tools/-only one cannot. Moved verbatim; the ABI
-// question this file's own prior header comment named ("sslm_adapter_map/opaque handles") is what
-// this move answers. `tools/sslm_adapter_loader.h` is now a compatibility shim forwarding here, so
-// every existing includer (sslm_generate.cpp, sslm_lora_switch_demo.cpp, test_main.cpp) keeps
-// compiling unchanged.
+// `tools/sslm_adapter_loader.h` is a compatibility shim that forwards to this header, so
+// existing includers keep compiling unchanged.
 #ifndef SUPERSLM_INCLUDE_ADAPTER_MARSHAL_H
 #define SUPERSLM_INCLUDE_ADAPTER_MARSHAL_H
 

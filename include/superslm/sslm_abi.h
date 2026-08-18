@@ -1,28 +1,14 @@
 #ifndef SUPERSLM_INCLUDE_SSLM_ABI_H
 #define SUPERSLM_INCLUDE_SSLM_ABI_H
-// T-2139 (Brunel, C1/C2): the production Layer-1 CPU-side sslm_* consumer C ABI surface.
+// SuperSLM Layer-1 C ABI -- the production, engine-agnostic C surface for a CPU-side consumer:
+// workspace and KV-pool sizing and lifetime, model and adapter mapping, sequence lifetime
+// (create, save, restore, reset, release), prefix and prefill, schema-constrained decode,
+// tokenization and detokenization, and stats.
 //
-// This header's own declarations -- opaque handle typedefs, the sslm_status enum (every
-// enumerator, same order, same values), the sslm_config/sslm_detok_state/sslm_span_kind/
-// sslm_decode_params/sslm_stats_out struct/enum bodies, and every function signature -- are
-// transcribed verbatim from Claude/Vitruvius/t2133-layer1-c-abi-design-2026-08-16.md Sec8
-// (Wizard repo), the design of record. tests/t2138-abi-red-suite/sslm_abi.h is an
-// independently-promoted copy of the SAME design section (Curie's own build, T-2138) -- the
-// suite includes its own copy, never this one; the two are declaration-identical by
-// construction (both transcribed from the same Sec8 code block) and Gate A (tools/
-// t2139_gate_a_header_parity_check.cpp) is the standing, compiler-enforced proof that THIS
-// header's declarations match tests/t2130-g5-red-suite/sslm_g5.h wherever the two overlap --
-// not a proof against the suite's own sslm_abi.h copy, which this file does not reference.
-// **This is a declaration-shape parity convention, not a literal whole-file diff** (matching
-// gpu_1p0.h's own identical precedent, this repo) -- each copy carries its own explanatory
-// prose; only the DECLARATIONS are required to agree.
-//
-// Only C1's own eight verbs (sslm_workspace_size/sslm_kv_block_size/sslm_kv_pool_overhead_size/
-// sslm_seq_state_size, sslm_workspace_create/_destroy, sslm_kv_pool_create/_destroy) and C2's
-// two (sslm_model_map/_unmap) are DEFINED as of this commit (src/sslm_abi.cpp). Every other
-// declaration below exists so later C-slots extend one already-complete, already-reviewed
-// header rather than re-declaring the surface piecemeal -- the same convention gpu_1p0.h
-// itself established at B1 (this repo).
+// Every declaration in this header has `extern "C"` linkage and a stable ABI shape -- opaque
+// handles, POD config/state structs, and a single closed `sslm_status` enum whose enumerator
+// values never change once shipped. New functionality is added by appending new enumerators
+// and new functions, never by renumbering or repurposing an existing one.
 
 #include <stdint.h>
 #include <stddef.h>

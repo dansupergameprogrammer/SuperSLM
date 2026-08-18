@@ -1,32 +1,23 @@
-// SuperSLM numeric-record trace instrument (SuperSLM_S3a_WalkingSkeleton_Plan.md
-// §11 S3.1a, §10.2's trace-row exclusion, §10.3's instrumentation axis;
-// Claude/Curie/superslm-s3.1a-trace-hook-test-design-2026-07-28.md §4.1-§4.2).
+// SuperSLM numeric-record trace instrument.
 //
-// The record schema is pinned field-for-field against the reference's own chain
-// records (Tools/superslm_spike/dynamic_engine.py:172-203, `_chain_record_vec`,
-// `trace.append` at :197-202) and its K/V-landing sibling (:367-397, inside
-// `_forward_dynamic_vec_layers`). The reference's conformance contract is
-// bit-equality on logits AND trace, record-for-record (dynamic_engine.py:5-7);
-// this header is what makes that contract checkable in C++.
+// The record schema is pinned field-for-field against a reference implementation's own chain
+// and K/V-landing records; the reference's conformance contract is bit-equality on logits and
+// trace, record-for-record, and this header is what makes that contract checkable in C++.
 //
-// THIS IS A DIFFERENT INSTRUMENT from the master plan's profiling hook
-// (SuperSLM_Plan.md:1436, `sslm_set_trace_hook(model, fn, user)` carrying span
-// identity and `sslm_stats` counters at kernel-phase boundaries). That hook
-// carries execution-shape telemetry; this one carries the numeric chain/landing
-// records the reference's own trace produces. Neither this file nor any site it
-// touches builds the master plan's instrument (§10.3). Being a different
-// instrument does not exempt this one from §3's Layer-1-wide "no global state"
-// law, which is not scoped to the profiling hook -- it is scoped to all of
-// Layer 1 (Claude/Vitruvius/SuperSLM_S3.1a_TraceHookGlobal_Ruling-2026-07-28.md
-// Sec3/Sec4, D-SLM353). That is why the hook's state below is owned per model
-// handle (SslmModelView::trace_hook, model.h) and threaded as an explicit
+// This is a different instrument from the separate execution-shape profiling hook
+// (`sslm_set_trace_hook`, carrying span identity and stats counters at kernel-phase
+// boundaries): that hook carries execution-shape telemetry, while this one carries the numeric
+// chain/landing records a reference trace produces. Neither this file nor any site it touches
+// builds the profiling hook.
+//
+// Layer 1 holds no global state, and this instrument is no exception: the hook's state below is
+// owned per model handle (SslmModelView::trace_hook, model.h) and threaded as an explicit
 // parameter, never held in a process-wide static.
 //
-// Read-only by construction: installing a hook adds a notification after a
-// site's own arithmetic has already produced its outputs. No hook call
-// participates in, or can change, any value a site returns or writes. This is
-// what §10.3's instrumentation axis requires -- a forward with the hook
-// installed produces digests identical to one without.
+// Read-only by construction: installing a hook adds a notification after a site's own
+// arithmetic has already produced its outputs. No hook call participates in, or can change, any
+// value a site returns or writes — a forward pass with the hook installed produces digests
+// identical to one without.
 #ifndef SUPERSLM_TRACE_HOOK_H
 #define SUPERSLM_TRACE_HOOK_H
 

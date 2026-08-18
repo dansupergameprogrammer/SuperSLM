@@ -1,18 +1,16 @@
 // SuperSLM artifact format (`.sslm`). Current format version is
 // kArtifactFormatVersion below, the single source of truth -- not restated
 // as a number here, so this comment cannot go stale the next time the
-// format bumps (S-HARDEN-8; this file previously said "version 1" after the
-// real format version had already moved to 2 at S-HARDEN-1).
+// format bumps.
 //
 // The runtime C++ loader for a converted, quantized model. This header is the
 // machine-readable contract for the format specified in docs/sslm_format.md; the
 // two must agree byte-for-byte. Standard library only — Layer 1 is independently
-// embeddable, no third-party runtime dependency (DecisionLog D-SLM13).
+// embeddable, with no third-party runtime dependency.
 //
-// The loader is a trust boundary (SuperSLM_Plan.md §17 dim 2): every field of the
-// file is treated as hostile input and validated against declared bounds before any
-// section byte is read. Deviation is rejection with a versioned diagnostic, never a
-// silent partial load (§11, reject-over-degrade).
+// The loader is a trust boundary: every field of the file is treated as hostile
+// input and validated against declared bounds before any section byte is read.
+// Deviation is rejection with a versioned diagnostic, never a silent partial load.
 #ifndef SUPERSLM_ARTIFACT_H
 #define SUPERSLM_ARTIFACT_H
 
