@@ -14,10 +14,14 @@ run of this gate records the actual per-file percentages
 (`--record-floors`); every subsequent run compares against the committed
 file.
 
-Usage:
-    llvm-cov export --format=text -instr-profile=default.profdata \\
-        out/cov/superslm_tests_cov -- <object args> \\
-        src/*.cpp include/superslm/*.h > coverage.json
+Usage (T-2149 fold round 4, D-SLM3569: the branch-coverage CI job merges profiles
+across the non-forced binary and the forced-tier binaries so each SIMD leaf reaches
+its own coverage in its own forced binary -- see .github/workflows/tests.yml,
+branch-coverage job, for the full multi-binary build/run/merge sequence):
+    llvm-profdata merge -sparse *.profraw -o merged.profdata
+    llvm-cov export --format=text -instr-profile=merged.profdata \\
+        out/cov/superslm_tests -object out/cov/superslm_tests_sse2_forced ... \\
+        -- src/*.cpp include/superslm/*.h > coverage.json
     python tools/ci/check_branch_coverage_floors.py coverage.json
 """
 from __future__ import annotations

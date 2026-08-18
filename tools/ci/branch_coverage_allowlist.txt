@@ -8,9 +8,26 @@
 # (tools/ci/check_branch_coverage_floors.py) rejects a malformed line rather
 # than silently admitting an unreasoned one.
 #
-# Empty at this design pass: no branch in the current source was found to
-# need allowlisting during this build. If the branch-coverage CI job's own
-# first run (the "Red: run llvm-cov report against current state with no
-# floors set" step) finds a defensive branch a test genuinely cannot reach,
-# add it here with its reason in the same change that adds the floor for
-# the file it lives in.
+# If the branch-coverage CI job's own first run (the "Red: run llvm-cov
+# report against current state with no floors set" step) finds a defensive
+# branch a test genuinely cannot reach, add it here with its reason in the
+# same change that adds the floor for the file it lives in.
+#
+# T-2149 design §10 dimension 7 item (h) (fold round 4, D-SLM3569): named
+# residual for src/matmul.cpp's re-recorded floor (66.18%, measured by
+# merging coverage profiles across the non-forced superslm_tests plus the
+# sse2/avx2-forced full-suite binaries and the scalar-forced digest, on
+# AVX2-capable hardware with no AVX-512). This gate does not cross-check
+# these lines against llvm-cov's per-branch report (T-1456, see the
+# checker's own printed note) -- documented for a human reviewer only, not
+# excluded from the measured percentage.
+# src/matmul.cpp:241-283 -- DotRowAvx512's entire body (all branches) is
+#   unreachable in any binary built on hardware without AVX-512: even the
+#   AVX-512-forced binary resolves the tier at compile time but faults on
+#   its first real AVX-512 instruction on such hardware. No same-machine
+#   union closes this; it requires an AVX-512 host (design §8.4, standing).
+# src/matmul.cpp:341,344 -- DetectBestDotRowTier's "AVX-512 present" and
+#   "AVX2 present, AVX-512 absent" arms cannot both be taken by one process
+#   on one CPU (the CPUID/XGETBV bits it reads are a fixed property of the
+#   running hardware) -- a genuine, permanent gap no union of same-machine
+#   binaries closes (design §10 dimension 7 item (h)).

@@ -484,6 +484,20 @@ jobs:
   # the digest jobs above, Laplace findings 7/8). clang-18/clang++-18 are
   # already proven present on this exact runner image by those jobs -- no
   # apt-get step is needed here either.
+  # T-2149 design §10 dimension 7 item (h) (fold round 4, D-SLM3569): src/matmul.cpp
+  # widened from one SIMD kernel to three, so a single non-forced binary's runtime
+  # dispatch selects exactly one tier per process -- the other two are structurally
+  # dead there. This job now builds and runs the non-forced superslm_tests plus the
+  # sse2/avx2/avx512-forced full-suite binaries and the scalar-forced digest, and
+  # merges all five raw profiles before computing the branch percentage, so each SIMD
+  # leaf reaches its own coverage in its own forced binary. The AVX-512-forced binary
+  # is allowed to fail its run step (`|| true`) -- code review (T-2170, Finding 2/12)
+  # and this fold's own build log confirm no AVX-512 hardware has executed anything
+  # yet, standing and disclosed (design §8.4); on such a runner the leg still merges
+  # whatever partial profile that binary emitted before faulting, contributing nothing
+  # new to DotRowAvx512's coverage, which is why its branches and
+  # DetectBestDotRowTier()'s hardware-conditioned arms are named as a permanent
+  # residual in tools/ci/branch_coverage_allowlist.txt rather than pinned as covered.
   branch-coverage:
     runs-on: ubuntu-latest
     steps:
@@ -494,18 +508,30 @@ jobs:
             -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18 \
             -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
             -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate"
-          cmake --build build --target superslm_tests
-      - name: Run the suite under instrumentation
+          cmake --build build --target superslm_tests superslm_tests_sse2_forced \
+            superslm_tests_avx2_forced superslm_tests_avx512_forced \
+            sslm_axis_digest_scalar_forced
+      - name: Run the five binaries under instrumentation
         run: |
-          LLVM_PROFILE_FILE=build/superslm_tests.profraw ./build/superslm_tests
-      - name: Merge the raw profile
+          LLVM_PROFILE_FILE=build/nonforced.profraw ./build/superslm_tests
+          LLVM_PROFILE_FILE=build/sse2.profraw ./build/superslm_tests_sse2_forced
+          LLVM_PROFILE_FILE=build/avx2.profraw ./build/superslm_tests_avx2_forced
+          LLVM_PROFILE_FILE=build/scalar_digest.profraw ./build/sslm_axis_digest_scalar_forced
+          LLVM_PROFILE_FILE=build/avx512.profraw ./build/superslm_tests_avx512_forced || true
+      - name: Merge the raw profiles
         run: |
-          llvm-profdata-18 merge -sparse build/superslm_tests.profraw -o build/superslm_tests.profdata
+          llvm-profdata-18 merge -sparse build/nonforced.profraw build/sse2.profraw \
+            build/avx2.profraw build/scalar_digest.profraw build/avx512.profraw \
+            -o build/superslm_tests.profdata
       - name: Export per-file branch coverage
         run: |
           llvm-cov-18 export --format=text \
             -instr-profile=build/superslm_tests.profdata \
             ./build/superslm_tests \
+            -object ./build/superslm_tests_sse2_forced \
+            -object ./build/superslm_tests_avx2_forced \
+            -object ./build/superslm_tests_avx512_forced \
+            -object ./build/sslm_axis_digest_scalar_forced \
             -- src/*.cpp include/superslm/*.h \
             > build/coverage.json
       - name: Check per-file branch-coverage floors

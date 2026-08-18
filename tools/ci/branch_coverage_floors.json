@@ -6,7 +6,7 @@
   "src/artifact.cpp": 84.12698412698413,
   "src/decode_digest.cpp": 100.0,
   "src/intmath.cpp": 87.93103448275862,
-  "src/matmul.cpp": 100.0,
+  "src/matmul.cpp": 66.17647058823529,
   "src/model.cpp": 68.26347305389223,
   "src/proof_manifest.cpp": 63.013698630136986,
   "src/sha256.cpp": 100.0,
