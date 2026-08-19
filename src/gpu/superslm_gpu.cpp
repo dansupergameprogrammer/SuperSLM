@@ -1216,7 +1216,7 @@ void RecordOneTokenFullDepthDispatchBody(
 // (`dev.Upload`/`dev.MakeBuffer`, all `SSLM_GPU_HR`-guarded) can throw `std::runtime_error` exactly
 // as it always could -- this function installs no try/catch of its own and lets such a throw
 // propagate to the caller's enclosing try, which is where the existing
-// `invalidate_residency_caches_on_throw`/`dev.list->Close()`/status-mapping catch clauses still
+// `InvalidateResidencyCachesOnThrow()`/`dev.list->Close()`/status-mapping catch clauses still
 // live, unchanged, because they are also used by the dispatch-recording and readback code that
 // still runs in the caller after this function returns successfully.
 struct GpuLayerLoopChunkOpenState {
@@ -1737,11 +1737,17 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 		if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
 	}
 
-	// T-2101 (dispatch-overhead decomposition): `record_ms` covers this whole window, Reset()
-	// through Close() -- every Upload()/MakeBuffer() call and every dispatch's own recording. (The
-	// zero-reset for a REJECTED call lives at this function's own entry, above, alongside
-	// `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never reaches
-	// this line at all.)
+	// T-2101 (dispatch-overhead decomposition), corrected T-2184 remedy M2 (Brunel fix round 1,
+	// D-SLM3662; review O1): `record_ms` no longer starts here. T-2169 (Rung 2b-prep) moved its
+	// own `t_record_start` capture out of this function and into EACH caller
+	// (`RunLayerLoopGpuSubmit`/`SubmitOneSubChunkToFullDepthForG5Bridge`), taken immediately before
+	// the call into this function -- so `record_ms` now also brackets the nine-guard ladder and the
+	// RoPE sin/cos table `memcpy` above, which it previously excluded. What is still true: `Close()`
+	// is still where the caller stops the clock, and every `Upload()`/`MakeBuffer()` call and every
+	// dispatch's own recording, in this function and the caller's own recording loop, is inside the
+	// window. (The zero-reset for a REJECTED call lives at this function's own entry, above,
+	// alongside `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never
+	// reaches this line at all.)
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
@@ -2046,6 +2052,28 @@ superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
 	return superslm::SslmForwardStatus::Ok;
 }
 
+namespace {
+// T-2101 (S3-prime): the shared five-line residency-cache invalidation every GPU-recording catch
+// clause in this file performs when an exception unwinds mid-recording -- originally consolidated
+// from two divergent copies into the lambda `RunLayerLoopGpuSubmit`'s own catch clauses (below)
+// declared locally; `SubmitOneSubChunkToFullDepthForG5Bridge`'s own catch clauses (further below)
+// then re-declared an IDENTICAL lambda rather than a divergent copy, verified line-for-line at that
+// function's own header comment ("a third, independent call site of the identical five lines, not
+// a fourth divergent copy"). T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): that verification
+// was a claim someone had to keep re-checking by eye -- factored here into the ONE file-scope
+// helper every catch clause calls, so a future divergence is a compile-time impossibility rather
+// than a re-derived fact. Neither lambda captured anything local (both bodies touch only the
+// file-scope statics `g_resident_weights`/`g_resident_kv`/`g_last_weight_upload_was_skipped`
+// already declared above), so this needed no parameters.
+void InvalidateResidencyCachesOnThrow() {
+	g_resident_weights.lw_buf.Reset();
+	g_resident_weights.valid = false;
+	g_resident_kv.kv_buf.Reset();
+	g_resident_kv.valid = false;
+	g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
+}
+}  // namespace
+
 // fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
 // external-weights/external-rope bridge (this section's own new work, gated entirely
 // behind the trailing parameters -- every existing behavior is reached identically
@@ -2065,16 +2093,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
 	// PrepareGpuLayerLoopChunkOpenState (above) -- a mechanical extraction, called here exactly
 	// once per Submit call, matching this function's own pre-extraction behavior for its own
-	// single-token callers. `invalidate_residency_caches_on_throw` and the readback-lifetime
-	// resources stay declared here: they are used by the dispatch-recording/readback code below
-	// and by this function's own catch clauses, neither of which moved.
-	auto invalidate_residency_caches_on_throw = [&]() {
-		g_resident_weights.lw_buf.Reset();
-		g_resident_weights.valid = false;
-		g_resident_kv.kv_buf.Reset();
-		g_resident_kv.valid = false;
-		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
-	};
+	// single-token callers. The readback-lifetime resources stay declared here: they are used by
+	// the dispatch-recording/readback code below and by this function's own catch clauses,
+	// neither of which moved. T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): the
+	// invalidation itself is now the shared file-scope `InvalidateResidencyCachesOnThrow()`
+	// (declared immediately above this function), not a locally-declared lambda.
 	harness::Device& dev = harness::GetDevice();
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
@@ -2215,7 +2238,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// confirmation pass's own finding was that the original guard's exception, its one useful
 		// payload, was constructed, thrown, and dropped by an unnamed catch clause.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		invalidate_residency_caches_on_throw();
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
 	} catch (const std::runtime_error&) {
@@ -2264,11 +2287,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 		// f7026db): both residency caches reset to invalid, `LastWeightUploadWasSkipped` set false --
-		// issued via the shared `invalidate_residency_caches_on_throw` lambda (declared immediately
-		// before the try block, where its own full history -- T-2055, T-2062 M-b, T-2080 S3 -- now
-		// lives), identical effect, written once so this clause and the `GpuGemmGroupArithmeticError`
-		// clause above cannot diverge.
-		invalidate_residency_caches_on_throw();
+		// issued via the shared file-scope `InvalidateResidencyCachesOnThrow()` (T-2184 remedy S3,
+		// Brunel fix round 1, D-SLM3662 -- its own full history, T-2055/T-2062 M-b/T-2080 S3/T-2101
+		// S3-prime, now lives on that function's own header comment), identical effect, written once
+		// so this clause and the `GpuGemmGroupArithmeticError` clause above cannot diverge.
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
 		// gone right now (device recreation owed, not a retry against this
@@ -2365,18 +2388,13 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
 	if (out_inflight) *out_inflight = nullptr;
-	// Same shared cache-invalidation lambda as RunLayerLoopGpuSubmit's own (superslm_gpu.cpp,
-	// this file) -- declared fresh here rather than factored out, matching the codebase's own
-	// established convention (T-2101 consolidated it ONCE already, into this lambda's own
-	// current five-line shape, shared by both of Submit's catch clauses; this primitive is a
-	// third, independent call site of the identical five lines, not a fourth divergent copy).
-	auto invalidate_residency_caches_on_throw = [&]() {
-		g_resident_weights.lw_buf.Reset();
-		g_resident_weights.valid = false;
-		g_resident_kv.kv_buf.Reset();
-		g_resident_kv.valid = false;
-		g_last_weight_upload_was_skipped = false;
-	};
+	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
+	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
+	// clauses call (declared once, above `RunLayerLoopGpuSubmit`) -- previously a THIRD locally-
+	// declared copy of the identical five lines (this function's own prior header comment: "a
+	// third, independent call site of the identical five lines, not a fourth divergent copy"),
+	// which was an argument that the copy was currently right, not that anything kept it right.
+	// Factored so there is nothing left to drift, per the T-2184 review's own S3 remedy.
 	harness::Device& dev = harness::GetDevice();
 	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
@@ -2557,7 +2575,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// submission-granularity batching structurally trades per-token exception atomicity
 		// for round-trip reduction.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		invalidate_residency_caches_on_throw();
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
 	} catch (const std::runtime_error&) {
@@ -2565,7 +2583,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		// removed failure class RunLayerLoopGpuSubmit's own twin catch clause already handles
 		// (superslm_gpu.cpp, above) -- same status mapping, same cache-invalidation contract.
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
-		invalidate_residency_caches_on_throw();
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;

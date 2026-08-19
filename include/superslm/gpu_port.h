@@ -414,28 +414,45 @@ enum class GpuLayerLoopGuard : int {
 // the smaller promise that is actually true, per `StandardsDocument.md`
 // §5.6:
 //
+// CORRECTED 2026-08-19 (T-2184, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-review.md,
+// S3; D-SLM3662): T-2169's own chunk-submission primitive, `SubmitOneSubChunkToFullDepthForG5
+// Bridge` (`superslm_gpu.cpp`), calls `PrepareGpuLayerLoopChunkOpenState` for its own chunk-open
+// (the SAME ladder/device-capability region the "before" count already reads, not duplicated) and
+// then carries its OWN two catch clauses -- `GpuGemmGroupArithmeticError`'s own literal return,
+// and the generic `std::runtime_error` one's own ternary -- each calling the identical shared
+// `InvalidateResidencyCachesOnThrow()` (T-2184's own S3 remedy factored the lambda this paragraph
+// already named into one file-scope helper both `RunLayerLoopGpuSubmit` and this primitive call,
+// so "before every one of their own returns" below is now a compile-time guarantee, not a
+// re-derived fact) before every one of their own returns -- two more paths that never reached a
+// residency decision. Its own terminal `return superslm::SslmForwardStatus::Ok;` (handing the
+// caller an in-flight token, the identical async-submission-succeeded shape `RunLayerLoopGpuSubmit`
+// already contributes one of) is one more path that DOES read whatever the residency decision
+// already decided. The two counts below are updated to name three functions, not two.
+//
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
 // decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
-// device-capability rejections, and the recording-window catch, fifteen
-// paths in all (the recording window now carries TWO catch clauses --
-// `GpuGemmGroupArithmeticError`'s own, and the generic `std::runtime_error`
-// one -- both counted, since both call the shared cache-invalidation lambda
-// before every one of their own returns), none of which ever reached a
-// residency decision to report.
+// device-capability rejections, and the recording-window catch, seventeen
+// paths in all (the recording window now carries FOUR catch clauses across two functions --
+// `RunLayerLoopGpuSubmit`'s own `GpuGemmGroupArithmeticError`/`std::runtime_error` pair, and
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical pair -- all four counted, since all
+// four call the shared cache-invalidation helper before every one of their own returns), none of
+// which ever reached a residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
 // miss) on every path that returns AFTER the decision -- **re-derived after
 // this file's own (B5) split of the single function this paragraph originally
 // described into `RunLayerLoopGpuSubmit` (the guard ladder, the residency
 // decision, and everything above) and `RunLayerLoopGpuFinish` (the fence-
-// wait and the readback) -- the "after" population now has five members
+// wait and the readback), then again (T-2184) for `SubmitOneSubChunkToFullDepthForG5Bridge`'s own
+// terminal success return -- the "after" population now has six members
 // instead of one, not because any NEW decision-making was added, but
 // because the single old "keep going toward the terminal decode" fall-
-// through is now five separate real return statements across two
+// through is now six separate real return statements across three
 // functions: `RunLayerLoopGpuSubmit`'s own async-submission-succeeded
-// return (`return ...::Ok;`, handing the caller an in-flight token), and
-// `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
+// return (`return ...::Ok;`, handing the caller an in-flight token),
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical terminal `Ok`
+// return, and `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
 // return, the caller-misuse null-token rejection, the terminal
 // `return DecodeStickyTag(sticky_tag);` the sticky-tag-decoded path always
 // ended on, and `RunLayerLoopGpuFinish`'s own catch clause (added the same
@@ -444,10 +461,10 @@ enum class GpuLayerLoopGuard : int {
 // found escaping this function as an uncaught exception instead of the
 // defined `GpuDeviceRemoved`/`GpuAllocationFailed` channel design Sec9
 // promises; StandardsDocument.md Sec5.4, reproduced by execution before
-// being fixed). None of these five re-decides or re-writes the flag --
-// each reads whatever `RunLayerLoopGpuSubmit` already decided -- the four,
-// and the fifteen before them, alike, twenty paths' own destination in
-// total across the two functions, whether the decoded
+// being fixed). None of these six re-decides or re-writes the flag --
+// each reads whatever the residency decision already decided -- the six,
+// and the seventeen before them, alike, twenty-three paths' own destination in
+// total across the three functions, whether the decoded
 // status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
 // A caller that wants "did THIS call's upload run" reads this accessor for
 // exactly that, on every path, correctly; a caller that reads it as "did
