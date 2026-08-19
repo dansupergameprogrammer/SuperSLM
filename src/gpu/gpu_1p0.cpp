@@ -2359,9 +2359,16 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// `std::bad_alloc` from the `new` can escape this call. Caught HERE -- the one choke point both
 	// public G5 prefill entry points (`SslmGpuSeqPrefillPromptForG5Bridge`/
 	// `SslmGpuSeqPrefillSchemaContentForG5Bridge`) funnel through -- so the documented
-	// `SslmGpuStatus` boundary (gpu_1p0.h) is never crossed by a raw C++ exception. `RunLayerLoopGpuFinish`
-	// is included in the same try: its own tail (the FINAL sub-chunk's fence-wait/readback) is the
-	// identical class of D3D12 call and carries the identical failure mode.
+	// `SslmGpuStatus` boundary (gpu_1p0.h) is never crossed by `std::bad_alloc` or
+	// `std::runtime_error`, the two exception types this call's own tail can raise (a failed
+	// `Close()`/`Signal()`'s `SSLM_GPU_HR` throw, or the `new GpuLayerLoopInFlight()` allocation).
+	// Every throw site actually reachable from this try is one of these two; a third type
+	// escaping here would still propagate uncaught, so this catch documents what it covers
+	// rather than claiming to contain every possible exception. `RunLayerLoopGpuFinish` is
+	// included in the same try for symmetry with this call's own tail -- both are the same class
+	// of D3D12 call -- though `RunLayerLoopGpuFinish` cannot itself throw: it wraps its entire
+	// body in `catch (const std::exception&)` and converts to a status before returning (see its
+	// own definition, superslm_gpu.cpp).
 	//
 	// No status is returned from THIS function (it never has been -- see its own header comment);
 	// the catch clauses below deliberately do NOT return early or rethrow. `seq->live_state` is
