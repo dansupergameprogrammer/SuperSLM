@@ -2,6 +2,68 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [1.1.0] - 2026-08-19
+
+A performance release: both halves of 1.0's own "compute-bound, not
+memory-bound" finding get a real lever, one on the CPU path and one on the
+GPU path. No API surface changes; see
+[README.md](README.md) for the full capability descriptions and
+[docs/platform-support.md](docs/platform-support.md) for every measured
+number and where it was measured.
+
+### CPU: a wider-vector prefill kernel
+
+- The scalar-and-SSE2-only integer matmul kernel 1.0 shipped is now a
+  runtime-dispatched, three-tier kernel: SSE2 (the unconditional
+  architectural floor), AVX2, and AVX-512, selected once per process by a
+  CPUID+XGETBV probe, with SSE2 as the automatic fallback on hardware
+  lacking the wider tiers. Every tier is proven bit-identical to the
+  scalar reference — the same determinism guarantee 1.0 established, now
+  carried across three additional dispatch paths rather than weakened by
+  them.
+- Measured on a real 1.5B-parameter model artifact, batched prefill,
+  SSE2 to AVX2: **about 1.68x-1.72x faster**, two independent runs. This is
+  the CPU-side answer to the lever 1.0's own changelog named but did not
+  yet build.
+
+### GPU: batched prompt prefill
+
+- Prompt prefill on the GPU path now runs a whole prefill span through the
+  device in one submission rather than one token's worth of dispatches per
+  round trip, internally splitting only when needed for driver stability
+  (see [docs/platform-support.md](docs/platform-support.md) for how that
+  internal bound was found). Proven bit-identical to the pre-1.1,
+  one-round-trip-per-token path at every span size and every internal
+  split boundary tested.
+- Measured on a certified NVIDIA GPU, forced prefill spans of 128 and 256
+  tokens against a real 1.5B-parameter model: **about 6.91x-7.19x faster**
+  than the pre-1.1 per-token path. The two public GPU prefill entry points
+  are documented as bulk-throughput calls as of this release: their
+  per-call dispatch-budget parameter is still validated but no longer
+  slices submission per token on the prefill path — see
+  [docs/api.md](docs/api.md). Per-frame budget slicing for interactive
+  decode is unchanged.
+
+### Continuous integration
+
+- The CI matrix gained four independently-forced kernel-tier legs (scalar,
+  SSE2, AVX2, AVX-512) alongside the existing dispatch-live default, each
+  its own full test-suite run plus its own cross-toolchain digest check —
+  a runner that lacks a wider tier's hardware skips that tier's leg loudly
+  rather than silently passing a build it cannot actually exercise.
+
+### Known gaps, tracked
+
+- The AVX-512 kernel tier is exercised at continuous-integration extent
+  only — probed for hardware support, compiled, and bit-identity-checked
+  where a runner has it — with no dedicated real-hardware throughput
+  measurement published yet, the same disposition 1.0 gave macOS.
+- GPU batched prefill's determinism proof and throughput measurement are
+  on the certified NVIDIA GPU only in this release; certification on the
+  certified AMD GPU is not yet complete for the batched path specifically
+  (the pre-1.1 per-token GPU path stays certified on both, unaffected by
+  this release).
+
 ## [1.0.0] - 2026-08-18
 
 This is the first public release line. Rather than a chronology of internal

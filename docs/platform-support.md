@@ -26,8 +26,35 @@ Cross-toolchain determinism at the primitive level (the SiLU
 lookup-table and integer matmul kernels) is checked by comparing a digest
 of each kernel's output across every measured toolchain axis: Linux/GCC,
 Linux/Clang, Linux/Clang with SIMD forced off, Windows/MSVC,
-Windows/Clang-cl, and macOS/Clang (arm64) — six axes, byte-identical
-digests on all six as of this writing.
+Windows/Clang-cl, and macOS/Clang (arm64), plus four additional axes that
+each force one matmul kernel tier (scalar, SSE2, AVX2, AVX-512) on
+Linux/Clang — nine axes total, byte-identical digests on all nine as of
+this writing. A forced axis whose runner lacks the tier's required
+hardware is a loud, named skip, not a silent pass.
+
+### CPU matmul kernel tiers
+
+The integer matmul kernel runtime-dispatches among three SIMD tiers —
+SSE2 (the unconditional x86-64 architectural floor), AVX2, and AVX-512 —
+selected once per process by a CPUID+XGETBV probe, with SSE2 as the
+automatic fallback on hardware lacking the wider tiers. All three tiers,
+plus the scalar reference, are proven bit-identical against each other; a
+consumer never trades correctness for the faster tier its hardware
+happens to support.
+
+| Tier | Status | How it's exercised |
+|---|---|---|
+| Scalar | Certified | Every platform's default build; also independently force-selectable |
+| SSE2 | Certified | The x86-64 architectural floor; force-selectable and CI-exercised independent of what a runner's ambient dispatch would pick |
+| AVX2 | Certified, measured | Force-selectable; CI-probed on hosted runners; throughput measured on real hardware (below) |
+| AVX-512 | CI extent | Force-selectable; CI-probed (skips loudly on a runner without AVX-512F/BW); bit-identity proven wherever it runs; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |
+
+**Measured, real 1.5B-parameter model artifact, batched prefill, SSE2 to
+AVX2, this project's own reference AMD hardware (Zen 2, no AVX-512):
+about 1.68x-1.72x faster**, two independent runs (6.93 vs. 11.68 tok/s,
+and a second run at 11.33 tok/s, well within run-to-run noise of the
+first). AVX-512's own throughput is not yet measured on real hardware —
+tracked as a known gap below, not assumed from the AVX2 figure.
 
 ## GPU inference
 
@@ -77,6 +104,34 @@ already-resident model) was measured on the RTX 2080 SUPER against a real
 the model with a different adapter merged in at load time — about 58x
 faster, with the base model's resident weights untouched by the switch.
 
+### GPU-side batched prompt prefill
+
+Prompt prefill on the GPU path records and submits a whole prefill span in
+one device round trip rather than one round trip per token. Measured on the
+certified NVIDIA RTX 2080 SUPER, forced prefill spans against a real
+1.5B-parameter model, comparing the pre-batching one-round-trip-per-token
+path against the batched path through the same public entry point:
+
+| Span length | Pre-batching (per-token) | Batched (one call) | Speedup |
+|---|---|---|---|
+| 128 tokens | 8.62 tok/s | 61.96 tok/s | 7.19x |
+| 256 tokens | 8.96 tok/s | 61.93 tok/s | 6.91x |
+
+Both paths proven bit-identical at every span size and every internal
+split boundary tested. **The internal split bound stated honestly:** a
+prefill span larger than a certain size is submitted as multiple smaller
+sub-chunks rather than one, each finished before the next opens. That size
+is not a theoretical or configured limit — it was found empirically, by
+running progressively larger spans against this GPU's real driver until an
+unrelated, third-party driver defect reproduced deterministically at one
+exact size, and set to half that size as a safety margin. It is measured
+on this one device/driver pairing only; a second vendor's own data point
+is a named gap below, not assumed to match.
+
+This measurement is on the certified NVIDIA GPU only — see
+[Known gaps](#known-gaps) below for AMD certification status on this
+specific capability.
+
 ### Schema-constrained decoding on the GPU
 
 The GPU twin of schema-constrained decoding (see [api.md](api.md)) is
@@ -103,9 +158,28 @@ integrated GPU is explicitly not a certified target today: any
 determinism claim in this project's documentation is scoped to the
 certified GPUs above, never to "GPUs" unqualified.
 
+## Known gaps
+
+- **AVX-512 has no dedicated real-hardware throughput measurement yet.**
+  The tier is proven bit-identical and exercised in continuous integration
+  (probed, compiled, and run wherever a runner has the hardware) — see
+  [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — but its own
+  tokens/second figure, alongside SSE2's and AVX2's above, is not yet
+  published.
+- **GPU-side batched prompt prefill is measured and certified on the
+  certified NVIDIA GPU only.** The pre-batching, per-token GPU path stays
+  certified on both certified GPUs, unaffected; certifying the batched
+  path on the certified AMD GPU as well — including spans at and above the
+  internal sub-chunk split bound — is the next step for this capability
+  specifically. The split bound itself (see
+  [GPU-side batched prompt prefill](#gpu-side-batched-prompt-prefill)
+  above) is measured on the NVIDIA device/driver pairing only; a second
+  vendor's own value is unmeasured.
+
 ## What's next
 
 Extending GPU certification to a newer NVIDIA generation (Blackwell) and
-to integrated GPUs (pending the divergence investigation above), and
-measuring macOS beyond what GitHub's own CI runners can exercise, are
-committed post-1.0 work — see the README's roadmap section.
+to integrated GPUs (pending the divergence investigation above), closing
+the two gaps above, and measuring macOS beyond what GitHub's own CI
+runners can exercise, are committed post-1.1 work — see the README's
+roadmap section.

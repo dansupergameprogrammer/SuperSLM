@@ -14,12 +14,16 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-**Status: 1.0.** Every capability below — including schema-constrained
+**Status: 1.1.** Every capability below — including schema-constrained
 generation — is built and measured on the platforms named, on both certified
 GPUs: the schema-constrained-decoding GPU parity check passed bit-identical
 on the certified NVIDIA GPU, and passed bit-identical on the certified AMD
 GPU as well (measured 2026-08-17 on the Radeon RX 7900 XTX; see
-[Certified platforms](#certified-platforms)).
+[Certified platforms](#certified-platforms)). 1.1 adds a wider-vector CPU
+kernel tier and GPU-side batched prompt prefill — see
+[CHANGELOG.md](CHANGELOG.md) for what changed and
+[docs/platform-support.md](docs/platform-support.md) for the measured
+numbers.
 
 ## Capabilities
 
@@ -58,13 +62,17 @@ engine level.
 
 Prompt prefill (processing the tokens you send in before decoding begins)
 batches an entire prefill chunk through the engine's matrix kernels in one
-pass on the CPU path, proven bit-identical to processing the same tokens one
-at a time at every chunk size and every chunk-boundary split. On the
-reference hardware this workload turned out to be bound by the integer
-kernel's own compute throughput rather than by memory bandwidth, so the
-batching gives a modest, real gain rather than a large one — see
-[the roadmap](#roadmap-beyond-10) for the wider-vector kernel that targets
-the actual bottleneck.
+pass, proven bit-identical to processing the same tokens one at a time at
+every chunk size and every chunk-boundary split — on both the CPU path and
+the GPU path. This workload turned out to be bound by kernel compute
+throughput rather than by memory bandwidth or per-call overhead, so 1.1
+targets that bottleneck directly on each path: a wider-vector CPU kernel
+tier (SSE2/AVX2/AVX-512, runtime-selected) measured about 1.68x-1.72x faster
+than the SSE2-only 1.0 kernel on batched prefill, and GPU-side batched
+prefill measured about 6.91x-7.19x faster than the pre-1.1 one-round-trip-
+per-token GPU path — see
+[docs/platform-support.md](docs/platform-support.md) for both measurements
+and [the roadmap](#roadmap-beyond-11) for what is still open.
 
 ### Schema-constrained generation
 
@@ -153,7 +161,7 @@ cmake -B build && cmake --build build && ctest --test-dir build
 This builds the CPU-only product library (`superslm`), the public headers,
 and the test suite. On Linux and macOS this is standard-library only, no
 third-party runtime dependency, and works from CMake 3.16. On Windows, the
-test suite's own T-2019 GPU-serial-port section calls the D3D12 GPU path
+test suite's own GPU-serial-port section calls the D3D12 GPU path
 directly and unconditionally, so `superslm_tests` also compiles and links
 `src/gpu/superslm_gpu.cpp` and its compiled shaders on every Windows
 configure — this needs CMake 3.20+ and the DirectX Shader Compiler
@@ -205,26 +213,31 @@ SuperSLM is licensed under Apache License 2.0. The permissive license and
 express patent grant are deliberate: they make adoption safe for consumers,
 and closed forks remain permitted.
 
-## Roadmap beyond 1.0
+## Roadmap beyond 1.1
 
-Work already committed for the release after 1.0, alongside its own full
+Work already committed for the release after 1.1, alongside its own full
 design and review loop when scheduled:
 
 - **True shared-prefix KV memory.** 1.0 ships a straightforward per-sequence
   KV layout; a block-table indirection layer is the next step, giving a
   cohort of sequences that share a prompt prefix N-fold memory savings
   instead of each holding its own copy.
-- **Async-wrapper overhead reduction.** The 1.0 API's convenience wrapper
+- **Async-wrapper overhead reduction.** The API's convenience wrapper
   around the dispatch path measurably costs throughput versus the raw
   dispatch path — see the Direct dispatch vs. Async wrapper API rows in
   [docs/platform-support.md](docs/platform-support.md#certified-gpu-measurements);
   closing that gap is a named follow-on campaign.
 - **Launch-floor reduction.** The fixed per-call GPU launch overhead has an
   identified, not-yet-built optimization path.
-- **A wider-vector CPU prefill kernel.** Prefill throughput on the CPU path
-  is bound by the scalar/SSE2 integer kernel's own instruction throughput,
-  not by memory bandwidth — a wider-vector kernel (AVX2/AVX-512) is the
-  identified lever for a further speedup, not yet built.
+- **AVX-512 real-hardware throughput measurement.** The AVX-512 kernel tier
+  1.1 ships is proven bit-identical and exercised in continuous integration,
+  but has no dedicated throughput measurement published yet — see
+  [Known gaps](docs/platform-support.md) in the platform-support doc.
+- **GPU batched-prefill cross-vendor certification.** 1.1's GPU-side batched
+  prefill is measured and certified on the certified NVIDIA GPU; certifying
+  it on the certified AMD GPU as well is the next step for that capability
+  specifically (the pre-1.1 per-token GPU path remains certified on both,
+  unaffected by this gap).
 - **Flat-batch dispatch fusion and the remaining single-group tail sites.**
   Two named, scoped opportunities to close the gap between batched and
   single-sequence throughput further.
