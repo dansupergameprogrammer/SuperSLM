@@ -56,6 +56,87 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2169 (Brunel, Rung 2b, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
+rem the chunk-submission primitive's own self-check harness (tools/t2169_rung2b_selfcheck.cpp) --
+rem design Sec8's exit condition (b)/(b2), the chunk_tokens=1 mechanism cell and the 4-token
+rem discriminating cell (D-SLM3608/D-SLM3615), both against the real Qwen2.5-1.5B artifact. Same
+rem committed-build-recipe discipline t2039_c5_harness.cpp's own S5 lesson established above --
+rem NOT auto-run (needs a real .sslm artifact on disk this build does not assume exists). Usage
+rem after a successful build: out\t2169_rung2b_selfcheck.exe ^<model.sslm^>.
+if not exist out\t2169selfcheck mkdir out\t2169selfcheck
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2169_rung2b_selfcheck.cpp /Fo:out\t2169selfcheck\ /Fe:out\t2169_rung2b_selfcheck.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2169 (Brunel, Rung 2, D-SLM3596): the TDR-safe bound measurement harness
+rem (tools/t2169_tdr_measure.cpp) -- queries this machine's own real TDR delay and measures
+rem gpu_busy_ms across a swept chunk_tokens range against the real Qwen2.5-1.5B artifact. Same
+rem committed-build-recipe discipline as the two tools above; links advapi32.lib for the registry
+rem query. NOT auto-run. Usage after a successful build: out\t2169_tdr_measure.exe ^<model.sslm^>.
+rem STATUS (Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md): this tool's own
+rem measurement run found chunk_tokens>=8 reproducibly crashes the process
+rem (STATUS_STACK_OVERFLOW) -- a genuine, hardware-executed defect inside the NVIDIA driver
+rem (nvwgf2umx.dll), not a TDR event (no Display/nvlddmkm TDR-recovery event logged at the crash
+rem time), root-caused under cdb (D-SLM3649). T-2184 remedy M2 (Brunel fix round 1, D-SLM3662):
+rem corrected -- superslm_gpu::kT2169TdrSafeMaxChunkTokens is DEFINED (src/gpu/superslm_gpu.cpp,
+rem `= 4`, half the confirmed-crashing 8) as of Rung 2's close; this paragraph described the gap
+rem only until then.
+if not exist out\t2169tdr mkdir out\t2169tdr
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2169_tdr_measure.cpp /Fo:out\t2169tdr\ /Fe:out\t2169_tdr_measure.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib advapi32.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2180 (Brunel, Rung 6, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
+rem the public-bridge bit-identity sweep (tools\t2180_rung6_public_bridge_sweep.cpp) -- design
+rem Sec6's own size/boundary-split proof cells generalized to the exact size list this build's own
+rem log reports against ({1,2,4,8,16,256}, plus splits straddling the TDR-safe sub-chunk bound of
+rem 4), driven through SslmGpuSeqPrefillPromptForG5Bridge, the same PUBLIC entry point Rungs 3/4
+rem wired. Same committed-build-recipe discipline as the two tools above. NOT auto-run (needs a
+rem real .sslm artifact). Usage after a successful build: out\t2180_rung6_sweep.exe ^<model.sslm^>.
+if not exist out\t2180 mkdir out\t2180
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2180_rung6_public_bridge_sweep.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_sweep.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2180 (Brunel, Rung 6): the product cell -- tok/s on a long forced span, chunked (one
+rem public-bridge call) vs shipped-per-token (N separate single-token public-bridge calls),
+rem through the SAME public entry point (tools\t2180_rung6_tokps.cpp). 1.1's headline GPU number
+rem (design Sec10). NOT auto-run. Usage after a successful build:
+rem out\t2180_rung6_tokps.exe ^<model.sslm^> [span_len].
+rem T-2185 remedy N6/observation (Brunel fix round 2, D-SLM3677): /DSUPERSLM_ENABLE_GPU_BENCH_
+rem PRE_BATCHING added -- this is the ONLY compile line in this script that defines it, gating
+rem SslmGpuSeqPrefillPromptPreBatchingBenchOnly (gpu_1p0.cpp/gpu_1p0_bench_bridge.h) into THIS
+rem binary only. Every other line below that compiles src\gpu\gpu_1p0.cpp does not define this
+rem macro, so that symbol is absent from those binaries entirely.
+if not exist out\t2180 mkdir out\t2180
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2180_rung6_tokps.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_tokps.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
 rem enumeration tool (tools\t2116_list_adapters.cpp) -- no .sslm artifact needed, so it is
 rem built here and NOT auto-run; run_crossvendor.ps1 invokes it directly. See that file's

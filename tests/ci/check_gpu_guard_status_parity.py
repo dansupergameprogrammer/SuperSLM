@@ -302,18 +302,53 @@ CPU_BELOW_GUARD_ARITHMETIC_STATUSES = frozenset({
 # parity and LWUWS "before" analysis both need) and RunLayerLoopGpuFinish (the fence-
 # wait, the readback, and the DecodeStickyTag-decoded terminal return this module's
 # LWUWS "after" analysis needs) -- see Claude/Brunel/t2113-1p0-core-build-2026-08-15.md
-# B5. `GPU_FUNC_SIGNATURE` now targets Submit, which is the function that actually
-# contains the nine-guard ladder, the two device-capability rejections, and the
-# residency-write statement every derivation below keys on; `RunLayerLoopGpu` itself is
-# now a two-line Submit+Finish wrapper with no guard ladder of its own, and is a
-# DELIBERATELY SUBSTRING-DISTINCT literal from `RunLayerLoopGpuSubmit(`/
-# `RunLayerLoopGpuFinish(` (the trailing `(` never follows `RunLayerLoopGpu` in either
-# longer name), so this constant cannot accidentally match either split half.
+# B5. `RunLayerLoopGpu` itself is a two-line Submit+Finish wrapper with no guard ladder
+# of its own, and every constant below is a DELIBERATELY SUBSTRING-DISTINCT literal from
+# `RunLayerLoopGpuFinish(`/`RunLayerLoopGpu(` (the trailing `(` never follows the bare
+# name in either longer name), so none of them can accidentally match a sibling.
+#
+# T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633, mechanical relocation, Claude/Brunel/
+# t2180-t2169-gpu-batched-prefill-build-2026-08-18.md): the nine-guard ladder, the two
+# device-capability rejections, and the residency-write statement moved a second time --
+# out of `RunLayerLoopGpuSubmit` and into a new function, `PrepareGpuLayerLoopChunkOpenState`,
+# shared with the T-2169 chunk-submission primitive so neither caller duplicates this
+# block's own residency-cache/guard-ladder logic. `GPU_LADDER_FUNC_SIGNATURE` now targets
+# that function for the guard-status-SET check (`gpu_ladder_status_set`) and for the
+# "before" COUNT's own ladder/device-capability term (`derive_lwuws_before_decision_count`
+# term 1). `GPU_FUNC_SIGNATURE` still targets `RunLayerLoopGpuSubmit` -- it still contains
+# both catch clauses (unmoved: they wrap the dispatch-recording/readback code that stayed
+# here, and the extracted setup function throws INTO them rather than catching its own
+# exceptions, so the catch bodies these two constants' own callers scan are unaffected by
+# where the throwing code physically lives) and the async-submission-succeeded terminal
+# return, so it remains the right anchor for the "before" term-2 catch scan and for the
+# "after, in Submit" derivation.
+GPU_LADDER_FUNC_SIGNATURE = "superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState("
 GPU_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpuSubmit("
 # T-2113 (B5): the FINISH half's own signature -- `derive_lwuws_after_decision_count`
 # below now reads from this function's body for the DecodeStickyTag-decoded return; see
 # that function's own updated header comment for the full account of what moved where.
 GPU_FINISH_FUNC_SIGNATURE = "superslm::SslmForwardStatus RunLayerLoopGpuFinish("
+# T-2184 (S3, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-review.md; D-SLM3662): the
+# T-2169 chunk-submission primitive -- also calls `PrepareGpuLayerLoopChunkOpenState` (its own
+# ladder/device-capability returns are already covered once via `GPU_LADDER_FUNC_SIGNATURE`, a
+# SHARED function body, not duplicated here) and carries its OWN two catch clauses plus its own
+# prep-rejection relay return and its own terminal success return, none of which the checker saw
+# before this fix (the review's own finding: "it names two. There are now three."). A THIRD anchor,
+# scanned by the same catch-clause/relay-return/after-return machinery `GPU_FUNC_SIGNATURE` already
+# uses for `RunLayerLoopGpuSubmit`.
+SUBCHUNK_FUNC_SIGNATURE = "superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge("
+# T-2169 (Rung 2b-prep): `RunLayerLoopGpuSubmit`'s own new relay return, immediately
+# after calling `PrepareGpuLayerLoopChunkOpenState` -- reached ONLY when that call
+# rejected (a guard, or a device-capability check, already returned its own non-Ok
+# status from INSIDE the new function). This is not a NEW logical path: it is the same
+# guard-reject path `derive_lwuws_before_decision_count`'s own term 1 already counts once,
+# inside `PrepareGpuLayerLoopChunkOpenState`'s body, now crossing one more `return`
+# statement on its way out to this function's own caller. Counting it a second time here
+# would inflate the real path count by one without a real new path behind it; excluded by
+# exact statement match from both the "before" and "after, in Submit" derivations below,
+# the identical treatment `extract_catch_block_bodies`' own exclusion already gives catch
+# bodies for the same reason (a return already counted once must not be counted twice).
+_LWUWS_PREP_RELAY_RETURN_STATEMENT = "return prep_status;"
 # T-2069 (Claude/Poirot/b543abe-gpu-serial-port-ship-reverdict-review.md,
 # S3): retained as a citation of the real, named point in `superslm_gpu.cpp`
 # where the nine-guard ladder ends and the two device-capability rejections
@@ -349,12 +384,19 @@ GPU_BELOW_LADDER_STATUSES = frozenset({
     # the nine-guard ladder's own closing `static_assert`, on the SAME per-site
     # dimensions every real call carries, not a tenth pre-flight guard. Returned
     # via a literal `return superslm::SslmForwardStatus::
-    # GpuGemmGroupArithmeticInvalid;` inside a dedicated catch clause (S4), so
-    # unlike `GpuAllocationFailed`/`GpuDeviceRemoved` (returned through a
-    # ternary, invisible to `_STATUS_RETURN_RE` and needing no entry here) this
-    # ONE does match the literal-return pattern and must be named explicitly or
-    # it reads as an undocumented tenth guard.
-    "GpuGemmGroupArithmeticInvalid",
+    # GpuGemmGroupArithmeticInvalid;` inside a dedicated catch clause (S4).
+    #
+    # T-2169 (Rung 2b-prep): REMOVED from this set (was named here, between T-2101 and
+    # T-2169). `GpuGemmGroupArithmeticInvalid` is returned from `RunLayerLoopGpuSubmit`'s
+    # own catch clause, which never moved -- but `GPU_LADDER_FUNC_SIGNATURE` (what
+    # `gpu_ladder_status_set` now scans) is `PrepareGpuLayerLoopChunkOpenState`, a
+    # DIFFERENT function that never contains this status at all (the GEMM-arithmetic guard
+    # lives inside `RecordOneTokenFullDepthDispatchBody`, T-2169 Rung 2a, and is caught by
+    # `RunLayerLoopGpuSubmit`'s own enclosing try). A below-ladder name that cannot appear
+    # in the scanned body is dead weight in the subtraction set -- exactly the "unused name
+    # silently widens the residual for nothing" hazard this module's own real-tree test
+    # (`test_real_tree_gpu_full_body_raw_set_before_subtraction_matches_the_review_own_
+    # enumeration`) checks for and caught the day this move landed.
     # T-2113 (B5): `RunLayerLoopGpuSubmit`'s own new terminal return on the SUCCESS path
     # -- `return superslm::SslmForwardStatus::Ok;`, handing the caller an in-flight
     # token once recording+submission has proceeded (design Sec4.3's own call-level
@@ -565,7 +607,7 @@ def gpu_ladder_status_set(
     reviewing seat's own executed mutation (a new-status guard placed past
     the old marker stayed green; the identical guard placed before it
     reddened)."""
-    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    body = extract_function_body(gpu_text, GPU_LADDER_FUNC_SIGNATURE, label="superslm_gpu.cpp")
     return extract_status_set(body) - below_ladder_statuses
 
 
@@ -1310,8 +1352,22 @@ _NUMBER_WORDS = {
     "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
     "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
 }
-_LWUWS_BEFORE_COUNT_RE = re.compile(r"catch, (\w+)\s*paths in all")
-_LWUWS_TOTAL_COUNT_RE = re.compile(r"alike, (\w+) paths' own destination in\s*total")
+# T-2184 (S3, D-SLM3662): the LWUWS total crossed 20 once a third function
+# (`SubmitOneSubChunkToFullDepthForG5Bridge`) joined the scan -- `_NUMBER_WORDS` above only ever
+# needed to name 0-20 until now. Generated, not hand-listed, so a future count landing anywhere in
+# 21-99 needs no second edit here: every standard English "twenty-one".."ninety-nine" compound,
+# built from the SAME ones/tens words this dict already names, one hyphenated word at a time.
+_NUMBER_WORD_TENS = {
+    20: "twenty", 30: "thirty", 40: "forty", 50: "fifty", 60: "sixty", 70: "seventy",
+    80: "eighty", 90: "ninety",
+}
+_ONES_WORDS_BY_VALUE = {v: k for k, v in _NUMBER_WORDS.items() if 1 <= v <= 9}
+for _tens_value, _tens_word in _NUMBER_WORD_TENS.items():
+    for _ones_value, _ones_word in _ONES_WORDS_BY_VALUE.items():
+        _NUMBER_WORDS[f"{_tens_word}-{_ones_word}"] = _tens_value + _ones_value
+del _tens_value, _tens_word, _ones_value, _ones_word, _ONES_WORDS_BY_VALUE
+_LWUWS_BEFORE_COUNT_RE = re.compile(r"catch, (\w+(?:-\w+)?)\s*paths in all")
+_LWUWS_TOTAL_COUNT_RE = re.compile(r"alike, (\w+(?:-\w+)?) paths' own destination in\s*total")
 
 
 def parse_lwuws_path_counts(gpu_port_h_text: str) -> tuple[int, int]:
@@ -1464,18 +1520,33 @@ def derive_lwuws_before_decision_count(gpu_text: str) -> int:
     Raises `ValueError` if the residency marker is absent -- the region boundary term 1 needs.
     Catches are NOT required to exist (term 2 is legitimately zero for a function with none); only
     the residency-write anchor is load-bearing enough to fail loudly on absence."""
-    body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
-    stripped_body = strip_comments(body)
-    residency_write_at = stripped_body.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
+    # T-2169 (Rung 2b-prep): term 1 (ladder + device-capability returns above the residency
+    # write) now reads from `PrepareGpuLayerLoopChunkOpenState`'s own body -- that function,
+    # not `RunLayerLoopGpuSubmit`, is where both now live (see `GPU_LADDER_FUNC_SIGNATURE`'s
+    # own header comment).
+    #
+    # T-2184 (S3, D-SLM3662): term 2 (catch-clause returns) is no longer only
+    # `RunLayerLoopGpuSubmit`'s own -- `SubmitOneSubChunkToFullDepthForG5Bridge` carries an
+    # IDENTICAL pair of catch clauses (its own header comment: they call the same shared
+    # `InvalidateResidencyCachesOnThrow()` helper before every one of their own returns, exactly
+    # the property this term exists to count), previously invisible to this checker (the T-2184
+    # review's own finding). Summed over BOTH functions' own catch-clause bodies now.
+    ladder_body = extract_function_body(gpu_text, GPU_LADDER_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    ladder_stripped = strip_comments(ladder_body)
+    residency_write_at = ladder_stripped.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
     if residency_write_at == -1:
         raise ValueError(
-            "superslm_gpu.cpp: RunLayerLoopGpu's own residency assignment "
+            "superslm_gpu.cpp: PrepareGpuLayerLoopChunkOpenState's own residency assignment "
             f"{_LWUWS_RESIDENCY_WRITE_STATEMENT!r} not found in its comment-stripped body -- the "
             "before/after path-count region has no boundary to cut on"
         )
-    before_region = stripped_body[:residency_write_at]
-    catch_bodies = extract_catch_block_bodies(stripped_body)
-    catch_return_count = sum(count_any_return_statements(b) for b in catch_bodies)
+    before_region = ladder_stripped[:residency_write_at]
+    catch_return_count = 0
+    for signature in (GPU_FUNC_SIGNATURE, SUBCHUNK_FUNC_SIGNATURE):
+        body_stripped = strip_comments(extract_function_body(gpu_text, signature, label="superslm_gpu.cpp"))
+        catch_return_count += sum(
+            count_any_return_statements(b) for b in extract_catch_block_bodies(body_stripped)
+        )
     return count_any_return_statements(before_region) + catch_return_count
 
 
@@ -1502,23 +1573,40 @@ def derive_lwuws_after_decision_count(gpu_text: str) -> int:
        `superslm_gpu.cpp`-file-scope `static`, read, never written, anywhere in `RunLayerLoopGpuFinish`).
        Counted whole (no marker cut needed -- the entire function is "after" the decision by
        construction, since it cannot run before `RunLayerLoopGpuSubmit` already has).
+    3. T-2184 (S3, D-SLM3662): every return inside `SubmitOneSubChunkToFullDepthForG5Bridge`'s own
+       body, comment-stripped, EXCLUDING its own catch-clause bodies (already counted once, by this
+       function's own "before" twin) and EXCLUDING its own prep-rejection relay return (the
+       identical `_LWUWS_PREP_RELAY_RETURN_STATEMENT` text, already counted once inside
+       `PrepareGpuLayerLoopChunkOpenState`'s own body) -- today exactly one, the terminal
+       `return superslm::SslmForwardStatus::Ok;`, the identical async-submission-succeeded shape
+       term 1 above already contributes one of, previously invisible to this checker (the T-2184
+       review's own finding: "it names two. There are now three.").
     """
-    submit_body = extract_function_body(gpu_text, GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
-    submit_stripped = strip_comments(submit_body)
-    residency_write_at = submit_stripped.find(_LWUWS_RESIDENCY_WRITE_STATEMENT)
-    if residency_write_at == -1:
-        raise ValueError(
-            "superslm_gpu.cpp: RunLayerLoopGpuSubmit's own residency assignment "
-            f"{_LWUWS_RESIDENCY_WRITE_STATEMENT!r} not found in its comment-stripped body -- the "
-            "after-region has no boundary to cut on"
-        )
-    after_in_submit = submit_stripped[residency_write_at:]
-    for catch_body in extract_catch_block_bodies(submit_stripped):
-        after_in_submit = after_in_submit.replace(catch_body, "", 1)
-    submit_after_count = count_any_return_statements(after_in_submit)
+    # T-2169 (Rung 2b-prep): `RunLayerLoopGpuSubmit` no longer contains the residency-write
+    # statement at all (it moved into `PrepareGpuLayerLoopChunkOpenState`, along with the
+    # decision it anchors) -- there is no marker left inside Submit's own body to cut "after"
+    # from "before" positionally. Every return in Submit's own body IS "after" the decision,
+    # by the identical construction argument `RunLayerLoopGpuFinish`'s own whole-body count
+    # already uses below (Submit's own recording/dispatch/readback code runs only once
+    # `PrepareGpuLayerLoopChunkOpenState` has already returned `Ok`, i.e. only once the
+    # decision has already run) -- EXCLUDING catch-clause bodies (already counted once, by
+    # this function's own "before" twin) and EXCLUDING the prep-rejection relay return
+    # (`_LWUWS_PREP_RELAY_RETURN_STATEMENT` -- also already counted once, inside
+    # `PrepareGpuLayerLoopChunkOpenState`'s own body, by the same twin; its own header
+    # comment states why counting it here too would double-count one path as two). The
+    # IDENTICAL exclusion logic now runs a second time, over `SubmitOneSubChunkToFullDepthForG5
+    # Bridge`'s own body, for the same reason (term 3, above).
+    after_count = 0
+    for signature in (GPU_FUNC_SIGNATURE, SUBCHUNK_FUNC_SIGNATURE):
+        body_stripped = strip_comments(extract_function_body(gpu_text, signature, label="superslm_gpu.cpp"))
+        after_region = body_stripped
+        for catch_body in extract_catch_block_bodies(body_stripped):
+            after_region = after_region.replace(catch_body, "", 1)
+        after_region = after_region.replace(_LWUWS_PREP_RELAY_RETURN_STATEMENT, "", 1)
+        after_count += count_any_return_statements(after_region)
     finish_body = extract_function_body(gpu_text, GPU_FINISH_FUNC_SIGNATURE, label="superslm_gpu.cpp")
     finish_count = count_any_return_statements(strip_comments(finish_body))
-    return submit_after_count + finish_count
+    return after_count + finish_count
 
 
 def check_lwuws_path_count_claim(gpu_port_h_text: str, gpu_text: str) -> list[str]:

@@ -36,6 +36,29 @@
 
 #include "d3d12_harness.h"
 
+// T-2169 (Rung 2b, design Sec5/Sec8/Sec9): the two chunk-dispatch instrumentation counters
+// (tests/support/gpu_chunk_dispatch_instrument.h) -- this suite's own gating symbols
+// (Claude/Curie/t2178-t2169-gpu-batched-prefill-red-suite-2026-08-18.md Sec2's "RED BY LINK"
+// mechanism) and, simultaneously, the Guard-vitality row's own "actual GPU dispatch count
+// issued" instrument. Included only under SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT so a
+// normal production build (build.bat, no such define) never sees this test-only header at all;
+// tests/t2178-gpu-batched-prefill-red-suite/build_red_suite.bat passes the define so its own
+// cells' `extern` references resolve.
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+#include "support/gpu_chunk_dispatch_instrument.h"
+// T-2169 (Rung 2b): the real global symbols the header above declares `extern` -- this
+// definition is what resolves every red-suite cell's own LNK2019 the moment this build
+// carries SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT (tests/t2178-gpu-batched-prefill-
+// red-suite/build_red_suite.bat, updated this rung to pass it). Incremented at the two sites
+// SubmitChunkToFullDepthForG5Bridge's own header comment names (below), each guarded by the
+// identical macro so a normal production build (build.bat, no such define) carries neither
+// the declaration, the definition, nor the increment.
+namespace superslm_test {
+std::atomic<int64_t> g_gpu_chunk_submit_count_probe{0};
+std::atomic<int64_t> g_gpu_chunk_dispatch_count_probe{0};
+}  // namespace superslm_test
+#endif
+
 namespace superslm_gpu {
 namespace harness {
 
@@ -882,6 +905,80 @@ struct GpuGemmGroupArithmeticError : std::logic_error {
 	using std::logic_error::logic_error;
 };
 
+// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin fault-injection seam
+// (`gpu_port.h`'s own header comment on `ArmT2169ChunkRecordingFaultInjection` carries the full
+// design/casebook account). State declared here, after `GpuGemmGroupArithmeticError` (immediately
+// above) rather than beside `g_o11_alloc_injection_armed` (this file, above): the throw body below
+// constructs that type, which is not yet declared at the earlier point in this file O11's own
+// state block occupies -- construction-order, not a stylistic choice.
+namespace {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+bool g_t2169_chunk_recording_fault_armed = false;
+uint32_t g_t2169_chunk_recording_fault_after_token_index = 0;
+bool g_t2169_chunk_recording_tail_fault_armed = false;
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
+// Always defined, always callable -- mirrors `MaybeThrowInjectedO11AllocFault`'s own established
+// "zero overhead unarmed, call site never `#ifdef`-guarded" convention exactly. Internal linkage:
+// only ever called from `SubmitOneSubChunkToFullDepthForG5Bridge`, this same translation unit.
+inline void MaybeThrowInjectedT2169ChunkRecordingFault(uint32_t admitted_token_index) {
+	(void)admitted_token_index;  // unreferenced when the macro is undefined -- matches
+	                              // MaybeThrowInjectedO11AllocFault's own M3 fix (this file, above).
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_fault_armed &&
+	    g_t2169_chunk_recording_fault_after_token_index == admitted_token_index) {
+		// Single-shot: cleared before throwing, matching O11's own "the next matching call" idiom
+		// -- a re-armed-forever flag would fire on every later, unrelated call in the same process.
+		g_t2169_chunk_recording_fault_armed = false;
+		throw GpuGemmGroupArithmeticError(
+		    "T2183 D-SLM3660: injected mid-recording infrastructural fault after admitted token "
+		    "index " +
+		    std::to_string(admitted_token_index));
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
+
+// T-2186 remedy P1's own pin (Brunel fix round 3, D-SLM3682): the seam above only reaches the
+// TRY-COVERED per-token loop, whose throw is caught by this function's own catch clauses --
+// pinning P1 requires a throw from the UNCOVERED TAIL itself (this function, below, outside
+// either catch clause: `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`),
+// the exact region the confirmation review named. Single-shot, no token index -- the tail runs
+// once per (sub-)chunk submission, after every admitted token's dispatches are already recorded,
+// so there is nothing left to index. `std::runtime_error`, matching the real failure this stands
+// in for (`SSLM_GPU_HR` throws exactly this type on a failed `Close()`/`Signal()`, e.g. on device
+// removal) -- a `catch (const std::runtime_error&)` at the call site cannot distinguish this from
+// the real thing, which is the property the pin needs.
+inline void MaybeThrowInjectedT2169ChunkRecordingTailFault() {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_tail_fault_armed) {
+		g_t2169_chunk_recording_tail_fault_armed = false;
+		throw std::runtime_error(
+		    "T2186 D-SLM3682: injected fault from SubmitOneSubChunkToFullDepthForG5Bridge's own "
+		    "uncovered tail (outside its try/catch), simulating a failed Close()/Signal() or a "
+		    "bad_alloc from the inflight allocation");
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
+}  // namespace
+
+// External linkage, deliberately outside the anonymous namespace immediately above -- same
+// reasoning as `ArmO11AllocationFailureInjection` (this file, above): `tests/t2178-gpu-batched-
+// prefill-red-suite/cell_exit_census.cpp`, a different translation unit, calls these as
+// `superslm_gpu::ArmT2169ChunkRecordingFaultInjection(...)`, matching `gpu_port.h`'s own gated
+// declarations exactly.
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index) {
+	g_t2169_chunk_recording_fault_armed = true;
+	g_t2169_chunk_recording_fault_after_token_index = after_token_index;
+}
+void ClearT2169ChunkRecordingFaultInjection() { g_t2169_chunk_recording_fault_armed = false; }
+
+void ArmT2169ChunkRecordingTailFaultInjection() { g_t2169_chunk_recording_tail_fault_armed = true; }
+void ClearT2169ChunkRecordingTailFaultInjection() {
+	g_t2169_chunk_recording_tail_fault_armed = false;
+}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the full definition of the opaque token
 // gpu_port.h forward-declares. Every field is FINISH-phase-only state that only exists
 // once Submit has recorded and closed the command list -- see gpu_port.h's own comment
@@ -957,21 +1054,226 @@ uint32_t Stage1LanesForRank(uint32_t rank) {
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the SUBMIT half of the async split --
 // declared in gpu_port.h. This function is BYTE-FOR-BYTE what RunLayerLoopGpu's own
 // body always was, from function entry through ExecuteCommandLists/Signal, MINUS the
-// fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
-// external-weights/external-rope bridge (this section's own new work, gated entirely
-// behind the trailing parameters -- every existing behavior is reached identically
-// when they are all null/false/0, which is what every pre-B5 call site still passes).
-superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+// T-2169 (Rung 2, design Claude/Vitruvius/t2169-gpu-batched-prefill-design-2026-08-18.md Sec5/
+// Sec5.1, D-SLM3595): the per-token, per-layer dispatch body, extracted from
+// RunLayerLoopGpuSubmit's own former inline loop -- list-lifecycle separation, not a
+// call-and-compose reuse. Records exactly one token's full [start_layer, start_layer +
+// layers_to_record) dispatch chain into the ALREADY-OPEN command list on `dev` -- it does not
+// Reset(), Close(), Execute, or fence-wait; the caller (RunLayerLoopGpuSubmit for the
+// single-token, non-chunked call shape, or the T-2169 chunk-submission primitive for the
+// chunked shape) owns the list's own open/close lifecycle. The root signature and every one of
+// the twelve SRV/UAV root bindings (slots 8-14) must already be bound by the caller before this
+// is invoked -- unchanged from the pre-extraction shape, since those bindings are call-constant
+// (D-SLM3632, Sec5.1) and persist on an open command list across Dispatch/SetPipelineState
+// calls; this function issues only root CONSTANTS (slot 0) plus Dispatch/ResourceBarrier pairs,
+// byte-for-byte identical to the pre-extraction `bind_and_dispatch`/`bind_and_dispatch_tail`
+// calls for the same (layer, site). `position_u32`/`width_u32` are THIS TOKEN's own record-time
+// values (D-SLM3612, Sec5 2a) -- a chunked caller passes a chunk-local, per-token-advancing
+// pair rather than a call-wide constant read from `seq.context_length`; the single-token caller
+// passes the identical constant it always computed. `dispatch_query_index` is threaded by
+// reference so the timestamp-query boundary numbering stays contiguous across every token a
+// (sub-)chunk records, matching the pre-extraction single-call numbering exactly when only one
+// token is recorded (Rung 2's own refactor-safety cell, Sec5/Sec8, proves this).
+void RecordOneTokenFullDepthDispatchBody(
+    harness::Device& dev, uint32_t start_layer, uint32_t layers_to_record, uint32_t H, uint32_t HD,
+    uint32_t NH, uint32_t NQH, uint32_t I, uint32_t N, uint32_t context_cap_u32,
+    uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
+    uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
+    const GpuAdapterBridge* adapter_bridge, uint32_t& dispatch_query_index) {
+	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
+	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
+	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");
+	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
+	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");
+	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
+	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
+	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
+	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
+	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
+	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
+	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
+	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
+	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
+	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
+	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
+	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
+	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
+	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
+	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
+	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
+	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
+	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
+
+	D3D12_RESOURCE_BARRIER global_uav_barrier{};
+	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	global_uav_barrier.UAV.pResource = nullptr;  // Sec18.3 fold, D-SLM3002: every barrier this design issues is global
+
+	struct TailAdapterSlot {
+		int slot_p;
+		uint32_t in_base;
+		uint32_t wide_base;
+	};
+
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
+	                              uint32_t lanes = 1) {
+		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+		}
+		++dispatch_query_index;
+		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  lanes};
+		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
+		dev.list->SetPipelineState(pso);
+		dev.list->Dispatch(num_groups, 1, 1);
+		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
+	                                   std::initializer_list<TailAdapterSlot> slots) {
+		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+		}
+		++dispatch_query_index;
+		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
+		size_t base = 11;
+		for (const TailAdapterSlot& s : slots) {
+			uint32_t rank = 0, a_off = 0, b_off = 0, fold_off = 0;
+			if (adapter_bridge) {
+				const superslm_gpu::AdapterProjSlot& slot =
+				    adapter_bridge->slots[static_cast<size_t>(layer_index) * 7u + static_cast<size_t>(s.slot_p)];
+				if (slot.present) {
+					rank = slot.rank;
+					a_off = static_cast<uint32_t>(slot.a_offset);
+					b_off = static_cast<uint32_t>(slot.b_offset);
+					fold_off = static_cast<uint32_t>(slot.fold_offset);
+				}
+			}
+			consts[base + 0] = rank;
+			consts[base + 1] = a_off;
+			consts[base + 2] = b_off;
+			consts[base + 3] = fold_off;
+			consts[base + 4] = static_cast<uint32_t>(work_adapter_u_off);
+			consts[base + 5] = s.in_base;
+			consts[base + 6] = s.wide_base;
+			consts[base + 7] = Stage1LanesForRank(rank);
+			base += 8;
+		}
+		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
+		dev.list->SetPipelineState(pso);
+		dev.list->Dispatch(1, 1, 1);
+		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+
+	const uint32_t KV2 = 2u * NH * HD;
+	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan kv_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan gate_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan down_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
+
+	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
+	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
+	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
+
+	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &kv_proj_plan, &gate_proj_plan,
+	                                          &up_proj_plan, &down_proj_plan}) {
+		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
+		    static_cast<uint64_t>(plan->out_channels)) {
+			throw GpuGemmGroupArithmeticError(
+			    "RecordOneTokenFullDepthDispatchBody: GEMM group plan does not cover its own "
+			    "out_channels -- groups * channels_per_group fell short of out_channels");
+		}
+	}
+
+	for (uint32_t i = 0; i < layers_to_record; ++i) {
+		const uint32_t l = start_layer + i;
+		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
+		bind_and_dispatch_tail(q_proj_pipe.pso.Get(), l,
+		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
+		bind_and_dispatch_tail(
+		    kv_proj_pipe.pso.Get(), l,
+		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
+		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
+		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
+		bind_and_dispatch(softmax_pipe.pso.Get(), l);
+		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
+		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
+		bind_and_dispatch_tail(o_proj_pipe.pso.Get(), l,
+		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
+		bind_and_dispatch_tail(gate_proj_pipe.pso.Get(), l,
+		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
+		bind_and_dispatch_tail(up_proj_pipe.pso.Get(), l,
+		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
+		bind_and_dispatch_tail(down_proj_pipe.pso.Get(), l,
+		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(commit_pipe.pso.Get(), l);
+	}
+}
+
+// T-2169 (Rung 2b-prep, design Sec5.1, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
+// pack-and-residency decision, and the once-per-call root-signature/twelve-SRV-UAV-binding setup,
+// extracted verbatim from RunLayerLoopGpuSubmit's own former inline body -- a mechanical
+// relocation, not a rewrite; every line below is byte-for-byte what RunLayerLoopGpuSubmit used to
+// execute in this same order, only now reachable from a second caller (the chunk-submission
+// primitive, T-2169 Rung 2b) without duplicating this block's own ~900 lines of residency-cache
+// and guard-ladder logic a second time. Design Sec5.1 traces why this whole block is sound to run
+// exactly ONCE per Submit-equivalent call -- whether that call covers one token
+// (RunLayerLoopGpuSubmit's own existing shape) or a whole admitted chunk (the primitive) -- since
+// every one of the nine guards, and every one of the three residency-cache keys, tests only
+// call-level state that does not vary token-to-token within one call (D-SLM3632/D-SLM3633).
+//
+// Guard rejection is a plain, side-effect-free `return` (matching every guard's own pre-extraction
+// shape) -- reached before `dev.alloc->Reset()` ever runs, so the caller's own enclosing try/catch
+// (opened around THIS function's own call, not inside it) never sees a guard rejection as an
+// exception; it sees an ordinary non-Ok status and returns early itself, with no command list ever
+// opened and therefore nothing to close. Once the guards pass, every subsequent allocation
+// (`dev.Upload`/`dev.MakeBuffer`, all `SSLM_GPU_HR`-guarded) can throw `std::runtime_error` exactly
+// as it always could -- this function installs no try/catch of its own and lets such a throw
+// propagate to the caller's enclosing try, which is where the existing
+// `InvalidateResidencyCachesOnThrow()`/`dev.list->Close()`/status-mapping catch clauses still
+// live, unchanged, because they are also used by the dispatch-recording and readback code that
+// still runs in the caller after this function returns successfully.
+struct GpuLayerLoopChunkOpenState {
+	uint32_t H = 0, HD = 0, NH = 0, NQH = 0, I = 0, N = 0, context_cap_u32 = 0;
+	GpuScratchLayout scratch_layout;
+	uint64_t work_wide_a_off = 0, work_wide_b_off = 0, work_adapter_u_off = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> silu_lut_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+};
+
+superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
     size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
     const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
     ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
-    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
-    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
-    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge) {
-	if (out_inflight) *out_inflight = nullptr;
+    ID3D12Resource* external_weights_resident, ID3D12Resource* external_rope_cos_resident,
+    ID3D12Resource* external_rope_sin_resident, bool external_rope_has,
+    uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state) {
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
 	// rejecting return paths (the nine guards below, `!dev.available`, and
@@ -1463,68 +1765,28 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
 	}
 
-	// --- Build/upload every buffer this call needs, in ONE command list
-	// (upload-and-transition, then the composed dispatch chain, then the
-	// readback copies -- one submit, one fence wait). ---
-	// T-2101 (dispatch-overhead decomposition): `record_ms` covers this whole window, Reset()
-	// through Close() -- every Upload()/MakeBuffer() call and every dispatch's own recording. (The
-	// zero-reset for a REJECTED call lives at this function's own entry, above, alongside
-	// `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never reaches
-	// this line at all.)
-	const auto t_record_start = std::chrono::steady_clock::now();
+	// T-2101 (dispatch-overhead decomposition), corrected T-2184 remedy M2 (Brunel fix round 1,
+	// D-SLM3662; review O1): `record_ms` no longer starts here. T-2169 (Rung 2b-prep) moved its
+	// own `t_record_start` capture out of this function and into EACH caller
+	// (`RunLayerLoopGpuSubmit`/`SubmitOneSubChunkToFullDepthForG5Bridge`), taken immediately before
+	// the call into this function -- so `record_ms` now also brackets the nine-guard ladder and the
+	// RoPE sin/cos table `memcpy` above, which it previously excluded. What is still true: `Close()`
+	// is still where the caller stops the clock, and every `Upload()`/`MakeBuffer()` call and every
+	// dispatch's own recording, in this function and the caller's own recording loop, is inside the
+	// window. (The zero-reset for a REJECTED call lives at this function's own entry, above,
+	// alongside `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never
+	// reaches this line at all.)
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
-	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
-	// review.md, P3, superseding T-2052 M2's own "caught here specifically,
-	// not fixed by a blanket try/catch" comment, WHICH THIS CORRECTION CLAIMED
-	// TO REMOVE AND DID NOT): EVERY allocation between here and this
-	// command list's own Close() below throws `std::runtime_error`
-	// (`SSLM_GPU_HR`, `d3d12_harness.h`) on a failing HRESULT. M2's own
-	// remedy caught exactly ONE of six allocation call-groups in this window
-	// (the DEFAULT-heap weight buffer, immediately below) -- the review
-	// found five others still uncaught, including the two allocations C5's
-	// own real 1.5B-tier run measures at 448.00 MiB each
-	// (`MakeInitializedUav`'s own DEFAULT-heap buffer for `kv_uav`, and
-	// `kv_readback` below). An uncaught throw from any of them left this
-	// command list mid-recording with no fence ever waited on -- undefined
-	// recovery for the caller's NEXT call, reachable on the consumer
-	// hardware §9 is written about, not only on the weight buffer's own
-	// ~1.31 GiB allocation M2 already covered. Named as ONE boundary rather
-	// than site by site (the review's own remedy shape): the try below
-	// spans every allocation this window issues.
-	//
-	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
-	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, S1; D-SLM3195,
-	// superseding whichever prior decision carried the "removed" claim): the
-	// paragraph above's parenthetical was false the day it was written --
-	// M2's own inner `try`/`catch` (immediately below, around the
-	// DEFAULT-heap weight allocation) was NOT removed; it survived, byte-
-	// identical, inside this new outer try, for two further rounds
-	// (T-2055, T-2059), silently winning over the outer catch for that one
-	// allocation and returning `KvPrecisionUnsupported` on it long after
-	// T-2057's own fold (D-SLM3190/D-SLM3191) retired that status's use here.
-	// Deleted now (S1's own remedy, at the inner block's own site below) --
-	// this paragraph is left as written, not rewritten, per this tree's own
-	// append-only discipline for a claim already shipped.
-	//
-	// EVERY variable below this point that the command list's own GPU
-	// virtual addresses reference -- every buffer `bind_and_dispatch` binds,
-	// plus the two readback buffers -- is declared HERE, OUTSIDE the try,
-	// and only ASSIGNED inside it. This is load-bearing, not cosmetic: a
-	// `ComPtr<ID3D12Resource>` declared WITH `auto` INSIDE the try releases
-	// its D3D12 resource at the try block's own closing brace, which runs
-	// BEFORE `ExecuteCommandLists`/the fence wait below (both outside the
-	// try) -- a genuine use-after-free of GPU memory the command list still
-	// references, not merely a C++-level scoping question. Caught by this
-	// round's OWN full-suite run: an intermediate draft of this change
-	// declared these buffers with `auto` inside the try and reproduced,
-	// deterministically, a real `DXGI_ERROR_DEVICE_REMOVED` (0x887a0005) on
-	// the second `RunLayerLoopGpu` call of the suite (a content-changed
-	// weight-cache-miss call, `TestT2019_B2_GuardPath...RoundingDivideByPot
-	// ExponentOutOfDomain`'s `which == 1` iteration) -- fixed by this
-	// hoisting, re-verified by a full, clean 33870/3 re-run before this
-	// round's own checkpoint.
+	// EVERY variable below this point that the command list's own GPU virtual addresses
+	// reference is declared here, in the caller-visible out_state, or as a plain local that does
+	// not need to survive past this function's own return -- see RunLayerLoopGpuSubmit's own
+	// former comment on this exact hazard (a `ComPtr` released before ExecuteCommandLists/the
+	// fence wait is a genuine GPU-memory use-after-free, reproduced once by execution, T-2049).
+	// No try/catch here (see this function's own header comment) -- every allocation below can
+	// throw `std::runtime_error` via `SSLM_GPU_HR`, and the caller's own enclosing try/catch is
+	// what handles it, exactly as it always did when this code ran inline.
 	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
@@ -1537,100 +1799,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
-	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
-	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
-	// T-2101: which K/V rows this call's dispatches wrote (src offset in `kv_uav` == dst offset in
-	// `workspace`) -- read after the fence wait below, well outside the try, so hoisted here for the
-	// same reason as the ComPtr resources immediately above.
-	std::vector<size_t> kv_row_offsets;
-	// T-2101 (per-site decomposition): how many timestamp boundaries this call actually recorded --
-	// also read after the fence wait, well outside the try, hoisted for the identical reason.
-	uint32_t dispatch_count_this_call = 0;
-	// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @ f7026db):
-	// shared by BOTH catch clauses below (the generic D3D12-failure one and the new
-	// `GpuGemmGroupArithmeticError` one) so the cache-invalidation contract is written once and
-	// cannot drift between the two paths.
-	//
-	// T-2101 (S4): consolidated here, this round, from two catch clauses' own duplicated inline
-	// code -- the reasoning below (T-2055, T-2062 M-b, T-2080 S3) is UNCHANGED and still describes
-	// exactly what these five lines do; only their location moved.
-	//
-	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
-	// review.md, P3): defensively invalidate the weight-residency cache
-	// regardless of WHERE in the window the throw happened. A throw
-	// reached AFTER `g_resident_weights` was already marked valid+resident
-	// (the `!weights_resident` branch below, once ITS OWN CopyResource is
-	// merely RECORDED) but BEFORE this command list actually executes
-	// would otherwise leave that assignment describing a DEFAULT-heap
-	// buffer whose content copy was never submitted to the GPU -- serving
-	// it back to the NEXT call as a cache hit would bind an uninitialized
-	// VRAM buffer to every site's own weight reads with no error at all,
-	// the silent-wrong-answer class this whole arc exists to close, not
-	// merely the crash class M1 already closed. Safe unconditionally: if
-	// the cache was never touched this call (a hit, or a throw before the
-	// `!weights_resident` branch ran), this is a same-state no-op.
-	//
-	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
-	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "this is
-	// a same-state no-op" is false on the CACHE-HIT path specifically --
-	// left as written above, not rewritten, per this tree's own
-	// append-only discipline. On a hit, `g_resident_weights.valid` was
-	// already `true` and `lw_buf` already held the resident DEFAULT-heap
-	// copy BEFORE this call ever ran (a prior call's own success path set
-	// it); the two lines below unconditionally reset it to invalid --
-	// forcing the NEXT call into a full re-upload of the packed row
-	// (~1.31 GiB across PCIe at the 1.5B tier) that a hit exists to
-	// avoid, which is a real state CHANGE, not a no-op, on that one path.
-	// The conservative DIRECTION the paragraph above argues for is still
-	// correct and unchanged -- reproduced by execution (the review's own
-	// probe: a cache-hit call that throws, followed by a well-formed call
-	// with identical content, reads back a forced miss) -- what was wrong
-	// is calling a real, deliberate cache-state change a no-op.
-	//
-	// T-2101: the same reasoning applies to the K/V residency cache -- a throw reached after
-	// `g_resident_kv` was marked valid (the miss branch below, once its own CopyResource is
-	// merely recorded) but before this command list actually executes would otherwise serve an
-	// uninitialized or partially-written VRAM buffer back to the NEXT call as a cache hit, with
-	// no error. Invalidated unconditionally, matching the weight cache's own unconditional reset
-	// immediately above; a hit call that throws pays a full re-upload on its next call, which is
-	// the same real state change the weight cache's own T-2062 (M-b) correction already
-	// documents as correct, not a no-op.
-	//
-	// T-2062 (M-b): beside the cache invalidation above, not left to the
-	// function-entry assignment alone -- a throw in this window is a TWELFTH
-	// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
-	// too" enumeration (T-2055, P2) did not count when it said eleven.
-	// Without this line, a cache-hit call that throws here left
-	// `LastWeightUploadWasSkipped()` reading the call's own STALE `true`
-	// (set on entry to `false`, then overwritten `true` at the residency
-	// decision earlier in this same call, before the throw) even though
-	// the two lines above have just made the cache non-resident --
-	// reproduced by the review's own probe (call 5: `skipped=1` from a
-	// call whose catch had just invalidated the cache). Setting it
-	// here makes the observable agree with the state it describes on
-	// this path.
-	//
-	// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
-	// 94ebee3-gpu-serial-port-closing-review.md, S3; D-SLM3241): the
-	// sentence this replaces claimed the observable "agrees with the
-	// state it describes on every one of this function's ... rejecting
-	// paths" -- unscoped, and false: `gpu_port.h`'s own `Last
-	// WeightUploadWasSkipped` paragraph (T-2075, S2) measured that the
-	// STICKY-TAG-decoded path (this function's own terminal `return
-	// DecodeStickyTag(sticky_tag);`) reads `true` on a rejecting call,
-	// honestly, because that call's own upload genuinely was skipped.
-	// "Agrees on every rejecting path" is not the true contract; see
-	// `gpu_port.h`'s own paragraph for the actual one (`false` before
-	// the residency decision runs, exactly `weights_resident` after
-	// it) -- not restated a second time here.
-	auto invalidate_residency_caches_on_throw = [&]() {
-		g_resident_weights.lw_buf.Reset();
-		g_resident_weights.valid = false;
-		g_resident_kv.kv_buf.Reset();
-		g_resident_kv.valid = false;
-		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
-	};
-	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
 	// DEFAULT-heap (VRAM-resident) buffer -- not cached as an UPLOAD-heap
@@ -1813,46 +1981,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
-	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
-	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");  // T-2113 (B4)
-	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
-	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
-	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");  // T-2113 (B4)
-	// T-2045 (C3): the four ratified attention sites, de-fused from T-2039's
-	// own single fused dispatch (Claude/Poirot/82cfca7-gpu-serial-port-build-
-	// review.md, C3 -- Sec5.4/Sec13 place cross-site fusion outside this
-	// design's build target).
-	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
-	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
-	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
-	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
-	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
-	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
-	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
-	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
-	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
-	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
-	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
-	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
-	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
-	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step of each of
-	// these five sites now runs in its OWN multi-group dispatch, immediately before the (now
-	// requant-only, for q_proj also bias) site of the same name -- see each `<site>_gemm_site.hlsl`'s
-	// own header comment for the correctness account. T-2113 (B4, design Sec3/Sec6.1, D-SLM3341):
-	// kv_proj's own GEMM step now gets the identical treatment (`kv_proj_gemm_pipe`, declared
-	// above alongside `kv_proj_pipe`) -- the fused-and-single-dispatch shape `kv_proj_site.hlsl`'s
-	// own header comment used to describe was correct for its OWN cooperative guard/landing pass,
-	// never for the GEMM step, which this section's own second-dispatch remedy splits out.
-	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
-	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
-	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
-	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
-	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
-	// T-2113 (B10 lever 1, design Sec10 "B10 -- Lever Detail" #1): B6b's own standalone
-	// adapter-delta dispatch (`adapter_delta_site.hlsl`, one generic shader dispatched once per
-	// COVERED (layer, projection) slot) is retired -- the identical computation is now fused
-	// into each of the six tail shaders' own dispatch (`bind_and_dispatch_tail` below), via the
-	// extended root signature's own positions 11-24. No separate PSO is built for it anymore.
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
 	// T-2113 (B4, design Sec10 B2/B4's own deferred root-binding hoist -- Claude/Brunel/
@@ -1927,9 +2055,112 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	dev.list->SetComputeRootShaderResourceView(
 	    14, (adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get())->GetGPUVirtualAddress());
 
-	D3D12_RESOURCE_BARRIER global_uav_barrier{};
-	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-	global_uav_barrier.UAV.pResource = nullptr;  // Sec18.3 fold, D-SLM3002: every barrier this design issues is global
+	out_state->H = H;
+	out_state->HD = HD;
+	out_state->NH = NH;
+	out_state->NQH = NQH;
+	out_state->I = I;
+	out_state->N = N;
+	out_state->context_cap_u32 = static_cast<uint32_t>(context_cap);
+	out_state->scratch_layout = scratch_layout;
+	out_state->work_wide_a_off = work_wide_a_off;
+	out_state->work_wide_b_off = work_wide_b_off;
+	out_state->work_adapter_u_off = work_adapter_u_off;
+	out_state->seq_uav = seq_uav;
+	out_state->kv_uav = kv_uav;
+	out_state->scratch_uav = scratch_uav;
+	out_state->work_scratch_uav = work_scratch_uav;
+	out_state->layout_buf = layout_buf;
+	out_state->rope_buf = rope_buf;
+	out_state->model_const_buf = model_const_buf;
+	out_state->silu_lut_buf = silu_lut_buf;
+	out_state->scratch_layout_buf = scratch_layout_buf;
+	out_state->lw_upload_keep_alive = lw_upload_keep_alive;
+	out_state->upload_keep_alive = upload_keep_alive;
+	return superslm::SslmForwardStatus::Ok;
+}
+
+namespace {
+// T-2101 (S3-prime): the shared five-line residency-cache invalidation every GPU-recording catch
+// clause in this file performs when an exception unwinds mid-recording -- originally consolidated
+// from two divergent copies into the lambda `RunLayerLoopGpuSubmit`'s own catch clauses (below)
+// declared locally; `SubmitOneSubChunkToFullDepthForG5Bridge`'s own catch clauses (further below)
+// then re-declared an IDENTICAL lambda rather than a divergent copy, verified line-for-line at that
+// function's own header comment ("a third, independent call site of the identical five lines, not
+// a fourth divergent copy"). T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): that verification
+// was a claim someone had to keep re-checking by eye -- factored here into the ONE file-scope
+// helper every catch clause calls, so a future divergence is a compile-time impossibility rather
+// than a re-derived fact. Neither lambda captured anything local (both bodies touch only the
+// file-scope statics `g_resident_weights`/`g_resident_kv`/`g_last_weight_upload_was_skipped`
+// already declared above), so this needed no parameters.
+void InvalidateResidencyCachesOnThrow() {
+	g_resident_weights.lw_buf.Reset();
+	g_resident_weights.valid = false;
+	g_resident_kv.kv_buf.Reset();
+	g_resident_kv.valid = false;
+	g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
+}
+}  // namespace
+
+// fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
+// external-weights/external-rope bridge (this section's own new work, gated entirely
+// behind the trailing parameters -- every existing behavior is reached identically
+// when they are all null/false/0, which is what every pre-B5 call site still passes).
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+    size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+    const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
+    ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
+    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge) {
+	if (out_inflight) *out_inflight = nullptr;
+	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
+	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
+	// PrepareGpuLayerLoopChunkOpenState (above) -- a mechanical extraction, called here exactly
+	// once per Submit call, matching this function's own pre-extraction behavior for its own
+	// single-token callers. The readback-lifetime resources stay declared here: they are used by
+	// the dispatch-recording/readback code below and by this function's own catch clauses,
+	// neither of which moved. T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): the
+	// invalidation itself is now the shared file-scope `InvalidateResidencyCachesOnThrow()`
+	// (declared immediately above this function), not a locally-declared lambda.
+	harness::Device& dev = harness::GetDevice();
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	std::vector<size_t> kv_row_offsets;
+	uint32_t dispatch_count_this_call = 0;
+	GpuLayerLoopChunkOpenState state;
+	const auto t_record_start = std::chrono::steady_clock::now();
+	try {
+	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
+	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
+	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
+	    io_external_kv_needs_resume_barrier, external_weights_resident, external_rope_cos_resident,
+	    external_rope_sin_resident, external_rope_has, external_rope_cos_elems,
+	    external_rope_sin_elems, adapter_bridge, &state);
+	if (prep_status != superslm::SslmForwardStatus::Ok) {
+		return prep_status;  // a guard rejected before any recording began -- nothing to close
+	}
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+	// T-2169 (Rung 2b): the SAME "one command list opened and submitted" event
+	// SubmitChunkToFullDepthForG5Bridge's own identical increment counts (below) -- this
+	// single-token call is a degenerate one-token "chunk" under the counter's own general
+	// definition (tests/support/gpu_chunk_dispatch_instrument.h's own header comment: "one
+	// increment per chunk ... submission"), and the T-2178 red suite's own reference arm
+	// (N separate single-token calls through THIS function) is what proves the candidate
+	// arm's one-chunk-one-submission claim by contrast -- N here against 1 there.
+	++superslm_test::g_gpu_chunk_submit_count_probe;
+#endif
+	const uint32_t H = state.H;
+	const uint32_t HD = state.HD;
+	const uint32_t NH = state.NH;
+	const uint32_t NQH = state.NQH;
+	const uint32_t I = state.I;
+	const uint32_t N = state.N;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& seq_uav = state.seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& kv_uav = state.kv_uav;
 
 	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
 	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
@@ -1943,179 +2174,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// EVERY `bind_and_dispatch` call, capped at the heap's own real capacity (never overrun --
 	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
 	uint32_t dispatch_query_index = 0;
-	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): `num_groups` defaults to
-	// 1 (every pre-existing single-group site, unchanged behavior). The six `_gemm_site` pipelines
-	// pass `ceil(out_channels/(256/lanes))`, grid-sizing the dispatch to the output dimension
-	// exactly as `ComputeGpuGemmSiteGroupPlan` (gpu_port.h) computes it host-side -- both sides
-	// derive the group count from the SAME `out_channels`/`lanes`, so they cannot drift apart.
-	// T-2113 (B4): `lanes` (default 1, every non-GEMM site's unchanged meaning) is the 11th root
-	// constant -- the ONE source of a GEMM dispatch's own lane split, read by
-	// `GemmCoalescedGpu`/`GemmCoalescedGpuAt` (site_common.hlsli). The twelve SRV/UAV root
-	// bindings that used to be re-issued on every call are hoisted to the single set immediately
-	// after SetComputeRootSignature, above (design Sec10 B2's own deferred root-binding hoist).
-	//
-	// T-2113 (B4->B5 retirement): the TIME-SLICE INVARIANCE bench mechanism B4 built here
-	// (`SSLM_B4_SLICE_EVERY`/`SSLM_B4_SLICE_DROP_UAV_REBIND`/`SSLM_B4_SLICE_SWAP_SRV_REBIND`,
-	// a synthetic mid-call cut-and-resume inside ONE `RunLayerLoopGpu`/`RunLayerLoopGpuSubmit`
-	// call) is RETIRED, per its own documented promise ("retires the moment B5 lands its own
-	// real slicing and the equivalent proof runs through `sslm_decode_step_gpu`/
-	// `sslm_gpu_ready` instead," Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec6.1) and
-	// per the design's own Sec6.2 finding that the REAL boundary needs no per-call
-	// instrumentation at all: every separate `sslm_decode_step_gpu` call already performs its
-	// own full Reset+rebind (the twelve `SetComputeRoot*View` calls immediately above this
-	// lambda, unconditional, every call) -- that IS the resume rebind design Sec6.2 asks for,
-	// with no additional mechanism needed inside the dispatch loop. The two T-2106 violation-
-	// class pins move with it, to the top-of-call rebind site itself (this function's own
-	// `SSLM_B5_ASYNC_DROP_UAV_REBIND`/`SSLM_B5_ASYNC_SWAP_SRV_REBIND`, set immediately above),
-	// since that is now the ONLY rebind site a real async resume ever crosses.
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
-	                              uint32_t lanes = 1) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
-		}
-		++dispatch_query_index;
-		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
-		                        NQH,        width_u32, I,  N,  lanes};
-		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
-		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(num_groups, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
-	};
-	// T-2113 (B10 lever 1): one covered (layer, projection) slot's own arguments to
-	// `bind_and_dispatch_tail` below -- `in_channels`/`out_channels` are NOT carried here (unlike
-	// `bind_and_dispatch_adapter_delta`'s own retired signature): the fused shader already knows
-	// its own in_channels/out_channels from the SAME root constants it always read
-	// (g_hidden_size/g_intermediate_size), so ApplyFusedAdapterDeltaGpu's call site inside each
-	// shader passes them directly rather than round-tripping them back out to a root constant
-	// only to be read back in. Only what the shader cannot otherwise derive -- which slot to
-	// check, and the two byte offsets (`in_base`/`wide_base`) into LayerScratch/WorkScratch this
-	// dispatch's own base-GEMM tail already uses -- crosses this boundary.
-	struct TailAdapterSlot {
-		int slot_p;
-		uint32_t in_base;
-		uint32_t wide_base;
-	};
-	// T-2113 (B10 lever 1, design Sec10 "B10 -- Lever Detail" #1): the fused tail dispatch --
-	// issues ONE dispatch per tail shader (q/kv/o/gate/up/down_proj_site.hlsl), folding what used
-	// to be B6b's own separate `bind_and_dispatch_adapter_delta` dispatch into the SAME dispatch
-	// as the site's own bias/requant tail, via the extended root signature's own positions 11-24
-	// (site_common.hlsli's ApplyFusedAdapterDeltaGpu, called from inside each of the six shaders
-	// before their own bias-reconcile/requant code). `slots` names up to two (layer, projection)
-	// coverage checks -- one for every tail shader except kv_proj_site.hlsl, which fuses both its
-	// K (slot=5) and V (slot=6) deltas into its own single dispatch. `slot_p` matches
-	// `sslm_gpu_adapter_map`'s own by-position index (gpu_1p0.cpp: q=0, o=1, gate=2, up=3,
-	// down=4, k=5, v=6); `in_base`/`wide_base` are the SAME byte offsets B6b's own standalone
-	// dispatch used (ScratchLayout's `normed`/`ctx_codes`/`act_codes`, WorkScratch's
-	// WIDE_A/WIDE_B). Every uncovered slot (or `adapter_bridge == nullptr`) is packed with
-	// `rank == 0` -- ApplyFusedAdapterDeltaGpu's own no-op sentinel, matching the standalone
-	// path's "dispatch never issued" contract as a true no-op inside a dispatch that is always
-	// issued (the tail dispatch itself, unconditionally, exactly as it always was pre-lever-1).
-	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
-	                                   std::initializer_list<TailAdapterSlot> slots) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
-		}
-		++dispatch_query_index;
-		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
-		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
-		size_t base = 11;
-		for (const TailAdapterSlot& s : slots) {
-			uint32_t rank = 0, a_off = 0, b_off = 0, fold_off = 0;
-			if (adapter_bridge) {
-				const superslm_gpu::AdapterProjSlot& slot =
-				    adapter_bridge->slots[static_cast<size_t>(layer_index) * 7u + static_cast<size_t>(s.slot_p)];
-				if (slot.present) {
-					rank = slot.rank;
-					a_off = static_cast<uint32_t>(slot.a_offset);
-					b_off = static_cast<uint32_t>(slot.b_offset);
-					fold_off = static_cast<uint32_t>(slot.fold_offset);
-				}
-			}
-			consts[base + 0] = rank;
-			consts[base + 1] = a_off;
-			consts[base + 2] = b_off;
-			consts[base + 3] = fold_off;
-			consts[base + 4] = static_cast<uint32_t>(work_adapter_u_off);
-			consts[base + 5] = s.in_base;
-			consts[base + 6] = s.wide_base;
-			consts[base + 7] = Stage1LanesForRank(rank);
-			base += 8;
-		}
-		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
-		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(1, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
-	};
-	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
-	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
-	// six split GEMM dispatches' own grid size comes from -- computed once per site here so the
-	// standing guard below can check all six before any dispatch is recorded, and each plan's own
-	// `.groups`/`.lanes` is what the `bind_and_dispatch` calls pass, with no intermediate
-	// hand-editable local caching a copy of the value. T-2113 (B4): `KV2` is `kv_proj_gemm`'s own
-	// doubled out_channels (K's and V's kv_hidden_size channels packed into one grid,
-	// `kv_proj_gemm_site.hlsl`'s own header comment) -- the ONLY site that reads it; every other
-	// site's own `ComputeGpuGemmSiteGroupPlan` call ignores the parameter.
-	const uint32_t KV2 = 2u * NH * HD;
-	const GpuGemmSiteGroupPlan q_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan o_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan kv_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan gate_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan up_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan down_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
-
-	// T-2113 (B4): flattened work-item counts for the two attention sites and RoPE, gridded the
-	// identical way the GEMM sites are -- `ceil(items / 256)` groups, computed from the SAME
-	// `g_num_attention_heads`/`g_width`/`g_head_dim` root constants the shaders themselves read
-	// (attention_score_site.hlsl/context_accumulate_site.hlsl/rope_guard_site.hlsl/
-	// rope_commit_site.hlsl), so host and shader cannot disagree about how many items exist.
-	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
-	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
-	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
-
-	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md; S4, confirmation pass @
-	// f7026db): the standing guard the multi-group change was owed. Fires on EVERY call, at
-	// whatever dimensions that call carries -- trivially satisfied by the suite's own
-	// hidden_size=2 fixtures, genuinely load-bearing at the real 1.5B tier. Throws a DISTINCT type
-	// (`GpuGemmGroupArithmeticError`, above -- not `std::runtime_error`), caught by its own clause
-	// in the SAME try/catch this window already has (S4: the generic clause reported this as
-	// `GpuAllocationFailed`, "retry smaller" -- actively wrong advice for a permanent arithmetic bug
-	// no retry fixes, and discarded the diagnostic string). This function DOES return a status code
-	// for the condition (`GpuGemmGroupArithmeticInvalid`, below, distinct from `GpuAllocationFailed`
-	// and documented as permanent, never "retry smaller") -- returning a status at all matches every
-	// OTHER guard in this function's own convention; the earlier version of THIS comment claimed the
-	// opposite ("throws rather than returning a status code a caller could plausibly want to recover
-	// from"), which the confirmation pass correctly read as describing behavior the code did not
-	// have.
-	//
-	// T-2113 (B4): the covered-quantity check is now `groups * channels_per_group` -- under the
-	// transposed partition, a group of `threads_per_group` (always 256 now) threads covers
-	// `256 / lanes` output CHANNELS, not 256 of them, so `channels_per_group` (not
-	// `threads_per_group`) is the quantity the grid size must cover.
-	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &kv_proj_plan, &gate_proj_plan,
-	                                          &up_proj_plan, &down_proj_plan}) {
-		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
-		    static_cast<uint64_t>(plan->out_channels)) {
-			throw GpuGemmGroupArithmeticError(
-			    "RunLayerLoopGpu: GEMM group plan does not cover its own out_channels -- "
-			    "groups * channels_per_group fell short of out_channels");
-		}
-	}
-
-	// T-2045 (C3): attention is four real dispatches (attention-score, softmax,
-	// context-accumulate, ctx_fold), not T-2039's own fused one.
-	// T-2113 (B4, design Sec3/Sec6.1): 24 real dispatches per layer now, re-derived from
-	// T-2101's own 22 -- `kv_proj_gemm` is a NEW dispatch (kv_proj's own GEMM step, no longer
-	// fused into kv_proj_site.hlsl's single dispatch) and RoPE's own commit phase is a second,
-	// separate dispatch (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase
-	// inside `rope_guard_site.hlsl`. `PlanDispatchBudgetGpu`'s own `kDispatchesPerLayer` (below
-	// in this file) is re-derived to 24 in the SAME round (no longer the stale 17 T-2101 left
-	// unwired) -- see that function's own header comment.
 	// T-2045 (C2): resume from seq.layer_index, exactly as the loop in
 	// `RunLayerLoopImpl` (`forward_sites.cpp`) --
 	// `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)` --
@@ -2123,45 +2181,22 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
-	// T-2101 (dispatch-overhead decomposition): boundary 0, captured inside the first
-	// `bind_and_dispatch` call below, brackets the FIRST dispatch this call issues -- everything
-	// above (weight/K-V pack-or-skip, every Upload()) is recording work the GPU has not yet been
-	// asked to do anything about, so it must not be inside the GPU-busy window.
-	for (uint32_t i = 0; i < layers_to_record; ++i) {
-		const uint32_t l = start_layer + i;
-		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
-		bind_and_dispatch_tail(q_proj_pipe.pso.Get(), l,
-		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
-		bind_and_dispatch_tail(
-		    kv_proj_pipe.pso.Get(), l,
-		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
-		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
-		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
-		bind_and_dispatch(softmax_pipe.pso.Get(), l);
-		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
-		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
-		bind_and_dispatch_tail(o_proj_pipe.pso.Get(), l,
-		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
-		bind_and_dispatch_tail(gate_proj_pipe.pso.Get(), l,
-		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
-		bind_and_dispatch_tail(up_proj_pipe.pso.Get(), l,
-		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
-		bind_and_dispatch_tail(down_proj_pipe.pso.Get(), l,
-		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(commit_pipe.pso.Get(), l);
-	}
+	// T-2169 (Rung 2, D-SLM3595): the single-token, non-chunked call shape -- one call into the
+	// extracted per-token dispatch body (above), for this call's own [start_layer,
+	// start_layer + layers_to_record) slice, at the constant position_u32/width_u32 this whole
+	// call already computed. This is byte-for-byte the same dispatch sequence the pre-extraction
+	// inline loop issued for the identical layer range (Rung 2's own refactor-safety cell proves
+	// it) -- only the code that issues it moved into its own function.
+	RecordOneTokenFullDepthDispatchBody(dev, start_layer, layers_to_record, H, HD, NH, NQH, I, N,
+	                                     context_cap_u32, position_u32, width_u32, state.scratch_layout,
+	                                     state.work_wide_a_off, state.work_wide_b_off,
+	                                     state.work_adapter_u_off, adapter_bridge, dispatch_query_index);
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+	// T-2169 (Rung 2b): the SAME per-token-dispatch-body-invocation event
+	// SubmitChunkToFullDepthForG5Bridge's own identical increment counts (below), for the
+	// identical reference-arm-comparison reason the submit counter above states.
+	++superslm_test::g_gpu_chunk_dispatch_count_probe;
+#endif
 	// One final boundary, immediately after the LAST dispatch (the final layer's own commit_site
 	// above) -- `dispatch_query_index` now equals the total dispatch count this call issued, so
 	// this is boundary N for N dispatches, giving N per-dispatch deltas below. Resolved into a
@@ -2179,7 +2214,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// in-place K rotation touches the SAME row, never a different one) -- the identical
 	// `KvHalfOffsetGpu`/`KvRowOffsetWithinHalfGpu` addressing `KeyRowGpu`/`ValueRowGpu` below use
 	// host-side, so every offset computed here is exact, not an approximation of what changed. ---
-	seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	seq_readback = dev.MakeBuffer(SeqTotalSize(H), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                    D3D12_RESOURCE_STATE_COPY_DEST);
 	kv_row_offsets.reserve(static_cast<size_t>(layers_to_record) * NH * 2u);
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
@@ -2212,7 +2247,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// pre-existing g_resident_kv path already left it for kv_fast_hit's own resume
 	// barrier to find on the NEXT call -- latch that fact into the caller-owned flag on
 	// the external-buffer path too, so THIS handle's own next call knows to resume it.
-	if (external_kv && io_external_kv_needs_resume_barrier != nullptr) {
+	if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 		*io_external_kv_needs_resume_barrier = true;
 	}
 	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
@@ -2231,7 +2266,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		// confirmation pass's own finding was that the original guard's exception, its one useful
 		// payload, was constructed, thrown, and dropped by an unnamed catch clause.
 		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
-		invalidate_residency_caches_on_throw();
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
 	} catch (const std::runtime_error&) {
@@ -2280,11 +2315,11 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
 		// f7026db): both residency caches reset to invalid, `LastWeightUploadWasSkipped` set false --
-		// issued via the shared `invalidate_residency_caches_on_throw` lambda (declared immediately
-		// before the try block, where its own full history -- T-2055, T-2062 M-b, T-2080 S3 -- now
-		// lives), identical effect, written once so this clause and the `GpuGemmGroupArithmeticError`
-		// clause above cannot diverge.
-		invalidate_residency_caches_on_throw();
+		// issued via the shared file-scope `InvalidateResidencyCachesOnThrow()` (T-2184 remedy S3,
+		// Brunel fix round 1, D-SLM3662 -- its own full history, T-2055/T-2062 M-b/T-2080 S3/T-2101
+		// S3-prime, now lives on that function's own header comment), identical effect, written once
+		// so this clause and the `GpuGemmGroupArithmeticError` clause above cannot diverge.
+		InvalidateResidencyCachesOnThrow();
 		dev.list->Close();
 		// T-2057 (D-SLM3191): `GpuDeviceRemoved` iff the device is confirmed
 		// gone right now (device recreation owed, not a retry against this
@@ -2325,25 +2360,430 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	inflight->seq_readback = seq_readback;
 	inflight->kv_readback = kv_readback;
 	inflight->kv_row_offsets = kv_row_offsets;
-	inflight->seq_bytes_size = seq_bytes.size();
-	inflight->hidden_size_h = H;
-	inflight->head_dim_hd = HD;
+	inflight->seq_bytes_size = SeqTotalSize(state.H);
+	inflight->hidden_size_h = state.H;
+	inflight->head_dim_hd = state.HD;
 	inflight->t_record_end = t_record_end;
 	// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
 	// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
-	// the use-after-free the Submit/Finish split would otherwise open.
-	inflight->layout_buf = layout_buf;
-	inflight->rope_buf = rope_buf;
-	inflight->model_const_buf = model_const_buf;
-	inflight->silu_lut_buf = silu_lut_buf;
-	inflight->scratch_layout_buf = scratch_layout_buf;
-	inflight->seq_uav = seq_uav;
-	inflight->scratch_uav = scratch_uav;
-	inflight->work_scratch_uav = work_scratch_uav;
-	inflight->lw_upload_keep_alive = lw_upload_keep_alive;
-	inflight->upload_keep_alive = upload_keep_alive;
+	// the use-after-free the Submit/Finish split would otherwise open. T-2169 (Rung 2b-prep):
+	// sourced from `state` now -- these are the same resources PrepareGpuLayerLoopChunkOpenState
+	// populated, unchanged, since it is still called exactly once per Submit call here.
+	inflight->layout_buf = state.layout_buf;
+	inflight->rope_buf = state.rope_buf;
+	inflight->model_const_buf = state.model_const_buf;
+	inflight->silu_lut_buf = state.silu_lut_buf;
+	inflight->scratch_layout_buf = state.scratch_layout_buf;
+	inflight->seq_uav = state.seq_uav;
+	inflight->scratch_uav = state.scratch_uav;
+	inflight->work_scratch_uav = state.work_scratch_uav;
+	inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+	inflight->upload_keep_alive = state.upload_keep_alive;
 	if (out_inflight) *out_inflight = inflight.release();
 	return superslm::SslmForwardStatus::Ok;
+}
+
+// T-2169 (Rung 2b, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634):
+// the internal SUB-chunk-submission primitive -- records ONE (sub-)chunk's full dispatch
+// sequence into ONE open command list, bounded to at most `kT2169TdrSafeMaxChunkTokens` tokens
+// (D-SLM3596, and the empirical stability finding below that ruling now also carries -- see
+// `SubmitChunkToFullDepthForG5Bridge`'s own header comment, immediately below this function, for
+// the full account and D-SLM3649). One call into `PrepareGpuLayerLoopChunkOpenState` (chunk-open,
+// exactly once, per D-SLM3632/D-SLM3633), then one call into `RecordOneTokenFullDepthDispatchBody`
+// per admitted token in this sub-chunk, full depth, in order (token-outer, layer-inner,
+// unreordered, per §6's own "not reordered the way the CPU fix inverted its own loop nest"
+// ruling) -- and submits/fences once for the whole sub-chunk. Internal linkage surface (no ABI
+// touch, §7). Callers needing an admitted chunk LARGER than the bound go through
+// `SubmitChunkToFullDepthForG5Bridge` (the real chunk-scoped entry point, below), never this
+// function directly, except for the sub-chunk-sized final/only slice that function itself drives.
+//
+// `chunk_embedding_bytes` is a caller-owned, already-packed, contiguous buffer of `chunk_len`
+// per-token embedding blocks, each exactly `SeqScaleOff(hidden_size) + 16` bytes (the `[0,
+// SeqScaleOff(H)+16)` range 2b names) -- computed by the CALLER (Rung 3/4's own pre-scan, which
+// has access to the model handle's `EmbedEntry`/`sslm_gpu_seq_embed_token` arithmetic this
+// function does not) for every candidate index the pre-scan validates, in the same pass that
+// produces `embed_admit_count` (§5's own "the pre-scan and the record-time embedding source are
+// the same pass, not two"). This primitive itself performs no embedding arithmetic and no
+// admission decision -- it drives exactly `chunk_len` already-admitted tokens to full depth.
+superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
+	if (out_inflight) *out_inflight = nullptr;
+	// T-2184 remedy S3 (Brunel fix round 1, D-SLM3662): this primitive's own catch clauses call
+	// the same file-scope `InvalidateResidencyCachesOnThrow()` `RunLayerLoopGpuSubmit`'s catch
+	// clauses call (declared once, above `RunLayerLoopGpuSubmit`) -- previously a THIRD locally-
+	// declared copy of the identical five lines (this function's own prior header comment: "a
+	// third, independent call site of the identical five lines, not a fourth divergent copy"),
+	// which was an argument that the copy was currently right, not that anything kept it right.
+	// Factored so there is nothing left to drift, per the T-2184 review's own S3 remedy.
+	harness::Device& dev = harness::GetDevice();
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	// D-SLM3611 (2b): the per-chunk upload-heap buffer holding every admitted token's own
+	// embedding bytes -- declared HERE, outside the try, for the identical use-after-free
+	// reason every other per-call GPU-referenced resource in this file is (superslm_gpu.cpp's
+	// own comment on `layout_buf` et al., above): a `ComPtr` released before
+	// ExecuteCommandLists/the fence wait is a genuine GPU-memory use-after-free, since the
+	// per-token `CopyBufferRegion` calls below read from it.
+	Microsoft::WRL::ComPtr<ID3D12Resource> chunk_embed_upload;
+	std::vector<size_t> kv_row_offsets;
+	uint32_t dispatch_count_this_call = 0;
+	GpuLayerLoopChunkOpenState state;
+	const auto t_record_start = std::chrono::steady_clock::now();
+	// D-SLM3612 (2a): the chunk-open host mirror, read exactly ONCE, before any admitted
+	// token's own dispatches are recorded -- the same boundary point PrepareGpuLayerLoop
+	// ChunkOpenState's own fresh_sequence/residency-cache decisions already trust as
+	// known-current (§5's own "the identical boundary point already established as
+	// known-current by that ruling").
+	const int64_t chunk_open_ctxlen = seq.context_length;
+	try {
+	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
+	    seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size, head_dim,
+	    num_key_value_heads, intermediate_size, context_cap, rope_tables, workspace, workspace_size,
+	    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
+	    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
+	    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &state);
+	if (prep_status != superslm::SslmForwardStatus::Ok) {
+		return prep_status;  // a guard rejected before any recording began -- nothing to close
+	}
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+	// Design Sec9's own Guard-vitality row: one increment per chunk (or TDR-safe sub-chunk)
+	// submission -- this call IS one such submission (the whole-chunk case; the TDR-safe
+	// sub-chunk split, once measured, calls this primitive once per sub-chunk, so the
+	// increment stays correct under either resolution without change).
+	++superslm_test::g_gpu_chunk_submit_count_probe;
+#endif
+	const uint32_t H = state.H;
+	const uint32_t HD = state.HD;
+	const uint32_t NH = state.NH;
+	const uint32_t NQH = state.NQH;
+	const uint32_t I = state.I;
+	const uint32_t N = state.N;
+	const uint32_t context_cap_u32 = state.context_cap_u32;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& seq_uav = state.seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& kv_uav = state.kv_uav;
+
+	// D-SLM3611 (2b): the embedding delivery range -- [0, SeqScaleOff(H) + 16), the SeqState
+	// prefix `hidden_codes[H]` (SeqScaleOff(H) bytes) plus `hidden_scale.m`/`.e` (16 bytes),
+	// the exact contiguous byte range §5 names. One upload of the WHOLE chunk's own embedding
+	// bytes now (host-computed by the caller, ahead of recording); sliced per-token below.
+	const size_t embed_block_bytes = static_cast<size_t>(SeqScaleOff(H)) + 16u;
+	if (chunk_len > 0) {
+		chunk_embed_upload = dev.Upload(chunk_embedding_bytes, embed_block_bytes * static_cast<size_t>(chunk_len));
+		// Kept alive to the fence via the SAME mechanism `state.upload_keep_alive` already
+		// extends to `inflight` for every other upload this call makes (below).
+		state.upload_keep_alive.push_back(chunk_embed_upload);
+	}
+
+	uint32_t dispatch_query_index = 0;
+	kv_row_offsets.reserve(static_cast<size_t>(chunk_len) * static_cast<size_t>(N) *
+	                        static_cast<size_t>(NH) * 2u);
+	for (uint32_t t = 0; t < chunk_len; ++t) {
+		// D-SLM3612 (2a): position/width for token t, from the chunk-local counter -- never a
+		// stale call-wide constant read from `seq.context_length` (correct for exactly one
+		// token; stale for tokens 2..N of a chunk, T-2175's own fracture).
+		const uint32_t position_u32 = static_cast<uint32_t>(chunk_open_ctxlen) + t;
+		const uint32_t width_u32 = position_u32 + 1u;
+
+		// D-SLM3611 (2b): per-token embedding delivery -- uniform for every admitted token,
+		// including token 0, no first-token special case. The SeqState UAV transitions to
+		// COPY_DEST, receives exactly this token's own byte range from the shared upload
+		// buffer at its own offset, transitions back to UNORDERED_ACCESS before this token's
+		// own dispatch chain reads it.
+		D3D12_RESOURCE_BARRIER to_copy_dest{};
+		to_copy_dest.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		to_copy_dest.Transition.pResource = seq_uav.Get();
+		to_copy_dest.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		to_copy_dest.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+		to_copy_dest.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		dev.list->ResourceBarrier(1, &to_copy_dest);
+		dev.list->CopyBufferRegion(seq_uav.Get(), 0, chunk_embed_upload.Get(),
+		                            static_cast<UINT64>(t) * embed_block_bytes,
+		                            embed_block_bytes);
+		D3D12_RESOURCE_BARRIER to_uav = to_copy_dest;
+		to_uav.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+		to_uav.Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		dev.list->ResourceBarrier(1, &to_uav);
+
+		// D-SLM3595: full-depth dispatch chain for this token -- the chunk primitive drives
+		// every admitted token to its complete layer count in one call, since chunking now
+		// happens at the command-list boundary rather than at the per-token layer-budget
+		// boundary (§5's own "the chunk primitive's own token-body calls always request full
+		// depth").
+		RecordOneTokenFullDepthDispatchBody(dev, /*start_layer=*/0, /*layers_to_record=*/N, H, HD,
+		                                     NH, NQH, I, N, context_cap_u32, position_u32,
+		                                     width_u32, state.scratch_layout,
+		                                     state.work_wide_a_off, state.work_wide_b_off,
+		                                     state.work_adapter_u_off, adapter_bridge,
+		                                     dispatch_query_index);
+		// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin seam -- immediately after
+		// this token's own dispatches are recorded and before the loop advances (gpu_port.h's own
+		// header comment on ArmT2169ChunkRecordingFaultInjection carries the full account). Zero
+		// overhead unarmed, never `#ifdef`-guarded at the call site, matching
+		// MaybeThrowInjectedO11AllocFault's own established convention exactly.
+		MaybeThrowInjectedT2169ChunkRecordingFault(t);
+#if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
+		// Design Sec9's own Guard-vitality row / tests/support/gpu_chunk_dispatch_instrument.h's
+		// own committed contract: the counter's delta must equal `admit_count * num_hidden_layers`
+		// (Rung 3/4's own trust/guard cells, cell_trust_and_guard.cpp, assert exactly this) -- one
+		// token's own full-depth dispatch body (`RecordOneTokenFullDepthDispatchBody`, called once
+		// above) issues `N` (num_hidden_layers) layers' worth of dispatches in that single call, so
+		// the counter advances by `N` here, not by one -- a plain `++` would under-count by a
+		// factor of `N` against the header's own documented "admit_count * num_hidden_layers"
+		// formula, caught by executing Rung 3/4's own guard-vitality cells against the real
+		// artifact (T-2180).
+		superslm_test::g_gpu_chunk_dispatch_count_probe += N;
+#endif
+
+		// D-SLM3631: the nested per-token/per-layer/per-head K/V readback-offset enumeration
+		// -- generalizes the single-token path's own single-position loop (superslm_gpu.cpp,
+		// RunLayerLoopGpuSubmit's own readback section) to this token's own record-time
+		// position, growing `kv_row_offsets` to `admit_count * num_hidden_layers * NH * 2`
+		// entries across the whole chunk.
+		for (uint32_t l = 0; l < N; ++l) {
+			const size_t half_off = static_cast<size_t>(l) * static_cast<size_t>(context_cap) *
+			                         static_cast<size_t>(NH) * static_cast<size_t>(HD) * 2u;
+			const size_t k_store_size =
+			    static_cast<size_t>(context_cap) * static_cast<size_t>(NH) * static_cast<size_t>(HD);
+			for (uint32_t h = 0; h < NH; ++h) {
+				const size_t row_off = static_cast<size_t>(h) * static_cast<size_t>(context_cap) *
+				                            static_cast<size_t>(HD) +
+				                        static_cast<size_t>(position_u32) * static_cast<size_t>(HD);
+				kv_row_offsets.push_back(half_off + row_off);                 // K row
+				kv_row_offsets.push_back(half_off + k_store_size + row_off);  // V row
+			}
+		}
+	}
+	dispatch_count_this_call = std::min(dispatch_query_index, harness::Device::kMaxTimestampSlots - 1);
+	dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_count_this_call);
+	dev.list->ResolveQueryData(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0,
+	                            dispatch_count_this_call + 1, dev.timestamp_readback.Get(), 0);
+
+	// --- Readback: SeqState (whole, small) + every K/V row every admitted token's own
+	// dispatches wrote across the WHOLE chunk (D-SLM3631's own generalized enumeration,
+	// above) -- the single-pass-per-(sub-)chunk boundary D-SLM3631 rules (§5.1), never once
+	// per token. ---
+	seq_readback = dev.MakeBuffer(SeqTotalSize(H), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                               D3D12_RESOURCE_STATE_COPY_DEST);
+	const size_t kv_readback_bytes = kv_row_offsets.size() * static_cast<size_t>(HD);
+	kv_readback = dev.MakeBuffer(kv_readback_bytes, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	                              D3D12_RESOURCE_STATE_COPY_DEST);
+	D3D12_RESOURCE_BARRIER pre_copy[2]{};
+	pre_copy[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	pre_copy[0].Transition.pResource = seq_uav.Get();
+	pre_copy[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	pre_copy[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+	pre_copy[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	pre_copy[1] = pre_copy[0];
+	pre_copy[1].Transition.pResource = kv_uav.Get();
+	dev.list->ResourceBarrier(2, pre_copy);
+	if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
+		*io_external_kv_needs_resume_barrier = true;
+	}
+	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
+	for (size_t r = 0; r < kv_row_offsets.size(); ++r) {
+		dev.list->CopyBufferRegion(kv_readback.Get(), r * static_cast<UINT64>(HD), kv_uav.Get(),
+		                            kv_row_offsets[r], HD);
+	}
+	} catch (const GpuGemmGroupArithmeticError& e) {
+		// D-SLM3634 (§5.1): a mid-recording infrastructural exception is CHUNK-scoped, not
+		// token-scoped -- the tenth failure origin. Every admitted token's own
+		// already-recorded-but-unexecuted dispatches, however many precede the one that threw,
+		// are discarded as one unit by this same unexecuted `dev.list->Close()`, since they
+		// were all recorded into the SAME list this catch clause closes without ever
+		// submitting it. A documented, accepted divergence from the shipped per-token path's
+		// own token-scoped atomicity (§5.1's own ruling), not a correctness defect --
+		// submission-granularity batching structurally trades per-token exception atomicity
+		// for round-trip reduction.
+		std::fprintf(stderr, "superslm_gpu: %s\n", e.what());
+		InvalidateResidencyCachesOnThrow();
+		dev.list->Close();
+		return superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;
+	} catch (const std::runtime_error&) {
+		// D-SLM3634: the identical chunk-scoped discard, for the generic allocation/device-
+		// removed failure class RunLayerLoopGpuSubmit's own twin catch clause already handles
+		// (superslm_gpu.cpp, above) -- same status mapping, same cache-invalidation contract.
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		InvalidateResidencyCachesOnThrow();
+		dev.list->Close();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	}
+	// T-2186 remedy P1's own pin (D-SLM3682): everything from here to the end of this function
+	// sits OUTSIDE the try block above and outside both catch clauses -- this IS the uncovered
+	// tail the confirmation review named (`dev.list->Close()`, `dev.queue->Signal()`, the
+	// `GpuLayerLoopInFlight` allocation below all throw on failure, and nothing here catches any
+	// of them). The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
+	// failure, unarmed cost zero.
+	MaybeThrowInjectedT2169ChunkRecordingTailFault();
+	SSLM_GPU_HR(dev.list->Close());
+	const auto t_record_end = std::chrono::steady_clock::now();
+	g_last_call_timing.record_ms =
+	    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+	ID3D12CommandList* lists[] = {dev.list.Get()};
+	dev.queue->ExecuteCommandLists(1, lists);
+	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+	std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
+	inflight->dev = &dev;
+	inflight->fence_val = dev.fence_val;
+	inflight->dispatch_count_this_call = dispatch_count_this_call;
+	inflight->seq_readback = seq_readback;
+	inflight->kv_readback = kv_readback;
+	inflight->kv_row_offsets = kv_row_offsets;
+	inflight->seq_bytes_size = SeqTotalSize(state.H);
+	inflight->hidden_size_h = state.H;
+	inflight->head_dim_hd = state.HD;
+	inflight->t_record_end = t_record_end;
+	inflight->layout_buf = state.layout_buf;
+	inflight->rope_buf = state.rope_buf;
+	inflight->model_const_buf = state.model_const_buf;
+	inflight->silu_lut_buf = state.silu_lut_buf;
+	inflight->scratch_layout_buf = state.scratch_layout_buf;
+	inflight->seq_uav = state.seq_uav;
+	inflight->scratch_uav = state.scratch_uav;
+	inflight->work_scratch_uav = state.work_scratch_uav;
+	inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+	inflight->upload_keep_alive = state.upload_keep_alive;
+	if (out_inflight) *out_inflight = inflight.release();
+	return superslm::SslmForwardStatus::Ok;
+}
+
+// T-2169 (Rung 2, design Sec5, D-SLM3596; the bound's own real derivation, D-SLM3649 -- see this
+// constant's own definition, below, for the full account): the TDR-safe (now: hardware-stability-
+// safe) maximum sub-chunk size, in tokens. `extern`, matching this project's own established
+// red-suite convention (tests/support/gpu_chunk_dispatch_instrument.h's sibling counters) --
+// declared in every TU under SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT, defined exactly once,
+// here.
+extern const uint32_t kT2169TdrSafeMaxChunkTokens;
+
+// T-2169 (Rung 2, design Sec5/Sec8): the real chunk-scoped entry point -- splits an admitted
+// chunk of arbitrary size into a bounded sequence of sub-chunks, each driven through
+// `SubmitOneSubChunkToFullDepthForG5Bridge` (above), each at most `kT2169TdrSafeMaxChunkTokens`
+// tokens. Design Sec5's own resolution: "either (a) recording the whole admitted chunk into one
+// list when it stays under both ceilings, or (b) splitting into a bounded number of sub-chunks,
+// each its own command list/fence-wait pair, still far fewer than one per token."
+//
+// D-SLM3649 (ruled this rung, folding the TDR-measurement pass's own executed finding): the
+// bound this design anticipated as TDR-derived is not what actually governs on the certified
+// target hardware measured this pass (RTX 2080S, driver version confirmed via this machine's own
+// installed NVIDIA driver at measurement time). The pure TDR arithmetic at the measured dispatch
+// rate (~0.023 ms/dispatch, this model's own 672 dispatches/token) admits roughly 256 tokens
+// under half this machine's own measured 8-second TDR delay -- far larger than any realistic
+// chunk. A SMALLER, previously unanticipated ceiling binds first: driving a `chunk_tokens=8`
+// sub-chunk through `SubmitOneSubChunkToFullDepthForG5Bridge` reproducibly crashes the process
+// with `STATUS_STACK_OVERFLOW` (`0xC00000FD`); `chunk_tokens<=7` does not, verified repeatedly.
+// Root-caused under `cdb` (`k`/`kb`, a fresh-process repro): the crash is a recursive cycle
+// **entirely inside `nvwgf2umx.dll`** (NVIDIA's own D3D12 user-mode driver) -- every captured
+// frame across the full depth cdb reports is inside that module; ZERO frames from this
+// executable, from `d3d12.dll`, or from `dxgi.dll` appear anywhere in the cycle. **This is a
+// defect in pre-existing, third-party, shipped code (the GPU vendor's own driver), not in this
+// design's own new primitive** -- named loudly, per this ticket's own standing instruction, and
+// ruled here rather than silently worked around: there is no file:line in this codebase to fix,
+// because the recursion never enters this codebase's own call frames. The only lever this
+// project has is never asking the driver to hold open the specific dispatch-recording pattern
+// that triggers it -- i.e., the sub-chunk bound itself. `kT2169TdrSafeMaxChunkTokens` is
+// therefore set from the SMALLER of the two ceilings (design Sec5's own "the smaller of the two
+// ceilings governs," now with a third ceiling in the comparison), with the SAME half-margin
+// discipline design Sec5 already applies to the TDR ceiling: **4**, half of the confirmed-crashing
+// 8, leaving a full token of margin below the confirmed-safe 7 as well. This is deliberately
+// conservative rather than pinned to the exact 7/8 boundary -- the boundary was measured on one
+// specific real-artifact configuration (Qwen2.5-1.5B, this context_cap) and a driver-internal
+// recursion depth is not guaranteed to trip at the identical token count under a different
+// weight/adapter/context_cap combination; halving the confirmed-crashing point, not the
+// confirmed-safe one, is the conservative direction.
+const uint32_t kT2169TdrSafeMaxChunkTokens = 4;
+
+// T-2169 (Rung 3/4, design Sec5 2b, declared gpu_port.h): the SeqState embedding-byte block
+// size for one token, `[0, SeqScaleOff(hidden_size)+16)` -- exposed so a pre-scan caller
+// (gpu_1p0.cpp) can size/index its own per-chunk embedding buffer without re-deriving
+// `SeqScaleOff`'s own alignment arithmetic (internal linkage in this file, `Align8U32`/
+// `SeqScaleOff` above).
+uint32_t T2169SeqEmbeddingBlockBytes(uint32_t hidden_size) { return SeqScaleOff(hidden_size) + 16u; }
+
+superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
+	if (out_inflight) *out_inflight = nullptr;
+	if (chunk_len == 0) {
+		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
+		// caller (Rung 3/4's own admit_count==0 case) is expected to handle a zero-length chunk
+		// before ever reaching here. Defensive, not a load-bearing path this design specifies.
+		return superslm::SslmForwardStatus::Ok;
+	}
+	const size_t embed_block_bytes = static_cast<size_t>(SeqScaleOff(static_cast<uint32_t>(hidden_size))) + 16u;
+	uint32_t submitted = 0;
+	while (submitted < chunk_len) {
+		const uint32_t remaining = chunk_len - submitted;
+		const uint32_t this_sub_chunk =
+		    remaining < kT2169TdrSafeMaxChunkTokens ? remaining : kT2169TdrSafeMaxChunkTokens;
+		const bool is_last = (submitted + this_sub_chunk) >= chunk_len;
+		GpuLayerLoopInFlight* inflight = nullptr;
+		const superslm::SslmForwardStatus submit_status = SubmitOneSubChunkToFullDepthForG5Bridge(
+		    seq, layers, num_hidden_layers, hidden_size, head_dim, num_key_value_heads,
+		    intermediate_size, context_cap, rope_tables, workspace, workspace_size,
+		    chunk_embedding_bytes + static_cast<size_t>(submitted) * embed_block_bytes, this_sub_chunk,
+		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
+		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
+		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight);
+		if (submit_status != superslm::SslmForwardStatus::Ok) {
+			return submit_status;
+		}
+		if (is_last) {
+			// The caller's own async contract (design Sec4.2/Sec4.3): only the FINAL
+			// (sub-)chunk's own inflight token is handed back unfinished -- the caller drives
+			// its own Finish, exactly as it already does for the single-sub-chunk case.
+			if (out_inflight) *out_inflight = inflight;
+			return superslm::SslmForwardStatus::Ok;
+		}
+		// Every non-final sub-chunk is finished SYNCHRONOUSLY, here, before the next sub-chunk's
+		// own PrepareGpuLayerLoopChunkOpenState call -- required, not merely convenient: that
+		// call reads `seq.context_length`/`workspace` fresh at ITS OWN chunk-open boundary
+		// (D-SLM3612's own 2a ruling, generalized across sub-chunks), so the previous
+		// sub-chunk's own commit must already be visible to the host before the next one's
+		// chunk-open counter is read. A D3D12 command list also cannot be resumed after its own
+		// Close()+ExecuteCommandLists() -- Reset() for the next sub-chunk requires the GPU be
+		// done with the allocator the current list used, which the fence wait below guarantees.
+		int32_t ready = 0;
+		const superslm::SslmForwardStatus finish_status =
+		    RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
+		if (finish_status != superslm::SslmForwardStatus::Ok) {
+			return finish_status;
+		}
+		// D-SLM3649 (fold, found by execution): `commit_site.hlsl`'s own per-layer increment
+		// leaves the device's persistent `SeqState.layer_index` field at `num_hidden_layers`
+		// after a token's own LAST layer commits -- it is never auto-wrapped back to 0
+		// device-side. Every existing single-token caller never notices, because
+		// `sslm_gpu_seq_embed_token`'s own HOST-side write (`seq->layer_index = 0;`,
+		// gpu_1p0.cpp) resets it before the NEXT token's own call ever re-uploads the SeqState
+		// (Sec5.1's own guard-ladder trace: `layer_index==0` is what makes tokens 2..N of a
+		// SINGLE chunk vacuously fresh, because nothing within one chunk primitive call ever
+		// reads this field back to the host mid-chunk). This wrapper is the one caller that
+		// DOES read it back mid-sequence (`RunLayerLoopGpuFinish`, immediately above) and then
+		// hands `seq` to a SECOND `PrepareGpuLayerLoopChunkOpenState` call, whose own guard
+		// ladder (`seq.layer_index >= num_hidden_layers` -> `SequenceAlreadyComplete`) reads the
+		// terminal value this sub-chunk's own last token legitimately left behind and rejects a
+		// perfectly healthy continuation. The reset every embed_token call already performs for
+		// the single-token path is performed here, once, for the identical reason: this
+		// sub-chunk's own last token has fully committed and the sequence is ready for a fresh
+		// token, exactly the state embed_token's own reset always signals.
+		seq.layer_index = 0;
+		submitted += this_sub_chunk;
+	}
+	return superslm::SslmForwardStatus::Ok;  // unreachable (chunk_len > 0 always returns inside the loop)
 }
 
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the FINISH half of the async split --

@@ -239,6 +239,41 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
                                                     uint8_t* workspace, int32_t block,
                                                     int32_t* out_ready);
 
+// T-2169 (Rung 2b/3/4, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634/
+// D-SLM3641): the chunk-submission entry point -- declared here (not exported via the public C
+// ABI, gpu_1p0.h) so `gpu_1p0.cpp`'s own two G5 bridge functions (Rung 3/4) can call it after
+// their own pre-scan admission decision, on the identical footing `RunLayerLoopGpuSubmit`'s own
+// cross-TU declaration above already establishes. Splits `chunk_len` admitted tokens into
+// TDR-safe/driver-stable sub-chunks automatically (D-SLM3641); `chunk_embedding_bytes` is the
+// caller's own pre-packed, per-token `[0, SeqScaleOff(hidden_size)+16)` embedding buffer (Sec5
+// 2b) -- the caller (the pre-scan) computes it via `EmbedEntry`, this function performs no
+// embedding arithmetic and no admission decision of its own. Async, matching
+// `RunLayerLoopGpuSubmit`'s own contract: `*out_inflight` is null on an immediate rejection
+// (nothing to close), otherwise owns a token the caller drains via `RunLayerLoopGpuFinish`.
+superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+
+// T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
+// maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the
+// full derivation. Exposed here so a caller building an admitted chunk (Rung 3/4's own pre-scan)
+// can size its own embedding-byte buffer without needing to know the bound is enforced
+// internally -- the buffer must still cover the FULL `admit_count`, since
+// `SubmitChunkToFullDepthForG5Bridge` does its own internal splitting.
+extern const uint32_t kT2169TdrSafeMaxChunkTokens;
+
+// T-2169 (Rung 2, D-SLM3595): the SeqState embedding-byte block size for one token, `[0,
+// SeqScaleOff(hidden_size)+16)` (Sec5 2b) -- exposed so a caller can size and index its own
+// per-chunk embedding buffer without re-deriving `SeqScaleOff`'s own alignment arithmetic.
+uint32_t T2169SeqEmbeddingBlockBytes(uint32_t hidden_size);
+
 // (M1's
 // own remedy): the structural closure for `RunLayerLoopGpu`'s own host-side
 // guard ladder -- generated from `gpu_layer_loop_guards.def`, the single
@@ -379,28 +414,45 @@ enum class GpuLayerLoopGuard : int {
 // the smaller promise that is actually true, per `StandardsDocument.md`
 // §5.6:
 //
+// CORRECTED 2026-08-19 (T-2184, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-review.md,
+// S3; D-SLM3662): T-2169's own chunk-submission primitive, `SubmitOneSubChunkToFullDepthForG5
+// Bridge` (`superslm_gpu.cpp`), calls `PrepareGpuLayerLoopChunkOpenState` for its own chunk-open
+// (the SAME ladder/device-capability region the "before" count already reads, not duplicated) and
+// then carries its OWN two catch clauses -- `GpuGemmGroupArithmeticError`'s own literal return,
+// and the generic `std::runtime_error` one's own ternary -- each calling the identical shared
+// `InvalidateResidencyCachesOnThrow()` (T-2184's own S3 remedy factored the lambda this paragraph
+// already named into one file-scope helper both `RunLayerLoopGpuSubmit` and this primitive call,
+// so "before every one of their own returns" below is now a compile-time guarantee, not a
+// re-derived fact) before every one of their own returns -- two more paths that never reached a
+// residency decision. Its own terminal `return superslm::SslmForwardStatus::Ok;` (handing the
+// caller an in-flight token, the identical async-submission-succeeded shape `RunLayerLoopGpuSubmit`
+// already contributes one of) is one more path that DOES read whatever the residency decision
+// already decided. The two counts below are updated to name three functions, not two.
+//
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
 // decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
-// device-capability rejections, and the recording-window catch, fifteen
-// paths in all (the recording window now carries TWO catch clauses --
-// `GpuGemmGroupArithmeticError`'s own, and the generic `std::runtime_error`
-// one -- both counted, since both call the shared cache-invalidation lambda
-// before every one of their own returns), none of which ever reached a
-// residency decision to report.
+// device-capability rejections, and the recording-window catch, seventeen
+// paths in all (the recording window now carries FOUR catch clauses across two functions --
+// `RunLayerLoopGpuSubmit`'s own `GpuGemmGroupArithmeticError`/`std::runtime_error` pair, and
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical pair -- all four counted, since all
+// four call the shared cache-invalidation helper before every one of their own returns), none of
+// which ever reached a residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
 // miss) on every path that returns AFTER the decision -- **re-derived after
 // this file's own (B5) split of the single function this paragraph originally
 // described into `RunLayerLoopGpuSubmit` (the guard ladder, the residency
 // decision, and everything above) and `RunLayerLoopGpuFinish` (the fence-
-// wait and the readback) -- the "after" population now has five members
+// wait and the readback), then again (T-2184) for `SubmitOneSubChunkToFullDepthForG5Bridge`'s own
+// terminal success return -- the "after" population now has six members
 // instead of one, not because any NEW decision-making was added, but
 // because the single old "keep going toward the terminal decode" fall-
-// through is now five separate real return statements across two
+// through is now six separate real return statements across three
 // functions: `RunLayerLoopGpuSubmit`'s own async-submission-succeeded
-// return (`return ...::Ok;`, handing the caller an in-flight token), and
-// `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
+// return (`return ...::Ok;`, handing the caller an in-flight token),
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical terminal `Ok`
+// return, and `RunLayerLoopGpuFinish`'s own four -- the non-blocking-poll-not-ready
 // return, the caller-misuse null-token rejection, the terminal
 // `return DecodeStickyTag(sticky_tag);` the sticky-tag-decoded path always
 // ended on, and `RunLayerLoopGpuFinish`'s own catch clause (added the same
@@ -409,10 +461,10 @@ enum class GpuLayerLoopGuard : int {
 // found escaping this function as an uncaught exception instead of the
 // defined `GpuDeviceRemoved`/`GpuAllocationFailed` channel design Sec9
 // promises; StandardsDocument.md Sec5.4, reproduced by execution before
-// being fixed). None of these five re-decides or re-writes the flag --
-// each reads whatever `RunLayerLoopGpuSubmit` already decided -- the four,
-// and the fifteen before them, alike, twenty paths' own destination in
-// total across the two functions, whether the decoded
+// being fixed). None of these six re-decides or re-writes the flag --
+// each reads whatever the residency decision already decided -- the six,
+// and the seventeen before them, alike, twenty-three paths' own destination in
+// total across the three functions, whether the decoded
 // status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
 // A caller that wants "did THIS call's upload run" reads this accessor for
 // exactly that, on every path, correctly; a caller that reads it as "did
@@ -608,6 +660,49 @@ constexpr uint32_t kO11AllocInjectionSiteSeqRestore = 2;
 void ArmO11AllocationFailureInjection(uint32_t site);
 void ClearO11AllocationInjection();
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
+
+// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin fault-injection seam the design's
+// own Sec9 Coverage Model names (`Claude/Vitruvius/t2169-gpu-batched-prefill-design-2026-08-18.md`
+// Sec5.1/Sec9, D-SLM3634) and the test author's own casebook (T-2183) specified as owed to the
+// builder, not authorable against the pre-existing O11 seam (that seam's only two call sites fire
+// at chunk-OPEN, strictly before this window). Forces `GpuGemmGroupArithmeticError` from INSIDE
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own per-token loop (`superslm_gpu.cpp`), immediately
+// after `RecordOneTokenFullDepthDispatchBody` returns for admitted token index `t` and before the
+// loop advances to `t+1` -- letting a cell arm "throw after recording admitted token index N" and
+// observe the design's own ruled divergence (whole-(sub-)chunk discard, not token-scoped) through
+// the real code path rather than reasoning about it.
+//
+// Mirrors `SUPERSLM_O11_ALLOC_INJECTION`'s Arm/fire idiom exactly (a single-shot armed flag plus an
+// index match, cleared on fire so a re-armed-forever flag never re-fires on a LATER, unrelated
+// call in the same process) but is its OWN macro, not a third named site under O11's: O11 arms one
+// of a small, fixed enumeration of allocation call sites (`kO11AllocInjectionSite*`); this seam
+// arms an arbitrary 0-based TOKEN INDEX within whatever chunk the next call submits -- a different
+// parameter shape (an index into a per-call sequence, not a selector over a fixed site set) that
+// does not fit the existing constants' own convention. `after_token_index` is 0-based, within the
+// current (sub-)chunk: arming 1 against a chunk with >= 2 admitted tokens fires immediately after
+// token index 1's own dispatches are recorded (both tokens 0 and 1 are in the never-submitted
+// command list at that point), reproducing D-SLM3634's own worked example (an admitted-token index
+// `i > 0`).
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index);
+void ClearT2169ChunkRecordingFaultInjection();
+
+// T-2186 remedy P1's own pin (Brunel fix round 3, D-SLM3682, confirmation
+// `Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md`): the seam above only reaches the
+// try-covered per-token recording loop, whose throw is caught by
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own two catch clauses. Pinning P1 (the widened
+// `Submitted` window is not exception-safe against a throw from that function's own UNCOVERED
+// TAIL -- `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, all outside
+// either catch) requires a throw from exactly that region. Single-shot, no token index -- the
+// tail runs once per (sub-)chunk submission, after every admitted token's dispatches are already
+// recorded. Arm it, drive one chunk through the public bridge, and the call throws
+// `std::runtime_error` uncaught -- exactly the class `SSLM_GPU_HR` throws on a real `Close()`/
+// `Signal()` failure -- letting a cell catch it and assert `SubmitAdmittedChunkForG5Bridge`'s own
+// RAII window guard (`gpu_1p0.cpp`) left `model->submitted_sequences` and `seq->state` clean
+// rather than wedged.
+void ArmT2169ChunkRecordingTailFaultInjection();
+void ClearT2169ChunkRecordingTailFaultInjection();
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's

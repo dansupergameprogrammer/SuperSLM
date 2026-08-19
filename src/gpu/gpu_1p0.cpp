@@ -2106,6 +2106,336 @@ bool DriveGpuSeqToFullDepthForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandl
 }
 }  // namespace
 
+namespace {
+
+// T-2169 (Rung 3/4, design Claude/Vitruvius/t2169-gpu-batched-prefill-design-2026-08-18.md Sec5/
+// Sec5.1/Sec8, D-SLM3590/3595/3611-3613/3619-3622/3631-3634): the cause a chunk's own admission
+// count is attributable to, resolved once per call by the pre-scan below -- reused by both G5
+// bridge functions' own cause-routed return (Sec5's table).
+enum class ChunkAdmissionCause { kNone, kDfa, kEmbed, kPositionCap };
+
+// Host-side sequential pre-scan (design Sec5), run to completion over the intended chunk before
+// any dispatch is recorded. `dfa_entry` is null for the prompt twin (no reachability check --
+// `dfa_admit_count` defaults to `chunk_len`, design Sec5's own "the two GPU-schema-only terms
+// default to chunk_len for the prompt twin"); non-null for the schema twin. Produces `admit_count`
+// (the min of the applicable terms), the `cause` that produced it (DFA > EMBED > POSITION_CAP,
+// matching the shipped per-token loop's own check order so a tie resolves identically to what one
+// more per-token round-trip would find), every admitted token's own pre-packed embedding bytes
+// (the `[0, SeqScaleOff(hidden_size)+16)` layout `SubmitChunkToFullDepthForG5Bridge` expects,
+// `superslm_gpu::T2169SeqEmbeddingBlockBytes`), and -- schema twin only -- the DFA walk state
+// after each admitted transition, so the caller can commit the state after exactly however many
+// tokens actually end up committed (`admit_count`, or a device-derived shorter count, D-SLM3622).
+struct ChunkPreScanResult {
+	uint32_t admit_count = 0;
+	ChunkAdmissionCause cause = ChunkAdmissionCause::kNone;
+	SslmGpuStatus embed_reject_status = SSLM_OK;    // meaningful iff cause == kEmbed.
+	std::vector<uint8_t> chunk_embedding_bytes;     // admit_count * block_bytes, packed.
+	std::vector<uint32_t> dfa_states_after;         // schema twin only; dfa_states_after[t] is the
+	                                                 // walk state after admitting token t, valid
+	                                                 // for t in [0, dfa_admit_count).
+};
+
+ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t chunk_open_ctxlen,
+                                             int64_t context_cap, const int32_t* tokens,
+                                             int32_t chunk_len, const superslm::SchemaEntry* dfa_entry,
+                                             uint32_t dfa_walk_state_start) {
+	ChunkPreScanResult r;
+	const uint32_t n = static_cast<uint32_t>(chunk_len);
+
+	// D-SLM3613: position_admit_count, O(1) -- position advances by exactly 1 per token, so no
+	// per-token loop is needed (design Sec5).
+	int64_t cap_room = context_cap - chunk_open_ctxlen;
+	if (cap_room < 0) cap_room = 0;
+	const uint32_t position_admit_count = static_cast<uint32_t>(std::min<int64_t>(n, cap_room));
+
+	// D-SLM3590: dfa_admit_count, run to completion over the intended chunk -- schema twin only.
+	// Tracks the walk state after each admitted transition.
+	uint32_t dfa_admit_count = n;
+	if (dfa_entry) {
+		r.dfa_states_after.reserve(n);
+		uint32_t state = dfa_walk_state_start;
+		for (uint32_t t = 0; t < n; ++t) {
+			uint32_t next_state = 0;
+			if (!model->schemas.Transition(*dfa_entry, state, static_cast<uint32_t>(tokens[t]),
+			                                &next_state)) {
+				dfa_admit_count = t;
+				break;
+			}
+			state = next_state;
+			r.dfa_states_after.push_back(state);
+		}
+	}
+
+	// D-SLM3621: embed_admit_count, run to completion over the intended chunk -- the SAME pass
+	// that produces the record-time embedding bytes 2b needs, for every candidate index.
+	uint32_t embed_admit_count = n;
+	SslmGpuStatus embed_reject_status = SSLM_OK;
+	const uint32_t block_bytes = superslm_gpu::T2169SeqEmbeddingBlockBytes(model->hidden_size);
+	const uint32_t scale_offset = block_bytes - 16u;
+	std::vector<uint8_t> embed_bytes_cache;  // block_bytes per validated candidate index
+	embed_bytes_cache.reserve(static_cast<size_t>(block_bytes) * n);
+	for (uint32_t t = 0; t < n; ++t) {
+		const int32_t token_id = tokens[t];
+		if (token_id < 0 || token_id >= model->vocab_size) {
+			embed_admit_count = t;
+			embed_reject_status = SSLM_TOKEN_ID_OUT_OF_RANGE;
+			break;
+		}
+		std::vector<int8_t> embed_codes(model->hidden_size);
+		superslm::CarriedScale embed_scale{};
+		const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+		    token_id, model->vocab_size, model->embed_weights.data(),
+		    static_cast<size_t>(model->hidden_size), model->embed_site_constant, embed_codes.data(),
+		    &embed_scale);
+		if (est != superslm::SslmForwardStatus::Ok) {
+			// EmbedEntry's own only rejection is the identical token_id bounds check already
+			// performed above -- unreachable in practice, handled the same way
+			// sslm_gpu_seq_embed_token handles it (this file, above).
+			embed_admit_count = t;
+			embed_reject_status = SSLM_TOKEN_ID_OUT_OF_RANGE;
+			break;
+		}
+		const size_t base = embed_bytes_cache.size();
+		embed_bytes_cache.resize(base + block_bytes, 0);
+		for (uint32_t i = 0; i < model->hidden_size; ++i) {
+			const int32_t v = static_cast<int32_t>(embed_codes[i]);
+			std::memcpy(embed_bytes_cache.data() + base + static_cast<size_t>(i) * 4u, &v, 4);
+		}
+		std::memcpy(embed_bytes_cache.data() + base + scale_offset, &embed_scale.m, 8);
+		std::memcpy(embed_bytes_cache.data() + base + scale_offset + 8, &embed_scale.e, 8);
+	}
+
+	// D-SLM3620: admit_count = min of the applicable terms. `admit_count == chunk_len` is checked
+	// FIRST and is unconditionally NONE (every term trivially equals chunk_len when nothing is
+	// rejected, so the priority chain below is only meaningful once an actual rejection -- a term
+	// strictly less than chunk_len -- exists); otherwise cause is resolved by the shipped
+	// per-token loop's own check order (DFA before embed before the submit-time position-cap
+	// guard).
+	r.admit_count = std::min({dfa_admit_count, embed_admit_count, position_admit_count});
+	if (r.admit_count == n) {
+		r.cause = ChunkAdmissionCause::kNone;
+	} else if (dfa_entry && dfa_admit_count == r.admit_count) {
+		r.cause = ChunkAdmissionCause::kDfa;
+	} else if (embed_admit_count == r.admit_count) {
+		r.cause = ChunkAdmissionCause::kEmbed;
+		r.embed_reject_status = embed_reject_status;
+	} else {
+		r.cause = ChunkAdmissionCause::kPositionCap;
+	}
+
+	r.chunk_embedding_bytes.assign(
+	    embed_bytes_cache.begin(),
+	    embed_bytes_cache.begin() + static_cast<size_t>(r.admit_count) * block_bytes);
+	return r;
+}
+
+// T-2169 (Rung 3/4, design Sec5 step 5/D-SLM3614/D-SLM3622): dispatches exactly `admit_count`
+// pre-scanned, pre-embedded tokens through the chunk-submission primitive
+// (`superslm_gpu::SubmitChunkToFullDepthForG5Bridge`, internally TDR-safe-split) and drains the
+// final (sub-)chunk's own async token to completion, copying the decoded result back into this
+// handle's own canonical fields -- the same copy-back `sslm_gpu_ready` performs, since this call
+// bypasses that function entirely (this bridge owns the whole Submit/Finish pair for a chunk
+// call). `*out_derived_count` is the device's own actually-committed count, derived from
+// `seq->context_length`'s post-chunk delta against `chunk_open_ctxlen` -- never assumed to equal
+// `admit_count` (D-SLM3614): a device-domain rejection the pre-scan could not see (the sticky-tag
+// mechanism, P3(b)/S4(b)) or a mid-recording infrastructural fault (the tenth failure origin,
+// D-SLM3634) both show up here as a short count, which the caller checks against `admit_count` to
+// decide whether the device-computed override (D-SLM3622) applies -- this function itself reports
+// no status of its own beyond the derived count.
+void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHandle* seq,
+                                     const uint8_t* chunk_embedding_bytes, uint32_t admit_count,
+                                     int64_t chunk_open_ctxlen, int64_t* out_derived_count) {
+	*out_derived_count = 0;
+	if (admit_count == 0) return;
+	// Mirrors `sslm_gpu_seq_embed_token`'s own unconditional `layer_index = 0` reset for a VALID
+	// token, which the shipped per-token loop always performs for token 0 before any guard or
+	// dispatch runs -- this batched path bypasses `sslm_gpu_seq_embed_token` entirely (design
+	// Sec5.1's own "bypassing that wrapper's own state-transition/host-mirror side effects"), so
+	// without this, `PrepareGpuLayerLoopChunkOpenState`'s own `SequenceAlreadyComplete` guard
+	// (`seq.layer_index >= num_hidden_layers`) would reject every call after the first: a
+	// committed token's own last-layer commit leaves the DEVICE's `layer_index` at
+	// `num_hidden_layers` (D-SLM3649's own finding), and nothing else on this path ever resets
+	// the HOST mirror between separate calls. Only fires when a token WILL actually be dispatched
+	// (admit_count > 0), matching embed_token's own reset firing only for a validating token.
+	seq->layer_index = 0;
+	seq->live_state.layer_index = 0;
+	static const superslm::SslmTensorManifest kEmptyManifest;
+	// T-2185 remedy N1 (Brunel fix round 2, D-SLM3674): the T-2184 remedy (S1) opened this window
+	// AFTER `SubmitChunkToFullDepthForG5Bridge` returned, which is also after that call's own
+	// internal loop has already submitted-and-synchronously-finished every non-final sub-chunk
+	// (`SubmitChunkToFullDepthForG5Bridge`'s own header comment, superslm_gpu.cpp: "Every
+	// non-final sub-chunk is finished SYNCHRONOUSLY, here" -- `RunLayerLoopGpuFinish(...,
+	// block=1)` inside that loop). So the window covered only the FINAL sub-chunk's own fence
+	// wait -- under 3.2% of the call's wall time at a 128-token chunk (T-2185 N1's own derivation)
+	// -- and every earlier sub-chunk's fence wait ran with `model->submitted_sequences == 0`,
+	// exactly the reachable consequence the T-2184 review named, still reachable across the
+	// other 96.8% of the call. The window now opens HERE, before the first sub-chunk is ever
+	// submitted, so every sub-chunk's own fence wait -- not only the final one -- falls inside it;
+	// `seq->in_flight` is assigned once the call returns the final sub-chunk's own inflight token
+	// (the only one handed back to this caller unfenced; every earlier one already completed
+	// inside the call).
+	//
+	// T-2186 remedy P1 (Brunel fix round 3, D-SLM3682, confirmation
+	// Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md): opening and closing this window as
+	// two separate manual statements -- open here, close unconditionally below -- was NOT
+	// symmetric with the shipped per-token path in the property that matters: the call in between
+	// can throw. `SubmitChunkToFullDepthForG5Bridge`'s own tail
+	// (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
+	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, cited by name, not line) sits OUTSIDE that
+	// function's own try/catch, so a failed `Close()`/`Signal()` (`SSLM_GPU_HR` throws
+	// `std::runtime_error` -- precisely the device-removed channel design Sec9 promises is
+	// deliverable) or a `std::bad_alloc` from the `new` can escape this call with no catch
+	// anywhere between here and the ABI boundary. A manual "close below" statement is never
+	// reached on that path: `seq->state` stays `Submitted` and `model->submitted_sequences` stays
+	// incremented forever, and `sslm_gpu_model_unmap` (`SslmGpuModelHandle::submitted_sequences`'
+	// own check, above) returns `SSLM_BUSY` on every later call, permanently -- the model can
+	// never be unmapped. The shipped per-token twin (`SubmitOneSequenceDecode`, this file,
+	// `:1379-1381`'s own comment: "Rejected before submission (a guard, or an exception) -- seq/
+	// host state untouched, still Idle") avoids this class entirely by opening its window only
+	// AFTER submission returns; this batched path cannot do the same (design Sec9 wants the
+	// window held across the whole chunk, submitted or not, not only after it succeeds), so it is
+	// made safe by construction instead: an RAII guard opens the window in its constructor and
+	// closes it in its destructor, which C++ runs on every exit from this function -- normal
+	// return AND exception unwind alike -- so there is no longer any path between open and close
+	// where a throw can leave the window stuck open. This replaces the manual open above and the
+	// manual unconditional close that used to sit after the call, below; the close is no longer a
+	// second statement that can be skipped, it is a property of the guard's lifetime.
+	struct SubmittedWindowScopeGuard {
+		SslmGpuSequenceHandle* seq;
+		SslmGpuModelHandle* model;
+		SubmittedWindowScopeGuard(SslmGpuSequenceHandle* s, SslmGpuModelHandle* m) : seq(s), model(m) {
+			seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+			model->submitted_sequences += 1;
+		}
+		~SubmittedWindowScopeGuard() {
+			seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+			if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
+		}
+	} submitted_window_guard(seq, model);
+	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+	const superslm::SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
+	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
+	    model->head_dim, model->num_key_value_heads, model->intermediate_size, seq->context_cap,
+	    kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(), chunk_embedding_bytes,
+	    admit_count, seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, model->weights_buf.Get(),
+	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
+	    model->rope_cos_elem_count, model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
+	if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
+		// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
+		// genuinely unfenced (its own header comment: "the caller's own async contract... only the
+		// FINAL (sub-)chunk's own inflight token is handed back unfinished"), so the fence for that
+		// last sub-chunk has not yet signaled at this point -- a concurrent caller on another
+		// thread (e.g. `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) still genuinely observes the
+		// window while `RunLayerLoopGpuFinish` below blocks on it.
+		seq->in_flight = inflight;
+		int32_t ready = 0;
+		superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
+		                                      /*block=*/1, &ready);
+		seq->in_flight = nullptr;
+	}
+	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
+	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own
+	// "collapse Submitted -> Idle in one call" symmetry, now a property of the guard's lifetime
+	// rather than a second statement a throw could skip. No adapter bookkeeping to mirror: this
+	// path always submits with `adapter_bridge = nullptr` (no LoRA on the chunk path), so
+	// `seq->in_flight_adapter` is never set here and needs no clearing, matching every other
+	// adapter-less caller.
+	//
+	// Copy the (possibly partially-advanced, per the sub-chunk split's own synchronous-finish
+	// discipline, D-SLM3596/3649) live_state back into this handle's own canonical fields.
+	seq->hidden_scale = seq->live_state.hidden_scale;
+	seq->layer_index = seq->live_state.layer_index;
+	seq->kv_saturation_count = seq->live_state.kv_saturation_count;
+	seq->context_length = seq->live_state.context_length;
+	*out_derived_count = seq->context_length - chunk_open_ctxlen;
+	if (*out_derived_count < 0) *out_derived_count = 0;  // defensive; not expected by construction.
+}
+
+// D-SLM3619: reproduces the shipped per-token loop's own incidental side effect at the
+// position-cap boundary -- token[admit_count] is a VALID id (position_admit_count, never embed
+// validity, is what capped it, since cause == kPositionCap implies embed_admit_count >
+// admit_count), so the shipped loop's own unconditional `sslm_gpu_seq_embed_token(tokens[
+// admit_count])` call ALWAYS succeeds before the device-side guard discovers the position-cap
+// violation, leaving `hidden_codes`/`layer_index` at that token's own raw (never-dispatched)
+// embedding -- exactly the state `SslmGpuSeqFinishTokenForG5Bridge`'s own "not full depth yet"
+// check reads to decide whether a subsequent ready_for_logits-shortcut decode step is REJECTED.
+// No dispatch is recorded for this token; this is a host-only write, matching
+// `sslm_gpu_seq_embed_token`'s own exact effect. Called only when cause == kPositionCap and the
+// device did not additionally override the outcome (the device-computed fallback is a distinct,
+// untested-by-this-suite mechanism, design Sec6/Sec9's own named gap).
+void ReproducePositionCapBoundaryEmbedSideEffect(SslmGpuModelHandle* model,
+                                                  SslmGpuSequenceHandle* seq, const int32_t* tokens,
+                                                  uint32_t admit_count) {
+	const int32_t next_token = tokens[admit_count];
+	std::vector<int8_t> embed_codes(model->hidden_size);
+	superslm::CarriedScale embed_scale{};
+	const superslm::SslmForwardStatus est = superslm::EmbedEntry(
+	    next_token, model->vocab_size, model->embed_weights.data(),
+	    static_cast<size_t>(model->hidden_size), model->embed_site_constant, embed_codes.data(),
+	    &embed_scale);
+	if (est != superslm::SslmForwardStatus::Ok) return;  // unreachable per this function's own
+	                                                        // header comment; defensive only.
+	std::copy(embed_codes.begin(), embed_codes.end(), seq->hidden_codes.begin());
+	seq->hidden_scale = embed_scale;
+	seq->layer_index = 0;
+}
+
+}  // namespace
+
+// T-2184 remedy C1 (Brunel fix round 1, D-SLM3662): a bench-only entry point that reproduces the
+// GENUINELY shipped (pre-T-2169, `e35edc1`) per-token prefill composition -- `sslm_gpu_seq_embed_
+// token` followed by `DriveGpuSeqToFullDepthForG5Bridge`, one submit-and-fence round-trip per
+// LAYER (28 for Qwen2.5-1.5B, `dispatch_budget=24`), issued once per token in a plain host loop.
+// Body copied verbatim from `e35edc1:src/gpu/gpu_1p0.cpp`'s own
+// `SslmGpuSeqPrefillPromptForG5Bridge` (including its own per-iteration busy check, `if (seq->
+// state != Idle) return SSLM_BUSY;` inside the loop, and its own `if (count > 0) seq->ready_for_
+// logits = true;` tail) -- not reconstructed from a description of it.
+//
+// WHY THIS EXISTS. The T-2184 review's own C1 finding: after Rungs 3/4 rewrote `SslmGpuSeqPrefill
+// PromptForG5Bridge`'s body to the pre-scan-then-batch composition, `tools/t2180_rung6_tokps.cpp`'s
+// own "shipped-per-token" bench arm -- N separate single-token calls into that SAME public bridge
+// function -- silently became the batched primitive at `chunk_len=1`, not the genuinely shipped
+// 28-round-trip-per-token path. `DriveGpuSeqToFullDepthForG5Bridge` (this file, above) still exists
+// and is still exactly the shipped shape, but its only remaining production caller is
+// `SslmGpuSeqDecodeStepForG5Bridge` -- neither prefill twin can reach it any more. This function is
+// the one new caller that can, for bench purposes only.
+//
+// NOT part of the shipped 1.0 API surface (matching `gpu_1p0_bench_bridge.h`'s own "not part of
+// the shipped GPU API surface, and not installed alongside it" convention) -- declared in that
+// header, `tools/t2180_rung6_tokps.cpp`'s own intended includer alongside its existing bench
+// accessors.
+//
+// T-2185 remedy N6/observation (Brunel fix round 2, D-SLM3677): this definition, and its own
+// declaration in `gpu_1p0_bench_bridge.h`, are now gated behind
+// `SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING` -- previously defined unconditionally at file scope,
+// so the symbol linked into every binary that compiled this translation unit, not only the one
+// bench tool that calls it. Gated per this codebase's own established injection-seam convention
+// (`SUPERSLM_O11_ALLOC_INJECTION`, `SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION`, gpu_port.h):
+// `build.bat`'s own `tools\t2180_rung6_tokps.cpp` compile line is the only place that defines the
+// macro; every other target -- the red-suite cells, every other tool -- links `gpu_1p0.cpp`
+// without it, so this symbol is absent from those binaries entirely (verified: `dumpbin
+// /symbols` against a build of this file without the macro defined shows no
+// `SslmGpuSeqPrefillPromptPreBatchingBenchOnly` entry).
+#ifdef SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
+SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
+                                                            SslmGpuSequenceHandle* seq,
+                                                            const int32_t* tokens, int32_t count,
+                                                            uint32_t dispatch_budget) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || (count > 0 && !tokens) || count < 0 ||
+	    dispatch_budget < 1) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	for (int32_t i = 0; i < count; ++i) {
+		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, tokens[i]);
+		if (st != SSLM_OK) return st;
+		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+	}
+	if (count > 0) seq->ready_for_logits = true;
+	return SSLM_OK;
+}
+#endif  // SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
+
 // G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): the
 // GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- embeds and drives EVERY token in
 // `tokens` (including the last) to full depth, exactly `PrefillWholeTokensImpl`'s own
@@ -2124,14 +2454,55 @@ SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSeq
 	    dispatch_budget < 1) {
 		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
 	}
-	for (int32_t i = 0; i < count; ++i) {
-		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
-		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, tokens[i]);
-		if (st != SSLM_OK) return st;
-		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+	if (count == 0) return SSLM_OK;  // matches the shipped per-token loop's own vacuous-loop exit
+	                                  // (the busy check below is never reached for count == 0
+	                                  // either, on either path).
+	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+
+	// T-2169 (Rung 4, design Sec5/Sec8): the pre-scan-then-batch composition -- host-side
+	// sequential admission, then ONE call into the chunk-submission primitive for exactly
+	// `admit_count` tokens, replacing the per-token DriveGpuSeqToFullDepthForG5Bridge loop above.
+	// No DFA pre-scan (the prompt twin never advances or checks the DFA walk, design Sec5).
+	SslmGpuModelHandle* model = seq->model;
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = seq->layer_index;
+	seq->live_state.kv_saturation_count = seq->kv_saturation_count;
+	seq->live_state.context_length = seq->context_length;
+	const int64_t chunk_open_ctxlen = seq->context_length;
+
+	const ChunkPreScanResult scan = RunChunkAdmissionPreScan(
+	    model, chunk_open_ctxlen, seq->context_cap, tokens, count, /*dfa_entry=*/nullptr,
+	    /*dfa_walk_state_start=*/0);
+
+	int64_t derived_count = 0;
+	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
+	                                chunk_open_ctxlen, &derived_count);
+
+	// D-SLM3622 (design Sec5 step 5): the device-computed fallback -- a rejection the pre-scan
+	// could not see, discovered only via the post-chunk readback -- overrides whatever the
+	// host-computable cause predicted, regardless of cause. ready_for_logits stays untouched.
+	if (derived_count < static_cast<int64_t>(scan.admit_count)) {
+		return SSLM_DEVICE_LOST;
 	}
-	if (count > 0) seq->ready_for_logits = true;
-	return SSLM_OK;
+
+	switch (scan.cause) {
+		case ChunkAdmissionCause::kEmbed:
+			// ready_for_logits left untouched -- P2's own disposition (design Sec5's cause table).
+			return scan.embed_reject_status;
+		case ChunkAdmissionCause::kPositionCap:
+			// D-SLM3619: refuses the whole call with the shipped path's exact observables --
+			// ready_for_logits left untouched, and the next-rejected token's own incidental
+			// host-side embed side effect is reproduced (never a dispatch for it).
+			ReproducePositionCapBoundaryEmbedSideEffect(model, seq, tokens, scan.admit_count);
+			return SSLM_DEVICE_LOST;
+		case ChunkAdmissionCause::kDfa:
+			// Unreachable for the prompt twin (no DFA pre-scan is run for it) -- defensive only.
+			return SSLM_SEQUENCE_REJECTED;
+		case ChunkAdmissionCause::kNone:
+		default:
+			seq->ready_for_logits = true;  // count > 0 already established above -- P4's own row.
+			return SSLM_OK;
+	}
 }
 
 // G5-5 session 3 fix (T-2132, Brunel): the recommended one-call-per-step entry point -- the GPU-
@@ -2187,69 +2558,86 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
 	const superslm::SchemaEntry* entry =
 	    model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
 	if (!entry) return SSLM_SEQUENCE_REJECTED;
-
-	for (int32_t i = 0; i < count; ++i) {
-		const int32_t token = tokens[i];
-		// design Sec6 G5-3/G5-5's own "the reachability check runs BEFORE this token's forward
-		// pass" (src/sslm_abi.cpp's PrefillWholeTokensImpl, mirrored here verbatim): the
-		// REJECTED token's own effects never land -- its walk-state transition is never applied,
-		// its forward pass never runs, `*consumed` is never incremented for it. That is the only
-		// thing left "unmoved." Tokens admitted BEFORE the rejected one in this same call already
-		// had their walk-state advance, K/V write, and layer loop run for real, and `*consumed`
-		// already counts them (design Sec14.3, D-SLM3478 -- RULED design text as of this fold,
-		// Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md S5): this is not full-span atomicity, it is
-		// the documented partial-consumption contract, matching `sslm_prefill`'s own shape.
-		uint32_t next_state = 0;
-		if (!model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(token),
-		                                &next_state)) {
-			// S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): CPU/GPU ready_for_logits parity
-			// on the partial-rejection path -- the CPU ABI is the reference
-			// (src/sslm_abi.cpp's sslm_prefill: `if (*consumed > 0) seq->ready_for_logits =
-			// true;`, unconditional on the returned status). When earlier tokens in this call
-			// were already admitted, the last admitted token's own forward pass already ran to
-			// full depth and its hidden_codes already hold the finished residual -- exactly the
-			// condition ready_for_logits exists to record, whether this call as a whole succeeds
-			// or a later token in it rejects. Before this fix the GPU bridge returned
-			// SSLM_SEQUENCE_REJECTED without ever reaching the `ready_for_logits = true` set at
-			// this function's tail, so a caller's next `SslmGpuSeqDecodeStepForG5Bridge` call
-			// would wrongly re-embed the already-finished last admitted token, diverging from the
-			// CPU ABI's behaviour on the exact same input.
-			if (*consumed > 0) seq->ready_for_logits = true;
+	if (count == 0) return SSLM_OK;  // matches the shipped per-token loop's own vacuous-loop exit.
+	// T-2184 remedy M1 (Brunel fix round 1, D-SLM3662): restores the shipped per-token loop's own
+	// ordering -- `Transition(tokens[0])` first, `SSLM_SEQUENCE_REJECTED` on failure, THEN the busy
+	// check (`e35edc1`'s own per-token body). The batched composition below had the busy check run
+	// FIRST, so a sequence left `Submitted` (reachable single-threaded through
+	// `sslm_decode_step_gpu`, `fixture_common.h:174`'s own documented idiom) whose first token is
+	// DFA-unreachable returned `SSLM_BUSY` here instead of the shipped `SSLM_SEQUENCE_REJECTED`.
+	// `*consumed` stays 0 on this path -- no earlier admitted token exists in THIS call to set
+	// `ready_for_logits`, matching the shipped loop's own first-iteration disposition exactly.
+	{
+		uint32_t reachability_probe_state = 0;
+		if (!model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(tokens[0]),
+		                                &reachability_probe_state)) {
 			return SSLM_SEQUENCE_REJECTED;
 		}
-		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) {
-			return SSLM_BUSY;
-		}
-		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, token);
-		if (st != SSLM_OK) return st;
-		// Drive this ONE forced token's own layer loop to full depth -- possibly across
-		// multiple sslm_decode_step_gpu calls, the caller's own dispatch_budget_per_token
-		// governing how many layers land per submission, exactly the existing bounded-
-		// dispatch-budget primitive design Sec6 G5-5 names ("issued as GPU dispatches under
-		// the existing bounded-dispatch-budget primitive, sslm_decode_step_gpu"). Shared with
-		// SslmGpuSeqPrefillPromptForG5Bridge/SslmGpuSeqDecodeStepForG5Bridge (above) -- ONE
-		// implementation, per session 3's own finding that a private copy of this loop is
-		// exactly the shape that let the ready_for_logits gap slip past this bridge's first
-		// caller.
-		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget_per_token)) {
-			return SSLM_DEVICE_LOST;
-		}
-		// No masking/argmax here -- `token` is FORCED (already known), never chosen, exactly
-		// PrefillWholeTokensImpl's own SSLM_SPAN_SCHEMA_CONTENT branch. The token this token's
-		// own forward pass just committed IS `token` itself (not an argmax result) -- only the
-		// walk-state advances.
-		seq->dfa_walk_state = next_state;
-		++(*consumed);
 	}
-	// G5-5 session 3 fix (T-2132, Brunel): mirrors `sslm_prefill`'s own `if (*consumed > 0)
-	// seq->ready_for_logits = true;` (src/sslm_abi.cpp) -- the last ADMITTED token already ran
-	// its full layer loop above; a caller's immediate next `SslmGpuSeqDecodeStepForG5Bridge` call
-	// (the "one ordinary masked step run immediately after the forced chain") must not re-embed
-	// it. S6 (Claude/Poirot/9bc9ec6-t2132-g5-arc-review.md): keyed on `*consumed`, not `count`,
-	// to match the CPU ABI's own condition exactly -- on this all-admitted success path the two
-	// are equal, but keeping the same predicate as the rejection-path fix above (which can only
-	// test `*consumed`) keeps this one function internally consistent rather than using two
-	// different truths for the same flag.
-	if (*consumed > 0) seq->ready_for_logits = true;
-	return SSLM_OK;
+	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+
+	// T-2169 (Rung 3, design Sec5/Sec8): the pre-scan-then-batch composition -- host-side
+	// sequential admission (DFA reachability, embed validity, position cap, in that priority),
+	// then ONE call into the chunk-submission primitive for exactly `admit_count` tokens,
+	// replacing the per-token Transition/embed_token/DriveGpuSeqToFullDepthForG5Bridge loop above.
+	// design Sec14.3/D-SLM3478's own partial-consumption contract is preserved: tokens admitted
+	// before the cause that stops the call already ran their forward pass for real and *consumed
+	// already counts them -- what changes is HOW they are dispatched (one chunk call), never
+	// which tokens land.
+	seq->live_state.hidden_scale = seq->hidden_scale;
+	seq->live_state.layer_index = seq->layer_index;
+	seq->live_state.kv_saturation_count = seq->kv_saturation_count;
+	seq->live_state.context_length = seq->context_length;
+	const int64_t chunk_open_ctxlen = seq->context_length;
+
+	const ChunkPreScanResult scan = RunChunkAdmissionPreScan(model, chunk_open_ctxlen,
+	                                                          seq->context_cap, tokens, count, entry,
+	                                                          seq->dfa_walk_state);
+
+	int64_t derived_count = 0;
+	SubmitAdmittedChunkForG5Bridge(model, seq, scan.chunk_embedding_bytes.data(), scan.admit_count,
+	                                chunk_open_ctxlen, &derived_count);
+
+	// D-SLM3622 (design Sec5 step 5): the device-computed fallback overrides whatever the
+	// host-computable cause predicted, regardless of cause -- ready_for_logits stays untouched,
+	// and *consumed reflects the device's own actually-committed count, not admit_count.
+	const bool overridden = derived_count < static_cast<int64_t>(scan.admit_count);
+	*consumed = static_cast<int32_t>(overridden ? derived_count
+	                                             : static_cast<int64_t>(scan.admit_count));
+
+	// The DFA walk state advances exactly as far as the tokens that actually committed
+	// (*consumed, whether that is admit_count or the device-derived shorter count) -- nothing
+	// past the actually-committed prefix legitimately advanced the schema's own state either,
+	// matching design Sec14.3's "the rejected token's own effects never land" extended to the
+	// device-computed fallback.
+	if (*consumed > 0) {
+		seq->dfa_walk_state = scan.dfa_states_after[static_cast<size_t>(*consumed) - 1];
+	}
+
+	if (overridden) {
+		return SSLM_DEVICE_LOST;
+	}
+
+	switch (scan.cause) {
+		case ChunkAdmissionCause::kDfa:
+			// S1's own disposition (design Sec5's cause table): ready_for_logits SET, iff
+			// *consumed > 0 -- unlike EMBED/POSITION_CAP, this row is not "left untouched".
+			if (*consumed > 0) seq->ready_for_logits = true;
+			return SSLM_SEQUENCE_REJECTED;
+		case ChunkAdmissionCause::kEmbed:
+			// S3's own disposition: ready_for_logits left untouched.
+			return scan.embed_reject_status;
+		case ChunkAdmissionCause::kPositionCap:
+			// D-SLM3619: refuses the whole call with the shipped path's exact observables --
+			// S4(a)'s own disposition, ready_for_logits left untouched, and the next-rejected
+			// token's own incidental host-side embed side effect is reproduced.
+			ReproducePositionCapBoundaryEmbedSideEffect(model, seq, tokens, scan.admit_count);
+			return SSLM_DEVICE_LOST;
+		case ChunkAdmissionCause::kNone:
+		default:
+			// S5's own disposition: ready_for_logits set iff *consumed > 0 -- always true here
+			// since admit_count == count > 0 on the all-admitted path.
+			if (*consumed > 0) seq->ready_for_logits = true;
+			return SSLM_OK;
+	}
 }
