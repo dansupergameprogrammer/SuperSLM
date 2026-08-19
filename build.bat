@@ -74,6 +74,27 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2169 (Brunel, Rung 2, D-SLM3596): the TDR-safe bound measurement harness
+rem (tools/t2169_tdr_measure.cpp) -- queries this machine's own real TDR delay and measures
+rem gpu_busy_ms across a swept chunk_tokens range against the real Qwen2.5-1.5B artifact. Same
+rem committed-build-recipe discipline as the two tools above; links advapi32.lib for the registry
+rem query. NOT auto-run. Usage after a successful build: out\t2169_tdr_measure.exe ^<model.sslm^>.
+rem STATUS (Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md): this tool's own
+rem measurement run found chunk_tokens>=8 reproducibly crashes the process
+rem (STATUS_STACK_OVERFLOW) -- a genuine, hardware-executed, currently-unresolved defect, not a
+rem TDR event (no Display/nvlddmkm TDR-recovery event logged at the crash time). superslm_gpu::
+rem kT2169TdrSafeMaxChunkTokens remains undefined pending root-cause of that crash.
+if not exist out\t2169tdr mkdir out\t2169tdr
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2169_tdr_measure.cpp /Fo:out\t2169tdr\ /Fe:out\t2169_tdr_measure.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib advapi32.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
 rem enumeration tool (tools\t2116_list_adapters.cpp) -- no .sslm artifact needed, so it is
 rem built here and NOT auto-run; run_crossvendor.ps1 invokes it directly. See that file's
