@@ -2134,7 +2134,14 @@ struct ChunkPreScanResult {
 	std::vector<uint8_t> chunk_embedding_bytes;     // admit_count * block_bytes, packed.
 	std::vector<uint32_t> dfa_states_after;         // schema twin only; dfa_states_after[t] is the
 	                                                 // walk state after admitting token t, valid
-	                                                 // for t in [0, dfa_admit_count).
+	                                                 // for t in [0, min(dfa_admit_count,
+	                                                 // dfa_embed_scan_limit)) -- the vector holds
+	                                                 // at most dfa_embed_scan_limit entries even
+	                                                 // when dfa_admit_count defaults to n (D-SLM3689
+	                                                 // bounded the scan without narrowing this
+	                                                 // default); admit_count never exceeds either
+	                                                 // bound, so every caller's own index stays in
+	                                                 // range.
 };
 
 ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t chunk_open_ctxlen,
