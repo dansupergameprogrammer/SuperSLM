@@ -308,7 +308,7 @@ inline unsigned long long QueryXcr0() {
 // Pure decision logic (design §6.2, corrected T-2189 finding 1 / D-SLM3689 to add the
 // max-basic-leaf guard below) -- takes already-fetched (or synthetic) register fields and
 // touches no hardware itself, so it is independently testable with fabricated CPUID data
-// without a hardware CPUID shim (see ResolveDotRowTierForTest, declared in matmul.h,
+// without a hardware CPUID shim (see ResolveDotRowTier, declared in matmul.h,
 // mirroring DotRowScalarRef's own test-reachable-wrapper pattern below). The four-step
 // resolution:
 //   0. CPUID leaf 0 -- EAX is the highest basic leaf the CPU supports. Leaf 7 is
@@ -431,8 +431,8 @@ int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t
 }
 
 #if SUPERSLM_MATMUL_HAVE_SIMD_X64
-int ResolveDotRowTierForTest(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
-                              unsigned long long xcr0) {
+int ResolveDotRowTier(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
+                       unsigned long long xcr0) {
 	// Test-reachable wrapper around the anonymous-namespace pure resolver
 	// (ResolveDotRowTierFromFields above) -- see matmul.h's declaration. T-2189 finding 1
 	// (D-SLM3689): this is the seam the mutation proof drives directly with fabricated

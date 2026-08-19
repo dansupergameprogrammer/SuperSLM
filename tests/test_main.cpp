@@ -6840,7 +6840,7 @@ static void TestMatmulFirstCallDispatchRaceUnderConcurrency() {
 // below basic leaf 7 (some implementations echo the highest supported leaf's data or
 // return stale register contents rather than zero), so an older/limited x64 target could
 // false-positive an AVX2 or AVX-512 tier it does not actually support. The fix routes
-// through ResolveDotRowTierForTest -- a hardware-independent seam that drives the pure
+// through ResolveDotRowTier -- a hardware-independent seam that drives the pure
 // decision logic with fabricated leaf-0/leaf-1/leaf-7/XCR0 fields, so this cell needs no
 // real hardware CPUID shim and is not dependent on the test runner's own CPU. Gated only
 // on SUPERSLM_MATMUL_HAVE_SIMD_X64 -- unlike the T-2158 pair above, this does not depend
@@ -6862,10 +6862,10 @@ static void TestMatmulDotRowTierGatesLeaf7OnMaxBasicLeaf() {
 	// to kAvx512 (2) instead, since osxsave and both XCR0 state bits are also set here --
 	// so this cell fails the moment the guard is removed.
 	for (int max_leaf : {0, 1, 6}) {
-		const int tier = superslm::ResolveDotRowTierForTest(max_leaf, kLeaf1EcxOsxsave,
+		const int tier = superslm::ResolveDotRowTier(max_leaf, kLeaf1EcxOsxsave,
 		                                                     kLeaf7EbxAllBits, kXcr0AllState);
 		CHECK_MSG(tier == 0,
-		          "ResolveDotRowTierForTest(max_basic_leaf=%d, permissive leaf7/XCR0) == %d, "
+		          "ResolveDotRowTier(max_basic_leaf=%d, permissive leaf7/XCR0) == %d, "
 		          "want 0 (SSE2) -- leaf 7 is architecturally undefined below basic leaf 7 "
 		          "and its bits must not be consulted (T-2189 finding 1, D-SLM3689)",
 		          max_leaf, tier);
@@ -6874,10 +6874,10 @@ static void TestMatmulDotRowTierGatesLeaf7OnMaxBasicLeaf() {
 	// Sanity: the same permissive leaf7_ebx/xcr0 fields at max_basic_leaf == 7 (leaf 7 IS
 	// supported) resolve to kAvx512 (2) -- confirms the guard does not also suppress the
 	// legitimate case, only the undefined one.
-	const int tier_at_leaf7 = superslm::ResolveDotRowTierForTest(
+	const int tier_at_leaf7 = superslm::ResolveDotRowTier(
 	    7, kLeaf1EcxOsxsave, kLeaf7EbxAllBits, kXcr0AllState);
 	CHECK_MSG(tier_at_leaf7 == 2,
-	          "ResolveDotRowTierForTest(max_basic_leaf=7, permissive leaf7/XCR0) == %d, "
+	          "ResolveDotRowTier(max_basic_leaf=7, permissive leaf7/XCR0) == %d, "
 	          "want 2 (AVX512) -- the guard must not suppress a genuinely supported leaf 7",
 	          tier_at_leaf7);
 
@@ -6885,9 +6885,9 @@ static void TestMatmulDotRowTierGatesLeaf7OnMaxBasicLeaf() {
 	// the pre-existing OSXSAVE gate (design §6.2 step 2) and the new max-leaf gate compose
 	// without either masking the other's coverage.
 	const int tier_no_osxsave =
-	    superslm::ResolveDotRowTierForTest(6, 0, kLeaf7EbxAllBits, kXcr0AllState);
+	    superslm::ResolveDotRowTier(6, 0, kLeaf7EbxAllBits, kXcr0AllState);
 	CHECK_MSG(tier_no_osxsave == 0,
-	          "ResolveDotRowTierForTest(max_basic_leaf=6, OSXSAVE unset) == %d, want 0 (SSE2)",
+	          "ResolveDotRowTier(max_basic_leaf=6, OSXSAVE unset) == %d, want 0 (SSE2)",
 	          tier_no_osxsave);
 }
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
