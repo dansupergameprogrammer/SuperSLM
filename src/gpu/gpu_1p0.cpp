@@ -2150,13 +2150,40 @@ ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t c
 	if (cap_room < 0) cap_room = 0;
 	const uint32_t position_admit_count = static_cast<uint32_t>(std::min<int64_t>(n, cap_room));
 
-	// D-SLM3590: dfa_admit_count, run to completion over the intended chunk -- schema twin only.
-	// Tracks the walk state after each admitted transition.
+	// T-2189 finding 4 (P2, D-SLM3689): NO token past `position_admit_count` can ever be admitted
+	// -- the position cap already excludes it regardless of what the DFA/embed scans would find
+	// there -- so scanning DFA/embed all the way to `n` (the full REQUESTED chunk length, which a
+	// caller can set arbitrarily large) does unbounded work/allocation for a chunk that is mostly
+	// or entirely inadmissible on cap grounds alone: O(count * hidden_size) instead of the O(1)-ish
+	// cost a full-cap rejection should have.
+	//
+	// Bounding the scan to `position_admit_count` tokens is not quite enough on its own: `cause`
+	// (not just the numeric `admit_count`) must match the shipped per-token loop's own DFA-before-
+	// EMBED-before-POSITION_CAP priority (D-SLM3620) at a TIE -- if the one token exactly AT the
+	// position boundary (index `position_admit_count`, the first index the cap itself already
+	// excludes) would ALSO be DFA- or embed-rejected, the correct `cause` is still the higher-
+	// priority DFA/EMBED, even though the numeric `admit_count` is identical either way. Examining
+	// that one extra boundary token (`+ 1`) is what disambiguates the tie without re-introducing
+	// the unbounded scan: `dfa_embed_scan_limit` is `position_admit_count + 1` tokens (clamped to
+	// `n`, so a chunk that fits entirely under the cap is unaffected and still scans its own full
+	// length). A huge `count` at a tight cap therefore costs O(position_admit_count) work, not
+	// O(count) -- O(1)-ish at a full cap (`position_admit_count == 0`, scan_limit == 1).
+	const uint32_t dfa_embed_scan_limit =
+	    std::min(n, position_admit_count + 1u);  // `n <= INT32_MAX` (chunk_len is int32_t), so this
+	                                              // addition cannot overflow uint32_t.
+
+	// D-SLM3590: dfa_admit_count, run over [0, dfa_embed_scan_limit) -- schema twin only. Tracks
+	// the walk state after each admitted transition. A rejection found in this bounded range is
+	// identical to what the unbounded scan would have found (nothing past the position boundary
+	// can change `admit_count`, and the boundary token itself is examined for `cause` priority,
+	// per this function's own header comment above) -- defaulting to `n` (not `dfa_embed_scan_limit`)
+	// when nothing is rejected preserves the existing "unrejected within range" semantics the
+	// admit_count/cause resolution below already depends on.
 	uint32_t dfa_admit_count = n;
 	if (dfa_entry) {
-		r.dfa_states_after.reserve(n);
+		r.dfa_states_after.reserve(dfa_embed_scan_limit);
 		uint32_t state = dfa_walk_state_start;
-		for (uint32_t t = 0; t < n; ++t) {
+		for (uint32_t t = 0; t < dfa_embed_scan_limit; ++t) {
 			uint32_t next_state = 0;
 			if (!model->schemas.Transition(*dfa_entry, state, static_cast<uint32_t>(tokens[t]),
 			                                &next_state)) {
@@ -2168,15 +2195,16 @@ ChunkPreScanResult RunChunkAdmissionPreScan(SslmGpuModelHandle* model, int64_t c
 		}
 	}
 
-	// D-SLM3621: embed_admit_count, run to completion over the intended chunk -- the SAME pass
-	// that produces the record-time embedding bytes 2b needs, for every candidate index.
+	// D-SLM3621: embed_admit_count, run over [0, dfa_embed_scan_limit) -- the SAME pass that
+	// produces the record-time embedding bytes 2b needs, for every candidate index within the
+	// bounded range (see this function's own header comment above for why bounding here is sound).
 	uint32_t embed_admit_count = n;
 	SslmGpuStatus embed_reject_status = SSLM_OK;
 	const uint32_t block_bytes = superslm_gpu::T2169SeqEmbeddingBlockBytes(model->hidden_size);
 	const uint32_t scale_offset = block_bytes - 16u;
 	std::vector<uint8_t> embed_bytes_cache;  // block_bytes per validated candidate index
-	embed_bytes_cache.reserve(static_cast<size_t>(block_bytes) * n);
-	for (uint32_t t = 0; t < n; ++t) {
+	embed_bytes_cache.reserve(static_cast<size_t>(block_bytes) * dfa_embed_scan_limit);
+	for (uint32_t t = 0; t < dfa_embed_scan_limit; ++t) {
 		const int32_t token_id = tokens[t];
 		if (token_id < 0 || token_id >= model->vocab_size) {
 			embed_admit_count = t;

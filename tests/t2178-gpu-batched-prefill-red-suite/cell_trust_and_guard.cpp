@@ -439,6 +439,70 @@ static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
 	sslm_gpu_seq_release(ctx, seq);
 }
 
+// T-2189 finding 4 (P2, D-SLM3689): `RunChunkAdmissionPreScan` (gpu_1p0.cpp) used to scan/embed
+// the FULL requested chunk length before applying the position cap, doing O(count * hidden_size)
+// work and allocating O(count * hidden_size) bytes even when the cap admits ZERO tokens -- a
+// caller-controlled `count` with no upper bound driven at a context already full does unbounded
+// work for a call that must refuse everything. The fix bounds the DFA/embed scan to
+// `position_admit_count + 1` tokens (gpu_1p0.cpp's own header comment on that bound). The
+// oracle here is wall-clock time: a chunk this large would cost tens of seconds at minimum
+// (EmbedEntry's own O(hidden_size) cost repeated `count` times) and a multi-gigabyte allocation
+// attempt (`embed_bytes_cache.reserve(block_bytes * count)`) if the scan were unbounded --
+// reverting the bound (scanning to `n` instead of `position_admit_count + 1`) would make this
+// cell fail its own time budget, the measurable property a mutation of the fix flips.
+static void TestGuard_FullCapHugeCountBoundedPrescanWork(SslmGpuContext* ctx,
+                                                           SslmGpuModelHandle* model) {
+	const int64_t kSeqContextCap = 4;
+	const std::vector<int32_t> prime = {11, 22, 33, 44};  // fills context_length to the cap
+	                                                        // exactly -- cap_room == 0 afterward,
+	                                                        // position_admit_count == 0 for any
+	                                                        // following call regardless of size.
+
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kSeqContextCap, &seq) == SSLM_OK);
+	CHECK(PrimeSeq(ctx, seq, prime));
+
+	// 20,000,000 in-vocab tokens (token id 5, well inside any real model's vocab_size) -- an
+	// unbounded pre-scan would run EmbedEntry 20M times and attempt to reserve roughly
+	// 20M * ~6KB (T2169SeqEmbeddingBlockBytes at this model's hidden_size) of host memory before
+	// ever discovering the cap admits none of it. Constructing the token array itself is a single
+	// fast fill, not the property under test.
+	constexpr int32_t kHugeCount = 20000000;
+	std::vector<int32_t> huge_chunk(static_cast<size_t>(kHugeCount), /*token_id=*/5);
+
+	const int64_t dispatch_before = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
+	const auto t0 = std::chrono::steady_clock::now();
+	const SslmGpuStatus status =
+	    SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, huge_chunk.data(), kHugeCount, kDispatchBudget);
+	const auto t1 = std::chrono::steady_clock::now();
+	const double elapsed_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	const int64_t dispatch_delta =
+	    superslm_test::g_gpu_chunk_dispatch_count_probe.load() - dispatch_before;
+
+	// Generous budget: the bounded scan examines exactly 1 token (position_admit_count == 0, the
+	// "+1" boundary token) and dispatches nothing -- microseconds in practice. 2000 ms is many
+	// orders of magnitude more than that bounded cost needs, and many orders of magnitude less
+	// than 20M EmbedEntry calls plus a multi-gigabyte reserve() would cost.
+	CHECK_MSG(elapsed_ms < 2000.0,
+	          "Guard(bounded pre-scan): a %d-token prefill at a fully-saturated context cap took "
+	          "%.1f ms -- want under 2000 ms; the admission pre-scan must bound its DFA/embed scan "
+	          "to the cap-derived admissible maximum (+1 boundary token for cause disambiguation), "
+	          "not the full requested count (T-2189 finding 4, D-SLM3689)",
+	          kHugeCount, elapsed_ms);
+	CHECK_MSG(status == SSLM_DEVICE_LOST,
+	          "Guard(bounded pre-scan): prefill at a fully-saturated cap returned %s, want "
+	          "SSLM_DEVICE_LOST (cause == kPositionCap, admit_count == 0 -- D-SLM3619's own "
+	          "refuse-the-whole-call disposition)",
+	          GpuStatusName(status));
+	CHECK_MSG(dispatch_delta == 0,
+	          "Guard(bounded pre-scan): dispatch-body invocations = %lld, want 0 -- zero tokens are "
+	          "admissible at a fully-saturated cap, so nothing should ever be recorded or "
+	          "dispatched",
+	          dispatch_delta);
+
+	sslm_gpu_seq_release(ctx, seq);
+}
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	volatile void* a0 = (void*)&TestTrust_CapStraddleBridgeObservable; (void)a0;
@@ -449,6 +513,7 @@ int main(int argc, char** argv) {
 	volatile void* a5 = (void*)&TestGuard_EmbedAdmitCountClampDispatchCountInstrumented; (void)a5;
 	volatile void* a6 = (void*)&TestGuard_BusyUnderWidenedWindow; (void)a6;
 	volatile void* a7 = (void*)&TestGuard_ModelUnwedgesAfterUncoveredTailThrow; (void)a7;
+	volatile void* a8 = (void*)&TestGuard_FullCapHugeCountBoundedPrescanWork; (void)a8;
 
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("this file's cells need --model1p5b=PATH -- not run");
@@ -476,6 +541,13 @@ int main(int argc, char** argv) {
 		    ctx, model, static_cast<uint32_t>(view.config.num_hidden_layers),
 		    static_cast<int32_t>(view.config.vocab_size));
 		TestGuard_BusyUnderWidenedWindow(ctx, model);
+		// T-2189 finding 4's own pin runs BEFORE the tail-throw cell below, deliberately: the
+		// tail-throw cell's injected fault leaves the underlying D3D12 command list unclosed by
+		// construction (the fault fires before Close(), simulating a real device-level failure at
+		// that exact point) -- a pre-existing device-recovery gap orthogonal to this finding, not
+		// something T-2189 scopes fixing. Running the bounded-prescan pin first keeps it on a
+		// clean device/command-allocator state.
+		TestGuard_FullCapHugeCountBoundedPrescanWork(ctx, model);
 		TestGuard_ModelUnwedgesAfterUncoveredTailThrow(ctx, model);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
