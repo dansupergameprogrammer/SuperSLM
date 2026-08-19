@@ -137,9 +137,22 @@ static void TestCensus_S1_DfaRejection(SslmGpuContext* ctx, SslmGpuModelHandle* 
 // reachable token on this fixture is 90, found by widening the bound past the schema's own real
 // vocabulary range to `[0,256)` -- verified: every one of the three callers below now finds it
 // and runs for real rather than skipping.
+//
+// T-2186 remedy P3 (Brunel fix round 3, D-SLM3684; confirmation
+// Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md): `[0,256)` was the same class one
+// constant further out -- an author-chosen search bound that goes silently inert (a passing SKIP,
+// not a failure) the moment a fixture's own first reachable/unreachable token sits above it. The
+// bound is now the artifact's own `vocab_size` -- the search cannot be narrower than the
+// vocabulary it searches, so this class cannot recur under any fixture whose DFA-reachable/
+// unreachable tokens exist at all. Threaded in as an explicit parameter, not read off `model`:
+// `SslmGpuModelHandle` is an opaque forward-declared type in this file's own public header
+// (`gpu_1p0.h`'s own `typedef struct SslmGpuModelHandle SslmGpuModelHandle`), so its
+// `vocab_size` field is not visible here -- callers pass it from `SslmModelView::config`, the
+// same public source `main` already reads to look up the schema index.
 static bool FindDfaReachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle* model,
-                                        int32_t schema_index, int32_t* out_token) {
-	for (int32_t candidate = 0; candidate < 256; ++candidate) {
+                                        int32_t schema_index, int32_t vocab_size,
+                                        int32_t* out_token) {
+	for (int32_t candidate = 0; candidate < vocab_size; ++candidate) {
 		SslmGpuSequenceHandle* probe = nullptr;
 		if (sslm_gpu_seq_create(ctx, model, /*context_cap=*/16, &probe) != SSLM_OK || !probe) continue;
 		if (SslmGpuSeqSetSchemaForG5Bridge(ctx, probe, schema_index) != SSLM_OK) {
@@ -160,10 +173,10 @@ static bool FindDfaReachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle* 
 // --- S2: seq->state != Idle -> SSLM_BUSY (schema twin) -- same reasoning as P1, on the schema
 // entry point. ---
 static void TestCensus_S2_BusyOnSchema(SslmGpuContext* ctx, SslmGpuModelHandle* model,
-                                        int32_t schema_index) {
+                                        int32_t schema_index, int32_t vocab_size) {
 	int32_t reachable_token = 0;
-	if (!FindDfaReachableFirstToken(ctx, model, schema_index, &reachable_token)) {
-		SKIP_MSG("Census S2: no DFA-reachable first token found in [0,256) on this schema/fixture "
+	if (!FindDfaReachableFirstToken(ctx, model, schema_index, vocab_size, &reachable_token)) {
+		SKIP_MSG("Census S2: no DFA-reachable first token found in [0,vocab_size) on this schema/fixture "
 		         "-- cannot isolate the busy branch from the DFA-rejection branch");
 		return;
 	}
@@ -188,10 +201,10 @@ static void TestCensus_S2_BusyOnSchema(SslmGpuContext* ctx, SslmGpuModelHandle* 
 // --- S5: loop completes -> SSLM_OK, ready_for_logits iff *consumed > 0 (cause = NONE, schema
 // twin's own all-admitted baseline). ---
 static void TestCensus_S5_AllAdmittedSuccess(SslmGpuContext* ctx, SslmGpuModelHandle* model,
-                                              int32_t schema_index) {
+                                              int32_t schema_index, int32_t vocab_size) {
 	int32_t reachable_token = 0;
-	if (!FindDfaReachableFirstToken(ctx, model, schema_index, &reachable_token)) {
-		SKIP_MSG("Census S5: no DFA-reachable first token found in [0,256) on this schema/fixture");
+	if (!FindDfaReachableFirstToken(ctx, model, schema_index, vocab_size, &reachable_token)) {
+		SKIP_MSG("Census S5: no DFA-reachable first token found in [0,vocab_size) on this schema/fixture");
 		return;
 	}
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -227,8 +240,12 @@ static void TestCensus_S5_AllAdmittedSuccess(SslmGpuContext* ctx, SslmGpuModelHa
 // the busy branch is isolated from DFA rejection. This cell needs the opposite token and isolates
 // the ordering INTERACTION S2 cannot. ---
 static bool FindDfaUnreachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle* model,
-                                          int32_t schema_index, int32_t* out_token) {
-	for (int32_t candidate = 0; candidate < 256; ++candidate) {
+                                          int32_t schema_index, int32_t vocab_size,
+                                          int32_t* out_token) {
+	// T-2186 remedy P3 (D-SLM3684): the artifact's own `vocab_size`, matching
+	// `FindDfaReachableFirstToken`'s own correction above -- see that function's header comment
+	// for the full account.
+	for (int32_t candidate = 0; candidate < vocab_size; ++candidate) {
 		SslmGpuSequenceHandle* probe = nullptr;
 		if (sslm_gpu_seq_create(ctx, model, /*context_cap=*/16, &probe) != SSLM_OK || !probe) continue;
 		if (SslmGpuSeqSetSchemaForG5Bridge(ctx, probe, schema_index) != SSLM_OK) {
@@ -248,13 +265,13 @@ static bool FindDfaUnreachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle
 }
 
 static void TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(
-    SslmGpuContext* ctx, SslmGpuModelHandle* model, int32_t schema_index) {
+    SslmGpuContext* ctx, SslmGpuModelHandle* model, int32_t schema_index, int32_t vocab_size) {
 	int32_t reachable_token = 0;
 	int32_t unreachable_token = 0;
-	if (!FindDfaReachableFirstToken(ctx, model, schema_index, &reachable_token) ||
-	    !FindDfaUnreachableFirstToken(ctx, model, schema_index, &unreachable_token)) {
+	if (!FindDfaReachableFirstToken(ctx, model, schema_index, vocab_size, &reachable_token) ||
+	    !FindDfaUnreachableFirstToken(ctx, model, schema_index, vocab_size, &unreachable_token)) {
 		SKIP_MSG("Census M1: could not find both a DFA-reachable and a DFA-unreachable first token "
-		         "in [0,256) on this schema/fixture -- cannot construct the ordering-interaction case");
+		         "in [0,vocab_size) on this schema/fixture -- cannot construct the ordering-interaction case");
 		return;
 	}
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -429,11 +446,12 @@ int main(int argc, char** argv) {
 			CHECK_MSG(schema_index >= 0, "schema '%s' not found in --g5fixture=%s",
 			          g_schema_name.c_str(), g_g5_fixture_path.c_str());
 			if (schema_index >= 0) {
+				const int32_t vocab_size = static_cast<int32_t>(view.config.vocab_size);
 				TestCensus_S1_DfaRejection(ctx, model, schema_index);
-				TestCensus_S2_BusyOnSchema(ctx, model, schema_index);
-				TestCensus_S5_AllAdmittedSuccess(ctx, model, schema_index);
-				TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(ctx, model,
-				                                                                     schema_index);
+				TestCensus_S2_BusyOnSchema(ctx, model, schema_index, vocab_size);
+				TestCensus_S5_AllAdmittedSuccess(ctx, model, schema_index, vocab_size);
+				TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(
+				    ctx, model, schema_index, vocab_size);
 			}
 			CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		} else {
