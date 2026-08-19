@@ -217,16 +217,19 @@ def test_population_member(member: dict, tmp_path, capsys) -> None:
         )
 
 
-def test_population_has_twenty_two_members():
-    """Twenty distinct mutation members (M1-M16, N17-N20, deduplicated
-    across the three casebooks per the fold round 6 derivation table,
-    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3) plus the
-    clean-tree control (G0) and the checker-failure cell (CF0) -- 22 total.
-    A count check catches a member silently dropped from the fixture file
-    without anyone noticing the parametrized test count shrank."""
-    assert len(_POPULATION) == 22
+def test_population_has_twenty_four_members():
+    """Twenty-two distinct mutation members (M1-M16 and M21-M22, N17-N20 --
+    deduplicated across the three fold-6 casebooks per
+    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus M21-M22
+    added at T-2177's confirmation (Finding 3): the quoted-multi-flag and
+    prefix-assignment shell-environment shapes the pre-fix `(\\S*)` capture
+    missed) plus the clean-tree control (G0) and the checker-failure cell
+    (CF0) -- 24 total. A count check catches a member silently dropped from
+    the fixture file without anyone noticing the parametrized test count
+    shrank."""
+    assert len(_POPULATION) == 24
     red_count = sum(1 for m in _POPULATION if m["expect"] == "red")
-    assert red_count == 20
+    assert red_count == 22
 
 
 def test_population_ids_are_unique():

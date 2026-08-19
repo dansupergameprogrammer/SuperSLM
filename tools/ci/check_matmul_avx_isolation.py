@@ -364,8 +364,14 @@ def find_env_flag_hits(text: str, source_label: str) -> list[dict]:
 _BATCH_SET_ENV_RE = re.compile(
     r"(?im)^\s*set\s+(CXXFLAGS|CFLAGS)\s*=\s*(.*)$"
 )
+# T-2177 Finding 3: this used to capture the value as `(\S*)`, which stops at
+# the first whitespace and misses every quoted multi-flag value (`export
+# CXXFLAGS="-O2 -mavx2"` -- caught only when the AVX flag happens to be
+# written first). `(.*)$` matches the batch sibling above: the value is the
+# rest of the line, quotes stripped by the caller below -- same shape, same
+# rule, stated in both rather than one pinned to the other's wording.
 _SHELL_ENV_ASSIGN_RE = re.compile(
-    r"^\s*(?:export\s+)?(CXXFLAGS|CFLAGS)=(\S*)", re.MULTILINE
+    r"^\s*(?:export\s+)?(CXXFLAGS|CFLAGS)=(.*)$", re.MULTILINE
 )
 
 

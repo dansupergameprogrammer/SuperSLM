@@ -189,6 +189,24 @@
     "expect": "red"
   },
   {
+    "id": "M21",
+    "source": "T-2177 Finding 3",
+    "kind": "new-file",
+    "target": "tools/build_quoted_multi_flag.sh",
+    "insert_after_line": null,
+    "content": "#!/bin/sh\nexport CXXFLAGS=\"-O2 -mavx2\"\ncc -c src/matmul.cpp -o /tmp/matmul.o\n",
+    "expect": "red"
+  },
+  {
+    "id": "M22",
+    "source": "T-2177 Finding 3, design §20.4 item 3's prefix-assignment form",
+    "kind": "new-file",
+    "target": "tools/build_prefix_assign_multi_flag.sh",
+    "insert_after_line": null,
+    "content": "#!/bin/sh\nCXXFLAGS=\"-O2 -mavx2\" cc -c src/matmul.cpp -o /tmp/matmul.o\n",
+    "expect": "red"
+  },
+  {
     "id": "CF0",
     "source": "D-SLM3601, checker-failure cell",
     "kind": "remove-workflow",
