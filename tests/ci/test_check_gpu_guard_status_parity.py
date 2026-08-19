@@ -1439,7 +1439,7 @@ def test_wiring_vitality_check_lwuws_path_count_disable_stops_catching_a_corrupt
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("catch, twenty-one\n", "catch, seventeen\n", 1)
+        corrupted = real_text.replace("catch, twenty-five\n", "catch, seventeen\n", 1)
         assert corrupted != real_text, "sanity: the exact wrapped phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_before_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1464,7 +1464,7 @@ def test_wiring_vitality_gpu_port_h_path_disable_stops_catching_a_corrupted_word
     with tempfile.TemporaryDirectory() as tmp:
         with open(chk.GPU_PORT_H, "r", encoding="utf-8") as f:
             real_text = f.read()
-        corrupted = real_text.replace("alike, twenty-seven", "alike, twenty-three", 1)
+        corrupted = real_text.replace("alike, thirty-one", "alike, twenty-three", 1)
         assert corrupted != real_text, "sanity: the exact phrase must exist in the real file"
         gph_path = os.path.join(tmp, "corrupted_total_word_gpu_port.h")
         with open(gph_path, "w", encoding="utf-8") as f:
@@ -1702,22 +1702,25 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_
         assert "no boundary to cut on" in str(e)
 
 
-def test_the_real_tree_lwuws_before_count_is_twenty_one():
+def test_the_real_tree_lwuws_before_count_is_twenty_five():
     # T-2101's own two real catch clauses on RunLayerLoopGpuSubmit (GpuGemmGroupArithmeticError's,
     # one literal return; the generic std::runtime_error's, one ternary return), PLUS (T-2184, S3,
     # D-SLM3662) SubmitOneSubChunkToFullDepthForG5Bridge's own original pair of catch clauses
     # (GpuGemmGroupArithmeticError's/std::runtime_error's, covering its own recording body), PLUS
     # (T-2189 finding 6, D-SLM3695) that same function's own SECOND pair of catch clauses
-    # (std::bad_alloc's/std::runtime_error's, covering its own previously-uncovered tail) -- six
-    # catch CLAUSES total now, on top of the thirteen ladder/device-capability returns. T-2192's
-    # own T1/T2 remedy (Claude/Poirot/896553e-t2192-t2189-closing-confirmation.md) then split the
-    # tail's own runtime_error clause into three RETURNS instead of one (a honest-terminal early
-    # return when a second Close() attempt also fails, plus two textually distinct copies of the
-    # original ternary), so the six clauses now contribute eight returns, not six:
-    # 13 + 8 = 21, matching gpu_port.h's own corrected prose. The ladder/device-capability term
-    # reads from PrepareGpuLayerLoopChunkOpenState's own body (shared, not duplicated); the catch
-    # term sums over BOTH RunLayerLoopGpuSubmit's own body and SubmitOneSubChunkToFullDepthForG5
-    # Bridge's own body.
+    # (std::bad_alloc's/std::runtime_error's, covering its own previously-uncovered tail), PLUS
+    # (T-2195 remedy S1's class sweep, Claude/Poirot/1381076-t2195-t2189-closing-confirmation.md
+    # Observation O1) RunLayerLoopGpuSubmit's own IDENTICAL second pair of catch clauses
+    # (std::bad_alloc's/std::runtime_error's, covering its own previously-uncontained tail, mirroring
+    # the sibling) -- eight catch CLAUSES total now, on top of the thirteen ladder/device-capability
+    # returns. T-2192's own T1/T2 remedy (Claude/Poirot/896553e-t2192-t2189-closing-confirmation.md)
+    # split each function's own tail runtime_error clause into three RETURNS instead of one (a
+    # honest-terminal early return when a second Close() attempt also fails, plus two textually
+    # distinct copies of the original ternary) -- now true of BOTH functions' own tail clauses, not
+    # only the sub-chunk primitive's: 13 + 12 = 25, matching gpu_port.h's own current prose. The
+    # ladder/device-capability term reads from PrepareGpuLayerLoopChunkOpenState's own body (shared,
+    # not duplicated); the catch term sums over BOTH RunLayerLoopGpuSubmit's own body and
+    # SubmitOneSubChunkToFullDepthForG5Bridge's own body.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     ladder_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_LADDER_FUNC_SIGNATURE, label="x"))
@@ -1726,12 +1729,12 @@ def test_the_real_tree_lwuws_before_count_is_twenty_one():
     submit_catch_bodies = chk.extract_catch_block_bodies(submit_body)
     subchunk_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.SUBCHUNK_FUNC_SIGNATURE, label="x"))
     subchunk_catch_bodies = chk.extract_catch_block_bodies(subchunk_body)
-    assert len(submit_catch_bodies) == 2
+    assert len(submit_catch_bodies) == 4
     assert len(subchunk_catch_bodies) == 4
     assert chk.count_any_return_statements(before) == 13
-    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 2
+    assert sum(chk.count_any_return_statements(b) for b in submit_catch_bodies) == 6
     assert sum(chk.count_any_return_statements(b) for b in subchunk_catch_bodies) == 6
-    assert chk.derive_lwuws_before_decision_count(gpu_text) == 21
+    assert chk.derive_lwuws_before_decision_count(gpu_text) == 25
 
 
 def test_the_real_tree_lwuws_after_count_is_six():
@@ -1744,11 +1747,11 @@ def test_the_real_tree_lwuws_after_count_is_six():
     assert chk.derive_lwuws_after_decision_count(gpu_text) == 6
 
 
-def test_the_real_tree_lwuws_total_is_twenty_seven():
+def test_the_real_tree_lwuws_total_is_thirty_one():
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
     assert (chk.derive_lwuws_before_decision_count(gpu_text)
-            + chk.derive_lwuws_after_decision_count(gpu_text)) == 27
+            + chk.derive_lwuws_after_decision_count(gpu_text)) == 31
 
 
 # --- M2: O34's successor residual is a MEASURED property, not a claim about one ---

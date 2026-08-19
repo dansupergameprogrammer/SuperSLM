@@ -414,64 +414,49 @@ enum class GpuLayerLoopGuard : int {
 // the smaller promise that is actually true, per `StandardsDocument.md`
 // §5.6:
 //
-// CORRECTED 2026-08-19 (T-2184, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-review.md,
-// S3; D-SLM3662): T-2169's own chunk-submission primitive, `SubmitOneSubChunkToFullDepthForG5
-// Bridge` (`superslm_gpu.cpp`), calls `PrepareGpuLayerLoopChunkOpenState` for its own chunk-open
-// (the SAME ladder/device-capability region the "before" count already reads, not duplicated) and
-// then carries its OWN two catch clauses -- `GpuGemmGroupArithmeticError`'s own literal return,
-// and the generic `std::runtime_error` one's own ternary -- each calling the identical shared
-// `InvalidateResidencyCachesOnThrow()` (T-2184's own S3 remedy factored the lambda this paragraph
-// already named into one file-scope helper both `RunLayerLoopGpuSubmit` and this primitive call,
-// so "before every one of their own returns" below is now a compile-time guarantee, not a
-// re-derived fact) before every one of their own returns -- two more paths that never reached a
-// residency decision. Its own terminal `return superslm::SslmForwardStatus::Ok;` (handing the
-// caller an in-flight token, the identical async-submission-succeeded shape `RunLayerLoopGpuSubmit`
-// already contributes one of) is one more path that DOES read whatever the residency decision
-// already decided. The two counts below are updated to name three functions, not two.
+// CURRENT (2026-08-19, T-2195 round; `tests/ci/check_gpu_guard_status_parity.py`'s own
+// `derive_lwuws_before_decision_count`/`derive_lwuws_after_decision_count` are what this count is
+// checked against, not restated by hand -- this paragraph states the number that check currently
+// derives, and the check is what a future reader trusts if the two ever disagree, per this
+// project's own append-only/single-current-statement discipline; three same-day superseded
+// derivations of this count -- T-2184's move to three functions, T-2189 finding 6's tail
+// containment on `SubmitOneSubChunkToFullDepthForG5Bridge`, and T-2192's own split of that tail
+// catch's single return into three -- are git history, not restated here):
 //
-// CORRECTED 2026-08-19 (T-2189 finding 6's own fix round, D-SLM3695; T-2191 S6/D-SLM3692's own
-// out-of-scope observation): `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail
-// (`dev.list->Close()`, `dev.queue->Signal()`, the `GpuLayerLoopInFlight` allocation) used to sit
-// outside every catch clause in this function -- a fault caught there by
-// `SubmitAdmittedChunkForG5Bridge` (gpu_1p0.cpp, T-2189 finding 2) left the underlying D3D12
-// command list open/recording, wedging every later call on the same context. Fixed at the source:
-// the tail now runs inside its own `try`, with its own `std::bad_alloc`/`std::runtime_error` catch
-// clauses restoring the command-list-ends-Closed invariant every OTHER path in this function
-// already gave it -- two more catch CLAUSES, six across the two functions
-// (`RunLayerLoopGpuSubmit`'s original pair plus `SubmitOneSubChunkToFullDepthForG5Bridge`'s
-// now-four), term 1 and the "after" population (term 3, T-2184's own count) both unchanged. The
-// two counts below are updated to nineteen/twenty-five.
-//
-// CORRECTED 2026-08-19 (T-2192, `Claude/Poirot/896553e-t2192-t2189-closing-confirmation.md`
-// findings T1/T2): the round above's own tail `std::runtime_error` catch used to resolve every
-// entry to ONE return statement (a ternary choosing `GpuDeviceRemoved`/`GpuAllocationFailed`). It
-// now resolves through THREE, not because the catch clause COUNT changed (still six, unchanged
-// from the correction above) but because that ONE clause's own body now branches: a fault raised
-// before the command list reaches Closed retries `Close()` and returns one of two paths --
-// `GpuDeviceRemoved` outright if the retry also fails (T2(a)'s own honest-terminal disposition,
-// the list genuinely cannot be recovered), or the original ternary if it succeeds -- and a fault
-// raised after `ExecuteCommandLists` already queued the work retries `Signal()`, waits the fence
-// out, and falls through to a second, textually distinct copy of the same ternary. Term 2's own
-// catch-RETURN-count (a return-statement count, not a catch-clause count -- see this term's own
-// header comment above) rises by two, from six to eight (five catch clauses still contribute one
-// return each; the tail `runtime_error` catch alone now contributes three). Term 1 and the "after"
-// population (term 3) are both unchanged -- neither T1 nor T2 touches a return above the residency
-// write or an after-decision return. The two counts below are updated to twenty-one/twenty-seven.
+// `SubmitOneSubChunkToFullDepthForG5Bridge` (`superslm_gpu.cpp`) calls
+// `PrepareGpuLayerLoopChunkOpenState` for its own chunk-open (the SAME ladder/device-capability
+// region the "before" count already reads, not duplicated) and carries four catch clauses of its
+// own: its recording-body pair (`GpuGemmGroupArithmeticError`, `std::runtime_error`), and its tail
+// pair (`std::bad_alloc`, `std::runtime_error`) guarding `Close()`/`ExecuteCommandLists`/`Signal()`/
+// the `GpuLayerLoopInFlight` allocation -- the tail `runtime_error` clause alone contributes three
+// return statements (a fault before the command list reaches Closed retries `Close()` and returns
+// one of two paths; a fault after `ExecuteCommandLists` retries `Signal()` at a freshly minted fence
+// value and falls through to a third), so this one function contributes 1 + 1 + 1 + 3 = 6 "before"
+// returns. `RunLayerLoopGpuSubmit` (`superslm_gpu.cpp`) carries the identical shape as of this
+// round: its own pre-existing recording-body pair (`GpuGemmGroupArithmeticError`,
+// `std::runtime_error`, 2 returns, unchanged) plus a NEW tail pair
+// (`std::bad_alloc`, `std::runtime_error`) added this round (T-2195 remedy S1's class sweep,
+// `Claude/Poirot/1381076-t2195-t2189-closing-confirmation.md` Observation O1) closing the identical
+// gap T-2189 finding 6 closed on the sibling -- its own tail `runtime_error` clause contributing the
+// same three-return shape, for 2 + 1 + 3 = 6 "before" returns. Two functions, six "before" returns
+// each, twelve catch-clause-return total, plus the thirteen ladder/device-capability terms this
+// paragraph's own opening already counts, for TWENTY-FIVE "before" paths in total.
 //
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
-// decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
-// device-capability rejections, and the recording-window catch, twenty-one
-// paths in all (the recording window still carries SIX catch clauses across two functions --
-// `RunLayerLoopGpuSubmit`'s own `GpuGemmGroupArithmeticError`/`std::runtime_error` pair, and
-// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own FOUR -- the original
-// `GpuGemmGroupArithmeticError`/`std::runtime_error` pair covering its own recording body, plus
-// the T-2189 finding 6 pair covering its own tail (`std::bad_alloc`/`std::runtime_error`) -- all
-// six call the shared cache-invalidation helper before every one of their own returns, but the
-// tail `runtime_error` clause's own body now RETURNS three times, not once -- T-2192's own T1/T2
-// remedy, this file's own dated correction above -- for eight returns across the six clauses,
-// none of which ever reached a residency decision to report.
+// decision runs (the `weights_resident` write above) -- the nine-guard ladder's own eleven
+// returns, the two device-capability rejections, and the recording-window catch, twenty-five
+// paths in all (the recording window carries EIGHT catch clauses across two functions, both now
+// the identical shape: `RunLayerLoopGpuSubmit`'s own recording-body pair
+// (`GpuGemmGroupArithmeticError`/`std::runtime_error`) plus its own tail pair
+// (`std::bad_alloc`/`std::runtime_error`, T-2195 remedy S1's class sweep), and
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical recording-body pair plus tail pair
+// (the tail pair, T-2189 finding 6) -- all eight call the shared cache-invalidation helper before
+// every one of their own returns, but each function's own tail `runtime_error` clause RETURNS
+// three times, not once (T-2192's own T1/T2 remedy, mirrored onto `RunLayerLoopGpuSubmit`'s tail
+// this round), for TWELVE returns across the eight clauses, none of which ever reached a residency
+// decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
 // miss) on every path that returns AFTER the decision -- **re-derived after
 // this file's own (B5) split of the single function this paragraph originally
@@ -496,7 +481,7 @@ enum class GpuLayerLoopGuard : int {
 // promises; StandardsDocument.md Sec5.4, reproduced by execution before
 // being fixed). None of these six re-decides or re-writes the flag --
 // each reads whatever the residency decision already decided -- the six,
-// and the twenty-one before them, alike, twenty-seven paths' own destination in
+// and the twenty-five before them, alike, thirty-one paths' own destination in
 // total across the three functions, whether the decoded
 // status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
 // A caller that wants "did THIS call's upload run" reads this accessor for

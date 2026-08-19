@@ -77,6 +77,24 @@ struct Device {
 	// matching this file's own established `SSLM_GPU_ENABLE_DEBUG_LAYER` "off by default,
 	// diagnostic-only" convention) or when it was enabled and genuinely has nothing reportable
 	// queued.
+	//
+	// DEMONSTRATED LIMIT (T-2195, `Claude/Curie/t2195-warmarm-commissioning-2026-08-19.md`;
+	// `TestGuard_ContextReusableAfterCaughtTailFaultWarmArm`,
+	// `tests/t2178-gpu-batched-prefill-red-suite/cell_trust_and_guard.cpp`): a zero return from this
+	// function on a given call is NOT, by itself, proof that the call's own D3D12 command recording
+	// was correct. The warm-arm commissioning cell drove a source-confirmed reachable defect -- a
+	// resume-barrier transition recorded with `StateBefore=UNORDERED_ACCESS` against a resource
+	// genuinely in `COPY_SOURCE` (the T-2192/T-2195 KV-latch defect class) -- through this exact
+	// drain, with the debug layer enabled, on the RTX 2080 SUPER (driver 560.94), and it returned 0:
+	// the D3D12 validation layer did not flag the mismatched transition on this device/driver. Per
+	// `StandardsDocument.md` §5.4's instrument-commissioning rule, this drain's must-reject
+	// construction (independently authored, producible by the real data path) FAILED TO FIRE, so its
+	// verdicts on THIS defect class stay quarantined on this device/driver: a 0 return is read as "no
+	// message," never as "no defect," until a device/driver pairing is found where the same
+	// construction DOES produce a WARNING-or-worse message. This does not withdraw the drain's own
+	// must-accept evidence (a clean, correctly-handled call still reliably scores 0 here) or its
+	// value against defect classes it has not been shown blind to -- only the specific claim "this
+	// drain would have caught a desynced resume-barrier latch on this device" is retracted.
 	size_t DrainDebugLayerMessages() {
 		if (!debug_info_queue) return 0;
 		size_t reportable = 0;
