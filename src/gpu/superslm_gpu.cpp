@@ -905,6 +905,52 @@ struct GpuGemmGroupArithmeticError : std::logic_error {
 	using std::logic_error::logic_error;
 };
 
+// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin fault-injection seam
+// (`gpu_port.h`'s own header comment on `ArmT2169ChunkRecordingFaultInjection` carries the full
+// design/casebook account). State declared here, after `GpuGemmGroupArithmeticError` (immediately
+// above) rather than beside `g_o11_alloc_injection_armed` (this file, above): the throw body below
+// constructs that type, which is not yet declared at the earlier point in this file O11's own
+// state block occupies -- construction-order, not a stylistic choice.
+namespace {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+bool g_t2169_chunk_recording_fault_armed = false;
+uint32_t g_t2169_chunk_recording_fault_after_token_index = 0;
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
+// Always defined, always callable -- mirrors `MaybeThrowInjectedO11AllocFault`'s own established
+// "zero overhead unarmed, call site never `#ifdef`-guarded" convention exactly. Internal linkage:
+// only ever called from `SubmitOneSubChunkToFullDepthForG5Bridge`, this same translation unit.
+inline void MaybeThrowInjectedT2169ChunkRecordingFault(uint32_t admitted_token_index) {
+	(void)admitted_token_index;  // unreferenced when the macro is undefined -- matches
+	                              // MaybeThrowInjectedO11AllocFault's own M3 fix (this file, above).
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_fault_armed &&
+	    g_t2169_chunk_recording_fault_after_token_index == admitted_token_index) {
+		// Single-shot: cleared before throwing, matching O11's own "the next matching call" idiom
+		// -- a re-armed-forever flag would fire on every later, unrelated call in the same process.
+		g_t2169_chunk_recording_fault_armed = false;
+		throw GpuGemmGroupArithmeticError(
+		    "T2183 D-SLM3660: injected mid-recording infrastructural fault after admitted token "
+		    "index " +
+		    std::to_string(admitted_token_index));
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
+}  // namespace
+
+// External linkage, deliberately outside the anonymous namespace immediately above -- same
+// reasoning as `ArmO11AllocationFailureInjection` (this file, above): `tests/t2178-gpu-batched-
+// prefill-red-suite/cell_exit_census.cpp`, a different translation unit, calls these as
+// `superslm_gpu::ArmT2169ChunkRecordingFaultInjection(...)`, matching `gpu_port.h`'s own gated
+// declarations exactly.
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index) {
+	g_t2169_chunk_recording_fault_armed = true;
+	g_t2169_chunk_recording_fault_after_token_index = after_token_index;
+}
+void ClearT2169ChunkRecordingFaultInjection() { g_t2169_chunk_recording_fault_armed = false; }
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the full definition of the opaque token
 // gpu_port.h forward-declares. Every field is FINISH-phase-only state that only exists
 // once Submit has recorded and closed the command list -- see gpu_port.h's own comment
@@ -2431,6 +2477,12 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		                                     state.work_wide_a_off, state.work_wide_b_off,
 		                                     state.work_adapter_u_off, adapter_bridge,
 		                                     dispatch_query_index);
+		// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin seam -- immediately after
+		// this token's own dispatches are recorded and before the loop advances (gpu_port.h's own
+		// header comment on ArmT2169ChunkRecordingFaultInjection carries the full account). Zero
+		// overhead unarmed, never `#ifdef`-guarded at the call site, matching
+		// MaybeThrowInjectedO11AllocFault's own established convention exactly.
+		MaybeThrowInjectedT2169ChunkRecordingFault(t);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
 		// Design Sec9's own Guard-vitality row / tests/support/gpu_chunk_dispatch_instrument.h's
 		// own committed contract: the counter's delta must equal `admit_count * num_hidden_layers`

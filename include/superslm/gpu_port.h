@@ -644,6 +644,33 @@ void ArmO11AllocationFailureInjection(uint32_t site);
 void ClearO11AllocationInjection();
 #endif  // SUPERSLM_O11_ALLOC_INJECTION
 
+// T-2180/T-2183 (D-SLM3655/D-SLM3660): the tenth-failure-origin fault-injection seam the design's
+// own Sec9 Coverage Model names (`Claude/Vitruvius/t2169-gpu-batched-prefill-design-2026-08-18.md`
+// Sec5.1/Sec9, D-SLM3634) and the test author's own casebook (T-2183) specified as owed to the
+// builder, not authorable against the pre-existing O11 seam (that seam's only two call sites fire
+// at chunk-OPEN, strictly before this window). Forces `GpuGemmGroupArithmeticError` from INSIDE
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own per-token loop (`superslm_gpu.cpp`), immediately
+// after `RecordOneTokenFullDepthDispatchBody` returns for admitted token index `t` and before the
+// loop advances to `t+1` -- letting a cell arm "throw after recording admitted token index N" and
+// observe the design's own ruled divergence (whole-(sub-)chunk discard, not token-scoped) through
+// the real code path rather than reasoning about it.
+//
+// Mirrors `SUPERSLM_O11_ALLOC_INJECTION`'s Arm/fire idiom exactly (a single-shot armed flag plus an
+// index match, cleared on fire so a re-armed-forever flag never re-fires on a LATER, unrelated
+// call in the same process) but is its OWN macro, not a third named site under O11's: O11 arms one
+// of a small, fixed enumeration of allocation call sites (`kO11AllocInjectionSite*`); this seam
+// arms an arbitrary 0-based TOKEN INDEX within whatever chunk the next call submits -- a different
+// parameter shape (an index into a per-call sequence, not a selector over a fixed site set) that
+// does not fit the existing constants' own convention. `after_token_index` is 0-based, within the
+// current (sub-)chunk: arming 1 against a chunk with >= 2 admitted tokens fires immediately after
+// token index 1's own dispatches are recorded (both tokens 0 and 1 are in the never-submitted
+// command list at that point), reproducing D-SLM3634's own worked example (an admitted-token index
+// `i > 0`).
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index);
+void ClearT2169ChunkRecordingFaultInjection();
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+
 // Read back the device-resident K/V cache in the SAME layout and argument order
 // superslm::KeyRow/ValueRow already define (forward_sites.h) -- the GPU port's
 // `workspace` is the device-resident twin of the identical buffer RunLayerLoop uses.

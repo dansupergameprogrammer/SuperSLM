@@ -8,15 +8,24 @@
 // subject of cell_trust_and_guard.cpp's own Trust-boundary cells (T-2176's own probe cells 1/2)
 // -- not re-authored here, cited by census-member name in this file's own driver comment, per
 // StandardsDocument.md Sec6.6 ("one real implementation, not a second drifting copy"). This file
-// authors the FIVE remaining members those two cells do not already cover: P1, P4, S1, S2, S5.
-// P3(b)/S4(b) (the device-computed sticky-rejection cause) are named a GAP below, not authored
-// here -- design Sec6 itself states they remain "traced at source, not executed... no cell in
-// this design or its predecessor drives the specific device-domain sticky-rejection fault
-// directly," and inventing a fault-injection cell against the device-side sticky-tag mechanism
-// is explicitly out of this fold's scope (design Sec6/Sec9). Per Curie's own "realize the model,
-// a gap in it is a finding, not an invention" discipline, this suite does not paper over that
-// stated gap with a weaker assertion.
+// authors the SIX remaining members those two cells do not already cover: P1, P4, S1, S2, S5, and
+// the tenth, call-scope failure origin (below).
+// P3(b)/S4(b) (the device-computed sticky-rejection cause) remain a GAP -- design Sec6 itself
+// states they remain "traced at source, not executed... no cell in this design or its predecessor
+// drives the specific device-domain sticky-rejection fault directly," and inventing a fault-
+// injection cell against the device-side sticky-tag mechanism is explicitly out of this fold's
+// scope (design Sec6/Sec9). Per Curie's own "realize the model, a gap in it is a finding, not an
+// invention" discipline, this suite does not paper over that stated gap with a weaker assertion.
+//
+// T-2183 (Curie, D-SLM3655) named a second, DISTINCT gap here -- the tenth, call-scope failure
+// origin (design Sec5.1/Sec9, D-SLM3634): a mid-recording infrastructural exception is CHUNK-
+// scoped, not token-scoped, and no test-reachable seam existed to drive it. T-2180 (Brunel, this
+// same addendum, D-SLM3660) closed that gap by adding the seam Curie's casebook specified
+// (`ArmT2169ChunkRecordingFaultInjection`, `gpu_port.h`) and authoring the cell below against it --
+// `TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault`'s own header comment carries the full
+// account, including what remains untestable through this suite's public entry points.
 #include "fixture_common.h"
+#include "superslm/gpu_port.h"
 
 using namespace superslm;
 
@@ -195,6 +204,79 @@ static void TestCensus_S5_AllAdmittedSuccess(SslmGpuContext* ctx, SslmGpuModelHa
 	sslm_gpu_seq_release(ctx, seq);
 }
 
+// --- The tenth, call-scope failure origin (design Sec5.1/Sec9, D-SLM3634/D-SLM3655/D-SLM3660):
+// a mid-recording infrastructural exception inside the chunk-submission primitive's own per-token
+// loop discards the WHOLE (sub-)chunk's already-recorded-but-unexecuted dispatches as one unit --
+// a documented, ruled divergence from the shipped per-token path's own independent-commit
+// behavior for this failure class, not a defect. This cell's own oracle is that ruled divergence
+// itself (design Sec9's own text: "this cell exists to prove the divergence is what D-SLM3634 says
+// it is, not to assert bit-identity with the shipped path"), never the pre-batching per-token
+// reference. Arms the T-2180 seam (`superslm_gpu::ArmT2169ChunkRecordingFaultInjection`,
+// `gpu_port.h`) to throw immediately after admitted token index 1 is recorded, against a two-token
+// chunk -- both tokens are in the never-submitted command list at the point of the throw
+// (D-SLM3634's own worked example, "an admitted-token index i > 0"). ---
+static void TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault(SslmGpuContext* ctx,
+                                                                    SslmGpuModelHandle* model) {
+	const std::vector<int32_t> prime = {11, 22};
+	const std::vector<int32_t> chunk = {33, 44};  // 2 admitted tokens -- well under the TDR-safe
+	                                               // sub-chunk bound (kT2169TdrSafeMaxChunkTokens
+	                                               // = 4), so this is ONE sub-chunk, one
+	                                               // SubmitOneSubChunkToFullDepthForG5Bridge call.
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, /*context_cap=*/64, &seq) == SSLM_OK);
+	CHECK(PrimeSeq(ctx, seq, prime));
+	SeqSnapshot before;
+	CHECK(CaptureSnapshot(seq, &before));
+
+	superslm_gpu::ArmT2169ChunkRecordingFaultInjection(/*after_token_index=*/1);
+	const SslmGpuStatus st = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, seq, chunk.data(), static_cast<int32_t>(chunk.size()), kDispatchBudget);
+	// Defensive only -- the seam is single-shot and already fired above; clears any stray armed
+	// state if the call somehow did not reach the throw, so a later cell in this same process
+	// (there are none after this one today, but the discipline costs nothing) never inherits it.
+	superslm_gpu::ClearT2169ChunkRecordingFaultInjection();
+
+	// (a) the whole (sub-)chunk's command list closed unexecuted. This bridge (gpu_1p0.cpp's own
+	// SslmGpuSeqPrefillPromptForG5Bridge) has no status distinct from a device-domain sticky-
+	// rejection (P3(b)/S4(b)) for "the device-derived commit count came back short of admit_count"
+	// -- D-SLM3634 rules the chunk-scope-discard failure class folds into that SAME channel, so a
+	// discarded chunk surfaces as derived_count 0 (< admit_count 2) -> SSLM_DEVICE_LOST, exactly
+	// the observable this check names.
+	CHECK_MSG(st == SSLM_DEVICE_LOST,
+	          "Census tenth-origin: status is %s, expected SSLM_DEVICE_LOST (D-SLM3634's own "
+	          "chunk-scope-discard ruling, surfaced through the device-computed-fallback channel)",
+	          GpuStatusName(st));
+
+	SeqSnapshot after;
+	CHECK(CaptureSnapshot(seq, &after));
+	// (b) seq/workspace left at PRE-CHUNK state -- not at whatever token 0 (recorded before the
+	// throw at token index 1) would have committed had its own dispatches executed. The full
+	// snapshot must be bit-identical to priming's own post-state: nothing this call recorded was
+	// ever executed or read back, since the command list closed unsubmitted.
+	CHECK_MSG(SnapshotsBitEqual(before, after),
+	          "Census tenth-origin: sequence state changed across a chunk-scope-discarded call -- "
+	          "D-SLM3634 rules the whole (sub-)chunk (both admitted tokens here) discarded as one "
+	          "unit, not token 0 alone committing before the fault at token index 1");
+	CHECK_MSG(after.context_length == static_cast<int64_t>(prime.size()),
+	          "Census tenth-origin: context_length is %lld, expected %zu (exactly priming's own "
+	          "count -- neither admitted token committed)",
+	          static_cast<long long>(after.context_length), prime.size());
+
+	// (c) residency caches invalidated (design Sec9's third clause): traced at source only, not
+	// independently exercised here. `SubmitAdmittedChunkForG5Bridge` (gpu_1p0.cpp) always supplies
+	// this primitive an EXTERNAL kv/weights residency buffer (`seq->kv_buf.Get()`/
+	// `model->weights_buf.Get()`) -- this file's own established convention
+	// (`superslm_gpu.cpp`'s `external_kv`/`external_weights` bypass comments, above) means
+	// `g_resident_kv`/`g_resident_weights` are never POPULATED by any call through this public
+	// bridge, so both stay `.valid=false` whether or not the catch clause's own invalidation runs.
+	// A check against them here could not fail for its own reason (StandardsDocument.md Sec5.4's
+	// own "a test targets its cell and fails for its reason" discipline), so none is authored --
+	// genuinely unreachable through the public entry points this suite is scoped to, named here
+	// rather than asserted vacuously, matching this file's own established gap-naming convention
+	// (the header comment on P3(b)/S4(b), above).
+	sslm_gpu_seq_release(ctx, seq);
+}
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	volatile void* a0 = (void*)&TestCensus_P1_BusyOnPrompt; (void)a0;
@@ -202,6 +284,7 @@ int main(int argc, char** argv) {
 	volatile void* a2 = (void*)&TestCensus_S1_DfaRejection; (void)a2;
 	volatile void* a3 = (void*)&TestCensus_S2_BusyOnSchema; (void)a3;
 	volatile void* a4 = (void*)&TestCensus_S5_AllAdmittedSuccess; (void)a4;
+	volatile void* a5 = (void*)&TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault; (void)a5;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -216,12 +299,13 @@ int main(int argc, char** argv) {
 			CHECK(sslm_gpu_model_map(ctx, &view, GpuResidencyConfig{}, &model) == SSLM_OK);
 			TestCensus_P1_BusyOnPrompt(ctx, model);
 			TestCensus_P4_AllAdmittedSuccess(ctx, model);
+			TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault(ctx, model);
 			CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		} else {
 			CHECK_MSG(false, "failed to load --model1p5b=%s: %s", g_model_1p5b_path.c_str(), err.c_str());
 		}
 	} else {
-		SKIP_MSG("Census P1/P4 need --model1p5b=PATH -- not run");
+		SKIP_MSG("Census P1/P4/tenth-origin need --model1p5b=PATH -- not run");
 	}
 
 	if (!g_g5_fixture_path.empty()) {
@@ -255,7 +339,10 @@ int main(int argc, char** argv) {
 	    "checks=%d failures=%d skips=%d -- P3(b)/S4(b) (device-computed sticky-rejection cause) "
 	    "are a NAMED GAP, not authored here: design Sec6 states them traced-at-source only, no "
 	    "cell in this design or its predecessor drives the device-domain sticky-tag fault "
-	    "directly (out of this fold's scope)\n",
+	    "directly (out of this fold's scope). The tenth-origin cell's own (c) clause (residency "
+	    "cache invalidation) is traced at source only, not independently exercised -- genuinely "
+	    "unreachable through this suite's public entry points (see that cell's own header "
+	    "comment)\n",
 	    GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

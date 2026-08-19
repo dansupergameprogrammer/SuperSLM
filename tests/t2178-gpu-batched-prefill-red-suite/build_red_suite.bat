@@ -17,6 +17,12 @@ rem the LNK2019s this suite was gated on. kT2169TdrSafeMaxChunkTokens remains un
 rem its own TDR-measurement sub-step lands -- cell_ceiling_boundary.cpp is expected to stay red
 rem on that one symbol alone until then.
 rem
+rem T-2180 (Brunel, T-2180 addendum, D-SLM3660): /DSUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+rem added -- the tenth-failure-origin fault-injection seam (gpu_port.h) this suite's own
+rem cell_exit_census.cpp now arms; not defined by build.bat's own superslm_tests.exe line, which
+rem never calls the Arm/Clear functions this macro gates -- matching SUPERSLM_O11_ALLOC_INJECTION's
+rem own established precedent of being defined only where a cell actually calls its Arm/Clear pair.
+rem
 rem cell_exit_census.cpp is the one file in this suite NOT expected red today: its five cells
 rem (P1, P4, S1, S2, S5, Claude/Curie/t2178-t2169-gpu-batched-prefill-red-suite-2026-08-18.md)
 rem assert PRESERVED baseline behavior the design's own census marks "Yes -- unchanged" -- a
@@ -38,7 +44,7 @@ if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 set OVERALL_LINK_OK=1
 for %%f in (cell_bitidentity.cpp cell_ceiling_boundary.cpp cell_trust_and_guard.cpp cell_exit_census.cpp cell_embedding_range.cpp) do (
     echo ===== %%f =====
-    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT /I%ENG%\include /I%ENG%\tests /I. ^
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT /DSUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION /I%ENG%\include /I%ENG%\tests /I. ^
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
