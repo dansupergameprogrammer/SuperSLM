@@ -699,6 +699,174 @@ static void TestGuard_ContextReusableAfterBadAllocFault(SslmGpuContext* ctx,
 	sslm_gpu_seq_release(ctx, cand_seq);
 }
 
+// T-2195 (Curie, S1/S4 commissioning cell, Claude/Poirot/1381076-t2195-t2189-closing-
+// confirmation.md): the WARM-arm extension of `TestGuard_ContextReusableAfterCaughtTailFault`
+// above. That cell's own candidate sequence is fresh when the fault fires -- the resume-barrier
+// latch (superslm_gpu.cpp, `io_external_kv_needs_resume_barrier`) starts false on a freshly
+// created handle (gpu_1p0.cpp's own UNORDERED_ACCESS creation state), the one shape in which S1's
+// remedy (`*io_external_kv_needs_resume_barrier = false` in the `!tail_executed` branch,
+// superslm_gpu.cpp's tail `runtime_error` catch) happens to write the correct value. Every
+// ordinary prompt exceeds `kT2169TdrSafeMaxChunkTokens` (4) tokens and therefore reaches the
+// latch's STEADY state (true) before any fault can occur -- S1's own failure sequence. This cell
+// reproduces that sequence:
+//
+//   call 1 (warm-up): a successful multi-sub-chunk prefill on a FRESH sequence, driving the latch
+//     from its creation-time false through at least one genuine resume-barrier read/write cycle
+//     to its true steady state (buffer left in COPY_SOURCE).
+//   call 2 (fault): the SAME pre-Close tail fault `TestGuard_ContextReusableAfterCaughtTailFault`
+//     injects, on the SAME sequence -- reached with the latch already true, the shape that cell's
+//     own fresh-handle construction cannot reach.
+//   call 3 (probe): a third call on the SAME sequence, no fault armed. Two oracles, both against
+//     THIS single call:
+//     (a) the resulting sequence state bit-compares against a reference sequence driven through
+//         the identical successful history (warm-up, then this same third call) with the fault
+//         never injected -- the discarded call's whole effect must be invisible, not merely
+//         non-crashing (T-2192's own "not merely 'not crash'" standard, restated at that cell's
+//         own token-match oracle).
+//     (b) the D3D12 debug layer's validation-message drain, scoped to exactly this call
+//         (`DrainDebugLayerMessages`, d3d12_harness.h) -- S1's predicted defect is a resume
+//         barrier asserting StateBefore=UNORDERED_ACCESS against a resource genuinely in
+//         COPY_SOURCE, which the debug layer is documented to flag as a validation ERROR (the
+//         SAME oracle `TestGuard_ContextReusableAfterCaughtTailFault` already uses at its own
+//         second call). Only meaningful with SSLM_GPU_ENABLE_DEBUG_LAYER=1 -- see that macro's
+//         header comment.
+//
+// This cell is also T-2192 finding S4's own commissioning construction (StandardsDocument.md
+// Sec5.4's must-reject): the sibling pins' `..._validation_messages == 0` assertions have a
+// must-accept (a clean run scores zero) and no prior must-reject -- nothing showed a genuinely
+// desynced latch produces a message on this device/driver. Oracle (b) here is exactly that
+// must-reject, authored independently of the S1 remedy's own author and producible by the real
+// data path (no seam beyond the pre-existing pre-Close tail-fault injection this suite's sibling
+// cells already use). If it fires, the instrument is commissioned and S1 is confirmed by
+// execution in the same run; if the assertion in (b) passes anyway (no message despite the
+// mismatched transition), that is the S4 refutation of S1's reachability on this device/driver,
+// and the instrument stays quarantined -- this cell reports whichever the execution shows, not a
+// predicted one.
+static void TestGuard_ContextReusableAfterCaughtTailFaultWarmArm(SslmGpuContext* ctx,
+                                                                    SslmGpuModelHandle* model) {
+	const int64_t kContextCap = 64;
+	// > kT2169TdrSafeMaxChunkTokens (4) -- splits into two sub-chunks (4 + 2), so the warm-up call
+	// itself exercises the multi-sub-chunk resume-barrier cycle before the fault ever fires.
+	const std::vector<int32_t> kWarmChunk = {600, 601, 602, 603, 604, 605};
+	const std::vector<int32_t> kFaultChunk = {650, 651, 652};
+	const std::vector<int32_t> kThirdCallChunk = {700, 701, 702};
+	const int32_t kNextToken = 899;
+
+	// Reference arm: the SAME successful history (warm-up, then the third-position call), with the
+	// fault never injected -- the never-faulted reference S1's own failure account calls for. A
+	// correct implementation discards the faulted call's entire effect, so this arm's state after
+	// its own second call is what the candidate arm's state after its THIRD call must match.
+	SslmGpuSequenceHandle* ref_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &ref_seq) == SSLM_OK);
+	const SslmGpuStatus ref_warmup_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, ref_seq, kWarmChunk.data(), static_cast<int32_t>(kWarmChunk.size()), kDispatchBudget);
+	CHECK_MSG(ref_warmup_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): reference arm's own warm-up call returned %s, want "
+	          "SSLM_OK -- the pin's own baseline is broken",
+	          GpuStatusName(ref_warmup_status));
+	const SslmGpuStatus ref_third_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, ref_seq, kThirdCallChunk.data(), static_cast<int32_t>(kThirdCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(ref_third_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): reference arm's own third-position call returned %s, "
+	          "want SSLM_OK", GpuStatusName(ref_third_status));
+	SeqSnapshot ref_snap;
+	CHECK(CaptureSnapshot(ref_seq, &ref_snap));
+	int32_t ref_token = -1;
+	const SslmGpuStatus ref_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, ref_seq, kNextToken, kDispatchBudget, &ref_token);
+	CHECK_MSG(ref_step_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): reference arm's own following decode step returned %s, "
+	          "want SSLM_OK", GpuStatusName(ref_step_status));
+	sslm_gpu_seq_release(ctx, ref_seq);
+
+	// Candidate arm: the three-call sequence under test, on ONE sequence handle throughout.
+	SslmGpuSequenceHandle* cand_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &cand_seq) == SSLM_OK);
+
+	// Call 1 (warm-up): drives the latch from creation-time false to its steady-state true across
+	// a genuine multi-sub-chunk resume-barrier cycle -- the state every real fault-adjacent call
+	// actually starts from.
+	const SslmGpuStatus warmup_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kWarmChunk.data(), static_cast<int32_t>(kWarmChunk.size()), kDispatchBudget);
+	CHECK_MSG(warmup_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): candidate arm's own warm-up call returned %s, want "
+	          "SSLM_OK -- the pin's own setup is broken",
+	          GpuStatusName(warmup_status));
+
+	// Drain and discard whatever the debug layer queued from setup/warm-up so the count read at
+	// call 3 below is attributable only to that call, matching
+	// `TestGuard_ContextReusableAfterCaughtTailFault`'s own convention.
+	(void)superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
+
+	// Call 2 (fault): the SAME pre-Close tail fault, now reached with the latch true (steady
+	// state) instead of the fresh-handle false the sibling pin's own first call reaches it at.
+	superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection();
+	const SslmGpuStatus fault_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kFaultChunk.data(), static_cast<int32_t>(kFaultChunk.size()), kDispatchBudget);
+	superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection();
+	CHECK_MSG(fault_call_status == SSLM_DEVICE_LOST,
+	          "Guard(warm-arm reusable pin): the faulted second call returned %s, want "
+	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected, investigate "
+	          "before trusting the third call's own result",
+	          GpuStatusName(fault_call_status));
+	// The faulted call's own recorded-but-discarded barriers are expected debug-layer noise (the
+	// list is Closed without ever executing) -- drained and discarded here so only call 3's own
+	// validation traffic is graded below.
+	(void)superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
+
+	// Call 3 (probe): no fault armed. This is the call S1 names as the one the three existing
+	// fresh-handle pins cannot reach -- the latch's disputed `false` write (S1) would mean this
+	// call issues no resume barrier where one is required, leaving the KV buffer's actual
+	// COPY_SOURCE state unresolved before the pre-copy transition asserts
+	// StateBefore=UNORDERED_ACCESS against it.
+	const SslmGpuStatus third_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kThirdCallChunk.data(), static_cast<int32_t>(kThirdCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(third_call_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): the THIRD call on the same context, after a caught "
+	          "mid-recording tail fault reached with the resume-barrier latch already true, "
+	          "returned %s instead of SSLM_OK",
+	          GpuStatusName(third_call_status));
+
+	// Oracle (b) -- S1's predicted defect (a resume barrier recorded with the wrong StateBefore)
+	// must surface as a WARNING-or-worse D3D12 validation message on this call; this is
+	// simultaneously the S4 must-reject the instrument has never been shown to satisfy. Only
+	// meaningful with SSLM_GPU_ENABLE_DEBUG_LAYER=1 set (returns 0 unconditionally otherwise).
+	const size_t third_call_validation_messages =
+	    superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
+	CHECK_MSG(third_call_validation_messages == 0,
+	          "Guard(warm-arm reusable pin): the THIRD call's own D3D12 debug-layer validation "
+	          "reported %zu WARNING-or-worse message(s) (see stderr, \"D3D12 VALIDATION\" lines "
+	          "above) -- the KV resume-barrier latch was left desynced by the caught fault reached "
+	          "with the latch already true (T-2195 S1)",
+	          third_call_validation_messages);
+
+	// Oracle (a) -- the third call's own resulting sequence state must bit-compare against the
+	// never-faulted reference arm's identical-history state; a status of SSLM_OK alone does not
+	// prove correctness (T-2192's own "not merely 'not crash'" standard).
+	SeqSnapshot cand_snap;
+	CHECK(CaptureSnapshot(cand_seq, &cand_snap));
+	CHECK_MSG(SnapshotsBitEqual(cand_snap, ref_snap),
+	          "Guard(warm-arm reusable pin): the third call's own resulting sequence state does not "
+	          "bit-compare against the never-faulted reference arm's identical-history state -- the "
+	          "candidate arm returned SSLM_OK without actually reproducing the correct KV/hidden "
+	          "state (T-2195 S1)");
+
+	int32_t cand_token = -1;
+	const SslmGpuStatus cand_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, cand_seq, kNextToken, kDispatchBudget, &cand_token);
+	CHECK_MSG(cand_step_status == SSLM_OK,
+	          "Guard(warm-arm reusable pin): the candidate arm's own following decode step (after "
+	          "recovery) returned %s, want SSLM_OK", GpuStatusName(cand_step_status));
+	CHECK_MSG(cand_token == ref_token,
+	          "Guard(warm-arm reusable pin): the third call's own following decode step produced "
+	          "token %d, want the never-faulted reference arm's token %d",
+	          cand_token, ref_token);
+
+	sslm_gpu_seq_release(ctx, cand_seq);
+}
+
 // T-2189 finding 4 (P2, D-SLM3689): `RunChunkAdmissionPreScan` (gpu_1p0.cpp) used to scan/embed
 // the FULL requested chunk length before applying the position cap, doing O(count * hidden_size)
 // work and allocating O(count * hidden_size) bytes even when the cap admits ZERO tokens -- a
@@ -777,6 +945,7 @@ int main(int argc, char** argv) {
 	volatile void* a9 = (void*)&TestGuard_ContextReusableAfterCaughtTailFault; (void)a9;
 	volatile void* a10 = (void*)&TestGuard_ContextReusableAfterSignalFault; (void)a10;
 	volatile void* a11 = (void*)&TestGuard_ContextReusableAfterBadAllocFault; (void)a11;
+	volatile void* a12 = (void*)&TestGuard_ContextReusableAfterCaughtTailFaultWarmArm; (void)a12;
 
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("this file's cells need --model1p5b=PATH -- not run");
@@ -823,6 +992,12 @@ int main(int argc, char** argv) {
 		// above -- each proves its own catch clause recovers the context for the call that follows.
 		TestGuard_ContextReusableAfterSignalFault(ctx, model);
 		TestGuard_ContextReusableAfterBadAllocFault(ctx, model);
+		// T-2195 (Curie): the warm-arm variant of TestGuard_ContextReusableAfterCaughtTailFault --
+		// same fault-injection shape, reached with the resume-barrier latch at its true steady
+		// state instead of a fresh handle's false. Runs last among the tail-fault family so an
+		// unexpected outcome here cannot leave the shared device in a state the cells above have
+		// not already exercised and recovered from.
+		TestGuard_ContextReusableAfterCaughtTailFaultWarmArm(ctx, model);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		CHECK_MSG(false, "failed to load --model1p5b=%s: %s", g_model_1p5b_path.c_str(), err.c_str());
