@@ -2269,9 +2269,34 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
 	    model->rope_cos_elem_count, model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
 	if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
+		// T-2184 remedy S1 (Brunel fix round 1, D-SLM3662): the same `Submitted` window
+		// `SubmitOneSequenceDecode`/`sslm_gpu_ready` (above) open and close around the per-token
+		// path -- this batched path bypassed both, so `seq->state`/`seq->in_flight`/
+		// `model->submitted_sequences` were never written here despite design Sec9's Concurrency/
+		// lifecycle row asserting "a batched chunk submission still occupies exactly one
+		// `Submitted` window per chunk (not per token)." `SubmitChunkToFullDepthForG5Bridge`
+		// returns the FINAL (sub-)chunk's own inflight token genuinely unfenced (its own header
+		// comment: "the caller's own async contract... only the FINAL (sub-)chunk's own inflight
+		// token is handed back unfinished"), so the fence for that last sub-chunk has not yet
+		// signaled at this point -- a concurrent caller on another thread (e.g.
+		// `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) genuinely observes this window while
+		// `RunLayerLoopGpuFinish` below blocks on it, exactly the reachable consequence the T-2184
+		// review named (`model->submitted_sequences == 0` falsely falling through to
+		// `SSLM_MODEL_HAS_LIVE_SEQUENCES` instead of `SSLM_BUSY`).
+		seq->in_flight = inflight;
+		seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+		model->submitted_sequences += 1;
 		int32_t ready = 0;
 		superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
 		                                      /*block=*/1, &ready);
+		// Symmetric clear -- `sslm_gpu_ready`'s own "collapse Submitted -> Idle in one call" once
+		// the fence has signaled (RunLayerLoopGpuFinish above is `block=1`, so it always has by
+		// this point). No adapter bookkeeping to mirror: this path always submits with
+		// `adapter_bridge = nullptr` (no LoRA on the chunk path), so `seq->in_flight_adapter` is
+		// never set here and needs no clearing, matching every other adapter-less caller.
+		seq->in_flight = nullptr;
+		seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+		if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
 	}
 	// Copy the (possibly partially-advanced, per the sub-chunk split's own synchronous-finish
 	// discipline, D-SLM3596/3649) live_state back into this handle's own canonical fields.
@@ -2313,6 +2338,46 @@ void ReproducePositionCapBoundaryEmbedSideEffect(SslmGpuModelHandle* model,
 }
 
 }  // namespace
+
+// T-2184 remedy C1 (Brunel fix round 1, D-SLM3662): a bench-only entry point that reproduces the
+// GENUINELY shipped (pre-T-2169, `e35edc1`) per-token prefill composition -- `sslm_gpu_seq_embed_
+// token` followed by `DriveGpuSeqToFullDepthForG5Bridge`, one submit-and-fence round-trip per
+// LAYER (28 for Qwen2.5-1.5B, `dispatch_budget=24`), issued once per token in a plain host loop.
+// Body copied verbatim from `e35edc1:src/gpu/gpu_1p0.cpp`'s own
+// `SslmGpuSeqPrefillPromptForG5Bridge` (including its own per-iteration busy check, `if (seq->
+// state != Idle) return SSLM_BUSY;` inside the loop, and its own `if (count > 0) seq->ready_for_
+// logits = true;` tail) -- not reconstructed from a description of it.
+//
+// WHY THIS EXISTS. The T-2184 review's own C1 finding: after Rungs 3/4 rewrote `SslmGpuSeqPrefill
+// PromptForG5Bridge`'s body to the pre-scan-then-batch composition, `tools/t2180_rung6_tokps.cpp`'s
+// own "shipped-per-token" bench arm -- N separate single-token calls into that SAME public bridge
+// function -- silently became the batched primitive at `chunk_len=1`, not the genuinely shipped
+// 28-round-trip-per-token path. `DriveGpuSeqToFullDepthForG5Bridge` (this file, above) still exists
+// and is still exactly the shipped shape, but its only remaining production caller is
+// `SslmGpuSeqDecodeStepForG5Bridge` -- neither prefill twin can reach it any more. This function is
+// the one new caller that can, for bench purposes only.
+//
+// NOT part of the shipped 1.0 API surface (matching `gpu_1p0_bench_bridge.h`'s own "not part of
+// the shipped GPU API surface, and not installed alongside it" convention) -- declared in that
+// header, `tools/t2180_rung6_tokps.cpp`'s own intended includer alongside its existing bench
+// accessors.
+SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
+                                                            SslmGpuSequenceHandle* seq,
+                                                            const int32_t* tokens, int32_t count,
+                                                            uint32_t dispatch_budget) {
+	if (!ctx || !seq || !seq->model || seq->ctx != ctx || (count > 0 && !tokens) || count < 0 ||
+	    dispatch_budget < 1) {
+		return SSLM_SEQUENCE_KV_BUFFER_MISMATCH;
+	}
+	for (int32_t i = 0; i < count; ++i) {
+		if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
+		const SslmGpuStatus st = sslm_gpu_seq_embed_token(ctx, seq, tokens[i]);
+		if (st != SSLM_OK) return st;
+		if (!DriveGpuSeqToFullDepthForG5Bridge(ctx, seq, dispatch_budget)) return SSLM_DEVICE_LOST;
+	}
+	if (count > 0) seq->ready_for_logits = true;
+	return SSLM_OK;
+}
 
 // G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): the
 // GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- embeds and drives EVERY token in
@@ -2437,6 +2502,21 @@ SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
 	    model->schemas.ByIndex(static_cast<size_t>(seq->bound_schema_index));
 	if (!entry) return SSLM_SEQUENCE_REJECTED;
 	if (count == 0) return SSLM_OK;  // matches the shipped per-token loop's own vacuous-loop exit.
+	// T-2184 remedy M1 (Brunel fix round 1, D-SLM3662): restores the shipped per-token loop's own
+	// ordering -- `Transition(tokens[0])` first, `SSLM_SEQUENCE_REJECTED` on failure, THEN the busy
+	// check (`e35edc1`'s own per-token body). The batched composition below had the busy check run
+	// FIRST, so a sequence left `Submitted` (reachable single-threaded through
+	// `sslm_decode_step_gpu`, `fixture_common.h:174`'s own documented idiom) whose first token is
+	// DFA-unreachable returned `SSLM_BUSY` here instead of the shipped `SSLM_SEQUENCE_REJECTED`.
+	// `*consumed` stays 0 on this path -- no earlier admitted token exists in THIS call to set
+	// `ready_for_logits`, matching the shipped loop's own first-iteration disposition exactly.
+	{
+		uint32_t reachability_probe_state = 0;
+		if (!model->schemas.Transition(*entry, seq->dfa_walk_state, static_cast<uint32_t>(tokens[0]),
+		                                &reachability_probe_state)) {
+			return SSLM_SEQUENCE_REJECTED;
+		}
+	}
 	if (seq->state != superslm_gpu::SslmSequenceGpuState::Idle) return SSLM_BUSY;
 
 	// T-2169 (Rung 3, design Sec5/Sec8): the pre-scan-then-batch composition -- host-side

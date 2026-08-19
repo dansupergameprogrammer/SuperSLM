@@ -26,4 +26,16 @@ int64_t* SslmGpuSeqHandleContextLengthForBench(SslmGpuSequenceHandle* seq);
 size_t SslmGpuSeqHandleHiddenSizeForBench(SslmGpuSequenceHandle* seq);
 int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq);  // T-2113 (N1)
 
+// T-2184 remedy C1 (Brunel fix round 1, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-
+// review.md; D-SLM3662): a bench-only entry point reproducing the GENUINELY shipped (pre-T-2169,
+// `e35edc1`) per-token prefill composition -- one submit-and-fence round-trip per layer, issued
+// once per token -- for a bench harness that needs a reference arm the T-2169 batching change did
+// not touch. `tools/t2180_rung6_tokps.cpp` is this declaration's intended includer, alongside
+// this header's existing accessors. See its own definition (src/gpu/gpu_1p0.cpp) for the full
+// account of why the batched public bridge functions can no longer serve this role.
+SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
+                                                            SslmGpuSequenceHandle* seq,
+                                                            const int32_t* tokens, int32_t count,
+                                                            uint32_t dispatch_budget);
+
 #endif  // SSLM_GPU_1P0_BENCH_BRIDGE_H
