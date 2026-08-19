@@ -25,17 +25,34 @@
 // public surface is frozen and the compile-gate mechanism has nothing undeclared to gate on.
 //
 // THE COUNTERS ARE WIRED INTO PRODUCTION (T-2180 rungs 2-4; T-2184 remedy M2, Brunel fix round 1,
-// D-SLM3662 -- this paragraph corrected from "not yet wired," true only until Rung 2 landed):
-//   1. `g_gpu_chunk_submit_count_probe` increments exactly once per
-//      `SubmitOneSubChunkToFullDepthForG5Bridge` call (i.e. once per command list opened and
-//      submitted for a chunk/sub-chunk -- design Sec5 steps 1/3/4), from inside that function's
-//      own body, guarded by `SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT`.
-//   2. `g_gpu_chunk_dispatch_count_probe` advances by `num_hidden_layers` per invocation of the
-//      Rung-2-extracted per-token, per-layer dispatch body (`RecordOneTokenFullDepthDispatchBody`,
-//      design Sec5's own D-SLM3595 ruling -- one invocation of that body issues one token's own
-//      FULL-DEPTH dispatch chain, all layers in a single call), same guard -- matching this
-//      header's own documented "delta == admit_count * num_hidden_layers" contract below, not a
-//      plain per-invocation `++`.
+// D-SLM3662; T-2185 remedy N3, Brunel fix round 2, D-SLM3676 -- this paragraph corrected a
+// SECOND time: the M2 rewrite named only one of the two sites for each counter and stated the
+// chunk path's own per-invocation semantics as if they held everywhere). BOTH counters have TWO
+// increment sites -- the single-token path (`RunLayerLoopGpuSubmit`, superslm_gpu.cpp) and the
+// chunk path (`SubmitOneSubChunkToFullDepthForG5Bridge`, same file) -- and the two sites advance
+// `g_gpu_chunk_dispatch_count_probe` by DIFFERENT amounts per call, because they dispatch
+// different amounts of work per call:
+//   1. `g_gpu_chunk_submit_count_probe` increments exactly once per command list opened and
+//      submitted -- once per `RunLayerLoopGpuSubmit` call (superslm_gpu.cpp:2126, the
+//      single-token/decode-step path -- a degenerate one-token "chunk" under this counter's own
+//      general definition, its own site comment states this) AND once per
+//      `SubmitOneSubChunkToFullDepthForG5Bridge` call (superslm_gpu.cpp:2433, the batched-chunk
+//      path's own per-sub-chunk primitive) -- both guarded by
+//      `SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT`.
+//   2. `g_gpu_chunk_dispatch_count_probe` advances by DIFFERENT amounts at its two sites, both
+//      invoking the same `RecordOneTokenFullDepthDispatchBody` (design Sec5's own D-SLM3595
+//      ruling): at the CHUNK site (superslm_gpu.cpp:2514, inside
+//      `SubmitOneSubChunkToFullDepthForG5Bridge`'s own per-admitted-token loop) that call always
+//      passes `layers_to_record = N` (num_hidden_layers) -- full depth -- so the counter advances
+//      by `N` there, once per admitted token, matching this header's own documented
+//      "delta == admit_count * num_hidden_layers" contract below. At the SINGLE-TOKEN site
+//      (superslm_gpu.cpp:2170, inside `RunLayerLoopGpuSubmit`) that same call passes
+//      `layers_to_record = min(layer_budget, num_hidden_layers - seq.layer_index)` -- a
+//      BUDGET-LIMITED PARTIAL SLICE, never the full layer count in general -- and the counter
+//      advances by exactly ONE there, once per call, regardless of how many layers that call's
+//      own partial slice actually dispatched: the single-token site counts CALLS, the chunk site
+//      counts LAYERS-DISPATCHED, and `admit_count * num_hidden_layers` is a property of the
+//      chunk path only.
 // Both are declared here, at namespace scope (not inside test_main.cpp's translation unit, and
 // not inside an anonymous namespace -- see tests/t2112-gpu-1p0-red-suite/fixture_common.h's own
 // header note on why a bench-bridge extern must bind to the real global symbol) so a definition
@@ -48,21 +65,27 @@
 
 namespace superslm_test {
 
-// One increment per chunk (or TDR-safe sub-chunk) submission -- the observable that
-// distinguishes "N tokens batched into few command lists" from "N tokens, N submissions" a
-// black-box content comparison cannot see. Declared `extern`, defined only once the builder
-// wires Rung 2 (see header comment above) -- referencing it before then is a genuine unresolved
-// external, not a header-only no-op.
+// One increment per command list opened and submitted -- the single-token path
+// (`RunLayerLoopGpuSubmit`, once per call) AND the chunk path
+// (`SubmitOneSubChunkToFullDepthForG5Bridge`, once per (sub-)chunk call) both increment this,
+// which is the observable that distinguishes "N tokens batched into few command lists" from
+// "N tokens, N submissions" a black-box content comparison cannot see. Declared `extern`, defined
+// only once the builder wires Rung 2 (see header comment above) -- referencing it before then is
+// a genuine unresolved external, not a header-only no-op.
 extern std::atomic<int64_t> g_gpu_chunk_submit_count_probe;
 
-// Advances by `num_hidden_layers` per per-token dispatch body invocation inside an open chunk
-// list (one such invocation issues that token's own full-depth dispatch chain, all layers in one
-// call) -- the "actual dispatch count issued" instrument design Sec9's Guard-vitality row names for all three
-// admission clamps (DFA, position-cap, embed_admit_count): a cell drives a chunk through the
-// batched primitive, reads this counter's delta, and asserts it equals exactly
+// Advances by `num_hidden_layers` per per-admitted-token invocation of
+// `RecordOneTokenFullDepthDispatchBody` INSIDE THE CHUNK PATH's own open-list loop
+// (`SubmitOneSubChunkToFullDepthForG5Bridge`, which always requests full depth per token) --
+// the "actual dispatch count issued" instrument design Sec9's Guard-vitality row names for all
+// three admission clamps (DFA, position-cap, embed_admit_count): a cell drives a chunk through
+// the batched primitive, reads this counter's delta, and asserts it equals exactly
 // `admit_count * num_hidden_layers` (mutation-provable: a clamp removed or off-by-one'd changes
 // how many tokens are admitted, which changes this delta, which the cell's own assertion then
-// catches).
+// catches). The single-token path (`RunLayerLoopGpuSubmit`) invokes the SAME body but with a
+// budget-limited partial layer slice, not full depth, and advances this counter by exactly one
+// per call regardless of that slice's own size -- the `admit_count * num_hidden_layers` contract
+// above holds on the chunk path only; see the header comment above for both sites' own semantics.
 extern std::atomic<int64_t> g_gpu_chunk_dispatch_count_probe;
 
 }  // namespace superslm_test
