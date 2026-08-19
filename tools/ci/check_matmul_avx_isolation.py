@@ -22,34 +22,45 @@ form) and was structurally blind to the `-DCMAKE_CXX_FLAGS=`/`/DCMAKE_CXX_FLAGS=
 command-line channel three of this repo's own CI jobs already use
 (`linux-x64-asan`, `linux-x64-tsan`, `branch-coverage`), and to `add_compile_options`
 (directory-scoped -- the widest-blast-radius spelling, applying to every target in the
-directory including every forced-tier library at once). This checker now closes a
-spellings x channels matrix, both axes required before the guard is trusted:
+directory including every forced-tier library at once).
 
-Spellings (any one of these landing a TU-wide AVX-family flag is a hit):
-  1. `target_compile_options(<target> ...)`             -- CMakeLists.txt
-  2. same, wrapped in a `$<$<COMPILE_LANGUAGE:CXX>:...>` generator expression
-  3. `add_compile_options(...)`                          -- CMakeLists.txt (directory-scoped)
-  4. `set_target_properties(<target> PROPERTIES COMPILE_OPTIONS "...")` -- CMakeLists.txt
-  5. `set(CMAKE_CXX_FLAGS[_<CONFIG>] "...")`             -- CMakeLists.txt
-
-Channels (any one of these carrying an AVX-family flag is a hit, independent of spelling):
-  A. The `CMakeLists.txt` file itself (spellings 1-5 above, scanned directly).
-  B. A `cmake -B`/`cmake --build`/direct-compiler-invocation command line in
-     `.github/workflows/tests.yml` or `build.bat` carrying `-DCMAKE_CXX_FLAGS=`/
-     `/DCMAKE_CXX_FLAGS=` (a global CMake cache variable -- TU-wide for every target the
-     configured project builds, which always includes src/matmul.cpp, so no
-     target-name correlation is needed) or, in `build.bat`, a direct compiler
-     invocation whose source-file list names `matmul.cpp` in the same logical
-     (`^`-continued) statement as an AVX-family flag.
+**Required coverage widened a second time, fold round 5 (D-SLM3583).** Confirmation
+review (T-2171, Finding 1) built an independently-found six-mutation population and found
+the fold-round-4 matrix caught only its own control mutation. Two coverage dimensions,
+per StandardsDocument.md §4: a **flag-text axis** the fold-round-4 matrix never widened
+-- `_AVX_FAMILY_FLAG_PATTERNS` matched only the four literal `-mavx2`/`-mavx512*`/
+`/arch:AVX2`/`/arch:AVX512*` spellings and was blind to the entire `-march=`/`-mtune=`
+family (`-march=native`, `-march=x86-64-v3`/`-v4`, and any named microarchitecture that
+selects AVX2/AVX-512, e.g. `-march=skylake-avx512`) -- the first thing a person reaches
+for when they want this file to go faster; a sixth CMake spelling,
+`string(APPEND|PREPEND CMAKE_CXX_FLAGS ...)`; and a third channel, an `env:` block's
+`CXXFLAGS`/`CFLAGS` entry in a workflow YAML file (TU-wide for every compiler invocation
+started under that environment, same as the existing `-DCMAKE_CXX_FLAGS=` CLI channel).
+And an **input-set axis** -- `main()` read a fixed, hand-maintained two-path list
+(the workflow file, one `build.bat`) behind an `os.path.isfile` guard that printed `OK`
+and skipped silently on a missing/renamed path, while 15 files in this repository carry
+a direct compiler invocation naming `src/matmul.cpp` (`tools/build_verify.bat` among
+them) and the checker opened exactly one. Both axes are closed: `_AVX_FAMILY_FLAG_PATTERNS`
+is widened, the CMakeLists.txt scan gains the sixth spelling, the workflow scan gains the
+`env:` channel, and the checker now derives its own scanned-file population at check time
+by walking the whole tree for direct-compiler-invocation sites naming `src/matmul.cpp`
+(`scan_repo_for_direct_invocations`) rather than reading one hand-maintained path -- a
+file this walk finds but cannot open is a **checker failure** (`CheckerFailure`, distinct
+stderr tag), not a silent skip; the `os.path.isfile`-guarded silent-skip path this
+replaces is removed for the workflow file too (it is now opened unconditionally via
+`_read_required`, which raises `CheckerFailure` rather than skipping on a missing path).
 
 Mutation-provable (Curie's own "pin the documented claim" discipline,
-~/.claude/personas/Implement/Curie/Curie.md): eight representative mutations span this
-matrix (the five CMakeLists.txt spellings; the CLI CMAKE_CXX_FLAGS channel in both its
-`-D` and `/D` forms, against `tests.yml`; and the build.bat direct-invocation channel)
--- CMAKE_CXX_FLAGS is the only spelling with a genuine CLI-settable form, which is why
-the matrix is not a full 5x2 cross-product. Every mutation must flip this script's exit
-code from 0 to 1; removing it again must flip it back, and the unmutated real tree must
-stay green throughout. Executed and recorded, this fold, per remedy (build log).
+~/.claude/personas/Implement/Curie/Curie.md): the fold-round-5 required-coverage floor is
+the confirmation review's own independently-built six-member population (one control,
+five independently-found: `add_compile_options(-mavx2)`, `add_compile_options(-march=native)`,
+`set(CMAKE_CXX_FLAGS ...)` with `-march=x86-64-v4`, `string(APPEND CMAKE_CXX_FLAGS " -mavx2")`,
+`target_compile_options(... -march=skylake-avx512)`, and a `CXXFLAGS` environment entry
+in `tests.yml`), plus a seventh, input-axis mutation (an AVX flag added to
+`tools/build_verify.bat`) proving the tree-wide search finds a file the old hard-coded
+list never opened. Every mutation must flip this script's exit code from 0 to 1;
+removing it again must flip it back, and the unmutated real tree must stay green
+throughout. Executed and recorded per remedy (build log).
 """
 from __future__ import annotations
 
@@ -62,20 +73,41 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
 _DEFAULT_CMAKELISTS = os.path.join(_REPO_ROOT, "CMakeLists.txt")
 _DEFAULT_WORKFLOW = os.path.join(_REPO_ROOT, ".github", "workflows", "tests.yml")
-_DEFAULT_BUILD_BAT = os.path.join(_REPO_ROOT, "build.bat")
+
+# Fold round 5 (D-SLM3583): directories a tree-wide search never needs to enter --
+# VCS internals and build/output trees that hold generated artifacts, never committed
+# source, and can be enormous (object files, .vcxproj files, coverage profiles). This
+# is an efficiency and noise exclusion only; every one of these names is also either
+# git-ignored (.gitignore: build/, out/, out-clang/, .worktrees/, __pycache__/, .vs/,
+# .idea/) or a VCS-internal directory (`.git`) that cannot carry committed source, so
+# excluding them cannot hide a real direct-compiler-invocation site.
+_TREE_SEARCH_EXCLUDE_DIRS = {
+    ".git", "build", "out", "out-clang", ".vs", ".idea", "__pycache__",
+    ".worktrees", "node_modules",
+}
 
 # Every TU-wide spelling of "enable AVX2 or AVX-512 for this whole translation unit"
-# across the four toolchains design §6.4 names (GCC, Clang, MSVC, ClangCL). Matched
-# case-sensitively (case-insensitively for the /arch: spellings, which MSVC accepts in
-# any case) against literal flag text -- these are the exact strings a real -m/-arch
-# flag would use; a false negative from a novel spelling is a gap in this list, not in
-# the check's own logic (StandardsDocument.md §4's "narrower than the real variation"
-# residual), routed here rather than invented.
+# across the four toolchains design §6.4 names (GCC, Clang, MSVC, ClangCL), plus the
+# `-march=`/`-mtune=` family fold round 5 adds (D-SLM3583): `native`, the x86-64-v3/v4
+# psABI microarchitecture levels, and any other `-march=`/`-mtune=` value. No named
+# microarchitecture is treated as safe -- a maintained list of "which named
+# microarchitectures imply AVX2/AVX-512 and which do not" is exactly the kind of list
+# StandardsDocument.md §4 names as narrower than the real variation and due to rot the
+# same way the four-literal-spelling list already did; every `-march=`/`-mtune=`
+# assignment is a hit instead, on the same reasoning the AVX-isolation claim itself
+# rests on -- a false positive on a genuinely AVX-free `-march=` value costs a human one
+# look at a red CI job, and a false negative here is the exact SIGILL-on-a-consumer-
+# machine class this whole guard exists to prevent. Matched case-sensitively (the GCC/
+# Clang spellings; case-insensitively for the MSVC `/arch:` spellings, which MSVC
+# accepts in any case) against literal flag text -- these are the exact strings a real
+# compiler flag would use; a false negative from a spelling outside this list is a gap
+# in this list, not in the check's own logic, routed here rather than invented.
 _AVX_FAMILY_FLAG_PATTERNS = [
     re.compile(r"-mavx2\b"),
     re.compile(r"-mavx512\w*"),
     re.compile(r"/arch:AVX2\b", re.IGNORECASE),
     re.compile(r"/arch:AVX512\w*", re.IGNORECASE),
+    re.compile(r"-m(?:arch|tune)=[A-Za-z0-9_.\-]+"),
 ]
 
 
@@ -88,7 +120,27 @@ def _contains_avx_flag(text: str) -> str | None:
     return None
 
 
-# --- Channel A: CMakeLists.txt, five spellings -----------------------------------
+class CheckerFailure(Exception):
+    """Fold round 5 (D-SLM3583): a file this checker's own search names -- as a
+    required input (CMakeLists.txt, the workflow YAML) or as a tree-wide discovered
+    direct-compiler-invocation site -- but cannot open. Distinct from "the guard's
+    coverage matrix found a TU-wide AVX flag": this means the checker could not
+    complete its own scan at all, which is failure, not a green result and not a
+    silent skip. Replaces the `os.path.isfile`-guarded silent-skip path that used to
+    print `OK` when the workflow file or `build.bat` had moved or been renamed."""
+
+
+def _read_required(path: str, purpose: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except OSError as exc:
+        raise CheckerFailure(
+            "could not open {} ({}): {}".format(purpose, path, exc)
+        ) from exc
+
+
+# --- Channel A: CMakeLists.txt, six spellings -------------------------------------
 
 # Spellings 1+2: target_compile_options(<target> ...) -- captures the full argument
 # list up to the matching close-paren (this project never nests parens inside this
@@ -110,6 +162,16 @@ _SET_TARGET_PROPERTIES_RE = re.compile(
 # Spelling 5: set(CMAKE_CXX_FLAGS ...) / set(CMAKE_CXX_FLAGS_<CONFIG> ...)
 _SET_CMAKE_CXX_FLAGS_RE = re.compile(
     r"set\s*\(\s*(CMAKE_CXX_FLAGS(?:_[A-Za-z0-9_]+)?)\s+([^)]*)\)", re.MULTILINE
+)
+
+# Spelling 6 (fold round 5, D-SLM3583): string(APPEND|PREPEND CMAKE_CXX_FLAGS ...) --
+# the confirmation review's own Finding 1 named this as "a sixth CMake spelling beside
+# the five", independently blind to the pre-fold-5 checker: it assigns to the same
+# directory-scoped, every-target variable spelling 5 already watches, via a different
+# CMake command.
+_STRING_APPEND_CMAKE_CXX_FLAGS_RE = re.compile(
+    r"string\s*\(\s*(APPEND|PREPEND)\s+(CMAKE_CXX_FLAGS(?:_[A-Za-z0-9_]+)?)\s+([^)]*)\)",
+    re.MULTILINE,
 )
 
 
@@ -164,10 +226,20 @@ def find_cmakelists_hits(cmakelists_text: str) -> list[dict]:
                 "line": _line_of(m.start()),
             })
 
+    for m in _STRING_APPEND_CMAKE_CXX_FLAGS_RE.finditer(cmakelists_text):
+        flag = _contains_avx_flag(m.group(3))
+        if flag:
+            hits.append({
+                "spelling": "string({} {})".format(m.group(1), m.group(2)),
+                "target": "(directory-scoped, every target)",
+                "flag": flag,
+                "line": _line_of(m.start()),
+            })
+
     return hits
 
 
-# --- Channel B: command-line -DCMAKE_CXX_FLAGS= / direct compiler invocation -------
+# --- Channel B: command line, environment, and direct compiler invocation ---------
 
 _CMAKE_CXX_FLAGS_CLI_RE = re.compile(
     r"[-/]DCMAKE_CXX_FLAGS(?:_[A-Za-z0-9_]+)?=(\"[^\"]*\"|'[^']*'|\S+)"
@@ -193,39 +265,103 @@ def find_cli_hits(text: str, source_label: str) -> list[dict]:
     return hits
 
 
-def find_build_bat_direct_invocation_hits(build_bat_text: str) -> list[dict]:
-    """Channel B, second form: build.bat's direct compiler-invocation recipes list
-    source files across multiple `^`-continued lines. Join each continued statement
-    into one logical line, and flag any statement whose source-file list names
-    matmul.cpp while an AVX-family flag also appears in the same statement."""
+# Channel B, second form (fold round 5, D-SLM3583): an `env:` block's `CXXFLAGS`/
+# `CFLAGS` entry in a workflow YAML file -- TU-wide for every compiler invocation
+# started under that environment, the same reasoning as the CLI `-DCMAKE_CXX_FLAGS=`
+# channel above, just set via the job/step environment instead of a command-line
+# argument. Line-based: YAML's own `key: value` shape needs no CMake-argument parsing.
+_ENV_CXXFLAGS_RE = re.compile(r"^\s*(CXXFLAGS|CFLAGS)\s*:\s*(.+)$", re.MULTILINE)
+
+
+def find_env_flag_hits(text: str, source_label: str) -> list[dict]:
     hits: list[dict] = []
-    lines = build_bat_text.split("\n")
-    i = 0
-    stmt_start_line = 0
-    stmt_parts: list[str] = []
-    while i < len(lines):
-        raw = lines[i]
-        stripped = raw.rstrip("\r")
-        if not stmt_parts:
-            stmt_start_line = i + 1
-        stmt_parts.append(stripped)
-        if stripped.rstrip().endswith("^"):
-            i += 1
-            continue
-        statement = "\n".join(stmt_parts)
-        stmt_parts = []
-        if "matmul.cpp" in statement:
-            flag = _contains_avx_flag(statement)
-            if flag:
-                hits.append({
-                    "spelling": "direct compiler invocation (build.bat)",
-                    "target": "(matmul.cpp named in this recipe's source list)",
-                    "flag": flag,
-                    "line": stmt_start_line,
-                    "source": "build.bat",
-                })
-        i += 1
+    for m in _ENV_CXXFLAGS_RE.finditer(text):
+        value = m.group(2).strip().strip("\"'")
+        flag = _contains_avx_flag(value)
+        if flag:
+            line_no = text.count("\n", 0, m.start()) + 1
+            hits.append({
+                "spelling": "{} (environment)".format(m.group(1)),
+                "target": "(every compiler invocation run under this env)",
+                "flag": flag,
+                "line": line_no,
+                "source": source_label,
+            })
     return hits
+
+
+# Channel B, third form: a direct compiler invocation (no CMake in between) whose
+# source-file list names matmul.cpp. Fold round 5 (D-SLM3583) generalizes this from a
+# single hard-coded `build.bat` scan to every file the tree-wide search finds --
+# `find_direct_invocation_hits` is applied uniformly to whatever
+# `scan_repo_for_direct_invocations` opens.
+_COMPILER_BASENAMES = {
+    "cl", "cl.exe",
+    "clang", "clang.exe",
+    "clang++", "clang++.exe",
+    "clang-cl", "clang-cl.exe",
+    "gcc", "gcc.exe",
+    "g++", "g++.exe",
+    "cc", "cc.exe",
+}
+
+
+def _is_compiler_invocation_first_token(line: str) -> bool:
+    """A logical statement is a candidate direct compiler invocation when its own
+    first line's first whitespace-delimited token's basename (stripped of any
+    directory prefix and surrounding quotes) is a known compiler command -- matching
+    the shape every direct invocation in this repository actually uses (`cl /nologo
+    ...`, one command starting the line, arguments after it)."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    first = stripped.split(None, 1)[0]
+    basename = os.path.basename(first.strip("\"'")).lower()
+    return basename in _COMPILER_BASENAMES
+
+
+def find_direct_invocation_hits(text: str, source_label: str) -> tuple[bool, list[dict]]:
+    """Scans `text` for a logical statement -- a line beginning with a known
+    compiler command, joined across any `^` (batch) or trailing `\\` (shell)
+    line-continuation the same way this repository's own `.bat` recipes are
+    written -- that names `matmul.cpp` in its source-file list.
+
+    Returns `(found_matmul_invocation, avx_hits)`: the first tells the tree-wide
+    caller this file belongs in the scanned population at all (it carries at least
+    one direct compiler invocation naming matmul.cpp, whether or not that invocation
+    also carries an AVX-family flag); the second is this file's own AVX-family-flag
+    hits, in the same shape `find_cli_hits`/`find_env_flag_hits` report."""
+    lines = text.split("\n")
+    found_invocation = False
+    avx_hits: list[dict] = []
+    i = 0
+    while i < len(lines):
+        raw = lines[i].rstrip("\r")
+        if _is_compiler_invocation_first_token(raw):
+            start_line = i + 1
+            parts = [raw]
+            cont = raw.rstrip()
+            while cont.endswith("^") or cont.endswith("\\"):
+                i += 1
+                if i >= len(lines):
+                    break
+                raw = lines[i].rstrip("\r")
+                parts.append(raw)
+                cont = raw.rstrip()
+            statement = "\n".join(parts)
+            if "matmul.cpp" in statement:
+                found_invocation = True
+                flag = _contains_avx_flag(statement)
+                if flag:
+                    avx_hits.append({
+                        "spelling": "direct compiler invocation",
+                        "target": "(matmul.cpp named in this recipe's source list)",
+                        "flag": flag,
+                        "line": start_line,
+                        "source": source_label,
+                    })
+        i += 1
+    return found_invocation, avx_hits
 
 
 def _display_path(path: str) -> str:
@@ -238,6 +374,48 @@ def _display_path(path: str) -> str:
         return path.replace("\\", "/")
 
 
+def scan_repo_for_direct_invocations(repo_root: str) -> tuple[list[str], list[dict]]:
+    """Fold round 5 (D-SLM3583) input-set axis: walks the whole tree under
+    `repo_root` -- excluding only build-output and VCS-internal directories that can
+    never carry committed source (`_TREE_SEARCH_EXCLUDE_DIRS`) -- and opens every
+    remaining file, replacing the previous hard-coded single-file (`build.bat`) scan.
+    A file this walk finds but cannot open is a `CheckerFailure`, not a silent skip --
+    the `os.path.isfile` guard this replaces printed `OK` on a missing/renamed path
+    instead. A file that cannot be decoded as UTF-8 text is not a candidate (it
+    cannot contain a text compiler recipe naming a `.cpp` source file) and is not an
+    error -- this is the tree's own binary/generated content (images, `.pdb`, etc.),
+    not a script this guard's claim is about.
+
+    Returns `(scanned_files, avx_hits)`: every repo-root-relative path found to carry
+    at least one direct compiler invocation naming `matmul.cpp` (sorted, for a stable
+    report), and every AVX-family-flag hit found across all of them.
+    """
+    scanned_files: list[str] = []
+    avx_hits: list[dict] = []
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [d for d in dirnames if d not in _TREE_SEARCH_EXCLUDE_DIRS]
+        for fname in sorted(filenames):
+            full_path = os.path.join(dirpath, fname)
+            try:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except UnicodeDecodeError:
+                continue
+            except OSError as exc:
+                raise CheckerFailure(
+                    "the tree walk found {} but could not open it: {}".format(
+                        _display_path(full_path), exc
+                    )
+                ) from exc
+            if "matmul.cpp" not in text:
+                continue
+            found, hits = find_direct_invocation_hits(text, _display_path(full_path))
+            if found:
+                scanned_files.append(_display_path(full_path))
+                avx_hits.extend(hits)
+    return sorted(scanned_files), avx_hits
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -248,33 +426,36 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--workflow",
         default=_DEFAULT_WORKFLOW,
-        help="Path to the CI workflow YAML to scan (default: .github/workflows/tests.yml).",
+        help="Path to the CI workflow YAML to scan for the CLI/environment channels "
+        "(default: .github/workflows/tests.yml).",
     )
     parser.add_argument(
-        "--build-bat",
-        default=_DEFAULT_BUILD_BAT,
-        help="Path to build.bat to scan (default: the repo root's own).",
+        "--repo-root",
+        default=_REPO_ROOT,
+        help="Root of the tree-wide search for files carrying a direct compiler "
+        "invocation naming src/matmul.cpp (default: this repo's own root). Fold "
+        "round 5 (D-SLM3583): replaces the old --build-bat single-file scan -- "
+        "every file under this root is a candidate, not one hand-maintained path.",
     )
     args = parser.parse_args(argv)
 
-    with open(args.cmakelists, "r", encoding="utf-8") as f:
-        cmakelists_text = f.read()
-    hits = find_cmakelists_hits(cmakelists_text)
-    for h in hits:
-        h["source"] = _display_path(args.cmakelists)
+    try:
+        cmakelists_text = _read_required(args.cmakelists, "the CMakeLists.txt to scan")
+        hits = find_cmakelists_hits(cmakelists_text)
+        for h in hits:
+            h["source"] = _display_path(args.cmakelists)
 
-    if os.path.isfile(args.workflow):
-        with open(args.workflow, "r", encoding="utf-8") as f:
-            workflow_text = f.read()
-        hits.extend(find_cli_hits(
-            workflow_text, _display_path(args.workflow)))
+        workflow_text = _read_required(args.workflow, "the CI workflow YAML to scan")
+        hits.extend(find_cli_hits(workflow_text, _display_path(args.workflow)))
+        hits.extend(find_env_flag_hits(workflow_text, _display_path(args.workflow)))
 
-    if os.path.isfile(args.build_bat):
-        with open(args.build_bat, "r", encoding="utf-8") as f:
-            build_bat_text = f.read()
-        hits.extend(find_cli_hits(
-            build_bat_text, _display_path(args.build_bat)))
-        hits.extend(find_build_bat_direct_invocation_hits(build_bat_text))
+        scanned_files, tree_hits = scan_repo_for_direct_invocations(args.repo_root)
+        hits.extend(tree_hits)
+    except CheckerFailure as exc:
+        sys.stderr.write(
+            "check_matmul_avx_isolation: CHECKER FAILURE -- {}\n".format(exc)
+        )
+        return 1
 
     if hits:
         sys.stderr.write(
@@ -295,8 +476,11 @@ def main(argv: list[str]) -> int:
         return 1
 
     print("check_matmul_avx_isolation: OK -- no translation-unit-wide AVX-family "
-          "compile flag found in any of the five CMakeLists.txt spellings or the "
-          "command-line/direct-invocation channels.")
+          "compile flag found in CMakeLists.txt's six spellings, the workflow's "
+          "command-line/environment channels, or any of the {} file(s) under {} "
+          "carrying a direct compiler invocation naming src/matmul.cpp.".format(
+              len(scanned_files), _display_path(args.repo_root)
+          ))
     return 0
 
 

@@ -288,11 +288,15 @@ endforeach()
 
 # T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
 # AVX-isolation claim (design §6.4) -- no construct in this file, in
-# .github/workflows/tests.yml's cmake invocations, or in build.bat's direct compiler
-# invocations may set a translation-unit-wide AVX2/AVX-512 flag (five CMakeLists.txt
-# spellings x the CLI/direct-invocation channels, fold round 4, D-SLM3570 -- see
-# tools/ci/check_matmul_avx_isolation.py's own header for the full matrix and its
-# mutation-vitality proof, executed and recorded in the T-2159 build log). Runs today,
+# .github/workflows/tests.yml's cmake/environment invocations, or in any file under
+# this repository's own tree carrying a direct compiler invocation naming
+# src/matmul.cpp may set a translation-unit-wide AVX2/AVX-512 flag (six CMakeLists.txt
+# spellings x three channels -- CLI, environment, direct invocation -- fold round 4,
+# D-SLM3570; widened again fold round 5, D-SLM3583, which also replaced the checker's
+# hard-coded build.bat-only direct-invocation scan with a tree-wide search rooted at
+# --repo-root -- see tools/ci/check_matmul_avx_isolation.py's own header for the full
+# matrix and its mutation-vitality proof, executed and recorded in the T-2159 build
+# log). Runs today,
 # unconditionally, independent of SUPERSLM_T2149_AVX_TIERS_BUILT: the claim it protects
 # ("only two function-attributed sites may use these instructions") is already true
 # (vacuously, since neither attributed site exists yet) and stays true once they land --
@@ -304,7 +308,7 @@ if(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/ci/check_matmul_avx_isolation.py
 			--cmakelists ${CMAKE_SOURCE_DIR}/CMakeLists.txt
 			--workflow ${CMAKE_SOURCE_DIR}/.github/workflows/tests.yml
-			--build-bat ${CMAKE_SOURCE_DIR}/build.bat)
+			--repo-root ${CMAKE_SOURCE_DIR})
 else()
 	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation ctest entry not added (the script itself is still committed and runnable directly).")
 endif()
