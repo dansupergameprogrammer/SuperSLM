@@ -2362,12 +2362,13 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// and returns a `superslm::SslmForwardStatus` instead of throwing), so neither exception type
 	// reaches this catch through that call chain any more -- `submit_status` carries the outcome
 	// (`GpuDeviceRemoved`/`GpuAllocationFailed`) through the ordinary `submit_status != Ok` path
-	// below instead. This try/catch is kept as defense-in-depth for any exception type not
-	// enumerated at the source (the same caveat the comment below already states: "a third type
-	// escaping here would still propagate uncaught"), not as this failure class's own containment
-	// path any more. `RunLayerLoopGpuFinish` is included in the same try for symmetry with this
-	// call's own tail -- both are the same class of D3D12 call -- though `RunLayerLoopGpuFinish`
-	// cannot itself throw: it wraps its entire body in `catch (const std::exception&)` and converts
+	// below instead. This try/catch is kept as defense-in-depth for any exception type not caught
+	// at the source (a third, unenumerated type escaping `SubmitOneSubChunkToFullDepthForG5Bridge`
+	// would otherwise propagate uncaught to this call's own caller), not as this failure class's
+	// own containment path any more. `RunLayerLoopGpuFinish` is included in the same try for
+	// symmetry with this call's own tail -- both are the same class of D3D12 call -- though
+	// `RunLayerLoopGpuFinish` cannot itself throw: it wraps its entire body in
+	// `catch (const std::exception&)` and converts
 	// to a status before returning (see its own definition, superslm_gpu.cpp).
 	//
 	// No status is returned from THIS function (it never has been -- see its own header comment);
