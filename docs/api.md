@@ -215,11 +215,14 @@ The G5 schema-constrained-decoding verbs (`SslmGpuModelHasSchemasForG5Bridge`,
 `include/superslm/gpu_1p0.h` surface as the rest of the GPU API above — the
 GPU-side twins of the CPU ABI's schema lookup, binding, prefill, and decode
 calls, proven bit-identical against the CPU path (matching digest across 80
-real decode steps) on the certified NVIDIA GPU. `SslmGpuSeqDecodeStepForG5Bridge`
-is the recommended one-call-per-decode-step entry point; a caller that
-always uses it (rather than hand-composing the lower-level embed/decode/ready
-calls) cannot reproduce a class of duplicate-KV-commit bug this project's own
-build process found and fixed while landing this surface.
+real decode steps) on the certified NVIDIA GPU. The same check passed
+bit-identical on the certified AMD GPU as well (measured 2026-08-17 on the
+Radeon RX 7900 XTX) — see [Certified platforms](platform-support.md).
+`SslmGpuSeqDecodeStepForG5Bridge` is the recommended one-call-per-decode-step
+entry point; a caller that always uses it (rather than hand-composing the
+lower-level embed/decode/ready calls) cannot reproduce a class of
+duplicate-KV-commit bug this project's own build process found and fixed
+while landing this surface.
 
 `SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
 are bulk-throughput calls, not submission-slicing contracts: each still
@@ -231,7 +234,3 @@ token. Per-call, per-token submission slicing by a dispatch budget remains
 the decode path's own contract — `sslm_decode_step_gpu` and
 `SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step — unchanged
 by either prefill call.
-
-The same check passed bit-identical on the certified AMD GPU as well
-(measured 2026-08-17 on the Radeon RX 7900 XTX) — see
-[Certified platforms](platform-support.md).
