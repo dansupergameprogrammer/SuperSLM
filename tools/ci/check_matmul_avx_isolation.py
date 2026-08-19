@@ -96,6 +96,12 @@ round 6: `find_cmakelists_hits` now runs against every `CMakeLists.txt`/`*.cmake
 tree-wide walk opens, on the same no-`matmul.cpp`-gate rule as the CLI, environment, and
 batch-environment channels; `--cmakelists` is a required-file existence check only, exactly
 like `--workflow`.
+
+**Confirmation review found four gaps, fold round 8 (T-2179).** The CMake channel read
+`CMakeLists.txt`/`*.cmake` and not `*.cmake.in`, missing `cmake/superslmConfig.cmake.in` --
+the one CMake-language file in this repository that reaches every downstream consumer's own
+configure via `find_package(superslm)` (fixed here: `.cmake.in` joins the scan on the same
+terms, M25 in the committed population).
 """
 from __future__ import annotations
 
@@ -587,7 +593,13 @@ def scan_repo(repo_root: str) -> tuple[list[str], list[dict]]:
             # the CLI/environment/batch-environment channels above: a
             # directory-scoped CMake flag assignment does not need to
             # co-occur with a matmul.cpp mention in the same file either.
-            if fname == "CMakeLists.txt" or fname.endswith(".cmake"):
+            # T-2179 Finding 5: cmake/superslmConfig.cmake.in is the template
+            # find_package(superslm) instantiates in every downstream consumer's
+            # own configure -- a directory-scoped flag there affects every
+            # consumer's build, not this repository's, and is the widest-blast-
+            # radius file this channel could miss. `.cmake.in` joins the scan on
+            # the same terms as `.cmake` and `CMakeLists.txt`.
+            if fname == "CMakeLists.txt" or fname.endswith(".cmake") or fname.endswith(".cmake.in"):
                 cmake_hits = find_cmakelists_hits(text)
                 for h in cmake_hits:
                     h["source"] = label

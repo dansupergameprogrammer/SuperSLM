@@ -77,18 +77,22 @@ def _ignore_scratch_dirs(_dir: str, names: list[str]) -> set[str]:
 
 
 def _materialize_scratch_tree(tmp_path: str) -> str:
-    """Copies this repository's CMakeLists.txt, .github/, tools/, and
+    """Copies this repository's CMakeLists.txt, .github/, tools/, cmake/, and
     build.bat -- the only paths any population member's `target` or the
     checker's own required-file arguments ever reference -- into a fresh
     scratch tree, preserving their real relative paths so `--repo-root`
-    against the scratch tree walks the same shape the real repo does."""
+    against the scratch tree walks the same shape the real repo does.
+    T-2179 Finding 5 (M25): cmake/ was missing here -- the scratch tree could
+    never exercise cmake/superslmConfig.cmake.in, the one CMake-language file
+    that reaches every downstream consumer's own configure (Observation 11 of
+    the confirmation review this member answers)."""
     scratch_root = os.path.join(tmp_path, "scratch")
     os.makedirs(scratch_root, exist_ok=True)
     for rel in ("CMakeLists.txt", "build.bat"):
         src = os.path.join(_REPO_ROOT, rel)
         if os.path.isfile(src):
             shutil.copy2(src, os.path.join(scratch_root, rel))
-    for rel_dir in (".github", "tools"):
+    for rel_dir in (".github", "tools", "cmake"):
         src_dir = os.path.join(_REPO_ROOT, rel_dir)
         dst_dir = os.path.join(scratch_root, rel_dir)
         if os.path.isdir(src_dir):
@@ -227,20 +231,22 @@ def test_population_member(member: dict, tmp_path, capsys) -> None:
         )
 
 
-def test_population_has_twenty_six_members():
-    """Twenty-four distinct mutation members (M1-M16 and M21-M24, N17-N20 --
+def test_population_has_twenty_seven_members():
+    """Twenty-five distinct mutation members (M1-M16 and M21-M25, N17-N20 --
     deduplicated across the three fold-6 casebooks per
-    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus
-    M21-M24 added at T-2177's confirmation: the quoted-multi-flag and
+    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, M21-M24
+    added at T-2177's confirmation: the quoted-multi-flag and
     prefix-assignment shell-environment shapes (Finding 3), the wired-
     subdirectory CMakeLists.txt shape (Finding 4), and CMake's typed
-    `-D<var>:<type>=` cache-variable spelling (Finding 6)) plus the
-    clean-tree control (G0) and the checker-failure cell (CF0) -- 26 total.
-    A count check catches a member silently dropped from the fixture file
-    without anyone noticing the parametrized test count shrank."""
-    assert len(_POPULATION) == 26
+    `-D<var>:<type>=` cache-variable spelling (Finding 6); M25 added at
+    T-2179's confirmation: the `.cmake.in` package-config template shape
+    (Finding 5)) plus the clean-tree control (G0) and the checker-failure
+    cell (CF0) -- 27 total. A count check catches a member silently dropped
+    from the fixture file without anyone noticing the parametrized test
+    count shrank."""
+    assert len(_POPULATION) == 27
     red_count = sum(1 for m in _POPULATION if m["expect"] == "red")
-    assert red_count == 24
+    assert red_count == 25
 
 
 def test_population_ids_are_unique():

@@ -199,7 +199,7 @@
   },
   {
     "id": "M22",
-    "source": "T-2177 Finding 3, design §20.4 item 3's prefix-assignment form",
+    "source": "T-2177 Finding 3, design \u00a720.4 item 3's prefix-assignment form",
     "kind": "new-file",
     "target": "tools/build_prefix_assign_multi_flag.sh",
     "insert_after_line": null,
@@ -235,6 +235,15 @@
     "target": "tools/build_typed_cache_var.sh",
     "insert_after_line": null,
     "content": "#!/bin/sh\ncmake -B build -DCMAKE_CXX_FLAGS:STRING=\"-mavx2\" -S .\n",
+    "expect": "red"
+  },
+  {
+    "id": "M25",
+    "source": "T-2179 Finding 5",
+    "kind": "existing-file-edit",
+    "target": "cmake/superslmConfig.cmake.in",
+    "insert_after_line": 1,
+    "content": "add_compile_options(-mavx2)\n",
     "expect": "red"
   },
   {
