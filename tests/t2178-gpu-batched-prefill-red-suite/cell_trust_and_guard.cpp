@@ -13,6 +13,19 @@ namespace {
 // Mirrors the probe's own ArmResult -- prefill status, ctxlen after prefill, and the consumer-
 // visible consequence of `ready_for_logits`: does the FOLLOWING decode step consume the token
 // it is handed, or silently finish the stale residual.
+//
+// D-SLM3654 (part 2, T-2183 fix): `prefill_dispatch_delta` is the
+// g_gpu_chunk_dispatch_count_probe delta bracketing ONLY the prefill call under test -- captured
+// inside RunPromptArm, strictly after PrimeSeq's own priming call and strictly before the
+// following decode step, mirroring fixture_common.h's own RunTwoArmPrompt convention (which
+// scopes its ref/cand deltas around the call under test, never around priming). The two callers
+// that need a dispatch-count claim (TestGuard_PositionCapClampDispatchCountInstrumented,
+// TestGuard_EmbedAdmitCountClampDispatchCountInstrumented) previously captured "before" outside
+// this function, ahead of the call that includes PrimeSeq's own real, dispatching prefill --
+// widening the observed window to include priming's own dispatch cost. Confirmed by exact
+// arithmetic against the real artifact: the previously observed deltas (168, 84) equal
+// `(prime_tokens + admitted_chunk_tokens) * num_hidden_layers` precisely, not
+// `admitted_chunk_tokens * num_hidden_layers` alone.
 struct BridgeArmResult {
 	bool ok = false;
 	SslmGpuStatus prefill_status = SSLM_OK;
@@ -21,6 +34,7 @@ struct BridgeArmResult {
 	int64_t ctxlen_after_step = 0;
 	bool step_consumed_its_token = false;
 	int32_t step_out_token = -1;
+	int64_t prefill_dispatch_delta = 0;
 };
 
 BridgeArmResult RunPromptArm(SslmGpuContext* ctx, SslmGpuModelHandle* model, int64_t context_cap,
@@ -30,8 +44,12 @@ BridgeArmResult RunPromptArm(SslmGpuContext* ctx, SslmGpuModelHandle* model, int
 	SslmGpuSequenceHandle* seq = nullptr;
 	if (sslm_gpu_seq_create(ctx, model, context_cap, &seq) != SSLM_OK || !seq) return r;
 	if (!PrimeSeq(ctx, seq, prime)) { sslm_gpu_seq_release(ctx, seq); return r; }
+	// D-SLM3654 (part 2): captured AFTER priming, bracketing only the prefill call under test.
+	const int64_t dispatch_before = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
 	r.prefill_status =
 	    SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, chunk.data(), submit_count, kDispatchBudget);
+	r.prefill_dispatch_delta =
+	    superslm_test::g_gpu_chunk_dispatch_count_probe.load() - dispatch_before;
 	r.ctxlen_after_prefill = *SslmGpuSeqHandleContextLengthForBench(seq);
 	const int64_t before = r.ctxlen_after_prefill;
 	int32_t out_token = -1;
@@ -189,17 +207,16 @@ static void TestGuard_PositionCapClampDispatchCountInstrumented(SslmGpuContext* 
 	const std::vector<int32_t> prime = {11, 22, 33, 44};  // context_length = 4
 	const std::vector<int32_t> chunk = {55, 66, 77, 88};  // only 2 admitted before cap=6
 
-	const int64_t before = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
 	const BridgeArmResult a = RunPromptArm(ctx, model, kSeqContextCap, prime, chunk,
 	                                        static_cast<int32_t>(chunk.size()), /*next_token=*/99);
-	const int64_t after = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
 	CHECK(a.ok);
 	const int64_t expected_dispatch_delta = 2 * static_cast<int64_t>(num_hidden_layers);
-	CHECK_MSG((after - before) == expected_dispatch_delta,
+	CHECK_MSG(a.prefill_dispatch_delta == expected_dispatch_delta,
 	          "Guard(position-cap clamp): dispatch-body invocations = %lld, expected exactly %lld "
 	          "(2 admitted tokens * num_hidden_layers) -- a clamp removed or off-by-one'd would "
 	          "dispatch for 3 or 4 tokens instead of 2, and this instrument would catch it",
-	          static_cast<long long>(after - before), static_cast<long long>(expected_dispatch_delta));
+	          static_cast<long long>(a.prefill_dispatch_delta),
+	          static_cast<long long>(expected_dispatch_delta));
 }
 
 static void TestGuard_EmbedAdmitCountClampDispatchCountInstrumented(SslmGpuContext* ctx,
@@ -210,18 +227,17 @@ static void TestGuard_EmbedAdmitCountClampDispatchCountInstrumented(SslmGpuConte
 	const int32_t kHostileToken = vocab_size + 1000000;
 	const std::vector<int32_t> chunk = {55, kHostileToken, 77};  // only index 0 admitted
 
-	const int64_t before = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
 	const BridgeArmResult a = RunPromptArm(ctx, model, /*context_cap=*/64, prime, chunk,
 	                                        static_cast<int32_t>(chunk.size()), /*next_token=*/99);
-	const int64_t after = superslm_test::g_gpu_chunk_dispatch_count_probe.load();
 	CHECK(a.ok);
 	const int64_t expected_dispatch_delta = 1 * static_cast<int64_t>(num_hidden_layers);
-	CHECK_MSG((after - before) == expected_dispatch_delta,
+	CHECK_MSG(a.prefill_dispatch_delta == expected_dispatch_delta,
 	          "Guard(embed_admit_count clamp): dispatch-body invocations = %lld, expected exactly "
 	          "%lld (1 admitted token * num_hidden_layers) -- a clamp removed would dispatch "
 	          "index 1's own layer chain despite its hostile embed, which this instrument catches "
 	          "even though the final K/V content might otherwise look plausible",
-	          static_cast<long long>(after - before), static_cast<long long>(expected_dispatch_delta));
+	          static_cast<long long>(a.prefill_dispatch_delta),
+	          static_cast<long long>(expected_dispatch_delta));
 }
 
 // --- Guard vitality (b): SSLM_BUSY under the widened in-flight window -- documented behavior

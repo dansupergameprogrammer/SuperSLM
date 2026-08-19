@@ -10,6 +10,15 @@
 
 using namespace superslm;
 
+// D-SLM3654 (part 1, T-2183 fix): the TDR-safe sub-chunk bound (Rung 2, D-SLM3649) is measured
+// AFTER this cell's own N=6 sub-cell was first authored (Rung 1) -- declared here, `extern`,
+// mirroring cell_ceiling_boundary.cpp's own identical declaration, so this file's own expected-
+// submission-count arithmetic is derived from the real bound rather than re-asserting the
+// pre-bound "always exactly 1" assumption that a 6-token chunk (bound=4) can no longer satisfy.
+namespace superslm_gpu {
+extern const uint32_t kT2169TdrSafeMaxChunkTokens;
+}  // namespace superslm_gpu
+
 // --- Cell 1: per-size sweep -- chunk_budget = 1 (mechanism-only), mid-size, N (discriminating).
 // Design Sec6 cell 1 / Sec9 Boundary row. Asserts K/V (via hidden_codes/hidden_scale/
 // kv_saturation), dfa_walk_state, context_length, and the SUBMISSION-COUNT claim (Sec4's own
@@ -50,10 +59,26 @@ static void TestCell1_PerSizeSweep(SslmGpuContext* ctx, SslmGpuModelHandle* mode
 		          "per token",
 		          sz.label, static_cast<long long>(r.cand_submits_delta), sz.n);
 		if (sz.discriminating) {
-			CHECK_MSG(r.cand_submits_delta == 1,
-			          "Cell1 [%s]: at this size (below any TDR-safe sub-chunk bound), the "
-			          "candidate arm must submit exactly once, not %lld times",
-			          sz.label, static_cast<long long>(r.cand_submits_delta));
+			// D-SLM3654 (part 1, T-2183 fix): a chunk larger than the ruled TDR-safe sub-chunk
+			// bound (superslm_gpu::kT2169TdrSafeMaxChunkTokens, D-SLM3649) necessarily splits
+			// into ceil(sz.n / bound) sub-chunk submissions -- a mathematical consequence of the
+			// bound, not an implementation choice. This was previously hardcoded to exactly 1,
+			// which is correct only while every discriminating size stays under the bound (sizes
+			// 1 and 3 both do, at bound=4); the N=6 sub-cell exceeds it and must split into
+			// exactly 2. The expected count is derived from the real bound rather than
+			// re-asserting the pre-bound assumption, so this cell stays correct at any bound the
+			// design measures on any hardware, not only the value measured on this machine.
+			const uint32_t bound = superslm_gpu::kT2169TdrSafeMaxChunkTokens;
+			CHECK_MSG(bound > 0, "Cell1 [%s]: the TDR-safe bound is 0 -- Rung 2's own measurement "
+			                      "did not run or produced a degenerate figure",
+			          sz.label);
+			const int64_t expected_submits =
+			    bound > 0 ? static_cast<int64_t>((sz.n + bound - 1) / bound) : 0;
+			CHECK_MSG(r.cand_submits_delta == expected_submits,
+			          "Cell1 [%s]: at this size (bound=%u), the candidate arm must submit exactly "
+			          "%lld time(s) (ceil(%zu / %u)), not %lld",
+			          sz.label, bound, static_cast<long long>(expected_submits), sz.n, bound,
+			          static_cast<long long>(r.cand_submits_delta));
 		}
 		// Dispatch count parity: both arms must issue the IDENTICAL total number of per-token
 		// dispatch-body invocations (sz.n * num_hidden_layers each) -- a batched call that skips

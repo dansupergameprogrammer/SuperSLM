@@ -16,6 +16,51 @@
 // is explicitly out of this fold's scope (design Sec6/Sec9). Per Curie's own "realize the model,
 // a gap in it is a finding, not an invention" discipline, this suite does not paper over that
 // stated gap with a weaker assertion.
+//
+// D-SLM3655 / the tenth failure origin (design Sec5.1/Sec9, D-SLM3634) is likewise a NAMED GAP,
+// not authored anywhere in this suite -- checked at T-2183 (Claude/Curie/
+// t2183-t2169-suite-gaps-2026-08-18.md) and confirmed UNAUTHORABLE against the seam the built
+// tree (brunel/t2180-gpu-batched-prefill) actually provides. The design's own Coverage Model text
+// (Sec9, Failure/rejection-paths row) specifies this cell as "a throwaway fault injected into the
+// chunk primitive's own recording pass, e.g. an allocation failure engineered at an
+// admitted-token index i > 0" -- the ONLY test-reachable fault-injection hook in this codebase,
+// `MaybeThrowInjectedO11AllocFault` (gpu_port.h's `kO11AllocInjectionSite*` constants,
+// src/gpu/superslm_gpu.cpp), fires from exactly two call sites, both inside
+// `PrepareGpuLayerLoopChunkOpenState` -- i.e. at CHUNK-OPEN, strictly before
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own per-token loop (the same function's `for
+// (uint32_t t = 0; t < chunk_len; ++t)` body, superslm_gpu.cpp) issues a single
+// `RecordOneTokenFullDepthDispatchBody` call for token index 0. No hook exists inside that loop
+// itself, so no test can force the exception AFTER at least one admitted token (i > 0, per the
+// design's own text) has already had its dispatches recorded into the open list -- exactly the
+// state D-SLM3634's own ruling (whole-(sub-)chunk discard of tokens `0..i-1`'s own
+// already-recorded-but-unexecuted dispatches) requires to be a discriminating proof rather than a
+// vacuous one (an exception at chunk-open, before token 0, discards nothing that was ever
+// recorded, so a cell built on the existing hook would pass under both a correct and an
+// INcorrect whole-chunk-discard implementation -- it could not fail for its own reason). The
+// alternative -- exploiting `GpuGemmGroupArithmeticError`'s own throw sites inside
+// `RecordOneTokenFullDepthDispatchBody` (`ComputeGpuGemmSiteGroupPlan`'s enumerator/
+// arithmetic guards) -- is not caller-input-triggerable: every GEMM-site-plan value is a fixed
+// per-site constant (superslm_gpu.cpp), never derived from anything a public-bridge caller
+// supplies, so no chunk content or size can make it throw at a chosen token index, or throw at
+// all, in a correctly-functioning build.
+//
+// SEAM SPECIFICATION (owed to the builder, not authored here -- authoring it is production code,
+// outside a test author's jurisdiction per Curie.md's own "does not implement" boundary): a new
+// test-only injection hook, guarded by its own macro (e.g.
+// `SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION`, mirroring `SUPERSLM_O11_ALLOC_INJECTION`'s
+// existing single-shot Arm/fire idiom rather than reusing its three named sites), called from
+// INSIDE `SubmitOneSubChunkToFullDepthForG5Bridge`'s own per-token loop -- immediately after
+// `RecordOneTokenFullDepthDispatchBody` returns for token index `t`, before the loop advances to
+// `t + 1` -- and parameterized by a armed "throw after recording this many admitted tokens in the
+// current (sub-)chunk" count (0-based token index within the (sub-)chunk, not a call-site
+// enumerator), throwing `GpuGemmGroupArithmeticError` (or the generic `std::runtime_error` twin
+// the same catch clause already handles) exactly once, single-shot, when the armed count is
+// reached. This lets a cell arm "throw after token index 1" against a >= 2-admitted-token chunk
+// and assert (a) the whole (sub-)chunk's command list closes unexecuted, (b) `seq`/`workspace`
+// are left at their pre-chunk state (not token 0's own would-have-committed state), and (c) the
+// residency caches are invalidated -- the three assertions design Sec9's own text names for this
+// cell. Until this hook exists, D-SLM3655 stays quarantined here as a named gap, not a silently
+// dropped one, per StandardsDocument.md Sec5.6's deferral-surfacing rule.
 #include "fixture_common.h"
 
 using namespace superslm;
