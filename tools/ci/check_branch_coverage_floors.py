@@ -172,16 +172,26 @@ def main() -> int:
     # -- e.g. "_measured_cell", stating which runner/toolchain/binary-set cell every
     # real floor below is pinned from. Skipped here so a comment is never compared
     # against a measured percentage as though it were one.
-    failures: list[str] = []
+    # T-2179 Finding 3: the loop below used to append both a below-floor line
+    # (got < floor) and a no-measurement line (got is None) to the SAME
+    # `failures` list, and `below_floor_count = len(failures)` snapshotted
+    # both classes together -- a pinned file with no measured coverage in
+    # this run (dropped out of the export entirely: renamed, excluded from
+    # the merged profile, a build variant that stopped emitting a profraw)
+    # is not below a floor, it was never measured, and the summary said it
+    # was below one. Two separate lists now, so each class is counted only
+    # by its own members.
+    below_floor: list[str] = []
+    no_measurement: list[str] = []
     for rel, floor in sorted(floors.items()):
         if rel.startswith("_"):
             continue
         got = measured.get(rel)
         if got is None:
-            failures.append(f"{rel}: no measured branch coverage in this run (file missing or unmeasured)")
+            no_measurement.append(f"{rel}: no measured branch coverage in this run (file missing or unmeasured)")
             continue
         if got < floor - 1e-9:
-            failures.append(f"{rel}: branch coverage {got:.2f}% < floor {floor:.2f}%")
+            below_floor.append(f"{rel}: branch coverage {got:.2f}% < floor {floor:.2f}%")
 
     # Fold round 6 (D-SLM3603): a measured, gated (`_MEASURED_PREFIXES`-scoped)
     # file with a nonzero branch count and no entry in the committed floors file
@@ -192,20 +202,23 @@ def main() -> int:
     # this file right now"), so both are closed by the same general rule rather
     # than a file-specific special case that would silently reopen for the next
     # file this happens to.
-    # T-2177 Finding 7: `unpinned` entries are a distinct failure class from
-    # `failures` above -- a file with no floor is not below one -- but both
-    # were appended to the same `failures` list and summarised by one line
-    # naming only "below their pinned branch-coverage floor". Counted
-    # separately here so the summary names what actually happened.
-    below_floor_count = len(failures)
+    # T-2177 Finding 7 / T-2179 Finding 3: `unpinned` and `no_measurement` are
+    # each a distinct failure class from `below_floor` -- a file with no floor
+    # is not below one, and a file with no measurement is not below one
+    # either -- so each is counted and summarised separately, naming exactly
+    # what happened rather than folding every class into "below their pinned
+    # branch-coverage floor".
+    below_floor_count = len(below_floor)
+    no_measurement_count = len(no_measurement)
     unpinned = sorted(set(measured) - set(floors))
-    for rel in unpinned:
-        failures.append(
-            f"floor unrecorded for {rel} -- commit the artifact value from "
-            "this run's measured-branch-coverage-floors artifact into "
-            "tools/ci/branch_coverage_floors.json"
-        )
+    unrecorded: list[str] = [
+        f"floor unrecorded for {rel} -- commit the artifact value from "
+        "this run's measured-branch-coverage-floors artifact into "
+        "tools/ci/branch_coverage_floors.json"
+        for rel in unpinned
+    ]
     unpinned_count = len(unpinned)
+    failures: list[str] = below_floor + no_measurement + unrecorded
 
     if allowlist:
         print(
@@ -223,6 +236,8 @@ def main() -> int:
             summary_parts.append(
                 f"{below_floor_count} file(s) below their pinned branch-coverage floor"
             )
+        if no_measurement_count:
+            summary_parts.append(f"{no_measurement_count} file(s) with no measured branch coverage")
         if unpinned_count:
             summary_parts.append(f"{unpinned_count} file(s) with no pinned floor")
         print(
