@@ -457,8 +457,10 @@ jobs:
   # are measured, never invented -- tools/ci/check_branch_coverage_floors.py
   # fails the build if any file's measured branch percentage drops below its
   # pinned floor, once that floor exists. tools/ci/branch_coverage_floors.json
-  # is committed: fourteen floors landed at commit 2809d73, measured from
-  # this job's own artifact run 32113553479 -- the design's own step 1, "the
+  # is committed: thirteen floors are pinned as of this commit (fourteen
+  # landed at 2809d73, measured from this job's own artifact run 32113553479;
+  # d73f131 removed src/matmul.cpp's entry -- see the file's own
+  # _measured_cell comment) -- the design's own step 1, "the
   # first run of this gate records the actual per-file percentages", has
   # already happened. This leg always records its own measurement to a build
   # artifact via `--record-floors-to` (design Sec4.3 step 1); a human copies
@@ -920,14 +922,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
-      - name: branch_coverage_floors.json is committed and pins at least one numeric floor
+      - name: branch_coverage_floors.json is committed and pins exactly thirteen numeric floors
         run: |
           python3 -c "
           import json
           with open('tools/ci/branch_coverage_floors.json') as f:
               floors = json.load(f)
           numeric = [k for k in floors if not k.startswith('_')]
-          assert numeric, 'tools/ci/branch_coverage_floors.json exists but pins no numeric floor'
+          assert len(numeric) == 13, (
+              'tests.yml\'s branch-coverage comment states the pinned-floor count; '
+              'update both together (measured: {})'.format(len(numeric))
+          )
           print('{} floor(s) pinned'.format(len(numeric)))
           "
       # T-2177 Finding 5's own reasoning applies recursively: a check written
