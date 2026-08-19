@@ -221,6 +221,17 @@ always uses it (rather than hand-composing the lower-level embed/decode/ready
 calls) cannot reproduce a class of duplicate-KV-commit bug this project's own
 build process found and fixed while landing this surface.
 
+`SslmGpuSeqPrefillPromptForG5Bridge` and `SslmGpuSeqPrefillSchemaContentForG5Bridge`
+are bulk-throughput calls, not submission-slicing contracts: each still
+validates its `dispatch_budget`/`dispatch_budget_per_token` parameter as
+nonzero, but records and submits every admitted token as one chunk
+(subject only to an internal, driver-stability sub-chunk split, unrelated
+to the parameter's value) rather than issuing budget-sized round trips per
+token. Per-call, per-token submission slicing by a dispatch budget remains
+the decode path's own contract — `sslm_decode_step_gpu` and
+`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step — unchanged
+by either prefill call.
+
 The same check passed bit-identical on the certified AMD GPU as well
 (measured 2026-08-17 on the Radeon RX 7900 XTX) — see
 [Certified platforms](platform-support.md).
