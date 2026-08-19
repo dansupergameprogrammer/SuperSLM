@@ -90,11 +90,17 @@ typedef enum SslmGpuStatus {
      *       every later call against this context fails too (`ID3D12CommandAllocator::Reset()`
      *       refuses an allocator whose list is still recording) -- also terminal, independent of
      *       what `GetDeviceRemovedReason()` reports, since a stuck list makes the context
-     *       unusable regardless of whether the device itself is confirmed gone. A fault raised
-     *       AFTER submission (`ExecuteCommandLists` already queued the work; only the fence
-     *       `Signal()` itself failed) is retried at the same fence value and waited out before
-     *       this function returns, so the context genuinely recovers on that path without
-     *       reaching either terminal case above. */
+     *       unusable regardless of whether the device itself is confirmed gone;
+     *     - a fault raised AFTER submission (`ExecuteCommandLists` already queued the work; only
+     *       the fence `Signal()` itself failed) is retried at a FRESH fence value minted for the
+     *       retry, never the same value the failed call attempted -- a same-value retry cannot
+     *       distinguish "the failed Signal() already advanced the fence" from "it did not," so it
+     *       is not issued. If the retry `Signal()` itself fails, no wait is attempted and this is
+     *       ALSO terminal: the buffers this call is about to release may still be in use by work
+     *       the GPU has not finished, indistinguishable from here from a genuinely removed device,
+     *       and `GetDeviceRemovedReason()` is what a caller must consult, exactly as the two cases
+     *       above. Only when the retry `Signal()` succeeds does the context genuinely recover on
+     *       this path -- waited out before this function returns. */
     SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */

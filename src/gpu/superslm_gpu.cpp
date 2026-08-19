@@ -2189,6 +2189,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	uint32_t dispatch_count_this_call = 0;
 	GpuLayerLoopChunkOpenState state;
 	const auto t_record_start = std::chrono::steady_clock::now();
+	// T-2195 remedy S1, class sweep (D-SLM3702 arc; Claude/Poirot/
+	// 1381076-t2195-t2189-closing-confirmation.md, Observation O1): the caller-owned resume-barrier
+	// latch's value AS THIS CALL FOUND IT, read exactly once, before any recording that could change
+	// it -- the identical capture `SubmitOneSubChunkToFullDepthForG5Bridge` (below) takes for the
+	// identical reason. O1 named this function's own latch write (below, at the readback
+	// transitions) as carrying the same defect as the chunk path's tail catch, masked only by this
+	// function's tail (`Close()`/`ExecuteCommandLists`/`Signal()`, below) having no containment at
+	// all -- a throw there today propagates uncaught past this function and the C ABI boundary above
+	// it. The tail try/catch added below closes that gap and needs this captured value the same way
+	// the sibling does.
+	const bool kv_resume_barrier_entry_value =
+	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
 	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
@@ -2388,55 +2400,144 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	}
-	SSLM_GPU_HR(dev.list->Close());
-	const auto t_record_end = std::chrono::steady_clock::now();
-	g_last_call_timing.record_ms =
-	    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+	// T-2195 remedy S1, class sweep (D-SLM3702 arc; Claude/Poirot/
+	// 1381076-t2195-t2189-closing-confirmation.md, Observation O1): this tail -- `Close()`,
+	// `ExecuteCommandLists`, `Signal()`, and the `GpuLayerLoopInFlight` allocation -- previously ran
+	// with no containment at all, unlike the chunk path's own tail (T-2189 finding 6; T-2192 findings
+	// T1/T2(a)/T2(b)). A throw here left the command list open/recording -- the same
+	// `dev.alloc->Reset()` deadlock T-2189 finding 6 closed for the chunk path -- and propagated
+	// uncaught past this function and the C ABI boundary above it. O1: "not reachable-and-continuing
+	// today only because nothing between that throw and the C ABI catches it" -- the throw exiting
+	// uncaught masked the defect's consequence, it did not make the defect absent. This try/catch
+	// gives this function's tail the identical containment shape
+	// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail already has (this file, above), landing
+	// this round's own S1 correction (restore the captured entry value, not a constant) from the
+	// moment the containment exists, rather than in two separate rounds.
+	bool tail_list_closed = false;
+	bool tail_executed = false;
+	try {
+		SSLM_GPU_HR(dev.list->Close());
+		tail_list_closed = true;
+		const auto t_record_end = std::chrono::steady_clock::now();
+		g_last_call_timing.record_ms =
+		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
 
-	// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
-	// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
-	// number. `gpu_busy_ms` (below, from the timestamp queries §31's own bracket placed around this
-	// call's first/last dispatch) is the GPU-only figure the roofline comparison is judged against.
-	ID3D12CommandList* lists[] = {dev.list.Get()};
-	dev.queue->ExecuteCommandLists(1, lists);
-	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-	// T-2113 (B5, design Sec6.2): NO fence-wait here -- "records ... submits ... and
-	// returns without waiting for the fence." Everything below used to run
-	// synchronously at this point (the wait, the GPU-timing readback, the SeqState/KV
-	// readback, the sticky-tag decode); it now lives in RunLayerLoopGpuFinish, driven
-	// by the in-flight token this call hands back. `record_ms` is still measured here
-	// (it is host-side recording time, already complete by this point); `submit_wait_ms`/
-	// `gpu_busy_ms`/`readback_ms` are now measured inside Finish, against the SAME
-	// `g_last_call_timing` global every existing caller of the synchronous
-	// `RunLayerLoopGpu` wrapper still reads after ITS OWN Submit+Finish pair completes.
-	std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
-	inflight->dev = &dev;
-	inflight->fence_val = dev.fence_val;
-	inflight->dispatch_count_this_call = dispatch_count_this_call;
-	inflight->seq_readback = seq_readback;
-	inflight->kv_readback = kv_readback;
-	inflight->kv_row_offsets = kv_row_offsets;
-	inflight->seq_bytes_size = SeqTotalSize(state.H);
-	inflight->hidden_size_h = state.H;
-	inflight->head_dim_hd = state.HD;
-	inflight->t_record_end = t_record_end;
-	// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
-	// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
-	// the use-after-free the Submit/Finish split would otherwise open. T-2169 (Rung 2b-prep):
-	// sourced from `state` now -- these are the same resources PrepareGpuLayerLoopChunkOpenState
-	// populated, unchanged, since it is still called exactly once per Submit call here.
-	inflight->layout_buf = state.layout_buf;
-	inflight->rope_buf = state.rope_buf;
-	inflight->model_const_buf = state.model_const_buf;
-	inflight->silu_lut_buf = state.silu_lut_buf;
-	inflight->scratch_layout_buf = state.scratch_layout_buf;
-	inflight->seq_uav = state.seq_uav;
-	inflight->scratch_uav = state.scratch_uav;
-	inflight->work_scratch_uav = state.work_scratch_uav;
-	inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
-	inflight->upload_keep_alive = state.upload_keep_alive;
-	if (out_inflight) *out_inflight = inflight.release();
-	return superslm::SslmForwardStatus::Ok;
+		// T-2101: `submit_wait_ms` is CPU time from submission to the fence signaling complete --
+		// submission overhead PLUS actual GPU execution PLUS driver/OS scheduling, NOT a GPU-only
+		// number. `gpu_busy_ms` (below, from the timestamp queries §31's own bracket placed around this
+		// call's first/last dispatch) is the GPU-only figure the roofline comparison is judged against.
+		ID3D12CommandList* lists[] = {dev.list.Get()};
+		dev.queue->ExecuteCommandLists(1, lists);
+		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement order
+		// above), matching the sibling's own identical assertion.
+		assert(tail_list_closed);
+		tail_executed = true;
+		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+		// T-2113 (B5, design Sec6.2): NO fence-wait here -- "records ... submits ... and
+		// returns without waiting for the fence." Everything below used to run
+		// synchronously at this point (the wait, the GPU-timing readback, the SeqState/KV
+		// readback, the sticky-tag decode); it now lives in RunLayerLoopGpuFinish, driven
+		// by the in-flight token this call hands back. `record_ms` is still measured here
+		// (it is host-side recording time, already complete by this point); `submit_wait_ms`/
+		// `gpu_busy_ms`/`readback_ms` are now measured inside Finish, against the SAME
+		// `g_last_call_timing` global every existing caller of the synchronous
+		// `RunLayerLoopGpu` wrapper still reads after ITS OWN Submit+Finish pair completes.
+		std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
+		inflight->dev = &dev;
+		inflight->fence_val = dev.fence_val;
+		inflight->dispatch_count_this_call = dispatch_count_this_call;
+		inflight->seq_readback = seq_readback;
+		inflight->kv_readback = kv_readback;
+		inflight->kv_row_offsets = kv_row_offsets;
+		inflight->seq_bytes_size = SeqTotalSize(state.H);
+		inflight->hidden_size_h = state.H;
+		inflight->head_dim_hd = state.HD;
+		inflight->t_record_end = t_record_end;
+		// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
+		// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
+		// the use-after-free the Submit/Finish split would otherwise open. T-2169 (Rung 2b-prep):
+		// sourced from `state` now -- these are the same resources PrepareGpuLayerLoopChunkOpenState
+		// populated, unchanged, since it is still called exactly once per Submit call here.
+		inflight->layout_buf = state.layout_buf;
+		inflight->rope_buf = state.rope_buf;
+		inflight->model_const_buf = state.model_const_buf;
+		inflight->silu_lut_buf = state.silu_lut_buf;
+		inflight->scratch_layout_buf = state.scratch_layout_buf;
+		inflight->seq_uav = state.seq_uav;
+		inflight->scratch_uav = state.scratch_uav;
+		inflight->work_scratch_uav = state.work_scratch_uav;
+		inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+		inflight->upload_keep_alive = state.upload_keep_alive;
+		if (out_inflight) *out_inflight = inflight.release();
+		return superslm::SslmForwardStatus::Ok;
+	} catch (const std::bad_alloc&) {
+		// Reached only after Close() and Signal() both succeeded -- mirrors
+		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own identical `bad_alloc` clause exactly (this
+		// file, above): the list is already Closed and the GPU already has this submission queued
+		// against the fence value just signaled, so every resource this stack is about to release
+		// (`seq_readback`/`kv_readback`/every `state` buffer) must wait the fence out first, rather
+		// than let a GPU-referenced resource's last COM reference drop while the device may still be
+		// using it.
+		InvalidateResidencyCachesOnThrow();
+		if (dev.fence->GetCompletedValue() < dev.fence_val) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
+			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		}
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	} catch (const std::runtime_error&) {
+		// A failed Close() or Signal() -- mirrors the sibling's own identical clause exactly,
+		// including this round's own S1 restore-the-entry-value correction from this containment's
+		// first landing (there is no prior round's constant-`false` version of this clause to have
+		// carried the T-2192 T1 defect, since this tail had no containment before this round).
+		InvalidateResidencyCachesOnThrow();
+		if (!tail_executed) {
+			// `ExecuteCommandLists` never ran: either Close() itself failed, or (unreachable today,
+			// no injected seam exists on this path) some future instrumentation fires before it. The
+			// caller-owned resume-barrier latch this function set above (at the readback transitions,
+			// `:2318-2319`) claims a COPY_SOURCE transition that did not run -- restore it to
+			// `kv_resume_barrier_entry_value`, the value captured before this call's own recording
+			// began, for the identical reason the sibling's own S1 fix restores it there.
+			if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
+				*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
+			}
+			// Best-effort retry, matching the sibling's own T2(a) disposition: a list still recording
+			// after a second failed Close() refuses every later `dev.alloc->Reset()` on this context,
+			// so the honest terminal status is `GpuDeviceRemoved`, not `GpuAllocationFailed`'s implied
+			// "recovered, reusable list."
+			const bool retry_closed = SUCCEEDED(dev.list->Close());
+			const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+			if (!retry_closed) {
+				return superslm::SslmForwardStatus::GpuDeviceRemoved;
+			}
+			return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+			                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+		}
+		// `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
+		// situation the `bad_alloc` clause above documents. Mint a FRESH, unambiguously-unreached
+		// fence value and signal that one, matching the sibling's own T2(b) fix exactly, rather than
+		// retry at whatever `dev.fence_val` already holds (a near-guaranteed silent no-op).
+		const UINT64 recovery_fence_val = ++dev.fence_val;
+		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), recovery_fence_val)) &&
+		    dev.fence->GetCompletedValue() < recovery_fence_val) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(recovery_fence_val, dev.fence_event))) {
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
+			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		}
+		// A failed retry leaves the about-to-be-released resources racing whatever the GPU is still
+		// doing with them -- indistinguishable, from here, from a genuinely removed device;
+		// GetDeviceRemovedReason() below is what actually reports that case, the same bounded-honesty
+		// disposition the `bad_alloc` clause above already accepts for the identical risk.
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	}
 }
 
 // T-2169 (Rung 2b, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634):
@@ -2499,6 +2600,19 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	// known-current (§5's own "the identical boundary point already established as
 	// known-current by that ruling").
 	const int64_t chunk_open_ctxlen = seq.context_length;
+	// T-2195 remedy S1 (D-SLM3702 arc, Claude/Poirot/1381076-t2195-t2189-closing-confirmation.md):
+	// the caller-owned resume-barrier latch's value AS THIS CALL FOUND IT, read exactly once, before
+	// any recording that could change it -- the same "read once, before recording" boundary
+	// `chunk_open_ctxlen` above already uses for the identical reason. This is the value the tail
+	// `runtime_error` catch's `!tail_executed` branch (below) restores on a discarded list: the
+	// latch is the sequence handle's standing memory of the KV buffer's state, not a per-call flag,
+	// so undoing everything this call recorded (what a discarded list means) means returning the
+	// latch to what it was BEFORE this call touched it -- which is this value, not a constant. A
+	// fresh handle's first call enters `false` and this correctly captures `false`; every later call
+	// enters `true` (the buffer already resting in COPY_SOURCE from the PRIOR call's own successful
+	// resume-barrier read/write cycle) and this correctly captures `true`.
+	const bool kv_resume_barrier_entry_value =
+	    io_external_kv_needs_resume_barrier != nullptr && *io_external_kv_needs_resume_barrier;
 	try {
 	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
 	    seq, layers, num_hidden_layers, /*layer_budget=*/num_hidden_layers, hidden_size, head_dim,
@@ -2773,11 +2887,24 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 			// itself failed. Either way nothing recorded into this list has executed or ever will
 			// -- T-2192 finding T1: the caller-owned resume-barrier latch this function set above
 			// (immediately before this tail try, whenever the recording body reached the readback
-			// transitions) claims a COPY_SOURCE transition that did not run. Clear it -- the same
-			// "undo what recording promised but execution never delivered" shape
-			// `InvalidateResidencyCachesOnThrow()` already applies to the two residency caches.
+			// transitions) claims a COPY_SOURCE transition that did not run.
+			//
+			// T-2195 remedy S1 (D-SLM3702 arc): restore the latch to `kv_resume_barrier_entry_value`
+			// -- the value THIS CALL FOUND on entry, captured above before any recording ran -- not
+			// an unconditional `false`. The latch is not a per-call flag; it is the handle's standing
+			// memory of the KV buffer's real state, and its steady state after any successful call is
+			// `true`. A discarded command list undoes everything this call recorded, INCLUDING the
+			// resume-barrier transition the recording body may have executed (in-list, not yet
+			// submitted) against a buffer already left in COPY_SOURCE by a PRIOR successful call --
+			// so the buffer is still in COPY_SOURCE and the correct post-discard latch value is
+			// whatever was true before this call touched it, which is exactly the entry value. Writing
+			// a constant `false` here is only correct for the one shape where the entry value happens
+			// to BE `false` (a fresh handle's first call); every call after the first on a sequence
+			// enters `true` and a constant `false` would silently desync the latch from the buffer's
+			// real state, reintroducing the identical invalid-prior-state transition this whole class
+			// exists to close, on the very next call.
 			if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
-				*io_external_kv_needs_resume_barrier = false;
+				*io_external_kv_needs_resume_barrier = kv_resume_barrier_entry_value;
 			}
 			// Best-effort retry, matching the two catch clauses above this try -- but this time the
 			// RESULT decides whether the context is honestly reusable (T-2192 finding T2(a)): a
