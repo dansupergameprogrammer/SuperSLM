@@ -61,7 +61,7 @@ static SslmForwardStatus RunLayerLoopImpl(SequenceLayerState& seq, int x) {
 
 _GPU_FIXTURE = """\
 namespace superslm_gpu {
-superslm::SslmForwardStatus RunLayerLoopGpuSubmit(superslm::SequenceLayerState& seq, int x) {
+superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(superslm::SequenceLayerState& seq, int x) {
 	if (x == 0) return superslm::SslmForwardStatus::InvalidLayerBudget;  // LayerBudgetZero
 	if (x < 1) return superslm::SslmForwardStatus::InvalidContextCap;  // ContextCapNonPositive
 	if (x == 2) {
@@ -77,6 +77,22 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(superslm::SequenceLayerState& 
 	// the check, which is why the repaired derivation raises instead of falling back.
 	const bool weights_resident = g_resident_weights.valid;
 	g_last_weight_upload_was_skipped = weights_resident;
+	// T-2169 (Rung 2b-prep): this function's own success return, subtracted back out by
+	// GPU_BELOW_LADDER_STATUSES (the "Ok" member) -- mirrors the real
+	// PrepareGpuLayerLoopChunkOpenState, which hands its own out_state back this way.
+	return superslm::SslmForwardStatus::Ok;
+}
+
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(superslm::SequenceLayerState& seq, int x) {
+	// T-2169 (Rung 2b-prep): the guard ladder and the residency decision moved into
+	// PrepareGpuLayerLoopChunkOpenState (above) -- Submit relays a non-Ok status
+	// unchanged (not a new logical path; see _LWUWS_PREP_RELAY_RETURN_STATEMENT's own
+	// header comment in the production checker) and otherwise proceeds to its own
+	// terminal success return, mirroring the real function's shape.
+	superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(seq, x);
+	if (prep_status != superslm::SslmForwardStatus::Ok) {
+		return prep_status;
+	}
 	// the real function ends via `RunLayerLoopGpuFinish`'s own
 	// `return DecodeStickyTag(sticky_tag);` -- not here. T-2113 (B5): Submit's own
 	// success path is now a real early return handing the caller an in-flight token,
@@ -586,8 +602,12 @@ def test_gpu_ladder_status_set_subtracts_the_named_below_ladder_status():
 
 
 def test_gpu_ladder_status_set_default_matches_marker_truncated_extraction_on_the_unmutated_fixture():
+    # T-2169 (Rung 2b-prep): both the marker-truncated cross-check and the real extraction now
+    # target PrepareGpuLayerLoopChunkOpenState -- the function the guard ladder and its own
+    # static_assert marker live in today, not RunLayerLoopGpuSubmit (see GPU_LADDER_FUNC_
+    # SIGNATURE's own header comment in the production checker for the full account of the move).
     old_way = chk.extract_status_set(
-        chk.extract_region(_GPU_FIXTURE, chk.GPU_FUNC_SIGNATURE, chk.GPU_GUARD_REGION_END_MARKER, label="fixture")
+        chk.extract_region(_GPU_FIXTURE, chk.GPU_LADDER_FUNC_SIGNATURE, chk.GPU_GUARD_REGION_END_MARKER, label="fixture")
     )
     new_way = chk.gpu_ladder_status_set(_GPU_FIXTURE)
     assert new_way == old_way == {"InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch"}
@@ -598,10 +618,11 @@ def test_real_tree_gpu_full_body_raw_set_before_subtraction_matches_the_review_o
     # legitimately returned below the GPU marker (KvPrecisionUnsupported,
     # twice, both device-capability rejections). Confirmed against the real
     # file: the RAW (pre-subtraction) set over the whole function body is
-    # exactly the named nine guards plus that one.
+    # exactly the named nine guards plus that one. T-2169 (Rung 2b-prep):
+    # this function's own body is PrepareGpuLayerLoopChunkOpenState now.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
-    body = chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="superslm_gpu.cpp")
+    body = chk.extract_function_body(gpu_text, chk.GPU_LADDER_FUNC_SIGNATURE, label="superslm_gpu.cpp")
     raw = chk.extract_status_set(body)
     assert raw - chk.GPU_BELOW_LADDER_STATUSES == {
         "InvalidLayerBudget", "InvalidContextCap", "HeadDimGeometryMismatch",
@@ -1505,11 +1526,15 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent():
 # survive); `count_any_return_statements` and `extract_catch_block_bodies` replace them. ---
 
 _GPU_FIXTURE_WITH_CATCHES = _GPU_FIXTURE.replace(
-    "\tconst bool weights_resident = g_resident_weights.valid;\n"
-    "\tg_last_weight_upload_was_skipped = weights_resident;\n",
+    "\tsuperslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(seq, x);\n"
+    "\tif (prep_status != superslm::SslmForwardStatus::Ok) {\n"
+    "\t\treturn prep_status;\n"
+    "\t}\n",
     "\ttry {\n"
-    "\t\tconst bool weights_resident = g_resident_weights.valid;\n"
-    "\t\tg_last_weight_upload_was_skipped = weights_resident;\n"
+    "\tsuperslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(seq, x);\n"
+    "\tif (prep_status != superslm::SslmForwardStatus::Ok) {\n"
+    "\t\treturn prep_status;\n"
+    "\t}\n"
     "\t} catch (const GpuGemmGroupArithmeticError&) {\n"
     "\t\tg_last_weight_upload_was_skipped = false;\n"
     "\t\treturn superslm::SslmForwardStatus::GpuGemmGroupArithmeticInvalid;\n"
@@ -1580,8 +1605,11 @@ def test_derive_before_count_raises_when_the_residency_statement_is_absent_with_
     # The catch term is optional (a function with none contributes zero); the residency-write
     # marker is not, even when catches exist -- confirmed on the WITH-CATCHES fixture too, not only
     # the plain one `test_derive_before_count_raises_when_the_residency_statement_is_absent` covers.
+    # T-2169 (Rung 2b-prep): the residency-write statement lives in PrepareGpuLayerLoopChunkOpenState
+    # now, at one tab of indent (not inside a try there -- the try/catch moved to
+    # RunLayerLoopGpuSubmit's own relay call), unlike the pre-Rung-2b-prep fixture's two-tab indent.
     without = _GPU_FIXTURE_WITH_CATCHES.replace(
-        "\t\tg_last_weight_upload_was_skipped = weights_resident;\n", ""
+        "\tg_last_weight_upload_was_skipped = weights_resident;\n", ""
     )
     try:
         chk.derive_lwuws_before_decision_count(without)
@@ -1594,11 +1622,15 @@ def test_the_real_tree_lwuws_before_count_is_fifteen():
     # T-2101's own two real catch clauses (GpuGemmGroupArithmeticError's, one literal return; the
     # generic std::runtime_error's, one ternary return) both counted now, on top of the thirteen
     # ladder/device-capability returns: 13 + 2 = 15, matching gpu_port.h's own corrected prose.
+    # T-2169 (Rung 2b-prep): the ladder/device-capability term now reads from
+    # PrepareGpuLayerLoopChunkOpenState's own body; the catch term still reads from
+    # RunLayerLoopGpuSubmit's own body, where both catch clauses still live.
     with open(chk.SUPERSLM_GPU_CPP, "r", encoding="utf-8") as f:
         gpu_text = f.read()
-    body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="x"))
-    before = body[:body.find(chk._LWUWS_RESIDENCY_WRITE_STATEMENT)]
-    catch_bodies = chk.extract_catch_block_bodies(body)
+    ladder_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_LADDER_FUNC_SIGNATURE, label="x"))
+    before = ladder_body[:ladder_body.find(chk._LWUWS_RESIDENCY_WRITE_STATEMENT)]
+    submit_body = chk.strip_comments(chk.extract_function_body(gpu_text, chk.GPU_FUNC_SIGNATURE, label="x"))
+    catch_bodies = chk.extract_catch_block_bodies(submit_body)
     assert len(catch_bodies) == 2
     assert chk.count_any_return_statements(before) == 13
     assert sum(chk.count_any_return_statements(b) for b in catch_bodies) == 2

@@ -1127,21 +1127,56 @@ void RecordOneTokenFullDepthDispatchBody(
 	}
 }
 
-// fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
-// external-weights/external-rope bridge (this section's own new work, gated entirely
-// behind the trailing parameters -- every existing behavior is reached identically
-// when they are all null/false/0, which is what every pre-B5 call site still passes).
-superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+// T-2169 (Rung 2b-prep, design Sec5.1, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
+// pack-and-residency decision, and the once-per-call root-signature/twelve-SRV-UAV-binding setup,
+// extracted verbatim from RunLayerLoopGpuSubmit's own former inline body -- a mechanical
+// relocation, not a rewrite; every line below is byte-for-byte what RunLayerLoopGpuSubmit used to
+// execute in this same order, only now reachable from a second caller (the chunk-submission
+// primitive, T-2169 Rung 2b) without duplicating this block's own ~900 lines of residency-cache
+// and guard-ladder logic a second time. Design Sec5.1 traces why this whole block is sound to run
+// exactly ONCE per Submit-equivalent call -- whether that call covers one token
+// (RunLayerLoopGpuSubmit's own existing shape) or a whole admitted chunk (the primitive) -- since
+// every one of the nine guards, and every one of the three residency-cache keys, tests only
+// call-level state that does not vary token-to-token within one call (D-SLM3632/D-SLM3633).
+//
+// Guard rejection is a plain, side-effect-free `return` (matching every guard's own pre-extraction
+// shape) -- reached before `dev.alloc->Reset()` ever runs, so the caller's own enclosing try/catch
+// (opened around THIS function's own call, not inside it) never sees a guard rejection as an
+// exception; it sees an ordinary non-Ok status and returns early itself, with no command list ever
+// opened and therefore nothing to close. Once the guards pass, every subsequent allocation
+// (`dev.Upload`/`dev.MakeBuffer`, all `SSLM_GPU_HR`-guarded) can throw `std::runtime_error` exactly
+// as it always could -- this function installs no try/catch of its own and lets such a throw
+// propagate to the caller's enclosing try, which is where the existing
+// `invalidate_residency_caches_on_throw`/`dev.list->Close()`/status-mapping catch clauses still
+// live, unchanged, because they are also used by the dispatch-recording and readback code that
+// still runs in the caller after this function returns successfully.
+struct GpuLayerLoopChunkOpenState {
+	uint32_t H = 0, HD = 0, NH = 0, NQH = 0, I = 0, N = 0, context_cap_u32 = 0;
+	GpuScratchLayout scratch_layout;
+	uint64_t work_wide_a_off = 0, work_wide_b_off = 0, work_adapter_u_off = 0;
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> silu_lut_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_layout_buf;
+	Microsoft::WRL::ComPtr<ID3D12Resource> lw_upload_keep_alive;
+	std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> upload_keep_alive;
+};
+
+superslm::SslmForwardStatus PrepareGpuLayerLoopChunkOpenState(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
     size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
     const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
     ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
-    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
-    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
-    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
-    const GpuAdapterBridge* adapter_bridge) {
-	if (out_inflight) *out_inflight = nullptr;
+    ID3D12Resource* external_weights_resident, ID3D12Resource* external_rope_cos_resident,
+    ID3D12Resource* external_rope_sin_resident, bool external_rope_has,
+    uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopChunkOpenState* out_state) {
 	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
 	// review.md, P2): set BEFORE every one of this function's eleven
 	// rejecting return paths (the nine guards below, `!dev.available`, and
@@ -1633,68 +1668,22 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 		if (sin_t != nullptr) std::memcpy(sin_table_bytes.data(), sin_t->data, sin_table_bytes.size());
 	}
 
-	// --- Build/upload every buffer this call needs, in ONE command list
-	// (upload-and-transition, then the composed dispatch chain, then the
-	// readback copies -- one submit, one fence wait). ---
 	// T-2101 (dispatch-overhead decomposition): `record_ms` covers this whole window, Reset()
 	// through Close() -- every Upload()/MakeBuffer() call and every dispatch's own recording. (The
 	// zero-reset for a REJECTED call lives at this function's own entry, above, alongside
 	// `g_last_weight_upload_was_skipped`'s own -- not here, since a rejected call never reaches
 	// this line at all.)
-	const auto t_record_start = std::chrono::steady_clock::now();
 	SSLM_GPU_HR(dev.alloc->Reset());
 	SSLM_GPU_HR(dev.list->Reset(dev.alloc.Get(), nullptr));
 
-	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
-	// review.md, P3, superseding T-2052 M2's own "caught here specifically,
-	// not fixed by a blanket try/catch" comment, WHICH THIS CORRECTION CLAIMED
-	// TO REMOVE AND DID NOT): EVERY allocation between here and this
-	// command list's own Close() below throws `std::runtime_error`
-	// (`SSLM_GPU_HR`, `d3d12_harness.h`) on a failing HRESULT. M2's own
-	// remedy caught exactly ONE of six allocation call-groups in this window
-	// (the DEFAULT-heap weight buffer, immediately below) -- the review
-	// found five others still uncaught, including the two allocations C5's
-	// own real 1.5B-tier run measures at 448.00 MiB each
-	// (`MakeInitializedUav`'s own DEFAULT-heap buffer for `kv_uav`, and
-	// `kv_readback` below). An uncaught throw from any of them left this
-	// command list mid-recording with no fence ever waited on -- undefined
-	// recovery for the caller's NEXT call, reachable on the consumer
-	// hardware §9 is written about, not only on the weight buffer's own
-	// ~1.31 GiB allocation M2 already covered. Named as ONE boundary rather
-	// than site by site (the review's own remedy shape): the try below
-	// spans every allocation this window issues.
-	//
-	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
-	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, S1; D-SLM3195,
-	// superseding whichever prior decision carried the "removed" claim): the
-	// paragraph above's parenthetical was false the day it was written --
-	// M2's own inner `try`/`catch` (immediately below, around the
-	// DEFAULT-heap weight allocation) was NOT removed; it survived, byte-
-	// identical, inside this new outer try, for two further rounds
-	// (T-2055, T-2059), silently winning over the outer catch for that one
-	// allocation and returning `KvPrecisionUnsupported` on it long after
-	// T-2057's own fold (D-SLM3190/D-SLM3191) retired that status's use here.
-	// Deleted now (S1's own remedy, at the inner block's own site below) --
-	// this paragraph is left as written, not rewritten, per this tree's own
-	// append-only discipline for a claim already shipped.
-	//
-	// EVERY variable below this point that the command list's own GPU
-	// virtual addresses reference -- every buffer `bind_and_dispatch` binds,
-	// plus the two readback buffers -- is declared HERE, OUTSIDE the try,
-	// and only ASSIGNED inside it. This is load-bearing, not cosmetic: a
-	// `ComPtr<ID3D12Resource>` declared WITH `auto` INSIDE the try releases
-	// its D3D12 resource at the try block's own closing brace, which runs
-	// BEFORE `ExecuteCommandLists`/the fence wait below (both outside the
-	// try) -- a genuine use-after-free of GPU memory the command list still
-	// references, not merely a C++-level scoping question. Caught by this
-	// round's OWN full-suite run: an intermediate draft of this change
-	// declared these buffers with `auto` inside the try and reproduced,
-	// deterministically, a real `DXGI_ERROR_DEVICE_REMOVED` (0x887a0005) on
-	// the second `RunLayerLoopGpu` call of the suite (a content-changed
-	// weight-cache-miss call, `TestT2019_B2_GuardPath...RoundingDivideByPot
-	// ExponentOutOfDomain`'s `which == 1` iteration) -- fixed by this
-	// hoisting, re-verified by a full, clean 33870/3 re-run before this
-	// round's own checkpoint.
+	// EVERY variable below this point that the command list's own GPU virtual addresses
+	// reference is declared here, in the caller-visible out_state, or as a plain local that does
+	// not need to survive past this function's own return -- see RunLayerLoopGpuSubmit's own
+	// former comment on this exact hazard (a `ComPtr` released before ExecuteCommandLists/the
+	// fence wait is a genuine GPU-memory use-after-free, reproduced once by execution, T-2049).
+	// No try/catch here (see this function's own header comment) -- every allocation below can
+	// throw `std::runtime_error` via `SSLM_GPU_HR`, and the caller's own enclosing try/catch is
+	// what handles it, exactly as it always did when this code ran inline.
 	Microsoft::WRL::ComPtr<ID3D12Resource> layout_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> rope_buf;
 	Microsoft::WRL::ComPtr<ID3D12Resource> model_const_buf;
@@ -1707,100 +1696,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	Microsoft::WRL::ComPtr<ID3D12Resource> scratch_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> kv_uav;
 	Microsoft::WRL::ComPtr<ID3D12Resource> work_scratch_uav;
-	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
-	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
-	// T-2101: which K/V rows this call's dispatches wrote (src offset in `kv_uav` == dst offset in
-	// `workspace`) -- read after the fence wait below, well outside the try, so hoisted here for the
-	// same reason as the ComPtr resources immediately above.
-	std::vector<size_t> kv_row_offsets;
-	// T-2101 (per-site decomposition): how many timestamp boundaries this call actually recorded --
-	// also read after the fence wait, well outside the try, hoisted for the identical reason.
-	uint32_t dispatch_count_this_call = 0;
-	// T-2101 (S4, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @ f7026db):
-	// shared by BOTH catch clauses below (the generic D3D12-failure one and the new
-	// `GpuGemmGroupArithmeticError` one) so the cache-invalidation contract is written once and
-	// cannot drift between the two paths.
-	//
-	// T-2101 (S4): consolidated here, this round, from two catch clauses' own duplicated inline
-	// code -- the reasoning below (T-2055, T-2062 M-b, T-2080 S3) is UNCHANGED and still describes
-	// exactly what these five lines do; only their location moved.
-	//
-	// T-2055 (Claude/Poirot/db73b22-gpu-serial-port-final-confirmation-
-	// review.md, P3): defensively invalidate the weight-residency cache
-	// regardless of WHERE in the window the throw happened. A throw
-	// reached AFTER `g_resident_weights` was already marked valid+resident
-	// (the `!weights_resident` branch below, once ITS OWN CopyResource is
-	// merely RECORDED) but BEFORE this command list actually executes
-	// would otherwise leave that assignment describing a DEFAULT-heap
-	// buffer whose content copy was never submitted to the GPU -- serving
-	// it back to the NEXT call as a cache hit would bind an uninitialized
-	// VRAM buffer to every site's own weight reads with no error at all,
-	// the silent-wrong-answer class this whole arc exists to close, not
-	// merely the crash class M1 already closed. Safe unconditionally: if
-	// the cache was never touched this call (a hit, or a throw before the
-	// `!weights_resident` branch ran), this is a same-state no-op.
-	//
-	// CORRECTED 2026-08-14 (T-2062, Claude/Poirot/
-	// a3d44e7-gpu-serial-port-ship-confirmation-review.md, M-b): "this is
-	// a same-state no-op" is false on the CACHE-HIT path specifically --
-	// left as written above, not rewritten, per this tree's own
-	// append-only discipline. On a hit, `g_resident_weights.valid` was
-	// already `true` and `lw_buf` already held the resident DEFAULT-heap
-	// copy BEFORE this call ever ran (a prior call's own success path set
-	// it); the two lines below unconditionally reset it to invalid --
-	// forcing the NEXT call into a full re-upload of the packed row
-	// (~1.31 GiB across PCIe at the 1.5B tier) that a hit exists to
-	// avoid, which is a real state CHANGE, not a no-op, on that one path.
-	// The conservative DIRECTION the paragraph above argues for is still
-	// correct and unchanged -- reproduced by execution (the review's own
-	// probe: a cache-hit call that throws, followed by a well-formed call
-	// with identical content, reads back a forced miss) -- what was wrong
-	// is calling a real, deliberate cache-state change a no-op.
-	//
-	// T-2101: the same reasoning applies to the K/V residency cache -- a throw reached after
-	// `g_resident_kv` was marked valid (the miss branch below, once its own CopyResource is
-	// merely recorded) but before this command list actually executes would otherwise serve an
-	// uninitialized or partially-written VRAM buffer back to the NEXT call as a cache hit, with
-	// no error. Invalidated unconditionally, matching the weight cache's own unconditional reset
-	// immediately above; a hit call that throws pays a full re-upload on its next call, which is
-	// the same real state change the weight cache's own T-2062 (M-b) correction already
-	// documents as correct, not a no-op.
-	//
-	// T-2062 (M-b): beside the cache invalidation above, not left to the
-	// function-entry assignment alone -- a throw in this window is a TWELFTH
-	// rejecting return path `gpu_port.h`'s own "true of a REJECTING call
-	// too" enumeration (T-2055, P2) did not count when it said eleven.
-	// Without this line, a cache-hit call that throws here left
-	// `LastWeightUploadWasSkipped()` reading the call's own STALE `true`
-	// (set on entry to `false`, then overwritten `true` at the residency
-	// decision earlier in this same call, before the throw) even though
-	// the two lines above have just made the cache non-resident --
-	// reproduced by the review's own probe (call 5: `skipped=1` from a
-	// call whose catch had just invalidated the cache). Setting it
-	// here makes the observable agree with the state it describes on
-	// this path.
-	//
-	// CORRECTED 2026-08-14 (T-2080, Claude/Poirot/
-	// 94ebee3-gpu-serial-port-closing-review.md, S3; D-SLM3241): the
-	// sentence this replaces claimed the observable "agrees with the
-	// state it describes on every one of this function's ... rejecting
-	// paths" -- unscoped, and false: `gpu_port.h`'s own `Last
-	// WeightUploadWasSkipped` paragraph (T-2075, S2) measured that the
-	// STICKY-TAG-decoded path (this function's own terminal `return
-	// DecodeStickyTag(sticky_tag);`) reads `true` on a rejecting call,
-	// honestly, because that call's own upload genuinely was skipped.
-	// "Agrees on every rejecting path" is not the true contract; see
-	// `gpu_port.h`'s own paragraph for the actual one (`false` before
-	// the residency decision runs, exactly `weights_resident` after
-	// it) -- not restated a second time here.
-	auto invalidate_residency_caches_on_throw = [&]() {
-		g_resident_weights.lw_buf.Reset();
-		g_resident_weights.valid = false;
-		g_resident_kv.kv_buf.Reset();
-		g_resident_kv.valid = false;
-		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
-	};
-	try {
 	// T-2049 (N3, Claude/Poirot/34ef30f-gpu-serial-port-confirmation-review.md):
 	// on a residency-cache miss, the packed row is copied into a genuine
 	// DEFAULT-heap (VRAM-resident) buffer -- not cached as an UPLOAD-heap
@@ -1982,11 +1877,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-	// T-2169 (Rung 2, D-SLM3595): every other per-site pipeline fetch, the GEMM-plan computation,
-	// the flattened attention/RoPE group counts, the GEMM-group-arithmetic standing guard, and the
-	// bind_and_dispatch/bind_and_dispatch_tail lambdas that used to live here now live inside
-	// RecordOneTokenFullDepthDispatchBody (above) -- this fetch survives only because its root
-	// signature is bound once, below, before that extracted body's first call.
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
@@ -2062,6 +1952,86 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	dev.list->SetComputeRootShaderResourceView(
 	    14, (adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get())->GetGPUVirtualAddress());
 
+	out_state->H = H;
+	out_state->HD = HD;
+	out_state->NH = NH;
+	out_state->NQH = NQH;
+	out_state->I = I;
+	out_state->N = N;
+	out_state->context_cap_u32 = static_cast<uint32_t>(context_cap);
+	out_state->scratch_layout = scratch_layout;
+	out_state->work_wide_a_off = work_wide_a_off;
+	out_state->work_wide_b_off = work_wide_b_off;
+	out_state->work_adapter_u_off = work_adapter_u_off;
+	out_state->seq_uav = seq_uav;
+	out_state->kv_uav = kv_uav;
+	out_state->scratch_uav = scratch_uav;
+	out_state->work_scratch_uav = work_scratch_uav;
+	out_state->layout_buf = layout_buf;
+	out_state->rope_buf = rope_buf;
+	out_state->model_const_buf = model_const_buf;
+	out_state->silu_lut_buf = silu_lut_buf;
+	out_state->scratch_layout_buf = scratch_layout_buf;
+	out_state->lw_upload_keep_alive = lw_upload_keep_alive;
+	out_state->upload_keep_alive = upload_keep_alive;
+	return superslm::SslmForwardStatus::Ok;
+}
+
+// fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
+// external-weights/external-rope bridge (this section's own new work, gated entirely
+// behind the trailing parameters -- every existing behavior is reached identically
+// when they are all null/false/0, which is what every pre-B5 call site still passes).
+superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, uint32_t layer_budget, size_t hidden_size, size_t head_dim,
+    size_t num_key_value_heads, size_t intermediate_size, int64_t context_cap,
+    const superslm::SslmTensorManifest& rope_tables, uint8_t* workspace, size_t workspace_size,
+    ID3D12Resource* external_kv_resident, bool* io_external_kv_needs_resume_barrier,
+    GpuLayerLoopInFlight** out_inflight, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge) {
+	if (out_inflight) *out_inflight = nullptr;
+	// T-2169 (Rung 2b-prep, D-SLM3632/D-SLM3633): the guard ladder, the weight/rope/K-V
+	// pack-and-residency decision, and the once-per-call root-signature/binding setup now live in
+	// PrepareGpuLayerLoopChunkOpenState (above) -- a mechanical extraction, called here exactly
+	// once per Submit call, matching this function's own pre-extraction behavior for its own
+	// single-token callers. `invalidate_residency_caches_on_throw` and the readback-lifetime
+	// resources stay declared here: they are used by the dispatch-recording/readback code below
+	// and by this function's own catch clauses, neither of which moved.
+	auto invalidate_residency_caches_on_throw = [&]() {
+		g_resident_weights.lw_buf.Reset();
+		g_resident_weights.valid = false;
+		g_resident_kv.kv_buf.Reset();
+		g_resident_kv.valid = false;
+		g_last_weight_upload_was_skipped = false;  // ANCHOR:lwuws_write_catch
+	};
+	harness::Device& dev = harness::GetDevice();
+	Microsoft::WRL::ComPtr<ID3D12Resource> seq_readback;
+	Microsoft::WRL::ComPtr<ID3D12Resource> kv_readback;
+	std::vector<size_t> kv_row_offsets;
+	uint32_t dispatch_count_this_call = 0;
+	GpuLayerLoopChunkOpenState state;
+	const auto t_record_start = std::chrono::steady_clock::now();
+	try {
+	const superslm::SslmForwardStatus prep_status = PrepareGpuLayerLoopChunkOpenState(
+	    seq, layers, num_hidden_layers, layer_budget, hidden_size, head_dim, num_key_value_heads,
+	    intermediate_size, context_cap, rope_tables, workspace, workspace_size, external_kv_resident,
+	    io_external_kv_needs_resume_barrier, external_weights_resident, external_rope_cos_resident,
+	    external_rope_sin_resident, external_rope_has, external_rope_cos_elems,
+	    external_rope_sin_elems, adapter_bridge, &state);
+	if (prep_status != superslm::SslmForwardStatus::Ok) {
+		return prep_status;  // a guard rejected before any recording began -- nothing to close
+	}
+	const uint32_t H = state.H;
+	const uint32_t HD = state.HD;
+	const uint32_t NH = state.NH;
+	const uint32_t NQH = state.NQH;
+	const uint32_t I = state.I;
+	const uint32_t N = state.N;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& seq_uav = state.seq_uav;
+	Microsoft::WRL::ComPtr<ID3D12Resource>& kv_uav = state.kv_uav;
+
 	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
 	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
 	// Sec9.4: this token attends to every already-committed position plus its
@@ -2088,9 +2058,9 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// inline loop issued for the identical layer range (Rung 2's own refactor-safety cell proves
 	// it) -- only the code that issues it moved into its own function.
 	RecordOneTokenFullDepthDispatchBody(dev, start_layer, layers_to_record, H, HD, NH, NQH, I, N,
-	                                     context_cap_u32, position_u32, width_u32, scratch_layout,
-	                                     work_wide_a_off, work_wide_b_off, work_adapter_u_off,
-	                                     adapter_bridge, dispatch_query_index);
+	                                     context_cap_u32, position_u32, width_u32, state.scratch_layout,
+	                                     state.work_wide_a_off, state.work_wide_b_off,
+	                                     state.work_adapter_u_off, adapter_bridge, dispatch_query_index);
 	// One final boundary, immediately after the LAST dispatch (the final layer's own commit_site
 	// above) -- `dispatch_query_index` now equals the total dispatch count this call issued, so
 	// this is boundary N for N dispatches, giving N per-dispatch deltas below. Resolved into a
@@ -2108,7 +2078,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// in-place K rotation touches the SAME row, never a different one) -- the identical
 	// `KvHalfOffsetGpu`/`KvRowOffsetWithinHalfGpu` addressing `KeyRowGpu`/`ValueRowGpu` below use
 	// host-side, so every offset computed here is exact, not an approximation of what changed. ---
-	seq_readback = dev.MakeBuffer(seq_bytes.size(), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
+	seq_readback = dev.MakeBuffer(SeqTotalSize(H), D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_FLAG_NONE,
 	                                    D3D12_RESOURCE_STATE_COPY_DEST);
 	kv_row_offsets.reserve(static_cast<size_t>(layers_to_record) * NH * 2u);
 	for (uint32_t i = 0; i < layers_to_record; ++i) {
@@ -2141,7 +2111,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// pre-existing g_resident_kv path already left it for kv_fast_hit's own resume
 	// barrier to find on the NEXT call -- latch that fact into the caller-owned flag on
 	// the external-buffer path too, so THIS handle's own next call knows to resume it.
-	if (external_kv && io_external_kv_needs_resume_barrier != nullptr) {
+	if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
 		*io_external_kv_needs_resume_barrier = true;
 	}
 	dev.list->CopyResource(seq_readback.Get(), seq_uav.Get());
@@ -2254,23 +2224,25 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	inflight->seq_readback = seq_readback;
 	inflight->kv_readback = kv_readback;
 	inflight->kv_row_offsets = kv_row_offsets;
-	inflight->seq_bytes_size = seq_bytes.size();
-	inflight->hidden_size_h = H;
-	inflight->head_dim_hd = HD;
+	inflight->seq_bytes_size = SeqTotalSize(state.H);
+	inflight->hidden_size_h = state.H;
+	inflight->head_dim_hd = state.HD;
 	inflight->t_record_end = t_record_end;
 	// T-2113 (B5): extend every per-call GPU resource's lifetime to the fence, per
 	// GpuLayerLoopInFlight's own struct comment -- these ComPtr copies are what close
-	// the use-after-free the Submit/Finish split would otherwise open.
-	inflight->layout_buf = layout_buf;
-	inflight->rope_buf = rope_buf;
-	inflight->model_const_buf = model_const_buf;
-	inflight->silu_lut_buf = silu_lut_buf;
-	inflight->scratch_layout_buf = scratch_layout_buf;
-	inflight->seq_uav = seq_uav;
-	inflight->scratch_uav = scratch_uav;
-	inflight->work_scratch_uav = work_scratch_uav;
-	inflight->lw_upload_keep_alive = lw_upload_keep_alive;
-	inflight->upload_keep_alive = upload_keep_alive;
+	// the use-after-free the Submit/Finish split would otherwise open. T-2169 (Rung 2b-prep):
+	// sourced from `state` now -- these are the same resources PrepareGpuLayerLoopChunkOpenState
+	// populated, unchanged, since it is still called exactly once per Submit call here.
+	inflight->layout_buf = state.layout_buf;
+	inflight->rope_buf = state.rope_buf;
+	inflight->model_const_buf = state.model_const_buf;
+	inflight->silu_lut_buf = state.silu_lut_buf;
+	inflight->scratch_layout_buf = state.scratch_layout_buf;
+	inflight->seq_uav = state.seq_uav;
+	inflight->scratch_uav = state.scratch_uav;
+	inflight->work_scratch_uav = state.work_scratch_uav;
+	inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+	inflight->upload_keep_alive = state.upload_keep_alive;
 	if (out_inflight) *out_inflight = inflight.release();
 	return superslm::SslmForwardStatus::Ok;
 }
