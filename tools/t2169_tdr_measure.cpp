@@ -208,18 +208,33 @@ int main(int argc, char** argv) {
 	// excluded from the rate fit, matching this project's own established "one warmup step,
 	// discarded" convention, PrepareGpuLayerLoopChunkOpenState's own fresh_sequence comment).
 	double warm_ms = 0.0;
+#if defined(SUPERSLM_T2169_MINIMAL_CRASH_REPRO)
+	// Minimal, isolated repro for cdb: chunk_tokens=8 as the ONLY call in the process, no warmup.
+	double crash_ms = 0.0;
+	std::fprintf(stderr, "REPRO: about to call chunk_tokens=8\n");
+	std::fflush(stderr);
+	if (!MeasureOneChunkSize(model_view, layers, embed_w, embed_site_constant, 8, &crash_ms)) return 1;
+	std::printf("REPRO: chunk_tokens=8 gpu_busy_ms=%.4f (did not crash?!)\n", crash_ms);
+	return 0;
+#endif
 	if (!MeasureOneChunkSize(model_view, layers, embed_w, embed_site_constant, 1, &warm_ms)) return 1;
 	std::printf("warm-up (discarded): chunk_tokens=1 gpu_busy_ms=%.4f\n", warm_ms);
 
-	// NOTE: chunk_tokens=8 is EXCLUDED here -- reproducibly crashes this process with
-	// STATUS_STACK_OVERFLOW (0xC00000FD), a genuine hardware-executed finding, not a TDR event
-	// (confirmed: no Display/nvlddmkm TDR-recovery event in the System event log at the crash
-	// time; the identical crash reproduces as the FIRST and ONLY call in a fresh process, ruling
-	// out cumulative-VRAM-churn across repeated calls; /STACK:16777216 -- 16x the 1MB default --
-	// does not avoid it, arguing against "large-but-bounded per-call stack frame" and toward a
-	// genuinely unbounded/looping growth specific to chunk_tokens>=8). Root cause NOT yet
-	// isolated -- filed as its own blocking defect (build log), not worked around here.
-	const uint32_t sizes[] = {2, 3, 4, 5, 6, 7};
+	// HISTORICAL NOTE (superseded by the fix below, kept for the record): this pass's own first
+	// run swept {2,3,4,5,6,7}, all single-list (the split-wrapper did not exist yet), and found
+	// chunk_tokens=8 reproducibly crashed the process with STATUS_STACK_OVERFLOW (0xC00000FD) --
+	// root-caused under cdb as a recursive cycle entirely inside nvwgf2umx.dll (NVIDIA's own
+	// D3D12 driver), not this codebase. D-SLM3641: SubmitChunkToFullDepthForG5Bridge
+	// (src/gpu/superslm_gpu.cpp) now internally splits any chunk larger than
+	// superslm_gpu::kT2169TdrSafeMaxChunkTokens into multiple sub-chunk submissions, each
+	// finished synchronously before the next opens. Consequence for THIS tool: calling the
+	// public name at chunk_tokens > kT2169TdrSafeMaxChunkTokens now measures only the LAST
+	// sub-chunk's own gpu_busy_ms, not the whole requested chunk's -- the swept set below is
+	// restricted to {2,3,4}, all <= the bound (4), so every measurement here stays single-list
+	// and directly comparable to a real command-list's own busy time, matching what this rate
+	// fit needs. tools/t2169_rung2b_selfcheck.cpp's own chunk_tokens=8/256 cells are what
+	// exercise and bit-identity-verify the split path itself.
+	const uint32_t sizes[] = {2, 3, 4};
 	double total_ms_per_dispatch = 0.0;
 	int fits = 0;
 	for (uint32_t sz : sizes) {
@@ -235,17 +250,21 @@ int main(int argc, char** argv) {
 		++fits;
 	}
 	const double mean_ms_per_dispatch = total_ms_per_dispatch / fits;
-	std::printf("measured mean: %.6f ms/dispatch (over chunk_tokens={2,3,4,5,6,7})\n", mean_ms_per_dispatch);
+	std::printf("measured mean: %.6f ms/dispatch (over chunk_tokens={2,3,4})\n", mean_ms_per_dispatch);
 
 	const double dispatches_per_token = static_cast<double>(num_hidden_layers) * kDispatchesPerLayer;
 	const double tdr_bound_exact = tdr_budget_ms / (mean_ms_per_dispatch * dispatches_per_token);
 	std::printf(
-	    "\nTDR-ARITHMETIC-ONLY BOUND (NOT the safe figure to ship): %.1f tokens would fit under "
-	    "half this platform's TDR budget at the measured rate (dispatches/token=%.0f, budget=%.1f "
-	    "ms, rate=%.6f ms/dispatch). This number is FAR above what is actually safe: chunk_tokens=8 "
-	    "reproducibly crashes this process (STATUS_STACK_OVERFLOW) well below it -- see this tool's "
-	    "own header comment. kT2169TdrSafeMaxChunkTokens is NOT defined by this pass; the binding "
-	    "constraint right now is the unexplained chunk_tokens>=8 crash, not the TDR arithmetic.\n",
+	    "\nTDR-ARITHMETIC-ONLY BOUND (NOT what is shipped): %.1f tokens would fit under half this "
+	    "platform's TDR budget at the measured rate (dispatches/token=%.0f, budget=%.1f ms, "
+	    "rate=%.6f ms/dispatch). This number is FAR above what is actually safe on this hardware: "
+	    "an uncapped chunk_tokens=8 in one command list reproducibly crashed this process with "
+	    "STATUS_STACK_OVERFLOW, root-caused under cdb as a recursive cycle entirely inside "
+	    "nvwgf2umx.dll (NVIDIA's own D3D12 driver), not this codebase -- see this tool's own "
+	    "header comment. superslm_gpu::kT2169TdrSafeMaxChunkTokens is DEFINED (src/gpu/"
+	    "superslm_gpu.cpp, D-SLM3641) at 4 -- half the confirmed-crashing point, the smaller of "
+	    "the TDR ceiling and the driver-stability ceiling -- and SubmitChunkToFullDepthForG5Bridge "
+	    "now splits any larger chunk into sub-chunks at that bound automatically.\n",
 	    tdr_bound_exact, dispatches_per_token, tdr_budget_ms, mean_ms_per_dispatch);
 	return 0;
 }

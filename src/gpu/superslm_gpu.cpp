@@ -2287,13 +2287,18 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 }
 
 // T-2169 (Rung 2b, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634):
-// the internal chunk-submission primitive. Records an admitted chunk's full dispatch sequence
-// into ONE open command list -- one call into PrepareGpuLayerLoopChunkOpenState (chunk-open,
-// exactly once, per D-SLM3632/D-SLM3633), then one call into RecordOneTokenFullDepthDispatchBody
-// per admitted token, full depth, in order (token-outer, layer-inner, unreordered, per §6's own
-// "not reordered the way the CPU fix inverted its own loop nest" ruling) -- and submits/fences
-// once for the whole chunk. Internal linkage surface (no ABI touch, §7): the two G5 bridge
-// functions this primitive serves (Rung 3/4, not yet wired) keep their existing signatures.
+// the internal SUB-chunk-submission primitive -- records ONE (sub-)chunk's full dispatch
+// sequence into ONE open command list, bounded to at most `kT2169TdrSafeMaxChunkTokens` tokens
+// (D-SLM3596, and the empirical stability finding below that ruling now also carries -- see
+// `SubmitChunkToFullDepthForG5Bridge`'s own header comment, immediately below this function, for
+// the full account and D-SLM3641). One call into `PrepareGpuLayerLoopChunkOpenState` (chunk-open,
+// exactly once, per D-SLM3632/D-SLM3633), then one call into `RecordOneTokenFullDepthDispatchBody`
+// per admitted token in this sub-chunk, full depth, in order (token-outer, layer-inner,
+// unreordered, per §6's own "not reordered the way the CPU fix inverted its own loop nest"
+// ruling) -- and submits/fences once for the whole sub-chunk. Internal linkage surface (no ABI
+// touch, §7). Callers needing an admitted chunk LARGER than the bound go through
+// `SubmitChunkToFullDepthForG5Bridge` (the real chunk-scoped entry point, below), never this
+// function directly, except for the sub-chunk-sized final/only slice that function itself drives.
 //
 // `chunk_embedding_bytes` is a caller-owned, already-packed, contiguous buffer of `chunk_len`
 // per-token embedding blocks, each exactly `SeqScaleOff(hidden_size) + 16` bytes (the `[0,
@@ -2303,7 +2308,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 // produces `embed_admit_count` (§5's own "the pre-scan and the record-time embedding source are
 // the same pass, not two"). This primitive itself performs no embedding arithmetic and no
 // admission decision -- it drives exactly `chunk_len` already-admitted tokens to full depth.
-superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
+superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
     size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
@@ -2538,6 +2543,130 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 	inflight->upload_keep_alive = state.upload_keep_alive;
 	if (out_inflight) *out_inflight = inflight.release();
 	return superslm::SslmForwardStatus::Ok;
+}
+
+// T-2169 (Rung 2, design Sec5, D-SLM3596; the bound's own real derivation, D-SLM3641 -- see this
+// constant's own definition, below, for the full account): the TDR-safe (now: hardware-stability-
+// safe) maximum sub-chunk size, in tokens. `extern`, matching this project's own established
+// red-suite convention (tests/support/gpu_chunk_dispatch_instrument.h's sibling counters) --
+// declared in every TU under SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT, defined exactly once,
+// here.
+extern const uint32_t kT2169TdrSafeMaxChunkTokens;
+
+// T-2169 (Rung 2, design Sec5/Sec8): the real chunk-scoped entry point -- splits an admitted
+// chunk of arbitrary size into a bounded sequence of sub-chunks, each driven through
+// `SubmitOneSubChunkToFullDepthForG5Bridge` (above), each at most `kT2169TdrSafeMaxChunkTokens`
+// tokens. Design Sec5's own resolution: "either (a) recording the whole admitted chunk into one
+// list when it stays under both ceilings, or (b) splitting into a bounded number of sub-chunks,
+// each its own command list/fence-wait pair, still far fewer than one per token."
+//
+// D-SLM3641 (ruled this rung, folding the TDR-measurement pass's own executed finding): the
+// bound this design anticipated as TDR-derived is not what actually governs on the certified
+// target hardware measured this pass (RTX 2080S, driver version confirmed via this machine's own
+// installed NVIDIA driver at measurement time). The pure TDR arithmetic at the measured dispatch
+// rate (~0.023 ms/dispatch, this model's own 672 dispatches/token) admits roughly 256 tokens
+// under half this machine's own measured 8-second TDR delay -- far larger than any realistic
+// chunk. A SMALLER, previously unanticipated ceiling binds first: driving a `chunk_tokens=8`
+// sub-chunk through `SubmitOneSubChunkToFullDepthForG5Bridge` reproducibly crashes the process
+// with `STATUS_STACK_OVERFLOW` (`0xC00000FD`); `chunk_tokens<=7` does not, verified repeatedly.
+// Root-caused under `cdb` (`k`/`kb`, a fresh-process repro): the crash is a recursive cycle
+// **entirely inside `nvwgf2umx.dll`** (NVIDIA's own D3D12 user-mode driver) -- every captured
+// frame across the full depth cdb reports is inside that module; ZERO frames from this
+// executable, from `d3d12.dll`, or from `dxgi.dll` appear anywhere in the cycle. **This is a
+// defect in pre-existing, third-party, shipped code (the GPU vendor's own driver), not in this
+// design's own new primitive** -- named loudly, per this ticket's own standing instruction, and
+// ruled here rather than silently worked around: there is no file:line in this codebase to fix,
+// because the recursion never enters this codebase's own call frames. The only lever this
+// project has is never asking the driver to hold open the specific dispatch-recording pattern
+// that triggers it -- i.e., the sub-chunk bound itself. `kT2169TdrSafeMaxChunkTokens` is
+// therefore set from the SMALLER of the two ceilings (design Sec5's own "the smaller of the two
+// ceilings governs," now with a third ceiling in the comparison), with the SAME half-margin
+// discipline design Sec5 already applies to the TDR ceiling: **4**, half of the confirmed-crashing
+// 8, leaving a full token of margin below the confirmed-safe 7 as well. This is deliberately
+// conservative rather than pinned to the exact 7/8 boundary -- the boundary was measured on one
+// specific real-artifact configuration (Qwen2.5-1.5B, this context_cap) and a driver-internal
+// recursion depth is not guaranteed to trip at the identical token count under a different
+// weight/adapter/context_cap combination; halving the confirmed-crashing point, not the
+// confirmed-safe one, is the conservative direction.
+const uint32_t kT2169TdrSafeMaxChunkTokens = 4;
+
+superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight) {
+	if (out_inflight) *out_inflight = nullptr;
+	if (chunk_len == 0) {
+		// Nothing to submit -- no guard ladder has run, so this is not itself a rejection; the
+		// caller (Rung 3/4's own admit_count==0 case) is expected to handle a zero-length chunk
+		// before ever reaching here. Defensive, not a load-bearing path this design specifies.
+		return superslm::SslmForwardStatus::Ok;
+	}
+	const size_t embed_block_bytes = static_cast<size_t>(SeqScaleOff(static_cast<uint32_t>(hidden_size))) + 16u;
+	uint32_t submitted = 0;
+	while (submitted < chunk_len) {
+		const uint32_t remaining = chunk_len - submitted;
+		const uint32_t this_sub_chunk =
+		    remaining < kT2169TdrSafeMaxChunkTokens ? remaining : kT2169TdrSafeMaxChunkTokens;
+		const bool is_last = (submitted + this_sub_chunk) >= chunk_len;
+		GpuLayerLoopInFlight* inflight = nullptr;
+		const superslm::SslmForwardStatus submit_status = SubmitOneSubChunkToFullDepthForG5Bridge(
+		    seq, layers, num_hidden_layers, hidden_size, head_dim, num_key_value_heads,
+		    intermediate_size, context_cap, rope_tables, workspace, workspace_size,
+		    chunk_embedding_bytes + static_cast<size_t>(submitted) * embed_block_bytes, this_sub_chunk,
+		    external_kv_resident, io_external_kv_needs_resume_barrier, external_weights_resident,
+		    external_rope_cos_resident, external_rope_sin_resident, external_rope_has,
+		    external_rope_cos_elems, external_rope_sin_elems, adapter_bridge, &inflight);
+		if (submit_status != superslm::SslmForwardStatus::Ok) {
+			return submit_status;
+		}
+		if (is_last) {
+			// The caller's own async contract (design Sec4.2/Sec4.3): only the FINAL
+			// (sub-)chunk's own inflight token is handed back unfinished -- the caller drives
+			// its own Finish, exactly as it already does for the single-sub-chunk case.
+			if (out_inflight) *out_inflight = inflight;
+			return superslm::SslmForwardStatus::Ok;
+		}
+		// Every non-final sub-chunk is finished SYNCHRONOUSLY, here, before the next sub-chunk's
+		// own PrepareGpuLayerLoopChunkOpenState call -- required, not merely convenient: that
+		// call reads `seq.context_length`/`workspace` fresh at ITS OWN chunk-open boundary
+		// (D-SLM3612's own 2a ruling, generalized across sub-chunks), so the previous
+		// sub-chunk's own commit must already be visible to the host before the next one's
+		// chunk-open counter is read. A D3D12 command list also cannot be resumed after its own
+		// Close()+ExecuteCommandLists() -- Reset() for the next sub-chunk requires the GPU be
+		// done with the allocator the current list used, which the fence wait below guarantees.
+		int32_t ready = 0;
+		const superslm::SslmForwardStatus finish_status =
+		    RunLayerLoopGpuFinish(inflight, seq, workspace, /*block=*/1, &ready);
+		if (finish_status != superslm::SslmForwardStatus::Ok) {
+			return finish_status;
+		}
+		// D-SLM3641 (fold, found by execution): `commit_site.hlsl`'s own per-layer increment
+		// leaves the device's persistent `SeqState.layer_index` field at `num_hidden_layers`
+		// after a token's own LAST layer commits -- it is never auto-wrapped back to 0
+		// device-side. Every existing single-token caller never notices, because
+		// `sslm_gpu_seq_embed_token`'s own HOST-side write (`seq->layer_index = 0;`,
+		// gpu_1p0.cpp) resets it before the NEXT token's own call ever re-uploads the SeqState
+		// (Sec5.1's own guard-ladder trace: `layer_index==0` is what makes tokens 2..N of a
+		// SINGLE chunk vacuously fresh, because nothing within one chunk primitive call ever
+		// reads this field back to the host mid-chunk). This wrapper is the one caller that
+		// DOES read it back mid-sequence (`RunLayerLoopGpuFinish`, immediately above) and then
+		// hands `seq` to a SECOND `PrepareGpuLayerLoopChunkOpenState` call, whose own guard
+		// ladder (`seq.layer_index >= num_hidden_layers` -> `SequenceAlreadyComplete`) reads the
+		// terminal value this sub-chunk's own last token legitimately left behind and rejects a
+		// perfectly healthy continuation. The reset every embed_token call already performs for
+		// the single-token path is performed here, once, for the identical reason: this
+		// sub-chunk's own last token has fully committed and the sequence is ready for a fresh
+		// token, exactly the state embed_token's own reset always signals.
+		seq.layer_index = 0;
+		submitted += this_sub_chunk;
+	}
+	return superslm::SslmForwardStatus::Ok;  // unreachable (chunk_len > 0 always returns inside the loop)
 }
 
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the FINISH half of the async split --

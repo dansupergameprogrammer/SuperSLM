@@ -311,6 +311,26 @@ int main(int argc, char** argv) {
 	overall_ok &=
 	    RunSelfCheck("4-token", model_view, layers, embed_w, embed_site_constant, {90, 1, 258, 1960});
 
+	// D-SLM3641 (this rung's own fold, cdb-confirmed nvwgf2umx driver recursion above
+	// kT2169TdrSafeMaxChunkTokens*2=8 tokens in one open command list): the sub-chunk split
+	// wrapper's own pin. `chunk_tokens=8` straddles the split boundary exactly (2 internal
+	// sub-chunks of 4) -- the cell that would have crashed the process outright before this
+	// rung's own fix landed.
+	std::vector<int32_t> straddle_tokens;
+	for (int i = 0; i < 8; ++i) straddle_tokens.push_back(90 + (i % 50));
+	overall_ok &=
+	    RunSelfCheck("chunk_tokens=8 (split boundary)", model_view, layers, embed_w, embed_site_constant,
+	                 straddle_tokens);
+
+	// A much larger chunk (256 tokens, matching design Sec5's own pure-TDR-arithmetic figure) --
+	// proves the split-wrapper fix SCALES, not merely clears the one crashing size (64 internal
+	// sub-chunk submissions of 4 tokens each, each its own synchronous Finish per the wrapper's
+	// own D-SLM3641 ruling).
+	std::vector<int32_t> large_tokens;
+	for (int i = 0; i < 256; ++i) large_tokens.push_back(90 + (i % 50));
+	overall_ok &= RunSelfCheck("chunk_tokens=256 (TDR-arithmetic scale)", model_view, layers, embed_w,
+	                            embed_site_constant, large_tokens);
+
 	std::printf("\n=== T-2169 Rung 2b self-check: %s ===\n", overall_ok ? "PASS" : "FAIL");
 	return overall_ok ? 0 : 1;
 }
