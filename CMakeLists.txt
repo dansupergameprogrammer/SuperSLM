@@ -291,17 +291,20 @@ endforeach()
 # .github/workflows/tests.yml's cmake/environment invocations, or in any file under
 # this repository's own tree carrying a direct compiler invocation naming
 # src/matmul.cpp may set a translation-unit-wide AVX2/AVX-512 flag (six CMakeLists.txt
-# spellings x three channels -- CLI, environment, direct invocation -- fold round 4,
-# D-SLM3570; widened again fold round 5, D-SLM3583, which also replaced the checker's
-# hard-coded build.bat-only direct-invocation scan with a tree-wide search rooted at
-# --repo-root -- see tools/ci/check_matmul_avx_isolation.py's own header for the full
-# matrix and its mutation-vitality proof, executed and recorded in the T-2159 build
-# log). Runs today,
-# unconditionally, independent of SUPERSLM_T2149_AVX_TIERS_BUILT: the claim it protects
-# ("only two function-attributed sites may use these instructions") is already true
-# (vacuously, since neither attributed site exists yet) and stays true once they land --
-# this is exactly the guard design §10 dimension 7 commissions as a standing check, not a
-# one-time build-time probe like its dimension-7c/7g siblings (§11 steps 4b/4d).
+# spellings x five channels -- CLI, workflow/environment, batch/shell environment,
+# direct invocation -- fold round 4, D-SLM3570; widened fold round 5, D-SLM3583;
+# widened a third time fold round 6, D-SLM3601/D-SLM3602, which also retired the
+# per-fold pattern-list widening itself in favor of a committed, 20-member
+# validation population (tools/ci/matmul_avx_isolation_population.json) exercised
+# by the second `add_test` below -- see tools/ci/check_matmul_avx_isolation.py's own
+# header for the full matrix and its mutation-vitality proof, executed and recorded
+# in the T-2159 build log. Run by the `matmul-avx-isolation-guard` CI job
+# (.github/workflows/tests.yml, D-SLM3604), independent of
+# SUPERSLM_T2149_AVX_TIERS_BUILT: the claim it protects ("only two function-attributed
+# sites may use these instructions") is already true (vacuously, since neither
+# attributed site exists yet) and stays true once they land -- this is exactly the
+# guard design §10 dimension 7 commissions as a standing check, not a one-time
+# build-time probe like its dimension-7c/7g siblings (§11 steps 4b/4d).
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
 	add_test(NAME check_matmul_avx_isolation
@@ -309,8 +312,17 @@ if(Python3_Interpreter_FOUND)
 			--cmakelists ${CMAKE_SOURCE_DIR}/CMakeLists.txt
 			--workflow ${CMAKE_SOURCE_DIR}/.github/workflows/tests.yml
 			--repo-root ${CMAKE_SOURCE_DIR})
+	# Fold round 6 (D-SLM3601): the checker's own committed validation population,
+	# self-tested against a scratch copy of this repository so a future widening
+	# of check_matmul_avx_isolation.py is required to reproduce green against the
+	# whole population before it is trusted -- never a fresh subset the widening's
+	# own author chose. Picked up by the matmul-avx-isolation-guard CI job by the
+	# same `^check_matmul_avx_isolation` name prefix as the checker itself.
+	add_test(NAME check_matmul_avx_isolation_population_vitality
+		COMMAND ${Python3_EXECUTABLE} -m pytest
+			${CMAKE_SOURCE_DIR}/tests/ci/test_matmul_avx_isolation_population.py -q)
 else()
-	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation ctest entry not added (the script itself is still committed and runnable directly).")
+	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation and check_matmul_avx_isolation_population_vitality ctest entries not added (the scripts themselves are still committed and runnable directly).")
 endif()
 
 # C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate

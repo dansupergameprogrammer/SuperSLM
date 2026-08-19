@@ -461,7 +461,7 @@ jobs:
   # that it was): this job has never started (D-SLM469/T-1450), so the design's
   # own step 1 -- "the first run of this gate records the actual per-file
   # percentages" -- has never happened. Until it does, the checker fails
-  # cleanly with a diagnostic naming the missing file and the `--record-floors`
+  # cleanly with a diagnostic naming the missing file and the `--record-floors-to`
   # remedy (design Sec4.3 step 1) rather than crashing; that failure is this
   # job's honest, expected first result, not a defect in the gate. The floors
   # are defined against THIS job's own clang-18 / Linux / RelWithDebInfo cell
@@ -490,14 +490,11 @@ jobs:
   # dead there. This job now builds and runs the non-forced superslm_tests plus the
   # sse2/avx2/avx512-forced full-suite binaries and the scalar-forced digest, and
   # merges all five raw profiles before computing the branch percentage, so each SIMD
-  # leaf reaches its own coverage in its own forced binary. The AVX-512-forced binary
-  # is allowed to fail its run step (`|| true`) -- code review (T-2170, Finding 2/12)
-  # and this fold's own build log confirm no AVX-512 hardware has executed anything
-  # yet, standing and disclosed (design §8.4); on such a runner the leg still merges
-  # whatever partial profile that binary emitted before faulting, contributing nothing
-  # new to DotRowAvx512's coverage, which is why its branches and
-  # DetectBestDotRowTier()'s hardware-conditioned arms are named as a permanent
-  # residual in tools/ci/branch_coverage_allowlist.txt rather than pinned as covered.
+  # leaf reaches its own coverage in its own forced binary. (Fold round 6, D-SLM3605:
+  # this paragraph previously continued with a stale description of a `|| true`
+  # allowance and a partial-profile merge claim -- both predate the exit-status trap
+  # below, which is this file's single, correct description of how the AVX-512-forced
+  # binary's expected failure is handled.)
   branch-coverage:
     runs-on: ubuntu-latest
     steps:
@@ -572,33 +569,35 @@ jobs:
             -object ./build/sslm_axis_digest_scalar_forced \
             -- src/*.cpp include/superslm/*.h \
             > build/coverage.json
-      # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): fix round 1
-      # re-recorded src/matmul.cpp's floor at 66.18% measured on the reviewer's own
-      # local AVX2-only Windows machine -- a different toolchain, platform, and corpus
-      # than this leg (GitHub-hosted Linux, clang-18, the full suite, all five
-      # binaries unioned). That wrong entry is removed from
-      # tools/ci/branch_coverage_floors.json (below the "src/matmul.cpp" key is
-      # simply absent, not re-guessed); this step lets the leg record its own
-      # measurement, in its own cell, the first time it runs against the amended
-      # file -- `check_branch_coverage_floors.py --record-floors` is the same
-      # mechanism the fold-round-4 ruling already named but fix round 1 did not use.
-      # Only runs when the committed floors file has no src/matmul.cpp entry yet
-      # (the normal, steady-state case skips straight to the check step below); its
-      # output is uploaded as an artifact rather than committed automatically, so a
-      # human copies the recorded number into the committed
-      # tools/ci/branch_coverage_floors.json alongside that file's own
-      # "_measured_cell" comment describing this exact cell -- closing the loop the
-      # design names ("the recorded cell is stated in the floors file's own
-      # comment") without inventing new bot-commit CI machinery this remedy's scope
-      # does not otherwise call for.
-      - name: Record branch-coverage floors from this leg's own first run, if unset
+      # T-2149 design §10 dimension 7 item (h), fold round 6 (D-SLM3603): the record
+      # step and the check step never share a file. The prior construction had the
+      # record step conditionally rewrite the whole committed
+      # tools/ci/branch_coverage_floors.json from THIS run's own measurement
+      # whenever "src/matmul.cpp" was absent from it, then had the very next step
+      # check that same file -- at HEAD, with no committed src/matmul.cpp entry,
+      # every run took the record branch and the check step was checking the
+      # record step's own output, reporting OK unconditionally regardless of the
+      # true coverage. This step is now unconditional (cheap, and its output is
+      # useful evidence even in the steady state) and writes only a build artifact,
+      # never the committed file.
+      #
+      # Integration sequence: push (or PR) -> this leg runs, unconditionally
+      # records its own measurement to the build artifact below, and -- because
+      # tools/ci/branch_coverage_floors.json has no src/matmul.cpp key at HEAD --
+      # the check step FAILS the leg with the named message -> a human downloads
+      # the measured-branch-coverage-floors artifact and commits src/matmul.cpp's
+      # measured value into tools/ci/branch_coverage_floors.json, next to that
+      # file's own "_measured_cell" comment (already present, naming the cell:
+      # GitHub-hosted Linux runner, clang-18, llvm-cov/llvm-profdata 18, the full
+      # suite, all five binaries unioned) -> the next push finds the key present
+      # and the leg goes green, unless a genuine regression occurred between the
+      # two runs (in which case it correctly stays red, exactly as it would have
+      # if the number had been correct from the start).
+      - name: Record branch-coverage floors from this leg's own run
         run: |
-          python3 -c "
-          import json, sys
-          with open('tools/ci/branch_coverage_floors.json', 'r', encoding='utf-8') as f:
-              floors = json.load(f)
-          sys.exit(0 if 'src/matmul.cpp' in floors else 1)
-          " || python3 tools/ci/check_branch_coverage_floors.py --record-floors build/coverage.json
+          python3 tools/ci/check_branch_coverage_floors.py \
+            --record-floors-to build/measured_branch_coverage_floors.json \
+            build/coverage.json
       - name: Check per-file branch-coverage floors
         run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -607,9 +606,10 @@ jobs:
           name: branch-coverage-json
           path: build/coverage.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
         with:
-          name: branch-coverage-floors-json-post-leg
-          path: tools/ci/branch_coverage_floors.json
+          name: measured-branch-coverage-floors
+          path: build/measured_branch_coverage_floors.json
 
   # The golden headers under tests/ and tools/ state, in their own generated
   # comments, that re-running their generator reproduces them byte-for-byte.
@@ -866,3 +866,33 @@ jobs:
       # tree passes. Import-independent of the cross-tree spike, same as
       # everything else this job already runs.
       - run: python -m pytest tools/ tests/reference/ -v
+
+  # T-2149 design §10 dimension 7 item (d), fold round 6 (D-SLM3604, Poirot
+  # T-2174 Critical 2): check_matmul_avx_isolation and its population
+  # self-test (check_matmul_avx_isolation_population_vitality) are `ctest`
+  # entries (CMakeLists.txt) and no job in this workflow invoked `ctest` --
+  # CMakeLists.txt's own prior comment claiming the checker "Runs today,
+  # unconditionally" was false. This job wires exactly those two entries by
+  # name prefix; neither needs the project built (both invoke python3
+  # directly, with no binary dependency), so configuration is a bare
+  # `cmake -B build` with no build step. `-R '^check_matmul_avx_isolation'`
+  # matches both `check_matmul_avx_isolation` and
+  # `check_matmul_avx_isolation_population_vitality` and excludes every
+  # other `add_test` entry in CMakeLists.txt (superslm_tests,
+  # t2139_gate_*/t2141_gate_*) -- a deliberate scope decision, named here
+  # rather than silently touched or silently left unwired.
+  matmul-avx-isolation-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      # check_matmul_avx_isolation_population_vitality invokes `python3 -m
+      # pytest` (CMakeLists.txt) -- pytest is required on the interpreter
+      # CMake's find_package(Python3) resolves, matching the
+      # bad-alloc-membership-check job's own setup-python + pip install
+      # pattern for the same reason.
+      - run: pip install pytest
+      - run: cmake -B build
+      - run: ctest --test-dir build --output-on-failure -R '^check_matmul_avx_isolation'
