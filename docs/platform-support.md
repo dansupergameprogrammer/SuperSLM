@@ -192,11 +192,23 @@ certified GPUs above, never to "GPUs" unqualified.
   [GPU-side batched prompt prefill](#gpu-side-batched-prompt-prefill)
   above) is measured on the NVIDIA device/driver pairing only; a second
   vendor's own value is unmeasured.
+- **A device fault caught mid-recording on the batched GPU prefill path
+  leaves the underlying command list unclosed.** The two GPU-side batched
+  prefill entry points ([api.md](api.md)) return the same status,
+  `SSLM_DEVICE_LOST`, for a healthy context-cap rejection and for a real,
+  contained device/allocation fault — the context stays usable after the
+  first, and may need teardown after the second, and the two are not
+  distinguishable at the ABI today. When the second case is caught during
+  command-list recording specifically, the command list itself is left
+  unclosed rather than recovered, which can affect a later call against
+  the same context. Closing this — recovering the command list on that
+  path, or otherwise making the two causes distinguishable — is a named
+  follow-up, not yet built.
 
 ## What's next
 
 Extending GPU certification to a newer NVIDIA generation (Blackwell) and
 to integrated GPUs (pending the divergence investigation above), closing
-the two gaps above, and measuring macOS beyond what GitHub's own CI
+the gaps above, and measuring macOS beyond what GitHub's own CI
 runners can exercise, are committed post-1.1 work — see the README's
 roadmap section.

@@ -66,7 +66,22 @@ typedef enum SslmGpuStatus {
     SSLM_ADAPTER_MODEL_MISMATCH,         /* design Sec9 -- B6                   */
     SSLM_ADAPTER_BASE_HASH_MISMATCH,     /* design Sec9 -- B6                   */
     SSLM_SEQUENCE_KV_BUFFER_MISMATCH,    /* design Sec9 -- B3                   */
-    SSLM_DEVICE_LOST,                    /* design Sec9 -- B1/B2                */
+    /* design Sec9 -- B1/B2. Two distinct causes resolve to this ONE status, indistinguishable
+     * at the ABI:
+     * (a) an ordinary, healthy rejection -- most visibly, the batched G5 prefill entry points
+     *     (SslmGpuSeqPrefillPromptForG5Bridge/SslmGpuSeqPrefillSchemaContentForG5Bridge, below)
+     *     returning it when a chunk's own derived admit count comes back short of what was
+     *     requested at a saturated context cap; the shipped per-token decode loop's own
+     *     cap-boundary behavior, mirrored. The device and the context stay fully usable; a
+     *     caller may continue issuing calls against the same context and sequence.
+     * (b) a real device/allocation fault -- a lost/removed device, or an infrastructural
+     *     submit/finish failure (an exception caught and contained at this boundary from the
+     *     GPU command-submission tail). The context may be left needing teardown; a caller
+     *     that continues issuing calls against it after this cause is not guaranteed a
+     *     healthy device on the other end. See the wedge this creates when the fault is
+     *     caught mid-recording (Known gaps, docs/platform-support.md) -- fixing that is a
+     *     separate, tracked follow-up, not resolved by this comment. */
+    SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
     /* A per-sequence
@@ -244,7 +259,14 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * `dispatch_budget`-sized round trips per token. Per-call, per-token submission slicing by a
  * dispatch budget remains the DECODE path's own contract
  * (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step),
- * unchanged by this call. */
+ * unchanged by this call.
+ *
+ * Returns SSLM_DEVICE_LOST for two distinct causes (see the status enum's own comment,
+ * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
+ * short of what was requested at a saturated context cap -- the context and device stay
+ * usable, and a caller may continue -- or a real, contained device/allocation fault from the
+ * GPU submit/finish tail, after which the context may need teardown before further calls
+ * against it can be trusted. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget);
@@ -297,7 +319,14 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  * `dispatch_budget_per_token`-sized `sslm_decode_step_gpu` calls issued one token at a time.
  * Per-call, per-token submission slicing by a dispatch budget remains the DECODE path's own
  * contract (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth
- * step), unchanged by this call. */
+ * step), unchanged by this call.
+ *
+ * Returns SSLM_DEVICE_LOST for two distinct causes (see the status enum's own comment,
+ * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
+ * short of what was requested at a saturated context cap -- the context and device stay
+ * usable, and a caller may continue -- or a real, contained device/allocation fault from the
+ * GPU submit/finish tail, after which the context may need teardown before further calls
+ * against it can be trusted. */
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,
