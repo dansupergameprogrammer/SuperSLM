@@ -36,6 +36,8 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -2313,24 +2315,67 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		}
 	} submitted_window_guard(seq, model);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
-	const superslm::SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
-	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
-	    model->head_dim, model->num_key_value_heads, model->intermediate_size, seq->context_cap,
-	    kEmptyManifest, seq->host_kv_mirror.data(), seq->host_kv_mirror.size(), chunk_embedding_bytes,
-	    admit_count, seq->kv_buf.Get(), &seq->kv_needs_resume_barrier, model->weights_buf.Get(),
-	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
-	    model->rope_cos_elem_count, model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
-	if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
-		// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
-		// genuinely unfenced (its own header comment: "the caller's own async contract... only the
-		// FINAL (sub-)chunk's own inflight token is handed back unfinished"), so the fence for that
-		// last sub-chunk has not yet signaled at this point -- a concurrent caller on another
-		// thread (e.g. `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) still genuinely observes the
-		// window while `RunLayerLoopGpuFinish` below blocks on it.
-		seq->in_flight = inflight;
-		int32_t ready = 0;
-		superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
-		                                      /*block=*/1, &ready);
+	// T-2189 finding 2 (D-SLM3689): `SubmitChunkToFullDepthForG5Bridge`'s own tail
+	// (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
+	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, superslm_gpu.cpp) sits OUTSIDE that
+	// function's own internal try/catch (see the T-2186 P1 comment on `SubmittedWindowScopeGuard`
+	// above for the full history), so a failed `Close()`/`Signal()` (`SSLM_GPU_HR` throws
+	// `std::runtime_error`, the device-removed channel design Sec9 promises is deliverable) or a
+	// `std::bad_alloc` from the `new` can escape this call. Caught HERE -- the one choke point both
+	// public G5 prefill entry points (`SslmGpuSeqPrefillPromptForG5Bridge`/
+	// `SslmGpuSeqPrefillSchemaContentForG5Bridge`) funnel through -- so the documented
+	// `SslmGpuStatus` boundary (gpu_1p0.h) is never crossed by a raw C++ exception. `RunLayerLoopGpuFinish`
+	// is included in the same try: its own tail (the FINAL sub-chunk's fence-wait/readback) is the
+	// identical class of D3D12 call and carries the identical failure mode.
+	//
+	// No status is returned from THIS function (it never has been -- see its own header comment);
+	// the catch clauses below deliberately do NOT return early or rethrow. `seq->live_state` is
+	// mutated BY REFERENCE, incrementally, by every (sub-)chunk that completed and finished
+	// synchronously BEFORE the one that threw (`SubmitChunkToFullDepthForG5Bridge`'s own multi-
+	// sub-chunk loop, superslm_gpu.cpp) -- so falling through to the unchanged copy-back below
+	// (which reads `seq->live_state`) derives `*out_derived_count` from exactly how much of the
+	// chunk genuinely committed, the SAME partial-consumption contract every other rejection cause
+	// on this path already honors (D-SLM3614/D-SLM3622). Both public callers already test
+	// `derived_count < admit_count` BEFORE consulting `scan.cause` and return `SSLM_DEVICE_LOST` on
+	// that path -- since `admit_count > 0` is already established above (the `admit_count == 0`
+	// early return, this function's own top), a caught throw here that leaves `*out_derived_count`
+	// short of `admit_count` is guaranteed to resolve to `SSLM_DEVICE_LOST` through that EXISTING
+	// logic, with no new status-mapping code duplicated at either call site.
+	try {
+		const superslm::SslmForwardStatus submit_status =
+		    superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
+		        seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
+		        model->head_dim, model->num_key_value_heads, model->intermediate_size,
+		        seq->context_cap, kEmptyManifest, seq->host_kv_mirror.data(),
+		        seq->host_kv_mirror.size(), chunk_embedding_bytes, admit_count, seq->kv_buf.Get(),
+		        &seq->kv_needs_resume_barrier, model->weights_buf.Get(), model->rope_cos_buf.Get(),
+		        model->rope_sin_buf.Get(), model->has_rope_tables, model->rope_cos_elem_count,
+		        model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
+		if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
+			// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
+			// genuinely unfenced (its own header comment: "the caller's own async contract... only
+			// the FINAL (sub-)chunk's own inflight token is handed back unfinished"), so the fence
+			// for that last sub-chunk has not yet signaled at this point -- a concurrent caller on
+			// another thread (e.g. `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) still genuinely
+			// observes the window while `RunLayerLoopGpuFinish` below blocks on it.
+			seq->in_flight = inflight;
+			int32_t ready = 0;
+			superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
+			                                      /*block=*/1, &ready);
+			seq->in_flight = nullptr;
+		}
+	} catch (const std::bad_alloc& e) {
+		std::fprintf(stderr,
+		             "gpu_1p0: SubmitAdmittedChunkForG5Bridge: bad_alloc escaped the batched-prefill "
+		             "submit/finish call, contained at the SslmGpuStatus boundary: %s\n",
+		             e.what());
+		seq->in_flight = nullptr;
+	} catch (const std::runtime_error& e) {
+		std::fprintf(stderr,
+		             "gpu_1p0: SubmitAdmittedChunkForG5Bridge: runtime_error escaped the "
+		             "batched-prefill submit/finish call, contained at the SslmGpuStatus boundary: "
+		             "%s\n",
+		             e.what());
 		seq->in_flight = nullptr;
 	}
 	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this

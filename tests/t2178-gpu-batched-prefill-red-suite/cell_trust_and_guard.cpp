@@ -356,26 +356,24 @@ static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHa
 }
 
 // T-2186 P1 (Significant, confirmation Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md,
-// D-SLM3682): the widened `Submitted` window (T-2185 N1, cell above) is opened in
-// `SubmitAdmittedChunkForG5Bridge` (gpu_1p0.cpp) before `SubmitChunkToFullDepthForG5Bridge` is
-// called and, before this remedy, closed by a second, separate statement after it returns --
-// never reached if that call throws. `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail
-// (superslm_gpu.cpp: `dev.list->Close()`, `dev.queue->Signal()`, the `GpuLayerLoopInFlight`
-// allocation) sits outside its own try/catch, so a failed `Close()`/`Signal()` (`SSLM_GPU_HR`
-// throws `std::runtime_error`) or a `std::bad_alloc` from the allocation escapes all the way to
-// this cell's own caller with `seq->state` left at `Submitted` and `model->submitted_sequences`
-// left incremented -- `sslm_gpu_model_unmap` checks `submitted_sequences > 0` FIRST (gpu_1p0.cpp,
-// `SslmGpuModelHandle::submitted_sequences`' own field comment) and would return `SSLM_BUSY`
-// forever after. The fix wraps the open/close pair in an RAII scope guard
-// (`SubmittedWindowScopeGuard`, gpu_1p0.cpp) whose destructor runs on every exit from
-// `SubmitAdmittedChunkForG5Bridge`, including exception unwind.
+// D-SLM3682) / T-2189 finding 2 (D-SLM3689, this cell's own oracle inverted here): the widened
+// `Submitted` window (T-2185 N1, cell above) is opened in `SubmitAdmittedChunkForG5Bridge`
+// (gpu_1p0.cpp) before `SubmitChunkToFullDepthForG5Bridge` is called. `SubmitOneSubChunkToFull
+// DepthForG5Bridge`'s own tail (superslm_gpu.cpp: `dev.list->Close()`, `dev.queue->Signal()`, the
+// `GpuLayerLoopInFlight` allocation) sits outside its own try/catch, so a failed
+// `Close()`/`Signal()` (`SSLM_GPU_HR` throws `std::runtime_error`) or a `std::bad_alloc` from the
+// allocation can originate there.
 //
-// This cell drives that exact throw via the tail-fault seam
-// (`superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection`, gpu_port.h) and asserts the model
-// is left unwedged: `sslm_gpu_model_unmap`, polled immediately after the throw is caught (with
-// this cell's own `seq` still alive, so `live_sequences > 0` is still genuinely true), must
-// return something OTHER than `SSLM_BUSY` -- the review's own named discriminator, since
-// `submitted_sequences > 0` is checked and answered before `live_sequences` is ever read.
+// D-SLM3682's own remedy (`SubmittedWindowScopeGuard`) closed the Submitted window on every exit
+// from `SubmitAdmittedChunkForG5Bridge`, including exception unwind, but still let the raw
+// exception escape past the documented `SslmGpuStatus` ABI boundary (gpu_1p0.h). T-2189 finding 2
+// (D-SLM3689) closes that: `SubmitAdmittedChunkForG5Bridge` now catches
+// `std::bad_alloc`/`std::runtime_error` itself and lets its own existing `derived_count <
+// admit_count` fallback (D-SLM3622) resolve to `SSLM_DEVICE_LOST` through the public entry
+// point's ordinary return, never a raw throw. This cell's own oracle inverts to match: no
+// exception is expected any more, and the model must be genuinely unwedged (this remedy's own
+// property is unchanged -- only the reporting channel is) with `SSLM_DEVICE_LOST` observable as
+// the prefill call's OWN return value, not a caught exception's side effect.
 static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
                                                              SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
@@ -386,11 +384,12 @@ static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
 	                                                // well under kT2169TdrSafeMaxChunkTokens (4).
 
 	superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection();
+	SslmGpuStatus prefill_status = SSLM_OK;
 	bool threw = false;
 	std::string what;
 	try {
-		SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, chunk.data(), static_cast<int32_t>(chunk.size()),
-		                                    kDispatchBudget);
+		prefill_status = SslmGpuSeqPrefillPromptForG5Bridge(
+		    ctx, seq, chunk.data(), static_cast<int32_t>(chunk.size()), kDispatchBudget);
 	} catch (const std::runtime_error& e) {
 		threw = true;
 		what = e.what();
@@ -399,12 +398,22 @@ static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
 	// tail; clears any stray armed state so a later cell in this same process never inherits it.
 	superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection();
 
-	CHECK_MSG(threw,
-	          "Guard(tail-throw unwedge): SslmGpuSeqPrefillPromptForG5Bridge did not throw with the "
-	          "tail fault armed -- the injection seam did not fire, this cell proves nothing");
-	CHECK_MSG(what.find("D-SLM3682") != std::string::npos,
-	          "Guard(tail-throw unwedge): caught exception's own message (\"%s\") is not the "
-	          "injected tail fault -- caught the wrong throw", what.c_str());
+	// T-2189 finding 2 (D-SLM3689): the inverted half of this cell's own oracle -- the tail fault
+	// must no longer escape as a raw exception at all. A throw reaching here means the containment
+	// fix regressed (or was never built), so this is checked first and the cell stops rather than
+	// continuing to grade a caught-but-still-thrown call as if it were contained.
+	CHECK_MSG(!threw,
+	          "Guard(tail-throw containment): SslmGpuSeqPrefillPromptForG5Bridge let the injected "
+	          "tail fault escape as a raw exception (\"%s\") -- T-2189 finding 2's containment fix "
+	          "must catch this at the SslmGpuStatus boundary, never let it reach the caller",
+	          what.c_str());
+	CHECK_MSG(prefill_status == SSLM_DEVICE_LOST,
+	          "Guard(tail-throw containment): SslmGpuSeqPrefillPromptForG5Bridge returned %s with "
+	          "the tail fault armed, want SSLM_DEVICE_LOST -- the injected fault fires before the "
+	          "sub-chunk's own dispatches ever execute, so derived_count must fall short of "
+	          "admit_count and resolve through the existing device-computed-fallback path "
+	          "(D-SLM3622)",
+	          GpuStatusName(prefill_status));
 
 	// The discriminating oracle: `seq` is still alive (never released), so `live_sequences > 0`
 	// is genuinely true -- if `submitted_sequences` were left wedged at 1, gpu_1p0.cpp's own
@@ -412,8 +421,8 @@ static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
 	// SSLM_BUSY here, not SSLM_MODEL_HAS_LIVE_SEQUENCES.
 	const SslmGpuStatus unmap_status = sslm_gpu_model_unmap(ctx, model);
 	CHECK_MSG(unmap_status != SSLM_BUSY,
-	          "Guard(tail-throw unwedge): sslm_gpu_model_unmap returned SSLM_BUSY after an "
-	          "exception escaped SubmitChunkToFullDepthForG5Bridge's own uncovered tail -- "
+	          "Guard(tail-throw unwedge): sslm_gpu_model_unmap returned SSLM_BUSY after the tail "
+	          "fault fired inside SubmitChunkToFullDepthForG5Bridge's own uncovered tail -- "
 	          "model->submitted_sequences was left incremented forever, the model can never be "
 	          "unmapped (got status %s)",
 	          GpuStatusName(unmap_status));
