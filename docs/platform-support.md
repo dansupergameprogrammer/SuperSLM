@@ -41,11 +41,10 @@ not produced a digest anywhere: this project's own build and test
 hardware has no AVX-512 support (a forced AVX-512 binary compiles clean
 and exits via SIGILL when run), and the CI leg's designed outcome on a
 runner without the hardware is the same loud SKIP, not a pass — a real
-AVX-512 evidence run on capable hardware is owed (D-SLM3688). The
-nine-way comparison across GitHub Actions' own hosted runners has not
-run at all yet — hosted runs are capped, per this document's own opening
-note — and lands at the first real Actions matrix run after that cap
-lifts.
+AVX-512 evidence run on capable hardware is owed. The nine-way
+comparison across GitHub Actions' own hosted runners has not run at
+all yet — hosted runs are capped, per this document's own opening note
+— and lands at the first real Actions matrix run after that cap lifts.
 
 ### CPU matmul kernel tiers
 
