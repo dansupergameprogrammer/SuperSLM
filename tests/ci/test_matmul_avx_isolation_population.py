@@ -227,19 +227,20 @@ def test_population_member(member: dict, tmp_path, capsys) -> None:
         )
 
 
-def test_population_has_twenty_five_members():
-    """Twenty-three distinct mutation members (M1-M16 and M21-M23, N17-N20 --
+def test_population_has_twenty_six_members():
+    """Twenty-four distinct mutation members (M1-M16 and M21-M24, N17-N20 --
     deduplicated across the three fold-6 casebooks per
-    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus M21-M23
-    added at T-2177's confirmation: the quoted-multi-flag and prefix-
-    assignment shell-environment shapes (Finding 3) and the wired-
-    subdirectory CMakeLists.txt shape (Finding 4)) plus the clean-tree
-    control (G0) and the checker-failure cell (CF0) -- 25 total. A count
-    check catches a member silently dropped from the fixture file without
-    anyone noticing the parametrized test count shrank."""
-    assert len(_POPULATION) == 25
+    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus
+    M21-M24 added at T-2177's confirmation: the quoted-multi-flag and
+    prefix-assignment shell-environment shapes (Finding 3), the wired-
+    subdirectory CMakeLists.txt shape (Finding 4), and CMake's typed
+    `-D<var>:<type>=` cache-variable spelling (Finding 6)) plus the
+    clean-tree control (G0) and the checker-failure cell (CF0) -- 26 total.
+    A count check catches a member silently dropped from the fixture file
+    without anyone noticing the parametrized test count shrank."""
+    assert len(_POPULATION) == 26
     red_count = sum(1 for m in _POPULATION if m["expect"] == "red")
-    assert red_count == 23
+    assert red_count == 24
 
 
 def test_population_ids_are_unique():

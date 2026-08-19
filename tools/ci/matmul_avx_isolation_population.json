@@ -229,6 +229,15 @@
     "expect": "red"
   },
   {
+    "id": "M24",
+    "source": "T-2177 Finding 6",
+    "kind": "new-file",
+    "target": "tools/build_typed_cache_var.sh",
+    "insert_after_line": null,
+    "content": "#!/bin/sh\ncmake -B build -DCMAKE_CXX_FLAGS:STRING=\"-mavx2\" -S .\n",
+    "expect": "red"
+  },
+  {
     "id": "CF0",
     "source": "D-SLM3601, checker-failure cell",
     "kind": "remove-workflow",

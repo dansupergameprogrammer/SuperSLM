@@ -293,8 +293,17 @@ def find_cmakelists_hits(cmakelists_text: str) -> list[dict]:
 
 # --- Channel B: command line, environment, and direct compiler invocation ---------
 
+# T-2177 Finding 6: required `=` to follow the variable name (and its optional
+# `_<CONFIG>` suffix) immediately, missing CMake's own typed cache-variable
+# spelling, `-D<var>:<type>=<value>` -- a `:STRING` (or any other CMake cache
+# type tag) between the name and the `=` matched nothing. `(?::[A-Za-z]+)?`
+# admits that optional type tag without changing what matches when it is
+# absent. (This comment states the shape rather than a literal worked
+# example: this file is itself under the tree-wide scan below, and a
+# concrete flag-bearing sample here would be a self-inflicted hit -- see
+# M24 in the committed population for the worked example instead.)
 _CMAKE_CXX_FLAGS_CLI_RE = re.compile(
-    r"[-/]DCMAKE_CXX_FLAGS(?:_[A-Za-z0-9_]+)?=(\"[^\"]*\"|'[^']*'|\S+)"
+    r"[-/]DCMAKE_CXX_FLAGS(?:_[A-Za-z0-9_]+)?(?::[A-Za-z]+)?=(\"[^\"]*\"|'[^']*'|\S+)"
 )
 
 

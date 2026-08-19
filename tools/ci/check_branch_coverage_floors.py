@@ -192,6 +192,12 @@ def main() -> int:
     # this file right now"), so both are closed by the same general rule rather
     # than a file-specific special case that would silently reopen for the next
     # file this happens to.
+    # T-2177 Finding 7: `unpinned` entries are a distinct failure class from
+    # `failures` above -- a file with no floor is not below one -- but both
+    # were appended to the same `failures` list and summarised by one line
+    # naming only "below their pinned branch-coverage floor". Counted
+    # separately here so the summary names what actually happened.
+    below_floor_count = len(failures)
     unpinned = sorted(set(measured) - set(floors))
     for rel in unpinned:
         failures.append(
@@ -199,6 +205,7 @@ def main() -> int:
             "this run's measured-branch-coverage-floors artifact into "
             "tools/ci/branch_coverage_floors.json"
         )
+    unpinned_count = len(unpinned)
 
     if allowlist:
         print(
@@ -211,9 +218,15 @@ def main() -> int:
     if failures:
         for line in failures:
             print(line, file=sys.stderr)
+        summary_parts = []
+        if below_floor_count:
+            summary_parts.append(
+                f"{below_floor_count} file(s) below their pinned branch-coverage floor"
+            )
+        if unpinned_count:
+            summary_parts.append(f"{unpinned_count} file(s) with no pinned floor")
         print(
-            f"check_branch_coverage_floors.py: FAILED -- {len(failures)} file(s) below "
-            "their pinned branch-coverage floor",
+            "check_branch_coverage_floors.py: FAILED -- " + "; ".join(summary_parts),
             file=sys.stderr,
         )
         return 1
