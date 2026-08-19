@@ -53,6 +53,24 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
     bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
     const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+#if defined(SUPERSLM_T2169_VALIDATE_UNSPLIT_CRASH_REPRO)
+// D-SLM3649's own owed evidence (Dan's review): the UNSPLIT, pre-fix primitive -- identical
+// signature, renamed in production (src/gpu/superslm_gpu.cpp) when the split-wrapper landed.
+// Forward-declared here ONLY under this macro so this tool can replay the exact original crashing
+// shape (one command list, chunk_tokens=8, no internal split) under the D3D12 debug layer, to
+// settle whether OUR command list construction is what the validation layer flags, or whether it
+// reports clean and the recursion is purely the driver's own (D-SLM3649's own attribution).
+superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+#endif
 }  // namespace superslm_gpu
 
 namespace {
@@ -133,10 +151,19 @@ bool MeasureOneChunkSize(const SslmModelView& model_view, const std::vector<Laye
 	}
 
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
+#if defined(SUPERSLM_T2169_VALIDATE_UNSPLIT_CRASH_REPRO)
+	// D-SLM3649's own owed evidence: the UNSPLIT primitive, replaying the exact original crashing
+	// shape (one command list, no internal split) under the D3D12 debug layer.
+	const SslmForwardStatus submit_status = superslm_gpu::SubmitOneSubChunkToFullDepthForG5Bridge(
+	    seq, layers.data(), num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size,
+	    context_cap, model_view.rope_tables, ws.data(), ws.size(), chunk_bytes.data(), chunk_tokens,
+	    nullptr, nullptr, nullptr, nullptr, nullptr, false, 0, 0, nullptr, &inflight);
+#else
 	const SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 	    seq, layers.data(), num_hidden_layers, hidden_size, head_dim, num_kv_heads, intermediate_size,
 	    context_cap, model_view.rope_tables, ws.data(), ws.size(), chunk_bytes.data(), chunk_tokens,
 	    nullptr, nullptr, nullptr, nullptr, nullptr, false, 0, 0, nullptr, &inflight);
+#endif
 	if (submit_status != SslmForwardStatus::Ok || !inflight) {
 		std::fprintf(stderr, "FAILED at stage=submit chunk_tokens=%u status=%s\n", chunk_tokens,
 		             SslmForwardStatusName(submit_status));

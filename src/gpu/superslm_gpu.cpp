@@ -2590,6 +2590,13 @@ extern const uint32_t kT2169TdrSafeMaxChunkTokens;
 // confirmed-safe one, is the conservative direction.
 const uint32_t kT2169TdrSafeMaxChunkTokens = 4;
 
+// T-2169 (Rung 3/4, design Sec5 2b, declared gpu_port.h): the SeqState embedding-byte block
+// size for one token, `[0, SeqScaleOff(hidden_size)+16)` -- exposed so a pre-scan caller
+// (gpu_1p0.cpp) can size/index its own per-chunk embedding buffer without re-deriving
+// `SeqScaleOff`'s own alignment arithmetic (internal linkage in this file, `Align8U32`/
+// `SeqScaleOff` above).
+uint32_t T2169SeqEmbeddingBlockBytes(uint32_t hidden_size) { return SeqScaleOff(hidden_size) + 16u; }
+
 superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
     superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
     uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,

@@ -239,6 +239,41 @@ superslm::SslmForwardStatus RunLayerLoopGpuFinish(GpuLayerLoopInFlight* inflight
                                                     uint8_t* workspace, int32_t block,
                                                     int32_t* out_ready);
 
+// T-2169 (Rung 2b/3/4, design Sec5/Sec5.1/Sec8, D-SLM3595/D-SLM3611/D-SLM3612/D-SLM3631/D-SLM3634/
+// D-SLM3641): the chunk-submission entry point -- declared here (not exported via the public C
+// ABI, gpu_1p0.h) so `gpu_1p0.cpp`'s own two G5 bridge functions (Rung 3/4) can call it after
+// their own pre-scan admission decision, on the identical footing `RunLayerLoopGpuSubmit`'s own
+// cross-TU declaration above already establishes. Splits `chunk_len` admitted tokens into
+// TDR-safe/driver-stable sub-chunks automatically (D-SLM3641); `chunk_embedding_bytes` is the
+// caller's own pre-packed, per-token `[0, SeqScaleOff(hidden_size)+16)` embedding buffer (Sec5
+// 2b) -- the caller (the pre-scan) computes it via `EmbedEntry`, this function performs no
+// embedding arithmetic and no admission decision of its own. Async, matching
+// `RunLayerLoopGpuSubmit`'s own contract: `*out_inflight` is null on an immediate rejection
+// (nothing to close), otherwise owns a token the caller drains via `RunLayerLoopGpuFinish`.
+superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
+    superslm::SequenceLayerState& seq, const superslm::LayerWeights* layers,
+    uint32_t num_hidden_layers, size_t hidden_size, size_t head_dim, size_t num_key_value_heads,
+    size_t intermediate_size, int64_t context_cap, const superslm::SslmTensorManifest& rope_tables,
+    uint8_t* workspace, size_t workspace_size, const uint8_t* chunk_embedding_bytes,
+    uint32_t chunk_len, ID3D12Resource* external_kv_resident,
+    bool* io_external_kv_needs_resume_barrier, ID3D12Resource* external_weights_resident,
+    ID3D12Resource* external_rope_cos_resident, ID3D12Resource* external_rope_sin_resident,
+    bool external_rope_has, uint64_t external_rope_cos_elems, uint64_t external_rope_sin_elems,
+    const GpuAdapterBridge* adapter_bridge, GpuLayerLoopInFlight** out_inflight);
+
+// T-2169 (Rung 2, design Sec5, D-SLM3596/D-SLM3641): the measured, driver-stability-bounded
+// maximum sub-chunk size, in tokens -- see its own definition (src/gpu/superslm_gpu.cpp) for the
+// full derivation. Exposed here so a caller building an admitted chunk (Rung 3/4's own pre-scan)
+// can size its own embedding-byte buffer without needing to know the bound is enforced
+// internally -- the buffer must still cover the FULL `admit_count`, since
+// `SubmitChunkToFullDepthForG5Bridge` does its own internal splitting.
+extern const uint32_t kT2169TdrSafeMaxChunkTokens;
+
+// T-2169 (Rung 2, D-SLM3595): the SeqState embedding-byte block size for one token, `[0,
+// SeqScaleOff(hidden_size)+16)` (Sec5 2b) -- exposed so a caller can size and index its own
+// per-chunk embedding buffer without re-deriving `SeqScaleOff`'s own alignment arithmetic.
+uint32_t T2169SeqEmbeddingBlockBytes(uint32_t hidden_size);
+
 // (M1's
 // own remedy): the structural closure for `RunLayerLoopGpu`'s own host-side
 // guard ladder -- generated from `gpu_layer_loop_guards.def`, the single

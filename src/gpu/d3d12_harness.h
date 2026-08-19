@@ -97,6 +97,36 @@ struct Device {
 	// cell it runs, so certification output is unaffected; every other consumer of the 1.0
 	// API (unset env var) gets byte-identical stdout to before this ticket.
 	void Init() {
+		// T-2169 (D-SLM3649's own owed evidence, Dan's review): SSLM_GPU_ENABLE_DEBUG_LAYER, when
+		// set, turns on the D3D12 debug layer (and GPU-based validation, when the installed SDK
+		// supports it) BEFORE any device is created -- the only order the API allows a debug
+		// device to be produced in. This is what settles D-SLM3649's own driver-defect attribution
+		// in either direction: replaying the chunk_tokens=8 crashing shape under this flag and
+		// reading whether the validation layer reports anything on OUR command list, before the
+		// driver's own recursion fires. Off by default (unset env var): zero behavioral change,
+		// zero performance cost, matching this file's own established SSLM_GPU_ADAPTER_INDEX
+		// convention for a diagnostic-only, opt-in override.
+		{
+			char buf[8] = {0};
+			DWORD n = GetEnvironmentVariableA("SSLM_GPU_ENABLE_DEBUG_LAYER", buf, sizeof(buf));
+			if (n > 0 && buf[0] == '1') {
+				ComPtr<ID3D12Debug> debug0;
+				if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug0)))) {
+					debug0->EnableDebugLayer();
+					ComPtr<ID3D12Debug1> debug1;
+					if (SUCCEEDED(debug0.As(&debug1))) {
+						debug1->SetEnableGPUBasedValidation(TRUE);
+					}
+					std::fprintf(stderr, "# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer%s enabled\n",
+					             debug1 ? " + GPU-based validation" : " enabled (GPU-based validation unavailable)");
+				} else {
+					std::fprintf(stderr,
+					              "# SSLM_GPU_ENABLE_DEBUG_LAYER=1 requested but D3D12GetDebugInterface "
+					              "failed -- the Windows 'Graphics Tools' optional feature is likely not "
+					              "installed on this machine; proceeding WITHOUT the debug layer\n");
+				}
+			}
+		}
 		ComPtr<IDXGIFactory6> factory;
 		if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) {
 			init_error = "CreateDXGIFactory2 failed";
