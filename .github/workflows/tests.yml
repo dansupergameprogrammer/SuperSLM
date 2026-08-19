@@ -895,4 +895,10 @@ jobs:
       # pattern for the same reason.
       - run: pip install pytest
       - run: cmake -B build
-      - run: ctest --test-dir build --output-on-failure -R '^check_matmul_avx_isolation'
+      # T-2177 Finding 2: `-R` alone selects tests by name and exits 0 when the
+      # selection is empty ("No tests were found!!!") -- a filter typo or a
+      # registration that silently stopped happening (e.g. the else() branch
+      # this repository's own CMakeLists.txt used to take on a missing Python3
+      # interpreter) would make this job report success having run nothing.
+      # --no-tests=error turns an empty selection into a hard failure (exit 8).
+      - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^check_matmul_avx_isolation'

@@ -322,7 +322,15 @@ if(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} -m pytest
 			${CMAKE_SOURCE_DIR}/tests/ci/test_matmul_avx_isolation_population.py -q)
 else()
-	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation and check_matmul_avx_isolation_population_vitality ctest entries not added (the scripts themselves are still committed and runnable directly).")
+	# T-2177 Finding 2: this branch used to print a message(STATUS) no CI step
+	# reads and configure clean -- the matmul-avx-isolation-guard job's own
+	# `ctest -R '^check_matmul_avx_isolation'` would then select nothing,
+	# report "No tests were found!!!", and exit 0, so the guard silently
+	# stopped running while its own CI job stayed green. A missing Python3
+	# interpreter is a hard configuration failure here, not a silent skip --
+	# the two ctest entries this branch would have added are the only thing
+	# that job exists to run.
+	message(FATAL_ERROR "T-2158/T-2177: Python3 interpreter not found -- cannot register check_matmul_avx_isolation or check_matmul_avx_isolation_population_vitality. The matmul-avx-isolation-guard CI job (.github/workflows/tests.yml) exists to run exactly these two ctest entries; configuring without them would let that job report success having run nothing.")
 endif()
 
 # C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate
