@@ -59,9 +59,9 @@ happens to support.
 | Tier | Status | How it's exercised |
 |---|---|---|
 | Scalar | Certified | Every platform's default build; also independently force-selectable |
-| SSE2 | Certified | The x86-64 architectural floor; force-selectable and CI-exercised independent of what a runner's ambient dispatch would pick |
-| AVX2 | Certified, measured | Force-selectable; CI-probed on hosted runners; throughput measured on real hardware (below) |
-| AVX-512 | CI extent | Force-selectable; CI-probed (skips loudly on a runner without AVX-512F/BW); bit-identity proven wherever it runs; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |
+| SSE2 | Certified | The x86-64 architectural floor; force-selectable; CI leg defined (1.1), not yet executed on a hosted runner (capped since 2026-07-23) — verified locally, matches the golden digest exactly |
+| AVX2 | Certified, measured | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner — verified locally, matches the golden digest exactly; throughput measured on real hardware (below) |
+| AVX-512 | CI extent | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner or on any AVX-512-capable machine this project has access to — bit-identity unverified; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |
 
 **Measured, real 1.5B-parameter model artifact, batched prefill, SSE2 to
 AVX2, this project's own reference AMD hardware (Zen 2, no AVX-512):
@@ -176,12 +176,13 @@ certified GPUs above, never to "GPUs" unqualified.
 
 ## Known gaps
 
-- **AVX-512 has no dedicated real-hardware throughput measurement yet.**
-  The tier is proven bit-identical and exercised in continuous integration
-  (probed, compiled, and run wherever a runner has the hardware) — see
-  [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — but its own
-  tokens/second figure, alongside SSE2's and AVX2's above, is not yet
-  published.
+- **AVX-512 has no dedicated real-hardware throughput measurement yet, and no
+  bit-identity run at all.** The CI leg is defined (probes, compiles, and
+  would run wherever a runner has the hardware) but has not yet executed on
+  any hosted runner or any AVX-512-capable machine this project has access
+  to — see [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — so
+  neither its bit-identity nor its tokens/second figure, alongside SSE2's and
+  AVX2's above, is yet published.
 - **GPU-side batched prompt prefill is measured and certified on the
   certified NVIDIA GPU only.** The pre-batching, per-token GPU path stays
   certified on both certified GPUs, unaffected; certifying the batched
@@ -196,6 +197,6 @@ certified GPUs above, never to "GPUs" unqualified.
 
 Extending GPU certification to a newer NVIDIA generation (Blackwell) and
 to integrated GPUs (pending the divergence investigation above), closing
-the gaps above, and measuring macOS beyond what GitHub's own CI
+the two gaps above, and measuring macOS beyond what GitHub's own CI
 runners can exercise, are committed post-1.1 work — see the README's
 roadmap section.

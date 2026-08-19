@@ -239,10 +239,12 @@ design and review loop when scheduled:
   closing that gap is a named follow-on campaign.
 - **Launch-floor reduction.** The fixed per-call GPU launch overhead has an
   identified, not-yet-built optimization path.
-- **AVX-512 real-hardware throughput measurement.** The AVX-512 kernel tier
-  1.1 ships is proven bit-identical and exercised in continuous integration,
-  but has no dedicated throughput measurement published yet — see
-  [Known gaps](docs/platform-support.md#known-gaps) in the platform-support doc.
+- **AVX-512 real-hardware throughput measurement, and a first execution.** The
+  AVX-512 kernel tier 1.1 ships has a defined CI leg that has not yet executed
+  on a hosted runner or on any AVX-512-capable machine this project has
+  access to, so it carries neither a bit-identity result nor a throughput
+  measurement yet — see [Known gaps](docs/platform-support.md#known-gaps) in
+  the platform-support doc.
 - **GPU batched-prefill cross-vendor certification.** 1.1's GPU-side batched
   prefill is measured and certified on the certified NVIDIA GPU; certifying
   it on the certified AMD GPU as well is the next step for that capability

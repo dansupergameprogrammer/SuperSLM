@@ -57,10 +57,12 @@ number and where it was measured.
 
 ### Known gaps, tracked
 
-- The AVX-512 kernel tier is exercised at continuous-integration extent
-  only — probed for hardware support, compiled, and bit-identity-checked
-  where a runner has it — with no dedicated real-hardware throughput
-  measurement published yet, the same disposition 1.0 gave macOS.
+- The AVX-512 kernel tier's CI leg is defined — probes for hardware support,
+  compiles, and bit-identity-checks where a runner has it — but has not yet
+  executed on any hosted runner (GitHub Actions hosted runs are capped since
+  2026-07-23) or on any AVX-512-capable machine this project has access to,
+  so it carries no bit-identity result and no dedicated real-hardware
+  throughput measurement yet.
 - GPU batched prefill's determinism proof and throughput measurement are
   on the certified NVIDIA GPU only in this release; certification on the
   certified AMD GPU is not yet complete for the batched path specifically
