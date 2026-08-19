@@ -6,6 +6,10 @@
 // (the shipped per-token bridge, unmodified) is this file's own reference oracle for both.
 #include "fixture_common.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
+
 using namespace superslm;
 
 namespace {
@@ -240,31 +244,82 @@ static void TestGuard_EmbedAdmitCountClampDispatchCountInstrumented(SslmGpuConte
 	          static_cast<long long>(expected_dispatch_delta));
 }
 
-// --- Guard vitality (b): SSLM_BUSY under the widened in-flight window -- documented behavior
-// change (design Sec9), not a defect: a second caller against the same seq handle, issued while
-// a chunk submission is genuinely in flight, must still receive SSLM_BUSY exactly as the
-// per-token path's own in-flight window already returns it today; this design only lengthens
-// the window in proportion to the batching performed. ---
+// --- Guard vitality (b): SSLM_BUSY under the widened in-flight window -- T-2184 remedy S1
+// retarget (Brunel fix round 1, D-SLM3662). Design Sec9's Concurrency/lifecycle row: "a batched
+// chunk submission still occupies exactly one `Submitted` window per chunk (not per token)" --
+// gpu_1p0.cpp's `SubmitAdmittedChunkForG5Bridge` now sets/clears `seq->state`/`seq->in_flight`/
+// `model->submitted_sequences` around the batched chunk's own final (sub-)chunk fence wait,
+// symmetric with `SubmitOneSequenceDecode`/`sslm_gpu_ready`.
+//
+// UNLIKE the per-token path -- whose LOW-LEVEL `sslm_decode_step_gpu` submits without fencing and
+// returns control to the SAME thread, letting a single-threaded caller observe the window with a
+// second call (this file's own prior version of this cell) -- every batched public entry point
+// (`SslmGpuSeqPrefillPromptForG5Bridge` et al.) submits AND drains inside one call, so the window
+// is invisible to a same-thread caller by construction; it exists only for a genuinely concurrent
+// SECOND thread, exactly the reachable consequence the T-2184 review named: a caller managing
+// model lifetime on one thread while another thread drives a batched prefill. This cell reproduces
+// that scenario for real -- a worker thread drives a forced span wide enough to span several
+// TDR-safe sub-chunks (`kT2169TdrSafeMaxChunkTokens == 4`) at real full depth, while this thread
+// polls `sslm_gpu_model_unmap` (the review's own discriminating oracle, gpu_1p0.cpp:789-794:
+// `submitted_sequences>0` returns SSLM_BUSY before `live_sequences>0` is even checked) throughout.
+// This does NOT drive the same SslmGpuSequenceHandle from two threads (gpu_1p0.h Sec5.4's own
+// "unguarded caller error" boundary) -- the worker thread owns `seq` exclusively; the polling
+// thread only reads `model`'s own two plain counters via the public `sslm_gpu_model_unmap` entry
+// point, which submits no GPU work and touches no command list, the exact cross-thread pattern
+// design Sec9 names as supported.
 static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, /*context_cap=*/64, &seq) == SSLM_OK);
-	CHECK(sslm_gpu_seq_embed_token(ctx, seq, 300) == SSLM_OK);
-	// Single-threaded in-flight idiom (fixture_common.h's own header note): the LOW-LEVEL
-	// sslm_decode_step_gpu submits without fencing and returns immediately -- a second call
-	// against the SAME handle before draining must return SSLM_BUSY, on one thread, with no race.
-	// This is the shipped per-token path's own in-flight window today; the batched primitive's
-	// own single-fence-per-chunk shape (once built) widens how many dispatches this window can
-	// span without changing the observable contract this cell checks -- exercised here at the
-	// existing granularity since the widened case needs the batched primitive itself to exist.
-	const SslmGpuStatus submit_st = sslm_decode_step_gpu(ctx, seq, /*adapter=*/nullptr, kDispatchBudget);
-	CHECK_MSG(submit_st == SSLM_OK, "Guard(SSLM_BUSY window): primary submit failed: %s",
-	          GpuStatusName(submit_st));
-	const SslmGpuStatus second_st = sslm_decode_step_gpu(ctx, seq, /*adapter=*/nullptr, kDispatchBudget);
-	CHECK_MSG(second_st == SSLM_BUSY,
-	          "Guard(SSLM_BUSY window): a second decode call against a still-Submitted sequence "
-	          "returned %s, expected SSLM_BUSY",
-	          GpuStatusName(second_st));
-	CHECK(Drain(ctx, seq) == SSLM_OK);
+
+	// 32 forced tokens -> 8 TDR-safe sub-chunks at real full depth (num_hidden_layers *
+	// kDispatchesPerLayer dispatches per token, C1's own measured ~15-17ms/token compute floor)
+	// -- several hundred milliseconds of genuine GPU-busy wall time, wide enough that a tight
+	// polling loop on another thread reliably lands inside the window rather than racing it.
+	std::vector<int32_t> span;
+	span.reserve(32);
+	for (int32_t i = 0; i < 32; ++i) span.push_back(300 + i);
+
+	std::atomic<bool> submission_done{false};
+	std::atomic<int> observed_busy{0};
+	std::atomic<int> observed_unexpected_status{-1};
+
+	std::thread submitter([&]() {
+		const SslmGpuStatus st = SslmGpuSeqPrefillPromptForG5Bridge(
+		    ctx, seq, span.data(), static_cast<int32_t>(span.size()), kDispatchBudget);
+		if (st != SSLM_OK) observed_unexpected_status.store(static_cast<int>(st));
+		submission_done.store(true);
+	});
+
+	// Poll until the submitter finishes, bounded so a genuine hang fails the cell instead of the
+	// process. Every poll that returned SSLM_OK would delete `model` out from under the rest of
+	// this suite -- correctness here depends on that never happening: `submitted_sequences>0`
+	// (during the window) or `live_sequences>0` (this cell's own `seq`, alive throughout) always
+	// takes precedence over the delete-and-return-OK path (gpu_1p0.cpp:789-794).
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+	while (!submission_done.load()) {
+		const SslmGpuStatus poll_status = sslm_gpu_model_unmap(ctx, model);
+		if (poll_status == SSLM_BUSY) {
+			++observed_busy;
+		} else if (poll_status != SSLM_MODEL_HAS_LIVE_SEQUENCES) {
+			observed_unexpected_status.store(static_cast<int>(poll_status));
+		}
+		if (std::chrono::steady_clock::now() > deadline) {
+			CHECK_MSG(false, "Guard(SSLM_BUSY window): submitter thread did not finish within 30s");
+			break;
+		}
+	}
+	submitter.join();
+
+	CHECK_MSG(observed_unexpected_status.load() == -1,
+	          "Guard(SSLM_BUSY window): saw unexpected status %d (submission or a concurrent "
+	          "sslm_gpu_model_unmap call), expected SSLM_OK from the submission and only "
+	          "SSLM_BUSY/SSLM_MODEL_HAS_LIVE_SEQUENCES from the poll",
+	          observed_unexpected_status.load());
+	CHECK_MSG(observed_busy.load() > 0,
+	          "Guard(SSLM_BUSY window): a concurrent sslm_gpu_model_unmap never observed SSLM_BUSY "
+	          "during a genuinely in-flight batched chunk submission -- design Sec9's own "
+	          "\"occupies exactly one Submitted window per chunk\" is not delivered");
+
 	sslm_gpu_seq_release(ctx, seq);
 }
 

@@ -208,6 +208,69 @@ static void TestCensus_S5_AllAdmittedSuccess(SslmGpuContext* ctx, SslmGpuModelHa
 	sslm_gpu_seq_release(ctx, seq);
 }
 
+// --- T-2184 M1 (Brunel fix round 1, Claude/Poirot/efeb9ba-t2184-t2169-gpu-batched-prefill-
+// review.md; D-SLM3662): a sequence left `Submitted` whose FIRST token in the next schema-prefill
+// call is DFA-unreachable must return `SSLM_SEQUENCE_REJECTED`, matching the shipped per-token
+// loop's own ordering (`e35edc1`: `Transition` checked, on failure `SSLM_SEQUENCE_REJECTED`, THEN
+// the busy check) -- not `SSLM_BUSY`, which the busy-check-first ordering this fix corrects would
+// have returned instead. S2 above cannot see this: it deliberately finds a DFA-REACHABLE token so
+// the busy branch is isolated from DFA rejection. This cell needs the opposite token and isolates
+// the ordering INTERACTION S2 cannot. ---
+static bool FindDfaUnreachableFirstToken(SslmGpuContext* ctx, SslmGpuModelHandle* model,
+                                          int32_t schema_index, int32_t* out_token) {
+	for (int32_t candidate = 0; candidate < 64; ++candidate) {
+		SslmGpuSequenceHandle* probe = nullptr;
+		if (sslm_gpu_seq_create(ctx, model, /*context_cap=*/16, &probe) != SSLM_OK || !probe) continue;
+		if (SslmGpuSeqSetSchemaForG5Bridge(ctx, probe, schema_index) != SSLM_OK) {
+			sslm_gpu_seq_release(ctx, probe);
+			continue;
+		}
+		int32_t consumed = 0;
+		const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5Bridge(ctx, probe, &candidate, 1,
+		                                                                   kDispatchBudget, &consumed);
+		sslm_gpu_seq_release(ctx, probe);
+		if (st == SSLM_SEQUENCE_REJECTED && consumed == 0) {
+			*out_token = candidate;
+			return true;
+		}
+	}
+	return false;
+}
+
+static void TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(
+    SslmGpuContext* ctx, SslmGpuModelHandle* model, int32_t schema_index) {
+	int32_t reachable_token = 0;
+	int32_t unreachable_token = 0;
+	if (!FindDfaReachableFirstToken(ctx, model, schema_index, &reachable_token) ||
+	    !FindDfaUnreachableFirstToken(ctx, model, schema_index, &unreachable_token)) {
+		SKIP_MSG("Census M1: could not find both a DFA-reachable and a DFA-unreachable first token "
+		         "in [0,64) on this schema/fixture -- cannot construct the ordering-interaction case");
+		return;
+	}
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, /*context_cap=*/64, &seq) == SSLM_OK);
+	CHECK(SslmGpuSeqSetSchemaForG5Bridge(ctx, seq, schema_index) == SSLM_OK);
+	// Leave the sequence genuinely Submitted via the LOW-LEVEL single-threaded idiom
+	// (fixture_common.h's own established convention) -- a reachable token so the submit itself
+	// succeeds and the sequence is provably Submitted, not merely Idle, when the call under test
+	// runs.
+	CHECK(sslm_gpu_seq_embed_token(ctx, seq, reachable_token) == SSLM_OK);
+	const SslmGpuStatus submit_st = sslm_decode_step_gpu(ctx, seq, /*adapter=*/nullptr, kDispatchBudget);
+	CHECK_MSG(submit_st == SSLM_OK, "Census M1: primary submit failed: %s", GpuStatusName(submit_st));
+	std::vector<int32_t> chunk = {unreachable_token};
+	int32_t consumed = 0;
+	const SslmGpuStatus st = SslmGpuSeqPrefillSchemaContentForG5Bridge(
+	    ctx, seq, chunk.data(), 1, kDispatchBudget, &consumed);
+	CHECK_MSG(st == SSLM_SEQUENCE_REJECTED,
+	          "Census M1: a schema-prefill call whose FIRST token is DFA-unreachable, against a "
+	          "still-Submitted sequence, returned %s, expected SSLM_SEQUENCE_REJECTED -- the shipped "
+	          "per-token loop checks Transition before the busy check; a busy-check-first ordering "
+	          "would wrongly return SSLM_BUSY here",
+	          GpuStatusName(st));
+	CHECK(Drain(ctx, seq) == SSLM_OK);
+	sslm_gpu_seq_release(ctx, seq);
+}
+
 // --- The tenth, call-scope failure origin (design Sec5.1/Sec9, D-SLM3634/D-SLM3655/D-SLM3660):
 // a mid-recording infrastructural exception inside the chunk-submission primitive's own per-token
 // loop discards the WHOLE (sub-)chunk's already-recorded-but-unexecuted dispatches as one unit --
@@ -318,6 +381,8 @@ int main(int argc, char** argv) {
 	volatile void* a3 = (void*)&TestCensus_S2_BusyOnSchema; (void)a3;
 	volatile void* a4 = (void*)&TestCensus_S5_AllAdmittedSuccess; (void)a4;
 	volatile void* a5 = (void*)&TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault; (void)a5;
+	volatile void* a6 =
+	    (void*)&TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken; (void)a6;
 
 	SslmGpuContext* ctx = nullptr;
 	CHECK(sslm_gpu_context_create(GpuContextConfig{}, &ctx) == SSLM_OK);
@@ -357,6 +422,8 @@ int main(int argc, char** argv) {
 				TestCensus_S1_DfaRejection(ctx, model, schema_index);
 				TestCensus_S2_BusyOnSchema(ctx, model, schema_index);
 				TestCensus_S5_AllAdmittedSuccess(ctx, model, schema_index);
+				TestCensus_M1_RejectedBeforeBusyOnSubmittedWithUnreachableFirstToken(ctx, model,
+				                                                                     schema_index);
 			}
 			CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 		} else {
