@@ -439,6 +439,98 @@ static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
 	sslm_gpu_seq_release(ctx, seq);
 }
 
+// T-2189 finding 6's own fix round (D-SLM3695; T-2191 S6/D-SLM3692's own out-of-scope
+// observation, closed here): the reviewer's own named scenario. The cell above
+// (`TestGuard_ModelUnwedgesAfterUncoveredTailThrow`) proves the fault is caught and the model can
+// still be unmapped; it never issues a SECOND real GPU call on the same context, so it could not
+// see the wedge that observation names -- `ID3D12CommandAllocator::Reset()` failing with `E_FAIL`
+// on the next call, because `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail used to leave the
+// D3D12 command list open/recording when the injected fault fired before `dev.list->Close()` ever
+// ran. This cell issues that second call and checks it against a never-faulted reference arm's own
+// output, not merely that it avoids crashing -- red under the reverted fix (the wedge reproduces:
+// the second call fails, typically `SSLM_DEVICE_LOST` again or a crash inside `dev.alloc->Reset()`),
+// green under it.
+static void TestGuard_ContextReusableAfterCaughtTailFault(SslmGpuContext* ctx,
+                                                            SslmGpuModelHandle* model) {
+	const int64_t kContextCap = 64;
+	// The SAME tokens drive the "second call" on both arms -- only whether a fault preceded it,
+	// on the SAME shared `harness::GetDevice()` singleton (every context in this process shares
+	// one command allocator/list/queue -- `harness::GetDevice()`'s own header comment,
+	// d3d12_harness.h), differs between them.
+	const std::vector<int32_t> kSecondCallChunk = {700, 701, 702};
+	const int32_t kNextToken = 799;
+
+	// Reference arm: a fresh sequence, no fault armed anywhere in this arm's own history, prefills
+	// `kSecondCallChunk` directly and reads the following decode step's own produced token -- the
+	// never-faulted baseline the candidate arm's own second call is compared against.
+	SslmGpuSequenceHandle* ref_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &ref_seq) == SSLM_OK);
+	const SslmGpuStatus ref_prefill_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, ref_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(ref_prefill_status == SSLM_OK,
+	          "Guard(context-reusable pin): reference arm's own prefill (no fault involved anywhere) "
+	          "returned %s, want SSLM_OK -- the pin's own baseline is broken, investigate before "
+	          "trusting the candidate arm's comparison against it",
+	          GpuStatusName(ref_prefill_status));
+	int32_t ref_token = -1;
+	const SslmGpuStatus ref_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, ref_seq, kNextToken, kDispatchBudget, &ref_token);
+	CHECK_MSG(ref_step_status == SSLM_OK,
+	          "Guard(context-reusable pin): reference arm's own following decode step returned %s, "
+	          "want SSLM_OK", GpuStatusName(ref_step_status));
+	sslm_gpu_seq_release(ctx, ref_seq);
+
+	// Candidate arm: a second, independent sequence, on the SAME context (and therefore the same
+	// shared device/list/queue the reference arm above already used and released cleanly). First
+	// call: the identical fault-injection shape `TestGuard_ModelUnwedgesAfterUncoveredTailThrow`
+	// exercises -- fires before `dev.list->Close()` ever runs, caught, expected
+	// `SSLM_DEVICE_LOST`. Second call: `kSecondCallChunk`, on the SAME seq/ctx, no fault armed --
+	// the call T-2191 S6 named. It must succeed and produce the SAME token the never-faulted
+	// reference arm produced, not merely "not crash."
+	SslmGpuSequenceHandle* cand_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &cand_seq) == SSLM_OK);
+
+	const std::vector<int32_t> kFirstCallChunk = {500, 501, 502};
+	superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection();
+	const SslmGpuStatus first_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kFirstCallChunk.data(), static_cast<int32_t>(kFirstCallChunk.size()),
+	    kDispatchBudget);
+	// Defensive only -- the seam is single-shot and already fired above if the first call reached
+	// the tail; clears any stray armed state so a later cell in this same process never inherits
+	// it, mirroring TestGuard_ModelUnwedgesAfterUncoveredTailThrow's own convention.
+	superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection();
+	CHECK_MSG(first_call_status == SSLM_DEVICE_LOST,
+	          "Guard(context-reusable pin): the faulted first call returned %s, want "
+	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected, investigate "
+	          "before trusting the second call's own result",
+	          GpuStatusName(first_call_status));
+
+	const SslmGpuStatus second_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(second_call_status == SSLM_OK,
+	          "Guard(context-reusable pin): the SECOND call on the same context, after a caught "
+	          "mid-recording tail fault, returned %s instead of SSLM_OK -- the command list was left "
+	          "open/recording by the caught fault (T-2189 finding 6's own out-of-scope observation, "
+	          "D-SLM3692 Sec9; T-2191 S6) and this context is wedged",
+	          GpuStatusName(second_call_status));
+
+	int32_t cand_token = -1;
+	const SslmGpuStatus cand_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, cand_seq, kNextToken, kDispatchBudget, &cand_token);
+	CHECK_MSG(cand_step_status == SSLM_OK,
+	          "Guard(context-reusable pin): the candidate arm's own following decode step (after "
+	          "recovery) returned %s, want SSLM_OK", GpuStatusName(cand_step_status));
+	CHECK_MSG(cand_token == ref_token,
+	          "Guard(context-reusable pin): the second call's own produced token (%d) does not match "
+	          "the never-faulted reference arm's token (%d) -- the context recovered enough to avoid "
+	          "returning an error but not enough to produce the correct output",
+	          cand_token, ref_token);
+
+	sslm_gpu_seq_release(ctx, cand_seq);
+}
+
 // T-2189 finding 4 (P2, D-SLM3689): `RunChunkAdmissionPreScan` (gpu_1p0.cpp) used to scan/embed
 // the FULL requested chunk length before applying the position cap, doing O(count * hidden_size)
 // work and allocating O(count * hidden_size) bytes even when the cap admits ZERO tokens -- a
@@ -514,6 +606,7 @@ int main(int argc, char** argv) {
 	volatile void* a6 = (void*)&TestGuard_BusyUnderWidenedWindow; (void)a6;
 	volatile void* a7 = (void*)&TestGuard_ModelUnwedgesAfterUncoveredTailThrow; (void)a7;
 	volatile void* a8 = (void*)&TestGuard_FullCapHugeCountBoundedPrescanWork; (void)a8;
+	volatile void* a9 = (void*)&TestGuard_ContextReusableAfterCaughtTailFault; (void)a9;
 
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("this file's cells need --model1p5b=PATH -- not run");
@@ -541,14 +634,21 @@ int main(int argc, char** argv) {
 		    ctx, model, static_cast<uint32_t>(view.config.num_hidden_layers),
 		    static_cast<int32_t>(view.config.vocab_size));
 		TestGuard_BusyUnderWidenedWindow(ctx, model);
-		// T-2189 finding 4's own pin runs BEFORE the tail-throw cell below, deliberately: the
-		// tail-throw cell's injected fault leaves the underlying D3D12 command list unclosed by
-		// construction (the fault fires before Close(), simulating a real device-level failure at
-		// that exact point) -- a pre-existing device-recovery gap orthogonal to this finding, not
-		// something T-2189 scopes fixing. Running the bounded-prescan pin first keeps it on a
-		// clean device/command-allocator state.
+		// T-2189 finding 4's own pin ran BEFORE the tail-throw cell below when this ordering was
+		// first written, deliberately: the tail-throw cell's injected fault used to leave the
+		// underlying D3D12 command list unclosed (the fault fires before Close(), simulating a
+		// real device-level failure at that exact point), and running the bounded-prescan pin
+		// first kept it on a clean device/command-allocator state. T-2189 finding 6's own fix
+		// round (D-SLM3695) closed that gap -- the tail is now covered by its own try/catch and
+		// the command list ends Closed on this path too -- so the ordering constraint no longer
+		// binds; kept anyway, since nothing is gained by reordering a working sequence.
+		// `TestGuard_ContextReusableAfterCaughtTailFault` runs immediately after the tail-throw
+		// cell, deliberately: it is the SAME fault-injection shape, one call further -- the pin
+		// that proves the caught fault no longer leaves the shared device wedged for the call
+		// that comes after it.
 		TestGuard_FullCapHugeCountBoundedPrescanWork(ctx, model);
 		TestGuard_ModelUnwedgesAfterUncoveredTailThrow(ctx, model);
+		TestGuard_ContextReusableAfterCaughtTailFault(ctx, model);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		CHECK_MSG(false, "failed to load --model1p5b=%s: %s", g_model_1p5b_path.c_str(), err.c_str());
