@@ -242,7 +242,7 @@ design and review loop when scheduled:
 - **AVX-512 real-hardware throughput measurement.** The AVX-512 kernel tier
   1.1 ships is proven bit-identical and exercised in continuous integration,
   but has no dedicated throughput measurement published yet — see
-  [Known gaps](docs/platform-support.md) in the platform-support doc.
+  [Known gaps](docs/platform-support.md#known-gaps) in the platform-support doc.
 - **GPU batched-prefill cross-vendor certification.** 1.1's GPU-side batched
   prefill is measured and certified on the certified NVIDIA GPU; certifying
   it on the certified AMD GPU as well is the next step for that capability
