@@ -457,13 +457,14 @@ jobs:
   # are measured, never invented -- tools/ci/check_branch_coverage_floors.py
   # fails the build if any file's measured branch percentage drops below its
   # pinned floor, once that floor exists. tools/ci/branch_coverage_floors.json
-  # is NOT YET committed (T-1451, correcting this comment's prior false claim
-  # that it was): this job has never started (D-SLM469/T-1450), so the design's
-  # own step 1 -- "the first run of this gate records the actual per-file
-  # percentages" -- has never happened. Until it does, the checker fails
-  # cleanly with a diagnostic naming the missing file and the `--record-floors-to`
-  # remedy (design Sec4.3 step 1) rather than crashing; that failure is this
-  # job's honest, expected first result, not a defect in the gate. The floors
+  # is committed: fourteen floors landed at commit 2809d73, measured from
+  # this job's own artifact run 32113553479 -- the design's own step 1, "the
+  # first run of this gate records the actual per-file percentages", has
+  # already happened. This leg always records its own measurement to a build
+  # artifact via `--record-floors-to` (design Sec4.3 step 1); a human copies
+  # the recorded value(s) into this committed file deliberately, and the
+  # record step never writes the committed file itself (fold round 6,
+  # D-SLM3603). The floors
   # are defined against THIS job's own clang-18 / Linux / RelWithDebInfo cell
   # (D-SLM521): only a branch-coverage percentage measured in that exact
   # configuration is a floor for it, so recording them requires a run of this
@@ -902,3 +903,48 @@ jobs:
       # interpreter) would make this job report success having run nothing.
       # --no-tests=error turns an empty selection into a hard failure (exit 8).
       - run: ctest --test-dir build --output-on-failure --no-tests=error -R '^check_matmul_avx_isolation'
+
+  # T-2177 Finding 5: the branch-coverage job's own comment (above) claimed
+  # tools/ci/branch_coverage_floors.json was not yet committed and that job
+  # had never started -- both false, and false in the repository's own
+  # history, in the paragraph a prior fix round edited without reading it.
+  # Rewriting the paragraph more carefully has now failed three consecutive
+  # rounds; this pins the mechanism instead, per the reviewer's own routed
+  # repair -- a cell that fails the moment either claim becomes true again,
+  # rather than a fourth attempt at wording.
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - name: branch_coverage_floors.json is committed and pins at least one numeric floor
+        run: |
+          python3 -c "
+          import json
+          with open('tools/ci/branch_coverage_floors.json') as f:
+              floors = json.load(f)
+          numeric = [k for k in floors if not k.startswith('_')]
+          assert numeric, 'tools/ci/branch_coverage_floors.json exists but pins no numeric floor'
+          print('{} floor(s) pinned'.format(len(numeric)))
+          "
+      # T-2177 Finding 5's own reasoning applies recursively: a check written
+      # as a shell `grep` for the literal retired phrase would match its OWN
+      # quoted argument in this same file. The retired phrases are built by
+      # runtime string concatenation instead, so neither is present as a
+      # contiguous literal anywhere in this source file -- only the parsed
+      # tests.yml content this step reads is searched for the whole phrase.
+      - name: tests.yml never claims the floors file is uncommitted or the job unstarted
+        run: |
+          python3 -c "
+          retired_1 = 'is NOT' + ' YET committed'
+          retired_2 = 'this job has ' + 'never started'
+          with open('.github/workflows/tests.yml') as f:
+              text = f.read()
+          assert retired_1 not in text, (
+              'tests.yml claims tools/ci/branch_coverage_floors.json is '
+              + retired_1 + ', but it is committed with pinned floors (commit 2809d73)'
+          )
+          assert retired_2 not in text, (
+              'tests.yml claims the branch-coverage job has never started, but '
+              'its own committed floors file was measured from a real run of it'
+          )
+          "
