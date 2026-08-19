@@ -704,11 +704,22 @@ def main(argv: list[str]) -> int:
             )
         return 1
 
+    # T-2179 Finding 7: this line used to describe the fold-round-4 architecture
+    # ("CMakeLists.txt's six spellings", "the workflow's" command-line/environment
+    # channels) two widenings after both scoping clauses went tree-wide -- every
+    # channel below scans every file under --repo-root, not one named file, so the
+    # line states scope once rather than per-channel and survives the next
+    # widening without an edit. The direct-invocation channel is the one channel
+    # whose scan is naturally countable (it opens exactly the files carrying a
+    # `matmul.cpp` compiler invocation), so it is the one channel whose count is
+    # named.
     print("check_matmul_avx_isolation: OK -- no translation-unit-wide AVX-family "
-          "compile flag found in CMakeLists.txt's six spellings, the workflow's "
-          "command-line/environment channels, or any of the {} file(s) under {} "
-          "carrying a direct compiler invocation naming src/matmul.cpp.".format(
-              len(scanned_files), _display_path(args.repo_root)
+          "compile flag found under {} in any of: the six CMake spellings "
+          "(CMakeLists.txt/*.cmake/*.cmake.in); the command-line or environment "
+          "channels; or the batch/shell/PowerShell environment-assignment channel "
+          "-- all four scanned tree-wide; and none in a direct compiler invocation "
+          "naming src/matmul.cpp, among the {} file(s) under {} carrying one.".format(
+              _display_path(args.repo_root), len(scanned_files), _display_path(args.repo_root)
           ))
     return 0
 
