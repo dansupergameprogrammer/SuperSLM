@@ -2,8 +2,10 @@
 // The two Trust-boundaries occupants named fold round 3 (D-SLM3623) are direct adaptations of
 // Claude/Loki/t2176-probe-cap-straddle-bridge-semantics.cpp's own Arm A / Arm F construction into
 // committed cells, per this suite's own casebook Sec2 and the design's own Sec8 rung 1 text
-// ("T-2176's own probe... is the template for the two new Trust-boundaries cells"); its Arm A
-// (the shipped per-token bridge, unmodified) is this file's own reference oracle for both.
+// ("T-2176's own probe... is the template for the two new Trust-boundaries cells"). Arm A here
+// calls the PUBLIC bridge, which since Rungs 3/4 runs the batched primitive for every count
+// (chunk_len=1 included) -- there is no per-token arm in this file; the shipped-equivalence
+// carrier is t2132_g5_gpu_parity (design Sec6, corrected at T-2184/T-2185).
 #include "fixture_common.h"
 #include "superslm/gpu_port.h"
 
@@ -81,9 +83,9 @@ static void TestTrust_CapStraddleBridgeObservable(SslmGpuContext* ctx, SslmGpuMo
 	const std::vector<int32_t> chunk = {55, 66, 77, 88};  // only 2 of 4 fit before context_cap
 	const int32_t kNextToken = 99;
 
-	// Arm A: the WHOLE chunk in one call -- the batched candidate under test (post-build, this
-	// exercises SubmitChunkToFullDepthForG5Bridge's own admission clamp; today it is the shipped
-	// per-token loop, which already clamps correctly per-token -- see cell_bitidentity.cpp's own
+	// Arm A: the WHOLE chunk in one call -- the batched candidate under test: this
+	// exercises SubmitChunkToFullDepthForG5Bridge's own admission clamp (the build is landed;
+	// the pre-batching per-token loop is no longer reachable here) -- see cell_bitidentity.cpp's own
 	// header note on why black-box content agreement alone is not sufficient evidence this cell
 	// exercised the NEW mechanism, which is why every cell in this file also reads the dispatch
 	// probes below).

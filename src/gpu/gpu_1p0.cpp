@@ -2280,8 +2280,8 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// two separate manual statements -- open here, close unconditionally below -- was NOT
 	// symmetric with the shipped per-token path in the property that matters: the call in between
 	// can throw. `SubmitChunkToFullDepthForG5Bridge`'s own tail
-	// (`SubmitOneSubChunkToFullDepthForG5Bridge`, superslm_gpu.cpp:2591/2597/2598 --
-	// `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`) sits OUTSIDE that
+	// (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
+	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, cited by name, not line) sits OUTSIDE that
 	// function's own try/catch, so a failed `Close()`/`Signal()` (`SSLM_GPU_HR` throws
 	// `std::runtime_error` -- precisely the device-removed channel design Sec9 promises is
 	// deliverable) or a `std::bad_alloc` from the `new` can escape this call with no catch
