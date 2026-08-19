@@ -66,10 +66,12 @@ happens to support.
 
 **Measured, real 1.5B-parameter model artifact, batched prefill, SSE2 to
 AVX2, this project's own reference AMD hardware (Zen 2, no AVX-512):
-about 1.68x-1.72x faster**, two independent runs (6.93 vs. 11.68 tok/s,
-and a second run at 11.33 tok/s, well within run-to-run noise of the
-first). AVX-512's own throughput is not yet measured on real hardware —
-tracked as a known gap below, not assumed from the AVX2 figure.
+about 1.68x-1.72x faster**, two independent runs, each its own paired
+SSE2/AVX2 baseline: run 1 at 6.93 → 11.68 tok/s (1.68x), run 2 at
+6.60 → 11.33 tok/s (1.72x) — within the 2-5% run-to-run noise this
+project measured on this machine. AVX-512's own throughput is not yet
+measured on real hardware — tracked as a known gap below, not assumed
+from the AVX2 figure.
 
 ## GPU inference
 
