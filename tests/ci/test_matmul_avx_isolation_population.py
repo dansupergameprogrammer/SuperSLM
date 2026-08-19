@@ -148,10 +148,11 @@ def _member_ids() -> list[str]:
 
 
 @pytest.mark.parametrize("member", _POPULATION, ids=_member_ids())
-def test_population_member(member: dict, tmp_path) -> None:
+def test_population_member(member: dict, tmp_path, capsys) -> None:
     scratch_root = _materialize_scratch_tree(str(tmp_path))
     _apply_member(scratch_root, member)
     exit_code = _run_checker_against_scratch(scratch_root)
+    captured = capsys.readouterr()
 
     expect = member["expect"]
     if expect == "green":
@@ -159,13 +160,54 @@ def test_population_member(member: dict, tmp_path) -> None:
             "population member {!r} expects the unmutated tree to pass "
             "(exit 0) but the checker exited {}".format(member["id"], exit_code)
         )
-    elif expect in ("red", "checker-failure"):
+    elif expect == "red":
         assert exit_code == 1, (
             "population member {!r} ({}) expects the checker to fail "
             "(exit 1) but it exited {} -- this is a checker coverage gap, "
             "not a passing population member".format(
                 member["id"], member["source"], exit_code
             )
+        )
+        # T-2177 Finding 1: exit_code == 1 alone cannot tell a genuine hit
+        # from a crashed channel -- the checker returns 1 down both paths.
+        # "FAIL --" is the tag `main()` writes to stderr only on the real-hit
+        # path (never on the CheckerFailure path, which writes "CHECKER
+        # FAILURE" instead), and each hit line beneath it names the file the
+        # channel actually caught -- so this assertion is the population's
+        # own proof that the member's hit was attributed in the checker's
+        # OUTPUT, not merely that some exit code happened to be 1.
+        assert "FAIL --" in captured.err, (
+            "population member {!r} exited 1 but stderr carries no 'FAIL --' "
+            "tag -- this is exit_code == 1 for the WRONG reason (a crashed "
+            "channel, not an attributed hit); captured stderr:\n{}".format(
+                member["id"], captured.err
+            )
+        )
+    elif expect == "checker-failure":
+        assert exit_code == 1, (
+            "population member {!r} ({}) expects the checker to fail "
+            "(exit 1) but it exited {} -- this is a checker coverage gap, "
+            "not a passing population member".format(
+                member["id"], member["source"], exit_code
+            )
+        )
+        # T-2177 Finding 1: a CheckerFailure (a channel that could not
+        # complete its own scan) must be distinguishable from a genuine hit.
+        # design §20.3's own closing paragraph: this cell "must exit 1 with
+        # the CHECKER FAILURE stderr tag, never OK" -- and, by the same
+        # reasoning this suite now applies to the red cells, never a silent
+        # "FAIL --" either, which would mean a crash was scored as a catch.
+        assert "CHECKER FAILURE" in captured.err, (
+            "population member {!r} exited 1 but stderr carries no "
+            "'CHECKER FAILURE' tag -- this is exit_code == 1 for the WRONG "
+            "reason (a genuine hit or something else entirely, not the "
+            "CheckerFailure path this member exists to exercise); captured "
+            "stderr:\n{}".format(member["id"], captured.err)
+        )
+        assert "FAIL --" not in captured.err, (
+            "population member {!r} stderr carries both the CHECKER FAILURE "
+            "tag and the FAIL -- tag -- a checker-failure member must take "
+            "the CheckerFailure path exclusively".format(member["id"])
         )
     else:
         raise ValueError(
