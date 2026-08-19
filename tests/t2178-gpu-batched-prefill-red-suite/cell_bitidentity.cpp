@@ -131,10 +131,15 @@ static void TestCell2_BoundarySplit(SslmGpuContext* ctx, SslmGpuModelHandle* mod
 	}
 }
 
-// --- Cell 3: real-artifact consistency -- the batched GPU path, at production scale, reproduces
-// the unbatched per-token GPU path bit-for-bit; simultaneously the CPU/GPU parity re-proof under
-// the new code path (design Sec6 cell 3). Runs a real decode step after the compared prefill, so
-// an argmax-visible divergence (not only a raw-byte one) is also caught, matching
+// --- Cell 3: real-artifact consistency -- corrected per T-2186 P2 (Brunel fix round 3,
+// D-SLM3683; T-2185 N4/D-SLM3679's own design-doc correction, Sec6 cell 3, which this header had
+// not yet followed): the batched GPU path, at production scale, reproduces its own
+// `chunk_budget = 1` arm's output bit-for-bit -- chunk-size invariance of the ONE implementation,
+// never a comparison against a distinct unbatched implementation. CPU/GPU parity (D-SLM3487) is a
+// SEPARATE, genuinely-independent oracle (`t2132_g5_gpu_parity`) whose reference (the CPU forward
+// pass) takes no input from the GPU implementation under test -- this cell's two GPU arms cannot
+// re-prove or substitute for it. Runs a real decode step after the compared prefill, so an
+// argmax-visible divergence (not only a raw-byte one) is also caught, matching
 // Claude/Loki/t2176-probe-cap-straddle-bridge-semantics.cpp's own "the one question a consumer
 // actually asks next" methodology. ---
 static void TestCell3_RealArtifactConsistency(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
@@ -182,9 +187,12 @@ static void TestCell3_RealArtifactConsistency(SslmGpuContext* ctx, SslmGpuModelH
 	          GpuStatusName(cand_status));
 	CHECK_MSG(SnapshotsBitEqual(ref_snap, cand_snap),
 	          "Cell3: post-prefill state diverges at production scale (32-token forced span, real "
-	          "Qwen2.5-1.5B artifact) -- this is also the CPU/GPU parity re-proof under the new "
-	          "batched code path (D-SLM3487), since CPU output is unaffected by this design "
-	          "(Sec7) and matching the pre-existing per-token GPU path is sufficient");
+	          "Qwen2.5-1.5B artifact) -- chunk-size invariance of the SAME batched primitive "
+	          "(chunk_budget=1 vs the whole 32-token chunk), corrected per T-2186 P2 (Brunel fix "
+	          "round 3, D-SLM3683; T-2185 N4/D-SLM3679): this GPU-vs-GPU comparison does NOT "
+	          "re-prove or substitute for CPU/GPU parity (D-SLM3487) -- that is a separate, "
+	          "genuinely-independent oracle (t2132_g5_gpu_parity) whose reference takes no input "
+	          "from this implementation");
 	CHECK_MSG(ref_step_status == cand_step_status && ref_out_token == cand_out_token,
 	          "Cell3: the FOLLOWING decode step diverges (status ref=%s/%d cand=%s/%d) -- an "
 	          "argmax-visible product-level divergence, not merely a raw-byte one",

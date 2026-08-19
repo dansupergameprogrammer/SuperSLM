@@ -9,11 +9,17 @@
 // test) is Claude/Loki/t2176-probe-cap-straddle-bridge-semantics.cpp's own convention -- adapted
 // here into committed, gated cells per this suite's own casebook Sec2, not reinvented.
 //
-// UNLIKE T-2112's suite, T-2169's own oracle is NOT a CPU reference model -- the design's own
-// central claim (Sec6) is that the batched GPU path reproduces the EXISTING unbatched per-token
-// GPU path bit-for-bit; CPU/GPU parity (D-SLM3487) is a separate, already-proven property this
-// design does not touch (Sec7) and cell 3 below re-confirms only as a byproduct of matching the
-// GPU reference. No CpuOracleModel/CpuOracleRunner machinery is needed or included here.
+// UNLIKE T-2112's suite, T-2169's own oracle is NOT a CPU reference model -- corrected per T-2186
+// P2 (Brunel fix round 3, D-SLM3683; T-2185 N4/D-SLM3679's own design-doc correction, Sec6, which
+// this file's comment had not yet followed): every cell's reference arm below is the SAME batched
+// primitive (`SslmGpuSeqPrefillPromptForG5Bridge`/`SslmGpuSeqPrefillSchemaContentForG5Bridge`) at
+// a DIFFERENT chunk size (`chunk_budget = 1` vs mid-size/N) -- chunk-size invariance of the one
+// implementation, never a comparison against a distinct unbatched implementation. CPU/GPU parity
+// (D-SLM3487) is a SEPARATE, genuinely-independent oracle -- `t2132_g5_gpu_parity` -- since only
+// that comparison's reference (the CPU forward pass) takes no input from the GPU implementation
+// under test; cell 3 below (`TestCell3_RealArtifactConsistency`) cannot re-prove or substitute for
+// it, whatever chunk sizes its own two GPU arms are swept across. No CpuOracleModel/CpuOracleRunner
+// machinery is needed or included here.
 #ifndef SSLM_T2178_FIXTURE_COMMON_H
 #define SSLM_T2178_FIXTURE_COMMON_H
 

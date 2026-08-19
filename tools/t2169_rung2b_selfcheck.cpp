@@ -4,10 +4,16 @@
 // the identical dispatch sequence RunLayerLoopGpu already produces for that same token
 // (mechanism-only per the design's own fold-round-2 disposition -- every stale-host-input class
 // member is trivially current at one token); (b) a 4-token self-check: driving four tokens
-// through the SAME primitive, in one call, must produce the identical post-chunk SeqState AND
-// K/V cache the unbatched per-token path (four separate RunLayerLoopGpu calls) produces for the
-// same four tokens -- the discriminating instance (D-SLM3608/D-SLM3615), since a size-1 check
-// alone cannot see the T-2175 stale-root-constant/stale-embedding defect class.
+// through the SAME primitive, in one call, must produce the identical post-chunk SeqState AND K/V
+// cache FOUR separate `RunLayerLoopGpu` calls, one per token, at the WIDEST `layer_budget`
+// (`num_hidden_layers`, one round-trip covering every layer -- corrected per T-2186 P2, Brunel fix
+// round 3, D-SLM3683; T-2185 N4/D-SLM3679: this reference is chunk-size invariance in round-trip
+// granularity, NOT a reproduction of the genuinely-shipped, pre-batching per-token composition's
+// own 28-round-trip-per-token shape, "not the narrower per-layer-quantum stepping the real bridge
+// functions use before Rung 3/4 lands" -- see this file's own header comment, below, which states
+// the distinction precisely) produce for the same four tokens -- the discriminating instance
+// (D-SLM3608/D-SLM3615), since a size-1 check alone cannot see the T-2175 stale-root-constant/
+// stale-embedding defect class.
 //
 // This primitive has internal linkage in its own translation unit's header sense (no exported
 // declaration in gpu_port.h -- Rung 3/4 have not yet wired a public bridge caller) and is
