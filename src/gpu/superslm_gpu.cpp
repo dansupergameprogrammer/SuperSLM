@@ -2800,19 +2800,28 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 			                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 		}
 		// `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
-		// situation the `bad_alloc` clause above documents. Only `Signal()` failed, so the fence
-		// value already reserved for this submission (`dev.fence_val`, incremented as Signal's own
-		// argument before the call) was never actually handed to the queue to raise. T-2192
-		// finding T2(b): this function's stack is about to release `seq_readback`/`kv_readback`/
-		// every `state` buffer the already-queued work reads from or writes to, so the fence must
-		// be made to signal -- or the wait skipped only because the device is confirmed gone --
-		// before this function returns, the same requirement the `bad_alloc` clause above honors
-		// for the identical post-Execute situation. Retry Signal() once at the SAME target value
-		// (direct HRESULT check, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
-		// same catch), the adjacent clause's own "an alternate fence signal" option.
-		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), dev.fence_val)) &&
-		    dev.fence->GetCompletedValue() < dev.fence_val) {
-			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
+		// situation the `bad_alloc` clause above documents. Whatever `dev.fence_val` holds right
+		// now may or may not already be the value the failed `Signal()` attempted (that increment
+		// is evaluated as part of constructing `Signal()`'s own argument, so a REAL `Signal()`
+		// failure leaves it already advanced; the injected pin fires as a separate statement
+		// strictly before that line, so on the injected path it is not) -- rather than depend on
+		// which case this is, mint a FRESH, unambiguously-unreached value here and signal that one.
+		// A stale retry at whatever `dev.fence_val` already held would be a near-guaranteed no-op
+		// (that value was very likely already reached by an earlier submission's own wait), which
+		// is exactly the silent non-wait T-2192 finding T2(b) exists to close -- reproduced by
+		// executing this cell against the real device before this fix: the retry skipped waiting
+		// entirely, the stack's buffers were released into work the GPU was still doing, and the
+		// device was confirmed removed on the very next call. This function's stack is about to
+		// release `seq_readback`/`kv_readback`/every `state` buffer the already-queued work reads
+		// from or writes to, so the fence must be made to signal -- or the wait skipped only
+		// because the device is confirmed gone -- before this function returns, the same
+		// requirement the `bad_alloc` clause above honors for the identical post-Execute situation.
+		// Direct HRESULT check, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
+		// same catch.
+		const UINT64 recovery_fence_val = ++dev.fence_val;
+		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), recovery_fence_val)) &&
+		    dev.fence->GetCompletedValue() < recovery_fence_val) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(recovery_fence_val, dev.fence_event))) {
 				WaitForSingleObject(dev.fence_event, INFINITE);
 			}
 			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
