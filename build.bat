@@ -95,6 +95,40 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2180 (Brunel, Rung 6, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
+rem the public-bridge bit-identity sweep (tools\t2180_rung6_public_bridge_sweep.cpp) -- design
+rem Sec6's own size/boundary-split proof cells generalized to the exact size list this build's own
+rem log reports against ({1,2,4,8,16,256}, plus splits straddling the TDR-safe sub-chunk bound of
+rem 4), driven through SslmGpuSeqPrefillPromptForG5Bridge, the same PUBLIC entry point Rungs 3/4
+rem wired. Same committed-build-recipe discipline as the two tools above. NOT auto-run (needs a
+rem real .sslm artifact). Usage after a successful build: out\t2180_rung6_sweep.exe ^<model.sslm^>.
+if not exist out\t2180 mkdir out\t2180
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2180_rung6_public_bridge_sweep.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_sweep.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
+rem T-2180 (Brunel, Rung 6): the product cell -- tok/s on a long forced span, chunked (one
+rem public-bridge call) vs shipped-per-token (N separate single-token public-bridge calls),
+rem through the SAME public entry point (tools\t2180_rung6_tokps.cpp). 1.1's headline GPU number
+rem (design Sec10). NOT auto-run. Usage after a successful build:
+rem out\t2180_rung6_tokps.exe ^<model.sslm^> [span_len].
+if not exist out\t2180 mkdir out\t2180
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^
+	tools\t2180_rung6_tokps.cpp /Fo:out\t2180\ /Fe:out\t2180_rung6_tokps.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
 rem enumeration tool (tools\t2116_list_adapters.cpp) -- no .sslm artifact needed, so it is
 rem built here and NOT auto-run; run_crossvendor.ps1 invokes it directly. See that file's
