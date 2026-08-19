@@ -305,6 +305,22 @@ endforeach()
 # attributed site exists yet) and stays true once they land -- this is exactly the
 # guard design §10 dimension 7 commissions as a standing check, not a one-time
 # build-time probe like its dimension-7c/7g siblings (§11 steps 4b/4d).
+# T-2179 fix round 5 (Finding 1): T-2177's own FATAL_ERROR remedy for the silent-skip
+# defect below made a host Python 3 interpreter a hard configure requirement for the
+# whole project -- this repository's README states the opposite ("none is required to
+# build or to pass the suite"), and no CI job in .github/workflows/tests.yml that runs
+# `cmake -B build` declares `setup-python`, so the dependency was silent everywhere it
+# reached. SUPERSLM_REQUIRE_CI_CHECK_TOOLS scopes the hard failure to the one job that
+# actually needs these two ctest entries to exist -- `-DSUPERSLM_REQUIRE_CI_CHECK_TOOLS=ON`
+# on the matmul-avx-isolation-guard job's own `cmake -B build` (.github/workflows/tests.yml)
+# -- and OFF everywhere else, so a bare `cmake -B build` on a Python-less host configures
+# clean, exactly as the README promises. `--no-tests=error` on that job's own `ctest` line
+# already turns an empty test selection into a hard failure independently and
+# unconditionally, so the empty-selection half of the original defect stays closed with no
+# coverage lost by scoping the FATAL_ERROR this way.
+option(SUPERSLM_REQUIRE_CI_CHECK_TOOLS
+	"Fail configuration if the Python 3 interpreter needed by the tools/ci checks is absent (set by the matmul-avx-isolation-guard CI job only)"
+	OFF)
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
 	add_test(NAME check_matmul_avx_isolation
@@ -321,7 +337,7 @@ if(Python3_Interpreter_FOUND)
 	add_test(NAME check_matmul_avx_isolation_population_vitality
 		COMMAND ${Python3_EXECUTABLE} -m pytest
 			${CMAKE_SOURCE_DIR}/tests/ci/test_matmul_avx_isolation_population.py -q)
-else()
+elseif(SUPERSLM_REQUIRE_CI_CHECK_TOOLS)
 	# T-2177 Finding 2: this branch used to print a message(STATUS) no CI step
 	# reads and configure clean -- the matmul-avx-isolation-guard job's own
 	# `ctest -R '^check_matmul_avx_isolation'` would then select nothing,
@@ -329,8 +345,17 @@ else()
 	# stopped running while its own CI job stayed green. A missing Python3
 	# interpreter is a hard configuration failure here, not a silent skip --
 	# the two ctest entries this branch would have added are the only thing
-	# that job exists to run.
+	# that job exists to run. T-2179 fix round 5 (Finding 1): scoped behind
+	# SUPERSLM_REQUIRE_CI_CHECK_TOOLS (see the option() above) so this failure
+	# reaches only the one CI job that opts in, never a bare `cmake -B build`.
 	message(FATAL_ERROR "T-2158/T-2177: Python3 interpreter not found -- cannot register check_matmul_avx_isolation or check_matmul_avx_isolation_population_vitality. The matmul-avx-isolation-guard CI job (.github/workflows/tests.yml) exists to run exactly these two ctest entries; configuring without them would let that job report success having run nothing.")
+else()
+	# T-2179 fix round 5 (Finding 1): SUPERSLM_REQUIRE_CI_CHECK_TOOLS is OFF (the
+	# default) -- a consumer building this library without a Python 3 interpreter
+	# on the host configures clean, as README.md's own "none is required to build
+	# or to pass the suite" promises. The matmul-avx-isolation-guard job is the
+	# only caller that sets the option ON.
+	message(STATUS "T-2158: Python3 interpreter not found -- check_matmul_avx_isolation and check_matmul_avx_isolation_population_vitality are not registered (non-fatal; set -DSUPERSLM_REQUIRE_CI_CHECK_TOOLS=ON to make this fatal, as the matmul-avx-isolation-guard CI job does).")
 endif()
 
 # C1 fix round (S9/S8 residual, Claude/Poirot/2c18dab-t2139-abi-build-review.md): Gate A and Gate

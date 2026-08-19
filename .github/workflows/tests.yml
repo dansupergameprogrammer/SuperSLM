@@ -895,7 +895,11 @@ jobs:
       # bad-alloc-membership-check job's own setup-python + pip install
       # pattern for the same reason.
       - run: pip install pytest
-      - run: cmake -B build
+      # T-2179 fix round 5 (Finding 1): SUPERSLM_REQUIRE_CI_CHECK_TOOLS=ON makes a
+      # missing Python 3 interpreter a hard configure failure here -- the one job
+      # these two ctest entries actually gate. The option defaults OFF everywhere
+      # else, so a bare `cmake -B build` on a Python-less host configures clean.
+      - run: cmake -B build -DSUPERSLM_REQUIRE_CI_CHECK_TOOLS=ON
       # T-2177 Finding 2: `-R` alone selects tests by name and exits 0 when the
       # selection is empty ("No tests were found!!!") -- a filter typo or a
       # registration that silently stopped happening (e.g. the else() branch
