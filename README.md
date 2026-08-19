@@ -128,15 +128,14 @@ that same run.
 
 "CI extent" means the platform is exercised by this project's own continuous
 integration matrix, and no further hardware-specific measurement has been
-made beyond what that gives. The workflows exist and define the full
-matrix ([.github/workflows/tests.yml](.github/workflows/tests.yml):
-windows-x64, linux-x64, linux-x64-asan, macos-arm64), runs on every push,
-and is **fully green on the 1.0 release commit** — every platform leg,
-sanitizer leg, cross-toolchain digest leg, and CI checker. A consumer can
-reproduce the same verification locally: the [Building](#building)
-section's `cmake`+`ctest` matrix on any platform, and `build.bat` on
-Windows. See [docs/platform-support.md](docs/platform-support.md) for the
-full table, every measured number, and where each one was measured.
+made beyond what that gives. What that matrix has actually executed, and as
+of when, is stated in exactly one place —
+[docs/platform-support.md § CI execution status](docs/platform-support.md#ci-execution-status)
+— rather than restated here. A consumer can reproduce the same verification
+locally regardless of hosted-run status: the [Building](#building) section's
+`cmake`+`ctest` matrix on any platform, and `build.bat` on Windows. See
+[docs/platform-support.md](docs/platform-support.md) for the full table,
+every measured number, and where each one was measured.
 
 GPU determinism is scoped to the certified adapters above: an AMD
 integrated GPU on the same RDNA3 test machine passes the direct-dispatch

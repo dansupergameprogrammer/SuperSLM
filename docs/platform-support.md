@@ -3,16 +3,31 @@
 "Certified" in this document means: built and run on that exact hardware,
 with every determinism check (bit-identical output against the CPU
 reference, at every layer-budget granularity the engine supports) passing
-on that run. "CI extent" means the platform is exercised by this project's
-continuous integration matrix, which exists and defines the full build +
-test job for each platform below — **GitHub Actions hosted runs are
-currently capped by the account's spending limit and have not executed
-since 2026-07-23**; today, the same matrix each job runs is reproducible
-locally (this project's own `cmake`+`ctest`, per platform) and that local
-run is the verification path CI extent below stands on until hosted runs
-resume. Every number below states the device, the artifact, and the
-surface it was measured through — a number without that context is not
-included here.
+on that run.
+
+## CI execution status
+
+This is the ONE place this project states what its continuous integration
+has actually executed, and every other public document (README, CHANGELOG,
+API docs) points here rather than restating it — a present-tense
+CI-execution claim living in more than one place is how the same claim goes
+stale in one copy while staying correct in another (T-2192/T-2195, three
+consecutive review rounds).
+
+"CI extent" means the platform is exercised by this project's continuous
+integration matrix, which exists and defines the full build + test job for
+each platform below (`.github/workflows/tests.yml`: windows-x64, linux-x64,
+linux-x64-asan, macos-arm64). **GitHub Actions hosted runs are currently
+capped by the account's spending limit and have not executed since
+2026-07-23.** The matrix **was fully green on the 1.0 release commit** —
+every platform leg, sanitizer leg, cross-toolchain digest leg, and CI
+checker — a dated, past-tense fact that stays true regardless of hosted-run
+status today. Since the cap, the same matrix each job runs is reproducible
+locally (this project's own `cmake`+`ctest`, per platform, and `build.bat`
+on Windows) and that local run is the verification path CI extent below
+stands on until hosted runs resume. Every number below states the device,
+the artifact, and the surface it was measured through — a number without
+that context is not included here.
 
 ## CPU inference
 
