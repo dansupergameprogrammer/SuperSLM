@@ -19,11 +19,15 @@
 //
 // T-2183 (Curie, D-SLM3655) named a second, DISTINCT gap here -- the tenth, call-scope failure
 // origin (design Sec5.1/Sec9, D-SLM3634): a mid-recording infrastructural exception is CHUNK-
-// scoped, not token-scoped, and no test-reachable seam existed to drive it. T-2180 (Brunel, this
-// same addendum, D-SLM3660) closed that gap by adding the seam Curie's casebook specified
-// (`ArmT2169ChunkRecordingFaultInjection`, `gpu_port.h`) and authoring the cell below against it --
-// `TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault`'s own header comment carries the full
-// account, including what remains untestable through this suite's public entry points.
+// scoped, not token-scoped, and confirmed UNAUTHORABLE at that pass against the only
+// test-reachable fault-injection hook then in the tree (`MaybeThrowInjectedO11AllocFault`, fires
+// only at chunk-OPEN, strictly before this loop) -- that casebook's own Sec4 filed the seam
+// specification a builder would need to add, rather than paper over the gap with a vacuous cell.
+// T-2180 (Brunel, this same addendum, D-SLM3660) closed the gap by adding the seam exactly as
+// specified (`ArmT2169ChunkRecordingFaultInjection`, `gpu_port.h`) and authoring the cell below
+// against it -- `TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault`'s own header comment
+// carries the full account, including what remains untestable through this suite's public entry
+// points (the design's own third clause, residency-cache invalidation).
 #include "fixture_common.h"
 #include "superslm/gpu_port.h"
 
