@@ -2432,11 +2432,16 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		                                     state.work_adapter_u_off, adapter_bridge,
 		                                     dispatch_query_index);
 #if defined(SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT)
-		// Design Sec9's own Guard-vitality row: one increment per per-token dispatch-body
-		// invocation inside an open chunk list -- the "actual dispatch count issued"
-		// instrument all three admission clamps (DFA, position-cap, embed_admit_count) are
-		// checked against, once Rung 3/4 wires the pre-scan that decides `chunk_len`.
-		++superslm_test::g_gpu_chunk_dispatch_count_probe;
+		// Design Sec9's own Guard-vitality row / tests/support/gpu_chunk_dispatch_instrument.h's
+		// own committed contract: the counter's delta must equal `admit_count * num_hidden_layers`
+		// (Rung 3/4's own trust/guard cells, cell_trust_and_guard.cpp, assert exactly this) -- one
+		// token's own full-depth dispatch body (`RecordOneTokenFullDepthDispatchBody`, called once
+		// above) issues `N` (num_hidden_layers) layers' worth of dispatches in that single call, so
+		// the counter advances by `N` here, not by one -- a plain `++` would under-count by a
+		// factor of `N` against the header's own documented "admit_count * num_hidden_layers"
+		// formula, caught by executing Rung 3/4's own guard-vitality cells against the real
+		// artifact (T-2180).
+		superslm_test::g_gpu_chunk_dispatch_count_probe += N;
 #endif
 
 		// D-SLM3631: the nested per-token/per-layer/per-head K/V readback-offset enumeration

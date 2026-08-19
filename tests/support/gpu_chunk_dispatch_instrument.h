@@ -29,9 +29,12 @@
 //      `SubmitChunkToFullDepthForG5Bridge` call (i.e. once per command list opened and
 //      submitted for a chunk/sub-chunk -- design Sec5 steps 1/3/4), from inside that function's
 //      own body, guarded by `SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT`.
-//   2. Increment `g_gpu_chunk_dispatch_count_probe` exactly once per invocation of the Rung-2-
-//      extracted per-token, per-layer dispatch body (design Sec5's own D-SLM3595 ruling -- the
-//      function `RunLayerLoopGpuSubmit` is reduced to open/call/close around), same guard.
+//   2. Advance `g_gpu_chunk_dispatch_count_probe` by `num_hidden_layers` per invocation of the
+//      Rung-2-extracted per-token, per-layer dispatch body (design Sec5's own D-SLM3595 ruling --
+//      the function `RunLayerLoopGpuSubmit` is reduced to open/call/close around, and one
+//      invocation of that body issues one token's own FULL-DEPTH dispatch chain, all layers in a
+//      single call), same guard -- matching this header's own documented "delta ==
+//      admit_count * num_hidden_layers" contract below, not a plain per-invocation `++`.
 // Both are declared here, at namespace scope (not inside test_main.cpp's translation unit, and
 // not inside an anonymous namespace -- see tests/t2112-gpu-1p0-red-suite/fixture_common.h's own
 // header note on why a bench-bridge extern must bind to the real global symbol) so a definition
@@ -51,8 +54,9 @@ namespace superslm_test {
 // external, not a header-only no-op.
 extern std::atomic<int64_t> g_gpu_chunk_submit_count_probe;
 
-// One increment per per-token dispatch body invocation inside an open chunk list -- the "actual
-// dispatch count issued" instrument design Sec9's Guard-vitality row names for all three
+// Advances by `num_hidden_layers` per per-token dispatch body invocation inside an open chunk
+// list (one such invocation issues that token's own full-depth dispatch chain, all layers in one
+// call) -- the "actual dispatch count issued" instrument design Sec9's Guard-vitality row names for all three
 // admission clamps (DFA, position-cap, embed_admit_count): a cell drives a chunk through the
 // batched primitive, reads this counter's delta, and asserts it equals exactly
 // `admit_count * num_hidden_layers` (mutation-provable: a clamp removed or off-by-one'd changes
