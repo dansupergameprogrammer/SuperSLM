@@ -8,6 +8,12 @@
 // carrier is t2132_g5_gpu_parity (design Sec6, corrected at T-2184/T-2185).
 #include "fixture_common.h"
 #include "superslm/gpu_port.h"
+// T-2192 finding 8 (O2's own instrument, and T1's own execution-verification pin): the SAME
+// header the production translation units include, so `harness::GetDevice()`'s function-local
+// static singleton (d3d12_harness.h) is genuinely shared with `superslm_gpu.cpp`/`gpu_1p0.cpp` --
+// this file drains the identical device's debug-layer message queue the production code ran
+// against, not a second, empty one.
+#include "../../src/gpu/d3d12_harness.h"
 
 #include <atomic>
 #include <chrono>
@@ -491,6 +497,13 @@ static void TestGuard_ContextReusableAfterCaughtTailFault(SslmGpuContext* ctx,
 	SslmGpuSequenceHandle* cand_seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &cand_seq) == SSLM_OK);
 
+	// T-2192 finding 8/T1: drain and discard whatever the debug layer has queued from setup (the
+	// reference arm above, sequence creation) so the counts read below are attributable to THIS
+	// arm's own two calls, not to unrelated prior traffic. A no-op (returns/drains nothing) when
+	// SSLM_GPU_ENABLE_DEBUG_LAYER is not set -- see d3d12_harness.h's own header comment on
+	// `DrainDebugLayerMessages`.
+	(void)superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
+
 	const std::vector<int32_t> kFirstCallChunk = {500, 501, 502};
 	superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection();
 	const SslmGpuStatus first_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
@@ -505,6 +518,10 @@ static void TestGuard_ContextReusableAfterCaughtTailFault(SslmGpuContext* ctx,
 	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected, investigate "
 	          "before trusting the second call's own result",
 	          GpuStatusName(first_call_status));
+	// The faulted first call's own recorded-but-discarded barriers are expected debug-layer noise
+	// (the list is Closed without ever executing) -- drained and discarded here so only the SECOND
+	// call's own validation traffic is graded below.
+	(void)superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
 
 	const SslmGpuStatus second_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
 	    ctx, cand_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
@@ -515,6 +532,23 @@ static void TestGuard_ContextReusableAfterCaughtTailFault(SslmGpuContext* ctx,
 	          "open/recording by the caught fault (T-2189 finding 6's own out-of-scope observation, "
 	          "D-SLM3692 Sec9; T-2191 S6) and this context is wedged",
 	          GpuStatusName(second_call_status));
+	// T-2192 finding 8/T1's own execution pin: on the reverted fix, the second call's own resume
+	// barrier claims `StateBefore=COPY_SOURCE` on a buffer the caught first call left in
+	// `UNORDERED_ACCESS` (the latch was set before the transition that would have made it true ever
+	// executed) -- an invalid prior-state transition, which the D3D12 debug layer flags as a
+	// validation ERROR. Zero under the fix (the latch is cleared when the first call's list is
+	// discarded, so the second call correctly issues no resume barrier at all). Only meaningful
+	// with SSLM_GPU_ENABLE_DEBUG_LAYER=1 set (returns 0 unconditionally otherwise, per
+	// DrainDebugLayerMessages's own contract) -- run with that flag set to execution-verify this
+	// pin rather than trust it by source reading alone.
+	const size_t second_call_validation_messages =
+	    superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
+	CHECK_MSG(second_call_validation_messages == 0,
+	          "Guard(context-reusable pin): the SECOND call's own D3D12 debug-layer validation "
+	          "reported %zu WARNING-or-worse message(s) (see stderr, \"D3D12 VALIDATION\" lines "
+	          "above) -- the KV resource-state resume-barrier latch was left asserting a "
+	          "transition the caught first call never executed (T-2192 finding T1)",
+	          second_call_validation_messages);
 
 	int32_t cand_token = -1;
 	const SslmGpuStatus cand_step_status =
@@ -526,6 +560,140 @@ static void TestGuard_ContextReusableAfterCaughtTailFault(SslmGpuContext* ctx,
 	          "Guard(context-reusable pin): the second call's own produced token (%d) does not match "
 	          "the never-faulted reference arm's token (%d) -- the context recovered enough to avoid "
 	          "returning an error but not enough to produce the correct output",
+	          cand_token, ref_token);
+
+	sslm_gpu_seq_release(ctx, cand_seq);
+}
+
+// T-2192 finding M3: the SAME pin shape as `TestGuard_ContextReusableAfterCaughtTailFault` above,
+// aimed at the OTHER of the tail's three failure points that catch clause covers -- a `Signal()`
+// failure AFTER `ExecuteCommandLists` has already queued the recorded work to the GPU. That
+// catch body (T-2192 T2(b)'s own remedy, `SubmitOneSubChunkToFullDepthForG5Bridge`,
+// superslm_gpu.cpp) retries `Signal()` at the same fence value and waits it out before returning,
+// so -- unlike the pre-Close pin above -- the context is expected to recover with the FIRST call's
+// own work genuinely committed, not merely with the second call unaffected. Red under a reverted
+// T2(b) fix (the un-waited release races the still-executing GPU work, corrupting or hanging a
+// later call on this shared device); green under it.
+static void TestGuard_ContextReusableAfterSignalFault(SslmGpuContext* ctx,
+                                                        SslmGpuModelHandle* model) {
+	const int64_t kContextCap = 64;
+	const std::vector<int32_t> kSecondCallChunk = {710, 711, 712};
+	const int32_t kNextToken = 809;
+
+	SslmGpuSequenceHandle* ref_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &ref_seq) == SSLM_OK);
+	const SslmGpuStatus ref_prefill_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, ref_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(ref_prefill_status == SSLM_OK,
+	          "Guard(signal-fault reusable pin): reference arm's own prefill returned %s, want "
+	          "SSLM_OK -- the pin's own baseline is broken",
+	          GpuStatusName(ref_prefill_status));
+	int32_t ref_token = -1;
+	const SslmGpuStatus ref_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, ref_seq, kNextToken, kDispatchBudget, &ref_token);
+	CHECK_MSG(ref_step_status == SSLM_OK,
+	          "Guard(signal-fault reusable pin): reference arm's own following decode step returned "
+	          "%s, want SSLM_OK", GpuStatusName(ref_step_status));
+	sslm_gpu_seq_release(ctx, ref_seq);
+
+	SslmGpuSequenceHandle* cand_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &cand_seq) == SSLM_OK);
+
+	const std::vector<int32_t> kFirstCallChunk = {510, 511, 512};
+	superslm_gpu::ArmT2169ChunkRecordingTailSignalFaultInjection();
+	const SslmGpuStatus first_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kFirstCallChunk.data(), static_cast<int32_t>(kFirstCallChunk.size()),
+	    kDispatchBudget);
+	superslm_gpu::ClearT2169ChunkRecordingTailSignalFaultInjection();
+	CHECK_MSG(first_call_status == SSLM_DEVICE_LOST,
+	          "Guard(signal-fault reusable pin): the faulted first call returned %s, want "
+	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected",
+	          GpuStatusName(first_call_status));
+
+	const SslmGpuStatus second_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(second_call_status == SSLM_OK,
+	          "Guard(signal-fault reusable pin): the SECOND call on the same context, after a caught "
+	          "post-Execute Signal() fault, returned %s instead of SSLM_OK -- T-2192 T2(b)'s own "
+	          "remedy did not recover the context",
+	          GpuStatusName(second_call_status));
+
+	int32_t cand_token = -1;
+	const SslmGpuStatus cand_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, cand_seq, kNextToken, kDispatchBudget, &cand_token);
+	CHECK_MSG(cand_step_status == SSLM_OK,
+	          "Guard(signal-fault reusable pin): the candidate arm's own following decode step "
+	          "(after recovery) returned %s, want SSLM_OK", GpuStatusName(cand_step_status));
+	CHECK_MSG(cand_token == ref_token,
+	          "Guard(signal-fault reusable pin): the second call's own produced token (%d) does not "
+	          "match the never-faulted reference arm's token (%d)",
+	          cand_token, ref_token);
+
+	sslm_gpu_seq_release(ctx, cand_seq);
+}
+
+// T-2192 finding M3: the third of the tail's three failure points -- `std::bad_alloc` from
+// `new GpuLayerLoopInFlight()`, after `Close()`/`ExecuteCommandLists`/`Signal()` have all
+// genuinely succeeded. This is the ONE tail catch T-2192 found already correct before this round
+// (the existing fence-wait pattern T2(b)'s own remedy now mirrors); this cell exists so the claim
+// is executed, not merely read, and so the class has full three-of-three coverage rather than
+// one-of-three. Same pin shape as the two cells above.
+static void TestGuard_ContextReusableAfterBadAllocFault(SslmGpuContext* ctx,
+                                                          SslmGpuModelHandle* model) {
+	const int64_t kContextCap = 64;
+	const std::vector<int32_t> kSecondCallChunk = {720, 721, 722};
+	const int32_t kNextToken = 819;
+
+	SslmGpuSequenceHandle* ref_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &ref_seq) == SSLM_OK);
+	const SslmGpuStatus ref_prefill_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, ref_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(ref_prefill_status == SSLM_OK,
+	          "Guard(bad_alloc reusable pin): reference arm's own prefill returned %s, want SSLM_OK "
+	          "-- the pin's own baseline is broken",
+	          GpuStatusName(ref_prefill_status));
+	int32_t ref_token = -1;
+	const SslmGpuStatus ref_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, ref_seq, kNextToken, kDispatchBudget, &ref_token);
+	CHECK_MSG(ref_step_status == SSLM_OK,
+	          "Guard(bad_alloc reusable pin): reference arm's own following decode step returned %s, "
+	          "want SSLM_OK", GpuStatusName(ref_step_status));
+	sslm_gpu_seq_release(ctx, ref_seq);
+
+	SslmGpuSequenceHandle* cand_seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, kContextCap, &cand_seq) == SSLM_OK);
+
+	const std::vector<int32_t> kFirstCallChunk = {520, 521, 522};
+	superslm_gpu::ArmT2169ChunkRecordingTailBadAllocFaultInjection();
+	const SslmGpuStatus first_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kFirstCallChunk.data(), static_cast<int32_t>(kFirstCallChunk.size()),
+	    kDispatchBudget);
+	superslm_gpu::ClearT2169ChunkRecordingTailBadAllocFaultInjection();
+	CHECK_MSG(first_call_status == SSLM_DEVICE_LOST,
+	          "Guard(bad_alloc reusable pin): the faulted first call returned %s, want "
+	          "SSLM_DEVICE_LOST -- the injection seam itself did not fire as expected",
+	          GpuStatusName(first_call_status));
+
+	const SslmGpuStatus second_call_status = SslmGpuSeqPrefillPromptForG5Bridge(
+	    ctx, cand_seq, kSecondCallChunk.data(), static_cast<int32_t>(kSecondCallChunk.size()),
+	    kDispatchBudget);
+	CHECK_MSG(second_call_status == SSLM_OK,
+	          "Guard(bad_alloc reusable pin): the SECOND call on the same context, after a caught "
+	          "post-Execute bad_alloc fault, returned %s instead of SSLM_OK",
+	          GpuStatusName(second_call_status));
+
+	int32_t cand_token = -1;
+	const SslmGpuStatus cand_step_status =
+	    SslmGpuSeqDecodeStepForG5Bridge(ctx, cand_seq, kNextToken, kDispatchBudget, &cand_token);
+	CHECK_MSG(cand_step_status == SSLM_OK,
+	          "Guard(bad_alloc reusable pin): the candidate arm's own following decode step (after "
+	          "recovery) returned %s, want SSLM_OK", GpuStatusName(cand_step_status));
+	CHECK_MSG(cand_token == ref_token,
+	          "Guard(bad_alloc reusable pin): the second call's own produced token (%d) does not "
+	          "match the never-faulted reference arm's token (%d)",
 	          cand_token, ref_token);
 
 	sslm_gpu_seq_release(ctx, cand_seq);
@@ -607,6 +775,8 @@ int main(int argc, char** argv) {
 	volatile void* a7 = (void*)&TestGuard_ModelUnwedgesAfterUncoveredTailThrow; (void)a7;
 	volatile void* a8 = (void*)&TestGuard_FullCapHugeCountBoundedPrescanWork; (void)a8;
 	volatile void* a9 = (void*)&TestGuard_ContextReusableAfterCaughtTailFault; (void)a9;
+	volatile void* a10 = (void*)&TestGuard_ContextReusableAfterSignalFault; (void)a10;
+	volatile void* a11 = (void*)&TestGuard_ContextReusableAfterBadAllocFault; (void)a11;
 
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("this file's cells need --model1p5b=PATH -- not run");
@@ -649,6 +819,10 @@ int main(int argc, char** argv) {
 		TestGuard_FullCapHugeCountBoundedPrescanWork(ctx, model);
 		TestGuard_ModelUnwedgesAfterUncoveredTailThrow(ctx, model);
 		TestGuard_ContextReusableAfterCaughtTailFault(ctx, model);
+		// T-2192 finding M3: the two follow-on pins, same shared-device reasoning as the cell just
+		// above -- each proves its own catch clause recovers the context for the call that follows.
+		TestGuard_ContextReusableAfterSignalFault(ctx, model);
+		TestGuard_ContextReusableAfterBadAllocFault(ctx, model);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		CHECK_MSG(false, "failed to load --model1p5b=%s: %s", g_model_1p5b_path.c_str(), err.c_str());
