@@ -2416,6 +2416,14 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	bool tail_list_closed = false;
 	bool tail_executed = false;
 	try {
+		// T-2195 pertoken pin (Curie): the SAME pre-Close pin seam
+		// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail already calls (this file, below) --
+		// extended to fire here too, so the per-token drive (`sslm_decode_step_gpu` ->
+		// `SubmitOneSequenceDecode` -> this function, reached from the public surface through
+		// `SslmGpuSeqDecodeStepForG5Bridge`'s embed-then-drive branch) has an injection point for
+		// this round's own S1 containment, not only the chunk primitive's. Arming plumbing only --
+		// unarmed cost is the existing zero-overhead check the sibling call site already pays.
+		MaybeThrowInjectedT2169ChunkRecordingTailFault();
 		SSLM_GPU_HR(dev.list->Close());
 		tail_list_closed = true;
 		const auto t_record_end = std::chrono::steady_clock::now();

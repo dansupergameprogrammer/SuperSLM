@@ -718,6 +718,14 @@ void ClearT2169ChunkRecordingFaultInjection();
 // `Signal()` failure -- letting a cell catch it and assert `SubmitAdmittedChunkForG5Bridge`'s own
 // RAII window guard (`gpu_1p0.cpp`) left `model->submitted_sequences` and `seq->state` clean
 // rather than wedged.
+//
+// T-2195 pertoken pin (Curie, D-SLM3702 arc round 5 S1/S2 fold): the identical pre-Close fire
+// point ALSO exists in `RunLayerLoopGpuSubmit`'s own tail (superslm_gpu.cpp) since that
+// function's containment landed -- the primitive the PER-TOKEN drive (`sslm_decode_step_gpu` via
+// `SubmitOneSequenceDecode`, reached from the public surface through
+// `SslmGpuSeqDecodeStepForG5Bridge`'s embed-then-drive branch) calls directly, never through
+// `SubmitOneSubChunkToFullDepthForG5Bridge`. This single Arm/Clear pair now fires at BOTH sites;
+// which one a given call reaches depends only on which public entry point drove it.
 void ArmT2169ChunkRecordingTailFaultInjection();
 void ClearT2169ChunkRecordingTailFaultInjection();
 
