@@ -957,6 +957,176 @@ uint32_t Stage1LanesForRank(uint32_t rank) {
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the SUBMIT half of the async split --
 // declared in gpu_port.h. This function is BYTE-FOR-BYTE what RunLayerLoopGpu's own
 // body always was, from function entry through ExecuteCommandLists/Signal, MINUS the
+// T-2169 (Rung 2, design Claude/Vitruvius/t2169-gpu-batched-prefill-design-2026-08-18.md Sec5/
+// Sec5.1, D-SLM3595): the per-token, per-layer dispatch body, extracted from
+// RunLayerLoopGpuSubmit's own former inline loop -- list-lifecycle separation, not a
+// call-and-compose reuse. Records exactly one token's full [start_layer, start_layer +
+// layers_to_record) dispatch chain into the ALREADY-OPEN command list on `dev` -- it does not
+// Reset(), Close(), Execute, or fence-wait; the caller (RunLayerLoopGpuSubmit for the
+// single-token, non-chunked call shape, or the T-2169 chunk-submission primitive for the
+// chunked shape) owns the list's own open/close lifecycle. The root signature and every one of
+// the twelve SRV/UAV root bindings (slots 8-14) must already be bound by the caller before this
+// is invoked -- unchanged from the pre-extraction shape, since those bindings are call-constant
+// (D-SLM3632, Sec5.1) and persist on an open command list across Dispatch/SetPipelineState
+// calls; this function issues only root CONSTANTS (slot 0) plus Dispatch/ResourceBarrier pairs,
+// byte-for-byte identical to the pre-extraction `bind_and_dispatch`/`bind_and_dispatch_tail`
+// calls for the same (layer, site). `position_u32`/`width_u32` are THIS TOKEN's own record-time
+// values (D-SLM3612, Sec5 2a) -- a chunked caller passes a chunk-local, per-token-advancing
+// pair rather than a call-wide constant read from `seq.context_length`; the single-token caller
+// passes the identical constant it always computed. `dispatch_query_index` is threaded by
+// reference so the timestamp-query boundary numbering stays contiguous across every token a
+// (sub-)chunk records, matching the pre-extraction single-call numbering exactly when only one
+// token is recorded (Rung 2's own refactor-safety cell, Sec5/Sec8, proves this).
+void RecordOneTokenFullDepthDispatchBody(
+    harness::Device& dev, uint32_t start_layer, uint32_t layers_to_record, uint32_t H, uint32_t HD,
+    uint32_t NH, uint32_t NQH, uint32_t I, uint32_t N, uint32_t context_cap_u32,
+    uint32_t position_u32, uint32_t width_u32, const GpuScratchLayout& scratch_layout,
+    uint64_t work_wide_a_off, uint64_t work_wide_b_off, uint64_t work_adapter_u_off,
+    const GpuAdapterBridge* adapter_bridge, uint32_t& dispatch_query_index) {
+	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
+	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
+	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");
+	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
+	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
+	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");
+	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
+	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
+	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
+	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
+	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
+	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
+	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
+	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
+	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
+	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
+	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
+	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
+	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
+	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
+	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
+	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
+	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
+	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
+
+	D3D12_RESOURCE_BARRIER global_uav_barrier{};
+	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+	global_uav_barrier.UAV.pResource = nullptr;  // Sec18.3 fold, D-SLM3002: every barrier this design issues is global
+
+	struct TailAdapterSlot {
+		int slot_p;
+		uint32_t in_base;
+		uint32_t wide_base;
+	};
+
+	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
+	                              uint32_t lanes = 1) {
+		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+		}
+		++dispatch_query_index;
+		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  lanes};
+		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
+		dev.list->SetPipelineState(pso);
+		dev.list->Dispatch(num_groups, 1, 1);
+		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
+	                                   std::initializer_list<TailAdapterSlot> slots) {
+		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
+			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
+		}
+		++dispatch_query_index;
+		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
+		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
+		size_t base = 11;
+		for (const TailAdapterSlot& s : slots) {
+			uint32_t rank = 0, a_off = 0, b_off = 0, fold_off = 0;
+			if (adapter_bridge) {
+				const superslm_gpu::AdapterProjSlot& slot =
+				    adapter_bridge->slots[static_cast<size_t>(layer_index) * 7u + static_cast<size_t>(s.slot_p)];
+				if (slot.present) {
+					rank = slot.rank;
+					a_off = static_cast<uint32_t>(slot.a_offset);
+					b_off = static_cast<uint32_t>(slot.b_offset);
+					fold_off = static_cast<uint32_t>(slot.fold_offset);
+				}
+			}
+			consts[base + 0] = rank;
+			consts[base + 1] = a_off;
+			consts[base + 2] = b_off;
+			consts[base + 3] = fold_off;
+			consts[base + 4] = static_cast<uint32_t>(work_adapter_u_off);
+			consts[base + 5] = s.in_base;
+			consts[base + 6] = s.wide_base;
+			consts[base + 7] = Stage1LanesForRank(rank);
+			base += 8;
+		}
+		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
+		dev.list->SetPipelineState(pso);
+		dev.list->Dispatch(1, 1, 1);
+		dev.list->ResourceBarrier(1, &global_uav_barrier);
+	};
+
+	const uint32_t KV2 = 2u * NH * HD;
+	const GpuGemmSiteGroupPlan q_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan o_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan kv_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan gate_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan up_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
+	const GpuGemmSiteGroupPlan down_proj_plan = ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
+
+	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
+	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
+	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
+
+	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &kv_proj_plan, &gate_proj_plan,
+	                                          &up_proj_plan, &down_proj_plan}) {
+		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
+		    static_cast<uint64_t>(plan->out_channels)) {
+			throw GpuGemmGroupArithmeticError(
+			    "RecordOneTokenFullDepthDispatchBody: GEMM group plan does not cover its own "
+			    "out_channels -- groups * channels_per_group fell short of out_channels");
+		}
+	}
+
+	for (uint32_t i = 0; i < layers_to_record; ++i) {
+		const uint32_t l = start_layer + i;
+		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
+		bind_and_dispatch_tail(q_proj_pipe.pso.Get(), l,
+		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
+		bind_and_dispatch_tail(
+		    kv_proj_pipe.pso.Get(), l,
+		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
+		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
+		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
+		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
+		bind_and_dispatch(softmax_pipe.pso.Get(), l);
+		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
+		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
+		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
+		bind_and_dispatch_tail(o_proj_pipe.pso.Get(), l,
+		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
+		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
+		bind_and_dispatch_tail(gate_proj_pipe.pso.Get(), l,
+		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
+		bind_and_dispatch_tail(up_proj_pipe.pso.Get(), l,
+		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
+		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
+		bind_and_dispatch_tail(down_proj_pipe.pso.Get(), l,
+		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
+		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
+		bind_and_dispatch(commit_pipe.pso.Get(), l);
+	}
+}
+
 // fence-wait and everything after it (moved to RunLayerLoopGpuFinish, below) PLUS the
 // external-weights/external-rope bridge (this section's own new work, gated entirely
 // behind the trailing parameters -- every existing behavior is reached identically
@@ -1812,47 +1982,12 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	                                        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
 	                                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
+	// T-2169 (Rung 2, D-SLM3595): every other per-site pipeline fetch, the GEMM-plan computation,
+	// the flattened attention/RoPE group counts, the GEMM-group-arithmetic standing guard, and the
+	// bind_and_dispatch/bind_and_dispatch_tail lambdas that used to live here now live inside
+	// RecordOneTokenFullDepthDispatchBody (above) -- this fetch survives only because its root
+	// signature is bound once, below, before that extracted body's first call.
 	auto& attn_norm_pipe = harness::GetOrBuildComposedPipeline("attn_norm_site");
-	auto& q_proj_pipe = harness::GetOrBuildComposedPipeline("q_proj_site");
-	auto& kv_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("kv_proj_gemm_site");  // T-2113 (B4)
-	auto& kv_proj_pipe = harness::GetOrBuildComposedPipeline("kv_proj_site");
-	auto& rope_pipe = harness::GetOrBuildComposedPipeline("rope_guard_site");
-	auto& rope_commit_pipe = harness::GetOrBuildComposedPipeline("rope_commit_site");  // T-2113 (B4)
-	// T-2045 (C3): the four ratified attention sites, de-fused from T-2039's
-	// own single fused dispatch (Claude/Poirot/82cfca7-gpu-serial-port-build-
-	// review.md, C3 -- Sec5.4/Sec13 place cross-site fusion outside this
-	// design's build target).
-	auto& attention_score_pipe = harness::GetOrBuildComposedPipeline("attention_score_site");
-	auto& softmax_pipe = harness::GetOrBuildComposedPipeline("softmax_site");
-	auto& context_accumulate_pipe = harness::GetOrBuildComposedPipeline("context_accumulate_site");
-	auto& ctx_fold_pipe = harness::GetOrBuildComposedPipeline("ctx_fold_site");
-	auto& o_proj_pipe = harness::GetOrBuildComposedPipeline("o_proj_site");
-	auto& attn_residual_pipe = harness::GetOrBuildComposedPipeline("attn_residual_site");
-	auto& mlp_norm_pipe = harness::GetOrBuildComposedPipeline("mlp_norm_site");
-	auto& gate_proj_pipe = harness::GetOrBuildComposedPipeline("gate_proj_site");
-	auto& up_proj_pipe = harness::GetOrBuildComposedPipeline("up_proj_site");
-	auto& mlp_act_pipe = harness::GetOrBuildComposedPipeline("mlp_act_site");
-	auto& down_proj_pipe = harness::GetOrBuildComposedPipeline("down_proj_site");
-	auto& mlp_residual_pipe = harness::GetOrBuildComposedPipeline("mlp_residual_site");
-	auto& commit_pipe = harness::GetOrBuildComposedPipeline("commit_site");
-	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): the GEMM step of each of
-	// these five sites now runs in its OWN multi-group dispatch, immediately before the (now
-	// requant-only, for q_proj also bias) site of the same name -- see each `<site>_gemm_site.hlsl`'s
-	// own header comment for the correctness account. T-2113 (B4, design Sec3/Sec6.1, D-SLM3341):
-	// kv_proj's own GEMM step now gets the identical treatment (`kv_proj_gemm_pipe`, declared
-	// above alongside `kv_proj_pipe`) -- the fused-and-single-dispatch shape `kv_proj_site.hlsl`'s
-	// own header comment used to describe was correct for its OWN cooperative guard/landing pass,
-	// never for the GEMM step, which this section's own second-dispatch remedy splits out.
-	auto& q_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("q_proj_gemm_site");
-	auto& o_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("o_proj_gemm_site");
-	auto& gate_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("gate_proj_gemm_site");
-	auto& up_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("up_proj_gemm_site");
-	auto& down_proj_gemm_pipe = harness::GetOrBuildComposedPipeline("down_proj_gemm_site");
-	// T-2113 (B10 lever 1, design Sec10 "B10 -- Lever Detail" #1): B6b's own standalone
-	// adapter-delta dispatch (`adapter_delta_site.hlsl`, one generic shader dispatched once per
-	// COVERED (layer, projection) slot) is retired -- the identical computation is now fused
-	// into each of the six tail shaders' own dispatch (`bind_and_dispatch_tail` below), via the
-	// extended root signature's own positions 11-24. No separate PSO is built for it anymore.
 
 	dev.list->SetComputeRootSignature(attn_norm_pipe.root_sig.Get());  // identical signature, every PSO here
 	// T-2113 (B4, design Sec10 B2/B4's own deferred root-binding hoist -- Claude/Brunel/
@@ -1927,10 +2062,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	dev.list->SetComputeRootShaderResourceView(
 	    14, (adapter_bridge ? adapter_bridge->fold_resident : model_const_buf.Get())->GetGPUVirtualAddress());
 
-	D3D12_RESOURCE_BARRIER global_uav_barrier{};
-	global_uav_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-	global_uav_barrier.UAV.pResource = nullptr;  // Sec18.3 fold, D-SLM3002: every barrier this design issues is global
-
 	const uint32_t position_u32 = static_cast<uint32_t>(seq.context_length);  // constant across the whole call (Sec9.3)
 	const uint32_t context_cap_u32 = static_cast<uint32_t>(context_cap);
 	// Sec9.4: this token attends to every already-committed position plus its
@@ -1943,179 +2074,6 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// EVERY `bind_and_dispatch` call, capped at the heap's own real capacity (never overrun --
 	// a call past the cap simply stops timing, it never re-uses a slot or corrupts an earlier one).
 	uint32_t dispatch_query_index = 0;
-	// T-2101 (per-dispatch parallelism, follow-up to D-SLM3312/D-SLM3313): `num_groups` defaults to
-	// 1 (every pre-existing single-group site, unchanged behavior). The six `_gemm_site` pipelines
-	// pass `ceil(out_channels/(256/lanes))`, grid-sizing the dispatch to the output dimension
-	// exactly as `ComputeGpuGemmSiteGroupPlan` (gpu_port.h) computes it host-side -- both sides
-	// derive the group count from the SAME `out_channels`/`lanes`, so they cannot drift apart.
-	// T-2113 (B4): `lanes` (default 1, every non-GEMM site's unchanged meaning) is the 11th root
-	// constant -- the ONE source of a GEMM dispatch's own lane split, read by
-	// `GemmCoalescedGpu`/`GemmCoalescedGpuAt` (site_common.hlsli). The twelve SRV/UAV root
-	// bindings that used to be re-issued on every call are hoisted to the single set immediately
-	// after SetComputeRootSignature, above (design Sec10 B2's own deferred root-binding hoist).
-	//
-	// T-2113 (B4->B5 retirement): the TIME-SLICE INVARIANCE bench mechanism B4 built here
-	// (`SSLM_B4_SLICE_EVERY`/`SSLM_B4_SLICE_DROP_UAV_REBIND`/`SSLM_B4_SLICE_SWAP_SRV_REBIND`,
-	// a synthetic mid-call cut-and-resume inside ONE `RunLayerLoopGpu`/`RunLayerLoopGpuSubmit`
-	// call) is RETIRED, per its own documented promise ("retires the moment B5 lands its own
-	// real slicing and the equivalent proof runs through `sslm_decode_step_gpu`/
-	// `sslm_gpu_ready` instead," Claude/Brunel/t2113-1p0-core-build-2026-08-15.md Sec6.1) and
-	// per the design's own Sec6.2 finding that the REAL boundary needs no per-call
-	// instrumentation at all: every separate `sslm_decode_step_gpu` call already performs its
-	// own full Reset+rebind (the twelve `SetComputeRoot*View` calls immediately above this
-	// lambda, unconditional, every call) -- that IS the resume rebind design Sec6.2 asks for,
-	// with no additional mechanism needed inside the dispatch loop. The two T-2106 violation-
-	// class pins move with it, to the top-of-call rebind site itself (this function's own
-	// `SSLM_B5_ASYNC_DROP_UAV_REBIND`/`SSLM_B5_ASYNC_SWAP_SRV_REBIND`, set immediately above),
-	// since that is now the ONLY rebind site a real async resume ever crosses.
-	auto bind_and_dispatch = [&](ID3D12PipelineState* pso, uint32_t layer_index, uint32_t num_groups = 1,
-	                              uint32_t lanes = 1) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
-		}
-		++dispatch_query_index;
-		uint32_t consts[11] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
-		                        NQH,        width_u32, I,  N,  lanes};
-		dev.list->SetComputeRoot32BitConstants(0, 11, consts, 0);
-		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(num_groups, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
-	};
-	// T-2113 (B10 lever 1): one covered (layer, projection) slot's own arguments to
-	// `bind_and_dispatch_tail` below -- `in_channels`/`out_channels` are NOT carried here (unlike
-	// `bind_and_dispatch_adapter_delta`'s own retired signature): the fused shader already knows
-	// its own in_channels/out_channels from the SAME root constants it always read
-	// (g_hidden_size/g_intermediate_size), so ApplyFusedAdapterDeltaGpu's call site inside each
-	// shader passes them directly rather than round-tripping them back out to a root constant
-	// only to be read back in. Only what the shader cannot otherwise derive -- which slot to
-	// check, and the two byte offsets (`in_base`/`wide_base`) into LayerScratch/WorkScratch this
-	// dispatch's own base-GEMM tail already uses -- crosses this boundary.
-	struct TailAdapterSlot {
-		int slot_p;
-		uint32_t in_base;
-		uint32_t wide_base;
-	};
-	// T-2113 (B10 lever 1, design Sec10 "B10 -- Lever Detail" #1): the fused tail dispatch --
-	// issues ONE dispatch per tail shader (q/kv/o/gate/up/down_proj_site.hlsl), folding what used
-	// to be B6b's own separate `bind_and_dispatch_adapter_delta` dispatch into the SAME dispatch
-	// as the site's own bias/requant tail, via the extended root signature's own positions 11-24
-	// (site_common.hlsli's ApplyFusedAdapterDeltaGpu, called from inside each of the six shaders
-	// before their own bias-reconcile/requant code). `slots` names up to two (layer, projection)
-	// coverage checks -- one for every tail shader except kv_proj_site.hlsl, which fuses both its
-	// K (slot=5) and V (slot=6) deltas into its own single dispatch. `slot_p` matches
-	// `sslm_gpu_adapter_map`'s own by-position index (gpu_1p0.cpp: q=0, o=1, gate=2, up=3,
-	// down=4, k=5, v=6); `in_base`/`wide_base` are the SAME byte offsets B6b's own standalone
-	// dispatch used (ScratchLayout's `normed`/`ctx_codes`/`act_codes`, WorkScratch's
-	// WIDE_A/WIDE_B). Every uncovered slot (or `adapter_bridge == nullptr`) is packed with
-	// `rank == 0` -- ApplyFusedAdapterDeltaGpu's own no-op sentinel, matching the standalone
-	// path's "dispatch never issued" contract as a true no-op inside a dispatch that is always
-	// issued (the tail dispatch itself, unconditionally, exactly as it always was pre-lever-1).
-	auto bind_and_dispatch_tail = [&](ID3D12PipelineState* pso, uint32_t layer_index,
-	                                   std::initializer_list<TailAdapterSlot> slots) {
-		if (dispatch_query_index < harness::Device::kMaxTimestampSlots - 1) {
-			dev.list->EndQuery(dev.timestamp_heap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, dispatch_query_index);
-		}
-		++dispatch_query_index;
-		uint32_t consts[27] = {layer_index, H,        HD, NH, context_cap_u32, position_u32,
-		                        NQH,        width_u32, I,  N,  /*lanes=*/1u};
-		size_t base = 11;
-		for (const TailAdapterSlot& s : slots) {
-			uint32_t rank = 0, a_off = 0, b_off = 0, fold_off = 0;
-			if (adapter_bridge) {
-				const superslm_gpu::AdapterProjSlot& slot =
-				    adapter_bridge->slots[static_cast<size_t>(layer_index) * 7u + static_cast<size_t>(s.slot_p)];
-				if (slot.present) {
-					rank = slot.rank;
-					a_off = static_cast<uint32_t>(slot.a_offset);
-					b_off = static_cast<uint32_t>(slot.b_offset);
-					fold_off = static_cast<uint32_t>(slot.fold_offset);
-				}
-			}
-			consts[base + 0] = rank;
-			consts[base + 1] = a_off;
-			consts[base + 2] = b_off;
-			consts[base + 3] = fold_off;
-			consts[base + 4] = static_cast<uint32_t>(work_adapter_u_off);
-			consts[base + 5] = s.in_base;
-			consts[base + 6] = s.wide_base;
-			consts[base + 7] = Stage1LanesForRank(rank);
-			base += 8;
-		}
-		dev.list->SetComputeRoot32BitConstants(0, 27, consts, 0);
-		dev.list->SetPipelineState(pso);
-		dev.list->Dispatch(1, 1, 1);
-		dev.list->ResourceBarrier(1, &global_uav_barrier);
-	};
-	// T-2101 (S3-prime, code review 6d9e04e-t2101-gpu-throughput-review.md, confirmation pass @
-	// f7026db): `ComputeGpuGemmSiteGroupPlan` (gpu_port.h/above) is the ONE source every one of the
-	// six split GEMM dispatches' own grid size comes from -- computed once per site here so the
-	// standing guard below can check all six before any dispatch is recorded, and each plan's own
-	// `.groups`/`.lanes` is what the `bind_and_dispatch` calls pass, with no intermediate
-	// hand-editable local caching a copy of the value. T-2113 (B4): `KV2` is `kv_proj_gemm`'s own
-	// doubled out_channels (K's and V's kv_hidden_size channels packed into one grid,
-	// `kv_proj_gemm_site.hlsl`'s own header comment) -- the ONLY site that reads it; every other
-	// site's own `ComputeGpuGemmSiteGroupPlan` call ignores the parameter.
-	const uint32_t KV2 = 2u * NH * HD;
-	const GpuGemmSiteGroupPlan q_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::QProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan o_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::OProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan kv_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::KvProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan gate_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::GateProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan up_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::UpProj, H, KV2, I);
-	const GpuGemmSiteGroupPlan down_proj_plan =
-	    ComputeGpuGemmSiteGroupPlan(GpuGemmSplitSite::DownProj, H, KV2, I);
-
-	// T-2113 (B4): flattened work-item counts for the two attention sites and RoPE, gridded the
-	// identical way the GEMM sites are -- `ceil(items / 256)` groups, computed from the SAME
-	// `g_num_attention_heads`/`g_width`/`g_head_dim` root constants the shaders themselves read
-	// (attention_score_site.hlsl/context_accumulate_site.hlsl/rope_guard_site.hlsl/
-	// rope_commit_site.hlsl), so host and shader cannot disagree about how many items exist.
-	const uint32_t attn_score_groups = (NQH * width_u32 + 255u) / 256u;
-	const uint32_t ctx_accum_groups = (NQH * HD + 255u) / 256u;
-	const uint32_t rope_groups = (NQH * (HD / 2u) + 255u) / 256u;
-
-	// T-2101 (S3, code review 6d9e04e-t2101-gpu-throughput-review.md; S4, confirmation pass @
-	// f7026db): the standing guard the multi-group change was owed. Fires on EVERY call, at
-	// whatever dimensions that call carries -- trivially satisfied by the suite's own
-	// hidden_size=2 fixtures, genuinely load-bearing at the real 1.5B tier. Throws a DISTINCT type
-	// (`GpuGemmGroupArithmeticError`, above -- not `std::runtime_error`), caught by its own clause
-	// in the SAME try/catch this window already has (S4: the generic clause reported this as
-	// `GpuAllocationFailed`, "retry smaller" -- actively wrong advice for a permanent arithmetic bug
-	// no retry fixes, and discarded the diagnostic string). This function DOES return a status code
-	// for the condition (`GpuGemmGroupArithmeticInvalid`, below, distinct from `GpuAllocationFailed`
-	// and documented as permanent, never "retry smaller") -- returning a status at all matches every
-	// OTHER guard in this function's own convention; the earlier version of THIS comment claimed the
-	// opposite ("throws rather than returning a status code a caller could plausibly want to recover
-	// from"), which the confirmation pass correctly read as describing behavior the code did not
-	// have.
-	//
-	// T-2113 (B4): the covered-quantity check is now `groups * channels_per_group` -- under the
-	// transposed partition, a group of `threads_per_group` (always 256 now) threads covers
-	// `256 / lanes` output CHANNELS, not 256 of them, so `channels_per_group` (not
-	// `threads_per_group`) is the quantity the grid size must cover.
-	for (const GpuGemmSiteGroupPlan* plan : {&q_proj_plan, &o_proj_plan, &kv_proj_plan, &gate_proj_plan,
-	                                          &up_proj_plan, &down_proj_plan}) {
-		if (static_cast<uint64_t>(plan->groups) * static_cast<uint64_t>(plan->channels_per_group) <
-		    static_cast<uint64_t>(plan->out_channels)) {
-			throw GpuGemmGroupArithmeticError(
-			    "RunLayerLoopGpu: GEMM group plan does not cover its own out_channels -- "
-			    "groups * channels_per_group fell short of out_channels");
-		}
-	}
-
-	// T-2045 (C3): attention is four real dispatches (attention-score, softmax,
-	// context-accumulate, ctx_fold), not T-2039's own fused one.
-	// T-2113 (B4, design Sec3/Sec6.1): 24 real dispatches per layer now, re-derived from
-	// T-2101's own 22 -- `kv_proj_gemm` is a NEW dispatch (kv_proj's own GEMM step, no longer
-	// fused into kv_proj_site.hlsl's single dispatch) and RoPE's own commit phase is a second,
-	// separate dispatch (`rope_commit_site.hlsl`) rather than a group-barrier-separated phase
-	// inside `rope_guard_site.hlsl`. `PlanDispatchBudgetGpu`'s own `kDispatchesPerLayer` (below
-	// in this file) is re-derived to 24 in the SAME round (no longer the stale 17 T-2101 left
-	// unwired) -- see that function's own header comment.
 	// T-2045 (C2): resume from seq.layer_index, exactly as the loop in
 	// `RunLayerLoopImpl` (`forward_sites.cpp`) --
 	// `while (advanced < layer_budget && seq.layer_index < num_hidden_layers)` --
@@ -2123,45 +2081,16 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 	// `seq.layer_index < N`, so `N - start_layer` cannot underflow.
 	const uint32_t start_layer = seq.layer_index;
 	const uint32_t layers_to_record = std::min(layer_budget, N - start_layer);
-	// T-2101 (dispatch-overhead decomposition): boundary 0, captured inside the first
-	// `bind_and_dispatch` call below, brackets the FIRST dispatch this call issues -- everything
-	// above (weight/K-V pack-or-skip, every Upload()) is recording work the GPU has not yet been
-	// asked to do anything about, so it must not be inside the GPU-busy window.
-	for (uint32_t i = 0; i < layers_to_record; ++i) {
-		const uint32_t l = start_layer + i;
-		bind_and_dispatch(attn_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(q_proj_gemm_pipe.pso.Get(), l, q_proj_plan.groups, q_proj_plan.lanes);
-		bind_and_dispatch_tail(q_proj_pipe.pso.Get(), l,
-		                        {{/*q=*/0, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(kv_proj_gemm_pipe.pso.Get(), l, kv_proj_plan.groups, kv_proj_plan.lanes);
-		bind_and_dispatch_tail(
-		    kv_proj_pipe.pso.Get(), l,
-		    {{/*k=*/5, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)},
-		     {/*v=*/6, scratch_layout.normed, static_cast<uint32_t>(work_wide_b_off)}});
-		bind_and_dispatch(rope_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(rope_commit_pipe.pso.Get(), l, rope_groups);
-		bind_and_dispatch(attention_score_pipe.pso.Get(), l, attn_score_groups);
-		bind_and_dispatch(softmax_pipe.pso.Get(), l);
-		bind_and_dispatch(context_accumulate_pipe.pso.Get(), l, ctx_accum_groups);
-		bind_and_dispatch(ctx_fold_pipe.pso.Get(), l);
-		bind_and_dispatch(o_proj_gemm_pipe.pso.Get(), l, o_proj_plan.groups, o_proj_plan.lanes);
-		bind_and_dispatch_tail(o_proj_pipe.pso.Get(), l,
-		                        {{/*o=*/1, scratch_layout.ctx_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(attn_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(mlp_norm_pipe.pso.Get(), l);
-		bind_and_dispatch(gate_proj_gemm_pipe.pso.Get(), l, gate_proj_plan.groups, gate_proj_plan.lanes);
-		bind_and_dispatch_tail(gate_proj_pipe.pso.Get(), l,
-		                        {{/*gate=*/2, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(up_proj_gemm_pipe.pso.Get(), l, up_proj_plan.groups, up_proj_plan.lanes);
-		bind_and_dispatch_tail(up_proj_pipe.pso.Get(), l,
-		                        {{/*up=*/3, scratch_layout.normed, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_act_pipe.pso.Get(), l);
-		bind_and_dispatch(down_proj_gemm_pipe.pso.Get(), l, down_proj_plan.groups, down_proj_plan.lanes);
-		bind_and_dispatch_tail(down_proj_pipe.pso.Get(), l,
-		                        {{/*down=*/4, scratch_layout.act_codes, static_cast<uint32_t>(work_wide_a_off)}});
-		bind_and_dispatch(mlp_residual_pipe.pso.Get(), l);
-		bind_and_dispatch(commit_pipe.pso.Get(), l);
-	}
+	// T-2169 (Rung 2, D-SLM3595): the single-token, non-chunked call shape -- one call into the
+	// extracted per-token dispatch body (above), for this call's own [start_layer,
+	// start_layer + layers_to_record) slice, at the constant position_u32/width_u32 this whole
+	// call already computed. This is byte-for-byte the same dispatch sequence the pre-extraction
+	// inline loop issued for the identical layer range (Rung 2's own refactor-safety cell proves
+	// it) -- only the code that issues it moved into its own function.
+	RecordOneTokenFullDepthDispatchBody(dev, start_layer, layers_to_record, H, HD, NH, NQH, I, N,
+	                                     context_cap_u32, position_u32, width_u32, scratch_layout,
+	                                     work_wide_a_off, work_wide_b_off, work_adapter_u_off,
+	                                     adapter_bridge, dispatch_query_index);
 	// One final boundary, immediately after the LAST dispatch (the final layer's own commit_site
 	// above) -- `dispatch_query_index` now equals the total dispatch count this call issued, so
 	// this is boundary N for N dispatches, giving N per-dispatch deltas below. Resolved into a
