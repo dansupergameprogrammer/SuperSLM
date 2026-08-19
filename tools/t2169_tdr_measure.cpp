@@ -224,7 +224,7 @@ int main(int argc, char** argv) {
 	// run swept {2,3,4,5,6,7}, all single-list (the split-wrapper did not exist yet), and found
 	// chunk_tokens=8 reproducibly crashed the process with STATUS_STACK_OVERFLOW (0xC00000FD) --
 	// root-caused under cdb as a recursive cycle entirely inside nvwgf2umx.dll (NVIDIA's own
-	// D3D12 driver), not this codebase. D-SLM3641: SubmitChunkToFullDepthForG5Bridge
+	// D3D12 driver), not this codebase. D-SLM3649: SubmitChunkToFullDepthForG5Bridge
 	// (src/gpu/superslm_gpu.cpp) now internally splits any chunk larger than
 	// superslm_gpu::kT2169TdrSafeMaxChunkTokens into multiple sub-chunk submissions, each
 	// finished synchronously before the next opens. Consequence for THIS tool: calling the
@@ -262,7 +262,7 @@ int main(int argc, char** argv) {
 	    "STATUS_STACK_OVERFLOW, root-caused under cdb as a recursive cycle entirely inside "
 	    "nvwgf2umx.dll (NVIDIA's own D3D12 driver), not this codebase -- see this tool's own "
 	    "header comment. superslm_gpu::kT2169TdrSafeMaxChunkTokens is DEFINED (src/gpu/"
-	    "superslm_gpu.cpp, D-SLM3641) at 4 -- half the confirmed-crashing point, the smaller of "
+	    "superslm_gpu.cpp, D-SLM3649) at 4 -- half the confirmed-crashing point, the smaller of "
 	    "the TDR ceiling and the driver-stability ceiling -- and SubmitChunkToFullDepthForG5Bridge "
 	    "now splits any larger chunk into sub-chunks at that bound automatically.\n",
 	    tdr_bound_exact, dispatches_per_token, tdr_budget_ms, mean_ms_per_dispatch);

@@ -2291,7 +2291,7 @@ superslm::SslmForwardStatus RunLayerLoopGpuSubmit(
 // sequence into ONE open command list, bounded to at most `kT2169TdrSafeMaxChunkTokens` tokens
 // (D-SLM3596, and the empirical stability finding below that ruling now also carries -- see
 // `SubmitChunkToFullDepthForG5Bridge`'s own header comment, immediately below this function, for
-// the full account and D-SLM3641). One call into `PrepareGpuLayerLoopChunkOpenState` (chunk-open,
+// the full account and D-SLM3649). One call into `PrepareGpuLayerLoopChunkOpenState` (chunk-open,
 // exactly once, per D-SLM3632/D-SLM3633), then one call into `RecordOneTokenFullDepthDispatchBody`
 // per admitted token in this sub-chunk, full depth, in order (token-outer, layer-inner,
 // unreordered, per §6's own "not reordered the way the CPU fix inverted its own loop nest"
@@ -2545,7 +2545,7 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	return superslm::SslmForwardStatus::Ok;
 }
 
-// T-2169 (Rung 2, design Sec5, D-SLM3596; the bound's own real derivation, D-SLM3641 -- see this
+// T-2169 (Rung 2, design Sec5, D-SLM3596; the bound's own real derivation, D-SLM3649 -- see this
 // constant's own definition, below, for the full account): the TDR-safe (now: hardware-stability-
 // safe) maximum sub-chunk size, in tokens. `extern`, matching this project's own established
 // red-suite convention (tests/support/gpu_chunk_dispatch_instrument.h's sibling counters) --
@@ -2560,7 +2560,7 @@ extern const uint32_t kT2169TdrSafeMaxChunkTokens;
 // list when it stays under both ceilings, or (b) splitting into a bounded number of sub-chunks,
 // each its own command list/fence-wait pair, still far fewer than one per token."
 //
-// D-SLM3641 (ruled this rung, folding the TDR-measurement pass's own executed finding): the
+// D-SLM3649 (ruled this rung, folding the TDR-measurement pass's own executed finding): the
 // bound this design anticipated as TDR-derived is not what actually governs on the certified
 // target hardware measured this pass (RTX 2080S, driver version confirmed via this machine's own
 // installed NVIDIA driver at measurement time). The pure TDR arithmetic at the measured dispatch
@@ -2646,7 +2646,7 @@ superslm::SslmForwardStatus SubmitChunkToFullDepthForG5Bridge(
 		if (finish_status != superslm::SslmForwardStatus::Ok) {
 			return finish_status;
 		}
-		// D-SLM3641 (fold, found by execution): `commit_site.hlsl`'s own per-layer increment
+		// D-SLM3649 (fold, found by execution): `commit_site.hlsl`'s own per-layer increment
 		// leaves the device's persistent `SeqState.layer_index` field at `num_hidden_layers`
 		// after a token's own LAST layer commits -- it is never auto-wrapped back to 0
 		// device-side. Every existing single-token caller never notices, because
