@@ -245,11 +245,12 @@ static void TestGuard_EmbedAdmitCountClampDispatchCountInstrumented(SslmGpuConte
 }
 
 // --- Guard vitality (b): SSLM_BUSY under the widened in-flight window -- T-2184 remedy S1
-// retarget (Brunel fix round 1, D-SLM3662). Design Sec9's Concurrency/lifecycle row: "a batched
-// chunk submission still occupies exactly one `Submitted` window per chunk (not per token)" --
-// gpu_1p0.cpp's `SubmitAdmittedChunkForG5Bridge` now sets/clears `seq->state`/`seq->in_flight`/
-// `model->submitted_sequences` around the batched chunk's own final (sub-)chunk fence wait,
-// symmetric with `SubmitOneSequenceDecode`/`sslm_gpu_ready`.
+// retarget (Brunel fix round 1, D-SLM3662), re-retargeted by T-2185 remedy N1 (Brunel fix round
+// 2, D-SLM3674). Design Sec9's Concurrency/lifecycle row: "a batched chunk submission still
+// occupies exactly one `Submitted` window per chunk (not per token)" -- gpu_1p0.cpp's
+// `SubmitAdmittedChunkForG5Bridge` now sets `seq->state`/`model->submitted_sequences` BEFORE the
+// first sub-chunk is ever submitted and clears them only after the whole chunk (every sub-chunk,
+// not only the final one) has finished, symmetric with `SubmitOneSequenceDecode`/`sslm_gpu_ready`.
 //
 // UNLIKE the per-token path -- whose LOW-LEVEL `sslm_decode_step_gpu` submits without fencing and
 // returns control to the SAME thread, letting a single-threaded caller observe the window with a
@@ -267,6 +268,18 @@ static void TestGuard_EmbedAdmitCountClampDispatchCountInstrumented(SslmGpuConte
 // thread only reads `model`'s own two plain counters via the public `sslm_gpu_model_unmap` entry
 // point, which submits no GPU work and touches no command list, the exact cross-thread pattern
 // design Sec9 names as supported.
+//
+// T-2185 N1's own finding (against the T-2184 remedy): `observed_busy > 0` -- one hit anywhere --
+// cannot discriminate a window that covers the whole 8-sub-chunk span (the N1 fix) from one that
+// covers only the final sub-chunk of 8 (the T-2184 remedy this cell was retargeting), because both
+// produce at least one BUSY poll. The N1 remedy also REMOVES this cell's prior timing dependence
+// (N7): under the T-2184 remedy the window was bounded to one sub-chunk's own fence wait
+// (~tens of ms), so a slow poll loop could race past it and see nothing; under the N1 remedy the
+// window spans the whole submitter-thread call, so a poll landing anywhere but the extreme
+// start/end of that call lands inside it. The oracle below is re-pointed accordingly: it counts
+// every poll, not just whether one hit, and requires a STATED MAJORITY of them to observe
+// SSLM_BUSY -- a property the final-sub-chunk-only window (1 of 8 sub-chunks, ~12.5% of this
+// cell's own wall time) cannot satisfy, and the whole-chunk window comfortably does.
 static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHandle* model) {
 	SslmGpuSequenceHandle* seq = nullptr;
 	CHECK(sslm_gpu_seq_create(ctx, model, /*context_cap=*/64, &seq) == SSLM_OK);
@@ -281,6 +294,7 @@ static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHa
 
 	std::atomic<bool> submission_done{false};
 	std::atomic<int> observed_busy{0};
+	std::atomic<int> observed_total_polls{0};
 	std::atomic<int> observed_unexpected_status{-1};
 
 	std::thread submitter([&]() {
@@ -298,6 +312,7 @@ static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHa
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 	while (!submission_done.load()) {
 		const SslmGpuStatus poll_status = sslm_gpu_model_unmap(ctx, model);
+		++observed_total_polls;
 		if (poll_status == SSLM_BUSY) {
 			++observed_busy;
 		} else if (poll_status != SSLM_MODEL_HAS_LIVE_SEQUENCES) {
@@ -315,10 +330,23 @@ static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHa
 	          "sslm_gpu_model_unmap call), expected SSLM_OK from the submission and only "
 	          "SSLM_BUSY/SSLM_MODEL_HAS_LIVE_SEQUENCES from the poll",
 	          observed_unexpected_status.load());
-	CHECK_MSG(observed_busy.load() > 0,
-	          "Guard(SSLM_BUSY window): a concurrent sslm_gpu_model_unmap never observed SSLM_BUSY "
-	          "during a genuinely in-flight batched chunk submission -- design Sec9's own "
-	          "\"occupies exactly one Submitted window per chunk\" is not delivered");
+	// T-2185 N1: one hit anywhere cannot tell a whole-chunk window from a final-sub-chunk-only
+	// window (both produce >=1 BUSY poll over an 8-sub-chunk span). Require a stated MAJORITY of
+	// every poll taken across the whole submitter-thread call to observe SSLM_BUSY -- the
+	// final-sub-chunk-only window covers 1 of 8 sub-chunks (~12.5% of this cell's own wall time)
+	// and cannot clear a strict majority; the whole-chunk window covers essentially the entire
+	// call and does.
+	const int total_polls = observed_total_polls.load();
+	const int busy_polls = observed_busy.load();
+	CHECK_MSG(total_polls > 0,
+	          "Guard(SSLM_BUSY window): the polling loop never ran -- the submitter thread "
+	          "finished before a single poll landed, this cell's own timing assumption failed");
+	CHECK_MSG(busy_polls * 2 > total_polls,
+	          "Guard(SSLM_BUSY window): only %d/%d polls observed SSLM_BUSY during a genuinely "
+	          "in-flight batched chunk submission spanning multiple sub-chunks -- design Sec9's own "
+	          "\"occupies exactly one Submitted window per chunk\" requires the window to cover the "
+	          "WHOLE chunk (a majority of the call's own wall time), not merely the final sub-chunk",
+	          busy_polls, total_polls);
 
 	sslm_gpu_seq_release(ctx, seq);
 }

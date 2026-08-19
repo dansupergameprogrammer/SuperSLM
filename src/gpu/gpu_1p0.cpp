@@ -2260,6 +2260,25 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	seq->layer_index = 0;
 	seq->live_state.layer_index = 0;
 	static const superslm::SslmTensorManifest kEmptyManifest;
+	// T-2185 remedy N1 (Brunel fix round 2, D-SLM3674): the T-2184 remedy (S1) opened this window
+	// AFTER `SubmitChunkToFullDepthForG5Bridge` returned, which is also after that call's own
+	// internal loop has already submitted-and-synchronously-finished every non-final sub-chunk
+	// (`SubmitChunkToFullDepthForG5Bridge`'s own header comment, superslm_gpu.cpp: "Every
+	// non-final sub-chunk is finished SYNCHRONOUSLY, here" -- `RunLayerLoopGpuFinish(...,
+	// block=1)` inside that loop). So the window covered only the FINAL sub-chunk's own fence
+	// wait -- under 3.2% of the call's wall time at a 128-token chunk (T-2185 N1's own derivation)
+	// -- and every earlier sub-chunk's fence wait ran with `model->submitted_sequences == 0`,
+	// exactly the reachable consequence the T-2184 review named, still reachable across the
+	// other 96.8% of the call. The window now opens HERE, before the first sub-chunk is ever
+	// submitted, so every sub-chunk's own fence wait -- not only the final one -- falls inside it;
+	// `seq->in_flight` is assigned once the call returns the final sub-chunk's own inflight token
+	// (the only one handed back to this caller unfenced; every earlier one already completed
+	// inside the call), and all three fields close symmetrically below regardless of how the call
+	// below resolves -- a submission that fails partway still leaves earlier sub-chunks genuinely
+	// dispatched, so the window closing unconditionally (not only on Ok) is correct, not merely
+	// simpler.
+	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+	model->submitted_sequences += 1;
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2269,35 +2288,26 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	    model->rope_cos_buf.Get(), model->rope_sin_buf.Get(), model->has_rope_tables,
 	    model->rope_cos_elem_count, model->rope_sin_elem_count, /*adapter_bridge=*/nullptr, &inflight);
 	if (submit_status == superslm::SslmForwardStatus::Ok && inflight) {
-		// T-2184 remedy S1 (Brunel fix round 1, D-SLM3662): the same `Submitted` window
-		// `SubmitOneSequenceDecode`/`sslm_gpu_ready` (above) open and close around the per-token
-		// path -- this batched path bypassed both, so `seq->state`/`seq->in_flight`/
-		// `model->submitted_sequences` were never written here despite design Sec9's Concurrency/
-		// lifecycle row asserting "a batched chunk submission still occupies exactly one
-		// `Submitted` window per chunk (not per token)." `SubmitChunkToFullDepthForG5Bridge`
-		// returns the FINAL (sub-)chunk's own inflight token genuinely unfenced (its own header
-		// comment: "the caller's own async contract... only the FINAL (sub-)chunk's own inflight
-		// token is handed back unfinished"), so the fence for that last sub-chunk has not yet
-		// signaled at this point -- a concurrent caller on another thread (e.g.
-		// `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) genuinely observes this window while
-		// `RunLayerLoopGpuFinish` below blocks on it, exactly the reachable consequence the T-2184
-		// review named (`model->submitted_sequences == 0` falsely falling through to
-		// `SSLM_MODEL_HAS_LIVE_SEQUENCES` instead of `SSLM_BUSY`).
+		// `SubmitChunkToFullDepthForG5Bridge` returns the FINAL (sub-)chunk's own inflight token
+		// genuinely unfenced (its own header comment: "the caller's own async contract... only the
+		// FINAL (sub-)chunk's own inflight token is handed back unfinished"), so the fence for that
+		// last sub-chunk has not yet signaled at this point -- a concurrent caller on another
+		// thread (e.g. `sslm_gpu_model_unmap`, `sslm_gpu_seq_save`) still genuinely observes the
+		// window while `RunLayerLoopGpuFinish` below blocks on it.
 		seq->in_flight = inflight;
-		seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
-		model->submitted_sequences += 1;
 		int32_t ready = 0;
 		superslm_gpu::RunLayerLoopGpuFinish(inflight, seq->live_state, seq->host_kv_mirror.data(),
 		                                      /*block=*/1, &ready);
-		// Symmetric clear -- `sslm_gpu_ready`'s own "collapse Submitted -> Idle in one call" once
-		// the fence has signaled (RunLayerLoopGpuFinish above is `block=1`, so it always has by
-		// this point). No adapter bookkeeping to mirror: this path always submits with
-		// `adapter_bridge = nullptr` (no LoRA on the chunk path), so `seq->in_flight_adapter` is
-		// never set here and needs no clearing, matching every other adapter-less caller.
 		seq->in_flight = nullptr;
-		seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
-		if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
 	}
+	// Symmetric clear -- `sslm_gpu_ready`'s own "collapse Submitted -> Idle in one call" -- runs
+	// unconditionally (not gated on `submit_status == Ok`, per the header comment above): the
+	// window opened unconditionally before the call, so it closes unconditionally after it. No
+	// adapter bookkeeping to mirror: this path always submits with `adapter_bridge = nullptr` (no
+	// LoRA on the chunk path), so `seq->in_flight_adapter` is never set here and needs no
+	// clearing, matching every other adapter-less caller.
+	seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+	if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
 	// Copy the (possibly partially-advanced, per the sub-chunk split's own synchronous-finish
 	// discipline, D-SLM3596/3649) live_state back into this handle's own canonical fields.
 	seq->hidden_scale = seq->live_state.hidden_scale;
