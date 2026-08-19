@@ -33,9 +33,21 @@ int64_t SslmGpuSeqHandleContextCapForBench(SslmGpuSequenceHandle* seq);  // T-21
 // not touch. `tools/t2180_rung6_tokps.cpp` is this declaration's intended includer, alongside
 // this header's existing accessors. See its own definition (src/gpu/gpu_1p0.cpp) for the full
 // account of why the batched public bridge functions can no longer serve this role.
+//
+// T-2185 remedy N6/observation (Brunel fix round 2, D-SLM3677): gated behind
+// `SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING`, matching this codebase's own established injection-
+// seam convention (`SUPERSLM_O11_ALLOC_INJECTION`/`SUPERSLM_T2169_CHUNK_RECORDING_FAULT_
+// INJECTION`, gpu_port.h) -- an `#ifdef`-gated symbol, absent entirely (not merely undeclared)
+// from any translation unit that does not define the macro. `build.bat`'s own
+// `tools\t2180_rung6_tokps.cpp` compile line is the ONLY place this macro is ever defined; every
+// other build target -- including the red-suite cells and every other bench/smoke tool, none of
+// which call this function -- compiles `src/gpu/gpu_1p0.cpp` without it, so the symbol is not
+// linked into any of them.
+#ifdef SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
 SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
                                                             SslmGpuSequenceHandle* seq,
                                                             const int32_t* tokens, int32_t count,
                                                             uint32_t dispatch_budget);
+#endif  // SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
 
 #endif  // SSLM_GPU_1P0_BENCH_BRIDGE_H

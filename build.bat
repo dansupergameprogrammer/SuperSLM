@@ -121,8 +121,13 @@ rem public-bridge call) vs shipped-per-token (N separate single-token public-bri
 rem through the SAME public entry point (tools\t2180_rung6_tokps.cpp). 1.1's headline GPU number
 rem (design Sec10). NOT auto-run. Usage after a successful build:
 rem out\t2180_rung6_tokps.exe ^<model.sslm^> [span_len].
+rem T-2185 remedy N6/observation (Brunel fix round 2, D-SLM3677): /DSUPERSLM_ENABLE_GPU_BENCH_
+rem PRE_BATCHING added -- this is the ONLY compile line in this script that defines it, gating
+rem SslmGpuSeqPrefillPromptPreBatchingBenchOnly (gpu_1p0.cpp/gpu_1p0_bench_bridge.h) into THIS
+rem binary only. Every other line below that compiles src\gpu\gpu_1p0.cpp does not define this
+rem macro, so that symbol is absent from those binaries entirely.
 if not exist out\t2180 mkdir out\t2180
-cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION /DSUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
 	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
 	src\gpu\superslm_gpu.cpp src\gpu\gpu_1p0.cpp ^

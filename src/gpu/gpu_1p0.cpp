@@ -2371,6 +2371,19 @@ void ReproducePositionCapBoundaryEmbedSideEffect(SslmGpuModelHandle* model,
 // the shipped GPU API surface, and not installed alongside it" convention) -- declared in that
 // header, `tools/t2180_rung6_tokps.cpp`'s own intended includer alongside its existing bench
 // accessors.
+//
+// T-2185 remedy N6/observation (Brunel fix round 2, D-SLM3677): this definition, and its own
+// declaration in `gpu_1p0_bench_bridge.h`, are now gated behind
+// `SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING` -- previously defined unconditionally at file scope,
+// so the symbol linked into every binary that compiled this translation unit, not only the one
+// bench tool that calls it. Gated per this codebase's own established injection-seam convention
+// (`SUPERSLM_O11_ALLOC_INJECTION`, `SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION`, gpu_port.h):
+// `build.bat`'s own `tools\t2180_rung6_tokps.cpp` compile line is the only place that defines the
+// macro; every other target -- the red-suite cells, every other tool -- links `gpu_1p0.cpp`
+// without it, so this symbol is absent from those binaries entirely (verified: `dumpbin
+// /symbols` against a build of this file without the macro defined shows no
+// `SslmGpuSeqPrefillPromptPreBatchingBenchOnly` entry).
+#ifdef SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
 SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
                                                             SslmGpuSequenceHandle* seq,
                                                             const int32_t* tokens, int32_t count,
@@ -2388,6 +2401,7 @@ SslmGpuStatus SslmGpuSeqPrefillPromptPreBatchingBenchOnly(SslmGpuContext* ctx,
 	if (count > 0) seq->ready_for_logits = true;
 	return SSLM_OK;
 }
+#endif  // SUPERSLM_ENABLE_GPU_BENCH_PRE_BATCHING
 
 // G5-5 session 3 fix (T-2132, Brunel, Claude/Brunel/t2132-g5-build-2026-08-16.md session 3): the
 // GPU-1.0 twin of `sslm_prefill(..., SSLM_SPAN_PROMPT, ...)` -- embeds and drives EVERY token in
