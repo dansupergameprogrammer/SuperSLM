@@ -455,14 +455,30 @@ def read_peft_lora_pair(adapter_dir: Path, layer: int, proj_short: str, meta: Ad
     """One (layer, projection)'s own A/B float64 tensors, PEFT's on-disk orientation (A: [r, in],
     B: [out, r]) -- `SuperSLM_Plan.md` §11(b)(i) -- returned as `(A_float, B_scaled_float)`, B
     already carrying PEFT's own scaling folded in (§11(b)(ii)), matching
-    `tools/t2029_b3_execute.py`'s own `load_adapter()`."""
-    from safetensors import safe_open  # lazy: not needed by the 22 existing B0 unit tests
+    `tools/t2029_b3_execute.py`'s own `load_adapter()`.
+
+    T-2194: bf16 is the prevailing PEFT/LoRA training default, and bf16 is not a numpy dtype --
+    the `safetensors` library's own `framework="numpy"` binding has no bfloat16 representation and
+    raises `TypeError: data type bfloat16 not understood` out of its own `get_tensor()` before this
+    function's `.astype(np.float64)` ever ran. Read through `_SafeTensors` instead (this module's
+    own sibling, `reference_pipeline.pipeline`) -- the SAME manual safetensors parser and exact
+    bit-shift widening (`raw.view(uint16).astype(uint32) << 16`, reinterpreted as float32) the base
+    converter's own `_open_checkpoint_tensors` path already uses to read the base checkpoint
+    (pipeline.py `_SafeTensors.tensor`), rather than inventing a second bf16 convention here.
+    bf16->float32 widening is LOSSLESS: bf16 is float32's top 16 bits, so the shift zero-fills the
+    dropped mantissa bits and no rounding occurs. `_SafeTensors.tensor()` also raises for any
+    dtype it does not widen exactly (`UnsupportedOpSet`), sweeping in the same class of defect for
+    fp16 and any other on-disk dtype this reader might otherwise silently mis-cast, not only bf16.
+    Numpy-only and dependency-free -- no torch import, matching `requirements.txt`'s own
+    declaration that the vendored reference pipeline never imports torch.
+    """
+    pipeline = _load_spike()
     full_path = _PROJECTION_FULL_PATH[proj_short]
     key_a = f"base_model.model.model.layers.{layer}.{full_path}.lora_A.weight"
     key_b = f"base_model.model.model.layers.{layer}.{full_path}.lora_B.weight"
-    with safe_open(Path(adapter_dir) / "adapter_model.safetensors", framework="numpy") as f:
-        a_f = f.get_tensor(key_a).astype(np.float64)
-        b_f = f.get_tensor(key_b).astype(np.float64)
+    reader = pipeline._SafeTensors(Path(adapter_dir) / "adapter_model.safetensors")
+    a_f = reader.tensor(key_a)
+    b_f = reader.tensor(key_b)
     return a_f, b_f * meta.scaling
 
 
