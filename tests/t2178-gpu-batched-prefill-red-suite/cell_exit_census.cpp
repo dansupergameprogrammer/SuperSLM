@@ -254,13 +254,42 @@ static void TestCensus_TenthOrigin_ChunkScopeInfrastructuralFault(SslmGpuContext
 	SeqSnapshot after;
 	CHECK(CaptureSnapshot(seq, &after));
 	// (b) seq/workspace left at PRE-CHUNK state -- not at whatever token 0 (recorded before the
-	// throw at token index 1) would have committed had its own dispatches executed. The full
-	// snapshot must be bit-identical to priming's own post-state: nothing this call recorded was
-	// ever executed or read back, since the command list closed unsubmitted.
-	CHECK_MSG(SnapshotsBitEqual(before, after),
-	          "Census tenth-origin: sequence state changed across a chunk-scope-discarded call -- "
-	          "D-SLM3634 rules the whole (sub-)chunk (both admitted tokens here) discarded as one "
-	          "unit, not token 0 alone committing before the fault at token index 1");
+	// throw at token index 1) would have committed had its own dispatches executed. Every field
+	// the chunk PRIMITIVE's own recording window could have advanced (only reachable via the
+	// post-submit readback D-SLM3634's own try/catch discards, since the command list closes
+	// unsubmitted) must be bit-identical to priming's own post-state: hidden_codes/hidden_scale
+	// (the committed residual), kv_saturation_count, context_length, and dfa_walk_state (unused on
+	// the prompt twin, but compared anyway -- SnapshotsBitEqual's whole-struct convention every
+	// sibling cell in this file already uses).
+	//
+	// EXECUTED, NOT REASONED (StandardsDocument.md Sec5.4): `layer_index` is DELIBERATELY excluded
+	// from this comparison, confirmed by running this cell against the pre-fix code before adding
+	// the exclusion -- `SnapshotsBitEqual`'s whole-struct form failed on `layer_index` alone (28 ->
+	// 0), not on any other field. Root-caused at source: `SubmitAdmittedChunkForG5Bridge`
+	// (gpu_1p0.cpp) unconditionally sets `seq->layer_index = 0` / `seq->live_state.layer_index = 0`
+	// BEFORE calling this primitive at all (its own header comment: "mirrors
+	// sslm_gpu_seq_embed_token's own unconditional layer_index = 0 reset for a VALID token...
+	// without this, PrepareGpuLayerLoopChunkOpenState's own SequenceAlreadyComplete guard would
+	// reject every call after the first") -- a pre-existing, already-shipped CALLER-side side
+	// effect that fires whenever admit_count > 0, regardless of whether the submission that
+	// follows succeeds. It is orthogonal to D-SLM3634's own claim, which is scoped to what the
+	// PRIMITIVE's try/catch protects (state this primitive itself would have advanced via
+	// readback) -- the caller has already zeroed layer_index before the primitive is ever entered,
+	// so from the primitive's own perspective 0 IS the pre-chunk value it receives. Asserting
+	// layer_index against its value from BEFORE the whole prefill call (28, priming's own committed
+	// end state) would fail this cell for a caller-side bookkeeping reset D-SLM3634 does not
+	// govern, not for a chunk-scope-discard defect -- exactly the miscalibrated-oracle shape
+	// StandardsDocument.md Sec5.4 warns a check must avoid.
+	CHECK_MSG(after.hidden_codes == before.hidden_codes &&
+	              after.hidden_scale_m == before.hidden_scale_m &&
+	              after.hidden_scale_e == before.hidden_scale_e &&
+	              after.kv_saturation_count == before.kv_saturation_count &&
+	              after.context_length == before.context_length &&
+	              after.dfa_walk_state == before.dfa_walk_state,
+	          "Census tenth-origin: sequence state the chunk primitive's own recording window "
+	          "could have advanced changed across a chunk-scope-discarded call -- D-SLM3634 rules "
+	          "the whole (sub-)chunk (both admitted tokens here) discarded as one unit, not token 0 "
+	          "alone committing before the fault at token index 1");
 	CHECK_MSG(after.context_length == static_cast<int64_t>(prime.size()),
 	          "Census tenth-origin: context_length is %lld, expected %zu (exactly priming's own "
 	          "count -- neither admitted token committed)",
