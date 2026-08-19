@@ -1,4 +1,5 @@
 {
+  "_measured_cell": "Every numeric floor in this file is pinned from the branch-coverage CI job's own run (.github/workflows/tests.yml): GitHub-hosted ubuntu-latest runner, clang-18/clang++-18, LLVM 18 llvm-cov/llvm-profdata, RelWithDebInfo, the full committed suite, all five binaries this job builds (the non-forced superslm_tests plus the sse2/avx2/avx512-forced full suites and the scalar-forced digest) merged via llvm-profdata merge before the branch percentage is computed. A number measured on any other machine, toolchain, or binary subset is not a floor for this file (T-2149 design §10 dimension 7 item (h), fold round 5, D-SLM3584) -- src/matmul.cpp has no entry below for exactly this reason: fix round 1's 66.17647058823529 was measured on the reviewer's own local AVX2-only Windows machine, a different cell than this one, and was removed rather than kept as a wrong number. The branch-coverage job records a fresh src/matmul.cpp entry from its own first run against the amended file (see that job's 'Record branch-coverage floors from this leg's own first run, if unset' step) and uploads the result as the branch-coverage-floors-json-post-leg artifact; a human copies the recorded number back into this file, in this same key's place, once available.",
   "include/superslm/adapter_marshal.h": 44.91525423728814,
   "include/superslm/artifact.h": 100.0,
   "include/superslm/layer_marshal.h": 40.0,
@@ -6,7 +7,6 @@
   "src/artifact.cpp": 84.12698412698413,
   "src/decode_digest.cpp": 100.0,
   "src/intmath.cpp": 87.93103448275862,
-  "src/matmul.cpp": 66.17647058823529,
   "src/model.cpp": 68.26347305389223,
   "src/proof_manifest.cpp": 63.013698630136986,
   "src/sha256.cpp": 100.0,

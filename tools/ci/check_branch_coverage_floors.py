@@ -114,8 +114,22 @@ def main() -> int:
     measured = per_file_branch_percentages(export_json)
 
     if args.record_floors:
+        # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): a
+        # `_`-prefixed key (e.g. "_measured_cell") is a comment, not a per-file
+        # floor -- JSON has no native comment syntax, so this is the file's own
+        # convention for stating which cell (runner, toolchain, binary set) every
+        # numeric floor in it is pinned from. Preserved across a re-record rather
+        # than dropped, so recording a fresh set of numbers never silently erases
+        # the statement of where they came from.
+        existing_comments: dict[str, str] = {}
+        if os.path.isfile(_FLOORS_PATH):
+            with open(_FLOORS_PATH, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            existing_comments = {k: v for k, v in existing.items() if k.startswith("_")}
+        recorded = dict(existing_comments)
+        recorded.update(sorted(measured.items()))
         with open(_FLOORS_PATH, "w", encoding="utf-8") as f:
-            json.dump(dict(sorted(measured.items())), f, indent=2)
+            json.dump(dict(sorted(recorded.items())), f, indent=2)
             f.write("\n")
         print(f"Recorded {len(measured)} file floor(s) to {_FLOORS_PATH}")
         return 0
@@ -134,8 +148,14 @@ def main() -> int:
 
     allowlist = _load_allowlist()
 
+    # `_`-prefixed keys are comments (fold round 5, D-SLM3584), not per-file floors
+    # -- e.g. "_measured_cell", stating which runner/toolchain/binary-set cell every
+    # real floor below is pinned from. Skipped here so a comment is never compared
+    # against a measured percentage as though it were one.
     failures: list[str] = []
     for rel, floor in sorted(floors.items()):
+        if rel.startswith("_"):
+            continue
         got = measured.get(rel)
         if got is None:
             failures.append(f"{rel}: no measured branch coverage in this run (file missing or unmeasured)")

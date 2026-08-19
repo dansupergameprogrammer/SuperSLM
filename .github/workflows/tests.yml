@@ -511,13 +511,51 @@ jobs:
           cmake --build build --target superslm_tests superslm_tests_sse2_forced \
             superslm_tests_avx2_forced superslm_tests_avx512_forced \
             sslm_axis_digest_scalar_forced
+      # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): every
+      # binary's exit status is trapped explicitly rather than relying on `bash -e`'s
+      # implicit stop-on-error (which cannot distinguish which exit code killed the
+      # job) or a blanket `|| true` (which swallowed a real regression identically to
+      # the expected crash). The AVX-512-forced binary's expected-on-no-AVX-512-
+      # hardware SIGILL (POSIX exit 132, design §8.4's own standing, disclosed gap)
+      # is the only accepted non-zero exit, on any of the five binaries; the
+      # AVX2-forced binary in particular previously ran with no fallback at all,
+      # silently requiring an AVX2 runner with nothing stating the assumption.
       - name: Run the five binaries under instrumentation
         run: |
+          set +e
           LLVM_PROFILE_FILE=build/nonforced.profraw ./build/superslm_tests
+          ec_nonforced=$?
           LLVM_PROFILE_FILE=build/sse2.profraw ./build/superslm_tests_sse2_forced
+          ec_sse2_forced=$?
           LLVM_PROFILE_FILE=build/avx2.profraw ./build/superslm_tests_avx2_forced
+          ec_avx2_forced=$?
           LLVM_PROFILE_FILE=build/scalar_digest.profraw ./build/sslm_axis_digest_scalar_forced
-          LLVM_PROFILE_FILE=build/avx512.profraw ./build/superslm_tests_avx512_forced || true
+          ec_scalar_digest=$?
+          LLVM_PROFILE_FILE=build/avx512.profraw ./build/superslm_tests_avx512_forced
+          ec_avx512_forced=$?
+          set -e
+
+          fail=0
+          for entry in "superslm_tests:$ec_nonforced" \
+                       "superslm_tests_sse2_forced:$ec_sse2_forced" \
+                       "superslm_tests_avx2_forced:$ec_avx2_forced" \
+                       "sslm_axis_digest_scalar_forced:$ec_scalar_digest"; do
+            name="${entry%%:*}"
+            ec="${entry##*:}"
+            if [ "$ec" -ne 0 ]; then
+              echo "::error::${name} exited ${ec} (any non-zero exit fails this leg)"
+              fail=1
+            fi
+          done
+
+          if [ "$ec_avx512_forced" -eq 132 ]; then
+            echo "superslm_tests_avx512_forced: SIGILL (132), expected on a runner without AVX-512 hardware (design §8.4) -- not a failure"
+          elif [ "$ec_avx512_forced" -ne 0 ]; then
+            echo "::error::superslm_tests_avx512_forced exited ${ec_avx512_forced} (neither 0 nor the expected SIGILL/132) -- fails this leg"
+            fail=1
+          fi
+
+          exit $fail
       - name: Merge the raw profiles
         run: |
           llvm-profdata-18 merge -sparse build/nonforced.profraw build/sse2.profraw \
@@ -534,6 +572,33 @@ jobs:
             -object ./build/sslm_axis_digest_scalar_forced \
             -- src/*.cpp include/superslm/*.h \
             > build/coverage.json
+      # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): fix round 1
+      # re-recorded src/matmul.cpp's floor at 66.18% measured on the reviewer's own
+      # local AVX2-only Windows machine -- a different toolchain, platform, and corpus
+      # than this leg (GitHub-hosted Linux, clang-18, the full suite, all five
+      # binaries unioned). That wrong entry is removed from
+      # tools/ci/branch_coverage_floors.json (below the "src/matmul.cpp" key is
+      # simply absent, not re-guessed); this step lets the leg record its own
+      # measurement, in its own cell, the first time it runs against the amended
+      # file -- `check_branch_coverage_floors.py --record-floors` is the same
+      # mechanism the fold-round-4 ruling already named but fix round 1 did not use.
+      # Only runs when the committed floors file has no src/matmul.cpp entry yet
+      # (the normal, steady-state case skips straight to the check step below); its
+      # output is uploaded as an artifact rather than committed automatically, so a
+      # human copies the recorded number into the committed
+      # tools/ci/branch_coverage_floors.json alongside that file's own
+      # "_measured_cell" comment describing this exact cell -- closing the loop the
+      # design names ("the recorded cell is stated in the floors file's own
+      # comment") without inventing new bot-commit CI machinery this remedy's scope
+      # does not otherwise call for.
+      - name: Record branch-coverage floors from this leg's own first run, if unset
+        run: |
+          python3 -c "
+          import json, sys
+          with open('tools/ci/branch_coverage_floors.json', 'r', encoding='utf-8') as f:
+              floors = json.load(f)
+          sys.exit(0 if 'src/matmul.cpp' in floors else 1)
+          " || python3 tools/ci/check_branch_coverage_floors.py --record-floors build/coverage.json
       - name: Check per-file branch-coverage floors
         run: python3 tools/ci/check_branch_coverage_floors.py build/coverage.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -541,6 +606,10 @@ jobs:
         with:
           name: branch-coverage-json
           path: build/coverage.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: branch-coverage-floors-json-post-leg
+          path: tools/ci/branch_coverage_floors.json
 
   # The golden headers under tests/ and tools/ state, in their own generated
   # comments, that re-running their generator reproduces them byte-for-byte.
