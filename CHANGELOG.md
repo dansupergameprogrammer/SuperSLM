@@ -46,11 +46,14 @@ number and where it was measured.
 
 ### Continuous integration
 
-- The CI matrix gained four independently-forced kernel-tier legs (scalar,
-  SSE2, AVX2, AVX-512) alongside the existing dispatch-live default, each
-  its own full test-suite run plus its own cross-toolchain digest check —
-  a runner that lacks a wider tier's hardware skips that tier's leg loudly
-  rather than silently passing a build it cannot actually exercise.
+- The CI matrix gained three independently-forced kernel-tier legs (SSE2,
+  AVX2, AVX-512), each its own full test-suite run plus its own
+  cross-toolchain digest check, alongside the existing dispatch-live
+  default — a runner that lacks a wider tier's hardware skips that tier's
+  leg loudly rather than silently passing a build it cannot actually
+  exercise. The scalar tier's own cross-toolchain digest leg shipped in
+  1.0 and is unchanged by this release; scalar has no forced full-suite
+  leg — digest comparison only.
 
 ### Known gaps, tracked
 
