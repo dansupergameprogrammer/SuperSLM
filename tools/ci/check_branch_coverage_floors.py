@@ -9,10 +9,13 @@ tools/ci/branch_coverage_floors.json.
 Per-file floors, not one aggregate threshold (F12's own finding: "a single
 aggregate line threshold hides exactly the parser gaps that matter" --
 artifact.cpp and model.cpp were the two files a 97%/92%/75.7% aggregate
-concealed real gaps inside). Floors are measured, never invented: the first
-run of this gate records the actual per-file percentages
-(`--record-floors`); every subsequent run compares against the committed
-file.
+concealed real gaps inside). Floors are measured, never invented: a run of
+this gate with `--record-floors-to <path>` records the actual per-file
+percentages to a build artifact, never to the committed floors file itself
+(fold round 6, D-SLM3603 -- the record step and the check step never share
+a file); a human commits the recorded value(s) into
+tools/ci/branch_coverage_floors.json deliberately, and every subsequent run
+compares against that committed file.
 
 Usage (T-2149 fold round 4, D-SLM3569: the branch-coverage CI job merges profiles
 across the non-forced binary and the forced-tier binaries so each SIMD leaf reaches
@@ -100,11 +103,18 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("export_json", help="Path to llvm-cov export --format=text output")
     parser.add_argument(
-        "--record-floors",
-        action="store_true",
-        help="Write the measured percentages to branch_coverage_floors.json "
-        "instead of checking them (the design's own step 1: run unmodified, "
-        "record the current state, before any floor is pinned).",
+        "--record-floors-to",
+        metavar="PATH",
+        default=None,
+        help="Write the measured percentages to PATH (a build artifact) instead "
+        "of checking them, and never to the committed floors file (fold round 6, "
+        "D-SLM3603: --record-floors used to write _FLOORS_PATH directly, which is "
+        "the same file the check step below reads -- at HEAD, with no committed "
+        "src/matmul.cpp entry, every run took this branch and the check that "
+        "followed was checking this step's own output, reporting OK "
+        "unconditionally. The record step and the check step never share a file "
+        "now: a human reads this artifact and commits the value into "
+        "tools/ci/branch_coverage_floors.json deliberately.).",
     )
     args = parser.parse_args()
 
@@ -113,14 +123,17 @@ def main() -> int:
 
     measured = per_file_branch_percentages(export_json)
 
-    if args.record_floors:
+    if args.record_floors_to:
         # T-2149 design §10 dimension 7 item (h), fold round 5 (D-SLM3584): a
         # `_`-prefixed key (e.g. "_measured_cell") is a comment, not a per-file
         # floor -- JSON has no native comment syntax, so this is the file's own
         # convention for stating which cell (runner, toolchain, binary set) every
         # numeric floor in it is pinned from. Preserved across a re-record rather
         # than dropped, so recording a fresh set of numbers never silently erases
-        # the statement of where they came from.
+        # the statement of where they came from. Fold round 6 (D-SLM3603): the
+        # comment carried forward is read from the COMMITTED floors file
+        # (`_FLOORS_PATH`), never from `--record-floors-to`'s own output path,
+        # since this step no longer writes `_FLOORS_PATH` at all.
         existing_comments: dict[str, str] = {}
         if os.path.isfile(_FLOORS_PATH):
             with open(_FLOORS_PATH, "r", encoding="utf-8") as f:
@@ -128,17 +141,24 @@ def main() -> int:
             existing_comments = {k: v for k, v in existing.items() if k.startswith("_")}
         recorded = dict(existing_comments)
         recorded.update(sorted(measured.items()))
-        with open(_FLOORS_PATH, "w", encoding="utf-8") as f:
+        out_path = args.record_floors_to
+        out_dir = os.path.dirname(out_path)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(dict(sorted(recorded.items())), f, indent=2)
             f.write("\n")
-        print(f"Recorded {len(measured)} file floor(s) to {_FLOORS_PATH}")
+        print(f"Recorded {len(measured)} file floor(s) to {out_path} (a build "
+              f"artifact -- commit the value(s) you need into {_FLOORS_PATH} "
+              "deliberately; this step never writes the committed file).")
         return 0
 
     if not os.path.isfile(_FLOORS_PATH):
         print(
             f"check_branch_coverage_floors.py: {_FLOORS_PATH} does not exist -- "
-            "run with --record-floors first (design Sec4.3 step 1: measure "
-            "before pinning).",
+            "run with --record-floors-to <path> first, then commit the recorded "
+            "value(s) into this file (design Sec4.3 step 1: measure before "
+            "pinning).",
             file=sys.stderr,
         )
         return 1
@@ -163,16 +183,21 @@ def main() -> int:
         if got < floor - 1e-9:
             failures.append(f"{rel}: branch coverage {got:.2f}% < floor {floor:.2f}%")
 
-    # A file the pinned floors don't yet know about is not itself a
-    # failure (new source files start unpinned) -- but it is reported so a
-    # human notices and pins it deliberately in the same change, matching
-    # the pinned-oracle discipline this gate otherwise enforces.
+    # Fold round 6 (D-SLM3603): a measured, gated (`_MEASURED_PREFIXES`-scoped)
+    # file with a nonzero branch count and no entry in the committed floors file
+    # is a hard FAILURE, replacing the prior advisory-only NOTE. The committed
+    # JSON alone cannot distinguish "never measured before" from "measured
+    # before, entry since lost" -- both are the same shape ("this gate's own
+    # docstring claim, floors are measured never invented, does not hold for
+    # this file right now"), so both are closed by the same general rule rather
+    # than a file-specific special case that would silently reopen for the next
+    # file this happens to.
     unpinned = sorted(set(measured) - set(floors))
-    if unpinned:
-        print(
-            "check_branch_coverage_floors.py: NOTE -- measured but unpinned file(s), "
-            "not gated: " + ", ".join(unpinned),
-            file=sys.stderr,
+    for rel in unpinned:
+        failures.append(
+            f"floor unrecorded for {rel} -- commit the artifact value from "
+            "this run's measured-branch-coverage-floors artifact into "
+            "tools/ci/branch_coverage_floors.json"
         )
 
     if allowlist:
@@ -193,7 +218,13 @@ def main() -> int:
         )
         return 1
 
-    print(f"check_branch_coverage_floors.py: OK -- {len(floors)} file(s) at or above their pinned floor")
+    # Fold round 6 (D-SLM3606): `len(floors)` counts every key, including
+    # `_`-prefixed comment keys the check loop above already skips (today,
+    # "_measured_cell") -- the same exclusion is applied here so the success
+    # line's file count matches what was actually gated, not the dict's raw key
+    # count.
+    pinned_count = len([k for k in floors if not k.startswith("_")])
+    print(f"check_branch_coverage_floors.py: OK -- {pinned_count} file(s) at or above their pinned floor")
     return 0
 
 
