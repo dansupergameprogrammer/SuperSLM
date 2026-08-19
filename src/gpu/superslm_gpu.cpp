@@ -25,6 +25,7 @@
 #include "superslm/silu_lut_canonical.h"  // kSiluLutCanonicalTable (T-2035 mlp_act_site upload)
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -916,6 +917,17 @@ namespace {
 bool g_t2169_chunk_recording_fault_armed = false;
 uint32_t g_t2169_chunk_recording_fault_after_token_index = 0;
 bool g_t2169_chunk_recording_tail_fault_armed = false;
+// T-2192 finding M3 (D-SLM3689's own follow-up): two more single-shot seams, mirroring the
+// pre-Close seam above exactly, aimed at the two OTHER tail failure points T-2192's own T1/T2
+// remedy distinguishes -- a `Signal()` failure AFTER `ExecuteCommandLists` has already queued the
+// work (the seam fires between the two calls, so `ExecuteCommandLists` genuinely runs first,
+// reproducing the real "work is already on the GPU" state the remedy handles), and a
+// `std::bad_alloc` from the `new GpuLayerLoopInFlight()` allocation (the seam fires immediately
+// before it, after `Close()`/`ExecuteCommandLists()`/`Signal()` have all genuinely succeeded).
+// Neither existed before this round because nothing exercised the two catch bodies they target
+// (`cell_trust_and_guard.cpp`'s own new cells, T-2192 M3).
+bool g_t2169_chunk_recording_tail_signal_fault_armed = false;
+bool g_t2169_chunk_recording_tail_bad_alloc_fault_armed = false;
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Always defined, always callable -- mirrors `MaybeThrowInjectedO11AllocFault`'s own established
@@ -959,6 +971,35 @@ inline void MaybeThrowInjectedT2169ChunkRecordingTailFault() {
 	}
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 }
+
+// T-2192 finding M3: fires between `ExecuteCommandLists` and `Signal()` -- `ExecuteCommandLists`
+// has therefore already genuinely queued the recorded work to the GPU when this throws, the exact
+// "work is already in flight, only Signal() itself failed" state T-2192's own T2(b) remedy
+// (this file, `SubmitOneSubChunkToFullDepthForG5Bridge`'s tail) handles. `std::runtime_error`,
+// matching what `SSLM_GPU_HR` throws on a real `Signal()` failure.
+inline void MaybeThrowInjectedT2169ChunkRecordingTailSignalFault() {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_tail_signal_fault_armed) {
+		g_t2169_chunk_recording_tail_signal_fault_armed = false;
+		throw std::runtime_error(
+		    "T2192 T2(b): injected fault between ExecuteCommandLists and Signal(), simulating a "
+		    "failed Signal() after the recorded work was already queued to the GPU");
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
+
+// T-2192 finding M3: fires immediately before `new GpuLayerLoopInFlight()`, after `Close()`,
+// `ExecuteCommandLists`, and `Signal()` have all genuinely succeeded -- the exact entry state the
+// existing `catch (const std::bad_alloc&)` clause documents. `std::bad_alloc`, matching the real
+// exception `operator new` throws on allocation failure.
+inline void MaybeThrowInjectedT2169ChunkRecordingTailBadAllocFault() {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_tail_bad_alloc_fault_armed) {
+		g_t2169_chunk_recording_tail_bad_alloc_fault_armed = false;
+		throw std::bad_alloc();
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
 }  // namespace
 
 // External linkage, deliberately outside the anonymous namespace immediately above -- same
@@ -976,6 +1017,21 @@ void ClearT2169ChunkRecordingFaultInjection() { g_t2169_chunk_recording_fault_ar
 void ArmT2169ChunkRecordingTailFaultInjection() { g_t2169_chunk_recording_tail_fault_armed = true; }
 void ClearT2169ChunkRecordingTailFaultInjection() {
 	g_t2169_chunk_recording_tail_fault_armed = false;
+}
+
+// T-2192 finding M3: the two follow-on seams' own Arm/Clear pair, matching the convention above
+// exactly.
+void ArmT2169ChunkRecordingTailSignalFaultInjection() {
+	g_t2169_chunk_recording_tail_signal_fault_armed = true;
+}
+void ClearT2169ChunkRecordingTailSignalFaultInjection() {
+	g_t2169_chunk_recording_tail_signal_fault_armed = false;
+}
+void ArmT2169ChunkRecordingTailBadAllocFaultInjection() {
+	g_t2169_chunk_recording_tail_bad_alloc_fault_armed = true;
+}
+void ClearT2169ChunkRecordingTailBadAllocFaultInjection() {
+	g_t2169_chunk_recording_tail_bad_alloc_fault_armed = false;
 }
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
@@ -2632,6 +2688,11 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 	// `dev.list->Close()`, then `GetDeviceRemovedReason()` picks the status) rather than inventing
 	// a new recovery shape.
 	bool tail_list_closed = false;
+	// T-2192 finding T2(b): tracks whether `ExecuteCommandLists` has already run -- the point past
+	// which the recorded work is genuinely queued to the GPU regardless of what throws next. Read
+	// by the `runtime_error` catch below to tell a `Close()` failure (nothing submitted) apart from
+	// a `Signal()` failure (submitted, only the fence signal failed).
+	bool tail_executed = false;
 	try {
 		// The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
 		// failure, unarmed cost zero.
@@ -2643,10 +2704,22 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
 		ID3D12CommandList* lists[] = {dev.list.Get()};
 		dev.queue->ExecuteCommandLists(1, lists);
+		// `ExecuteCommandLists` is only reachable once `Close()` has succeeded (the statement
+		// order above), so `tail_list_closed` is always true by this point -- asserted rather than
+		// left as a fact only the statement order documents, so a future reordering that broke it
+		// would fail loudly here instead of silently mis-branching the catch below.
+		assert(tail_list_closed);
+		tail_executed = true;
+		// T-2192 finding M3: the Signal()-failure seam, unarmed cost zero -- fires here, strictly
+		// after ExecuteCommandLists so `tail_executed` is genuinely true when it throws.
+		MaybeThrowInjectedT2169ChunkRecordingTailSignalFault();
 		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
 		// From here on, only `std::bad_alloc` from the `new` below can throw -- Close() and
 		// Signal() have both already succeeded, so the GPU already has this submission queued and
 		// fenced at `dev.fence_val`.
+		// T-2192 finding M3: the bad_alloc seam, unarmed cost zero -- fires immediately before the
+		// real allocation, after Close()/Execute/Signal have all genuinely succeeded.
+		MaybeThrowInjectedT2169ChunkRecordingTailBadAllocFault();
 		std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
 		inflight->dev = &dev;
 		inflight->fence_val = dev.fence_val;
@@ -2692,16 +2765,64 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	} catch (const std::runtime_error&) {
-		// A failed Close() or Signal() -- the two `SSLM_GPU_HR`-wrapped calls above. If Close()
-		// itself is what failed, `tail_list_closed` is still false and the list is left
-		// open/recording by the failed call (documented D3D12 behavior); attempt the identical
-		// best-effort, unchecked recovery `dev.list->Close()` the two catch clauses above this try
-		// already use for the same failure class -- if the device is genuinely gone this second
-		// attempt fails too and `GetDeviceRemovedReason()` below reports it, rather than crashing.
+		// A failed Close() or Signal() (or the pre-Close injected pin, which fires before either
+		// runs) -- the two `SSLM_GPU_HR`-wrapped calls above.
 		InvalidateResidencyCachesOnThrow();
-		if (!tail_list_closed) {
-			dev.list->Close();
+		if (!tail_executed) {
+			// `ExecuteCommandLists` never ran: either the pre-Close fault fired first, or Close()
+			// itself failed. Either way nothing recorded into this list has executed or ever will
+			// -- T-2192 finding T1: the caller-owned resume-barrier latch this function set above
+			// (immediately before this tail try, whenever the recording body reached the readback
+			// transitions) claims a COPY_SOURCE transition that did not run. Clear it -- the same
+			// "undo what recording promised but execution never delivered" shape
+			// `InvalidateResidencyCachesOnThrow()` already applies to the two residency caches.
+			if (external_kv_resident != nullptr && io_external_kv_needs_resume_barrier != nullptr) {
+				*io_external_kv_needs_resume_barrier = false;
+			}
+			// Best-effort retry, matching the two catch clauses above this try -- but this time the
+			// RESULT decides whether the context is honestly reusable (T-2192 finding T2(a)): a
+			// list still recording after a second failed Close() refuses every later
+			// `dev.alloc->Reset()` on this context (T-2191 S6's own class), so returning
+			// `GpuAllocationFailed` here -- which the header (`gpu_1p0.h`) promises means "the list
+			// is recovered (Closed), the context stays usable" -- would be false.
+			const bool retry_closed = SUCCEEDED(dev.list->Close());
+			const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+			if (!retry_closed) {
+				// Neither Close() attempt reached Closed. Honest terminal disposition (T-2192
+				// T2(a)): the header's own device-removed language, not the allocation-failed one
+				// that implies a recovered, reusable list -- regardless of what
+				// GetDeviceRemovedReason() itself reports, since a healthy device does not fail
+				// Close() twice on a list with only barrier/copy commands recorded, and this
+				// function has no further recovery to offer either way.
+				return superslm::SslmForwardStatus::GpuDeviceRemoved;
+			}
+			return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+			                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 		}
+		// `ExecuteCommandLists` already ran -- the GPU has this submission queued, the identical
+		// situation the `bad_alloc` clause above documents. Only `Signal()` failed, so the fence
+		// value already reserved for this submission (`dev.fence_val`, incremented as Signal's own
+		// argument before the call) was never actually handed to the queue to raise. T-2192
+		// finding T2(b): this function's stack is about to release `seq_readback`/`kv_readback`/
+		// every `state` buffer the already-queued work reads from or writes to, so the fence must
+		// be made to signal -- or the wait skipped only because the device is confirmed gone --
+		// before this function returns, the same requirement the `bad_alloc` clause above honors
+		// for the identical post-Execute situation. Retry Signal() once at the SAME target value
+		// (direct HRESULT check, not `SSLM_GPU_HR` -- a second throw here must not re-enter this
+		// same catch), the adjacent clause's own "an alternate fence signal" option.
+		if (SUCCEEDED(dev.queue->Signal(dev.fence.Get(), dev.fence_val)) &&
+		    dev.fence->GetCompletedValue() < dev.fence_val) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
+			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		}
+		// A failed retry leaves the about-to-be-released resources racing whatever the GPU is
+		// still doing with them -- indistinguishable, from here, from a genuinely removed device
+		// (a healthy device does not fail two consecutive Signal() calls on the same queue);
+		// GetDeviceRemovedReason() below is what actually reports that case, the same bounded-
+		// honesty disposition the bad_alloc clause above already accepts for the identical risk.
 		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;

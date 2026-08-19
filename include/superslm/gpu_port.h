@@ -437,23 +437,41 @@ enum class GpuLayerLoopGuard : int {
 // command list open/recording, wedging every later call on the same context. Fixed at the source:
 // the tail now runs inside its own `try`, with its own `std::bad_alloc`/`std::runtime_error` catch
 // clauses restoring the command-list-ends-Closed invariant every OTHER path in this function
-// already gave it -- two more catch-clause returns, term 2's own catch-return-count (above) now six
-// across the two functions (`RunLayerLoopGpuSubmit`'s original pair plus
-// `SubmitOneSubChunkToFullDepthForG5Bridge`'s now-four), term 1 and the "after" population (term 3,
-// T-2184's own count) both unchanged. The two counts below are updated to nineteen/twenty-five.
+// already gave it -- two more catch CLAUSES, six across the two functions
+// (`RunLayerLoopGpuSubmit`'s original pair plus `SubmitOneSubChunkToFullDepthForG5Bridge`'s
+// now-four), term 1 and the "after" population (term 3, T-2184's own count) both unchanged. The
+// two counts below are updated to nineteen/twenty-five.
+//
+// CORRECTED 2026-08-19 (T-2192, `Claude/Poirot/896553e-t2192-t2189-closing-confirmation.md`
+// findings T1/T2): the round above's own tail `std::runtime_error` catch used to resolve every
+// entry to ONE return statement (a ternary choosing `GpuDeviceRemoved`/`GpuAllocationFailed`). It
+// now resolves through THREE, not because the catch clause COUNT changed (still six, unchanged
+// from the correction above) but because that ONE clause's own body now branches: a fault raised
+// before the command list reaches Closed retries `Close()` and returns one of two paths --
+// `GpuDeviceRemoved` outright if the retry also fails (T2(a)'s own honest-terminal disposition,
+// the list genuinely cannot be recovered), or the original ternary if it succeeds -- and a fault
+// raised after `ExecuteCommandLists` already queued the work retries `Signal()`, waits the fence
+// out, and falls through to a second, textually distinct copy of the same ternary. Term 2's own
+// catch-RETURN-count (a return-statement count, not a catch-clause count -- see this term's own
+// header comment above) rises by two, from six to eight (five catch clauses still contribute one
+// return each; the tail `runtime_error` catch alone now contributes three). Term 1 and the "after"
+// population (term 3) are both unchanged -- neither T1 nor T2 touches a return above the residency
+// write or an after-decision return. The two counts below are updated to twenty-one/twenty-seven.
 //
 // **The true contract, stated precisely rather than as a path count:**
 // `LastWeightUploadWasSkipped()` reflects THIS CALL's own weight-residency
 // decision. It reads `false` on every path that returns BEFORE that
 // decision runs (the `weights_resident` write above) -- the nine-guard ladder, the two
-// device-capability rejections, and the recording-window catch, nineteen
-// paths in all (the recording window now carries SIX catch clauses across two functions --
+// device-capability rejections, and the recording-window catch, twenty-one
+// paths in all (the recording window still carries SIX catch clauses across two functions --
 // `RunLayerLoopGpuSubmit`'s own `GpuGemmGroupArithmeticError`/`std::runtime_error` pair, and
 // `SubmitOneSubChunkToFullDepthForG5Bridge`'s own FOUR -- the original
 // `GpuGemmGroupArithmeticError`/`std::runtime_error` pair covering its own recording body, plus
 // the T-2189 finding 6 pair covering its own tail (`std::bad_alloc`/`std::runtime_error`) -- all
-// six counted, since all six call the shared cache-invalidation helper before every one of their
-// own returns), none of which ever reached a residency decision to report.
+// six call the shared cache-invalidation helper before every one of their own returns, but the
+// tail `runtime_error` clause's own body now RETURNS three times, not once -- T-2192's own T1/T2
+// remedy, this file's own dated correction above -- for eight returns across the six clauses,
+// none of which ever reached a residency decision to report.
 // It reads exactly `weights_resident` (`true` on a cache hit, `false` on a
 // miss) on every path that returns AFTER the decision -- **re-derived after
 // this file's own (B5) split of the single function this paragraph originally
@@ -478,7 +496,7 @@ enum class GpuLayerLoopGuard : int {
 // promises; StandardsDocument.md Sec5.4, reproduced by execution before
 // being fixed). None of these six re-decides or re-writes the flag --
 // each reads whatever the residency decision already decided -- the six,
-// and the nineteen before them, alike, twenty-five paths' own destination in
+// and the twenty-one before them, alike, twenty-seven paths' own destination in
 // total across the three functions, whether the decoded
 // status is `Ok` or one of `DecodeStickyTag`'s thirteen rejecting statuses.**
 // A caller that wants "did THIS call's upload run" reads this accessor for
@@ -717,6 +735,19 @@ void ClearT2169ChunkRecordingFaultInjection();
 // rather than wedged.
 void ArmT2169ChunkRecordingTailFaultInjection();
 void ClearT2169ChunkRecordingTailFaultInjection();
+
+// T-2192 (D-SLM3695's own confirmation round, finding M3): the pin above (and its cell,
+// `TestGuard_ContextReusableAfterCaughtTailFault`) only exercises the pre-`Close()` failure point
+// -- the ONE of the tail's three failure points the single existing seam fires at. The other two
+// -- a `Signal()` failure after `ExecuteCommandLists` has already queued the work, and a
+// `std::bad_alloc` from the `new GpuLayerLoopInFlight()` allocation, both handled by their own
+// dedicated catch clauses in `SubmitOneSubChunkToFullDepthForG5Bridge` (`superslm_gpu.cpp`) --
+// had no seam that could reach them. These two fire at those exact points, mirroring the
+// pre-`Close()` seam's own single-shot Arm/Clear idiom.
+void ArmT2169ChunkRecordingTailSignalFaultInjection();
+void ClearT2169ChunkRecordingTailSignalFaultInjection();
+void ArmT2169ChunkRecordingTailBadAllocFaultInjection();
+void ClearT2169ChunkRecordingTailBadAllocFaultInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

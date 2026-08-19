@@ -79,9 +79,22 @@ typedef enum SslmGpuStatus {
      *     GPU command-submission tail). The command list is recovered at the point the fault is
      *     caught (Closed, matching the invariant every other failure path in the same function
      *     already restores) and the context stays usable for a caller that continues issuing
-     *     calls against it. The one exception: a confirmed device-removed condition
-     *     (`GetDeviceRemovedReason()` non-S_OK) is genuinely terminal for the context regardless
-     *     of the command-list state, and no call against it can be trusted afterward. */
+     *     calls against it, PROVIDED neither exception below applies -- both are checked and
+     *     resolved to this same status before returning, so a caller cannot tell the difference
+     *     from the status alone and must not assume recovery from it:
+     *     - a confirmed device-removed condition (`GetDeviceRemovedReason()` non-S_OK) is
+     *       genuinely terminal for the context regardless of the command-list state, and no call
+     *       against it can be trusted afterward;
+     *     - a fault raised before the command list reaches Closed (e.g. `Close()` itself
+     *       failing) is retried once; if that retry also fails, the list is left recording and
+     *       every later call against this context fails too (`ID3D12CommandAllocator::Reset()`
+     *       refuses an allocator whose list is still recording) -- also terminal, independent of
+     *       what `GetDeviceRemovedReason()` reports, since a stuck list makes the context
+     *       unusable regardless of whether the device itself is confirmed gone. A fault raised
+     *       AFTER submission (`ExecuteCommandLists` already queued the work; only the fence
+     *       `Signal()` itself failed) is retried at the same fence value and waited out before
+     *       this function returns, so the context genuinely recovers on that path without
+     *       reaching either terminal case above. */
     SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
