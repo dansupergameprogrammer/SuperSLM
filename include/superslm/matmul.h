@@ -101,6 +101,23 @@ enum class MatmulAccumWidth : int32_t { Int32 = 0, Int64 = 1 };
 // factors widened to int64 before the multiply, no saturation, no rounding.
 int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t in_channels);
 
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+// T-2189 finding 1 (D-SLM3689) -- test-reachable, hardware-independent wrapper around the
+// pure CPUID-field resolver DotRow's runtime tier probe uses on x64 (matmul.cpp's internal
+// DetectBestDotRowTier(), design §6.2). Exposed so the mutation proof for the max-basic-
+// leaf guard (leaf 7 is architecturally undefined below basic leaf 7 and must not be
+// consulted) can drive the decision logic directly with fabricated register values,
+// without a real hardware CPUID shim -- mirrors DotRowScalarRef's own pattern above.
+// `max_basic_leaf` is CPUID leaf 0's EAX; `leaf1_ecx` is CPUID leaf 1's ECX (OSXSAVE, bit
+// 27); `leaf7_ebx` is CPUID leaf 7 sub-leaf 0's EBX (AVX2 bit 5, AVX512F bit 16, AVX512BW
+// bit 30) -- consulted only when `max_basic_leaf >= 7`; `xcr0` is the XGETBV(0) value
+// (XMM/YMM state bits 1-2, opmask/ZMM state bits 5-7) -- consulted only when OSXSAVE is
+// set. Returns 0=SSE2, 1=AVX2, 2=AVX512, matching the internal DotRowTier enum's
+// declaration order.
+int ResolveDotRowTierForTest(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
+                              unsigned long long xcr0);
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
 // F-S3-6/C32 (SuperSLM_S3a_WalkingSkeleton_Plan.md §4.6, §11 S3.3 §6.4) — the
 // probability x value context accumulate: `out_ctx[d] = Sum_k probs[k] *
 // values[k*head_dim + d]`. `probs` are C32's Q15 row-normalized probabilities

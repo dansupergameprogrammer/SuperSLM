@@ -305,35 +305,41 @@ inline unsigned long long QueryXcr0() {
 }
 #endif
 
-// Called exactly once per process via the function-local static initializer in
-// DotRow's non-forced, SIMD_X64 branch below (C++11 magic-static: thread-safe by
-// standard guarantee, the write happens-before every subsequent read through the
-// same static). design §6.2's four steps:
+// Pure decision logic (design §6.2, corrected T-2189 finding 1 / D-SLM3689 to add the
+// max-basic-leaf guard below) -- takes already-fetched (or synthetic) register fields and
+// touches no hardware itself, so it is independently testable with fabricated CPUID data
+// without a hardware CPUID shim (see ResolveDotRowTierForTest, declared in matmul.h,
+// mirroring DotRowScalarRef's own test-reachable-wrapper pattern below). The four-step
+// resolution:
+//   0. CPUID leaf 0 -- EAX is the highest basic leaf the CPU supports. Leaf 7 is
+//      architecturally undefined on any CPU whose max basic leaf is below 7 (some
+//      implementations echo back the highest supported leaf's output or return stale
+//      register state instead of zero) -- so leaf 7 is consulted ONLY when max_leaf >= 7;
+//      below that, every leaf-7-derived bit is treated as unset and resolution falls
+//      through to the unconditional SSE2 floor. This was the previous defect: leaf 7 was
+//      queried and its bits interpreted unconditionally, with no max-leaf check.
 //   1. CPUID leaf 7, sub-leaf 0 -- EBX bit 5 (AVX2), bit 16 (AVX512F), bit 30 (AVX512BW).
 //   2. CPUID leaf 1 -- ECX bit 27 (OSXSAVE, confirms the OS exposes XGETBV).
 //   3. XGETBV(0), only if OSXSAVE is set -- bits 1-2 (XMM/YMM state), bits 5-7
 //      (opmask/ZMM_hi256/Hi16_ZMM state).
 //   4. AVX-512 selected only if (AVX512F AND AVX512BW) AND (bits 1-2 AND bits 5-7);
 //      else AVX2 if (AVX2 bit) AND (bits 1-2); else SSE2 (the unconditional floor).
-inline DotRowTier DetectBestDotRowTier() {
-#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
-	superslm_test::g_dot_row_tier_probe_invocations.fetch_add(1, std::memory_order_relaxed);
-#endif
+inline DotRowTier ResolveDotRowTierFromFields(int max_basic_leaf, int leaf1_ecx,
+                                               int leaf7_ebx, unsigned long long xcr0) {
+	const bool osxsave = (leaf1_ecx & (1 << 27)) != 0;  // leaf 1, ECX bit 27
 
-	int regs1[4] = {0, 0, 0, 0};
-	QueryCpuId(1, 0, regs1);
-	const bool osxsave = (regs1[2] & (1 << 27)) != 0;  // leaf 1, ECX bit 27
+	bool avx2_bit = false;       // leaf 7/0, EBX bit 5
+	bool avx512f_bit = false;    // leaf 7/0, EBX bit 16
+	bool avx512bw_bit = false;   // leaf 7/0, EBX bit 30
+	if (max_basic_leaf >= 7) {
+		avx2_bit = (leaf7_ebx & (1 << 5)) != 0;
+		avx512f_bit = (leaf7_ebx & (1 << 16)) != 0;
+		avx512bw_bit = (leaf7_ebx & (1 << 30)) != 0;
+	}
 
-	int regs7[4] = {0, 0, 0, 0};
-	QueryCpuId(7, 0, regs7);
-	const bool avx2_bit = (regs7[1] & (1 << 5)) != 0;       // leaf 7/0, EBX bit 5
-	const bool avx512f_bit = (regs7[1] & (1 << 16)) != 0;   // leaf 7/0, EBX bit 16
-	const bool avx512bw_bit = (regs7[1] & (1 << 30)) != 0;  // leaf 7/0, EBX bit 30
-
-	bool xmm_ymm_state = false;    // XGETBV(0) bits 1-2
-	bool opmask_zmm_state = false; // XGETBV(0) bits 5-7
+	bool xmm_ymm_state = false;     // XGETBV(0) bits 1-2
+	bool opmask_zmm_state = false;  // XGETBV(0) bits 5-7
 	if (osxsave) {
-		const unsigned long long xcr0 = QueryXcr0();
 		xmm_ymm_state = (xcr0 & 0x6ULL) == 0x6ULL;
 		opmask_zmm_state = (xcr0 & 0xE0ULL) == 0xE0ULL;
 	}
@@ -345,6 +351,37 @@ inline DotRowTier DetectBestDotRowTier() {
 		return DotRowTier::kAvx2;
 	}
 	return DotRowTier::kSse2;
+}
+
+// Called exactly once per process via the function-local static initializer in
+// DotRow's non-forced, SIMD_X64 branch below (C++11 magic-static: thread-safe by
+// standard guarantee, the write happens-before every subsequent read through the
+// same static). Fetches the real CPUID/XGETBV fields and hands them to the pure
+// resolver above -- see ResolveDotRowTierFromFields for the resolution rules.
+inline DotRowTier DetectBestDotRowTier() {
+#ifdef SUPERSLM_ENABLE_MATMUL_DISPATCH_INSTRUMENT
+	superslm_test::g_dot_row_tier_probe_invocations.fetch_add(1, std::memory_order_relaxed);
+#endif
+
+	int regs0[4] = {0, 0, 0, 0};
+	QueryCpuId(0, 0, regs0);
+	const int max_basic_leaf = regs0[0];  // leaf 0, EAX: highest supported basic leaf
+
+	int regs1[4] = {0, 0, 0, 0};
+	QueryCpuId(1, 0, regs1);
+
+	int regs7[4] = {0, 0, 0, 0};
+	if (max_basic_leaf >= 7) {
+		QueryCpuId(7, 0, regs7);
+	}
+
+	const bool osxsave = (regs1[2] & (1 << 27)) != 0;  // leaf 1, ECX bit 27
+	unsigned long long xcr0 = 0;
+	if (osxsave) {
+		xcr0 = QueryXcr0();
+	}
+
+	return ResolveDotRowTierFromFields(max_basic_leaf, regs1[2], regs7[1], xcr0);
 }
 
 #endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
@@ -392,6 +429,28 @@ int64_t DotRowScalarRef(const int8_t* activations, const int8_t* weights, size_t
 	// dispatch resolution above is unchanged.
 	return DotRowScalar(activations, weights, in_channels);
 }
+
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+int ResolveDotRowTierForTest(int max_basic_leaf, int leaf1_ecx, int leaf7_ebx,
+                              unsigned long long xcr0) {
+	// Test-reachable wrapper around the anonymous-namespace pure resolver
+	// (ResolveDotRowTierFromFields above) -- see matmul.h's declaration. T-2189 finding 1
+	// (D-SLM3689): this is the seam the mutation proof drives directly with fabricated
+	// leaf-0/leaf-1/leaf-7/XCR0 values, entirely independent of the host's real CPUID --
+	// no hardware CPUID shim is needed because the decision logic itself takes no
+	// hardware input. Mirrors DotRowScalarRef's own test-reachable-wrapper pattern.
+	// Return value matches DotRowTier's declaration order: 0=SSE2, 1=AVX2, 2=AVX512.
+	switch (ResolveDotRowTierFromFields(max_basic_leaf, leaf1_ecx, leaf7_ebx, xcr0)) {
+		case DotRowTier::kSse2:
+			return 0;
+		case DotRowTier::kAvx2:
+			return 1;
+		case DotRowTier::kAvx512:
+			return 2;
+	}
+	return 0;  // unreachable; every enumerator handled above
+}
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
 
 void GemmInt8AccumulateRow(const int8_t* activations, const int8_t* weights,
                             size_t in_channels, size_t out_channels, int64_t* out_acc) {

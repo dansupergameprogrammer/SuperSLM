@@ -6834,6 +6834,64 @@ static void TestMatmulFirstCallDispatchRaceUnderConcurrency() {
 
 #endif  // SUPERSLM_T2149_AVX_TIERS_BUILT
 
+// T-2189 finding 1 (D-SLM3689): DotRow's runtime CPUID tier probe (matmul.cpp's internal
+// DetectBestDotRowTier(), design §6.2) queried CPUID leaf 7 unconditionally, with no check
+// of CPUID leaf 0's max supported basic leaf first -- leaf 7 is architecturally undefined
+// below basic leaf 7 (some implementations echo the highest supported leaf's data or
+// return stale register contents rather than zero), so an older/limited x64 target could
+// false-positive an AVX2 or AVX-512 tier it does not actually support. The fix routes
+// through ResolveDotRowTierForTest -- a hardware-independent seam that drives the pure
+// decision logic with fabricated leaf-0/leaf-1/leaf-7/XCR0 fields, so this cell needs no
+// real hardware CPUID shim and is not dependent on the test runner's own CPU. Gated only
+// on SUPERSLM_MATMUL_HAVE_SIMD_X64 -- unlike the T-2158 pair above, this does not depend
+// on SUPERSLM_T2149_AVX_TIERS_BUILT, since it exercises the always-compiled resolver
+// directly rather than the process-global invocation counter.
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+static void TestMatmulDotRowTierGatesLeaf7OnMaxBasicLeaf() {
+	// Fully-populated leaf 7/XCR0 fields: every AVX2 and AVX-512 bit set, and an XCR0
+	// value with both the XMM/YMM and opmask/ZMM state bits set -- the fields that, read
+	// unconditionally, resolve to kAvx512 (2).
+	constexpr int kLeaf1EcxOsxsave = (1 << 27);
+	constexpr int kLeaf7EbxAllBits = (1 << 5) | (1 << 16) | (1 << 30);
+	constexpr unsigned long long kXcr0AllState = 0x6ULL | 0xE0ULL;
+
+	// Mutation proof: with max_basic_leaf below 7, the leaf-7-derived bits above must be
+	// ignored entirely and resolution must fall through to the unconditional SSE2 floor
+	// (0) -- regardless of how permissive leaf7_ebx looks. Removing the `max_basic_leaf >=
+	// 7` guard (reading leaf7_ebx unconditionally, the pre-fix defect) makes this resolve
+	// to kAvx512 (2) instead, since osxsave and both XCR0 state bits are also set here --
+	// so this cell fails the moment the guard is removed.
+	for (int max_leaf : {0, 1, 6}) {
+		const int tier = superslm::ResolveDotRowTierForTest(max_leaf, kLeaf1EcxOsxsave,
+		                                                     kLeaf7EbxAllBits, kXcr0AllState);
+		CHECK_MSG(tier == 0,
+		          "ResolveDotRowTierForTest(max_basic_leaf=%d, permissive leaf7/XCR0) == %d, "
+		          "want 0 (SSE2) -- leaf 7 is architecturally undefined below basic leaf 7 "
+		          "and its bits must not be consulted (T-2189 finding 1, D-SLM3689)",
+		          max_leaf, tier);
+	}
+
+	// Sanity: the same permissive leaf7_ebx/xcr0 fields at max_basic_leaf == 7 (leaf 7 IS
+	// supported) resolve to kAvx512 (2) -- confirms the guard does not also suppress the
+	// legitimate case, only the undefined one.
+	const int tier_at_leaf7 = superslm::ResolveDotRowTierForTest(
+	    7, kLeaf1EcxOsxsave, kLeaf7EbxAllBits, kXcr0AllState);
+	CHECK_MSG(tier_at_leaf7 == 2,
+	          "ResolveDotRowTierForTest(max_basic_leaf=7, permissive leaf7/XCR0) == %d, "
+	          "want 2 (AVX512) -- the guard must not suppress a genuinely supported leaf 7",
+	          tier_at_leaf7);
+
+	// max_basic_leaf below 7 with OSXSAVE unset resolves to SSE2 regardless of leaf7_ebx --
+	// the pre-existing OSXSAVE gate (design §6.2 step 2) and the new max-leaf gate compose
+	// without either masking the other's coverage.
+	const int tier_no_osxsave =
+	    superslm::ResolveDotRowTierForTest(6, 0, kLeaf7EbxAllBits, kXcr0AllState);
+	CHECK_MSG(tier_no_osxsave == 0,
+	          "ResolveDotRowTierForTest(max_basic_leaf=6, OSXSAVE unset) == %d, want 0 (SSE2)",
+	          tier_no_osxsave);
+}
+#endif  // SUPERSLM_MATMUL_HAVE_SIMD_X64
+
 // --- S12 dim 8, S11 item 3: composition regression. NarrowAccumulatorToI32's output,
 //     fed into the already-shipped MaxAbsReduce/NormalizeScale/DynamicScaleReciprocal/
 //     RequantTokenCode chain, must be bit-identical to feeding an INDEPENDENTLY-
@@ -26262,6 +26320,9 @@ int main(int argc, char** argv) {
     !defined(SUPERSLM_FORCE_AVX2_MATMUL) && !defined(SUPERSLM_FORCE_AVX512_MATMUL)
 	TestMatmulFirstCallDispatchRaceUnderConcurrency();
 #endif
+#endif
+#if SUPERSLM_MATMUL_HAVE_SIMD_X64
+	TestMatmulDotRowTierGatesLeaf7OnMaxBasicLeaf();
 #endif
 	TestGemmInt8AccumulateComposesWithShippedRequantChain();
 	TestS2Point5SixCaseAcceptanceGateMeasurement();
