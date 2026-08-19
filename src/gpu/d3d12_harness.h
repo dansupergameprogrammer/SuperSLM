@@ -54,6 +54,58 @@ struct Device {
 	bool available = false;
 	std::string init_error;
 
+	// T-2192 O2: `SSLM_GPU_ENABLE_DEBUG_LAYER=1` (below) turns the D3D12 debug layer on but never
+	// installed anything to READ its output -- validation messages went to `OutputDebugString`
+	// (an attached debugger's own window) and nowhere else, so a console/CI run produced the
+	// startup banner and nothing else, no matter how many validation errors the run actually hit.
+	// `debug_info_queue` (populated in `Init()`, immediately after device creation, only when the
+	// debug layer was actually requested and enabled) is the read side: `DrainDebugLayerMessages()`
+	// below pulls every message the layer has queued since the last drain and prints each one to
+	// stderr, so a validation error becomes test-readable output instead of a window nobody has
+	// open.
+	bool debug_layer_enabled = false;
+	ComPtr<ID3D12InfoQueue> debug_info_queue;
+
+	// Pops every message currently queued in the debug layer's own message buffer (oldest first)
+	// and prints each to stderr as "# D3D12 VALIDATION [severity] category: description". Returns
+	// the number of WARNING-severity-or-worse messages drained (CORRUPTION/ERROR/WARNING) -- INFO
+	// messages are printed too (the debug layer's own routine chatter -- object lifetime tracking
+	// and the like -- is not a defect and would make a raw total-message count noisy as a pass/fail
+	// oracle) but never counted, so a test cell can assert the return value is 0 to mean "the
+	// validation layer raised no concern," not "the validation layer said nothing at all." 0 when
+	// the debug layer was never enabled (`debug_info_queue` null, the common case: zero cost,
+	// matching this file's own established `SSLM_GPU_ENABLE_DEBUG_LAYER` "off by default,
+	// diagnostic-only" convention) or when it was enabled and genuinely has nothing reportable
+	// queued.
+	size_t DrainDebugLayerMessages() {
+		if (!debug_info_queue) return 0;
+		size_t reportable = 0;
+		const UINT64 stored = debug_info_queue->GetNumStoredMessages();
+		for (UINT64 i = 0; i < stored; ++i) {
+			SIZE_T msg_len = 0;
+			if (FAILED(debug_info_queue->GetMessage(i, nullptr, &msg_len)) || msg_len == 0) continue;
+			std::vector<char> buf(msg_len);
+			D3D12_MESSAGE* msg = reinterpret_cast<D3D12_MESSAGE*>(buf.data());
+			if (FAILED(debug_info_queue->GetMessage(i, msg, &msg_len))) continue;
+			const char* severity =
+			    msg->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION ? "CORRUPTION"
+			    : msg->Severity == D3D12_MESSAGE_SEVERITY_ERROR    ? "ERROR"
+			    : msg->Severity == D3D12_MESSAGE_SEVERITY_WARNING  ? "WARNING"
+			    : msg->Severity == D3D12_MESSAGE_SEVERITY_INFO     ? "INFO"
+			                                                       : "MESSAGE";
+			std::fprintf(stderr, "# D3D12 VALIDATION [%s] category=%d: %s\n", severity,
+			             static_cast<int>(msg->Category),
+			             msg->pDescription ? msg->pDescription : "(no description)");
+			if (msg->Severity == D3D12_MESSAGE_SEVERITY_CORRUPTION ||
+			    msg->Severity == D3D12_MESSAGE_SEVERITY_ERROR ||
+			    msg->Severity == D3D12_MESSAGE_SEVERITY_WARNING) {
+				++reportable;
+			}
+		}
+		debug_info_queue->ClearStoredMessages();
+		return reportable;
+	}
+
 	// T-2101 (dispatch-overhead decomposition, D-SLM3302/D-SLM3304's own follow-up): a GPU
 	// timestamp query heap, created once and reused every call. `RunLayerLoopGpu` ends one query
 	// PER DISPATCH BOUNDARY -- immediately before every `bind_and_dispatch` call, plus one final
@@ -119,6 +171,9 @@ struct Device {
 					}
 					std::fprintf(stderr, "# SSLM_GPU_ENABLE_DEBUG_LAYER=1: D3D12 debug layer%s enabled\n",
 					             debug1 ? " + GPU-based validation" : " enabled (GPU-based validation unavailable)");
+					// T-2192 O2: remembered so the info-queue query below (which needs `dev`, not
+					// created yet at this point in Init()) knows whether to run at all.
+					debug_layer_enabled = true;
 				} else {
 					std::fprintf(stderr,
 					              "# SSLM_GPU_ENABLE_DEBUG_LAYER=1 requested but D3D12GetDebugInterface "
@@ -208,6 +263,21 @@ struct Device {
 		if (!dev) {
 			if (init_error.empty()) init_error = "no D3D12 hardware compute adapter found";
 			return;
+		}
+		// T-2192 O2: the read side of SSLM_GPU_ENABLE_DEBUG_LAYER, queried once `dev` genuinely
+		// exists (the earliest point either device-creation path -- override or default-preference
+		// -- makes that true). A failed QueryInterface here (an SDK/driver combination that
+		// enabled the debug layer but does not expose ID3D12InfoQueue on this device) leaves
+		// `debug_info_queue` null, and `DrainDebugLayerMessages()` reports 0 rather than crashing --
+		// the same "diagnostic-only, never load-bearing for a non-debug run" posture the debug
+		// layer itself already has.
+		if (debug_layer_enabled) {
+			if (FAILED(dev.As(&debug_info_queue))) {
+				std::fprintf(stderr,
+				              "# SSLM_GPU_ENABLE_DEBUG_LAYER=1: ID3D12InfoQueue unavailable on this "
+				              "device -- validation messages will not be drainable through "
+				              "DrainDebugLayerMessages()\n");
+			}
 		}
 		if (override_requested) {
 			// Only when SSLM_GPU_ADAPTER_INDEX was set -- see the Init() header comment (S2).
