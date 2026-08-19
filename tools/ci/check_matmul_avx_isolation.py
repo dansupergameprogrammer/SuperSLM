@@ -44,23 +44,44 @@ them) and the checker opened exactly one. Both axes are closed: `_AVX_FAMILY_FLA
 is widened, the CMakeLists.txt scan gains the sixth spelling, the workflow scan gains the
 `env:` channel, and the checker now derives its own scanned-file population at check time
 by walking the whole tree for direct-compiler-invocation sites naming `src/matmul.cpp`
-(`scan_repo_for_direct_invocations`) rather than reading one hand-maintained path -- a
+(`scan_repo`) rather than reading one hand-maintained path -- a
 file this walk finds but cannot open is a **checker failure** (`CheckerFailure`, distinct
 stderr tag), not a silent skip; the `os.path.isfile`-guarded silent-skip path this
 replaces is removed for the workflow file too (it is now opened unconditionally via
 `_read_required`, which raises `CheckerFailure` rather than skipping on a missing path).
 
 Mutation-provable (Curie's own "pin the documented claim" discipline,
-~/.claude/personas/Implement/Curie/Curie.md): the fold-round-5 required-coverage floor is
-the confirmation review's own independently-built six-member population (one control,
-five independently-found: `add_compile_options(-mavx2)`, `add_compile_options(-march=native)`,
-`set(CMAKE_CXX_FLAGS ...)` with `-march=x86-64-v4`, `string(APPEND CMAKE_CXX_FLAGS " -mavx2")`,
-`target_compile_options(... -march=skylake-avx512)`, and a `CXXFLAGS` environment entry
-in `tests.yml`), plus a seventh, input-axis mutation (an AVX flag added to
-`tools/build_verify.bat`) proving the tree-wide search finds a file the old hard-coded
-list never opened. Every mutation must flip this script's exit code from 0 to 1;
-removing it again must flip it back, and the unmutated real tree must stay green
-throughout. Executed and recorded per remedy (build log).
+~/.claude/personas/Implement/Curie/Curie.md): the fold-round-5 required-coverage floor was
+the confirmation review's own independently-built six-member population. Confirmation
+review (T-2174) built a population independently a second time and found the fold-round-5
+widening regressed on three of six mutations it had just closed and never closed two
+standing gaps -- because that widening, like the one before it, was validated only against
+its own author's mutations.
+
+**Required coverage widened a third time, fold round 6 (D-SLM3601/D-SLM3602).** Per
+StandardsDocument.md §4, this is the third consecutive instance of the same coverage
+failure and is closed structurally, not with a fourth pattern list: the validation floor
+is now `tools/ci/matmul_avx_isolation_population.json`, a committed, 20-member population
+(deduplicated across all three casebooks' own findings) plus a clean-tree control and a
+checker-failure cell, exercised by `tests/ci/test_matmul_avx_isolation_population.py`. Any
+future widening of this checker reproduces green against the *whole* committed population
+before it is trusted -- never a fresh subset the widening's own author chose. The specific
+mechanism repair this fold makes, read at source rather than inferred from the symptom
+(design §20.4): the CLI (`-DCMAKE_CXX_FLAGS=`) and environment (`CXXFLAGS:`/`CFLAGS:`)
+channels were scoped to the one `--workflow` file and are now applied, unmodified, to
+every file the tree-wide walk opens -- the direct-invocation channel alone keeps its
+`matmul.cpp`-substring gate, since that is the only channel for which the gate is a
+correct precondition. The direct-invocation first-token match now recognizes an
+`@`-prefixed batch invocation and a compiler invoked via a build-variable reference
+(`$(CXX)`/`$(CC)`/`${CXX}`/`${CC}`/`%CXX%`/`%CC%`) as well as a literal basename. A new
+batch/shell environment-assignment channel (`set CXXFLAGS=...`/`export CXXFLAGS=...`/a
+leading `CXXFLAGS=... <command>` prefix-assignment) is applied tree-wide on the same
+no-`matmul.cpp`-gate rule. A workflow `env:` value using YAML block-scalar syntax
+(`|`/`>`) is a `CheckerFailure`, not a silent non-match. Every mutation in the committed
+population must flip this script's exit code from 0 to 1; the unmutated real tree, and a
+scratch tree missing its required workflow file, must resolve exactly as the population's
+own `"green"`/`"checker-failure"` cells specify. Executed and recorded per remedy (build
+log).
 """
 from __future__ import annotations
 
@@ -84,6 +105,23 @@ _DEFAULT_WORKFLOW = os.path.join(_REPO_ROOT, ".github", "workflows", "tests.yml"
 _TREE_SEARCH_EXCLUDE_DIRS = {
     ".git", "build", "out", "out-clang", ".vs", ".idea", "__pycache__",
     ".worktrees", "node_modules",
+}
+
+# Fold round 6 (D-SLM3601): the committed validation population itself is not a
+# build-configuration file -- it is this checker's own test data, and its JSON
+# necessarily quotes each mutation's own channel spelling and flag text verbatim
+# (that is the whole point of the fixture -- one member's content field alone
+# reproduces a full CLI-channel assignment, quotes and all). Once §20.4 item 1
+# makes the CLI and environment channels tree-wide with no `matmul.cpp` gate,
+# those channels would otherwise match inside the fixture's own JSON strings and
+# fail the checker on itself in the real, unmutated tree -- discovered by this
+# fold's own green-cell check (`test_population_member[G0]`) the moment the
+# widening landed. Excluded by exact repo-root-relative path, the same reasoning
+# `_TREE_SEARCH_EXCLUDE_DIRS` already uses for generated/non-source content: this
+# file cannot itself be a channel through which a TU-wide AVX flag reaches a
+# compiler.
+_TREE_SEARCH_EXCLUDE_FILES = {
+    "tools/ci/matmul_avx_isolation_population.json",
 }
 
 # Every TU-wide spelling of "enable AVX2 or AVX-512 for this whole translation unit"
@@ -265,18 +303,44 @@ def find_cli_hits(text: str, source_label: str) -> list[dict]:
     return hits
 
 
-# Channel B, second form (fold round 5, D-SLM3583): an `env:` block's `CXXFLAGS`/
-# `CFLAGS` entry in a workflow YAML file -- TU-wide for every compiler invocation
-# started under that environment, the same reasoning as the CLI `-DCMAKE_CXX_FLAGS=`
-# channel above, just set via the job/step environment instead of a command-line
-# argument. Line-based: YAML's own `key: value` shape needs no CMake-argument parsing.
+# Channel B, second form (fold round 5, D-SLM3583; widened tree-wide fold round 6,
+# D-SLM3602): an `env:` block's `CXXFLAGS`/`CFLAGS` entry in a workflow YAML file --
+# TU-wide for every compiler invocation started under that environment, the same
+# reasoning as the CLI `-DCMAKE_CXX_FLAGS=` channel above, just set via the job/step
+# environment instead of a command-line argument. Line-based: YAML's own `key: value`
+# shape needs no CMake-argument parsing. Fold round 6 (D-SLM3602, T-2174 #13): applied
+# to every file the tree walk opens, not only the one `--workflow` path -- a second
+# workflow file (e.g. a `bench.yml` this checker was never told about) carries the
+# same `env:` channel and does not need to mention `matmul.cpp` anywhere in its own
+# text to be TU-wide for a compile of it started under that job's environment.
 _ENV_CXXFLAGS_RE = re.compile(r"^\s*(CXXFLAGS|CFLAGS)\s*:\s*(.+)$", re.MULTILINE)
+
+# Fold round 6 (D-SLM3602, design §20.4 item 4): a YAML block-scalar value (`|` or
+# `>`, optionally with a chomping/indentation indicator, spanning the following
+# indented lines) is outside what a line-based regex can parse -- `_ENV_CXXFLAGS_RE`
+# above would capture only the bare `|`/`>` token as `value` and silently find no AVX
+# flag in it, even when the block's own content carries one. Detecting this shape and
+# raising `CheckerFailure` is the honest close: general YAML block-scalar parsing is
+# not owed by this guard, and a silent non-match on a shape it cannot read is the same
+# failure this whole fold is about.
+_YAML_BLOCK_SCALAR_RE = re.compile(r"^[|>][+\-]?\d*\s*$")
 
 
 def find_env_flag_hits(text: str, source_label: str) -> list[dict]:
     hits: list[dict] = []
     for m in _ENV_CXXFLAGS_RE.finditer(text):
-        value = m.group(2).strip().strip("\"'")
+        raw_value = m.group(2).strip()
+        if _YAML_BLOCK_SCALAR_RE.match(raw_value):
+            line_no = text.count("\n", 0, m.start()) + 1
+            raise CheckerFailure(
+                "{}:{}: {} uses YAML block-scalar syntax ({!r}), which this "
+                "checker's line-based scan cannot parse -- rewrite as a plain "
+                "scalar or state explicitly that it carries no AVX-family flag "
+                "before this guard can pass".format(
+                    source_label, line_no, m.group(1), raw_value
+                )
+            )
+        value = raw_value.strip("\"'")
         flag = _contains_avx_flag(value)
         if flag:
             line_no = text.count("\n", 0, m.start()) + 1
@@ -290,11 +354,47 @@ def find_env_flag_hits(text: str, source_label: str) -> list[dict]:
     return hits
 
 
-# Channel B, third form: a direct compiler invocation (no CMake in between) whose
+# Channel B, fourth form (fold round 6, D-SLM3602, design §20.4 item 3): a batch or
+# shell environment assignment naming CXXFLAGS/CFLAGS -- `set CXXFLAGS=...` (`.bat`/
+# `.cmd`, case-insensitive, matching batch's own case-insensitivity; T-2174 #9) and
+# `export CXXFLAGS=...` or a leading `CXXFLAGS=... <command>` prefix-assignment
+# (`.sh`). Applied tree-wide on the same no-`matmul.cpp`-gate rule as the CLI and
+# environment channels above -- an environment assignment does not need to co-occur
+# with a `matmul.cpp` mention in the same file either.
+_BATCH_SET_ENV_RE = re.compile(
+    r"(?im)^\s*set\s+(CXXFLAGS|CFLAGS)\s*=\s*(.*)$"
+)
+_SHELL_ENV_ASSIGN_RE = re.compile(
+    r"^\s*(?:export\s+)?(CXXFLAGS|CFLAGS)=(\S*)", re.MULTILINE
+)
+
+
+def find_batch_env_assign_hits(text: str, source_label: str) -> list[dict]:
+    hits: list[dict] = []
+    for pattern, spelling in (
+        (_BATCH_SET_ENV_RE, "set {} (batch environment)"),
+        (_SHELL_ENV_ASSIGN_RE, "{} (shell environment)"),
+    ):
+        for m in pattern.finditer(text):
+            value = m.group(2).strip().strip("\"'")
+            flag = _contains_avx_flag(value)
+            if flag:
+                line_no = text.count("\n", 0, m.start()) + 1
+                hits.append({
+                    "spelling": spelling.format(m.group(1)),
+                    "target": "(every compiler invocation run under this environment)",
+                    "flag": flag,
+                    "line": line_no,
+                    "source": source_label,
+                })
+    return hits
+
+
+# Channel B, fifth form: a direct compiler invocation (no CMake in between) whose
 # source-file list names matmul.cpp. Fold round 5 (D-SLM3583) generalizes this from a
 # single hard-coded `build.bat` scan to every file the tree-wide search finds --
 # `find_direct_invocation_hits` is applied uniformly to whatever
-# `scan_repo_for_direct_invocations` opens.
+# `scan_repo` opens.
 _COMPILER_BASENAMES = {
     "cl", "cl.exe",
     "clang", "clang.exe",
@@ -305,18 +405,39 @@ _COMPILER_BASENAMES = {
     "cc", "cc.exe",
 }
 
+# Fold round 6 (D-SLM3602): a compiler invoked via a build-variable reference rather
+# than a literal basename -- $(CXX)/$(CC) (Makefile), ${CXX}/${CC} (shell), %CXX%/%CC%
+# (batch). The checker cannot know a variable's resolved value, so any of these six
+# spellings as the first token is ruled a hit-candidate exactly as a literal basename
+# already is: a false positive on a CXX that happens not to be a compiler costs one
+# look at a red CI job; a false negative on this exact shape is the SIGILL class this
+# whole guard exists to prevent (T-2174 #15, a Makefile's `$(CXX) -march=native ...`).
+_COMPILER_VAR_REFS = {
+    "$(cxx)", "$(cc)", "${cxx}", "${cc}", "%cxx%", "%cc%",
+}
+
 
 def _is_compiler_invocation_first_token(line: str) -> bool:
     """A logical statement is a candidate direct compiler invocation when its own
     first line's first whitespace-delimited token's basename (stripped of any
-    directory prefix and surrounding quotes) is a known compiler command -- matching
-    the shape every direct invocation in this repository actually uses (`cl /nologo
-    ...`, one command starting the line, arguments after it)."""
+    directory prefix and surrounding quotes) is a known compiler command, or the
+    token itself is a build-variable reference to one -- matching the shape every
+    direct invocation in this repository actually uses (`cl /nologo ...`, one
+    command starting the line, arguments after it), plus batch's own `@`
+    echo-suppression prefix (fold round 6, D-SLM3602: T-2174 #10, `@cl ...`) and a
+    variable-referenced compiler command (T-2174 #11/#15: `%CXX% ...`, `$(CXX) ...`)."""
     stripped = line.strip()
     if not stripped:
         return False
+    if stripped.startswith("@"):
+        stripped = stripped[1:].lstrip()
+    if not stripped:
+        return False
     first = stripped.split(None, 1)[0]
-    basename = os.path.basename(first.strip("\"'")).lower()
+    stripped_first = first.strip("\"'")
+    if stripped_first.lower() in _COMPILER_VAR_REFS:
+        return True
+    basename = os.path.basename(stripped_first).lower()
     return basename in _COMPILER_BASENAMES
 
 
@@ -374,21 +495,31 @@ def _display_path(path: str) -> str:
         return path.replace("\\", "/")
 
 
-def scan_repo_for_direct_invocations(repo_root: str) -> tuple[list[str], list[dict]]:
-    """Fold round 5 (D-SLM3583) input-set axis: walks the whole tree under
-    `repo_root` -- excluding only build-output and VCS-internal directories that can
-    never carry committed source (`_TREE_SEARCH_EXCLUDE_DIRS`) -- and opens every
-    remaining file, replacing the previous hard-coded single-file (`build.bat`) scan.
-    A file this walk finds but cannot open is a `CheckerFailure`, not a silent skip --
-    the `os.path.isfile` guard this replaces printed `OK` on a missing/renamed path
-    instead. A file that cannot be decoded as UTF-8 text is not a candidate (it
-    cannot contain a text compiler recipe naming a `.cpp` source file) and is not an
-    error -- this is the tree's own binary/generated content (images, `.pdb`, etc.),
-    not a script this guard's claim is about.
+def scan_repo(repo_root: str) -> tuple[list[str], list[dict]]:
+    """Fold round 5 (D-SLM3583) input-set axis, widened fold round 6 (D-SLM3602,
+    design §20.4 item 1): walks the whole tree under `repo_root` -- excluding only
+    build-output and VCS-internal directories that can never carry committed source
+    (`_TREE_SEARCH_EXCLUDE_DIRS`) -- and opens every remaining file. A file this walk
+    finds but cannot open is a `CheckerFailure`, not a silent skip. A file that
+    cannot be decoded as UTF-8 text is not a candidate and is not an error -- this is
+    the tree's own binary/generated content (images, `.pdb`, etc.), not a script this
+    guard's claim is about.
+
+    Every channel predicate applies to every file this walk opens: the CLI, workflow-
+    environment, and batch/shell-environment channels (`find_cli_hits`,
+    `find_env_flag_hits`, `find_batch_env_assign_hits`) carry no `matmul.cpp` gate --
+    a TU-wide flag set via any of those three channels can affect a compile of
+    matmul.cpp with no mention of it anywhere in the same file (T-2174 #8/#9/#13/#15's
+    exact shape: fold round 5's remedy scoped these two channels to the one
+    `--workflow` path, which is why it regressed on `build.bat`'s own CLI/environment
+    forms and never closed the standing `bench.yml`/Makefile-shaped misses). Only the
+    direct-invocation channel keeps its `matmul.cpp`-substring gate, since a compiler
+    recipe not naming `matmul.cpp` cannot compile it -- that gate is a correct
+    precondition for that one channel alone.
 
     Returns `(scanned_files, avx_hits)`: every repo-root-relative path found to carry
     at least one direct compiler invocation naming `matmul.cpp` (sorted, for a stable
-    report), and every AVX-family-flag hit found across all of them.
+    report), and every AVX-family-flag hit found across all channels in all files.
     """
     scanned_files: list[str] = []
     avx_hits: list[dict] = []
@@ -396,6 +527,14 @@ def scan_repo_for_direct_invocations(repo_root: str) -> tuple[list[str], list[di
         dirnames[:] = [d for d in dirnames if d not in _TREE_SEARCH_EXCLUDE_DIRS]
         for fname in sorted(filenames):
             full_path = os.path.join(dirpath, fname)
+            # Exclusion is checked relative to THIS walk's own `repo_root` (not the
+            # real repo's `_REPO_ROOT`, which `_display_path` reports against) --
+            # the self-test's scratch tree has a different root than the real repo,
+            # and the excluded fixture must be recognized there too.
+            rel_to_root = os.path.relpath(full_path, repo_root).replace("\\", "/")
+            if rel_to_root in _TREE_SEARCH_EXCLUDE_FILES:
+                continue
+            label = _display_path(full_path)
             try:
                 with open(full_path, "r", encoding="utf-8") as f:
                     text = f.read()
@@ -404,14 +543,16 @@ def scan_repo_for_direct_invocations(repo_root: str) -> tuple[list[str], list[di
             except OSError as exc:
                 raise CheckerFailure(
                     "the tree walk found {} but could not open it: {}".format(
-                        _display_path(full_path), exc
+                        label, exc
                     )
                 ) from exc
-            if "matmul.cpp" not in text:
-                continue
-            found, hits = find_direct_invocation_hits(text, _display_path(full_path))
-            if found:
-                scanned_files.append(_display_path(full_path))
+            avx_hits.extend(find_cli_hits(text, label))
+            avx_hits.extend(find_env_flag_hits(text, label))
+            avx_hits.extend(find_batch_env_assign_hits(text, label))
+            if "matmul.cpp" in text:
+                found, hits = find_direct_invocation_hits(text, label)
+                if found:
+                    scanned_files.append(label)
                 avx_hits.extend(hits)
     return sorted(scanned_files), avx_hits
 
@@ -426,8 +567,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--workflow",
         default=_DEFAULT_WORKFLOW,
-        help="Path to the CI workflow YAML to scan for the CLI/environment channels "
-        "(default: .github/workflows/tests.yml).",
+        help="Path to the CI workflow YAML this checker requires to exist (default: "
+        ".github/workflows/tests.yml) -- a missing/renamed file is a CheckerFailure. "
+        "Fold round 6 (D-SLM3602): its CLI/environment channels are no longer scanned "
+        "here specifically -- they run tree-wide, against every file --repo-root "
+        "finds, this one included.",
     )
     parser.add_argument(
         "--repo-root",
@@ -445,11 +589,16 @@ def main(argv: list[str]) -> int:
         for h in hits:
             h["source"] = _display_path(args.cmakelists)
 
-        workflow_text = _read_required(args.workflow, "the CI workflow YAML to scan")
-        hits.extend(find_cli_hits(workflow_text, _display_path(args.workflow)))
-        hits.extend(find_env_flag_hits(workflow_text, _display_path(args.workflow)))
+        # Required-file existence check only -- fold round 6 (D-SLM3602) moves the
+        # CLI/environment/batch-environment channels into the tree-wide `scan_repo`
+        # walk below (applied to every file it opens, this file included when it is
+        # under --repo-root, which every real and scratch-test invocation has it be).
+        # This call's only job is preserving the checker-failure invariant on a
+        # missing/renamed workflow file -- its returned text is intentionally
+        # discarded so the workflow file is never scanned twice.
+        _read_required(args.workflow, "the CI workflow YAML to scan")
 
-        scanned_files, tree_hits = scan_repo_for_direct_invocations(args.repo_root)
+        scanned_files, tree_hits = scan_repo(args.repo_root)
         hits.extend(tree_hits)
     except CheckerFailure as exc:
         sys.stderr.write(

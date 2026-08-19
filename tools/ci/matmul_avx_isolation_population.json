@@ -1,0 +1,200 @@
+[
+  {
+    "id": "G0",
+    "source": "fold round 6, D-SLM3601 (unmutated tree)",
+    "kind": "none",
+    "target": null,
+    "insert_after_line": null,
+    "content": null,
+    "expect": "green"
+  },
+  {
+    "id": "M1",
+    "source": "T-2174 #1 (control)",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "add_compile_options(-mavx2)\n",
+    "expect": "red"
+  },
+  {
+    "id": "M2",
+    "source": "T-2174 #2",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "add_compile_options(-march=native)\n",
+    "expect": "red"
+  },
+  {
+    "id": "M3",
+    "source": "T-2174 #3",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} -march=x86-64-v4\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "M4",
+    "source": "T-2174 #4",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "string(APPEND CMAKE_CXX_FLAGS \" -mavx2\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "M5",
+    "source": "T-2174 #5",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "target_compile_options(superslm PRIVATE -march=skylake-avx512)\n",
+    "expect": "red"
+  },
+  {
+    "id": "M6",
+    "source": "T-2174 #6",
+    "kind": "workflow-edit",
+    "target": ".github/workflows/tests.yml",
+    "insert_after_line": 1,
+    "content": "  env:\n    CXXFLAGS: -mavx512bw\n",
+    "expect": "red"
+  },
+  {
+    "id": "M7",
+    "source": "T-2174 #7",
+    "kind": "existing-file-edit",
+    "target": "tools/build_verify.bat",
+    "insert_after_line": 1,
+    "content": "cl /nologo /arch:AVX512 /c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
+    "id": "M8",
+    "source": "T-2174 #8",
+    "kind": "existing-file-edit",
+    "target": "build.bat",
+    "insert_after_line": 1,
+    "content": "cmake -B build -DCMAKE_CXX_FLAGS=\"-mavx2\"\n",
+    "expect": "red"
+  },
+  {
+    "id": "M9",
+    "source": "T-2174 #9",
+    "kind": "existing-file-edit",
+    "target": "build.bat",
+    "insert_after_line": 1,
+    "content": "set CXXFLAGS=-mavx2\ncl /nologo /c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
+    "id": "M10",
+    "source": "T-2174 #10",
+    "kind": "existing-file-edit",
+    "target": "build.bat",
+    "insert_after_line": 1,
+    "content": "@cl /nologo /arch:AVX2 /c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
+    "id": "M11",
+    "source": "T-2174 #11",
+    "kind": "existing-file-edit",
+    "target": "build.bat",
+    "insert_after_line": 1,
+    "content": "%CXX% /arch:AVX2 -c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
+    "id": "M12",
+    "source": "T-2174 #12",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "set_target_properties(superslm PROPERTIES COMPILE_OPTIONS \"-march=native\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "M13",
+    "source": "T-2174 #13",
+    "kind": "new-file",
+    "target": ".github/workflows/bench.yml",
+    "insert_after_line": null,
+    "content": "name: bench\n\non: [push]\n\njobs:\n  bench:\n    runs-on: ubuntu-latest\n    env:\n      CXXFLAGS: -mavx2\n    steps:\n      - run: echo noop\n",
+    "expect": "red"
+  },
+  {
+    "id": "M14",
+    "source": "T-2174 #14",
+    "kind": "new-file",
+    "target": "tools/build_fast.sh",
+    "insert_after_line": null,
+    "content": "#!/bin/sh\nclang++ -mavx2 -c src/matmul.cpp -o /tmp/matmul.o\n",
+    "expect": "red"
+  },
+  {
+    "id": "M15",
+    "source": "T-2174 #15",
+    "kind": "new-file",
+    "target": "Makefile",
+    "insert_after_line": null,
+    "content": "matmul.o: src/matmul.cpp\n\t$(CXX) -march=native -c src/matmul.cpp -o matmul.o\n",
+    "expect": "red"
+  },
+  {
+    "id": "M16",
+    "source": "T-2174 #16",
+    "kind": "new-file",
+    "target": "tools/build_verify_continuation.bat",
+    "insert_after_line": null,
+    "content": "cl /nologo ^\n  /arch:AVX2 ^\n  /c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
+    "id": "N17",
+    "source": "T-2170 #1",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "target_compile_options(superslm PRIVATE -mavx2)\n",
+    "expect": "red"
+  },
+  {
+    "id": "N18",
+    "source": "T-2170 #2",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "target_compile_options(superslm PRIVATE \"$<$<COMPILE_LANGUAGE:CXX>:-mavx2>\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "N19",
+    "source": "T-2170 #4",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} -mavx512bw\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "N20",
+    "source": "T-2170 #5",
+    "kind": "cmakelists-edit",
+    "target": "CMakeLists.txt",
+    "insert_after_line": 1,
+    "content": "set_target_properties(superslm PROPERTIES COMPILE_OPTIONS \"-mavx2\")\n",
+    "expect": "red"
+  },
+  {
+    "id": "CF0",
+    "source": "D-SLM3601, checker-failure cell",
+    "kind": "remove-workflow",
+    "target": ".github/workflows/tests.yml",
+    "insert_after_line": null,
+    "content": null,
+    "expect": "checker-failure"
+  }
+]
