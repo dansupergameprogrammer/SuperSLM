@@ -81,9 +81,12 @@ rem committed-build-recipe discipline as the two tools above; links advapi32.lib
 rem query. NOT auto-run. Usage after a successful build: out\t2169_tdr_measure.exe ^<model.sslm^>.
 rem STATUS (Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md): this tool's own
 rem measurement run found chunk_tokens>=8 reproducibly crashes the process
-rem (STATUS_STACK_OVERFLOW) -- a genuine, hardware-executed, currently-unresolved defect, not a
-rem TDR event (no Display/nvlddmkm TDR-recovery event logged at the crash time). superslm_gpu::
-rem kT2169TdrSafeMaxChunkTokens remains undefined pending root-cause of that crash.
+rem (STATUS_STACK_OVERFLOW) -- a genuine, hardware-executed defect inside the NVIDIA driver
+rem (nvwgf2umx.dll), not a TDR event (no Display/nvlddmkm TDR-recovery event logged at the crash
+rem time), root-caused under cdb (D-SLM3649). T-2184 remedy M2 (Brunel fix round 1, D-SLM3662):
+rem corrected -- superslm_gpu::kT2169TdrSafeMaxChunkTokens is DEFINED (src/gpu/superslm_gpu.cpp,
+rem `= 4`, half the confirmed-crashing 8) as of Rung 2's close; this paragraph described the gap
+rem only until then.
 if not exist out\t2169tdr mkdir out\t2169tdr
 cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
 	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^

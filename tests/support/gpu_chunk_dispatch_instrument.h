@@ -24,17 +24,18 @@
 // declared-but-undefined 1.0 API surface) rather than T-2158's compile-gate, because here the
 // public surface is frozen and the compile-gate mechanism has nothing undeclared to gate on.
 //
-// THE COUNTERS ARE NOT YET WIRED INTO PRODUCTION. Rung 2 (design Sec8) is expected to:
-//   1. Increment `g_gpu_chunk_submit_count_probe` exactly once per
-//      `SubmitChunkToFullDepthForG5Bridge` call (i.e. once per command list opened and
+// THE COUNTERS ARE WIRED INTO PRODUCTION (T-2180 rungs 2-4; T-2184 remedy M2, Brunel fix round 1,
+// D-SLM3662 -- this paragraph corrected from "not yet wired," true only until Rung 2 landed):
+//   1. `g_gpu_chunk_submit_count_probe` increments exactly once per
+//      `SubmitOneSubChunkToFullDepthForG5Bridge` call (i.e. once per command list opened and
 //      submitted for a chunk/sub-chunk -- design Sec5 steps 1/3/4), from inside that function's
 //      own body, guarded by `SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT`.
-//   2. Advance `g_gpu_chunk_dispatch_count_probe` by `num_hidden_layers` per invocation of the
-//      Rung-2-extracted per-token, per-layer dispatch body (design Sec5's own D-SLM3595 ruling --
-//      the function `RunLayerLoopGpuSubmit` is reduced to open/call/close around, and one
-//      invocation of that body issues one token's own FULL-DEPTH dispatch chain, all layers in a
-//      single call), same guard -- matching this header's own documented "delta ==
-//      admit_count * num_hidden_layers" contract below, not a plain per-invocation `++`.
+//   2. `g_gpu_chunk_dispatch_count_probe` advances by `num_hidden_layers` per invocation of the
+//      Rung-2-extracted per-token, per-layer dispatch body (`RecordOneTokenFullDepthDispatchBody`,
+//      design Sec5's own D-SLM3595 ruling -- one invocation of that body issues one token's own
+//      FULL-DEPTH dispatch chain, all layers in a single call), same guard -- matching this
+//      header's own documented "delta == admit_count * num_hidden_layers" contract below, not a
+//      plain per-invocation `++`.
 // Both are declared here, at namespace scope (not inside test_main.cpp's translation unit, and
 // not inside an anonymous namespace -- see tests/t2112-gpu-1p0-red-suite/fixture_common.h's own
 // header note on why a bench-bridge extern must bind to the real global symbol) so a definition

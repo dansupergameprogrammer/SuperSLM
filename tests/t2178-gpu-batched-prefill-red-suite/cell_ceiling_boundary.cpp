@@ -1,22 +1,17 @@
 // T-2178 (Curie) -- design Sec6 cell 4 (ceiling-boundary) / Sec9 Boundary row's own
-// internally-forced-split occupant. Doubly gated: this file's own comparison machinery needs
-// the same dispatch-instrumentation counters cell_bitidentity.cpp needs (fixture_common.h,
-// LNK2019 today), AND it additionally needs `superslm_gpu::kT2169TdrSafeMaxChunkTokens` -- the
-// TDR-safe sub-chunk bound design Sec5 (D-SLM3596) rules is measured, not fixed, at Rung 2 (owed
-// at build, Sec10). That second symbol is declared here, `extern`, and is not defined anywhere
-// in this pass -- there is no number to gate on until Rung 2 measures one on real hardware, so
-// this cell cannot even be PARAMETERIZED before then, let alone run. This is the ticket's own
-// "cells that need the not-yet-built chunk primitive are authored gated/red" case in its purest
-// form: not merely an unimplemented function, an unmeasured constant.
+// internally-forced-split occupant. T-2184 remedy M2 (Brunel fix round 1, D-SLM3662): this
+// header corrected -- `superslm_gpu::kT2169TdrSafeMaxChunkTokens` is DEFINED (`= 4`,
+// src/gpu/superslm_gpu.cpp, Rung 2's own D-SLM3649 root-cause) and this cell RUNS (9 checks, 0
+// failures) as of Rung 2's close; the paragraph below described the gap only until then. Still
+// declared `extern` here rather than `#include`d from its own production header, matching this
+// suite's own established red-suite convention for a symbol resolved at link time.
 #include "fixture_common.h"
 
 using namespace superslm;
 
-// Declared, not defined -- Rung 2's own owed deliverable (design Sec8/Sec10: "the executed
-// max-chunk-tokens-per-list figure... measured wall-clock execution time... on the target
-// hardware"). `superslm_gpu` is this project's own GPU-internals namespace
-// (src/gpu/superslm_gpu.cpp); a definition landing there under
-// SUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT resolves this reference.
+// Declared here as `extern`, defined in src/gpu/superslm_gpu.cpp (Rung 2's own
+// D-SLM3649/D-SLM3596 measurement: the driver-recursion-safe bound, `= 4`) -- `superslm_gpu` is
+// this project's own GPU-internals namespace.
 namespace superslm_gpu {
 extern const uint32_t kT2169TdrSafeMaxChunkTokens;
 }  // namespace superslm_gpu
