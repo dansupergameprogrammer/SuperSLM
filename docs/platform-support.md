@@ -24,13 +24,28 @@ included here.
 
 Cross-toolchain determinism at the primitive level (the SiLU
 lookup-table and integer matmul kernels) is checked by comparing a digest
-of each kernel's output across every measured toolchain axis: Linux/GCC,
-Linux/Clang, Linux/Clang with SIMD forced off, Windows/MSVC,
-Windows/Clang-cl, and macOS/Clang (arm64), plus four additional axes that
-each force one matmul kernel tier (scalar, SSE2, AVX2, AVX-512) on
-Linux/Clang — nine axes total, byte-identical digests on all nine as of
-this writing. A forced axis whose runner lacks the tier's required
-hardware is a loud, named skip, not a silent pass.
+of each kernel's output across nine toolchain axes: six pre-1.1 axes —
+Linux/GCC, Linux/Clang, Linux/Clang with SIMD forced off (the scalar
+tier), Windows/MSVC, Windows/Clang-cl, and macOS/Clang (arm64) — plus
+three axes 1.1 adds, each forcing one of the remaining matmul kernel
+tiers on Linux/Clang: SSE2, AVX2, and AVX-512. A forced axis whose runner
+lacks the tier's required hardware is a loud, named skip, not a silent
+pass — this is how the AVX-512 axis behaves on every runner available to
+this project today.
+
+**What has actually run, as of this writing:** the six pre-1.1 axes
+matched byte-for-byte as of the 1.0 release. Of the three new axes, SSE2
+and AVX2 have each been run locally — one machine, one toolchain — and
+match the scalar/SSE2/AVX2 golden digest exactly. The AVX-512 axis has
+not produced a digest anywhere: this project's own build and test
+hardware has no AVX-512 support (a forced AVX-512 binary compiles clean
+and exits via SIGILL when run), and the CI leg's designed outcome on a
+runner without the hardware is the same loud SKIP, not a pass — a real
+AVX-512 evidence run on capable hardware is owed (D-SLM3688). The
+nine-way comparison across GitHub Actions' own hosted runners has not
+run at all yet — hosted runs are capped, per this document's own opening
+note — and lands at the first real Actions matrix run after that cap
+lifts.
 
 ### CPU matmul kernel tiers
 
