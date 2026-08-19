@@ -56,6 +56,24 @@ if errorlevel 1 (
 	popd & exit /b 1
 )
 
+rem T-2169 (Brunel, Rung 2b, Claude/Brunel/t2180-t2169-gpu-batched-prefill-build-2026-08-18.md):
+rem the chunk-submission primitive's own self-check harness (tools/t2169_rung2b_selfcheck.cpp) --
+rem design Sec8's exit condition (b)/(b2), the chunk_tokens=1 mechanism cell and the 4-token
+rem discriminating cell (D-SLM3608/D-SLM3615), both against the real Qwen2.5-1.5B artifact. Same
+rem committed-build-recipe discipline t2039_c5_harness.cpp's own S5 lesson established above --
+rem NOT auto-run (needs a real .sslm artifact on disk this build does not assume exists). Usage
+rem after a successful build: out\t2169_rung2b_selfcheck.exe ^<model.sslm^>.
+if not exist out\t2169selfcheck mkdir out\t2169selfcheck
+cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /Iinclude /Itests /Itools /DSUPERSLM_ENABLE_BAD_ALLOC_INJECTION ^
+	src\artifact.cpp src\sha256.cpp src\tokenizer.cpp src\model.cpp src\intmath.cpp src\silu_lut.cpp src\matmul.cpp src\proof_manifest.cpp src\trace_hook.cpp ^
+	src\forward\checked_chain_funnel.cpp src\forward\forward_sites.cpp src\decode_digest.cpp ^
+	src\gpu\superslm_gpu.cpp ^
+	tools\t2169_rung2b_selfcheck.cpp /Fo:out\t2169selfcheck\ /Fe:out\t2169_rung2b_selfcheck.exe ^
+	/link d3d12.lib dxgi.lib dxguid.lib
+if errorlevel 1 (
+	popd & exit /b 1
+)
+
 rem T-2116 (cross-vendor certification package): a minimal, dependency-free adapter
 rem enumeration tool (tools\t2116_list_adapters.cpp) -- no .sslm artifact needed, so it is
 rem built here and NOT auto-run; run_crossvendor.ps1 invokes it directly. See that file's

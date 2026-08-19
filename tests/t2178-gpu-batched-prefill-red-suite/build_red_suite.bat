@@ -10,6 +10,13 @@ rem pass. cell_ceiling_boundary.cpp additionally references
 rem superslm_gpu::kT2169TdrSafeMaxChunkTokens (Rung 2's own owed TDR-bound figure) and is
 rem expected red by the SAME mechanism until that symbol exists too.
 rem
+rem T-2180 (Brunel, Rung 2b): /DSUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT added to the cl
+rem invocation below -- superslm_gpu.cpp now DEFINES the two counters under this exact macro
+rem (SubmitChunkToFullDepthForG5Bridge, its own header comment), resolving the counter half of
+rem the LNK2019s this suite was gated on. kT2169TdrSafeMaxChunkTokens remains undefined until
+rem its own TDR-measurement sub-step lands -- cell_ceiling_boundary.cpp is expected to stay red
+rem on that one symbol alone until then.
+rem
 rem cell_exit_census.cpp is the one file in this suite NOT expected red today: its five cells
 rem (P1, P4, S1, S2, S5, Claude/Curie/t2178-t2169-gpu-batched-prefill-red-suite-2026-08-18.md)
 rem assert PRESERVED baseline behavior the design's own census marks "Yes -- unchanged" -- a
@@ -31,7 +38,7 @@ if exist ..\..\out\shaders xcopy /Y /I /Q ..\..\out\shaders obj\shaders >nul
 set OVERALL_LINK_OK=1
 for %%f in (cell_bitidentity.cpp cell_ceiling_boundary.cpp cell_trust_and_guard.cpp cell_exit_census.cpp cell_embedding_range.cpp) do (
     echo ===== %%f =====
-    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /I%ENG%\include /I%ENG%\tests /I. ^
+    cl /nologo /std:c++20 /O2 /W4 /fp:precise /EHsc /DSUPERSLM_ENABLE_GPU_CHUNK_DISPATCH_INSTRUMENT /I%ENG%\include /I%ENG%\tests /I. ^
         %ENG%\src\artifact.cpp %ENG%\src\sha256.cpp %ENG%\src\tokenizer.cpp %ENG%\src\model.cpp ^
         %ENG%\src\intmath.cpp %ENG%\src\silu_lut.cpp %ENG%\src\matmul.cpp %ENG%\src\proof_manifest.cpp ^
         %ENG%\src\trace_hook.cpp %ENG%\src\forward\checked_chain_funnel.cpp ^
