@@ -61,7 +61,7 @@ its own author's mutations.
 **Required coverage widened a third time, fold round 6 (D-SLM3601/D-SLM3602).** Per
 StandardsDocument.md §4, this is the third consecutive instance of the same coverage
 failure and is closed structurally, not with a fourth pattern list: the validation floor
-is now `tools/ci/matmul_avx_isolation_population.json`, a committed, 20-member population
+is now `tools/ci/matmul_avx_isolation_population.json`, a committed population
 (deduplicated across all three casebooks' own findings) plus a clean-tree control and a
 checker-failure cell, exercised by `tests/ci/test_matmul_avx_isolation_population.py`. Any
 future widening of this checker reproduces green against the *whole* committed population
@@ -82,6 +82,20 @@ population must flip this script's exit code from 0 to 1; the unmutated real tre
 scratch tree missing its required workflow file, must resolve exactly as the population's
 own `"green"`/`"checker-failure"` cells specify. Executed and recorded per remedy (build
 log).
+
+**Confirmation review found five gaps of the same species, fold round 7 (T-2177).** The
+population self-test could not tell a genuine hit from a crashed channel (fixed: two
+`capsys` assertions on the checker's own stderr tags); `ctest -R` reported success on an
+empty selection (fixed: `--no-tests=error`) and the CMake test registration's own
+`else()` branch degraded silently (fixed: `message(FATAL_ERROR)`); the shell environment
+channel truncated at the first space (fixed: `(.*)$`, matching its batch sibling); and the
+CMakeLists channel -- the widest-blast-radius spelling -- was still scoped to the one
+`--cmakelists` path while the CLI and environment channels had already gone tree-wide.
+That last gap is closed here the same way `--workflow`'s channels were closed at fold
+round 6: `find_cmakelists_hits` now runs against every `CMakeLists.txt`/`*.cmake` file the
+tree-wide walk opens, on the same no-`matmul.cpp`-gate rule as the CLI, environment, and
+batch-environment channels; `--cmakelists` is a required-file existence check only, exactly
+like `--workflow`.
 """
 from __future__ import annotations
 
@@ -555,6 +569,20 @@ def scan_repo(repo_root: str) -> tuple[list[str], list[dict]]:
             avx_hits.extend(find_cli_hits(text, label))
             avx_hits.extend(find_env_flag_hits(text, label))
             avx_hits.extend(find_batch_env_assign_hits(text, label))
+            # T-2177 Finding 4: the CMakeLists channel was still scoped to the
+            # one --cmakelists path while the CLI and environment channels
+            # went tree-wide at fold round 6 -- the widest-blast-radius
+            # spelling (add_compile_options) was left the narrowest-input-set
+            # channel of the four. Applied to every CMakeLists.txt/*.cmake
+            # file this walk opens, on the same no-matmul.cpp-gate rule as
+            # the CLI/environment/batch-environment channels above: a
+            # directory-scoped CMake flag assignment does not need to
+            # co-occur with a matmul.cpp mention in the same file either.
+            if fname == "CMakeLists.txt" or fname.endswith(".cmake"):
+                cmake_hits = find_cmakelists_hits(text)
+                for h in cmake_hits:
+                    h["source"] = label
+                avx_hits.extend(cmake_hits)
             if "matmul.cpp" in text:
                 found, hits = find_direct_invocation_hits(text, label)
                 if found:
@@ -568,7 +596,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--cmakelists",
         default=_DEFAULT_CMAKELISTS,
-        help="Path to the CMakeLists.txt to scan (default: the repo root's own).",
+        help="Path to the root CMakeLists.txt this checker requires to exist "
+        "(default: the repo root's own). Fold round 7 (T-2177 Finding 4): its "
+        "six CMake spellings are no longer scanned here specifically -- they "
+        "run tree-wide, against every CMakeLists.txt/*.cmake file --repo-root "
+        "finds, this one included, the same widening --workflow's channels "
+        "got at fold round 6.",
     )
     parser.add_argument(
         "--workflow",
@@ -590,22 +623,19 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     try:
-        cmakelists_text = _read_required(args.cmakelists, "the CMakeLists.txt to scan")
-        hits = find_cmakelists_hits(cmakelists_text)
-        for h in hits:
-            h["source"] = _display_path(args.cmakelists)
-
-        # Required-file existence check only -- fold round 6 (D-SLM3602) moves the
-        # CLI/environment/batch-environment channels into the tree-wide `scan_repo`
-        # walk below (applied to every file it opens, this file included when it is
-        # under --repo-root, which every real and scratch-test invocation has it be).
-        # This call's only job is preserving the checker-failure invariant on a
-        # missing/renamed workflow file -- its returned text is intentionally
-        # discarded so the workflow file is never scanned twice.
+        # Required-file existence checks only -- fold round 6 (D-SLM3602) moved
+        # the CLI/environment/batch-environment channels into the tree-wide
+        # `scan_repo` walk below, and fold round 7 (T-2177 Finding 4) moves the
+        # CMakeLists channel there too (applied to every CMakeLists.txt/*.cmake
+        # file it opens, this one included when it is under --repo-root, which
+        # every real and scratch-test invocation has it be). These two calls'
+        # only job is preserving the checker-failure invariant on a
+        # missing/renamed required file -- their returned text is intentionally
+        # discarded so neither file is ever scanned twice.
+        _read_required(args.cmakelists, "the CMakeLists.txt to scan")
         _read_required(args.workflow, "the CI workflow YAML to scan")
 
-        scanned_files, tree_hits = scan_repo(args.repo_root)
-        hits.extend(tree_hits)
+        scanned_files, hits = scan_repo(args.repo_root)
     except CheckerFailure as exc:
         sys.stderr.write(
             "check_matmul_avx_isolation: CHECKER FAILURE -- {}\n".format(exc)

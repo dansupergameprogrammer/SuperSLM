@@ -207,6 +207,28 @@
     "expect": "red"
   },
   {
+    "id": "M23",
+    "source": "T-2177 Finding 4",
+    "kind": "multi",
+    "target": null,
+    "insert_after_line": null,
+    "content": null,
+    "steps": [
+      {
+        "kind": "new-file",
+        "target": "tests/CMakeLists.txt",
+        "content": "add_compile_options(-mavx2)\n"
+      },
+      {
+        "kind": "cmakelists-edit",
+        "target": "CMakeLists.txt",
+        "insert_after_line": 2,
+        "content": "add_subdirectory(tests)\n"
+      }
+    ],
+    "expect": "red"
+  },
+  {
     "id": "CF0",
     "source": "D-SLM3601, checker-failure cell",
     "kind": "remove-workflow",

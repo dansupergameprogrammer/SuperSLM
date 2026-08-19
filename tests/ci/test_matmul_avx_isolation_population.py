@@ -105,6 +105,16 @@ def _apply_member(scratch_root: str, member: dict) -> None:
     kind = member["kind"]
     if kind == "none":
         return
+    if kind == "multi":
+        # T-2177 Finding 4 (M23): a population member whose real-world shape
+        # needs more than one file touched -- a new subdirectory
+        # CMakeLists.txt plus the root file's own add_subdirectory() wiring
+        # it -- applies its own "steps" list of ordinary single-kind members
+        # in order, reusing every existing kind's handler rather than adding
+        # a parallel code path for the combined shape.
+        for step in member["steps"]:
+            _apply_member(scratch_root, step)
+        return
     if kind == "remove-workflow":
         workflow_path = os.path.join(scratch_root, member["target"])
         if os.path.isfile(workflow_path):
@@ -217,19 +227,19 @@ def test_population_member(member: dict, tmp_path, capsys) -> None:
         )
 
 
-def test_population_has_twenty_four_members():
-    """Twenty-two distinct mutation members (M1-M16 and M21-M22, N17-N20 --
+def test_population_has_twenty_five_members():
+    """Twenty-three distinct mutation members (M1-M16 and M21-M23, N17-N20 --
     deduplicated across the three fold-6 casebooks per
-    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus M21-M22
-    added at T-2177's confirmation (Finding 3): the quoted-multi-flag and
-    prefix-assignment shell-environment shapes the pre-fix `(\\S*)` capture
-    missed) plus the clean-tree control (G0) and the checker-failure cell
-    (CF0) -- 24 total. A count check catches a member silently dropped from
-    the fixture file without anyone noticing the parametrized test count
-    shrank."""
-    assert len(_POPULATION) == 24
+    Claude/Vitruvius/t2149-avx-kernel-design-2026-08-18.md §20.3, plus M21-M23
+    added at T-2177's confirmation: the quoted-multi-flag and prefix-
+    assignment shell-environment shapes (Finding 3) and the wired-
+    subdirectory CMakeLists.txt shape (Finding 4)) plus the clean-tree
+    control (G0) and the checker-failure cell (CF0) -- 25 total. A count
+    check catches a member silently dropped from the fixture file without
+    anyone noticing the parametrized test count shrank."""
+    assert len(_POPULATION) == 25
     red_count = sum(1 for m in _POPULATION if m["expect"] == "red")
-    assert red_count == 22
+    assert red_count == 23
 
 
 def test_population_ids_are_unique():
