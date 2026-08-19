@@ -294,7 +294,7 @@ endforeach()
 # spellings x five channels -- CLI, workflow/environment, batch/shell environment,
 # direct invocation -- fold round 4, D-SLM3570; widened fold round 5, D-SLM3583;
 # widened a third time fold round 6, D-SLM3601/D-SLM3602, which also retired the
-# per-fold pattern-list widening itself in favor of a committed, 20-member
+# per-fold pattern-list widening itself in favor of a committed
 # validation population (tools/ci/matmul_avx_isolation_population.json) exercised
 # by the second `add_test` below -- see tools/ci/check_matmul_avx_isolation.py's own
 # header for the full matrix and its mutation-vitality proof, executed and recorded
