@@ -2616,43 +2616,96 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	}
-	// T-2186 remedy P1's own pin (D-SLM3682): everything from here to the end of this function
-	// sits OUTSIDE the try block above and outside both catch clauses -- this IS the uncovered
-	// tail the confirmation review named (`dev.list->Close()`, `dev.queue->Signal()`, the
-	// `GpuLayerLoopInFlight` allocation below all throw on failure, and nothing here catches any
-	// of them). The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
-	// failure, unarmed cost zero.
-	MaybeThrowInjectedT2169ChunkRecordingTailFault();
-	SSLM_GPU_HR(dev.list->Close());
-	const auto t_record_end = std::chrono::steady_clock::now();
-	g_last_call_timing.record_ms =
-	    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
-	ID3D12CommandList* lists[] = {dev.list.Get()};
-	dev.queue->ExecuteCommandLists(1, lists);
-	SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
-	std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
-	inflight->dev = &dev;
-	inflight->fence_val = dev.fence_val;
-	inflight->dispatch_count_this_call = dispatch_count_this_call;
-	inflight->seq_readback = seq_readback;
-	inflight->kv_readback = kv_readback;
-	inflight->kv_row_offsets = kv_row_offsets;
-	inflight->seq_bytes_size = SeqTotalSize(state.H);
-	inflight->hidden_size_h = state.H;
-	inflight->head_dim_hd = state.HD;
-	inflight->t_record_end = t_record_end;
-	inflight->layout_buf = state.layout_buf;
-	inflight->rope_buf = state.rope_buf;
-	inflight->model_const_buf = state.model_const_buf;
-	inflight->silu_lut_buf = state.silu_lut_buf;
-	inflight->scratch_layout_buf = state.scratch_layout_buf;
-	inflight->seq_uav = state.seq_uav;
-	inflight->scratch_uav = state.scratch_uav;
-	inflight->work_scratch_uav = state.work_scratch_uav;
-	inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
-	inflight->upload_keep_alive = state.upload_keep_alive;
-	if (out_inflight) *out_inflight = inflight.release();
-	return superslm::SslmForwardStatus::Ok;
+	// T-2186 remedy P1's own pin (D-SLM3682) named this region the uncovered tail
+	// (`dev.list->Close()`, `dev.queue->Signal()`, the `GpuLayerLoopInFlight` allocation below all
+	// throw on failure) and T-2189 finding 2 (D-SLM3689) caught the resulting throw at the
+	// `SslmGpuStatus` ABI boundary (`SubmitAdmittedChunkForG5Bridge`, gpu_1p0.cpp) -- but catching
+	// it there does not restore the invariant every OTHER failure path in this function already
+	// gives the command list: ending Closed, so the next call's `dev.alloc->Reset()`/
+	// `dev.list->Reset()` (this function's own entry, via `PrepareGpuLayerLoopChunkOpenState`,
+	// above) succeeds. Left uncovered, a fault injected before `dev.list->Close()` ever runs left
+	// the list open/recording forever -- `ID3D12CommandAllocator::Reset()` refuses to reset an
+	// allocator whose associated list is still recording, so every later call on the SAME context
+	// failed too (the T-2189 build log's own out-of-scope observation, D-SLM3692 §9; T-2191 S6).
+	// This try/catch closes that gap: the tail now ends Closed on every path, mirroring the two
+	// catch clauses above (`InvalidateResidencyCachesOnThrow()`, an unconditional best-effort
+	// `dev.list->Close()`, then `GetDeviceRemovedReason()` picks the status) rather than inventing
+	// a new recovery shape.
+	bool tail_list_closed = false;
+	try {
+		// The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
+		// failure, unarmed cost zero.
+		MaybeThrowInjectedT2169ChunkRecordingTailFault();
+		SSLM_GPU_HR(dev.list->Close());
+		tail_list_closed = true;
+		const auto t_record_end = std::chrono::steady_clock::now();
+		g_last_call_timing.record_ms =
+		    std::chrono::duration<double, std::milli>(t_record_end - t_record_start).count();
+		ID3D12CommandList* lists[] = {dev.list.Get()};
+		dev.queue->ExecuteCommandLists(1, lists);
+		SSLM_GPU_HR(dev.queue->Signal(dev.fence.Get(), ++dev.fence_val));
+		// From here on, only `std::bad_alloc` from the `new` below can throw -- Close() and
+		// Signal() have both already succeeded, so the GPU already has this submission queued and
+		// fenced at `dev.fence_val`.
+		std::unique_ptr<GpuLayerLoopInFlight> inflight(new GpuLayerLoopInFlight());
+		inflight->dev = &dev;
+		inflight->fence_val = dev.fence_val;
+		inflight->dispatch_count_this_call = dispatch_count_this_call;
+		inflight->seq_readback = seq_readback;
+		inflight->kv_readback = kv_readback;
+		inflight->kv_row_offsets = kv_row_offsets;
+		inflight->seq_bytes_size = SeqTotalSize(state.H);
+		inflight->hidden_size_h = state.H;
+		inflight->head_dim_hd = state.HD;
+		inflight->t_record_end = t_record_end;
+		inflight->layout_buf = state.layout_buf;
+		inflight->rope_buf = state.rope_buf;
+		inflight->model_const_buf = state.model_const_buf;
+		inflight->silu_lut_buf = state.silu_lut_buf;
+		inflight->scratch_layout_buf = state.scratch_layout_buf;
+		inflight->seq_uav = state.seq_uav;
+		inflight->scratch_uav = state.scratch_uav;
+		inflight->work_scratch_uav = state.work_scratch_uav;
+		inflight->lw_upload_keep_alive = state.lw_upload_keep_alive;
+		inflight->upload_keep_alive = state.upload_keep_alive;
+		if (out_inflight) *out_inflight = inflight.release();
+		return superslm::SslmForwardStatus::Ok;
+	} catch (const std::bad_alloc&) {
+		// Reached only after Close() and Signal() both succeeded (the only throwing statement
+		// between here and the try's own start is the `new` above) -- the list is already Closed,
+		// and the GPU already has this submission queued against the fence value just signaled.
+		// Every resource this function's stack is about to release on the way out
+		// (`seq_readback`/`kv_readback`/`state`'s own buffers) is exactly what that recorded work
+		// reads from or writes to, so wait the fence out before releasing them -- the same
+		// SetEventOnCompletion/WaitForSingleObject idiom `RunLayerLoopGpuFinish`'s own blocking
+		// path uses (this file, below) -- rather than let a GPU-referenced resource's last COM
+		// reference drop while the device may still be using it.
+		InvalidateResidencyCachesOnThrow();
+		if (dev.fence->GetCompletedValue() < dev.fence_val) {
+			if (SUCCEEDED(dev.fence->SetEventOnCompletion(dev.fence_val, dev.fence_event))) {
+				WaitForSingleObject(dev.fence_event, INFINITE);
+			}
+			// A failed SetEventOnCompletion means the fence itself is unusable -- the device is
+			// gone, which GetDeviceRemovedReason() below is what actually reports.
+		}
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	} catch (const std::runtime_error&) {
+		// A failed Close() or Signal() -- the two `SSLM_GPU_HR`-wrapped calls above. If Close()
+		// itself is what failed, `tail_list_closed` is still false and the list is left
+		// open/recording by the failed call (documented D3D12 behavior); attempt the identical
+		// best-effort, unchecked recovery `dev.list->Close()` the two catch clauses above this try
+		// already use for the same failure class -- if the device is genuinely gone this second
+		// attempt fails too and `GetDeviceRemovedReason()` below reports it, rather than crashing.
+		InvalidateResidencyCachesOnThrow();
+		if (!tail_list_closed) {
+			dev.list->Close();
+		}
+		const HRESULT device_removed_reason = dev.dev->GetDeviceRemovedReason();
+		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
+		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
+	}
 }
 
 // T-2169 (Rung 2, design Sec5, D-SLM3596; the bound's own real derivation, D-SLM3649 -- see this

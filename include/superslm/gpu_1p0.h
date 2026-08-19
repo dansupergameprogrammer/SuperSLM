@@ -76,11 +76,12 @@ typedef enum SslmGpuStatus {
      *     caller may continue issuing calls against the same context and sequence.
      * (b) a real device/allocation fault -- a lost/removed device, or an infrastructural
      *     submit/finish failure (an exception caught and contained at this boundary from the
-     *     GPU command-submission tail). The context may be left needing teardown; a caller
-     *     that continues issuing calls against it after this cause is not guaranteed a
-     *     healthy device on the other end. See the wedge this creates when the fault is
-     *     caught mid-recording (Known gaps, docs/platform-support.md) -- fixing that is a
-     *     separate, tracked follow-up, not resolved by this comment. */
+     *     GPU command-submission tail). The command list is recovered at the point the fault is
+     *     caught (Closed, matching the invariant every other failure path in the same function
+     *     already restores) and the context stays usable for a caller that continues issuing
+     *     calls against it. The one exception: a confirmed device-removed condition
+     *     (`GetDeviceRemovedReason()` non-S_OK) is genuinely terminal for the context regardless
+     *     of the command-list state, and no call against it can be trusted afterward. */
     SSLM_DEVICE_LOST,
     SSLM_BATCH_BUDGET_EXHAUSTED,         /* design Sec9 -- B7                   */
     SSLM_TOKEN_ID_OUT_OF_RANGE,          /* design Sec9 -- B3.5                 */
@@ -265,8 +266,9 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
  * short of what was requested at a saturated context cap -- the context and device stay
  * usable, and a caller may continue -- or a real, contained device/allocation fault from the
- * GPU submit/finish tail, after which the context may need teardown before further calls
- * against it can be trusted. */
+ * GPU submit/finish tail, after which the command list is recovered and the context stays
+ * usable for a caller that continues, unless the device is confirmed removed, which is
+ * terminal for the context regardless of cause. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget);
@@ -325,8 +327,9 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
  * above): an ordinary, healthy rejection when the chunk's own derived admit count comes back
  * short of what was requested at a saturated context cap -- the context and device stay
  * usable, and a caller may continue -- or a real, contained device/allocation fault from the
- * GPU submit/finish tail, after which the context may need teardown before further calls
- * against it can be trusted. */
+ * GPU submit/finish tail, after which the command list is recovered and the context stays
+ * usable for a caller that continues, unless the device is confirmed removed, which is
+ * terminal for the context regardless of cause. */
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,

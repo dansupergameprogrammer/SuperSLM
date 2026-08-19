@@ -2350,25 +2350,25 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		}
 	} submitted_window_guard(seq, model);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
-	// T-2189 finding 2 (D-SLM3689): `SubmitChunkToFullDepthForG5Bridge`'s own tail
-	// (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
-	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, superslm_gpu.cpp) sits OUTSIDE that
-	// function's own internal try/catch (see the T-2186 P1 comment on `SubmittedWindowScopeGuard`
-	// above for the full history), so a failed `Close()`/`Signal()` (`SSLM_GPU_HR` throws
-	// `std::runtime_error`, the device-removed channel design Sec9 promises is deliverable) or a
-	// `std::bad_alloc` from the `new` can escape this call. Caught HERE -- the one choke point both
-	// public G5 prefill entry points (`SslmGpuSeqPrefillPromptForG5Bridge`/
-	// `SslmGpuSeqPrefillSchemaContentForG5Bridge`) funnel through -- so the documented
-	// `SslmGpuStatus` boundary (gpu_1p0.h) is never crossed by `std::bad_alloc` or
-	// `std::runtime_error`, the two exception types this call's own tail can raise (a failed
-	// `Close()`/`Signal()`'s `SSLM_GPU_HR` throw, or the `new GpuLayerLoopInFlight()` allocation).
-	// Every throw site actually reachable from this try is one of these two; a third type
-	// escaping here would still propagate uncaught, so this catch documents what it covers
-	// rather than claiming to contain every possible exception. `RunLayerLoopGpuFinish` is
-	// included in the same try for symmetry with this call's own tail -- both are the same class
-	// of D3D12 call -- though `RunLayerLoopGpuFinish` cannot itself throw: it wraps its entire
-	// body in `catch (const std::exception&)` and converts to a status before returning (see its
-	// own definition, superslm_gpu.cpp).
+	// T-2189 finding 2 (D-SLM3689) added this try/catch because `SubmitChunkToFullDepthForG5Bridge`'s
+	// own tail (`SubmitOneSubChunkToFullDepthForG5Bridge`'s closing statements -- `dev.list->Close()`,
+	// `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, superslm_gpu.cpp) sat OUTSIDE that
+	// function's own internal try/catch at the time (see the T-2186 P1 comment on
+	// `SubmittedWindowScopeGuard` above for the full history), so a failed `Close()`/`Signal()`
+	// (`SSLM_GPU_HR` throws `std::runtime_error`) or a `std::bad_alloc` from the `new` could escape
+	// this call with the underlying D3D12 command list left open/recording -- T-2191 S6/D-SLM3692's
+	// own out-of-scope observation. T-2189 finding 6's own fix round closed that gap at its source
+	// (`SubmitOneSubChunkToFullDepthForG5Bridge` now catches its own tail's throw, closes the list,
+	// and returns a `superslm::SslmForwardStatus` instead of throwing), so neither exception type
+	// reaches this catch through that call chain any more -- `submit_status` carries the outcome
+	// (`GpuDeviceRemoved`/`GpuAllocationFailed`) through the ordinary `submit_status != Ok` path
+	// below instead. This try/catch is kept as defense-in-depth for any exception type not
+	// enumerated at the source (the same caveat the comment below already states: "a third type
+	// escaping here would still propagate uncaught"), not as this failure class's own containment
+	// path any more. `RunLayerLoopGpuFinish` is included in the same try for symmetry with this
+	// call's own tail -- both are the same class of D3D12 call -- though `RunLayerLoopGpuFinish`
+	// cannot itself throw: it wraps its entire body in `catch (const std::exception&)` and converts
+	// to a status before returning (see its own definition, superslm_gpu.cpp).
 	//
 	// No status is returned from THIS function (it never has been -- see its own header comment);
 	// the catch clauses below deliberately do NOT return early or rethrow. `seq->live_state` is
