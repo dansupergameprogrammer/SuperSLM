@@ -247,6 +247,22 @@
     "expect": "red"
   },
   {
+    "id": "M26",
+    "source": "T-2179 Finding 8",
+    "kind": "new-file",
+    "target": "tools/build_make_style_append.sh",
+    "content": "#!/bin/sh\nCXXFLAGS+=-mavx2\ncc -c src/matmul.cpp -o /tmp/matmul.o\n",
+    "expect": "red"
+  },
+  {
+    "id": "M27",
+    "source": "T-2179 Finding 8",
+    "kind": "new-file",
+    "target": "tools/build_powershell_env.ps1",
+    "content": "$env:CXXFLAGS = \"-O2 -mavx2\"\ncl /c src\\matmul.cpp\n",
+    "expect": "red"
+  },
+  {
     "id": "CF0",
     "source": "D-SLM3601, checker-failure cell",
     "kind": "remove-workflow",

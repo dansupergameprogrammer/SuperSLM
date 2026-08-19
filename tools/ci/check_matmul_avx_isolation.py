@@ -100,8 +100,15 @@ like `--workflow`.
 **Confirmation review found four gaps, fold round 8 (T-2179).** The CMake channel read
 `CMakeLists.txt`/`*.cmake` and not `*.cmake.in`, missing `cmake/superslmConfig.cmake.in` --
 the one CMake-language file in this repository that reaches every downstream consumer's own
-configure via `find_package(superslm)` (fixed here: `.cmake.in` joins the scan on the same
-terms, M25 in the committed population).
+configure via `find_package(superslm)` (fixed: `.cmake.in` joins the scan on the same
+terms, M25 in the committed population). The shell-environment channel's value capture was
+widened at fold round 7 without revisiting which assignment forms it recognizes at all: two
+ordinary spellings stayed unwatched -- `CXXFLAGS+=-mavx2` (the Make-style/shell append,
+no bare `=`; this checker's own history is a Makefile-shaped miss, T-2174's M13) and
+PowerShell's `$env:CXXFLAGS = "..."` (this repository ships `.bat` build scripts and runs a
+`shell: pwsh` step in `tests.yml`, so this is the natural Windows spelling). Fixed:
+`_SHELL_ENV_ASSIGN_RE` admits an optional `+` before `=` (M26), and a new
+`_POWERSHELL_ENV_ASSIGN_RE` pattern joins the batch/shell-environment channel (M27).
 """
 from __future__ import annotations
 
@@ -399,8 +406,23 @@ _BATCH_SET_ENV_RE = re.compile(
 # written first). `(.*)$` matches the batch sibling above: the value is the
 # rest of the line, quotes stripped by the caller below -- same shape, same
 # rule, stated in both rather than one pinned to the other's wording.
+# T-2179 Finding 8: `\+?` before `=` admits the Make-style/shell append
+# spelling (`CXXFLAGS+=-mavx2`, `CXXFLAGS += -mavx2`) -- `+=` is the natural
+# spelling a Makefile uses, and this checker's own history is a Makefile-
+# shaped miss (T-2174's M13). Widens what value-capture recognizes, same as
+# the round that widened the value capture itself; does not change what a
+# bare `CXXFLAGS=...` assignment matches.
 _SHELL_ENV_ASSIGN_RE = re.compile(
-    r"^\s*(?:export\s+)?(CXXFLAGS|CFLAGS)=(.*)$", re.MULTILINE
+    r"^\s*(?:export\s+)?(CXXFLAGS|CFLAGS)\s*\+?=(.*)$", re.MULTILINE
+)
+
+# T-2179 Finding 8: PowerShell's `$env:CXXFLAGS = "..."` -- this repository ships
+# `.bat` build scripts and .github/workflows/tests.yml already runs a `shell: pwsh`
+# step, so this is the natural Windows spelling of the thing this channel exists to
+# catch. Applied tree-wide on the same no-`matmul.cpp`-gate rule as the batch and
+# shell environment-assignment channels above.
+_POWERSHELL_ENV_ASSIGN_RE = re.compile(
+    r"(?im)^\s*\$env:(CXXFLAGS|CFLAGS)\s*=\s*(.*)$"
 )
 
 
@@ -409,6 +431,7 @@ def find_batch_env_assign_hits(text: str, source_label: str) -> list[dict]:
     for pattern, spelling in (
         (_BATCH_SET_ENV_RE, "set {} (batch environment)"),
         (_SHELL_ENV_ASSIGN_RE, "{} (shell environment)"),
+        (_POWERSHELL_ENV_ASSIGN_RE, "$env:{} (PowerShell environment)"),
     ):
         for m in pattern.finditer(text):
             value = m.group(2).strip().strip("\"'")
