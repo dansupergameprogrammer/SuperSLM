@@ -2273,12 +2273,45 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 	// submitted, so every sub-chunk's own fence wait -- not only the final one -- falls inside it;
 	// `seq->in_flight` is assigned once the call returns the final sub-chunk's own inflight token
 	// (the only one handed back to this caller unfenced; every earlier one already completed
-	// inside the call), and all three fields close symmetrically below regardless of how the call
-	// below resolves -- a submission that fails partway still leaves earlier sub-chunks genuinely
-	// dispatched, so the window closing unconditionally (not only on Ok) is correct, not merely
-	// simpler.
-	seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
-	model->submitted_sequences += 1;
+	// inside the call).
+	//
+	// T-2186 remedy P1 (Brunel fix round 3, D-SLM3682, confirmation
+	// Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md): opening and closing this window as
+	// two separate manual statements -- open here, close unconditionally below -- was NOT
+	// symmetric with the shipped per-token path in the property that matters: the call in between
+	// can throw. `SubmitChunkToFullDepthForG5Bridge`'s own tail
+	// (`SubmitOneSubChunkToFullDepthForG5Bridge`, superslm_gpu.cpp:2591/2597/2598 --
+	// `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`) sits OUTSIDE that
+	// function's own try/catch, so a failed `Close()`/`Signal()` (`SSLM_GPU_HR` throws
+	// `std::runtime_error` -- precisely the device-removed channel design Sec9 promises is
+	// deliverable) or a `std::bad_alloc` from the `new` can escape this call with no catch
+	// anywhere between here and the ABI boundary. A manual "close below" statement is never
+	// reached on that path: `seq->state` stays `Submitted` and `model->submitted_sequences` stays
+	// incremented forever, and `sslm_gpu_model_unmap` (`SslmGpuModelHandle::submitted_sequences`'
+	// own check, above) returns `SSLM_BUSY` on every later call, permanently -- the model can
+	// never be unmapped. The shipped per-token twin (`SubmitOneSequenceDecode`, this file,
+	// `:1379-1381`'s own comment: "Rejected before submission (a guard, or an exception) -- seq/
+	// host state untouched, still Idle") avoids this class entirely by opening its window only
+	// AFTER submission returns; this batched path cannot do the same (design Sec9 wants the
+	// window held across the whole chunk, submitted or not, not only after it succeeds), so it is
+	// made safe by construction instead: an RAII guard opens the window in its constructor and
+	// closes it in its destructor, which C++ runs on every exit from this function -- normal
+	// return AND exception unwind alike -- so there is no longer any path between open and close
+	// where a throw can leave the window stuck open. This replaces the manual open above and the
+	// manual unconditional close that used to sit after the call, below; the close is no longer a
+	// second statement that can be skipped, it is a property of the guard's lifetime.
+	struct SubmittedWindowScopeGuard {
+		SslmGpuSequenceHandle* seq;
+		SslmGpuModelHandle* model;
+		SubmittedWindowScopeGuard(SslmGpuSequenceHandle* s, SslmGpuModelHandle* m) : seq(s), model(m) {
+			seq->state = superslm_gpu::SslmSequenceGpuState::Submitted;
+			model->submitted_sequences += 1;
+		}
+		~SubmittedWindowScopeGuard() {
+			seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
+			if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
+		}
+	} submitted_window_guard(seq, model);
 	superslm_gpu::GpuLayerLoopInFlight* inflight = nullptr;
 	const superslm::SslmForwardStatus submit_status = superslm_gpu::SubmitChunkToFullDepthForG5Bridge(
 	    seq->live_state, /*layers=*/nullptr, model->num_hidden_layers, model->hidden_size,
@@ -2300,14 +2333,14 @@ void SubmitAdmittedChunkForG5Bridge(SslmGpuModelHandle* model, SslmGpuSequenceHa
 		                                      /*block=*/1, &ready);
 		seq->in_flight = nullptr;
 	}
-	// Symmetric clear -- `sslm_gpu_ready`'s own "collapse Submitted -> Idle in one call" -- runs
-	// unconditionally (not gated on `submit_status == Ok`, per the header comment above): the
-	// window opened unconditionally before the call, so it closes unconditionally after it. No
-	// adapter bookkeeping to mirror: this path always submits with `adapter_bridge = nullptr` (no
-	// LoRA on the chunk path), so `seq->in_flight_adapter` is never set here and needs no
-	// clearing, matching every other adapter-less caller.
-	seq->state = superslm_gpu::SslmSequenceGpuState::Idle;
-	if (model->submitted_sequences > 0) model->submitted_sequences -= 1;
+	// `submitted_window_guard`'s destructor closes the window here, unconditionally, on this
+	// normal-return path exactly as it would on an exception unwind -- `sslm_gpu_ready`'s own
+	// "collapse Submitted -> Idle in one call" symmetry, now a property of the guard's lifetime
+	// rather than a second statement a throw could skip. No adapter bookkeeping to mirror: this
+	// path always submits with `adapter_bridge = nullptr` (no LoRA on the chunk path), so
+	// `seq->in_flight_adapter` is never set here and needs no clearing, matching every other
+	// adapter-less caller.
+	//
 	// Copy the (possibly partially-advanced, per the sub-chunk split's own synchronous-finish
 	// discipline, D-SLM3596/3649) live_state back into this handle's own canonical fields.
 	seq->hidden_scale = seq->live_state.hidden_scale;

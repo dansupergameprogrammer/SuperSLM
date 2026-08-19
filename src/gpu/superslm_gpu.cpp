@@ -915,6 +915,7 @@ namespace {
 #ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 bool g_t2169_chunk_recording_fault_armed = false;
 uint32_t g_t2169_chunk_recording_fault_after_token_index = 0;
+bool g_t2169_chunk_recording_tail_fault_armed = false;
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Always defined, always callable -- mirrors `MaybeThrowInjectedO11AllocFault`'s own established
@@ -936,6 +937,28 @@ inline void MaybeThrowInjectedT2169ChunkRecordingFault(uint32_t admitted_token_i
 	}
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 }
+
+// T-2186 remedy P1's own pin (Brunel fix round 3, D-SLM3682): the seam above only reaches the
+// TRY-COVERED per-token loop, whose throw is caught by this function's own catch clauses --
+// pinning P1 requires a throw from the UNCOVERED TAIL itself (this function, below, outside
+// either catch clause: `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`),
+// the exact region the confirmation review named. Single-shot, no token index -- the tail runs
+// once per (sub-)chunk submission, after every admitted token's dispatches are already recorded,
+// so there is nothing left to index. `std::runtime_error`, matching the real failure this stands
+// in for (`SSLM_GPU_HR` throws exactly this type on a failed `Close()`/`Signal()`, e.g. on device
+// removal) -- a `catch (const std::runtime_error&)` at the call site cannot distinguish this from
+// the real thing, which is the property the pin needs.
+inline void MaybeThrowInjectedT2169ChunkRecordingTailFault() {
+#ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+	if (g_t2169_chunk_recording_tail_fault_armed) {
+		g_t2169_chunk_recording_tail_fault_armed = false;
+		throw std::runtime_error(
+		    "T2186 D-SLM3682: injected fault from SubmitOneSubChunkToFullDepthForG5Bridge's own "
+		    "uncovered tail (outside its try/catch), simulating a failed Close()/Signal() or a "
+		    "bad_alloc from the inflight allocation");
+	}
+#endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
+}
 }  // namespace
 
 // External linkage, deliberately outside the anonymous namespace immediately above -- same
@@ -949,6 +972,11 @@ void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index) {
 	g_t2169_chunk_recording_fault_after_token_index = after_token_index;
 }
 void ClearT2169ChunkRecordingFaultInjection() { g_t2169_chunk_recording_fault_armed = false; }
+
+void ArmT2169ChunkRecordingTailFaultInjection() { g_t2169_chunk_recording_tail_fault_armed = true; }
+void ClearT2169ChunkRecordingTailFaultInjection() {
+	g_t2169_chunk_recording_tail_fault_armed = false;
+}
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // T-2113 (B5, design Sec4.2/Sec6.2/Sec10 B5): the full definition of the opaque token
@@ -2588,6 +2616,13 @@ superslm::SslmForwardStatus SubmitOneSubChunkToFullDepthForG5Bridge(
 		return device_removed_reason != S_OK ? superslm::SslmForwardStatus::GpuDeviceRemoved
 		                                      : superslm::SslmForwardStatus::GpuAllocationFailed;
 	}
+	// T-2186 remedy P1's own pin (D-SLM3682): everything from here to the end of this function
+	// sits OUTSIDE the try block above and outside both catch clauses -- this IS the uncovered
+	// tail the confirmation review named (`dev.list->Close()`, `dev.queue->Signal()`, the
+	// `GpuLayerLoopInFlight` allocation below all throw on failure, and nothing here catches any
+	// of them). The pin seam fires here, throwing exactly the type `SSLM_GPU_HR` would on a real
+	// failure, unarmed cost zero.
+	MaybeThrowInjectedT2169ChunkRecordingTailFault();
 	SSLM_GPU_HR(dev.list->Close());
 	const auto t_record_end = std::chrono::steady_clock::now();
 	g_last_call_timing.record_ms =

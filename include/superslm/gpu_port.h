@@ -686,6 +686,22 @@ void ClearO11AllocationInjection();
 #ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 void ArmT2169ChunkRecordingFaultInjection(uint32_t after_token_index);
 void ClearT2169ChunkRecordingFaultInjection();
+
+// T-2186 remedy P1's own pin (Brunel fix round 3, D-SLM3682, confirmation
+// `Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md`): the seam above only reaches the
+// try-covered per-token recording loop, whose throw is caught by
+// `SubmitOneSubChunkToFullDepthForG5Bridge`'s own two catch clauses. Pinning P1 (the widened
+// `Submitted` window is not exception-safe against a throw from that function's own UNCOVERED
+// TAIL -- `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`, all outside
+// either catch) requires a throw from exactly that region. Single-shot, no token index -- the
+// tail runs once per (sub-)chunk submission, after every admitted token's dispatches are already
+// recorded. Arm it, drive one chunk through the public bridge, and the call throws
+// `std::runtime_error` uncaught -- exactly the class `SSLM_GPU_HR` throws on a real `Close()`/
+// `Signal()` failure -- letting a cell catch it and assert `SubmitAdmittedChunkForG5Bridge`'s own
+// RAII window guard (`gpu_1p0.cpp`) left `model->submitted_sequences` and `seq->state` clean
+// rather than wedged.
+void ArmT2169ChunkRecordingTailFaultInjection();
+void ClearT2169ChunkRecordingTailFaultInjection();
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 
 // Read back the device-resident K/V cache in the SAME layout and argument order

@@ -5,9 +5,11 @@
 // ("T-2176's own probe... is the template for the two new Trust-boundaries cells"); its Arm A
 // (the shipped per-token bridge, unmodified) is this file's own reference oracle for both.
 #include "fixture_common.h"
+#include "superslm/gpu_port.h"
 
 #include <atomic>
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 
 using namespace superslm;
@@ -351,6 +353,81 @@ static void TestGuard_BusyUnderWidenedWindow(SslmGpuContext* ctx, SslmGpuModelHa
 	sslm_gpu_seq_release(ctx, seq);
 }
 
+// T-2186 P1 (Significant, confirmation Claude/Poirot/8642652-t2186-t2169-fix2-confirmation.md,
+// D-SLM3682): the widened `Submitted` window (T-2185 N1, cell above) is opened in
+// `SubmitAdmittedChunkForG5Bridge` (gpu_1p0.cpp) before `SubmitChunkToFullDepthForG5Bridge` is
+// called and, before this remedy, closed by a second, separate statement after it returns --
+// never reached if that call throws. `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail
+// (superslm_gpu.cpp: `dev.list->Close()`, `dev.queue->Signal()`, the `GpuLayerLoopInFlight`
+// allocation) sits outside its own try/catch, so a failed `Close()`/`Signal()` (`SSLM_GPU_HR`
+// throws `std::runtime_error`) or a `std::bad_alloc` from the allocation escapes all the way to
+// this cell's own caller with `seq->state` left at `Submitted` and `model->submitted_sequences`
+// left incremented -- `sslm_gpu_model_unmap` checks `submitted_sequences > 0` FIRST (gpu_1p0.cpp,
+// `SslmGpuModelHandle::submitted_sequences`' own field comment) and would return `SSLM_BUSY`
+// forever after. The fix wraps the open/close pair in an RAII scope guard
+// (`SubmittedWindowScopeGuard`, gpu_1p0.cpp) whose destructor runs on every exit from
+// `SubmitAdmittedChunkForG5Bridge`, including exception unwind.
+//
+// This cell drives that exact throw via the tail-fault seam
+// (`superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection`, gpu_port.h) and asserts the model
+// is left unwedged: `sslm_gpu_model_unmap`, polled immediately after the throw is caught (with
+// this cell's own `seq` still alive, so `live_sequences > 0` is still genuinely true), must
+// return something OTHER than `SSLM_BUSY` -- the review's own named discriminator, since
+// `submitted_sequences > 0` is checked and answered before `live_sequences` is ever read.
+static void TestGuard_ModelUnwedgesAfterUncoveredTailThrow(SslmGpuContext* ctx,
+                                                             SslmGpuModelHandle* model) {
+	SslmGpuSequenceHandle* seq = nullptr;
+	CHECK(sslm_gpu_seq_create(ctx, model, /*context_cap=*/64, &seq) == SSLM_OK);
+
+	std::vector<int32_t> chunk = {500, 501, 502};  // 3 admitted tokens -- one sub-chunk, one
+	                                                // SubmitOneSubChunkToFullDepthForG5Bridge call,
+	                                                // well under kT2169TdrSafeMaxChunkTokens (4).
+
+	superslm_gpu::ArmT2169ChunkRecordingTailFaultInjection();
+	bool threw = false;
+	std::string what;
+	try {
+		SslmGpuSeqPrefillPromptForG5Bridge(ctx, seq, chunk.data(), static_cast<int32_t>(chunk.size()),
+		                                    kDispatchBudget);
+	} catch (const std::runtime_error& e) {
+		threw = true;
+		what = e.what();
+	}
+	// Defensive only -- the seam is single-shot and already fired above if the call reached the
+	// tail; clears any stray armed state so a later cell in this same process never inherits it.
+	superslm_gpu::ClearT2169ChunkRecordingTailFaultInjection();
+
+	CHECK_MSG(threw,
+	          "Guard(tail-throw unwedge): SslmGpuSeqPrefillPromptForG5Bridge did not throw with the "
+	          "tail fault armed -- the injection seam did not fire, this cell proves nothing");
+	CHECK_MSG(what.find("D-SLM3682") != std::string::npos,
+	          "Guard(tail-throw unwedge): caught exception's own message (\"%s\") is not the "
+	          "injected tail fault -- caught the wrong throw", what.c_str());
+
+	// The discriminating oracle: `seq` is still alive (never released), so `live_sequences > 0`
+	// is genuinely true -- if `submitted_sequences` were left wedged at 1, gpu_1p0.cpp's own
+	// precedence ordering (submitted_sequences checked before live_sequences) would surface it as
+	// SSLM_BUSY here, not SSLM_MODEL_HAS_LIVE_SEQUENCES.
+	const SslmGpuStatus unmap_status = sslm_gpu_model_unmap(ctx, model);
+	CHECK_MSG(unmap_status != SSLM_BUSY,
+	          "Guard(tail-throw unwedge): sslm_gpu_model_unmap returned SSLM_BUSY after an "
+	          "exception escaped SubmitChunkToFullDepthForG5Bridge's own uncovered tail -- "
+	          "model->submitted_sequences was left incremented forever, the model can never be "
+	          "unmapped (got status %s)",
+	          GpuStatusName(unmap_status));
+	CHECK_MSG(unmap_status == SSLM_MODEL_HAS_LIVE_SEQUENCES,
+	          "Guard(tail-throw unwedge): expected SSLM_MODEL_HAS_LIVE_SEQUENCES (this cell's own "
+	          "seq is still alive), got %s -- unexpected status, investigate before trusting this "
+	          "cell's own SSLM_BUSY-negative result",
+	          GpuStatusName(unmap_status));
+
+	// `seq` released, not the model -- `main`'s own final `sslm_gpu_model_unmap` call, after every
+	// cell in this file has run, is this suite's own end-to-end proof that unmap genuinely
+	// succeeds once nothing is left bound; this cell's own job is only to prove the intermediate
+	// BUSY-vs-live-sequences status, above.
+	sslm_gpu_seq_release(ctx, seq);
+}
+
 int main(int argc, char** argv) {
 	ParseFixtureArgs(argc, argv);
 	volatile void* a0 = (void*)&TestTrust_CapStraddleBridgeObservable; (void)a0;
@@ -360,6 +437,7 @@ int main(int argc, char** argv) {
 	volatile void* a4 = (void*)&TestGuard_PositionCapClampDispatchCountInstrumented; (void)a4;
 	volatile void* a5 = (void*)&TestGuard_EmbedAdmitCountClampDispatchCountInstrumented; (void)a5;
 	volatile void* a6 = (void*)&TestGuard_BusyUnderWidenedWindow; (void)a6;
+	volatile void* a7 = (void*)&TestGuard_ModelUnwedgesAfterUncoveredTailThrow; (void)a7;
 
 	if (g_model_1p5b_path.empty()) {
 		SKIP_MSG("this file's cells need --model1p5b=PATH -- not run");
@@ -387,6 +465,7 @@ int main(int argc, char** argv) {
 		    ctx, model, static_cast<uint32_t>(view.config.num_hidden_layers),
 		    static_cast<int32_t>(view.config.vocab_size));
 		TestGuard_BusyUnderWidenedWindow(ctx, model);
+		TestGuard_ModelUnwedgesAfterUncoveredTailThrow(ctx, model);
 		CHECK(sslm_gpu_model_unmap(ctx, model) == SSLM_OK);
 	} else {
 		CHECK_MSG(false, "failed to load --model1p5b=%s: %s", g_model_1p5b_path.c_str(), err.c_str());
