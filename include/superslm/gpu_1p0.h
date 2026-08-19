@@ -235,7 +235,16 @@ uint32_t SslmGpuSeqWalkStateForG5Bridge(SslmGpuSequenceHandle* seq);
  * `tokens` (including the last) to full depth, no walk-state touch, no masking. On success
  * (count > 0), sets an internal "ready for logits" flag mirroring `sslm_seq_s::ready_for_logits`
  * (src/sslm_abi.cpp) EXACTLY -- a caller's own next `SslmGpuSeqDecodeStepForG5Bridge` call
- * consumes this flag automatically. */
+ * consumes this flag automatically.
+ *
+ * `dispatch_budget` is a bulk-throughput call, not a submission-slicing contract: it is
+ * validated nonzero (SSLM_SEQUENCE_KV_BUFFER_MISMATCH otherwise) but this call records and
+ * submits every admitted token in `tokens` as ONE chunk (subject only to an internal
+ * driver-stability sub-chunk split, unrelated to this parameter's value) rather than issuing
+ * `dispatch_budget`-sized round trips per token. Per-call, per-token submission slicing by a
+ * dispatch budget remains the DECODE path's own contract
+ * (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth step),
+ * unchanged by this call. */
 SslmGpuStatus SslmGpuSeqPrefillPromptForG5Bridge(SslmGpuContext* ctx, SslmGpuSequenceHandle* seq,
                                                   const int32_t* tokens, int32_t count,
                                                   uint32_t dispatch_budget);
@@ -268,19 +277,27 @@ SslmGpuStatus SslmGpuSeqDecodeStepForG5Bridge(SslmGpuContext* ctx, SslmGpuSequen
 
 /* Jump-forward's own GPU twin. Drives `count` FORCED tokens (already known -- never chosen, no
  * masking/argmax involved, exactly `PrefillWholeTokensImpl`'s own SSLM_SPAN_SCHEMA_CONTENT
- * branch, src/sslm_abi.cpp) through the full embed -> layer-loop-to-depth -> commit sequence, ONE
- * token at a time (each token issued as up to `dispatch_budget_per_token`-sized
- * `sslm_decode_step_gpu` calls, internally). Reachability is checked BEFORE each token's own
- * forward pass (`SchemaMasksTable::Transition` against `seq`'s own current walk-state) -- a
- * token that leaves the DFA's language is rejected (SSLM_SEQUENCE_REJECTED). Only the REJECTED
- * token's own effects are withheld: its own walk-state transition never applies, its own forward
- * pass never runs, and `*consumed` is never incremented for it. Tokens admitted BEFORE it in the
- * same call already had their walk-state advance, K/V write, and layer loop run for real, and
- * `*consumed` already counts them -- the documented partial-consumption contract (matching
- * `sslm_prefill`'s own shape), not full-call atomicity (design Sec14.3 -- RULED design
- * text). Requires a schema already bound (SSLM_SEQUENCE_REJECTED otherwise). Sets the SAME
- * "ready for logits" flag `SslmGpuSeqPrefillPromptForG5Bridge` sets whenever `*consumed > 0` --
- * including on the rejection path, when earlier tokens in the same call were already admitted. */
+ * branch, src/sslm_abi.cpp) through the full embed -> layer-loop-to-depth -> commit sequence.
+ * Reachability is checked BEFORE each token's own forward pass (`SchemaMasksTable::Transition`
+ * against `seq`'s own current walk-state) -- a token that leaves the DFA's language is rejected
+ * (SSLM_SEQUENCE_REJECTED). Only the REJECTED token's own effects are withheld: its own
+ * walk-state transition never applies, its own forward pass never runs, and `*consumed` is
+ * never incremented for it. Tokens admitted BEFORE it in the same call already had their
+ * walk-state advance, K/V write, and layer loop run for real, and `*consumed` already counts
+ * them -- the documented partial-consumption contract (matching `sslm_prefill`'s own shape), not
+ * full-call atomicity (design Sec14.3 -- RULED design text). Requires a schema already bound
+ * (SSLM_SEQUENCE_REJECTED otherwise). Sets the SAME "ready for logits" flag
+ * `SslmGpuSeqPrefillPromptForG5Bridge` sets whenever `*consumed > 0` -- including on the
+ * rejection path, when earlier tokens in the same call were already admitted.
+ *
+ * `dispatch_budget_per_token` is a bulk-throughput call, not a submission-slicing contract: it
+ * is validated nonzero (SSLM_SEQUENCE_KV_BUFFER_MISMATCH otherwise) but every admitted token in
+ * `tokens` is recorded and submitted as part of ONE chunk (subject only to an internal
+ * driver-stability sub-chunk split, unrelated to this parameter's value), never as
+ * `dispatch_budget_per_token`-sized `sslm_decode_step_gpu` calls issued one token at a time.
+ * Per-call, per-token submission slicing by a dispatch budget remains the DECODE path's own
+ * contract (`sslm_decode_step_gpu`/`SslmGpuSeqDecodeStepForG5Bridge`'s layer-loop-to-depth
+ * step), unchanged by this call. */
 SslmGpuStatus SslmGpuSeqPrefillSchemaContentForG5Bridge(SslmGpuContext* ctx,
                                                           SslmGpuSequenceHandle* seq,
                                                           const int32_t* tokens, int32_t count,
