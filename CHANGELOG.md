@@ -14,13 +14,19 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   every mean-conjunct margin — the two tail conjuncts already used the raw
   point estimate correctly. A pair's `composed_mean`/`effect_mean` review
   flag now reflects the same statistic the tail conjuncts always used.
-- **`sslm_convert_adapter`'s pooled B3 gate now tells a consumer what its
-  accept/reject reading does and does not mean, everywhere the tool prints
-  it.** The gate can refuse to write an artifact based on sampling noise
-  between two halves of the same population, and it cannot detect a real
-  magnitude error in the adapter — a refusal is grounds to inspect the
-  conversion and re-run it, not confidence that the adapter itself is
-  defective. A repair replacing the gate's own statistic is in progress.
+- **`sslm_convert_adapter`'s pooled B3 gate is repaired and commissioned.**
+  The gate's accept/reject statistic now compares a converted adapter's own
+  total composed error against a fixed reference bound, computed
+  independently of the candidate adapter under test, rather than a
+  ratio-only comparison of the same adapter's own sampling partitions
+  against each other — the prior form could not distinguish an honest
+  adapter from an arbitrarily corrupted one, since both sides of the ratio
+  grew together under any uniform corruption. The repaired gate is
+  commissioned: a real, known-good adapter accepts, and five independently
+  constructed corrupted adapters, each producible by editing a real adapter
+  file, are all refused. Every print site states this plainly; a refusal
+  now means the adapter's composed error exceeded the bound, not merely
+  sampling noise between two halves of the same population.
 
 ## [1.1.0] - 2026-08-19
 

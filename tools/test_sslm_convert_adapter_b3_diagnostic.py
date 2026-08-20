@@ -200,29 +200,41 @@ def test_status_notice_names_no_internal_decision_ids():
     )
 
 
-def test_status_notice_states_what_the_check_can_and_cannot_do():
-    """T-2202 (Poirot S1/S2): the notice states the check can still refuse to write an artifact,
-    that the refusal can come from sampling noise rather than a real defect, that it cannot
-    detect a genuine magnitude error, and that a repair is in progress -- and it must NOT claim a
-    live reject "carries no information" (S2: the reject branch still refuses the artifact, which
-    directly contradicts that phrase) or headline the per-pair diagnostics as "the actionable
-    signal" (S1: they were never commissioned as a general oracle).
-
-    T-2206 (Poirot S1): the per-pair caveat above qualified the false-POSITIVE direction only
-    ("a pair named there is worth a closer look, not a confirmed finding") while the one thing
-    actually measured about this diagnostic (`Claude/Brunel/t2201-b3-gate-investigation-2026-08-
-    20.md` §3 finding 2, Wizard repo) runs the other way: the ×50-hot construction produces
-    0/28 flags. The notice must also state the false-NEGATIVE direction -- an empty per-pair
-    list is not evidence the adapter is sound."""
+def test_status_notice_states_the_commissioned_truth():
+    """T-2208: the pooled gate's statistic is repaired (T-2204 design, min(Delta_relative,
+    Delta_absolute) over composed_mean/composed_tail) and commissioned (a real, known-good
+    adapter accepts; five independently constructed corrupted adapters, each producible by
+    editing a real adapter file, are all refused) -- the notice's "repair... in progress" clause
+    (T-2202) is retired and replaced with the commissioned truth. The notice still states the
+    check can refuse to write an artifact, still names sampling noise as a distinct concept from
+    a real magnitude error (now the thing the gate IS shown to catch, via commissioning, rather
+    than the thing it is NOT shown to catch), and must NOT claim a live reject "carries no
+    information" or headline the per-pair diagnostics as "the actionable signal" -- both
+    unchanged from T-2202/T-2206's own requirements, since the per-pair diagnostic half of the
+    notice is untouched by this repair (T-2204 design §8)."""
     notice = A._B3_POOLED_GATE_STATUS_NOTICE.lower()
     assert "refuse" in notice and "artifact" in notice
     assert "sampling noise" in notice
     assert "magnitude error" in notice
-    assert "repair" in notice and "in progress" in notice
+    assert "commissioned" in notice
+    assert "repair" not in notice, "the notice must no longer describe itself as a repair in progress"
+    assert "in progress" not in notice
     assert "per-pair diagnostic" in notice
     assert "carries no information" not in notice
     assert "actionable signal" not in notice
     assert "empty" in notice and "not evidence" in notice
+
+
+def test_status_notice_states_the_commissioning_count_and_verdicts():
+    """The notice states what the gate was commissioned against, not merely that it was
+    commissioned -- a bare "commissioned" claim with no count is exactly as unverifiable to a
+    reader as the interim text it replaces (T-2204 design §7: must-accept = one real adapter,
+    must-reject = five independently constructed corrupted adapters)."""
+    notice = A._B3_POOLED_GATE_STATUS_NOTICE.lower()
+    assert "six" in notice
+    assert "known-good" in notice and "accepts" in notice
+    assert "five" in notice
+    assert "refused" in notice
 
 
 def test_status_notice_is_printed_at_every_pooled_gate_output_site():
@@ -244,7 +256,7 @@ def test_main_accept_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_p
     avoid the C++ verifier dependency) on the ACCEPT branch: the pooled gate's `accepted=True` is
     printed beside the status notice, not bare."""
     fake_pooled = {
-        "accepted": True, "n_pairs": 1,
+        "accepted": True, "disposition": "accept", "n_pairs": 1,
         "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
     }
     fake_verdict = {"domain_trip": False, "margin_exceeded": False,
@@ -284,8 +296,9 @@ def test_main_reject_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_p
     requires -- the per-conjunct accepts and the notice both appear -- is asserted below and
     holds regardless of whether a future round adds the bare line."""
     fake_pooled = {
-        "accepted": False, "n_pairs": 1,
-        "composed_mean_accepts": False, "composed_tail_accepts": True,
+        "accepted": False, "disposition": "reject", "n_pairs": 1,
+        "composed_mean_accepts": False, "composed_mean_disposition": "reject",
+        "composed_tail_accepts": True, "composed_tail_disposition": "accept",
         "effect_mean_accepts": True, "effect_tail_accepts": True,
         "per_pair_diagnostics": [{"name": "layer8.v_proj", "flagged": ["composed_mean"]}],
     }

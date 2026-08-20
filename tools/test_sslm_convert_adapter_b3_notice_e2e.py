@@ -16,24 +16,35 @@ This file closes both gaps with the SAME construction: a real, on-disk base chec
 _calibrate_checkpoint_fixture.py`) calibrated and converted via the real `calibrate_checkpoint.py`
 and `convert_model.py` CLIs, then a real, on-disk BF16 PEFT LoRA adapter (`tools/_t2194_bf16_
 lora_fixture.py`, already used by `test_sslm_convert_adapter_bf16.py`) converted via the real
-`sslm_convert_adapter.py` CLI -- every step a genuine subprocess (`sys.executable <script>.py
-...`), no mocks, no monkeypatching. Two seeds against the identical fixture shapes reach the two
-branches that matter:
+conversion pipeline -- real checkpoint, real adapter, real `_b3_collect_pair_raw_draws`/
+`run_b3_multi_pair_check`, no mocked build function. Two paths against the identical fixture
+shapes reach the two branches that matter:
 
-- `seed=0` (this fixture module's own default): the pooled gate ACCEPTS (`accepted=True`,
-  `margin_exceeded=False`), so `main()` takes `ArtifactOutcome.RUNTIME_ADDITIVE` and prints the
-  notice from its own accept branch (closing O2) in addition to the `--verbose` line inside
-  `build_runtime_additive_sections` (closing M1's accept-side gap).
-- `seed=7`: the pooled gate REJECTS on `composed_mean` (`margin_exceeded=True`,
-  `domain_trip=False` -- confirmed below, so this is the B3 margin branch and not the unrelated
-  domain-rejection branch), so `main()` takes `RejectionBranch.RUNTIME_VS_BAKED_MARGIN_EXCEEDED`
-  and prints the notice from its own reject branch (closing M1's reject-side gap, already
-  covered for the mocked case by `test_main_reject_path_prints_pooled_status_notice`, now
-  also covered for a real conversion).
+- `seed=0` (this fixture module's own default), with the pooled gate's frozen absolute anchors
+  overridden to a permissive placeholder scaled for this toy fixture (T-2208; see that test's own
+  docstring for why) -- the pooled gate ACCEPTS (`accepted=True`, `margin_exceeded=False`), so
+  `main()` takes `ArtifactOutcome.RUNTIME_ADDITIVE` and prints the notice from its own accept
+  branch (closing O2) in addition to the `--verbose` line inside `build_runtime_additive_sections`
+  (closing M1's accept-side gap).
+- `seed=7`, against the PRODUCTION frozen anchors, unmodified: the pooled gate REJECTS on both
+  surviving conjuncts (`margin_exceeded=True`, `domain_trip=False` -- confirmed below, so this is
+  the B3 margin branch and not the unrelated domain-rejection branch), so `main()` takes
+  `RejectionBranch.RUNTIME_VS_BAKED_MARGIN_EXCEEDED` and prints the notice from its own reject
+  branch (closing M1's reject-side gap, already covered for the mocked case by
+  `test_main_reject_path_prints_pooled_status_notice`, now also covered for a real conversion).
 
-Both seeds were found by a direct sweep of this fixture's own `seed=0..29` against the real CLI
-chain (recorded in the T-2202 build log) -- not reasoned from the arithmetic, since the B3
-statistic's behavior on a 2-draw-per-partition rank-2 fixture is not something worth predicting
+T-2208: under the repaired min-form gate, this fixture's own honest, uncorrupted reading exceeds
+the PRODUCTION frozen anchors at every one of a direct 30-seed sweep (`seed=0..29`, real CLI
+subprocess chain) -- the anchors are calibrated against the real 196-pair reference adapter's own
+scale and the design does not claim they generalize to a toy rank-2 fixture at a wildly different
+scale (T-2204 design §9 dimension 4, a named residual). `seed=7` still rejects under BOTH the
+production anchors and the permissive placeholder (its own composed error is large enough to
+clear either bar), so it remains the reject-path fixture unmodified; `seed=0`'s accept-path
+exercise now runs with the placeholder anchors, in-process, documented at that test.
+
+Both seeds were originally found by a direct sweep of this fixture's own `seed=0..29` against the
+real CLI chain (recorded in the T-2202 build log) -- not reasoned from the arithmetic, since the
+B3 statistic's behavior on a 2-draw-per-partition rank-2 fixture is not something worth predicting
 by construction (`StandardsDocument.md` §5.4: exactness is verified at source or by execution).
 
 T-2206 (Poirot M2): the sweep found three rejecting seeds -- 5, 7, 19. `seed=5`'s own margin
@@ -45,6 +56,8 @@ it costs nothing to pin the seed already 73x further out -- the sweep that found
 paid for. `seed=7` is pinned below in its place.
 """
 
+import contextlib
+import io
 import subprocess
 import sys
 from pathlib import Path
@@ -102,28 +115,64 @@ def _convert_adapter(tmp_path, real_base_artifact, seed):
 
 
 def test_real_conversion_accepts_and_prints_the_final_notice_at_both_its_sites(
-    tmp_path, real_base_artifact,
+    tmp_path, real_base_artifact, monkeypatch,
 ):
-    """seed=0: a real conversion through the real CLI subprocess chain that ACCEPTS -- closing
-    O2 (the accept branch's print block had never run against a real conversion) and M1's
-    accept-side gap (the `--verbose` print site inside `build_runtime_additive_sections`, whose
-    only prior cover was a source-text reference count)."""
-    r, out_sslm = _convert_adapter(tmp_path, real_base_artifact, seed=0)
+    """seed=0: a real conversion through the real conversion pipeline (real checkpoint, real
+    BF16 LoRA adapter, real `_b3_collect_pair_raw_draws`/`run_b3_multi_pair_check`) that ACCEPTS
+    -- closing O2 (the accept branch's print block had never run against a real conversion) and
+    M1's accept-side gap (the `--verbose` print site inside `build_runtime_additive_sections`,
+    whose only prior cover was a source-text reference count).
 
-    assert r.returncode == 0, f"expected the ACCEPT branch (rc=0):\n{r.stdout}\n{r.stderr}"
+    T-2208: the pooled gate's frozen absolute anchors (`A._B3_REFERENCE_ANCHORS`) are calibrated
+    against the real 196-pair `qwen2.5-1.5b-shopkeeper-lora-v1` reference adapter's own scale --
+    the design states this generalizes across pairs of different scale WITHIN that population
+    (§5) and explicitly does NOT claim invariance across LoRA rank or base-model size (§9
+    dimension 4, a named, un-closed residual). This module's own fixture is a tiny rank-2,
+    `d_in=8` toy model built for CI speed, orders of magnitude below the scale the anchors were
+    derived at; a direct sweep (30 seeds, real CLI subprocess chain) found the repaired gate
+    rejects this fixture's honest, uncorrupted adapter at every one of them -- the fixture's own
+    per-channel quantization noise at 8 output channels is proportionally far larger than at the
+    reference adapter's 256-8960, an artifact of the fixture's scale, not evidence the fixture is
+    corrupted. This cell therefore overrides `_B3_REFERENCE_ANCHORS` to a permissive placeholder
+    scaled for THIS fixture's own honest reading, in-process (`A.main()` directly, not a
+    subprocess, since a subprocess cannot inherit a monkeypatched module global) -- exercising the
+    real conversion pipeline and the real notice-print wiring, never gate CORRECTNESS at
+    production scale, which is proven separately against the frozen production anchors by the
+    real-shopkeeper-adapter commissioning battery (`Claude/Brunel/t2208-pooled-gate-commissioning/`,
+    Wizard repo)."""
+    checkpoint_dir, base_sslm = real_base_artifact
+    adapter_dir = build_bf16_lora_fixture(tmp_path / "adapter",
+                                          base_model_name_or_path=str(checkpoint_dir), seed=0)
+    out_sslm = tmp_path / "adapter_out.sslm"
+
+    # A permissive placeholder, not a claim about this scale's own true noise floor -- large
+    # enough that this fixture's honest reading clears it, scoped to this cell only via
+    # monkeypatch (reverted automatically at teardown).
+    monkeypatch.setattr(A, "_B3_REFERENCE_ANCHORS", {"composed_mean": 1.0, "composed_tail": 1.0})
+    monkeypatch.setattr(A.sys, "argv", [
+        "sslm_convert_adapter.py",
+        "--adapter", str(adapter_dir), "--base", str(base_sslm),
+        "--out", str(out_sslm), "--skip-verify",
+    ])
+    monkeypatch.chdir(_TOOLS_DIR)
+
+    stdout_buf = io.StringIO()
+    with contextlib.redirect_stdout(stdout_buf):
+        rc = A.main()
+    stdout = stdout_buf.getvalue()
+
+    assert rc == 0, f"expected the ACCEPT branch (rc=0):\n{stdout}"
     assert out_sslm.is_file(), "the accept branch must have written the runtime-additive artifact"
-    assert "domain_trip=False" not in r.stderr  # no rejection branch fired at all on stderr
-    assert "REJECTED" not in r.stderr
 
     # The verbose print site inside `build_runtime_additive_sections` fires before `main()`'s own
     # dispatch and always prints to stdout -- present regardless of the branch `main()` later
     # takes. `main()`'s own accept branch prints the notice a second time, immediately after
-    # `wrote <path>`. Both are real prints from a real process, not `capsys` on a mocked call.
-    assert r.stdout.count(_NOTICE) == 2, (
+    # `wrote <path>`. Both are real prints from a real, in-process conversion, not a mocked call.
+    assert stdout.count(_NOTICE) == 2, (
         f"expected the notice twice on stdout (the --verbose line, then main()'s accept branch); "
-        f"got {r.stdout.count(_NOTICE)}. Full stdout:\n{r.stdout}"
+        f"got {stdout.count(_NOTICE)}. Full stdout:\n{stdout}"
     )
-    assert "pooled B3 gate: accepted=True" in r.stdout
+    assert "pooled B3 gate: accepted=True" in stdout
 
     # T-2206 (Poirot S1): this fixture's seed=0 pooled run flags zero pairs (n_pairs=1,
     # 0 flagged) -- the exact shape the ×50-hot construction in `Claude/Brunel/t2201-b3-gate-
@@ -132,10 +181,10 @@ def test_real_conversion_accepts_and_prints_the_final_notice_at_both_its_sites(
     # 0-flag run printed silence there instead of a statement -- a consumer reading only the
     # branch's own output had no way to tell "checked, found nothing" apart from "never
     # checked." The empty case must print an explicit statement, not silence.
-    assert "0 pair(s) flagged for review" in r.stdout, (
-        f"expected the empty-flag case to print explicitly, not silently. Full stdout:\n{r.stdout}"
+    assert "0 pair(s) flagged for review" in stdout, (
+        f"expected the empty-flag case to print explicitly, not silently. Full stdout:\n{stdout}"
     )
-    assert "not evidence this adapter is sound" in r.stdout
+    assert "not evidence this adapter is sound" in stdout
 
 
 def test_real_conversion_rejects_on_composed_mean_and_prints_the_final_notice_at_both_its_sites(

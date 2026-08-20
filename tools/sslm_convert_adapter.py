@@ -782,22 +782,28 @@ def _p95(arr) -> float:
 
 _B3_REVIEW_MARGIN_SE = 2.0  # design §25.5 item 2's own stated multiple, matching §25.2's analysis.
 
-# T-2202 (D-SLM3730 lineage): this notice is the shipped text for as long as the pooled gate's
-# own statistic is unrepaired (Dan's ruling, D-SLM3730 -- the gate is being REPAIRED, not
-# relabeled or deleted, and its behavior stays unchanged in the interim). It states what the
-# check can and cannot do, never claims a live REJECT "carries no information" (it still blocks
-# artifact emission -- StandardsDocument.md §5.6), and does not headline the per-pair diagnostics
-# as an oracle beyond what they have actually been shown to do.
+# T-2208: this notice is the shipped, commissioned text. The pooled gate's statistic now
+# compares the candidate adapter's own composed error against a fixed reference bound computed
+# independently of the candidate under test (never derived from the adapter being converted), and
+# the gate has been commissioned per StandardsDocument.md §5.4: a real, known-good adapter accepts
+# and five independently constructed corrupted adapters, each producible by editing a real
+# adapter file, are all refused. It states plainly what the check now does, never claims a live
+# REJECT "carries no information" (it still blocks artifact emission -- StandardsDocument.md
+# §5.6), and does not headline the per-pair diagnostics as an oracle beyond what they have
+# actually been shown to do -- that half of the notice is unchanged from the prior text.
 _B3_POOLED_GATE_STATUS_NOTICE = (
-    "pooled B3 gate status: this check can refuse to write an artifact based on sampling noise "
-    "between two halves of the same population, and it has not been shown able to detect a real "
-    "magnitude error in the adapter -- a refusal here is a reason to inspect the conversion and "
-    "re-run it, not evidence that the adapter itself is defective. A repair that replaces this "
-    "check's statistic with one anchored to an absolute error bound is in progress. The per-pair "
-    "diagnostics below are review prompts, not a verdict -- a pair named there is worth a closer "
-    "look, not a confirmed finding, and an EMPTY per-pair list is not evidence the adapter is "
-    "sound: these diagnostics have not been shown able to flag a real magnitude error either, so "
-    "zero pairs named here means the diagnostics found nothing to name, not that nothing is wrong."
+    "pooled B3 gate status: this check compares the converted adapter's own total composed "
+    "output error against a fixed reference bound, computed independently of the candidate "
+    "adapter under test -- a refusal here means no runtime artifact is written because the "
+    "adapter's composed error exceeded that bound, not merely sampling noise between two halves "
+    "of the same population. The check is commissioned against six real-adapter constructions: "
+    "one known-good adapter, which accepts, and five independently constructed corrupted "
+    "adapters, each producible by editing a real adapter file and each carrying a genuine "
+    "magnitude error -- all five are refused. The per-pair diagnostics below are review "
+    "prompts, not a verdict -- a pair named there is worth a closer look, not a confirmed "
+    "finding, and an EMPTY per-pair list is not evidence the adapter is sound: these "
+    "diagnostics have not been shown able to flag a real magnitude error either, so zero pairs "
+    "named here means the diagnostics found nothing to name, not that nothing is wrong."
 )
 
 
@@ -840,14 +846,43 @@ def _b3_pair_diagnostic(name: str, raw: dict, own_check: dict, *, n_bootstrap_re
     return {"name": name, "own_accepted": own_check["accepted"], "margins_se": margins, "flagged": flagged}
 
 
-def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
+# T-2204/T-2208 (D-SLM3731, D-SLM3743, design §5): the frozen absolute-anchor constants for the
+# two surviving pooled-gate conjuncts. Both read ZERO state from the candidate adapter under
+# test -- `composed_mean`'s is a closed-form int8 quantization-noise floor (independent of any
+# sampled population); `composed_tail`'s is a designated reference adapter's own EXECUTED pooled
+# PILOT P95, frozen once and never recomputed from a different adapter. Neither is derived from
+# this module's own `pair_draws` argument -- `run_b3_multi_pair_check` receives them via the
+# `reference_anchors` parameter, never by re-deriving them internally, so "reads nothing about the
+# candidate under test" is checkable from the call signature, not merely by convention.
+#
+#   composed_mean: kappa_cm=3.0 * z=1.645 * floor_composed_gap(6.99508e-05) = 3.452072e-4.
+#     floor_composed_gap is the closed-form floor derived in `Claude/Vitruvius/
+#     t2068-scale-anchor-probe/t2068_quant_floor_probe.py` (Wizard repo) -- one LSB of int8
+#     rounding modeled as uniform RMS across the base checkpoint's own per-channel weight scale
+#     and the calibration corpus's own activation scale, cross-validated to 6.9% against the real
+#     self-calibrated Delta_composed_mean at layer0.q_proj.
+#   composed_tail: kappa_ct=3.0 * P95_pilot_reference(5.6398e-04) = 1.693989e-3. P95_pilot_reference
+#     is the real 196-pair qwen2.5-1.5b-shopkeeper-lora-v1 adapter's own pooled PILOT-partition P95
+#     of `composed_gap`, executed once at production `pilot_n=200` resolution (`Claude/Vitruvius/
+#     t2074-anchor-repair-probe/t2074_pooled_accept_probe.py`, Wizard repo; D-SLM3229) and never
+#     recomputed from the adapter being converted.
+_B3_REFERENCE_ANCHORS = {
+    "composed_mean": 3.452072e-4,
+    "composed_tail": 1.693989e-3,
+}
+
+
+def run_b3_multi_pair_check(pair_draws, *, reference_anchors: Optional[dict] = None,
+                            n_bootstrap_resamples: int = 2000,
                             bootstrap_seed: int = 0xB007, verbose: bool = False) -> dict:
-    """Design §25.5's own corrected multi-pair acceptance form (D-SLM3205) -- the PRIMARY
+    """T-2204/T-2208's repaired form of design §25.5's multi-pair acceptance gate -- the PRIMARY
     accept/reject gate for a multi-pair adapter, replacing the per-pair AND-of-196 architecture
     §25.3 found structurally broken (at the observed 23.5% per-pair reject rate, the probability
     all 196 pairs independently clear an AND-gate is `1.7e-23` -- near-certain whole-adapter
     rejection at ANY realistic per-pair noise level, independent of true adapter quality,
-    D-SLM3185/T-2058).
+    D-SLM3185/T-2058) and, for `composed_mean`/`composed_tail`, the RATIO-ONLY comparison D-SLM3217
+    proved scale-invariant (0 rejects across 84 trials sweeping four orders of magnitude, and a
+    same-distribution corrupted population accepting from ×10 through ×10⁵).
 
     `pair_draws`: an ordered list of `(name, raw)` pairs, `raw` being `_b3_collect_pair_raw_draws`'s
     own return shape -- one entry per adapted (layer, projection) pair. `gap[i]`/
@@ -860,25 +895,56 @@ def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
     exactly §6 item 1/1a's own form, evaluated once rather than 196 times.
 
     `Delta`-stability correction (design §25.5 item 3), applied to the POOLED pilot population:
-    the tail Deltas (`composed_tail`/`effect_tail`) gain an explicit bootstrap-derived
-    resolving-power term (`Delta_tail = SAFETY_INFLATION*(p95_pilot + Z*bootstrap_SE(p95_pilot))`),
-    replacing the old flat `SAFETY_INFLATION*p95_pilot` with no sampling-noise account at all; the
-    mean Deltas (`composed_mean`/`effect_mean`) gain a stated non-negative floor
-    (`max(0.0, ...)`), so a merely-unlucky pilot draw can never produce a bar no honest VALIDATION
-    run could clear (the exact failure mode §25.2 found on six per-pair Deltas before pooling --
-    pooling ~196x the pilot size independently makes this floor near-unreachable in practice, since
-    an ~8,400-item pooled mean cannot plausibly land negative the way a ~43-item per-pair draw can,
-    but the floor is retained as the stated, unconditional guarantee design §25.5 item 3 specifies,
-    not merely an emergent property of pooling).
+    the tail Deltas gain an explicit bootstrap-derived resolving-power term (`Delta_tail =
+    SAFETY_INFLATION*(p95_pilot + Z*bootstrap_SE(p95_pilot))`), replacing the old flat
+    `SAFETY_INFLATION*p95_pilot` with no sampling-noise account at all; the mean Deltas gain a
+    stated non-negative floor (`max(0.0, ...)`), so a merely-unlucky pilot draw can never produce a
+    bar no honest VALIDATION run could clear (the exact failure mode §25.2 found on six per-pair
+    Deltas before pooling -- pooling ~196x the pilot size independently makes this floor
+    near-unreachable in practice, since an ~8,400-item pooled mean cannot plausibly land negative
+    the way a ~43-item per-pair draw can, but the floor is retained as the stated, unconditional
+    guarantee design §25.5 item 3 specifies, not merely an emergent property of pooling).
 
-    Returns `{"accepted", "delta_*", "pooled_validation": {...}, "n_pairs", "n_pilot_pooled",
-    "n_val_pooled", "per_pair_diagnostics": [...]}` — `per_pair_diagnostics` is every pair's own
-    §25.5-item-2 review record (never gates; `flagged` names a conjunct-instance whose own margin
-    against ITS OWN self-calibrated Delta exceeds `_B3_REVIEW_MARGIN_SE` (2.0) bootstrap/parametric
-    SEs, per §25.2's own margin analysis).
+    T-2204/T-2208 REPAIR (D-SLM3731, D-SLM3741, D-SLM3744, T-2204 design §4/§5): for each of the
+    two SURVIVING conjuncts, `composed_mean` and `composed_tail`, this is now a MIN-form gate --
+    `Delta_final[C] = min(Delta_relative[C], Delta_absolute[C])`, `accepted[C] = val[C] <
+    Delta_final[C]` -- where `Delta_relative[C]` is the ratio-only term above (unchanged) and
+    `Delta_absolute[C] = reference_anchors[C]` is a FROZEN constant computed once from a designated
+    reference adapter's own pooled PILOT partition (or, for `composed_mean`, from a closed-form
+    quantization-noise floor), read verbatim from the `reference_anchors` argument and never
+    derived from `pair_draws` -- the property that stops a corrupted candidate from dragging its
+    own bar up with it, which the ratio-only term alone could never do (a ratio of a corrupted
+    adapter's own PILOT and VALIDATION partitions grows together without bound). `effect_mean`/
+    `effect_tail` are REMOVED from `accepted`'s AND (D-SLM3741; reasoning corrected D-SLM3749: the
+    statistic is non-monotone in adapter damage under a non-uniform corruption, not inert -- a
+    threshold cannot be trusted against a reading that can move either direction under damage).
+    Their Deltas are still computed and returned for diagnostic/informational purposes only; they
+    never gate.
+
+    UNRESOLVED disposition (D-SLM3222, T-2204 design §4/§9 dimension 5): a conjunct whose
+    `Delta_relative[C]` floor (`max(0.0, ...)`, `composed_mean` only among the surviving
+    conjuncts -- `composed_tail` has no floor) fires reads `"unresolved"` for that conjunct rather
+    than being evaluated against the clamped 0.0. An UNRESOLVED conjunct is never rounded to
+    ACCEPT (D-SLM2846: never round an unresolved result to a pass) and, per this repair, is
+    reported distinct from a genuine REJECT so a consumer can tell "the pilot sample was too poor
+    to grade" apart from "the adapter's own error exceeded the bound." The whole-gate `disposition`
+    is `"reject"` if either surviving conjunct rejects, else `"unresolved"` if either is
+    unresolved, else `"accept"`; `accepted` is `True` iff `disposition == "accept"`.
+
+    Returns `{"accepted", "disposition", "composed_mean_disposition", "composed_tail_disposition",
+    "delta_*", "pooled_validation": {...}, "n_pairs", "n_pilot_pooled", "n_val_pooled",
+    "per_pair_diagnostics": [...]}` — `per_pair_diagnostics` is every pair's own §25.5-item-2
+    review record (never gates; `flagged` names a conjunct-instance whose own margin against ITS
+    OWN self-calibrated Delta exceeds `_B3_REVIEW_MARGIN_SE` (2.0) bootstrap/parametric SEs, per
+    §25.2's own margin analysis).
     """
     if not pair_draws:
         raise ValueError("run_b3_multi_pair_check: pair_draws is empty -- no pairs to pool")
+
+    if reference_anchors is None:
+        reference_anchors = _B3_REFERENCE_ANCHORS
+    anchor_composed_mean = reference_anchors["composed_mean"]
+    anchor_composed_tail = reference_anchors["composed_tail"]
 
     pooled_composed_pilot = np.concatenate([raw["composed_pilot"] for _name, raw in pair_draws])
     pooled_composed_val = np.concatenate([raw["composed_val"] for _name, raw in pair_draws])
@@ -892,24 +958,48 @@ def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
     se_composed_tail_pilot = _bootstrap_se(pooled_composed_pilot, _p95, n_bootstrap_resamples, rng)
     se_effect_tail_pilot = _bootstrap_se(pooled_effect_pilot, _p95, n_bootstrap_resamples, rng)
 
-    # Delta-stability correction (design §25.5 item 3).
-    delta_composed_mean = max(0.0, _B3_SAFETY_INFLATION *
-                              (pooled_c_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * pooled_c_pilot_stat["se"]))
+    # Delta-stability correction (design §25.5 item 3), the ratio-only ("relative") term.
+    composed_mean_relative_raw = _B3_SAFETY_INFLATION * (
+        pooled_c_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * pooled_c_pilot_stat["se"])
+    composed_mean_floor_fired = composed_mean_relative_raw < 0.0
+    delta_composed_mean_relative = max(0.0, composed_mean_relative_raw)
+    delta_composed_tail_relative = _B3_SAFETY_INFLATION * (pooled_c_pilot_stat["p95"] +
+                                                           _B3_Z_95_ONE_SIDED * se_composed_tail_pilot)
+    # effect_mean/effect_tail: retained for diagnostic/informational purposes only -- removed from
+    # `accepted`'s AND, T-2204 design §4/§5 (D-SLM3741, reasoning corrected D-SLM3749).
     delta_effect_mean = max(0.0, _B3_SAFETY_INFLATION *
                             (pooled_e_pilot_stat["mean"] + _B3_Z_95_ONE_SIDED * pooled_e_pilot_stat["se"]))
-    delta_composed_tail = _B3_SAFETY_INFLATION * (pooled_c_pilot_stat["p95"] +
-                                                  _B3_Z_95_ONE_SIDED * se_composed_tail_pilot)
     delta_effect_tail = _B3_SAFETY_INFLATION * (pooled_e_pilot_stat["p95"] +
                                                 _B3_Z_95_ONE_SIDED * se_effect_tail_pilot)
+
+    # The min-form: Delta_final[C] = min(Delta_relative[C], Delta_absolute[C]).
+    delta_composed_mean = min(delta_composed_mean_relative, anchor_composed_mean)
+    delta_composed_tail = min(delta_composed_tail_relative, anchor_composed_tail)
 
     pooled_c_val_stat = _b3_stat(pooled_composed_val)
     pooled_e_val_stat = _b3_stat(pooled_effect_val)
 
-    composed_mean_accepts = pooled_c_val_stat["upper_ci"] < delta_composed_mean
+    if composed_mean_floor_fired:
+        composed_mean_disposition = "unresolved"
+        composed_mean_accepts = False
+    else:
+        composed_mean_accepts = pooled_c_val_stat["upper_ci"] < delta_composed_mean
+        composed_mean_disposition = "accept" if composed_mean_accepts else "reject"
+
     composed_tail_accepts = pooled_c_val_stat["p95"] < delta_composed_tail
+    composed_tail_disposition = "accept" if composed_tail_accepts else "reject"
+
+    # Retained, informational only -- never gate `accepted`/`disposition` (D-SLM3741/D-SLM3749).
     effect_mean_accepts = pooled_e_val_stat["upper_ci"] < delta_effect_mean
     effect_tail_accepts = pooled_e_val_stat["p95"] < delta_effect_tail
-    accepted = composed_mean_accepts and composed_tail_accepts and effect_mean_accepts and effect_tail_accepts
+
+    if composed_mean_disposition == "reject" or composed_tail_disposition == "reject":
+        disposition = "reject"
+    elif composed_mean_disposition == "unresolved":
+        disposition = "unresolved"
+    else:
+        disposition = "accept"
+    accepted = disposition == "accept"
 
     per_pair_diagnostics = []
     for name, raw in pair_draws:
@@ -938,11 +1028,18 @@ def run_b3_multi_pair_check(pair_draws, *, n_bootstrap_resamples: int = 2000,
                 print(f"  [B3 review-flag] {name}: {d['flagged']} margins_se={d['margins_se']}")
 
     return {
-        "accepted": accepted,
+        "accepted": accepted, "disposition": disposition,
+        "composed_mean_disposition": composed_mean_disposition,
+        "composed_tail_disposition": composed_tail_disposition,
         "composed_mean_accepts": composed_mean_accepts, "composed_tail_accepts": composed_tail_accepts,
         "effect_mean_accepts": effect_mean_accepts, "effect_tail_accepts": effect_tail_accepts,
         "delta_composed_mean": delta_composed_mean, "delta_composed_tail": delta_composed_tail,
+        "delta_composed_mean_relative": delta_composed_mean_relative,
+        "delta_composed_tail_relative": delta_composed_tail_relative,
+        "delta_composed_mean_absolute": anchor_composed_mean,
+        "delta_composed_tail_absolute": anchor_composed_tail,
         "delta_effect_mean": delta_effect_mean, "delta_effect_tail": delta_effect_tail,
+        "reference_anchors": dict(reference_anchors),
         "pooled_validation": {
             "composed_upper_ci": pooled_c_val_stat["upper_ci"], "composed_p95": pooled_c_val_stat["p95"],
             "effect_upper_ci": pooled_e_val_stat["upper_ci"], "effect_p95": pooled_e_val_stat["p95"],
@@ -1406,7 +1503,7 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
         margin_exceeded = not pooled["accepted"]
         if verbose:
             n_flagged = sum(1 for d in pooled["per_pair_diagnostics"] if d["flagged"])
-            print(f"  POOLED GATE: accepted={pooled['accepted']} "
+            print(f"  POOLED GATE: accepted={pooled['accepted']} disposition={pooled['disposition']} "
                  f"(n_pairs={pooled['n_pairs']} n_pilot_pooled={pooled['n_pilot_pooled']} "
                  f"n_val_pooled={pooled['n_val_pooled']}, {n_flagged} pair(s) flagged for review)")
             print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}")
@@ -1596,7 +1693,7 @@ def main():
              ", ".join(str(s.type) for s in sections))
         if verdict["pooled"] is not None:
             p = verdict["pooled"]
-            print(f"  pooled B3 gate: accepted={p['accepted']}")
+            print(f"  pooled B3 gate: accepted={p['accepted']} disposition={p['disposition']}")
             print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}")
             flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
             if flagged:
@@ -1619,11 +1716,15 @@ def main():
          f"saturation_elevated={verdict['saturation_elevated']})", file=sys.stderr)
     if verdict["margin_exceeded"] and verdict["pooled"] is not None:
         p = verdict["pooled"]
-        print(f"  pooled B3 gate (design §25.5, whole-adapter, n_pairs={p['n_pairs']}): "
+        print(f"  pooled B3 gate (whole-adapter, n_pairs={p['n_pairs']}): "
+             f"disposition={p['disposition']} "
              f"composed_mean_accepts={p['composed_mean_accepts']} "
+             f"(disposition={p['composed_mean_disposition']}) "
              f"composed_tail_accepts={p['composed_tail_accepts']} "
+             f"(disposition={p['composed_tail_disposition']}) -- "
              f"effect_mean_accepts={p['effect_mean_accepts']} "
-             f"effect_tail_accepts={p['effect_tail_accepts']}", file=sys.stderr)
+             f"effect_tail_accepts={p['effect_tail_accepts']} "
+             f"(informational only, does not gate)", file=sys.stderr)
         print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}", file=sys.stderr)
         flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
         if flagged:
