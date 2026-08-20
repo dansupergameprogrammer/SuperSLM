@@ -15,27 +15,26 @@ stale in one copy while staying correct in another (T-2192/T-2195, three
 consecutive review rounds).
 
 "CI extent" means the platform is exercised by this project's continuous
-integration matrix, which exists and defines the full build + test job for
-each platform below (`.github/workflows/tests.yml`: windows-x64, linux-x64,
-linux-x64-asan, macos-arm64). **GitHub Actions hosted runs are currently
-capped by the account's spending limit and have not executed since
-2026-07-23.** The matrix **was fully green on the 1.0 release commit** —
-every platform leg, sanitizer leg, cross-toolchain digest leg, and CI
-checker — a dated, past-tense fact that stays true regardless of hosted-run
-status today. Since the cap, the same matrix each job runs is reproducible
-locally (this project's own `cmake`+`ctest`, per platform, and `build.bat`
-on Windows) and that local run is the verification path CI extent below
-stands on until hosted runs resume. Every number below states the device,
-the artifact, and the surface it was measured through — a number without
-that context is not included here.
+integration matrix (`.github/workflows/tests.yml`: windows-x64, linux-x64,
+linux-x64-asan, macos-arm64, plus the forced-tier and digest legs 1.1
+adds). **Hosted runs resumed on 2026-08-20**: the full 28-job matrix
+executed on the 1.1 candidate (run 32336576519), every leg green except
+the branch-coverage job's designed first-run red — that job records its
+own floor measurement and fails until the recorded number is committed,
+which the immediately following commit did. The matrix was also fully
+green on the 1.0 release commit. Between 2026-07-23 and 2026-08-20 hosted
+runs were capped by the account's spending limit and the same matrix was
+reproduced locally (`cmake`+`ctest` per platform, `build.bat` on Windows).
+Every number below states the device, the artifact, and the surface it was
+measured through — a number without that context is not included here.
 
 ## CPU inference
 
 | Platform | Status | How it's exercised |
 |---|---|---|
-| Windows x64 | Certified | Local build + full test suite; CI job defined, hosted runs currently capped |
-| Linux x64 | CI extent | `cmake`+`ctest` (GCC and Clang toolchains) — locally reproducible; GitHub Actions (`ubuntu-latest`) job defined, hosted runs currently capped |
-| macOS (Apple Silicon, arm64) | CI extent | `cmake`+`ctest` — locally reproducible; GitHub Actions (`macos-latest`) job defined, hosted runs currently capped |
+| Windows x64 | Certified | Local build + full test suite; hosted CI leg executed green 2026-08-20 (run 32336576519) |
+| Linux x64 | CI extent | `cmake`+`ctest` (GCC and Clang toolchains); hosted CI legs (incl. ASan/TSan) executed green 2026-08-20 |
+| macOS (Apple Silicon, arm64) | CI extent | `cmake`+`ctest`; hosted CI leg executed green 2026-08-20 |
 
 Cross-toolchain determinism at the primitive level (the SiLU
 lookup-table and integer matmul kernels) is checked by comparing a digest
@@ -48,18 +47,15 @@ lacks the tier's required hardware is a loud, named skip, not a silent
 pass — this is how the AVX-512 axis behaves on every runner available to
 this project today.
 
-**What has actually run, as of this writing:** the six pre-1.1 axes
-matched byte-for-byte as of the 1.0 release. Of the three new axes, SSE2
-and AVX2 have each been run locally — one machine, one toolchain — and
-match the scalar/SSE2/AVX2 golden digest exactly. The AVX-512 axis has
-not produced a digest anywhere: this project's own build and test
-hardware has no AVX-512 support (a forced AVX-512 binary compiles clean
-and exits via SIGILL when run), and the CI leg's designed outcome on a
-runner without the hardware is the same loud SKIP, not a pass — a real
-AVX-512 evidence run on capable hardware is owed. The nine-way
-comparison across GitHub Actions' own hosted runners has not run at
-all yet — hosted runs are capped, per this document's own opening note
-— and lands at the first real Actions matrix run after that cap lifts.
+**What has actually run, as of 2026-08-20:** eight of the nine axes
+executed on GitHub Actions' own hosted runners in one matrix run
+(32336576519) and produced byte-identical global digests. The ninth —
+the forced-AVX-512 axis — reported its designed loud SKIP on that run
+(the hosted runner lacked AVX-512F/BW), and its digest is instead proven
+by a manual evidence run of the full forced-AVX-512 suite on real
+AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, global digest
+matching the other eight axes exactly. Between them, all nine axes have
+produced matching digests on executed hardware.
 
 ### CPU matmul kernel tiers
 
@@ -74,9 +70,9 @@ happens to support.
 | Tier | Status | How it's exercised |
 |---|---|---|
 | Scalar | Certified | Every platform's default build; also independently force-selectable |
-| SSE2 | Certified | The x86-64 architectural floor; force-selectable; CI leg defined (1.1), not yet executed on a hosted runner (capped since 2026-07-23) — verified locally, matches the golden digest exactly |
-| AVX2 | Certified, measured | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner — verified locally, matches the golden digest exactly; throughput measured on real hardware (below) |
-| AVX-512 | CI extent | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner or on any AVX-512-capable machine this project has access to — bit-identity unverified; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |
+| SSE2 | Certified | The x86-64 architectural floor; force-selectable; forced full-suite and digest CI legs executed hosted 2026-08-20 (run 32336576519), green, digest matching |
+| AVX2 | Certified, measured | Force-selectable; forced full-suite and digest CI legs executed hosted 2026-08-20, green, digest matching; throughput measured on real hardware (below) |
+| AVX-512 | Certified (bit-identity) | Force-selectable; full forced suite executed on real AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, cross-tier digest matching every other tier. Dedicated throughput measurement still open (known gap below). CI leg probes and reports SKIPPED honestly on runners without the hardware |
 
 **Measured, real 1.5B-parameter model artifact, batched prefill, SSE2 to
 AVX2, this project's own reference AMD hardware (Zen 2, no AVX-512):
@@ -143,10 +139,16 @@ certified NVIDIA RTX 2080 SUPER, forced prefill spans against a real
 1.5B-parameter model, comparing the pre-batching one-round-trip-per-token
 path against the batched path through the same public entry point:
 
-| Span length | Pre-batching (per-token) | Batched (one call) | Speedup |
-|---|---|---|---|
-| 128 tokens | 8.62 tok/s | 61.96 tok/s | 7.19x |
-| 256 tokens | 8.96 tok/s | 61.93 tok/s | 6.91x |
+| GPU | Span length | Pre-batching (per-token) | Batched (one call) | Speedup |
+|---|---|---|---|---|
+| NVIDIA RTX 2080 SUPER | 128 tokens | 8.62 tok/s | 61.96 tok/s | 7.19x |
+| NVIDIA RTX 2080 SUPER | 256 tokens | 8.96 tok/s | 61.93 tok/s | 6.91x |
+| AMD Radeon RX 7900 XTX | 256 tokens | 5.33 tok/s | 73.44 tok/s | 13.8x |
+
+The AMD measurement is larger because that driver's per-call round-trip
+cost is higher, so removing the round-trips buys more. Same binaries, same
+artifacts, same public entry point, run from this release's own evidence
+package.
 
 Both paths proven bit-identical at every span size and every internal
 split boundary tested. **The internal split bound stated honestly:** a
@@ -159,9 +161,13 @@ exact size, and set to half that size as a safety margin. It is measured
 on this one device/driver pairing only; a second vendor's own data point
 is a named gap below, not assumed to match.
 
-This measurement is on the certified NVIDIA GPU only — see
-[Known gaps](#known-gaps) below for AMD certification status on this
-specific capability.
+Batched prefill is certified on both certified GPUs: the full release
+evidence suite — bit-identity at every span size and split boundary, the
+exit-path census, the fault-recovery cells, and the sub-chunk-bound spans —
+ran clean on the AMD RX 7900 XTX with counts matching the NVIDIA and
+in-repo certifications exactly. The AMD driver also handles spans at and
+above the empirically-set sub-chunk bound without incident, giving the
+bound its second-vendor data point.
 
 ### Schema-constrained decoding on the GPU
 
@@ -191,22 +197,14 @@ certified GPUs above, never to "GPUs" unqualified.
 
 ## Known gaps
 
-- **AVX-512 has no dedicated real-hardware throughput measurement yet, and no
-  bit-identity run at all.** The CI leg is defined (probes, compiles, and
-  would run wherever a runner has the hardware) but has not yet executed on
-  any hosted runner or any AVX-512-capable machine this project has access
-  to — see [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — so
-  neither its bit-identity nor its tokens/second figure, alongside SSE2's and
-  AVX2's above, is yet published.
-- **GPU-side batched prompt prefill is measured and certified on the
-  certified NVIDIA GPU only.** The pre-batching, per-token GPU path stays
-  certified on both certified GPUs, unaffected; certifying the batched
-  path on the certified AMD GPU as well — including spans at and above the
-  internal sub-chunk split bound — is the next step for this capability
-  specifically. The split bound itself (see
-  [GPU-side batched prompt prefill](#gpu-side-batched-prompt-prefill)
-  above) is measured on the NVIDIA device/driver pairing only; a second
-  vendor's own value is unmeasured.
+- **AVX-512 bit-identity is proven on real hardware; its dedicated
+  throughput figure is not yet published.** The full forced-AVX-512 suite
+  has executed on AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, with
+  the cross-tier digest matching every other tier exactly. What remains
+  open is a tokens/second measurement for the AVX-512 tier alongside the
+  SSE2 and AVX2 figures above, and a hosted-runner execution of the CI leg
+  (which probes and reports SKIPPED honestly until the scheduler provides
+  capable hardware).
 
 ## What's next
 

@@ -25,9 +25,7 @@ narrower: adapter switching is measured on the certified NVIDIA GPU only
 (see [Runtime-switchable LoRA adapters](#runtime-switchable-lora-adapters)
 below), and CPU-side prefill batching is proven on every certified
 platform on the CPU path, with the GPU path — new this release — measured
-and certified on the certified NVIDIA GPU only — see
-[Known gaps](docs/platform-support.md#known-gaps) — with certification on
-the certified AMD GPU named as the next step for both. 1.1 adds a
+and certified on both certified GPUs, NVIDIA and AMD. 1.1 adds a
 wider-vector CPU kernel tier and GPU-side batched prompt prefill — see
 [CHANGELOG.md](CHANGELOG.md) for what changed and
 [docs/platform-support.md](docs/platform-support.md) for the measured
@@ -68,23 +66,28 @@ will turn "designed to avoid spikes" into a measured frame-time result;
 today the guarantee is the mechanism the design relies on, proven at the
 engine level.
 
-Prompt prefill (processing the tokens you send in before decoding begins)
-batches an entire prefill chunk through the engine's matrix kernels in one
-pass rather than processing tokens one at a time, proven bit-identical to
-the one-token-at-a-time path at every chunk size and every chunk-boundary
-split. On the CPU path this is proven on every certified platform; on the
-GPU path this is proven on the certified NVIDIA GPU — certifying it on the
-certified AMD GPU as well is the next step for that capability (see
-[Known gaps](docs/platform-support.md#known-gaps)). This workload turned
-out to be bound by kernel compute throughput rather than by memory
-bandwidth or per-call overhead, so 1.1 targets that bottleneck directly on
-each path: a wider-vector CPU kernel tier (SSE2/AVX2/AVX-512,
-runtime-selected) measured about 1.68x-1.72x faster than the SSE2-only 1.0
-kernel on batched prefill, and GPU-side batched prefill measured about
-6.91x-7.19x faster than the pre-1.1 one-round-trip-per-token GPU path, on
-the certified NVIDIA GPU — see
-[docs/platform-support.md](docs/platform-support.md) for both measurements
-and [the roadmap](#roadmap-beyond-11) for what is still open.
+1.1 makes prompt prefill — processing the tokens you send in before
+decoding begins — substantially faster on both paths, without changing a
+single output bit.
+
+On the CPU, the bottleneck was the kernel itself: the integer matmul is
+now runtime-dispatched across SSE2, AVX2, and AVX-512 tiers, and batched
+prefill measures **1.68x-1.72x faster** than 1.0's SSE2-only kernel on a
+real 1.5B model. Every tier produces bit-identical output to the scalar
+reference; the wider vectors change speed, not results.
+
+On the GPU, the bottleneck was per-token submission: the 1.0 path paid a
+host round-trip fence wait per token per layer batch. Prefill now submits
+a whole chunk of tokens per command list, measuring **6.91x-7.19x faster**
+on the certified NVIDIA GPU and **13.8x faster** on the certified AMD GPU,
+where the round-trips cost more. Output is bit-identical to the per-token
+path at every chunk size and every chunk-boundary split, on both certified
+GPUs.
+
+Both measurements, their exact hardware and span-length cells, and what
+remains open are in
+[docs/platform-support.md](docs/platform-support.md) and
+[the roadmap](#roadmap-beyond-11).
 
 ### Schema-constrained generation
 
@@ -240,17 +243,11 @@ design and review loop when scheduled:
   closing that gap is a named follow-on campaign.
 - **Launch-floor reduction.** The fixed per-call GPU launch overhead has an
   identified, not-yet-built optimization path.
-- **AVX-512 real-hardware throughput measurement, and a first execution.** The
-  AVX-512 kernel tier 1.1 ships has a defined CI leg that has not yet executed
-  on a hosted runner or on any AVX-512-capable machine this project has
-  access to, so it carries neither a bit-identity result nor a throughput
-  measurement yet — see [Known gaps](docs/platform-support.md#known-gaps) in
-  the platform-support doc.
-- **GPU batched-prefill cross-vendor certification.** 1.1's GPU-side batched
-  prefill is measured and certified on the certified NVIDIA GPU; certifying
-  it on the certified AMD GPU as well is the next step for that capability
-  specifically (the pre-1.1 per-token GPU path remains certified on both,
-  unaffected by this gap).
+- **AVX-512 dedicated throughput measurement.** The AVX-512 tier's
+  bit-identity is proven on real hardware (full forced suite, digest
+  matching every other tier); a tokens/second figure alongside the SSE2 and
+  AVX2 measurements is the remaining item — see
+  [Known gaps](docs/platform-support.md#known-gaps).
 - **Flat-batch dispatch fusion and the remaining single-group tail sites.**
   Two named, scoped opportunities to close the gap between batched and
   single-sequence throughput further.

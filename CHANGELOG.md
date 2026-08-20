@@ -18,12 +18,12 @@ for every measured number and where it was measured.
   runtime-dispatched, three-tier kernel: SSE2 (the unconditional
   architectural floor), AVX2, and AVX-512, selected once per process by a
   CPUID+XGETBV probe, with SSE2 as the automatic fallback on hardware
-  lacking the wider tiers. SSE2 and AVX2 are proven bit-identical to the
-  scalar reference on executed hardware — the same determinism guarantee
-  1.0 established, carried across the new dispatch paths. The AVX-512
-  tier compiles and dispatches correctly but has not yet executed on
-  AVX-512 silicon; its bit-identity run is pending and tracked in
-  [docs/platform-support.md](docs/platform-support.md).
+  lacking the wider tiers. All three tiers are proven bit-identical to the
+  scalar reference on real hardware — SSE2 and AVX2 on this project's
+  reference machines, AVX-512 with the full forced suite on AVX-512
+  silicon, its cross-tier digest matching every other tier exactly — the
+  same determinism guarantee 1.0 established, carried across every new
+  dispatch path.
 - Measured on a real 1.5B-parameter model artifact, batched prefill,
   SSE2 to AVX2: **about 1.68x-1.72x faster**, two independent runs. This is
   the CPU-side answer to the lever 1.0's own changelog named but did not
@@ -59,8 +59,8 @@ for every measured number and where it was measured.
   and `SslmGpuSeqPrefillSchemaContentForG5Bridge` now catch the fault at
   its own source and return `SSLM_DEVICE_LOST`; the context stays usable
   after a caught fault (a second call on the same context is proven bit-
-  identical to a never-faulted reference on the certified NVIDIA adapter;
-  the AMD run of the same cells is pending) except when the device is
+  identical to a never-faulted reference on both certified GPUs, NVIDIA
+  and AMD) except when the device is
   genuinely, confirmably removed, which remains terminal for that context.
   `SSLM_DEVICE_LOST` carries two dispositions at these entry points — see
   [include/superslm/gpu_1p0.h](include/superslm/gpu_1p0.h) for which is
@@ -95,17 +95,15 @@ for every measured number and where it was measured.
 
 ### Known gaps, tracked
 
-- The AVX-512 kernel tier's CI leg is defined — probes for hardware support,
-  compiles, and bit-identity-checks where a runner has it — but has not yet
-  executed on any hosted runner (GitHub Actions hosted runs are capped since
-  2026-07-23) or on any AVX-512-capable machine this project has access to,
-  so it carries no bit-identity result and no dedicated real-hardware
-  throughput measurement yet.
-- GPU batched prefill's determinism proof and throughput measurement are
-  on the certified NVIDIA GPU only in this release; certification on the
-  certified AMD GPU is not yet complete for the batched path specifically
-  (the pre-1.1 per-token GPU path stays certified on both, unaffected by
-  this release).
+- The AVX-512 tier is proven bit-identical on real AVX-512 silicon (full
+  forced suite, cross-tier digest match); a dedicated tokens/second
+  measurement for it, alongside the published SSE2 and AVX2 figures, is
+  still open. Its CI leg probes for hardware and reports SKIPPED honestly
+  on runners without AVX-512.
+- GPU batched prefill is certified on both certified GPUs, NVIDIA and AMD,
+  including spans at and above the internal sub-chunk split bound on both;
+  see [docs/platform-support.md](docs/platform-support.md) for both
+  measurements.
 
 ## [1.0.0] - 2026-08-18
 
