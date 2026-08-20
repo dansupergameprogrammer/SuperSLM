@@ -14,22 +14,9 @@ slicing produces the exact same output tokens as running the whole step at
 once. A game can therefore throttle inference to fit whatever GPU headroom a
 frame has left without changing what the model says.
 
-**Status: 1.1.** Every capability below is built and measured on the
-platforms named. Determinism, sliceable inference, and schema-constrained
-generation are all measured on both certified GPUs — the
-schema-constrained-decoding GPU parity check, for example, passed
-bit-identical on the certified NVIDIA GPU, and passed bit-identical on the
-certified AMD GPU as well (measured 2026-08-17 on the Radeon RX 7900 XTX;
-see [Certified platforms](#certified-platforms)). Two capabilities are
-narrower: adapter switching is measured on the certified NVIDIA GPU only
-(see [Runtime-switchable LoRA adapters](#runtime-switchable-lora-adapters)
-below), and CPU-side prefill batching is proven on every certified
-platform on the CPU path, with the GPU path — new this release — measured
-and certified on both certified GPUs, NVIDIA and AMD. 1.1 adds a
-wider-vector CPU kernel tier and GPU-side batched prompt prefill — see
-[CHANGELOG.md](CHANGELOG.md) for what changed and
-[docs/platform-support.md](docs/platform-support.md) for the measured
-numbers.
+Current release: **1.1** — a wider-vector CPU kernel tier and GPU-side
+batched prompt prefill. [CHANGELOG.md](CHANGELOG.md) has what changed;
+[Status](#status) below has what is measured where.
 
 ## Capabilities
 
@@ -116,6 +103,23 @@ paths on both certified GPUs — NVIDIA and AMD (see
 format it relies on, and the full CPU consumer ABI it ships through are
 documented in [docs/api.md](docs/api.md) and
 [docs/sslm_format.md](docs/sslm_format.md).
+
+## Status
+
+Every capability above is built and measured on the platforms named.
+Determinism, sliceable inference, and schema-constrained generation are
+all measured on both certified GPUs — the schema-constrained-decoding GPU
+parity check, for example, passed bit-identical on the certified NVIDIA
+GPU, and passed bit-identical on the certified AMD GPU as well (measured
+2026-08-17 on the Radeon RX 7900 XTX; see
+[Certified platforms](#certified-platforms)). Two capabilities are
+narrower: adapter switching is measured on the certified NVIDIA GPU only
+(see [Runtime-switchable LoRA adapters](#runtime-switchable-lora-adapters)
+above), and CPU-side prefill batching is proven on every certified
+platform on the CPU path, with the GPU path — new in 1.1 — measured and
+certified on both certified GPUs, NVIDIA and AMD.
+[docs/platform-support.md](docs/platform-support.md) carries every
+measured number with its device and cell.
 
 ## Certified platforms
 
