@@ -1,4 +1,7 @@
 obj/
+obj_green/
 *.exe
 *.obj
 *.log
+*.buildlog
+*.runlog
