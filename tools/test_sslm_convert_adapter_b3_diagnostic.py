@@ -17,9 +17,17 @@
    not a new synthetic scenario.
 
 2. The pooled primary gate's own `accepted=True`/`accepted=False` reading is printed by the CLI
-   beside an explicit, ID-free quarantine notice pointing the reader at the per-pair diagnostics as
-   the actionable signal, at every site the tool prints the pooled verdict (the `--verbose` build-log
-   line, and both the accept and reject branches of `main()`).
+   beside an explicit, ID-free notice, at every site the tool prints the pooled verdict (the
+   `--verbose` build-log line inside `build_runtime_additive_sections`, and both the accept and
+   reject branches of `main()`). T-2202 (D-SLM3730 lineage) rewrote this notice's text: it states
+   plainly that the check can still refuse to write an artifact, that a refusal can come from
+   sampling noise rather than a real defect, that the check cannot detect a genuine magnitude
+   error, and that a repair replacing its statistic is in progress -- and it stops calling the
+   per-pair diagnostics "the actionable signal" (they are uncommissioned as a general oracle;
+   this file's own flag-fire pin below is the first cell that commissions them for whether a
+   genuinely bad pair actually flags) and stops saying a live reject "carries no information"
+   (the reject branch still refuses to write the artifact, so that claim contradicted the branch
+   it sat beside).
 """
 
 import inspect
@@ -154,7 +162,29 @@ def test_tail_conjuncts_are_unaffected_by_the_mean_conjunct_fix():
     assert d["margins_se"]["effect_tail"] < -1.0e8
 
 
-# --- Remedy 2: the pooled gate's quarantine, surfaced in the tool's own output --------------
+def test_a_genuinely_flagging_pair_actually_flags_composed_mean():
+    """T-2202's own required cell (Poirot S3): every prior cell in this file asserts the NEGATIVE
+    (`"composed_mean" not in flagged`, three times); none ever asserted the positive. Fixed via
+    the same algebraic two-point construction `_diagnostic_for` already uses: a pair whose
+    CORRECTED `composed_mean` margin is 4.495 SE -- Thomas's own consumer-reported `layer8.v_proj`
+    pair, corrected via the D-SLM3221 fix this file's remedy-1 cells pin
+    (`Claude/Brunel/t2201-b3-gate-investigation-2026-08-20.md` Sec4.2, Wizard repo) -- must appear
+    in `flagged`, because 4.495 is more than double the 2.0 SE review threshold.
+
+    Executed red-then-green: replacing `flagged = [conjunct for conjunct, m in margins.items() if
+    m > _B3_REVIEW_MARGIN_SE]` at `sslm_convert_adapter.py:828` with `flagged = []` -- the
+    reviewer's own executed mutation -- makes this cell fail (nothing can ever appear in an empty
+    list); the current code, which actually computes `flagged` from the margins, passes."""
+    d = _diagnostic_for(composed_mean_point=4.495, effect_mean_point=-999.0)
+    assert d["margins_se"]["composed_mean"] == pytest.approx(4.495, abs=1e-9)
+    assert "composed_mean" in d["flagged"], (
+        "a corrected composed_mean margin of 4.495 SE is more than double the 2.0 SE review "
+        "threshold and must flag -- a diagnostic that never flags anything passes every prior "
+        "cell in this file while catching nothing"
+    )
+
+
+# --- Remedy 2: the notice printed beside the pooled gate's own verdict ----------------------
 
 def test_quarantine_notice_names_no_internal_decision_ids():
     notice = A._B3_POOLED_GATE_QUARANTINE_NOTICE
@@ -166,10 +196,21 @@ def test_quarantine_notice_names_no_internal_decision_ids():
     )
 
 
-def test_quarantine_notice_states_the_verdict_is_quarantined_and_points_at_per_pair_diagnostics():
+def test_quarantine_notice_states_what_the_check_can_and_cannot_do():
+    """T-2202 (Poirot S1/S2): the notice states the check can still refuse to write an artifact,
+    that the refusal can come from sampling noise rather than a real defect, that it cannot
+    detect a genuine magnitude error, and that a repair is in progress -- and it must NOT claim a
+    live reject "carries no information" (S2: the reject branch still refuses the artifact, which
+    directly contradicts that phrase) or headline the per-pair diagnostics as "the actionable
+    signal" (S1: they were never commissioned as a general oracle)."""
     notice = A._B3_POOLED_GATE_QUARANTINE_NOTICE.lower()
-    assert "quarantin" in notice
+    assert "refuse" in notice and "artifact" in notice
+    assert "sampling noise" in notice
+    assert "magnitude error" in notice
+    assert "repair" in notice and "in progress" in notice
     assert "per-pair diagnostic" in notice
+    assert "carries no information" not in notice
+    assert "actionable signal" not in notice
 
 
 def test_quarantine_notice_is_printed_at_every_pooled_gate_output_site():
@@ -215,13 +256,21 @@ def test_main_accept_path_prints_pooled_quarantine_notice(monkeypatch, capsys, t
 
     out = capsys.readouterr().out
     assert "accepted=True" in out
-    assert "QUARANTINED" in out
+    assert "sampling noise" in out
     assert "per-pair diagnostic" in out.lower()
 
 
 def test_main_reject_path_prints_pooled_quarantine_notice(monkeypatch, capsys, tmp_path):
     """Same, on the REJECT branch (`margin_exceeded=True`, no `--fallback`) -- the branch the
-    original consumer report's own `accepted=True` sat beside without qualification."""
+    original consumer report's own `accepted=True` sat beside without qualification.
+
+    T-2202 (Poirot M3): this cell no longer asserts the ABSENCE of a bare `accepted=False` line.
+    That assertion pinned an incidental fact about this branch's current print statements, not
+    this remedy -- making the reject branch symmetric with the accept branch (printing a bare
+    `pooled B3 gate: accepted=...` line here too) is a defensible future improvement that would
+    turn this cell red for a reason unrelated to what it guards. What the remedy actually
+    requires -- the per-conjunct accepts and the notice both appear -- is asserted below and
+    holds regardless of whether a future round adds the bare line."""
     fake_pooled = {
         "accepted": False, "n_pairs": 1,
         "composed_mean_accepts": False, "composed_tail_accepts": True,
@@ -247,7 +296,6 @@ def test_main_reject_path_prints_pooled_quarantine_notice(monkeypatch, capsys, t
     assert rc == 1
 
     err = capsys.readouterr().err
-    assert "accepted=False" not in err  # pooled['accepted'] isn't printed bare on this branch...
-    assert "composed_mean_accepts=False" in err  # ...its per-conjunct accepts are
-    assert "QUARANTINED" in err
+    assert "composed_mean_accepts=False" in err
+    assert "sampling noise" in err
     assert "per-pair diagnostic" in err.lower()

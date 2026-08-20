@@ -2,6 +2,26 @@
 
 All notable changes to SuperSLM (Layer 1) are recorded here.
 
+## [Unreleased]
+
+### Fixed
+
+- **`sslm_convert_adapter`'s B3 per-pair review diagnostic no longer
+  over-flags `composed_mean`/`effect_mean`.** These two margins graded a
+  VALIDATION-partition `upper_ci` (already `mean + 1.645*se`) against a
+  threshold instead of the partition's own `mean`, adding a spurious extra
+  `1.645` standard errors on top of the already-conservative threshold to
+  every mean-conjunct margin — the two tail conjuncts already used the raw
+  point estimate correctly. A pair's `composed_mean`/`effect_mean` review
+  flag now reflects the same statistic the tail conjuncts always used.
+- **`sslm_convert_adapter`'s pooled B3 gate now tells a consumer what its
+  accept/reject reading does and does not mean, everywhere the tool prints
+  it.** The gate can refuse to write an artifact based on sampling noise
+  between two halves of the same population, and it cannot detect a real
+  magnitude error in the adapter — a refusal is grounds to inspect the
+  conversion and re-run it, not confidence that the adapter itself is
+  defective. A repair replacing the gate's own statistic is in progress.
+
 ## [1.1.0] - 2026-08-19
 
 A performance release: both halves of 1.0's own "compute-bound, not

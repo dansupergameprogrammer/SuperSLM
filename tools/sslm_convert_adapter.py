@@ -782,11 +782,20 @@ def _p95(arr) -> float:
 
 _B3_REVIEW_MARGIN_SE = 2.0  # design §25.5 item 2's own stated multiple, matching §25.2's analysis.
 
+# T-2202 (D-SLM3730 lineage): this notice is the shipped text for as long as the pooled gate's
+# own statistic is unrepaired (Dan's ruling, D-SLM3730 -- the gate is being REPAIRED, not
+# relabeled or deleted, and its behavior stays unchanged in the interim). It states what the
+# check can and cannot do, never claims a live REJECT "carries no information" (it still blocks
+# artifact emission -- StandardsDocument.md §5.6), and does not headline the per-pair diagnostics
+# as an oracle beyond what they have actually been shown to do.
 _B3_POOLED_GATE_QUARANTINE_NOTICE = (
-    "pooled B3 gate status: QUARANTINED -- this instrument has not been shown able to reject an "
-    "adapter at any error magnitude (a scale sweep across 9 orders of magnitude produced 0 "
-    "rejects), so its accepted/rejected reading carries no information about this adapter's "
-    "quality. Read the per-pair diagnostics instead -- a pair named there is the actionable signal."
+    "pooled B3 gate status: this check can refuse to write an artifact based on sampling noise "
+    "between two halves of the same population, and it has not been shown able to detect a real "
+    "magnitude error in the adapter -- a refusal here is a reason to inspect the conversion and "
+    "re-run it, not evidence that the adapter itself is defective. A repair that replaces this "
+    "check's statistic with one anchored to an absolute error bound is in progress. The per-pair "
+    "diagnostics below are review prompts, not a verdict -- a pair named there is worth a closer "
+    "look, not a confirmed finding."
 )
 
 
