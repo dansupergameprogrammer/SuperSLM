@@ -38,9 +38,12 @@ for every measured number and where it was measured.
   internal bound was found). Proven bit-identical to the pre-1.1,
   one-round-trip-per-token path at every span size and every internal
   split boundary tested.
-- Measured on a certified NVIDIA GPU, forced prefill spans of 128 and 256
-  tokens against a real 1.5B-parameter model: **about 6.91x-7.19x faster**
-  than the pre-1.1 per-token path. The two public GPU prefill entry points
+- Measured on both certified GPUs, forced prefill spans against a real
+  1.5B-parameter model: **about 6.91x-7.19x faster** than the pre-1.1
+  per-token path on the NVIDIA RTX 2080 SUPER, and **about 13.8x faster**
+  on the AMD RX 7900 XTX, where the per-call round-trips cost more.
+  Certified bit-identical on both, including spans at and above the
+  internal sub-chunk split bound. The two public GPU prefill entry points
   are documented as bulk-throughput calls as of this release: their
   per-call dispatch-budget parameter is still validated but no longer
   slices submission per token on the prefill path — see
@@ -100,10 +103,6 @@ for every measured number and where it was measured.
   measurement for it, alongside the published SSE2 and AVX2 figures, is
   still open. Its CI leg probes for hardware and reports SKIPPED honestly
   on runners without AVX-512.
-- GPU batched prefill is certified on both certified GPUs, NVIDIA and AMD,
-  including spans at and above the internal sub-chunk split bound on both;
-  see [docs/platform-support.md](docs/platform-support.md) for both
-  measurements.
 
 ## [1.0.0] - 2026-08-18
 
