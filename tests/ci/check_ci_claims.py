@@ -282,7 +282,17 @@ def _strip_exempt_section(path: str, text: str) -> str:
 # own CI execution status section gets in the other direction (one place is
 # ALLOWED to make the claim there; here, one section is EXCUSED from being
 # read as a current claim at all).
-_CHANGELOG_RELEASE_HEADING_PATTERN = re.compile(r"(?m)^## \[")
+#
+# The pattern requires a DIGIT immediately after `[` -- `## [x.y.z]`, never
+# `## [Unreleased]` -- so a Keep-a-Changelog `[Unreleased]` heading is never
+# counted as a release boundary. Matching the bare `^## \[` would let an
+# `[Unreleased]` heading stand in as matches[0] or matches[1] and silently
+# shrink the scanned window to everything above it, cutting the entire
+# latest VERSIONED section (and its claims) out of scan scope -- exactly
+# the failure this pattern exists to prevent. `[Unreleased]` content itself
+# stays in scope: it sits in the un-headed span above the first versioned
+# heading, which this function always keeps.
+_CHANGELOG_RELEASE_HEADING_PATTERN = re.compile(r"(?m)^## \[\d")
 
 
 def _scope_changelog_to_latest_release(path: str, text: str) -> str:

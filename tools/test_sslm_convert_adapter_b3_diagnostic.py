@@ -23,9 +23,13 @@
    plainly that the check can still refuse to write an artifact, that a refusal can come from
    sampling noise rather than a real defect, that the check cannot detect a genuine magnitude
    error, and that a repair replacing its statistic is in progress -- and it stops calling the
-   per-pair diagnostics "the actionable signal" (they are uncommissioned as a general oracle;
-   this file's own flag-fire pin below is the first cell that commissions them for whether a
-   genuinely bad pair actually flags) and stops saying a live reject "carries no information"
+   per-pair diagnostics "the actionable signal" (they are uncommissioned as a general oracle --
+   `StandardsDocument.md` §5.4 reserves that word for a must-accept and a must-reject, both
+   producible by the instrument's real data path, authored independent of the instrument's
+   builder; this file's own flag-fire pin below is a hand-built two-point construction that
+   proves the flag-fire path is live above threshold, and proves nothing about what the
+   diagnostic does on a real conversion -- see `Claude/Poirot/4299d84-t2206-b3-round2-
+   confirmation.md` M3, Wizard repo) and stops saying a live reject "carries no information"
    (the reject branch still refuses to write the artifact, so that claim contradicted the branch
    it sat beside).
 """
@@ -186,24 +190,31 @@ def test_a_genuinely_flagging_pair_actually_flags_composed_mean():
 
 # --- Remedy 2: the notice printed beside the pooled gate's own verdict ----------------------
 
-def test_quarantine_notice_names_no_internal_decision_ids():
-    notice = A._B3_POOLED_GATE_QUARANTINE_NOTICE
+def test_status_notice_names_no_internal_decision_ids():
+    notice = A._B3_POOLED_GATE_STATUS_NOTICE
     assert not re.search(r"D-SLM\d+", notice), (
-        "the consumer-facing quarantine notice must not cite internal decision IDs"
+        "the consumer-facing status notice must not cite internal decision IDs"
     )
     assert not re.search(r"\bT-\d+\b", notice), (
-        "the consumer-facing quarantine notice must not cite internal ticket IDs"
+        "the consumer-facing status notice must not cite internal ticket IDs"
     )
 
 
-def test_quarantine_notice_states_what_the_check_can_and_cannot_do():
+def test_status_notice_states_what_the_check_can_and_cannot_do():
     """T-2202 (Poirot S1/S2): the notice states the check can still refuse to write an artifact,
     that the refusal can come from sampling noise rather than a real defect, that it cannot
     detect a genuine magnitude error, and that a repair is in progress -- and it must NOT claim a
     live reject "carries no information" (S2: the reject branch still refuses the artifact, which
     directly contradicts that phrase) or headline the per-pair diagnostics as "the actionable
-    signal" (S1: they were never commissioned as a general oracle)."""
-    notice = A._B3_POOLED_GATE_QUARANTINE_NOTICE.lower()
+    signal" (S1: they were never commissioned as a general oracle).
+
+    T-2206 (Poirot S1): the per-pair caveat above qualified the false-POSITIVE direction only
+    ("a pair named there is worth a closer look, not a confirmed finding") while the one thing
+    actually measured about this diagnostic (`Claude/Brunel/t2201-b3-gate-investigation-2026-08-
+    20.md` §3 finding 2, Wizard repo) runs the other way: the ×50-hot construction produces
+    0/28 flags. The notice must also state the false-NEGATIVE direction -- an empty per-pair
+    list is not evidence the adapter is sound."""
+    notice = A._B3_POOLED_GATE_STATUS_NOTICE.lower()
     assert "refuse" in notice and "artifact" in notice
     assert "sampling noise" in notice
     assert "magnitude error" in notice
@@ -211,26 +222,27 @@ def test_quarantine_notice_states_what_the_check_can_and_cannot_do():
     assert "per-pair diagnostic" in notice
     assert "carries no information" not in notice
     assert "actionable signal" not in notice
+    assert "empty" in notice and "not evidence" in notice
 
 
-def test_quarantine_notice_is_printed_at_every_pooled_gate_output_site():
+def test_status_notice_is_printed_at_every_pooled_gate_output_site():
     """Static wiring check: the notice constant must be referenced at its own definition plus
     every site the tool prints a pooled-gate verdict -- the `--verbose` build-log line inside
     `build_runtime_additive_sections`, and both the accept and reject branches of `main()`. A
     count of 1 (definition only, never printed) is exactly the pre-remedy defect T-2201 found:
     the pooled `accepted=True` printed with no caveat anywhere a consumer would see it."""
     source = inspect.getsource(A)
-    occurrences = source.count("_B3_POOLED_GATE_QUARANTINE_NOTICE")
+    occurrences = source.count("_B3_POOLED_GATE_STATUS_NOTICE")
     assert occurrences >= 4, (
-        f"expected the quarantine notice's definition plus 3 print sites (verbose pooled-gate "
+        f"expected the status notice's definition plus 3 print sites (verbose pooled-gate "
         f"line, main() accept branch, main() reject branch); found {occurrences} references"
     )
 
 
-def test_main_accept_path_prints_pooled_quarantine_notice(monkeypatch, capsys, tmp_path):
+def test_main_accept_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_path):
     """End-to-end through `main()` (real CLI dispatch, real argument parsing, `--skip-verify` to
     avoid the C++ verifier dependency) on the ACCEPT branch: the pooled gate's `accepted=True` is
-    printed beside the quarantine notice, not bare."""
+    printed beside the status notice, not bare."""
     fake_pooled = {
         "accepted": True, "n_pairs": 1,
         "per_pair_diagnostics": [{"name": "layer0.q_proj", "flagged": []}],
@@ -260,7 +272,7 @@ def test_main_accept_path_prints_pooled_quarantine_notice(monkeypatch, capsys, t
     assert "per-pair diagnostic" in out.lower()
 
 
-def test_main_reject_path_prints_pooled_quarantine_notice(monkeypatch, capsys, tmp_path):
+def test_main_reject_path_prints_pooled_status_notice(monkeypatch, capsys, tmp_path):
     """Same, on the REJECT branch (`margin_exceeded=True`, no `--fallback`) -- the branch the
     original consumer report's own `accepted=True` sat beside without qualification.
 

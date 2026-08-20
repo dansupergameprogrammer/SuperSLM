@@ -788,14 +788,16 @@ _B3_REVIEW_MARGIN_SE = 2.0  # design §25.5 item 2's own stated multiple, matchi
 # check can and cannot do, never claims a live REJECT "carries no information" (it still blocks
 # artifact emission -- StandardsDocument.md §5.6), and does not headline the per-pair diagnostics
 # as an oracle beyond what they have actually been shown to do.
-_B3_POOLED_GATE_QUARANTINE_NOTICE = (
+_B3_POOLED_GATE_STATUS_NOTICE = (
     "pooled B3 gate status: this check can refuse to write an artifact based on sampling noise "
     "between two halves of the same population, and it has not been shown able to detect a real "
     "magnitude error in the adapter -- a refusal here is a reason to inspect the conversion and "
     "re-run it, not evidence that the adapter itself is defective. A repair that replaces this "
     "check's statistic with one anchored to an absolute error bound is in progress. The per-pair "
     "diagnostics below are review prompts, not a verdict -- a pair named there is worth a closer "
-    "look, not a confirmed finding."
+    "look, not a confirmed finding, and an EMPTY per-pair list is not evidence the adapter is "
+    "sound: these diagnostics have not been shown able to flag a real magnitude error either, so "
+    "zero pairs named here means the diagnostics found nothing to name, not that nothing is wrong."
 )
 
 
@@ -1407,7 +1409,7 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
             print(f"  POOLED GATE: accepted={pooled['accepted']} "
                  f"(n_pairs={pooled['n_pairs']} n_pilot_pooled={pooled['n_pilot_pooled']} "
                  f"n_val_pooled={pooled['n_val_pooled']}, {n_flagged} pair(s) flagged for review)")
-            print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}")
+            print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}")
 
     verdict = {"domain_trip": domain_trip, "margin_exceeded": margin_exceeded,
               "saturation_elevated": False, "pairs": pair_diagnostics, "pooled": pooled}
@@ -1595,11 +1597,14 @@ def main():
         if verdict["pooled"] is not None:
             p = verdict["pooled"]
             print(f"  pooled B3 gate: accepted={p['accepted']}")
-            print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}")
+            print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}")
             flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
             if flagged:
                 print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
                      f"{flagged}")
+            else:
+                print("  0 pair(s) flagged for review -- an empty list is not evidence this "
+                     "adapter is sound; see the notice above.")
         if not args.skip_verify:
             import sslm_convert_manifest as scm
             repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1619,11 +1624,14 @@ def main():
              f"composed_tail_accepts={p['composed_tail_accepts']} "
              f"effect_mean_accepts={p['effect_mean_accepts']} "
              f"effect_tail_accepts={p['effect_tail_accepts']}", file=sys.stderr)
-        print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}", file=sys.stderr)
+        print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}", file=sys.stderr)
         flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
         if flagged:
             print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
                  f"{flagged}", file=sys.stderr)
+        else:
+            print("  0 pair(s) flagged for review -- an empty list is not evidence this "
+                 "adapter is sound; see the notice above.", file=sys.stderr)
 
     if outcome == ArtifactOutcome.NO_ARTIFACT_EMITTED:
         if out_path.exists():

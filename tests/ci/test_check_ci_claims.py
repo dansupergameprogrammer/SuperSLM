@@ -227,6 +227,27 @@ def test_changelog_latest_release_section_stays_in_scope():
     assert len(hits) == 1
 
 
+def test_changelog_unreleased_heading_does_not_hide_the_latest_release():
+    """`[Unreleased]` is a Keep-a-Changelog status heading, not a versioned
+    `## [x.y.z]` release heading -- it must never be counted as one of the
+    two release-heading matches that bound the scanned window. A regex that
+    matched the bare `## [` would treat `[Unreleased]` as a release boundary
+    and silently cut the entire latest VERSIONED section's claims out of
+    scope; this fixture plants a live claim in that latest versioned
+    section, with an `[Unreleased]` heading sitting above it, and requires
+    the claim still be caught."""
+    text = (
+        "## [Unreleased]\n\n"
+        "Nothing relevant here.\n\n"
+        "## [1.1.0] - 2026-08-19\n\n"
+        "- The workflow runs on every push against GitHub Actions.\n\n"
+        "## [1.0.0] - 2026-08-18\n\n"
+        "Nothing relevant here.\n"
+    )
+    hits = cic.scan_text("CHANGELOG.md", text)
+    assert len(hits) == 1
+
+
 def test_changelog_scoping_does_not_apply_to_other_files():
     text = (
         "## [1.1.0] - 2026-08-19\n\n"
