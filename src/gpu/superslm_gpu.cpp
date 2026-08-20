@@ -952,22 +952,30 @@ inline void MaybeThrowInjectedT2169ChunkRecordingFault(uint32_t admitted_token_i
 
 // T-2186 remedy P1's own pin (Brunel fix round 3, D-SLM3682): the seam above only reaches the
 // TRY-COVERED per-token loop, whose throw is caught by this function's own catch clauses --
-// pinning P1 requires a throw from the UNCOVERED TAIL itself (this function, below, outside
-// either catch clause: `dev.list->Close()`, `dev.queue->Signal()`, `new GpuLayerLoopInFlight()`),
-// the exact region the confirmation review named. Single-shot, no token index -- the tail runs
-// once per (sub-)chunk submission, after every admitted token's dispatches are already recorded,
-// so there is nothing left to index. `std::runtime_error`, matching the real failure this stands
-// in for (`SSLM_GPU_HR` throws exactly this type on a failed `Close()`/`Signal()`, e.g. on device
+// pinning P1 requires a throw from the UNCOVERED TAIL itself, the exact region the confirmation
+// review named. Single-shot, no token index -- the tail runs once per (sub-)chunk submission or
+// per-token decode, after every admitted token's dispatches are already recorded, so there is
+// nothing left to index. `std::runtime_error`, matching the real failure this stands in for
+// (`SSLM_GPU_HR` throws exactly this type on a failed `Close()`/`Signal()`, e.g. on device
 // removal) -- a `catch (const std::runtime_error&)` at the call site cannot distinguish this from
 // the real thing, which is the property the pin needs.
+//
+// Called from TWO tails, both inside the identical
+// `try`/`catch(bad_alloc)`/`catch(runtime_error)` shape (T-2189 finding 6's own remedy, applied
+// to both): `SubmitOneSubChunkToFullDepthForG5Bridge`'s own tail (this file, below), and
+// `RunLayerLoopGpuSubmit`'s tail (this file; T-2195 round 5's own S1 fix extended containment
+// there for the first time). Neither tail is uncovered any more as of this fix -- the seam's own
+// name and the throw message below predate that extension and are corrected to name both sites
+// rather than describe the pre-fix shape.
 inline void MaybeThrowInjectedT2169ChunkRecordingTailFault() {
 #ifdef SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 	if (g_t2169_chunk_recording_tail_fault_armed) {
 		g_t2169_chunk_recording_tail_fault_armed = false;
 		throw std::runtime_error(
-		    "T2186 D-SLM3682: injected fault from SubmitOneSubChunkToFullDepthForG5Bridge's own "
-		    "uncovered tail (outside its try/catch), simulating a failed Close()/Signal() or a "
-		    "bad_alloc from the inflight allocation");
+		    "T2186 D-SLM3682: injected fault from RunLayerLoopGpuSubmit's or "
+		    "SubmitOneSubChunkToFullDepthForG5Bridge's own tail (each inside its own "
+		    "try/catch as of T-2189 finding 6 and T-2195 S1), simulating a failed "
+		    "Close()/Signal() or a bad_alloc from the inflight allocation");
 	}
 #endif  // SUPERSLM_T2169_CHUNK_RECORDING_FAULT_INJECTION
 }
