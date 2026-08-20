@@ -14,13 +14,18 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   every mean-conjunct margin — the two tail conjuncts already used the raw
   point estimate correctly. A pair's `composed_mean`/`effect_mean` review
   flag now reflects the same statistic the tail conjuncts always used.
-- **`sslm_convert_adapter`'s pooled B3 gate now tells a consumer what its
-  accept/reject reading does and does not mean, everywhere the tool prints
-  it.** The gate can refuse to write an artifact based on sampling noise
-  between two halves of the same population, and it cannot detect a real
-  magnitude error in the adapter — a refusal is grounds to inspect the
-  conversion and re-run it, not confidence that the adapter itself is
-  defective. A repair replacing the gate's own statistic is in progress.
+- **`sslm_convert_adapter`'s pooled B3 accept/reject gate is retired.** It
+  never discriminated a healthy converted adapter from a corrupted one on
+  its own merits — its accept boundary was one frozen reference adapter's
+  own idiosyncratic scale, and no in-band corruption ever elevated the
+  statistic once that scale was accounted for. Converting an adapter can no
+  longer be refused on B3 pooled quality grounds; only a domain trip (an
+  unrepresentable ratio) still refuses to write an artifact. Two things
+  ship in its place: the per-pair review diagnostics above are now this
+  tool's primary B3 signal, and a new wide-tolerance magnitude sanity check
+  compares a candidate's pooled composed LoRA delta norm against an
+  optional reference (`--reference-delta-norm`) — a candidate far outside
+  tolerance prints a named WARNING for review, never a rejection.
 
 ## [1.1.0] - 2026-08-19
 

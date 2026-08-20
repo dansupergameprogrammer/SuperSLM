@@ -1,48 +1,25 @@
-"""T-2202 (Poirot M1/O2): the pooled-gate notice's real print sites, exercised through the real
+"""T-2213 (D-SLM3783): the B3 pooled-report notice's real print sites, exercised through the real
 CLI subprocess chain -- not a monkeypatched `build_runtime_additive_sections`, not a source-text
 occurrence count.
 
 `test_sslm_convert_adapter_b3_diagnostic.py`'s own `test_status_notice_is_printed_at_every_
-pooled_gate_output_site` is a static wiring check (it counts source references to the notice
-constant), by its own docstring's admission the ONLY cover the `--verbose` print site inside
-`build_runtime_additive_sections` had -- that print fires before `main()`'s own accept/reject
-branches are even reached, so `test_main_accept_path_prints_pooled_status_notice` and
-`test_main_reject_path_prints_pooled_status_notice` (both of which monkeypatch `build_
-runtime_additive_sections` itself away) never exercise it. And O2 found the accept branch's own
-print block had never run against a real conversion at all -- only against a hand-built
-three-key dict.
+pooled_report_output_site` is a static wiring check (it counts source references to the notice
+constant); this file exercises the notice's real print sites end to end, against a real, on-disk
+base checkpoint (`tools/_calibrate_checkpoint_fixture.py`) calibrated and converted via the real
+`calibrate_checkpoint.py` and `convert_model.py` CLIs, then a real, on-disk BF16 PEFT LoRA
+adapter (`tools/_t2194_bf16_lora_fixture.py`, already used by `test_sslm_convert_adapter_bf16.py`)
+converted via the real `sslm_convert_adapter.py` CLI -- every step a genuine subprocess
+(`sys.executable <script>.py ...`), no mocks, no monkeypatching.
 
-This file closes both gaps with the SAME construction: a real, on-disk base checkpoint (`tools/
-_calibrate_checkpoint_fixture.py`) calibrated and converted via the real `calibrate_checkpoint.py`
-and `convert_model.py` CLIs, then a real, on-disk BF16 PEFT LoRA adapter (`tools/_t2194_bf16_
-lora_fixture.py`, already used by `test_sslm_convert_adapter_bf16.py`) converted via the real
-`sslm_convert_adapter.py` CLI -- every step a genuine subprocess (`sys.executable <script>.py
-...`), no mocks, no monkeypatching. Two seeds against the identical fixture shapes reach the two
-branches that matter:
-
-- `seed=0` (this fixture module's own default): the pooled gate ACCEPTS (`accepted=True`,
-  `margin_exceeded=False`), so `main()` takes `ArtifactOutcome.RUNTIME_ADDITIVE` and prints the
-  notice from its own accept branch (closing O2) in addition to the `--verbose` line inside
-  `build_runtime_additive_sections` (closing M1's accept-side gap).
-- `seed=7`: the pooled gate REJECTS on `composed_mean` (`margin_exceeded=True`,
-  `domain_trip=False` -- confirmed below, so this is the B3 margin branch and not the unrelated
-  domain-rejection branch), so `main()` takes `RejectionBranch.RUNTIME_VS_BAKED_MARGIN_EXCEEDED`
-  and prints the notice from its own reject branch (closing M1's reject-side gap, already
-  covered for the mocked case by `test_main_reject_path_prints_pooled_status_notice`, now
-  also covered for a real conversion).
-
-Both seeds were found by a direct sweep of this fixture's own `seed=0..29` against the real CLI
-chain (recorded in the T-2202 build log) -- not reasoned from the arithmetic, since the B3
-statistic's behavior on a 2-draw-per-partition rank-2 fixture is not something worth predicting
-by construction (`StandardsDocument.md` §5.4: exactness is verified at source or by execution).
-
-T-2206 (Poirot M2): the sweep found three rejecting seeds -- 5, 7, 19. `seed=5`'s own margin
-clears the rejection boundary (`composed_upper_ci` vs `delta_composed_mean`) by +13.1% relative;
-`seed=7`'s clears it by +960%, ~73x further from the boundary. A future `torch`/`numpy` upgrade
-that nudges either number by a few percent turns `seed=5` into a flaky red, and the failure mode
-is loud (a rejection this cell expects turns into an unexpected accept) rather than silent, but
-it costs nothing to pin the seed already 73x further out -- the sweep that found it was already
-paid for. `seed=7` is pinned below in its place.
+T-2213 retired the B3 pooled ACCEPT/REJECT gate (`Claude/Loki/t2205/t2207/t2209/t2210/t2211`,
+`Claude/Vitruvius/t2204`'s own fold round 4, Wizard repo; Dan's ruling D-SLM3783): nothing B3
+computes can refuse to write an artifact any more, so every seed this fixture can produce now
+reaches `main()`'s ACCEPT branch on B3 grounds (a domain trip remains the only structural
+refusal, and this fixture's own fixed small geometry never trips it). `seed=0` (this fixture
+module's own default) is used below; the retired suite's own `seed=7` (previously pinned as a
+REJECT-branch cell, `Claude/Poirot/4299d84-t2206-b3-round2-confirmation.md` M2) is confirmed
+below to now reach the ACCEPT branch too, closing the loop on the retirement rather than leaving
+a stale reject-path cell in this file.
 """
 
 import subprocess
@@ -90,29 +67,34 @@ def real_base_artifact(tmp_path_factory):
     return checkpoint_dir, base_sslm
 
 
-def _convert_adapter(tmp_path, real_base_artifact, seed):
+def _convert_adapter(tmp_path, real_base_artifact, seed, reference_delta_norm=None):
     checkpoint_dir, base_sslm = real_base_artifact
     adapter_dir = build_bf16_lora_fixture(tmp_path / "adapter",
                                           base_model_name_or_path=str(checkpoint_dir), seed=seed)
     out_sslm = tmp_path / "adapter_out.sslm"
-    r = _run([sys.executable, "sslm_convert_adapter.py",
-             "--adapter", str(adapter_dir), "--base", str(base_sslm),
-             "--out", str(out_sslm), "--skip-verify"])
+    cmd = [sys.executable, "sslm_convert_adapter.py",
+          "--adapter", str(adapter_dir), "--base", str(base_sslm),
+          "--out", str(out_sslm), "--skip-verify"]
+    if reference_delta_norm is not None:
+        cmd += ["--reference-delta-norm", str(reference_delta_norm)]
+    r = _run(cmd)
     return r, out_sslm
 
 
+@pytest.mark.parametrize("seed", [0, 7])
 def test_real_conversion_accepts_and_prints_the_final_notice_at_both_its_sites(
-    tmp_path, real_base_artifact,
+    tmp_path, real_base_artifact, seed,
 ):
-    """seed=0: a real conversion through the real CLI subprocess chain that ACCEPTS -- closing
-    O2 (the accept branch's print block had never run against a real conversion) and M1's
-    accept-side gap (the `--verbose` print site inside `build_runtime_additive_sections`, whose
-    only prior cover was a source-text reference count)."""
-    r, out_sslm = _convert_adapter(tmp_path, real_base_artifact, seed=0)
+    """A real conversion through the real CLI subprocess chain, with no `--reference-delta-norm`
+    configured: T-2213 retired the B3 pooled ACCEPT/REJECT gate, so B3 can no longer refuse to
+    write an artifact -- both `seed=0` (this fixture's own default) and `seed=7` (the retired
+    suite's own pinned REJECT-branch seed, `Claude/Poirot/4299d84-t2206-b3-round2-confirmation.md`
+    M2) now reach the ACCEPT branch. This confirms the retirement closed the reject path rather
+    than leaving a stale cell asserting a rejection that can no longer happen."""
+    r, out_sslm = _convert_adapter(tmp_path, real_base_artifact, seed=seed)
 
     assert r.returncode == 0, f"expected the ACCEPT branch (rc=0):\n{r.stdout}\n{r.stderr}"
     assert out_sslm.is_file(), "the accept branch must have written the runtime-additive artifact"
-    assert "domain_trip=False" not in r.stderr  # no rejection branch fired at all on stderr
     assert "REJECTED" not in r.stderr
 
     # The verbose print site inside `build_runtime_additive_sections` fires before `main()`'s own
@@ -123,41 +105,33 @@ def test_real_conversion_accepts_and_prints_the_final_notice_at_both_its_sites(
         f"expected the notice twice on stdout (the --verbose line, then main()'s accept branch); "
         f"got {r.stdout.count(_NOTICE)}. Full stdout:\n{r.stdout}"
     )
-    assert "pooled B3 gate: accepted=True" in r.stdout
+    assert "accepted=" not in r.stdout, "the retired pooled verdict must not reappear"
+    assert "pooled B3 report: n_pairs=" in r.stdout
+    assert "delta_norm=" in r.stdout
+    assert "MAGNITUDE WARNING" not in r.stdout, "no --reference-delta-norm was passed; none must warn"
 
-    # T-2206 (Poirot S1): this fixture's seed=0 pooled run flags zero pairs (n_pairs=1,
-    # 0 flagged) -- the exact shape the ×50-hot construction in `Claude/Brunel/t2201-b3-gate-
-    # investigation-2026-08-20.md` also produced (0/28 flags on an adapter that IS defective).
-    # `main()`'s accept branch used to guard the flagged-pairs line behind `if flagged:`, so a
-    # 0-flag run printed silence there instead of a statement -- a consumer reading only the
-    # branch's own output had no way to tell "checked, found nothing" apart from "never
-    # checked." The empty case must print an explicit statement, not silence.
+    # This fixture's own pooled run flags zero pairs (n_pairs=1, 0 flagged) -- the empty case
+    # must print an explicit statement, not silence (T-2201/T-2206's own remedy, unaffected by
+    # the T-2213 retirement).
     assert "0 pair(s) flagged for review" in r.stdout, (
         f"expected the empty-flag case to print explicitly, not silently. Full stdout:\n{r.stdout}"
     )
     assert "not evidence this adapter is sound" in r.stdout
 
 
-def test_real_conversion_rejects_on_composed_mean_and_prints_the_final_notice_at_both_its_sites(
+def test_real_conversion_with_a_far_reference_still_accepts_and_prints_the_magnitude_warning(
     tmp_path, real_base_artifact,
 ):
-    """seed=7: a real conversion through the real CLI subprocess chain that REJECTS via the B3
-    pooled margin (never a domain trip) -- closing M1's reject-side gap for a real conversion
-    (the mocked case was already covered). T-2206 (Poirot M2): pinned at seed=7 rather than the
-    sweep's other rejecting seeds (5, 19) because its margin clears the rejection boundary by
-    +960% relative, ~73x further out than seed=5's +13.1% -- see this module's own docstring."""
-    r, out_sslm = _convert_adapter(tmp_path, real_base_artifact, seed=7)
+    """T-2213: `--reference-delta-norm` wired through the real CLI, end to end, against a real
+    conversion. A reference far below this fixture's own real `delta_norm` (this tiny CI fixture's
+    own scale is unrelated to the reference figure -- the point of this cell is to prove the flag
+    reaches `run_b3_pooled_report` and the warning prints, not to reproduce a specific ratio)
+    trips the wide-tolerance sanity band. The artifact is still written (rc=0): the warning is
+    UNRESOLVED, never a REJECT."""
+    r, out_sslm = _convert_adapter(tmp_path, real_base_artifact, seed=0, reference_delta_norm=1e-9)
 
-    assert r.returncode == 1, f"expected the REJECT branch (rc=1):\n{r.stdout}\n{r.stderr}"
-    assert not out_sslm.exists(), "a rejected conversion must not leave an artifact on disk"
-    assert "domain_trip=False margin_exceeded=True" in r.stderr, (
-        f"expected the B3 margin branch specifically, not a domain rejection. Full stderr:\n"
-        f"{r.stderr}"
-    )
-    assert "composed_mean_accepts=False" in r.stderr
-
-    # The --verbose print site (inside build_runtime_additive_sections, before dispatch) prints
-    # to stdout exactly as it does on the accept path; main()'s own reject branch prints the
-    # notice a second time, to STDERR, beside the per-conjunct accepts.
-    assert _NOTICE in r.stdout, f"expected the notice on stdout (--verbose site). stdout:\n{r.stdout}"
-    assert _NOTICE in r.stderr, f"expected the notice on stderr (main() reject branch). stderr:\n{r.stderr}"
+    assert r.returncode == 0, f"a magnitude warning must never refuse the artifact:\n{r.stdout}\n{r.stderr}"
+    assert out_sslm.is_file()
+    assert "MAGNITUDE WARNING" in r.stdout, f"expected a magnitude warning. stdout:\n{r.stdout}"
+    assert "unresolved" in r.stdout.lower()
+    assert "never a REJECT" in r.stdout
