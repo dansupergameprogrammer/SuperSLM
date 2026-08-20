@@ -40,6 +40,8 @@ set(SUPERSLM_CORE_SOURCES
 	src/forward/forward_sites.cpp
 	src/decode_digest.cpp
 	src/sslm_abi.cpp
+	src/damped_greedy_antilm.cpp
+	src/damped_greedy_topk.cpp
 )
 
 add_library(superslm STATIC ${SUPERSLM_CORE_SOURCES})
