@@ -458,7 +458,279 @@ static void TestFinding2_KeeperProbe_HighAlpha_ExactRecompute() {
 	AntiLmDestroy(alm);
 }
 
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot S1 + the owed S6 fixture, same casebook/build-log): `p_topk_q15`
+// is now `ExactRatioQ15` -- a file-local, purpose-built exact-integer multiply/divide (early
+// clamp when the true ratio is >= 1.0, so the overflowing product is never formed; otherwise a
+// 128-bit-safe restoring divide with round-to-nearest, ties away from zero) replacing the
+// pre-fix `double` computation (`ratio = (double)z_k_raw * (double)(1<<15) / (double)denom;
+// p_topk = llround(ratio)`), the only `double` anywhere in `src/` outside `model.cpp`'s
+// artifact reader (Poirot's own sweep) -- a direct violation of plan Sec1 constraint 1, "No
+// float on the decode path; any new arithmetic is exact integer."
+//
+// This is also where the STILL-OWED S6 fixture closes: `p_topk_q15` is clamped to
+// `[0, 1<<15]`, and every cell in THIS SUITE before this fix round supplied a `full_row_z` in
+// normalized Q15 units against a `z_k_q0` in raw units (both keeper-probe cells, this file) --
+// a units mismatch that always saturates the clamp to its own ceiling, so the clamp's
+// arithmetic below the ceiling had never been shown to READ correctly on any COMMITTED
+// fixture (Poirot's own S6 finding: "a must-accept without a must-reject is not a
+// commissioned instrument"). Poirot's own review supplies and executes the missing
+// construction directly (this file's own earlier caveat, and this campaign's own prior test-
+// design record, both routed exactly this gap): an HONEST denominator (`full_row_z` in the
+// SAME raw units `z_k_q0` already reports, read directly off `diag.z_k_q0` rather than
+// estimated) produces a genuinely sub-ceiling reading.
+//
+// RED-FIRST: EXECUTED for the exactness half (a) below -- see this cell's own comment there
+// for why the "double reintroduction" construction searched for exhaustively (500,000+ random
+// trials at this codebase's own magnitude range) found NO divergence between `double` and
+// exact-integer rounding, and why the adversarial-magnitude pin (b) is the fallback the
+// commission itself named for exactly this outcome. NOT executed pre-fix for (c) (the honest-
+// denominator/S6 construction) -- the pre-fix `double` computation is ALSO arithmetically
+// correct at this specific ratio (0.25 has an exact double representation, so `llround` cannot
+// diverge from the exact-integer path here); (c)'s own claim ("the clamp reads correctly below
+// its ceiling, on a COMMITTED fixture") is true of both the pre-fix and post-fix arithmetic --
+// what changed is that NO cell exercised it before this fix round, which is what (c) itself
+// now closes, not a pre-fix/post-fix behavioral difference.
+// ===========================================================================================
+static void TestS1S6_PTopkQ15_ExactIntegerAndHonestDenominator() {
+	const int32_t V = 30;
+	std::vector<int32_t> row = MakeSyntheticRow(V, {5, 10, 0, 15, 20, 25});
+	std::vector<uint8_t> mask = MakeMask(V, true);
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+	AntiLmState* alm = AntiLmCreate(1);
+	AntiLmUpdate(alm, 5);
+
+	// Probe call to learn the row's own REAL raw z_k_q0 (any full_row_z works for this read --
+	// diag.z_k_q0 is reported independent of what p_topk_q15 clamps to).
+	int32_t token = -1;
+	bool refused = false;
+	DampedGreedyDiagnostics probe{};
+	CHECK(DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm, 0, q_ln2, q_b, q_c,
+	                                      /*full_row_z=*/1, &token, &refused, &probe));
+	const int64_t z_k = probe.z_k_q0;
+	CHECK_MSG(z_k > 0, "test fixture error: z_k_q0=%lld, want a genuinely positive raw i-exp "
+	                    "sum for this construction to be meaningful",
+	          (long long)z_k);
+
+	// (a) Ceiling case, reproducing Poirot's own first row exactly (full_row_z=1, a units
+	// error of ~6 orders against any real z_k_q0 -- the true ratio is always >= 1.0 here,
+	// clamped): p_topk_q15 must be exactly 32768, and this is what a caller-side full_row_z
+	// underestimate is DESIGNED to report ("the k-gathered candidates hold effectively all of
+	// the row's mass").
+	CHECK_MSG(probe.p_topk_q15 == (1 << kProbFracBits),
+	          "full_row_z=1: p_topk_q15=%lld, want exactly 32768 (the clamp ceiling)",
+	          (long long)probe.p_topk_q15);
+
+	// (b) Adversarial-magnitude exact-Q15 known-answer cells. full_row_z = N * z_k_q0 for
+	// several small N -- the z_k_q0 factor cancels ALGEBRAICALLY (z_k_q0 / (N * z_k_q0) =
+	// 1/N exactly), so the expected Q15 value is computable here with zero risk of this
+	// TEST's own reference calc overflowing (no `<<15` product of the real, large z_k_q0 is
+	// ever formed on this side), while the PRODUCTION call still forms and divides that exact
+	// large product internally -- z_k_q0 can be up to ~2^47 (kSoftmaxRowMaxSafeExponent),
+	// `z_k_q0 << 15` up to ~2^62, precisely the magnitude `double`'s 52-bit mantissa cannot
+	// represent exactly, which is the adversarial-magnitude regime this cell exercises.
+	// Expected values computed independently (exact rational arithmetic, round-to-nearest-
+	// ties-away-from-zero, matching the production formula's own documented rounding rule):
+	// N=3 -> 10923, N=7 -> 4681, N=25 -> 1311 -- each computed by EXECUTING the exact-rational
+	// formula (floor division + round-to-nearest-ties-away-from-zero) in a scratch script, not
+	// derived by hand (StandardsDocument.md Sec5.4: verified at source or by execution).
+	struct NCase {
+		int64_t n;
+		int64_t expect_q15;
+	};
+	const NCase cases[] = {{3, 10923}, {7, 4681}, {25, 1311}};
+	for (const NCase& c : cases) {
+		const int64_t full_row_z = c.n * z_k;
+		int32_t t2 = -1;
+		bool r2 = false;
+		DampedGreedyDiagnostics d2{};
+		CHECK(DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm, 0, q_ln2, q_b,
+		                                      q_c, full_row_z, &t2, &r2, &d2));
+		CHECK_MSG(d2.z_k_q0 == z_k, "z_k_q0 changed (%lld -> %lld) across calls with the "
+		                            "identical row/scale -- must be deterministic",
+		          (long long)z_k, (long long)d2.z_k_q0);
+		CHECK_MSG(d2.p_topk_q15 == c.expect_q15,
+		          "N=%lld: full_row_z=%lld*z_k_q0, p_topk_q15=%lld, want exactly %lld "
+		          "(1/%lld in Q15, exact -- the z_k_q0 factor cancels algebraically, so this "
+		          "expected value does not depend on z_k_q0's own magnitude)",
+		          (long long)c.n, (long long)c.n, (long long)d2.p_topk_q15,
+		          (long long)c.expect_q15, (long long)c.n);
+	}
+
+	// (c) The owed S6 fixture: an HONEST denominator (N=4, reproducing Poirot's own second
+	// row exactly -- "full_row_z = 4*z_k -> exactly 8192 (0.25)") -- a genuinely sub-ceiling,
+	// non-trivial reading, closing the "never shown reading anything but its ceiling" gap.
+	{
+		const int64_t full_row_z = 4 * z_k;
+		int32_t t3 = -1;
+		bool r3 = false;
+		DampedGreedyDiagnostics d3{};
+		CHECK(DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm, 0, q_ln2, q_b,
+		                                      q_c, full_row_z, &t3, &r3, &d3));
+		CHECK_MSG(d3.p_topk_q15 == 8192,
+		          "honest denominator (full_row_z=4*z_k_q0): p_topk_q15=%lld, want exactly "
+		          "8192 (0.25) -- the arithmetic below the ceiling, on a COMMITTED fixture",
+		          (long long)d3.p_topk_q15);
+		CHECK_MSG(d3.p_topk_q15 != (1 << kProbFracBits),
+		          "p_topk_q15 read the ceiling (32768) on an HONEST, sub-ceiling denominator -- "
+		          "this is the exact failure mode the missing fixture existed to catch (every "
+		          "prior committed fixture landed on the ceiling regardless of the true ratio)");
+	}
+
+	AntiLmDestroy(alm);
+}
+
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot C1, `Claude/Poirot/7be9508-t2199-phaseAC-review.md`,
+// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec12.1): both public entry points now
+// reject `k <= 0`, `vocab_size <= 0`, or `k > vocab_size` with `return false` BEFORE touching
+// any `k`-sized array -- closing the `q_theta[0]`/`p_omega[0]` out-of-bounds access at `k=0`
+// in `DampedGreedyScoreAndArgmaxDiag` (pre-fix: `0xC0000005`, an access violation, since
+// `q_theta`/`p_omega` are `std::vector`s sized `k` and both subscripts are out of bounds at
+// `k=0`) and the non-`Diag` sibling's own silent `*out_token = -1` under a `true` return
+// (successful-selection-of-token-negative-one, indistinguishable from a real result to a
+// caller reading only the documented outputs).
+//
+// This cell tests THREE domain-violation shapes (`k <= 0`, `vocab_size <= 0`, `k >
+// vocab_size`) against BOTH entry points where each shape is SAFE to exercise directly (never
+// touching a `k`-sized array before the domain check fires, in EITHER the pre-fix or post-fix
+// code -- see the per-shape notes below), pre-filling every output with a sentinel so "the
+// function returns false and leaves outputs untouched" is a real, checkable assertion, not
+// merely "returns false."
+//
+// RED-FIRST, split by shape and entry point -- executed where the pre-fix construction is
+// SAFE to run in this shared binary (a crash would silently discard every other cell's own
+// result in this file); pinned-green with the crash cited as evidence otherwise:
+//   - `vocab_size = 0` (both entry points) and `k > vocab_size` with `vocab_size > 0` (both
+//     entry points): SAFE at ANY `k > 0` pre-fix (`q_theta`/`p_omega` are sized by `k`, never
+//     by `vocab_size`, and `vocab_size = 0` casts to a legitimate empty `size_t` allocation,
+//     not a crash) -- EXECUTED against `c473dad` (pre-fix: `*out_token` overwritten, e.g. `-1`
+//     from an all-empty `FsdTopK` write at `vocab_size=0`, or a real-but-wrong token at
+//     `k>vocab_size`'s own S5-shaped corruption; `wf`-derived `true` return either way) and
+//     `826f607` (post-fix: `false`, outputs untouched). See this campaign's own test-design
+//     record for the transcript.
+//   - `vocab_size < 0`: NOT exercised, even via the "safe" entry points -- a NEGATIVE
+//     `vocab_size` casts to a huge `size_t` in `FsdTopK`'s own pre-fix `idx` vector
+//     construction (the identical crash shape `AntiLmCreate(-1)` demonstrates elsewhere in
+//     this suite), independent of `k`. An earlier draft of this cell included
+//     `vocab_size=-5` in the "safe" shape list on the reasoning above (which only accounted
+//     for `q_theta`/`p_omega`'s own sizing, not `FsdTopK`'s internal `idx` allocation) --
+//     the pre-fix verification run crashed this entire binary with no output, discovered by
+//     executing it, not merely reasoned through after the fact. Removed from the shape array;
+//     PINNED-GREEN, same reasoning as the `k=0`/`Diag` sub-case below.
+//   - `k = 0` via `DampedGreedyScoreAndArgmax` (non-`Diag`): SAFE pre-fix -- Poirot's own
+//     review states plainly "The non-`Diag` sibling on the same input does *not* crash," and
+//     re-derived here from the pre-fix source directly: at `k=0`, `TopKRenormalizeQ15`'s own
+//     `if (k == 0) return true;` early-return makes the whole call SAFE end to end, landing on
+//     `*out_token = -1` under `true` (the documented pre-fix defect: "a caller reading the
+//     documented outputs is told a successful selection produced token -1"). EXECUTED.
+//   - `k = 0` via `DampedGreedyScoreAndArgmaxDiag`: NOT re-executed in this binary -- this is
+//     the literal access-violation shape Poirot's own review captured (0xC0000005), and running
+//     it here would crash this file's entire process before any other cell's own result could
+//     be recorded. PINNED-GREEN for this one sub-case, with Poirot's own executed crash (cited
+//     above) standing as the red evidence.
+// ===========================================================================================
+static void TestC1_DomainRejection_BothEntryPoints_VocabAndKOversizedShapes() {
+	const int32_t V = 20;
+	std::vector<int32_t> row = MakeSyntheticRow(V, {5, 10, 15});
+	std::vector<uint8_t> mask = MakeMask(V, true);
+	AntiLmState* alm = AntiLmCreate(1);
+	AntiLmUpdate(alm, 5);
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+
+	struct Shape {
+		int32_t vocab_size;
+		int32_t k;
+		const char* name;
+	};
+	// NOTE: vocab_size < 0 is deliberately NOT in this array -- executing it against pre-fix
+	// code, unlike vocab_size=0, is UNSAFE: `FsdTopK`'s own pre-fix `std::vector<int32_t>
+	// idx(static_cast<std::size_t>(vocab_size))` casts a negative `vocab_size` to a huge
+	// `size_t`, attempting a catastrophic allocation -- confirmed by execution (crashes this
+	// entire binary before any result records, the same crash SHAPE `AntiLmCreate(-1)`
+	// demonstrates elsewhere in this suite, `antilm_phaseA_red.cpp`'s own M4 cell). This is a
+	// finding this cell's own construction surfaced, not merely reasoned through: an earlier
+	// draft included `vocab_size=-5` here and the pre-fix verification run crashed with no
+	// output at all, silently discarding this file's own subsequent cells too -- removed and
+	// documented rather than left to happen again. `vocab_size < 0` is therefore PINNED-GREEN
+	// for the same reason `k=0` via `Diag` is below: the crash itself is the red evidence.
+	const Shape shapes[] = {
+	    {0, 6, "vocab_size=0"},
+	    {V, V + 10, "k>vocab_size (k=30,V=20)"},
+	};
+	for (const Shape& sh : shapes) {
+		// Non-Diag entry point.
+		int32_t out_token = -424242;  // pre-call sentinel, never a real token this suite emits
+		bool out_refused = true;      // pre-call sentinel (opposite of the expected untouched
+		                               // state's own natural default, so a spurious write is
+		                               // visible either direction)
+		const bool ok = DampedGreedyScoreAndArgmax(row.data(), mask.data(), sh.vocab_size, sh.k,
+		                                            alm, 0, q_ln2, q_b, q_c, &out_token,
+		                                            &out_refused);
+		CHECK_MSG(!ok, "DampedGreedyScoreAndArgmax(%s) returned true, want false (domain "
+		               "violation)",
+		          sh.name);
+		CHECK_MSG(out_token == -424242, "DampedGreedyScoreAndArgmax(%s): *out_token was "
+		                                "written (%d) despite the domain violation -- must "
+		                                "stay untouched",
+		          sh.name, out_token);
+		CHECK_MSG(out_refused == true, "DampedGreedyScoreAndArgmax(%s): *out_refused was "
+		                               "written despite the domain violation -- must stay "
+		                               "untouched",
+		          sh.name);
+
+		// Diag entry point -- safe at every one of these shapes (k > 0 in all three, so
+		// q_theta[0]/p_omega[0] are never the empty-vector access the k=0 shape triggers).
+		int32_t d_out_token = -424242;
+		bool d_out_refused = true;
+		DampedGreedyDiagnostics diag;
+		diag.qspread_q15 = -13;  // pre-call sentinel pattern, distinguishable from any real
+		diag.p_topk_q15 = -13;   // computed value (all real fields are >= 0 by contract)
+		diag.alpha_eff_q15 = -13;
+		diag.pomspread_q15 = -13;
+		diag.z_k_q0 = -13;
+		const bool d_ok = DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), sh.vocab_size,
+		                                                  sh.k, alm, 0, q_ln2, q_b, q_c,
+		                                                  /*full_row_z=*/32768, &d_out_token,
+		                                                  &d_out_refused, &diag);
+		CHECK_MSG(!d_ok, "DampedGreedyScoreAndArgmaxDiag(%s) returned true, want false", sh.name);
+		CHECK_MSG(d_out_token == -424242, "DampedGreedyScoreAndArgmaxDiag(%s): *out_token "
+		                                  "written despite the domain violation",
+		          sh.name);
+		CHECK_MSG(d_out_refused == true, "DampedGreedyScoreAndArgmaxDiag(%s): *out_refused "
+		                                 "written despite the domain violation",
+		          sh.name);
+		CHECK_MSG(diag.qspread_q15 == -13 && diag.p_topk_q15 == -13 &&
+		              diag.alpha_eff_q15 == -13 && diag.pomspread_q15 == -13 &&
+		              diag.z_k_q0 == -13,
+		          "DampedGreedyScoreAndArgmaxDiag(%s): *out_diag was written despite the "
+		          "domain violation -- the memset that populates it must never run before the "
+		          "domain check",
+		          sh.name);
+	}
+
+	// k=0 via the non-Diag entry point -- SAFE pre-fix (see this cell's own header comment).
+	{
+		int32_t out_token = -424242;
+		bool out_refused = true;
+		const bool ok = DampedGreedyScoreAndArgmax(row.data(), mask.data(), V, /*k=*/0, alm, 0,
+		                                            q_ln2, q_b, q_c, &out_token, &out_refused);
+		CHECK_MSG(!ok, "DampedGreedyScoreAndArgmax(k=0) returned true, want false -- pre-fix "
+		               "this returned true with *out_token=-1, indistinguishable from a "
+		               "genuine successful selection of token -1");
+		CHECK_MSG(out_token == -424242,
+		          "DampedGreedyScoreAndArgmax(k=0): *out_token was written (%d) despite the "
+		          "domain violation",
+		          out_token);
+	}
+
+	AntiLmDestroy(alm);
+}
+
 int main() {
+	TestC1_DomainRejection_BothEntryPoints_VocabAndKOversizedShapes();
 	TestDim7_MaskedNeverSelected_HighAlphaOverwhelmsLegalCandidate();
 	TestDim7_MaskedNeverSelected_SingleLegalAmongSix();
 	TestDim8_MaskFirst_SingleLegalContinuationAcrossFullGrid();
@@ -466,6 +738,7 @@ int main() {
 	TestDim7_AlphaZeroReducesToArgmax();
 	TestDim7_KeeperProbe_DiagnosticsComputedCorrectly();
 	TestFinding2_KeeperProbe_HighAlpha_ExactRecompute();
+	TestS1S6_PTopkQ15_ExactIntegerAndHonestDenominator();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

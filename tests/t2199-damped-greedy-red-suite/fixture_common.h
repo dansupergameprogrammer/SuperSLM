@@ -29,12 +29,26 @@ static int GChecks = 0;
 static int GFailures = 0;
 static int GSkips = 0;
 
+// fflush(stdout) after every printed line -- fix round 2026-08-20 (Curie, discovered by
+// execution while verifying the fix-round pins' own red-first status, not merely reasoned
+// through): when stdout is redirected to a file (build_green.bat's own `> ...runlog`
+// convention), the C runtime switches from line-buffered to FULLY buffered, so any printf'd
+// output not yet flushed at the moment a LATER cell crashes the process (e.g. this suite's
+// own documented crash-prone constructions, C1's k=0/Diag case and M4's negative-max_order
+// case) is silently LOST -- an earlier cell's own genuine FAIL line never reaches the log,
+// even though it printed before the crash. Verified directly: an antilm_phaseA_red.cpp run
+// against pre-fix code, with a real CHECK failure (AntiLmCreate(0) returning non-null)
+// printing BEFORE a later crash-prone call, produced a completely EMPTY runlog until this
+// fix. The crash itself is still caught by build_green.bat's own harness (no summary line,
+// nonzero exit -- NOT GREEN) regardless of this fix; what this restores is the SPECIFIC
+// per-assertion evidence a reader would otherwise lose.
 #define CHECK(cond) \
 	do { \
 		++GChecks; \
 		if (!(cond)) { \
 			++GFailures; \
 			std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+			std::fflush(stdout); \
 		} \
 	} while (0)
 
@@ -46,6 +60,7 @@ static int GSkips = 0;
 			std::printf("FAIL %s:%d: %s -- ", __FILE__, __LINE__, #cond); \
 			std::printf(__VA_ARGS__); \
 			std::printf("\n"); \
+			std::fflush(stdout); \
 		} \
 	} while (0)
 
@@ -55,6 +70,7 @@ static int GSkips = 0;
 		std::printf("SKIP %s:%d -- ", __FILE__, __LINE__); \
 		std::printf(__VA_ARGS__); \
 		std::printf("\n"); \
+		std::fflush(stdout); \
 	} while (0)
 
 namespace t2199fixture {

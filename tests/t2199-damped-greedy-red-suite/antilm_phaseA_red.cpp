@@ -477,6 +477,151 @@ static void TestPhaseA_LoftusCrossReference_BehavioralParity() {
 	AntiLmDestroy(fresh);
 }
 
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot M4, `Claude/Poirot/7be9508-t2199-phaseAC-review.md`,
+// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec12.1): `AntiLmCreate(max_order < 1)`
+// now returns `nullptr` instead of the two pre-fix failure modes -- `AntiLmCreate(-1)`
+// terminated the process (`0xC0000409`, a negative `max_order` casting to a huge `size_t` in
+// `tables_`'s own vector constructor) and `AntiLmCreate(0)` was silently accepted, producing a
+// state that always returns `p_omega = 0` (a permanently-disabled anti-LM, not a rejection).
+//
+// RED-FIRST: PARTIALLY EXECUTED, split by sub-case. `max_order = 0` is a genuine CHECK-based
+// red/green pair -- pre-fix it silently returned a non-null, always-zero state (this cell's own
+// `CHECK(state == nullptr)` would FAIL, printed, not crash); post-fix it returns nullptr
+// (passes). Executed against both `c473dad` (pre-fix) and `826f607` (post-fix); see this
+// campaign's own test-design record for the transcript. `max_order = -1` is NOT executed
+// red against pre-fix code in THIS binary -- pre-fix, that call terminates the process before
+// any CHECK can run or report, which would silently discard every OTHER cell's own result in
+// this same file's `main()`. The crash itself (0xC0000409, confirmed in Poirot's own review,
+// re-confirmed by a separate isolated scratch probe, not committed) IS the red evidence for
+// this sub-case -- loud and unambiguous, just not a printed FAIL line -- so this cell is
+// PINNED-GREEN for the negative-argument sub-case specifically, with the reason stated here
+// rather than risking every other cell in this file behind an uncaught crash.
+// ===========================================================================================
+static void TestM4_AntiLmCreate_SubOneMaxOrderReturnsNullptr() {
+	AntiLmState* zero = AntiLmCreate(0);
+	CHECK_MSG(zero == nullptr, "AntiLmCreate(0) = %p, want nullptr (Poirot M4: max_order=0 was "
+	                            "previously silently accepted as a permanently-disabled "
+	                            "anti-LM, p_omega always 0, rather than a rejection)",
+	          (void*)zero);
+	AntiLmDestroy(zero);  // AntiLmDestroy(nullptr) must be safe (matches `delete nullptr`)
+
+	// Positive control: max_order=1 (the domain floor) must still succeed -- a cell that only
+	// ever saw nullptr would trivially "pass" a stub that always returns nullptr for everything.
+	AntiLmState* one = AntiLmCreate(1);
+	CHECK_MSG(one != nullptr, "AntiLmCreate(1) returned nullptr -- the domain floor itself must "
+	                          "still succeed");
+	AntiLmDestroy(one);
+
+	// max_order = -1: NOT red-first executed via CHECK in this binary (pre-fix, this call
+	// terminates the process -- see this cell's own header comment). Post-fix assertion only.
+	AntiLmState* neg = AntiLmCreate(-1);
+	CHECK_MSG(neg == nullptr, "AntiLmCreate(-1) = %p, want nullptr (Poirot M4: previously "
+	                          "terminated the process, 0xC0000409, via a negative-to-size_t "
+	                          "cast in the tables_ vector constructor)",
+	          (void*)neg);
+	AntiLmDestroy(neg);
+}
+
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot S3, same casebook/build-log): `AntiLmRetainedBytes` recalibrated
+// against measured process-memory deltas. The DOCUMENTED SCOPE, unchanged by the recalibration
+// and pinned here rather than the recalibrated numeric constants themselves (which the
+// production header explicitly calls "a MODEL... not a byte-exact accounting," already
+// recalibrated once and disclaimed as subject to change again): the reported figure is a
+// function of the TABLE ONLY (the per-order count structures) and DELIBERATELY EXCLUDES
+// `history_` (the per-sequence generated-token buffer, which grows by one token on every
+// `AntiLmUpdate` call regardless of repeats) -- stated explicitly in both the production
+// header and `damped_greedy_antilm.cpp`'s own comment on `AntiLmRetainedBytes`. **This is the
+// stated exclusion this cell's own construction is built to make break loudly**: if a future
+// change folds `history_`'s own footprint into this same figure, the additivity and
+// exclusion assertions below fail immediately, not silently.
+//
+// RED-FIRST: NOT executed against pre-fix code. S3 was not a domain-rejection defect (the
+// pre-fix code always returned SOME reading; the finding was that the reading undercounted the
+// true process-memory delta by 3-6x) -- this cell pins the DOCUMENTED SCOPE (table-only,
+// additive per distinct n-gram, excludes history_), a property that held both before and after
+// S3's own recalibration (only the numeric CONSTANTS changed, not the accounting SHAPE), so
+// there is no pre-fix/post-fix behavioral difference for this cell to detect -- PINNED-GREEN,
+// reason stated: this is a scope/shape pin, not a magnitude pin, and the magnitude is exactly
+// what S3's own recalibration changed without changing the shape this cell checks.
+// ===========================================================================================
+static void TestS3_AntiLmRetainedBytes_TableOnlyDocumentedScope() {
+	// (a) A freshly created state (zero updates) reports exactly zero -- the trivial base case
+	// of "the table is empty."
+	AntiLmState* s = AntiLmCreate(2);
+	CHECK_MSG(AntiLmRetainedBytes(s) == 0, "fresh AntiLmState reports %zu bytes, want 0",
+	          AntiLmRetainedBytes(s));
+
+	// (b) Deterministic, reproducible per-entry cost: three structurally IDENTICAL insertions
+	// (a brand-new order-1 candidate under the always-existing empty context, plus a brand-new
+	// order-2 context-with-one-candidate under a token never seen as a context before) must
+	// cost the IDENTICAL number of bytes each time, regardless of how much history precedes
+	// them -- proving the accounting is a genuine per-entry sum (the documented "grows with
+	// distinct n-grams" claim), not, e.g., a formula that happens to undercount later entries
+	// or double-counts the context payload.
+	const int32_t X1 = 1000, X2 = 2000, X3 = 3000;
+	AntiLmUpdate(s, X1);
+	const std::size_t after_1 = AntiLmRetainedBytes(s);
+	AntiLmUpdate(s, X2);  // order1: new candidate X2 under ""; order2: new context (X1,) + X2
+	const std::size_t after_2 = AntiLmRetainedBytes(s);
+	AntiLmUpdate(s, X3);  // order1: new candidate X3 under ""; order2: new context (X2,) + X3
+	const std::size_t after_3 = AntiLmRetainedBytes(s);
+
+	CHECK_MSG(after_1 > 0, "after one update, retained bytes = %zu, want > 0 (a real table "
+	                        "entry must cost something, not a vacuous stub)",
+	          after_1);
+	const std::size_t delta_2 = after_2 - after_1;
+	const std::size_t delta_3 = after_3 - after_2;
+	CHECK_MSG(delta_2 > 0 && delta_3 > 0, "delta_2=%zu delta_3=%zu, both must be strictly "
+	                                      "positive (a genuinely new context+candidate at "
+	                                      "each step)",
+	          delta_2, delta_3);
+	CHECK_MSG(delta_2 == delta_3,
+	          "delta_2=%zu delta_3=%zu -- two structurally IDENTICAL insertions (one new "
+	          "order-1 candidate, one new order-2 context-with-candidate) must cost the "
+	          "IDENTICAL number of bytes; a mismatch means the accounting is not a "
+	          "deterministic per-entry sum",
+	          delta_2, delta_3);
+
+	// (c) The stated exclusion, made concrete: replaying an ALREADY-SEEN 2-token cycle many
+	// times (every context/candidate pair this replay visits was already counted above) must
+	// leave retained bytes EXACTLY UNCHANGED, even though `history_` (excluded from this
+	// figure by design) grows by one token per replay call -- the cell's own reason this
+	// assertion exists: a future change that folds `history_` into this same figure would grow
+	// `after_replay` past the priming baseline here, failing loudly.
+	//
+	// PRIMING, not a 2-token baseline: at order 2, a context is the SINGLE preceding token, so
+	// a bare two-update baseline ({L1, L2}) only ever inserts context (L1,)->L2 -- the reverse
+	// direction, context (L2,)->L1, is only reached on the THIRD update, which a short baseline
+	// would misclassify as "new" growth during replay (an error this cell's own first draft
+	// made, caught by executing it: 312 -> 440 bytes on the first replay step, exactly one new
+	// order-2 context+candidate, `kContextBaseOverhead + kContextPerTokenOverhead +
+	// kCandidateOverhead`). Three full cycles primes BOTH directions before the baseline is
+	// read, matching this suite's own existing `TestPhaseA_MemoryGrowth_BoundedByDistinctNgrams`
+	// cell's own construction exactly, for the identical reason.
+	AntiLmState* loop = AntiLmCreate(2);
+	const int32_t L1 = 5000, L2 = 6000;
+	for (int i = 0; i < 3; ++i) {
+		AntiLmUpdate(loop, L1);
+		AntiLmUpdate(loop, L2);
+	}
+	const std::size_t loop_baseline = AntiLmRetainedBytes(loop);
+	for (int rep = 0; rep < 50; ++rep) {
+		AntiLmUpdate(loop, L1);
+		AntiLmUpdate(loop, L2);
+	}
+	const std::size_t loop_after_replay = AntiLmRetainedBytes(loop);
+	CHECK_MSG(loop_after_replay == loop_baseline,
+	          "retained bytes grew from %zu to %zu across 50 further replays of an already-"
+	          "primed 2-token cycle -- history_ (100 additional tokens by now) must NOT be "
+	          "reflected in this table-only figure",
+	          loop_baseline, loop_after_replay);
+
+	AntiLmDestroy(s);
+	AntiLmDestroy(loop);
+}
+
 int main() {
 	TestPhaseA_KnownAnswer_Order1();
 	TestPhaseA_KnownAnswer_Order1_NonDivisible();
@@ -489,6 +634,12 @@ int main() {
 	TestPhaseA_SameSequenceTwiceIdenticalState();
 	TestPhaseA_MemoryGrowth_BoundedByDistinctNgrams();
 	TestPhaseA_LoftusCrossReference_BehavioralParity();
+	TestS3_AntiLmRetainedBytes_TableOnlyDocumentedScope();
+	// M4's own crash-prone sub-case (AntiLmCreate(-1)) is called LAST, deliberately, so that
+	// if it is ever run against a build where that regression has been reintroduced, every
+	// earlier cell in this file has already reported its own result first (see that cell's
+	// own header comment for why this suite does not otherwise re-execute a known crash).
+	TestM4_AntiLmCreate_SubOneMaxOrderReturnsNullptr();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }

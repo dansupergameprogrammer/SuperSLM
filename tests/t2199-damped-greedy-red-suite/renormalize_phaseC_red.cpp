@@ -235,12 +235,92 @@ static void TestDim7_CostShape_FlatRowNotMoreExpensiveThanRealistic() {
 	          t_flat, t_realistic);
 }
 
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot M2, `Claude/Poirot/7be9508-t2199-phaseAC-review.md`,
+// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec12.1): `intmath.h` states twice that a
+// caller gates `SoftmaxRowQ15` with `CheckSoftmaxRowWidthDomain(q_b, q_c, width)` BEFORE
+// calling it -- the per-element bound holds unconditionally either way, but the sum-overflow
+// bound the gate proves does not. `TopKRenormalizeQ15` previously called `SoftmaxRowQ15`
+// directly, never invoking the gate -- a documented contract honored in prose only. Fixed:
+// `CheckSoftmaxRowWidthDomain` is now called first; on a gate failure, every `out_q15[i]` is
+// written 0 and the function returns false.
+//
+// This suite's own EXISTING gate cell (`TestDim6_WidthDomainGate_ClearsAtEveryGridK`, above)
+// pins that the gate WOULD clear at every primary-grid k for a validly-derived scale -- Poirot's
+// own review names exactly why that is a different statement from the gate being INVOKED:
+// "establishes that the gate *would* clear... which is a different statement from the gate
+// being invoked." This cell closes that gap directly: an out-of-domain `(q_b, q_c)` pair
+// (`q_c < 0`, rejected unconditionally by `CheckSoftmaxRowWidthDomain`'s own first check,
+// `checked_chain_funnel.cpp`) must make `TopKRenormalizeQ15` REFUSE -- not silently compute a
+// row's own softmax against constants the gate itself would never certify.
+//
+// RED-FIRST: EXECUTED. Against `c473dad` (pre-fix): `TopKRenormalizeQ15` calls
+// `SoftmaxRowQ15` directly with `q_c = -1`, bypassing the gate entirely -- `SoftmaxRowQ15`'s
+// own per-element domain math does not itself reject `q_c < 0` (that is specifically the
+// gate's own additional, documented-but-unenforced check), so the pre-fix call computes and
+// returns `true` instead of refusing -- reproduced directly, not merely reasoned through
+// (see this campaign's own test-design record for the transcript). Against `826f607`
+// (post-fix): refuses, every output zeroed.
+// ===========================================================================================
+static void TestM2_TopKRenormalizeQ15_WidthDomainGateActuallyInvoked() {
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+	q_c = -1;  // CheckSoftmaxRowWidthDomain's own FIRST rejection: q_c < 0, unconditional,
+	           // independent of q_b or the row's own content (checked_chain_funnel.cpp).
+	CHECK_MSG(CheckSoftmaxRowWidthDomain(q_b, q_c, 6) != SslmForwardStatus::Ok,
+	          "test fixture error: q_c=-1 must itself be out of CheckSoftmaxRowWidthDomain's "
+	          "own domain, independent of what TopKRenormalizeQ15 does with it");
+
+	const int32_t V = 30;
+	const int32_t idx[6] = {0, 5, 10, 15, 20, 25};
+	std::vector<int32_t> row = MakeSyntheticRow(V, {5, 10, 0, 15, 20, 25});
+	int64_t out[6] = {-999, -999, -999, -999, -999, -999};  // pre-call sentinel
+	const bool wf = TopKRenormalizeQ15(row.data(), idx, 6, q_ln2, q_b, q_c, out);
+	CHECK_MSG(!wf, "TopKRenormalizeQ15 returned true at an out-of-domain (q_b, q_c) -- the "
+	               "documented gate (intmath.h's own stated caller contract) must actually be "
+	               "invoked, not merely satisfiable in principle");
+	for (int i = 0; i < 6; ++i)
+		CHECK_MSG(out[i] == 0,
+		          "out_q15[%d] = %lld on a gate refusal, want exactly 0 (matching "
+		          "SoftmaxRowQ15's own \"written for every element regardless of the returned "
+		          "bool\" contract)",
+		          i, (long long)out[i]);
+}
+
+// A second construction, at the gate's OTHER documented rejection shape (M too large for the
+// ceiling `kSoftmaxRowMaxSafeExponent`) -- NOT independently discriminating for M2 specifically
+// (`SoftmaxRowQ15` itself ALSO refuses an M this large via its own internal `m_usable` check,
+// intmath.cpp, regardless of whether the external gate ran first), stated honestly here rather
+// than claimed as a second red-first M2 pin: this cell confirms defense-in-depth (both the gate
+// and the kernel's own internal bound independently refuse this shape), while the q_c<0
+// cell above is the one that isolates the gate's own invocation specifically (SoftmaxRowQ15
+// does not check q_c's own sign internally, only the combined M value).
+static void TestM2_TopKRenormalizeQ15_WidthDomainGate_MTooLarge() {
+	// q_b large enough that q_b*q_b alone exceeds kSoftmaxRowMaxSafeExponent (2^47) -- any
+	// q_b > 2^24 clears this (2^24 squared = 2^48 > 2^47), independent of q_c (>=0).
+	const int64_t q_ln2 = 493, q_b = (int64_t{1} << 25), q_c = 0;
+	CHECK_MSG(CheckSoftmaxRowWidthDomain(q_b, q_c, 6) != SslmForwardStatus::Ok,
+	          "test fixture error: q_b=2^25 must overflow the gate's own M <= "
+	          "kSoftmaxRowMaxSafeExponent ceiling");
+	const int32_t V = 30;
+	const int32_t idx[6] = {0, 5, 10, 15, 20, 25};
+	std::vector<int32_t> row = MakeSyntheticRow(V, {5, 10, 0, 15, 20, 25});
+	int64_t out[6] = {-999, -999, -999, -999, -999, -999};
+	const bool wf = TopKRenormalizeQ15(row.data(), idx, 6, q_ln2, q_b, q_c, out);
+	CHECK_MSG(!wf, "TopKRenormalizeQ15 returned true with M far past the gate's own ceiling");
+	for (int i = 0; i < 6; ++i)
+		CHECK_MSG(out[i] == 0, "out_q15[%d] = %lld on a gate refusal, want exactly 0", i,
+		          (long long)out[i]);
+}
+
 int main() {
 	TestPhaseC2_KnownAnswer_MatchesSoftmaxRowQ15OnGatheredElements();
 	TestPhaseC2_KnownAnswer_KEqualsOneIsIdentity();
 	TestDim6_WidthDomainGate_ClearsAtEveryGridK();
 	TestDim5Dim11_RuntimeRefusal_AdversarialSearch();
 	TestDim7_CostShape_FlatRowNotMoreExpensiveThanRealistic();
+	TestM2_TopKRenormalizeQ15_WidthDomainGateActuallyInvoked();
+	TestM2_TopKRenormalizeQ15_WidthDomainGate_MTooLarge();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	std::printf("[gap, not authored] Phase C2a's own 5%% forward-cost RATIO budget needs the "
 	            "real engine's per-token GEMM cost as a denominator -- see this file's own "

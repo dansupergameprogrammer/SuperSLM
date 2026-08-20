@@ -162,12 +162,74 @@ static void TestTopK_RepeatedRunsIdentical() {
 		          picks1[static_cast<size_t>(i)], expect[i]);
 }
 
+// ===========================================================================================
+// Fix round 2026-08-20 (Poirot S5, `Claude/Poirot/7be9508-t2199-phaseAC-review.md`,
+// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec12.1): `FsdTopK`'s own header claim
+// ("writes exactly k") was false whenever `k > vocab_size` -- the body computed
+// `kk = min(k, vocab_size)` and wrote only `kk` slots, leaving every slot from `vocab_size` to
+// `k-1` UNTOUCHED (a read of uninitialized memory for a direct caller; a silent repeat of
+// index 0 for a `std::vector`-backed caller like `ScoreAndSelect`'s own value-initialized
+// `idx`, corrupting the renormalization denominator and the anti-LM query set -- Poirot's own
+// executed finding). Fixed: every slot past `min(k, vocab_size)` is now written exactly `-1`
+// (never a valid vocabulary index, never left uninitialized).
+//
+// This suite's own EXISTING oversized-k cell (`TestDim4_KOversized_AllLegalTokensIncluded`,
+// above) stops at `k = vocab_size` exactly and therefore cannot see this defect -- Poirot's
+// own review names this precisely ("the suite's own oversized-k cell... cannot see it"). This
+// cell uses `k > vocab_size` genuinely, pre-filling `out_indices` with a sentinel BEFORE the
+// call (mirroring Poirot's own probe exactly: V=4, k=7, sentinel -777) so the tail's own
+// pre-call content is known and distinguishable from every one of the three failure shapes
+// (uninitialized/untouched, silently-repeated token 0, or the correct -1).
+//
+// RED-FIRST: EXECUTED. Against `c473dad` (pre-fix): `picks = {1, 2, 3, 0, -777, -777, -777}`
+// (the exact shape Poirot's own review captured, reproduced independently here) -- the tail
+// slots retain the pre-call sentinel untouched, failing every assertion below. Against
+// `826f607` (post-fix): tail slots are exactly `-1`. See this campaign's own test-design
+// record for the full transcript.
+// ===========================================================================================
+static void TestS5_FsdTopK_OversizedK_TailIsSentinelNotUninitialized() {
+	const int32_t V = 4;
+	const int32_t k = 7;
+	std::vector<int32_t> row = MakeSyntheticRow(V, {1, 2, 3, 0});
+	std::vector<uint8_t> mask = MakeMask(V, true);
+	std::vector<int32_t> picks(static_cast<size_t>(k), -777);  // pre-call sentinel, matching
+	                                                            // Poirot's own probe exactly
+	FsdTopK(row.data(), mask.data(), V, k, picks.data());
+
+	// First min(k,V)=4 slots: real, valid vocabulary indices (0..3, some order).
+	for (int i = 0; i < V; ++i)
+		CHECK_MSG(picks[static_cast<size_t>(i)] >= 0 && picks[static_cast<size_t>(i)] < V,
+		          "slot %d = %d, want a valid vocabulary index in [0, %d)", i,
+		          picks[static_cast<size_t>(i)], V);
+	// Slots [V, k): must be EXACTLY -1 -- never the pre-call sentinel (-777, meaning
+	// "untouched" -- the pre-fix defect), never 0 (meaning "silently repeated the first real
+	// pick" -- the defect's quiet, non-UB-but-corrupting shape inside a value-initialized
+	// vector), never any other value.
+	for (int i = V; i < k; ++i) {
+		CHECK_MSG(picks[static_cast<size_t>(i)] != -777,
+		          "slot %d still holds the pre-call sentinel -777 -- FsdTopK left it "
+		          "UNTOUCHED, reproducing the pre-fix uninitialized-memory defect",
+		          i);
+		CHECK_MSG(picks[static_cast<size_t>(i)] != 0,
+		          "slot %d = 0 -- FsdTopK silently repeated a real vocabulary index into the "
+		          "padding, the quiet corruption shape inside a value-initialized caller "
+		          "vector (never UB there, but poisons TopKRenormalizeQ15's own denominator "
+		          "and the anti-LM's query set)",
+		          i);
+		CHECK_MSG(picks[static_cast<size_t>(i)] == -1,
+		          "slot %d = %d, want exactly -1 (never a valid vocabulary index, never "
+		          "uninitialized)",
+		          i, picks[static_cast<size_t>(i)]);
+	}
+}
+
 int main() {
 	TestDim7_TieBreak_LegalInt32MinWinsOverMaskedAtEqualValue();
 	TestDim7_TieBreak_Control_LowIndexLegalTokenAlwaysIncluded();
 	TestDim4_KFloor_SingleLegalCandidateAlwaysSelected();
 	TestDim4_KOversized_AllLegalTokensIncluded();
 	TestTopK_RepeatedRunsIdentical();
+	TestS5_FsdTopK_OversizedK_TailIsSentinelNotUninitialized();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
