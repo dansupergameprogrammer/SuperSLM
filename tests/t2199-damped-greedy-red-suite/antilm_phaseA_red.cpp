@@ -225,38 +225,71 @@ static void TestPhaseA_Dim3_TwoInstancesNoCrossContamination() {
 
 // ===========================================================================================
 // Sec9 dim7 / Phase A2 (Sec8): "the anti-LM's determinism holds regardless of its internal
-// table's iteration order." This suite cannot swap the future implementation's container type
-// from outside (that mutation belongs to the build seat's own unit test once Phase A lands
-// concretely) -- what a black-box red cell CAN pin today is the black-box CONSEQUENCE of that
-// claim: two instances built by applying the identical multiset of updates in two DIFFERENT
-// orders must produce IDENTICAL penalize() output for every candidate, since Sec7.2's own
-// "exact-key lookup only, never iterated" contract makes update order irrelevant to the
-// final counts (addition is commutative) -- an implementation whose penalize output depended
-// on some hidden iteration/insertion order would fail this cell.
+// table's iteration order." CORRECTED 2026-08-20 (builder's routed finding,
+// `Claude/Brunel/t2199-phaseAC-build-2026-08-20.md` Sec6, ruled and confirmed here): the
+// original construction permuted the token GENERATION sequence across two order-2 fixtures and
+// asserted "same multiset -> same output," conflating hash-table iteration-order independence
+// (Sec7.2's real claim -- the internal table is never iterated in its own container order)
+// with token-SEQUENCE-order invariance, which is mathematically FALSE for any order>=2 n-gram
+// model: context is defined by immediately-preceding tokens, not by set membership, so
+// permuting the generation order changes which (context, candidate) pairs are observed at all.
+// Hand-verified against the builder's own executed failure: `seq1={A,B,A,C,B,A,D,B}` and
+// `seq2={D,B,A,B,C,A,B,A}` share the identical unigram multiset (A:3,B:3,C:1,D:1) but genuinely
+// different bigram distributions (context `A` holds `{B:1,C:1,D:1}` in seq1 vs `{B:2}` in
+// seq2) -- worse, the two instances are queried under DIFFERENT bigram contexts entirely
+// (seq1's own history ends in `B`, seq2's in `A`), so the swap the builder measured
+// (`p_omega(A)`: 23067 vs 5820, and the reverse for `p_omega(B)`) is the CORRECT behavior of a
+// faithful order>=2 mixture, not a defect. No implementation of a genuine order->=2 model
+// could pass the original cell as constructed. Ruling: the builder is right; the test was
+// wrong. The claim this cell can actually pin as a black-box construction, without literally
+// swapping the future implementation's container type (that mutation belongs to source-level
+// review, not a black-box suite -- routed as a build-review item, not invented here):
+//   (a) order=1 (unigram): context is ALWAYS the empty string, so ANY permutation of the same
+//       token multiset is genuinely, provably order-invariant -- the one case where "same
+//       multiset -> same output" is actually true. Tested directly.
+//   (b) any order: `AntiLmPenalize`'s own OUTPUT must track candidate IDENTITY regardless of
+//       the ORDER candidates are listed in the QUERY array -- a distinct, order-agnostic
+//       determinism claim (a real defect class: an implementation that iterates a map and
+//       writes results out of query order would fail this even though every single-candidate
+//       query would individually look correct). Tested at order=3, reversing the query array.
 // ===========================================================================================
 static void TestPhaseA_Dim7_DeterminismAcrossInsertionOrder() {
 	const int32_t A = 100, B = 200, C = 300, D = 400;
-	AntiLmState* order1 = AntiLmCreate(2);
-	for (int32_t tok : {A, B, A, C, B, A, D, B}) AntiLmUpdate(order1, tok);
 
-	AntiLmState* order2 = AntiLmCreate(2);
-	// A permutation with the SAME multiset (the plan's own two-operation contract makes each
-	// update independent of ordering within a fixed context history for the COUNT it
-	// contributes to -- this permutation preserves every consecutive-pair context/candidate
-	// relationship's own final count, only the construction order differs).
-	for (int32_t tok : {D, B, A, B, C, A, B, A}) AntiLmUpdate(order2, tok);
-
+	// --- (a) order=1: ANY permutation of the SAME multiset must give IDENTICAL output. ---
+	AntiLmState* order1a = AntiLmCreate(1);
+	for (int32_t tok : {A, B, A, C, B, A, D, B}) AntiLmUpdate(order1a, tok);
+	AntiLmState* order1b = AntiLmCreate(1);
+	for (int32_t tok : {D, B, A, B, C, A, B, A}) AntiLmUpdate(order1b, tok);  // same multiset,
+	                                                                          // different order
 	const int32_t cands[4] = {A, B, C, D};
-	int64_t out1[4], out2[4];
-	AntiLmPenalize(order1, cands, 4, out1);
-	AntiLmPenalize(order2, cands, 4, out2);
+	int64_t out_a[4], out_b[4];
+	AntiLmPenalize(order1a, cands, 4, out_a);
+	AntiLmPenalize(order1b, cands, 4, out_b);
 	for (int i = 0; i < 4; ++i)
-		CHECK_MSG(out1[i] == out2[i],
-		          "candidate %d: order1=%lld order2=%lld -- must be identical (exact-key "
-		          "lookup, never iteration-order-dependent)",
-		          i, (long long)out1[i], (long long)out2[i]);
-	AntiLmDestroy(order1);
-	AntiLmDestroy(order2);
+		CHECK_MSG(out_a[i] == out_b[i],
+		          "order=1, candidate %d: instance-a=%lld instance-b=%lld -- unigram counts "
+		          "must be permutation-invariant (context is always empty at order 1)",
+		          i, (long long)out_a[i], (long long)out_b[i]);
+	AntiLmDestroy(order1a);
+	AntiLmDestroy(order1b);
+
+	// --- (b) order=3: the SAME generation sequence, queried with candidates listed in two
+	// DIFFERENT array orders, must return values that track candidate IDENTITY, not array
+	// position. ---
+	AntiLmState* s = AntiLmCreate(3);
+	for (int32_t tok : {A, B, A, C, B, A, D, B, A, C}) AntiLmUpdate(s, tok);
+	const int32_t cands_fwd[4] = {A, B, C, D};
+	const int32_t cands_rev[4] = {D, C, B, A};
+	int64_t out_fwd[4], out_rev[4];
+	AntiLmPenalize(s, cands_fwd, 4, out_fwd);
+	AntiLmPenalize(s, cands_rev, 4, out_rev);
+	for (int i = 0; i < 4; ++i)
+		CHECK_MSG(out_rev[i] == out_fwd[3 - i],
+		          "query-array-order independence: reversed-array position %d (token %d) = "
+		          "%lld, canonical-array reading for the same candidate = %lld",
+		          i, cands_rev[i], (long long)out_rev[i], (long long)out_fwd[3 - i]);
+	AntiLmDestroy(s);
 }
 
 // Repeating the identical update sequence into a second, independent instance must reproduce
