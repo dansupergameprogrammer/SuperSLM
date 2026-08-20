@@ -1,0 +1,6 @@
+- The AVX-512 kernel tier's CI leg is defined — probes for hardware support,
+  compiles, and bit-identity-checks where a runner has it — but has not yet
+  executed on any hosted runner (GitHub Actions hosted runs are capped since
+  2026-07-23) or on any AVX-512-capable machine this project has access to,
+  so it carries no bit-identity result and no dedicated real-hardware
+  throughput measurement yet.

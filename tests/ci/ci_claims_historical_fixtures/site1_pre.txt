@@ -1,0 +1,4 @@
+- The AVX-512 kernel tier is exercised at continuous-integration extent
+  only — probed for hardware support, compiled, and bit-identity-checked
+  where a runner has it — with no dedicated real-hardware throughput
+  measurement published yet, the same disposition 1.0 gave macOS.

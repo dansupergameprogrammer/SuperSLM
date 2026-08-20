@@ -1,0 +1,1 @@
+| SSE2 | Certified | The x86-64 architectural floor; force-selectable; CI leg defined (1.1), not yet executed on a hosted runner (capped since 2026-07-23) — verified locally, matches the golden digest exactly |

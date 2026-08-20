@@ -1,0 +1,7 @@
+- **AVX-512 has no dedicated real-hardware throughput measurement yet, and no
+  bit-identity run at all.** The CI leg is defined (probes, compiles, and
+  would run wherever a runner has the hardware) but has not yet executed on
+  any hosted runner or any AVX-512-capable machine this project has access
+  to — see [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — so
+  neither its bit-identity nor its tokens/second figure, alongside SSE2's and
+  AVX2's above, is yet published.

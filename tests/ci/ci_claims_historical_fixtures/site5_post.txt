@@ -1,0 +1,1 @@
+| AVX-512 | CI extent | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner or on any AVX-512-capable machine this project has access to — bit-identity unverified; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |

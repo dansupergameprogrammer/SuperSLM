@@ -1,0 +1,6 @@
+- **AVX-512 has no dedicated real-hardware throughput measurement yet.**
+  The tier is proven bit-identical and exercised in continuous integration
+  (probed, compiled, and run wherever a runner has the hardware) — see
+  [CPU matmul kernel tiers](#cpu-matmul-kernel-tiers) above — but its own
+  tokens/second figure, alongside SSE2's and AVX2's above, is not yet
+  published.

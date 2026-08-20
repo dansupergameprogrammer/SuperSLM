@@ -1,0 +1,1 @@
+| AVX2 | Certified, measured | Force-selectable; CI leg defined (1.1), not yet executed on a hosted runner — verified locally, matches the golden digest exactly; throughput measured on real hardware (below) |

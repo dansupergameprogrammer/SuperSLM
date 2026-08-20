@@ -1,0 +1,1 @@
+| SSE2 | Certified | The x86-64 architectural floor; force-selectable and CI-exercised independent of what a runner's ambient dispatch would pick |

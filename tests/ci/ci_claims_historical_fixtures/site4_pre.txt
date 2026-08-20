@@ -1,0 +1,1 @@
+| AVX2 | Certified, measured | Force-selectable; CI-probed on hosted runners; throughput measured on real hardware (below) |

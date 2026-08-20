@@ -1,0 +1,10 @@
+"CI extent" means the platform is exercised by this project's own continuous
+integration matrix, and no further hardware-specific measurement has been
+made beyond what that gives. What that matrix has actually executed, and as
+of when, is stated in exactly one place —
+[docs/platform-support.md § CI execution status](docs/platform-support.md#ci-execution-status)
+— rather than restated here. A consumer can reproduce the same verification
+locally regardless of hosted-run status: the [Building](#building) section's
+`cmake`+`ctest` matrix on any platform, and `build.bat` on Windows. See
+[docs/platform-support.md](docs/platform-support.md) for the full table,
+every measured number, and where each one was measured.

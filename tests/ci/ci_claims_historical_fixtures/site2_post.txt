@@ -1,0 +1,6 @@
+- **AVX-512 real-hardware throughput measurement, and a first execution.** The
+  AVX-512 kernel tier 1.1 ships has a defined CI leg that has not yet executed
+  on a hosted runner or on any AVX-512-capable machine this project has
+  access to, so it carries neither a bit-identity result nor a throughput
+  measurement yet — see [Known gaps](docs/platform-support.md#known-gaps) in
+  the platform-support doc.

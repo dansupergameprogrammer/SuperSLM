@@ -957,74 +957,27 @@ jobs:
               'its own committed floors file was measured from a real run of it'
           )
           "
-      # T-2195 remedy S3 (D-SLM3702 arc; Claude/Poirot/1381076-t2195-t2189-closing-confirmation.md):
-      # the same CI-execution overclaim recurred on three consecutive review rounds (T-2192, T-2195),
-      # each time in different words the prior round's own fix did not anticipate -- a four-literal-
-      # phrase grep closed the phrasings already found and the claim walked out through a fifth
-      # (README.md's "is exercised"/"runs on every push", present tense, false the moment hosted runs
-      # were capped). Scoped by MEANING here instead of by a phrase list: any clause that names CI
-      # (the token "CI", "continuous integration", "GitHub Actions", "hosted runner(s)", or "the
-      # matrix"/"the workflow(s)" in a CI context) alongside an unhedged present-tense execution or
-      # passing verb (exercises/is exercised, validates/is validated, tests/is tested, runs on every,
-      # is green/passing, executes, currently passing) is flagged -- a NEW paraphrase of the same claim
-      # is caught by the same rule without a new literal entry, which is what the phrase-list approach
-      # could not do. A clause carrying a negation cue (not/never/hasn't/has not/have not/capped) is
-      # exempted, so the honest "hosted runs have not executed since 2026-07-23" and "currently capped"
-      # statements this project's own docs correctly carry are not false positives. The ONE place
-      # allowed to make the claim -- docs/platform-support.md's own "CI execution status" section, the
-      # consolidated statement every other public doc now points to instead of restating -- is excluded
-      # from the scan; every other public doc, and every other section of that same file, is in scope.
-      - name: no public doc restates a present-tense CI-execution claim outside platform-support.md's CI execution status section
-        run: |
-          python3 -c "
-          import re
 
-          ci_noun = re.compile(
-              r'\bCI\b|continuous integration|GitHub Actions|hosted runners?|\bthe (matrix|workflows?)\b',
-              re.IGNORECASE)
-          exec_verb = re.compile(
-              r'\bis (currently )?(exercised|validated|tested)\b'
-              r'|\b(exercises|validates|tests)\b'
-              r'|\bruns? on every\b'
-              r'|\bis (fully )?(green|passing)\b'
-              r'|\bexecutes\b'
-              r'|\bcurrently (passing|green|executing)\b',
-              re.IGNORECASE)
-          negation = re.compile(
-              r'\bnot\b|\bnever\b|\bhasn.t\b|\bhas not\b|\bhave not\b|\bcapped\b|\bno further\b',
-              re.IGNORECASE)
-
-          def clauses(text):
-              paragraph = text.replace(chr(10), ' ')
-              return re.split(r'[.;]| -- | — ', paragraph)
-
-          def scan(path, text):
-              hits = []
-              for clause in clauses(text):
-                  if ci_noun.search(clause) and exec_verb.search(clause) and not negation.search(clause):
-                      hits.append(clause.strip())
-              return hits
-
-          targets = ['README.md', 'CHANGELOG.md']
-          import glob
-          for p in sorted(glob.glob('docs/*.md')):
-              targets.append(p)
-
-          violations = []
-          for path in targets:
-              with open(path, encoding='utf-8') as f:
-                  text = f.read()
-              if path == 'docs/platform-support.md':
-                  # Exclude only the one consolidated section this claim is allowed to live in --
-                  # every other section of this file is in scope like any other public doc.
-                  sections = re.split(r'(?m)^## ', text)
-                  text = '## '.join(s for s in sections if not s.startswith('CI execution status'))
-              for hit in scan(path, text):
-                  violations.append(path + ': ' + hit)
-
-          assert not violations, (
-              'Present-tense CI-execution claim found outside '
-              'docs/platform-support.md CI execution status: ' + repr(violations)
-          )
-          print('no CI-execution claims found outside the consolidated section')
-          "
+  # T-2196 S1/S2 (Claude/Poirot/8bf85c5-t2196-t2189-final-confirmation.md):
+  # the T-2195 remedy above lived as an inline `python3 -c "..."` block, reachable only
+  # on this hosted runner, with no self-test -- unlike every sibling structural checker
+  # in tests/ci/. It also did not fire on the instance it was built for: the clause
+  # splitter cut a filename's and a link target's own periods as sentence boundaries,
+  # shredding the one sentence it needed to catch into fragments that carried the CI
+  # noun and the execution verb separately. tests/ci/check_ci_claims.py replaces it,
+  # matching tests/ci/check_present_tense_defect_comments.py's own two-step shape
+  # (self-test, then the gate script), runnable by `pytest tests/ci/` on any machine --
+  # not only a hosted runner that, per docs/platform-support.md's own CI execution
+  # status section, has not executed since 2026-07-23.
+  ci-claims-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: '3.13'
+      - run: pip install pytest
+      - name: CI-execution-claim check's own red suite and historical-population validation
+        run: python -m pytest tests/ci/test_check_ci_claims.py -v
+      - name: Fail the build if a public doc restates a present-tense CI-execution claim outside platform-support.md's CI execution status section
+        run: python tests/ci/check_ci_claims.py

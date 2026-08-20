@@ -1,0 +1,1 @@
+| AVX-512 | CI extent | Force-selectable; CI-probed (skips loudly on a runner without AVX-512F/BW); bit-identity proven wherever it runs; no dedicated throughput measurement published yet — the same disposition this document gives macOS below |
