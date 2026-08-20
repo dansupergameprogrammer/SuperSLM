@@ -5,29 +5,6 @@ with every determinism check (bit-identical output against the CPU
 reference, at every layer-budget granularity the engine supports) passing
 on that run.
 
-## CI execution status
-
-This is the ONE place this project states what its continuous integration
-has actually executed, and every other public document (README, CHANGELOG,
-API docs) points here rather than restating it — a present-tense
-CI-execution claim living in more than one place is how the same claim goes
-stale in one copy while staying correct in another (T-2192/T-2195, three
-consecutive review rounds).
-
-"CI extent" means the platform is exercised by this project's continuous
-integration matrix (`.github/workflows/tests.yml`: windows-x64, linux-x64,
-linux-x64-asan, macos-arm64, plus the forced-tier and digest legs 1.1
-adds). **Hosted runs resumed on 2026-08-20**: the full 28-job matrix
-executed on the 1.1 candidate (run 32336576519), every leg green except
-the branch-coverage job's designed first-run red — that job records its
-own floor measurement and fails until the recorded number is committed,
-which the immediately following commit did. The matrix was also fully
-green on the 1.0 release commit. Between 2026-07-23 and 2026-08-20 hosted
-runs were capped by the account's spending limit and the same matrix was
-reproduced locally (`cmake`+`ctest` per platform, `build.bat` on Windows).
-Every number below states the device, the artifact, and the surface it was
-measured through — a number without that context is not included here.
-
 ## CPU inference
 
 | Platform | Status | How it's exercised |
@@ -194,6 +171,30 @@ the same underlying kernels. This is under active investigation and the
 integrated GPU is explicitly not a certified target today: any
 determinism claim in this project's documentation is scoped to the
 certified GPUs above, never to "GPUs" unqualified.
+
+## CI execution status
+
+This is the ONE place this project states what its continuous integration
+has actually executed, and every other public document (README, CHANGELOG,
+API docs) points here rather than restating it — a present-tense
+CI-execution claim living in more than one place is how the same claim goes
+stale in one copy while staying correct in another (T-2192/T-2195, three
+consecutive review rounds).
+
+"CI extent" means the platform is exercised by this project's continuous
+integration matrix (`.github/workflows/tests.yml`: windows-x64, linux-x64,
+linux-x64-asan, macos-arm64, plus the forced-tier and digest legs 1.1
+adds). **Hosted runs resumed on 2026-08-20**: the full 28-job matrix
+executed on the 1.1 candidate (run 32336576519), every leg green except
+the branch-coverage job's designed first-run red — that job records its
+own floor measurement and fails until the recorded number is committed,
+which the immediately following commit did. The matrix was also fully
+green on the 1.0 release commit. Between 2026-07-23 and 2026-08-20 hosted
+runs were capped by the account's spending limit and the same matrix was
+reproduced locally (`cmake`+`ctest` per platform, `build.bat` on Windows).
+Every number below states the device, the artifact, and the surface it was
+measured through — a number without that context is not included here.
+
 
 ## Known gaps
 
