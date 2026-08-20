@@ -782,6 +782,13 @@ def _p95(arr) -> float:
 
 _B3_REVIEW_MARGIN_SE = 2.0  # design §25.5 item 2's own stated multiple, matching §25.2's analysis.
 
+_B3_POOLED_GATE_QUARANTINE_NOTICE = (
+    "pooled B3 gate status: QUARANTINED -- this instrument has not been shown able to reject an "
+    "adapter at any error magnitude (a scale sweep across 9 orders of magnitude produced 0 "
+    "rejects), so its accepted/rejected reading carries no information about this adapter's "
+    "quality. Read the per-pair diagnostics instead -- a pair named there is the actionable signal."
+)
+
 
 def _b3_pair_diagnostic(name: str, raw: dict, own_check: dict, *, n_bootstrap_resamples: int,
                         rng) -> dict:
@@ -807,10 +814,15 @@ def _b3_pair_diagnostic(name: str, raw: dict, own_check: dict, *, n_bootstrap_re
     def _margin(point, delta, se):
         return (point - delta) / se if se > 0.0 else float("inf") if point > delta else float("-inf")
 
+    # D-SLM3221 (design §26.9): the mean conjuncts' margin is graded against the VALIDATION
+    # partition's own point estimate (`mean`), matching the tail conjuncts' use of a raw `p95`
+    # point estimate immediately below -- never `upper_ci`, which already carries its own
+    # `+1.645*se` term and, substituted here, added a second, spurious `+1.645` SE to every
+    # mean-conjunct margin relative to the tail conjuncts' correctly-paired form.
     margins = {
-        "composed_mean": _margin(c_val_stat["upper_ci"], own_check["delta_composed_mean"], se_composed_mean),
+        "composed_mean": _margin(c_val_stat["mean"], own_check["delta_composed_mean"], se_composed_mean),
         "composed_tail": _margin(c_val_stat["p95"], own_check["delta_composed_tail"], se_composed_tail),
-        "effect_mean": _margin(e_val_stat["upper_ci"], own_check["delta_effect_mean"], se_effect_mean),
+        "effect_mean": _margin(e_val_stat["mean"], own_check["delta_effect_mean"], se_effect_mean),
         "effect_tail": _margin(e_val_stat["p95"], own_check["delta_effect_tail"], se_effect_tail),
     }
     flagged = [conjunct for conjunct, m in margins.items() if m > _B3_REVIEW_MARGIN_SE]
@@ -1386,6 +1398,7 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
             print(f"  POOLED GATE: accepted={pooled['accepted']} "
                  f"(n_pairs={pooled['n_pairs']} n_pilot_pooled={pooled['n_pilot_pooled']} "
                  f"n_val_pooled={pooled['n_val_pooled']}, {n_flagged} pair(s) flagged for review)")
+            print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}")
 
     verdict = {"domain_trip": domain_trip, "margin_exceeded": margin_exceeded,
               "saturation_elevated": False, "pairs": pair_diagnostics, "pooled": pooled}
@@ -1570,6 +1583,14 @@ def main():
         fingerprint = sf.write_artifact(str(out_path), sections)
         print(f"wrote {out_path}\nfingerprint {fingerprint}\nsections {len(sections)}: " +
              ", ".join(str(s.type) for s in sections))
+        if verdict["pooled"] is not None:
+            p = verdict["pooled"]
+            print(f"  pooled B3 gate: accepted={p['accepted']}")
+            print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}")
+            flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
+            if flagged:
+                print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
+                     f"{flagged}")
         if not args.skip_verify:
             import sslm_convert_manifest as scm
             repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1589,6 +1610,7 @@ def main():
              f"composed_tail_accepts={p['composed_tail_accepts']} "
              f"effect_mean_accepts={p['effect_mean_accepts']} "
              f"effect_tail_accepts={p['effect_tail_accepts']}", file=sys.stderr)
+        print(f"  {_B3_POOLED_GATE_QUARANTINE_NOTICE}", file=sys.stderr)
         flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
         if flagged:
             print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
