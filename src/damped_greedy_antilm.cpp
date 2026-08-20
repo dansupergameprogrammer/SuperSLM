@@ -5,7 +5,9 @@
 // closes M4 (AntiLmCreate's own domain -- a negative max_order previously terminated the
 // process, a zero max_order was silently accepted as a permanently-disabled anti-LM) and
 // recalibrates S3 (AntiLmRetainedBytes read 3.0-5.9x low against measured process
-// retention).
+// retention) -- its own residual then stated honestly rather than left as "recalibrated"
+// alone (fold 21, plan Sec9 dim1, S9 of Claude/Poirot/927bbda-t2199-confirmation.md; see
+// AntiLmRetainedBytes's own comment below).
 #include "superslm/sslm_damped_greedy.h"
 
 #include <unordered_map>
@@ -208,6 +210,14 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
 // where `generation_length_so_far` is the caller's own count of `AntiLmUpdate` calls made
 // against this state (this interface has no accessor for it, matching the suite's own
 // declared two-operation surface -- update/penalize -- which this build does not extend).
+//
+// The table-portion residual itself is STATED HONESTLY, not merely "recalibrated" (fold 21,
+// plan Sec9 dim1, S9 of `Claude/Poirot/927bbda-t2199-confirmation.md`): this reading is a
+// LOWER BOUND, still ~2.9x low at this design's own default max_order=3 against measured
+// process-memory deltas -- the recalibration above reasoned the constants forward from an
+// allocator model rather than fitting them to the measured population, which is why the gap
+// narrowed (from ~5.8x) rather than closed. See the production header's own copy of this note
+// for the full per-order ratio table.
 std::size_t AntiLmRetainedBytes(const AntiLmState* state) { return state->retained_bytes_; }
 
 }  // namespace superslm

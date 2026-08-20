@@ -69,14 +69,20 @@ void AntiLmPenalize(const AntiLmState* state, const int32_t* candidates, std::si
                      int64_t* out_p_omega_q15);
 
 // Bytes currently retained across every order's count table -- grows with the number of
-// distinct n-grams observed, never with the number of AntiLmUpdate calls. Recalibrated
-// 2026-08-20 against measured process-memory deltas (Poirot S3: previously read
-// 3.0-5.9x low); remains a MODEL of allocator overhead, not a byte-exact accounting.
-// Deliberately EXCLUDES the per-sequence generated-token history (grows by one token per
-// AntiLmUpdate call regardless of repeats, unlike the table this reports on) -- a caller
-// pricing the anti-LM's TOTAL footprint adds `generation_length_so_far * sizeof(int32_t)`
-// directly; see the implementation's own comment for why folding it into this figure would
-// break this suite's own memory-growth cell.
+// distinct n-grams observed, never with the number of AntiLmUpdate calls. Recalibrated once
+// (2026-08-20, Poirot S3: previously read 3.0-5.9x low) and its residual STATED HONESTLY
+// (fold 21, plan Sec9 dim1, S9 of `Claude/Poirot/927bbda-t2199-confirmation.md`): this
+// reading is a LOWER BOUND, not a magnitude pin -- it still reads ~2.9x low at this design's
+// own default max_order=3 against measured process-memory deltas (a stable ratio: 1.50-1.81x
+// at max_order=1, ~2.9-3.1x at max_order=3, ~2.8-3.1x at max_order=5), because the
+// recalibration reasoned the constants forward from an allocator model rather than fitting
+// them to the measured population. A caller pricing this instrument (plan Sec8) rounds using
+// the ~2.9x figure, not the raw reading, until the constants are fit rather than reasoned
+// toward (owed, not this build's own scope). Deliberately EXCLUDES the per-sequence
+// generated-token history (grows by one token per AntiLmUpdate call regardless of repeats,
+// unlike the table this reports on) -- a caller pricing the anti-LM's TOTAL footprint adds
+// `generation_length_so_far * sizeof(int32_t)` directly; see the implementation's own comment
+// for why folding it into this figure would break this suite's own memory-growth cell.
 std::size_t AntiLmRetainedBytes(const AntiLmState* state);
 
 // =====================================================================================

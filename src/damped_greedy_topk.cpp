@@ -8,9 +8,10 @@
 // closes C1 (k=0 crash in the Diag entry point), S1 (double on a MEASUREMENT field), S5
 // (FsdTopK's own "writes exactly k" claim), M1 (the bool return now carries the domain
 // verdict), M2 (the documented SoftmaxRowQ15 gate is now invoked), M3 (GatheredRawIExpSum
-// now applies the same per-element M-bound rejection SoftmaxRowQ15 does), M4 (dead
-// initializer documented, AntiLmCreate's own domain closes the sibling crash), and O2 (the
-// anti-LM is no longer queried for masked picks whose result is always discarded).
+// now applies the same per-element M-bound rejection SoftmaxRowQ15 does), and M4 (dead
+// initializer documented, AntiLmCreate's own domain closes the sibling crash). O2 (querying
+// the anti-LM only for unmasked picks) landed the same day and was REVERTED the day after
+// (fold 21, plan commit dbda73ab31): see ScoreAndSelect's own comment below for why.
 #include "superslm/sslm_damped_greedy.h"
 
 #include <algorithm>
@@ -207,12 +208,28 @@ int64_t ExactRatioQ15(int64_t z_k_raw, int64_t full_row_z) {
 }
 
 // Shared score/select body for both public entry points (Sec7.5-7.6): FsdTopK -> gate ->
-// TopKRenormalizeQ15 -> AntiLmPenalize (unmasked picks only -- Poirot O2) -> per-candidate
+// TopKRenormalizeQ15 -> AntiLmPenalize (ALL k gathered picks, uniformly) -> per-candidate
 // score -> argmax. Returns false on a TopKRenormalizeQ15 refusal.
+//
+// REVERTED 2026-08-20 (fold 21, plan commit dbda73ab31, S7/S8 of
+// `Claude/Poirot/927bbda-t2199-confirmation.md`): the fix round's own O2 change (query only
+// the unmasked picks) is undone. That change made `DampedGreedyDiagnostics.pomspread_q15`
+// read a narrower, unmasked-only spread under a bound schema (measured: 3,276 where the true
+// all-k spread was 29,491; 16,384 where it was 0) while its own header still documented
+// "over k" -- and pomspread is an operand of MODEL-GOVERNS, whose own worst-case margin is
+// already 0.70x (Sec5.6.2). The ruling removes the term rather than adding an unmasked/all-k
+// split to an already-thin criterion: `AntiLmPenalize` is queried for every one of the k
+// gathered picks again, matching plan Sec7.5's own "a masked pick's own q_theta/p_omega reach
+// IExpConstruct and the anti-LM lookup exactly like an unmasked pick's" (fold 20, the design
+// of record). The score loop's own mask-floor branch below is unaffected: a masked pick's
+// score is still INT64_MIN regardless of its now-real p_omega. Cost: AntiLmPenalize's own
+// per-pick lookup is already inside plan Sec5.5's ~0.02-0.2%-of-the-head-GEMM figure for the
+// whole k-wide pass, so this restores a cost the design was priced against from the start,
+// not a new one.
 struct ScoredCandidates {
 	std::vector<int32_t> idx;
 	std::vector<int64_t> q_theta;
-	std::vector<int64_t> p_omega;  // 0 for masked positions (never queried)
+	std::vector<int64_t> p_omega;  // real for every pick, masked and unmasked alike
 	int32_t best_token = -1;
 	int winner_pos = -1;
 };
@@ -229,30 +246,8 @@ bool ScoreAndSelect(const int32_t* masked_row, const uint8_t* mask_bits, int32_t
 		return false;
 	}
 
-	// Poirot O2: p_omega is only ever read below for an UNMASKED pick (a masked pick's
-	// score floors to INT64_MIN regardless of p_omega) -- query the anti-LM only for those.
-	// This does not touch TopKRenormalizeQ15's own inclusion of masked picks in Z_k above
-	// (Poirot S2 / build log Sec6: that inclusion follows plan Sec5.3/Sec9 dim8, routed to
-	// the plan as a Sec7.5 correction, unaffected by this).
-	std::vector<int32_t> unmasked_idx;
-	std::vector<std::size_t> unmasked_pos;
-	unmasked_idx.reserve(static_cast<std::size_t>(k));
-	unmasked_pos.reserve(static_cast<std::size_t>(k));
-	for (int32_t i = 0; i < k; ++i) {
-		const std::size_t si = static_cast<std::size_t>(i);
-		if (MaskBitSet(mask_bits, out->idx[si])) {
-			unmasked_idx.push_back(out->idx[si]);
-			unmasked_pos.push_back(si);
-		}
-	}
 	out->p_omega.assign(static_cast<std::size_t>(k), 0);
-	if (!unmasked_idx.empty()) {
-		std::vector<int64_t> unmasked_p_omega(unmasked_idx.size());
-		AntiLmPenalize(anti_lm, unmasked_idx.data(), unmasked_idx.size(), unmasked_p_omega.data());
-		for (std::size_t j = 0; j < unmasked_pos.size(); ++j) {
-			out->p_omega[unmasked_pos[j]] = unmasked_p_omega[j];
-		}
-	}
+	AntiLmPenalize(anti_lm, out->idx.data(), static_cast<std::size_t>(k), out->p_omega.data());
 
 	out->best_token = -1;
 	out->winner_pos = -1;
