@@ -6,10 +6,11 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
 
 A performance release: both halves of 1.0's own "compute-bound, not
 memory-bound" finding get a real lever, one on the CPU path and one on the
-GPU path. No API surface changes; see
-[README.md](README.md) for the full capability descriptions and
-[docs/platform-support.md](docs/platform-support.md) for every measured
-number and where it was measured.
+GPU path. No public API signatures changed, but one public entry-point
+failure behavior did — see Fixed below — and existing consumers should read
+that section before upgrading. See [README.md](README.md) for the full
+capability descriptions and [docs/platform-support.md](docs/platform-support.md)
+for every measured number and where it was measured.
 
 ### CPU: a wider-vector prefill kernel
 
@@ -43,6 +44,40 @@ number and where it was measured.
   slices submission per token on the prefill path — see
   [docs/api.md](docs/api.md). Per-frame budget slicing for interactive
   decode is unchanged.
+
+### Fixed
+
+- **GPU decode/prefill entry points no longer terminate the process on a
+  device or allocation fault; they return `SSLM_DEVICE_LOST`.** Before this
+  release, a `Close()`/`Signal()` failure or an allocation failure while
+  submitting or finishing a GPU layer-loop chunk raised a raw C++ exception
+  that crossed the documented `SslmGpuStatus` C ABI boundary uncaught,
+  terminating the calling process. `sslm_decode_step_gpu` /
+  `SslmGpuSeqDecodeStepForG5Bridge`, `SslmGpuSeqPrefillPromptForG5Bridge`,
+  and `SslmGpuSeqPrefillSchemaContentForG5Bridge` now catch the fault at
+  its own source and return `SSLM_DEVICE_LOST`; the context stays usable
+  after a caught fault (a second call on the same context is proven bit-
+  identical to a never-faulted reference) except when the device is
+  genuinely, confirmably removed, which remains terminal for that context.
+  `SSLM_DEVICE_LOST` carries two dispositions at these entry points — see
+  [include/superslm/gpu_1p0.h](include/superslm/gpu_1p0.h) for which is
+  which and the documented recovery bounds. A consumer that previously
+  relied on process termination as its own crash-recovery signal for this
+  fault class should add an explicit `SSLM_DEVICE_LOST` check instead.
+- **`DetectBestDotRowTier()` no longer reads CPUID leaf 7 without first
+  checking leaf 0's own max supported basic leaf.** Leaf 7 is
+  architecturally undefined below basic leaf 7; on an older or limited x64
+  target this could false-positive an AVX2 or AVX-512 tier the hardware
+  does not support, defeating the documented SSE2 architectural floor. The
+  dispatch decision now gates every leaf-7-derived bit on
+  `max_basic_leaf >= 7`.
+- **`sslm_convert_adapter` no longer crashes converting a bf16-trained LoRA
+  adapter.** The prior reader called a numpy cast with no bfloat16
+  representation before ever widening the tensor, raising `TypeError: data
+  type bfloat16 not understood` on every bf16-trained adapter — the
+  prevailing PEFT/LoRA training default. Adapter tensors are now read
+  through the same manual safetensors parser and exact bit-shift widening
+  the base checkpoint converter already used, lossless for bf16.
 
 ### Continuous integration
 
