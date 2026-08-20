@@ -26,6 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 _TOOLS_DIR = Path(__file__).resolve().parent
@@ -135,3 +136,97 @@ def test_real_conversion_with_a_far_reference_still_accepts_and_prints_the_magni
     assert "MAGNITUDE WARNING" in r.stdout, f"expected a magnitude warning. stdout:\n{r.stdout}"
     assert "unresolved" in r.stdout.lower()
     assert "never a REJECT" in r.stdout
+
+
+# --- Checkpoint round-trip -- fix for D-SLM3787 finding C1 --------------------------------------
+# `_b3_collect_pair_raw_draws` used to return `delta_norm_sq` as a plain Python `float`, where
+# every other value in its dict is an `np.ndarray`. `build_runtime_additive_sections`'s checkpoint
+# writer serializes the whole dict with `{k: v.tolist() for k, v in raw.items()}` -- a bare
+# `float` has no `.tolist()`, so any call with `checkpoint_path` set raised `AttributeError` on
+# the first non-tripping pair. Neither this suite nor the one before this fix round ever set
+# `checkpoint_path` at all -- this is the cell that closes that gap, calling
+# `build_runtime_additive_sections` directly (not through the CLI, which does not expose
+# `checkpoint_path`) against the real fixture checkpoint and a real bf16 adapter.
+
+def test_checkpoint_path_round_trips_a_real_conversion_and_resumes_with_the_same_pooled_delta_norm(
+    tmp_path, real_base_artifact,
+):
+    checkpoint_dir, base_sslm = real_base_artifact
+    adapter_dir = build_bf16_lora_fixture(tmp_path / "adapter",
+                                          base_model_name_or_path=str(checkpoint_dir), seed=0)
+    ckpt_path = tmp_path / "b3_raw_checkpoint.jsonl"
+
+    # First pass: no checkpoint file exists yet, so this call must WRITE it -- the exact path
+    # C1's `AttributeError` fired on, before this fix round.
+    _sections1, verdict1, _rt1 = A.build_runtime_additive_sections(
+        adapter_dir, base_sslm, verbose=False, checkpoint_path=ckpt_path)
+    assert ckpt_path.is_file(), "checkpoint_path must be written on a run that has no checkpoint yet"
+    assert verdict1["pooled"] is not None
+    delta_norm_first_pass = verdict1["pooled"]["delta_norm"]
+    assert delta_norm_first_pass > 0.0
+
+    # Second pass: the checkpoint file from the first pass exists, so every pair's raw draws are
+    # read back from disk (`saved_draws`) rather than recomputed -- the resume path C1 also broke
+    # (any resumed pair's `delta_norm_sq` came back through the SAME serialize/deserialize round
+    # trip). The pooled `delta_norm` must match the first pass exactly: same adapter, same base.
+    _sections2, verdict2, _rt2 = A.build_runtime_additive_sections(
+        adapter_dir, base_sslm, verbose=False, checkpoint_path=ckpt_path)
+    assert verdict2["pooled"]["delta_norm"] == pytest.approx(delta_norm_first_pass, rel=1e-12), (
+        "a resumed run's pooled delta_norm must round-trip exactly through the checkpoint file"
+    )
+
+
+def test_resuming_a_pre_t2213_checkpoint_recomputes_delta_norm_sq_instead_of_reading_zero(
+    tmp_path, real_base_artifact,
+):
+    """D-SLM3787 finding S1: `raw.get("delta_norm_sq", 0.0)` silently turned a pre-T-2213
+    checkpoint file's missing key into `delta_norm=0` for every resumed pair. A checkpoint file in
+    the OLD format (no `delta_norm_sq` key at all, mirroring every `_t2065_raw_checkpoint.jsonl`
+    written before this ticket) is written here by hand; resuming from it must report the SAME
+    pooled `delta_norm` a fresh, non-resumed run of the identical adapter reports -- never 0."""
+    import json
+
+    checkpoint_dir, base_sslm = real_base_artifact
+    adapter_dir = build_bf16_lora_fixture(tmp_path / "adapter",
+                                          base_model_name_or_path=str(checkpoint_dir), seed=0)
+
+    # The ground truth: a fresh run with no checkpoint at all.
+    _sections_fresh, verdict_fresh, _rt = A.build_runtime_additive_sections(
+        adapter_dir, base_sslm, verbose=False, checkpoint_path=None)
+    expected_delta_norm = verdict_fresh["pooled"]["delta_norm"]
+    assert expected_delta_norm > 0.0
+
+    # A hand-written OLD-FORMAT checkpoint: real draws for the fixture's one pair
+    # ("layer0.q_proj"), `delta_norm_sq` deliberately omitted from the "draws" dict -- exactly the
+    # shape a checkpoint written before T-2213 would have, recomputed here from the pair's own
+    # real A/B rather than reusing `verdict_fresh`'s own already-pooled figures.
+    old_ckpt = tmp_path / "old_format_checkpoint.jsonl"
+    a_f, b_scaled = A.read_peft_lora_pair(adapter_dir, 0, "q_proj", A.load_adapter_meta(adapter_dir))
+    w_f = A.read_base_projection_weight(A._load_spike()._open_checkpoint_tensors(checkpoint_dir), 0, "q_proj")
+    pipeline = A._load_spike()
+    Wc, w_scales = pipeline.quantize_weight_per_channel(w_f, output_axis=0)
+    w = np.asarray(w_scales, dtype=np.float64)
+    S = float(np.max(w))
+    Ac, alpha_scales = pipeline.quantize_weight_per_channel(a_f, output_axis=0)
+    alpha = np.asarray(alpha_scales, dtype=np.float64)
+    Bc, beta_scales = pipeline.quantize_weight_per_channel(b_scaled, output_axis=0)
+    beta = np.asarray(beta_scales, dtype=np.float64)
+    g = np.random.default_rng(0xC0FFEE)
+    xf = g.standard_normal(a_f.shape[1])
+    xmax = float(np.max(np.abs(xf)))
+    X = xmax / 127.0 if xmax > 0.0 else 1.0
+    xc = np.clip(np.round(xf / X), -127, 127).astype(np.int64)
+    u_acc = Ac.astype(np.int64) @ xc
+    T_value = A.compute_t(list(alpha), list(np.abs(u_acc)))
+    raw = A._b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
+    old_format_draws = {k: v.tolist() for k, v in raw.items() if k != "delta_norm_sq"}
+    with open(old_ckpt, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"name": "layer0.q_proj", "draws": old_format_draws}) + "\n")
+
+    _sections_resumed, verdict_resumed, _rt3 = A.build_runtime_additive_sections(
+        adapter_dir, base_sslm, verbose=False, checkpoint_path=old_ckpt)
+    assert verdict_resumed["pooled"]["delta_norm"] == pytest.approx(expected_delta_norm, rel=1e-9), (
+        "resuming a pre-T-2213 checkpoint (missing delta_norm_sq) must recompute the real value, "
+        "never silently report 0"
+    )
+    assert verdict_resumed["pooled"]["delta_norm"] != 0.0

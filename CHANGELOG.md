@@ -26,6 +26,23 @@ All notable changes to SuperSLM (Layer 1) are recorded here.
   compares a candidate's pooled composed LoRA delta norm against an
   optional reference (`--reference-delta-norm`) — a candidate far outside
   tolerance prints a named WARNING for review, never a rejection.
+- **The per-pair review diagnostics' own reported margins shifted once, at
+  the retirement above, and are stable after.** The diagnostics reused a
+  random-number stream that two now-deleted pooled-statistic calls used to
+  draw from first; deleting those calls moved every pair's own bootstrap
+  draws to a different point in the same stream, with no change to the
+  diagnostic's own arithmetic. The stream is now seeded independently for
+  this loop alone, so an unrelated future change elsewhere in the pooled
+  report cannot shift these numbers again.
+- **`build_runtime_additive_sections`'s `checkpoint_path` resume path no
+  longer crashes, and no longer silently reports a zero magnitude for a
+  resumed pair.** The magnitude sanity check above added a required
+  per-pair field that a checkpoint file written before this fix lacks;
+  resuming from such a file now recomputes the field from the pair's own
+  current adapter weights instead of crashing (`.tolist()` on a plain
+  `float`) or silently defaulting to zero. `checkpoint_path` is a Python
+  keyword argument, not a CLI flag, so this affects only direct callers of
+  `build_runtime_additive_sections`, not `sslm_convert_adapter.py`'s CLI.
 
 ## [1.1.0] - 2026-08-19
 

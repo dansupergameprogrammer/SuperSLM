@@ -10,13 +10,29 @@ the statistic once magnitude was intercepted. Dan's ruling (D-SLM3783): delete t
 the per-pair diagnostics (unchanged, tested elsewhere -- `test_sslm_convert_adapter_b3_diagnostic
 .py`) plus a wide, non-blocking magnitude sanity WARNING.
 
-This file commissions that warning in both directions, per `StandardsDocument.md` §5.4: a
-must-accept (an honest sweep, including the >=2.5x magnitude candidates T-2210's own strike named,
-must never warn) and a must-reject (a x50-scaled corrupted adapter -- the same construction shape
-the T-2210 probe census used -- must warn). Both constructions are producible by the real
-production data path: `_b3_collect_pair_raw_draws` is the real per-pair collector, called here with
-hand-built `(a_f, b_scaled)` pairs exactly as `Claude/Loki/t2210-probe/t2210_guard_probe.py`'s own
-`collect()` calls it, not a reimplementation.
+This is the builder's own red-first suite, authored in the same context as the check it tests --
+NOT the independent, blind-to-the-builder's-own-controls commissioning `StandardsDocument.md`
+§5.4 requires before an instrument's verdicts are load-bearing. That independent pass is owed, not
+claimed here (`Claude/Poirot/8af620a-t2214-gate-retirement-confirmation.md` finding S6): this
+file's own must-accept sweep (Cell 2, 1.0x-6.0x) is entirely inside the shipped band and is
+structurally unable to surface the honest candidates the arc's own executed census already
+recorded above the band (~25x, ~100x -- see `_B3_MAGNITUDE_WARN_RATIO`'s own derivation comment),
+which is exactly the blind spot the independence clause exists to catch. The check's readings are
+not load-bearing (they never gate emission), which is what keeps this suite legitimate as a
+mechanism check in the meantime.
+
+Cells below pin the mechanism `_b3_collect_pair_raw_draws`/`run_b3_pooled_report` actually
+implement: the must-accept sweep confirms the check does not repeat the retired gate's own
+false-REJECT (a candidate T-2210's own strike showed the OLD gate wrongly refusing), the must-fire
+cells confirm a grossly rescaled candidate is at least flagged for visibility, and the boundary
+cells (Cell 3b) pin the literal shipped constant with numeric literals rather than reading it back
+from the module, so the suite cannot silently tolerate the constant drifting to a materially
+different value. None of this establishes that the check discriminates honest from corrupted
+adapters in general -- the derivation comment above `_B3_MAGNITUDE_WARN_RATIO` states plainly
+that the full executed census shows it does not. Both constructions below are producible by the
+real production data path: `_b3_collect_pair_raw_draws` is the real per-pair collector, called
+here with hand-built `(a_f, b_scaled)` pairs exactly as
+`Claude/Loki/t2210-probe/t2210_guard_probe.py`'s own `collect()` calls it, not a reimplementation.
 """
 
 import numpy as np
@@ -168,6 +184,100 @@ def test_uniform_b_scale_corruptions_above_the_ratio_all_trip_the_warning(k):
     corrupt_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled * float(k))
     result = A.run_b3_pooled_report([("corrupt", corrupt_raw)], reference_delta_norm=reference_delta_norm)
     assert result["magnitude_warning"] is not None, f"k={k} (ratio {k}x > {_RATIO}x) must warn"
+
+
+# --- Cell 3a: the lower band -- fix for D-SLM3787 finding S5 -----------------------------------
+# Two executed mutations against the pre-fix suite left 32/32 green: deleting the lower band
+# entirely (`if not (lo <= ratio <= hi)` -> `if not (ratio <= hi)`), and moving
+# `_B3_MAGNITUDE_WARN_RATIO` to 6.5 or 14.9. No cell constructed a candidate SMALLER than its
+# reference, and no cell asserted a numeric boundary rather than reading the shipped constant back
+# from the module. These two cells close both gaps.
+
+def test_a_candidate_at_a_twentieth_of_the_reference_warns_on_the_lower_band():
+    """A candidate far BELOW the reference (ratio ~0.05x) must warn -- this is the only shape in
+    the executed census (`Claude/Vitruvius/t2204-fold-round4-probe`'s "scale=0.002 CORRUPT k=10",
+    ratio 0.1x) the lower band exists to catch (S2/S5). Deleting `lo <= ratio` from the shipped
+    predicate leaves this cell red."""
+    rng = np.random.default_rng(8)
+    ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
+    ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
+    reference_delta_norm = ref_raw["delta_norm_sq"] ** 0.5
+
+    small_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled * 0.05)
+    result = A.run_b3_pooled_report([("small", small_raw)], reference_delta_norm=reference_delta_norm)
+    assert result["magnitude_warning"] is not None, (
+        "a candidate at ~0.05x the reference must trip the lower-band warning"
+    )
+    assert result["magnitude_warning"]["ratio_to_reference"] == pytest.approx(0.05, rel=1e-9)
+
+
+def test_a_candidate_at_half_the_reference_does_not_warn_on_the_lower_band():
+    """A candidate moderately below the reference (ratio 0.5x, well inside `[1/10, 10]`) must NOT
+    warn -- pairs with the cell above to confirm the lower band has a real inside as well as a
+    real outside, not just an always-fire predicate."""
+    rng = np.random.default_rng(9)
+    ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
+    ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
+    reference_delta_norm = ref_raw["delta_norm_sq"] ** 0.5
+
+    half_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled * 0.5)
+    result = A.run_b3_pooled_report([("half", half_raw)], reference_delta_norm=reference_delta_norm)
+    assert result["magnitude_warning"] is None
+
+
+# --- Cell 3b: literal-boundary pin on the shipped constant -- fix for D-SLM3787 finding S5 ------
+# Written as numeric literals, not read from `_RATIO`/`A._B3_MAGNITUDE_WARN_RATIO`, so a future
+# re-derivation of the shipped constant to a materially different value (this file's own sibling
+# cells read the module and so would silently "pass" a drifted constant) is caught here instead.
+
+def test_ratio_just_inside_ten_x_does_not_warn_and_just_outside_does():
+    """Boundary pin at literal 9.0x/11.0x around the shipped `10.0` -- M1 also names the exact
+    inclusive boundary (10.0x itself) as untested; covered by the second assertion below via the
+    corruption census's own k=10 reading, replicated with a hand-built pair."""
+    rng = np.random.default_rng(10)
+    ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
+    ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
+    reference_delta_norm = ref_raw["delta_norm_sq"] ** 0.5
+
+    inside = _collect(ref_w_f, ref_a_f, ref_b_scaled * 9.0)
+    r_inside = A.run_b3_pooled_report([("inside", inside)], reference_delta_norm=reference_delta_norm)
+    assert r_inside["magnitude_warning"] is None, "9.0x is inside the shipped [1/10, 10] band"
+
+    outside = _collect(ref_w_f, ref_a_f, ref_b_scaled * 11.0)
+    r_outside = A.run_b3_pooled_report([("outside", outside)], reference_delta_norm=reference_delta_norm)
+    assert r_outside["magnitude_warning"] is not None, "11.0x is outside the shipped [1/10, 10] band"
+
+
+def test_ratio_at_exactly_the_boundary_is_silent_on_the_inclusive_compare():
+    """M1: the census's own two exact-10.0x corruptions (`t2204r4_magnitude_domain_output.json`'s
+    "scale=0.02 CORRUPT k=10" and "scale=0.002 CORRUPT k=1000") pass silently because the shipped
+    predicate is `lo <= ratio <= hi`, inclusive. Pinned directly, not read back from the module, so
+    a future switch to an exclusive compare is a visible behavior change here."""
+    rng = np.random.default_rng(11)
+    ref_w_f, ref_a_f, ref_b_scaled = _honest_pair(rng, scale=0.02)
+    ref_raw = _collect(ref_w_f, ref_a_f, ref_b_scaled)
+    reference_delta_norm = ref_raw["delta_norm_sq"] ** 0.5
+
+    at_boundary = _collect(ref_w_f, ref_a_f, ref_b_scaled * 10.0)
+    result = A.run_b3_pooled_report([("boundary", at_boundary)], reference_delta_norm=reference_delta_norm)
+    assert result["magnitude_warning"] is None, (
+        "a candidate at EXACTLY 10.0x the reference is silent on the shipped inclusive `<=` -- "
+        "this is the same comparison that let a real executed corruption through (S2/M1)"
+    )
+
+
+# --- Cell 3c: `magnitude_warn_ratio` validation -- fix for D-SLM3787 finding M3 -----------------
+
+@pytest.mark.parametrize("bad_ratio", [1.0, 0.5, 0.0, -3.0])
+def test_magnitude_warn_ratio_at_or_below_one_is_rejected(bad_ratio):
+    """A ratio of exactly 1.0 collapses the tolerance band to a single point; below 1.0 it
+    inverts (`lo > hi`, everything warns); 0.0 previously raised `ZeroDivisionError` instead of a
+    clear error. All four are rejected up front with a `ValueError`."""
+    rng = np.random.default_rng(12)
+    w_f, a_f, b_scaled = _honest_pair(rng, scale=0.02)
+    raw = _collect(w_f, a_f, b_scaled)
+    with pytest.raises(ValueError):
+        A.run_b3_pooled_report([("p0", raw)], reference_delta_norm=1.0, magnitude_warn_ratio=bad_ratio)
 
 
 # --- Cell 4: never a REJECT -- the warning carries no field an emission decision reads ---------

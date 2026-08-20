@@ -721,7 +721,14 @@ def _b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta
            "composed_val": np.asarray(c_val, dtype=np.float64),
            "effect_pilot": np.asarray(e_pilot, dtype=np.float64),
            "effect_val": np.asarray(e_val, dtype=np.float64),
-           "delta_norm_sq": float(np.sum(lora_delta ** 2))}
+           # T-2213 fix round (D-SLM3787 finding C1): a plain Python `float` has no `.tolist()`,
+           # and every other value in this dict is an `np.ndarray` -- `build_runtime_additive_
+           # sections`'s checkpoint writer serializes the whole dict via
+           # `{k: v.tolist() for k, v in raw.items()}`, so a bare `float` here raised
+           # `AttributeError` on the first checkpointed pair. `np.sum(...)` already returns an
+           # `np.float64` scalar, which carries `.tolist()` (-> a plain Python float on decode)
+           # exactly like an `np.ndarray` does -- dropping the `float()` cast is the fix.
+           "delta_norm_sq": np.sum(lora_delta ** 2)}
 
 
 def run_b3_bootstrap_check(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_honest,
@@ -857,25 +864,43 @@ def _b3_pair_diagnostic(name: str, raw: dict, own_check: dict, *, n_bootstrap_re
 
 
 _B3_MAGNITUDE_WARN_RATIO = 10.0
-# T-2213 (D-SLM3783): the magnitude sanity check's own tolerance -- a candidate whose pooled
-# composed LoRA delta norm (`run_b3_pooled_report`'s own `delta_norm`, below) sits outside
-# `[reference / _B3_MAGNITUDE_WARN_RATIO, reference * _B3_MAGNITUDE_WARN_RATIO]` gets a named
-# WARNING, never a REJECT. Derived from the executed probe data across the T-2204 fold-round-4 /
-# T-2210 / T-2211 arc (Claude/Loki/t2210-probe, Claude/Loki/t2211-probe,
-# Claude/Vitruvius/t2204-fold-round4-probe, Wizard repo), all at that arc's own shared synthetic
-# cell (d_in=d_out=1536, rank=16, pilot_n=120): honest, uncorrupted, in-domain candidates' own
-# delta-norm ratio to the reference was observed up to ~6.2-6.3x (t2204r4_magnitude_domain_output
-# .json, "honest scale=0.05"), with the earlier T-2210 strike separately finding its own false-
-# REJECT boundary (under the now-retired tight band) at ~2.5x. Every corruption construction
-# actually executed against the real 196-pair reference adapter across this arc's own D-SLM3750
-# census (uniform B-scale, dpo_outlier_b, rank_hot, one_row, noise) crossed a composed-statistic
-# margin of 41.6x-366.1x -- a DIFFERENT quantity from the delta-norm ratio this constant gates
-# (a raw weight-magnitude ratio vs. a composed-error margin), cited here only to establish that
-# the two populations this constant separates are a decade-plus apart at every point either was
-# ever measured, not because the two figures are the same statistic. 10.0x sits in that gap: well
-# above every honest delta-norm ratio measured (~6.3x), well below every corruption margin
-# measured (41.6x-366.1x). This is a coarse, wide-tolerance sanity distance, not a calibrated
-# accept boundary -- it never refuses an adapter (§ below).
+# T-2213 fix round (D-SLM3787 item 1, superseding D-SLM3785): NOT a derived boundary. The shipped
+# 10.0x is an arbitrary, coarse, one-decade-wide sanity constant, kept only because the FULL
+# executed census this constant could be checked against shows no ratio -- on either side -- that
+# separates honest candidates from the arc's own "corrupted" construction on this axis.
+#
+# The check's own axis is `delta_norm`'s ratio to a fixed reference. Read directly, without
+# excluding any candidate, from `Claude/Vitruvius/t2204-fold-round4-probe/
+# t2204r4_magnitude_domain_output.json` and its `t2210_magnitude_axis_output.json` sibling
+# (Wizard repo; both replay the SAME 18 honest + 8 "corrupt" constructions, both drawing `a_f` and
+# `b_scaled` from one shared `scale` parameter, so `delta_norm` scales QUADRATICALLY in `scale`
+# for the honest set and the "corrupt" set is that same honest baseline with `b_scaled` further
+# multiplied by a constant `k`): the 18 honest candidates' `ratio_to_ref` spans 0.0099x-100.0x
+# (the earlier ~6.2-6.3x figure quoted a truncated 6-of-18 slice, "honest scale=0.05" only,
+# omitting the "scale=0.1" (~25x) and "scale=0.2" (~100x) rows the SAME probe run and file also
+# report); the 8 corruption candidates' `ratio_to_ref` spans 0.1x-100000.0x, with two readings at
+# EXACTLY 10.0x and one at 0.5x. On the high side the honest population's own max (100.0x) sits
+# TEN TIMES ABOVE the lowest corruption reading that side has (10.0x) -- not a gap, an inversion:
+# some "corrupted" candidates read a smaller ratio than some honest ones. On the low side a
+# corruption (0.5x) sits well inside the honest range (which itself reaches down to 0.0099x). No
+# threshold, symmetric or one-sided, separates these two populations on this axis, because the
+# "corruption" construction here (an honest baseline with `B` uniformly rescaled) and ordinary
+# honest scale variation are the same transformation of the same underlying weights -- the metric
+# cannot tell training-time magnitude choice apart from post-hoc rescaling, which is the same
+# conclusion the whole B3 pooled-gate arc reached about raw magnitude generally (this ticket's own
+# commission, above). D-SLM3787's own "25x honest max to 41.6x corruption floor" does not survive
+# this recomputation: the 25x figure silently excluded the census's own ~100x rows, and 41.6x is
+# `Claude/Loki/t2207-t2204-restrike-2026-08-20.md`'s composed-STATISTIC margin (D-SLM3750) --
+# a different quantity, never measured on this ratio axis at all, repeating exactly the
+# quantity-confusion `Claude/Poirot/8af620a-t2214-gate-retirement-confirmation.md` finding S2
+# raised against the figure this comment previously shipped.
+#
+# 10.0x therefore ships as a plain, non-calibrated sanity distance -- present for visibility,
+# never a discriminator, never a REJECT (see below). On the executed census it warns on 12 of the
+# 18 honest candidates (every row at ratio > 10x: "scale=0.1" and "scale=0.2") and stays silent on
+# 3 of the 8 corruptions (the two at exactly 10.0x, inclusive compare, and the one at 0.5x). A
+# caller who wires a real reference adapter should expect the warning to fire on honest
+# conversions and should not read its absence as a health signal.
 
 
 def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = None,
@@ -889,11 +914,20 @@ def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = 
     one frozen reference adapter's own idiosyncrasy, not a property of adapter health, and Dan's
     ruling (D-SLM3783) retired the arithmetic rather than continuing to repair it.
 
-    What ships instead, unaffected by the retirement:
+    What ships instead:
 
-    - **`per_pair_diagnostics`** (unchanged, `_b3_pair_diagnostic`, design §25.5 item 2): every
-      pair's own bias-corrected margin against its OWN self-calibrated Delta, never gating, and
-      the primary B3 review signal this tool reports (`_B3_POOLED_GATE_STATUS_NOTICE`).
+    - **`per_pair_diagnostics`** (`_b3_pair_diagnostic`, design §25.5 item 2, arithmetic itself
+      unchanged) -- T-2213 fix round (D-SLM3787 finding S3): this function's own numbers ARE
+      affected by the retirement even though the diagnostic's own arithmetic is not. The two
+      `_bootstrap_se` calls this function used to make against the pooled population, before this
+      per-pair loop, are deleted along with the retired verdict; they used to consume the shared
+      `rng` first, so every pair's own bootstrap draws below shifted to a different point in the
+      stream the moment those two calls were removed (executed on a constructed pair:
+      `composed_tail` margin 2.4227 -> 2.4316). The loop now seeds its own `rng` at its own point
+      of first use (below), so this cannot happen again from an unrelated change elsewhere in this
+      function. Reports every pair's own bias-corrected margin against its OWN self-calibrated
+      Delta, never gating, and is the primary B3 review signal this tool reports
+      (`_B3_POOLED_GATE_STATUS_NOTICE`).
     - **`delta_norm`** (T-2213, new): the candidate's pooled composed LoRA delta norm --
       `sqrt(sum over pairs of delta_norm_sq)`, reusing `_b3_collect_pair_raw_draws`'s own
       already-computed `b_scaled @ a_f` product per pair, no fresh computation.
@@ -912,13 +946,26 @@ def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = 
     """
     if not pair_draws:
         raise ValueError("run_b3_pooled_report: pair_draws is empty -- no pairs to pool")
+    # T-2213 fix round (D-SLM3787 finding M3): a ratio <= 1.0 collapses the tolerance band to a
+    # point (1.0) or inverts it (< 1.0, so `lo > hi` and every candidate warns).
+    if magnitude_warn_ratio <= 1.0:
+        raise ValueError(f"magnitude_warn_ratio must be > 1.0 (got {magnitude_warn_ratio}) -- a "
+                         "ratio <= 1.0 collapses or inverts the [reference/ratio, reference*ratio] "
+                         "tolerance band")
 
-    pooled_composed_pilot = np.concatenate([raw["composed_pilot"] for _name, raw in pair_draws])
-    pooled_composed_val = np.concatenate([raw["composed_val"] for _name, raw in pair_draws])
+    # T-2213 fix round (D-SLM3787 finding M4): `pooled_composed_pilot`/`pooled_composed_val` used
+    # to be concatenated here and read nowhere except `.shape[0]` below -- a full copy of the
+    # whole pooled population (196 pairs in production) to compute a length. `sum(len(...))` is
+    # exact and free.
+    n_pilot_pooled = sum(raw["composed_pilot"].shape[0] for _name, raw in pair_draws)
+    n_val_pooled = sum(raw["composed_val"].shape[0] for _name, raw in pair_draws)
 
-    rng = np.random.default_rng(bootstrap_seed)
-
-    delta_norm = math.sqrt(sum(raw.get("delta_norm_sq", 0.0) for _name, raw in pair_draws))
+    # T-2213 fix round (D-SLM3787 finding S1): every value in `raw` is required, not defaulted --
+    # `_b3_collect_pair_raw_draws` always sets `delta_norm_sq`, and the resume path above now
+    # recomputes it for any checkpointed pair that predates T-2213 rather than omitting it, so a
+    # missing key here means a `raw` dict from somewhere else entirely and should raise, not
+    # silently read as 0.
+    delta_norm = math.sqrt(sum(raw["delta_norm_sq"] for _name, raw in pair_draws))
     magnitude_warning = None
     if reference_delta_norm is not None and reference_delta_norm > 0.0:
         ratio = delta_norm / reference_delta_norm
@@ -935,6 +982,19 @@ def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = 
             }
         if verbose and magnitude_warning is not None:
             print(f"  [B3 MAGNITUDE WARNING] {magnitude_warning['reason']}")
+
+    # T-2213 fix round (D-SLM3787 finding S3, item 2): this loop's own rng, instantiated at its
+    # own point of first use rather than shared with anything computed above it in this function.
+    # Before this fix `rng` was created once at the top of the function and threaded through
+    # every `_b3_pair_diagnostic` call below; two `_bootstrap_se` calls that used to run against
+    # the pooled population, before this loop, were deleted by T-2213's own retirement (D-SLM3783)
+    # -- so every pair's diagnostic silently began drawing from a different point in the stream
+    # than it did before the retirement, with no diagnostic code itself touched (executed:
+    # `composed_tail` margin 2.4227 -> 2.4316, `effect_tail` 1.3834 -> 1.4165 on a constructed
+    # pair). Creating the generator here, at the loop that is its only consumer, means a future
+    # change anywhere else in this function -- adding, removing, or reordering a pooled
+    # computation -- cannot perturb these numbers again the way the retirement itself just did.
+    rng = np.random.default_rng(bootstrap_seed)
 
     per_pair_diagnostics = []
     for name, raw in pair_draws:
@@ -966,7 +1026,7 @@ def run_b3_pooled_report(pair_draws, *, reference_delta_norm: Optional[float] = 
         "delta_norm": delta_norm,
         "magnitude_warning": magnitude_warning,
         "n_pairs": len(pair_draws),
-        "n_pilot_pooled": int(pooled_composed_pilot.shape[0]), "n_val_pooled": int(pooled_composed_val.shape[0]),
+        "n_pilot_pooled": int(n_pilot_pooled), "n_val_pooled": int(n_val_pooled),
         "per_pair_diagnostics": per_pair_diagnostics,
     }
 
@@ -1383,6 +1443,19 @@ def build_runtime_additive_sections(adapter_dir, base_sslm_path, *,
             if not pair_domain_trip:
                 if name in saved_draws:
                     raw = saved_draws[name]
+                    if "delta_norm_sq" not in raw:
+                        # T-2213 fix round (D-SLM3787 finding S1): a checkpoint written before
+                        # T-2213 (D-SLM3783) has no `delta_norm_sq` key at all -- `raw.get(...,
+                        # 0.0)` at this function's own pooling call previously turned that
+                        # absence into a silent, plausible-looking `delta_norm=0` for the resumed
+                        # pair. Recompute it directly from this pair's own current A/B rather than
+                        # refusing the resume: it is the cheap ~0.1s/pair product
+                        # `_b3_collect_pair_raw_draws` already derives unconditionally
+                        # (`b_scaled @ a_f`), never the ~6.5s/pair draw cost the checkpoint exists
+                        # to avoid re-paying, so recomputing it here loses none of the resume's
+                        # own performance benefit.
+                        raw = dict(raw)
+                        raw["delta_norm_sq"] = np.sum((b_scaled @ a_f) ** 2)
                 else:
                     raw = _b3_collect_pair_raw_draws(w_f, a_f, b_scaled, Wc, w, S, Ac, alpha, Bc, beta, T_value)
                     if checkpoint_file is not None:
@@ -1577,6 +1650,30 @@ def run_merge_quantize_conversion(adapter_dir, out_path, *, verifier=None, manif
         return _run(built_dir)
 
 
+def _print_pooled_b3_report(pooled, *, file=None):
+    """T-2213 fix round (D-SLM3787 finding S4): the accept path and the reject path both print the
+    same pooled B3 report when one exists (`pooled is not None`) -- factored out so the reject
+    path (a partial domain trip) is not left silently printing nothing about the pairs that did
+    not trip, which is what the deleted print block's own false justification comment claimed
+    could not happen."""
+    if pooled is None:
+        return
+    file = sys.stdout if file is None else file
+    print(f"  pooled B3 report: n_pairs={pooled['n_pairs']} delta_norm={pooled['delta_norm']:.6e}",
+         file=file)
+    print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}", file=file)
+    if pooled["magnitude_warning"] is not None:
+        print(f"  MAGNITUDE WARNING (unresolved, not a rejection): "
+             f"{pooled['magnitude_warning']['reason']}", file=file)
+    flagged = [d["name"] for d in pooled["per_pair_diagnostics"] if d["flagged"]]
+    if flagged:
+        print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
+             f"{flagged}", file=file)
+    else:
+        print("  0 pair(s) flagged for review -- an empty list is not evidence this "
+             "adapter is sound; see the notice above.", file=file)
+
+
 def main():
     """Design §24.2 D-SLM3163's own CLI/dispatch contract."""
     import argparse
@@ -1601,7 +1698,12 @@ def main():
                     help="a reference adapter's own pooled composed LoRA delta norm (T-2213, "
                          "D-SLM3783), for the B3 magnitude sanity check -- optional; when omitted "
                          "(the default) no reference is configured and the check is reported but "
-                         "never fires, never blocking artifact emission either way")
+                         "never fires, never blocking artifact emission either way. This is a raw "
+                         "Frobenius norm, not normalized against the geometry it was measured on "
+                         "-- a value taken from a different base checkpoint, rank, or "
+                         "target_modules set produces a meaningless ratio with no error (D-SLM3787 "
+                         "finding O4). Whoever records a reference value should record alongside "
+                         "it which base-artifact hash and rank it was computed from.")
     args = ap.parse_args()
 
     adapter_dir = Path(args.adapter)
@@ -1624,19 +1726,7 @@ def main():
         fingerprint = sf.write_artifact(str(out_path), sections)
         print(f"wrote {out_path}\nfingerprint {fingerprint}\nsections {len(sections)}: " +
              ", ".join(str(s.type) for s in sections))
-        if verdict["pooled"] is not None:
-            p = verdict["pooled"]
-            print(f"  pooled B3 report: n_pairs={p['n_pairs']} delta_norm={p['delta_norm']:.6e}")
-            print(f"  {_B3_POOLED_GATE_STATUS_NOTICE}")
-            if p["magnitude_warning"] is not None:
-                print(f"  MAGNITUDE WARNING (unresolved, not a rejection): {p['magnitude_warning']['reason']}")
-            flagged = [d["name"] for d in p["per_pair_diagnostics"] if d["flagged"]]
-            if flagged:
-                print(f"  {len(flagged)} pair(s) flagged for review (diagnostic only, never gates): "
-                     f"{flagged}")
-            else:
-                print("  0 pair(s) flagged for review -- an empty list is not evidence this "
-                     "adapter is sound; see the notice above.")
+        _print_pooled_b3_report(verdict["pooled"])
         if not args.skip_verify:
             import sslm_convert_manifest as scm
             repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1646,13 +1736,22 @@ def main():
             print("verified: independent loader accepted the artifact")
         return 0
 
-    # T-2213 (D-SLM3783): B3's pooled report can no longer produce `margin_exceeded=True` -- this
-    # branch is reached only via `domain_trip` or `saturation_elevated`, neither of which carries
-    # pooled B3 diagnostics to print (a domain trip means no pair was collected into the pool at
-    # all; `saturation_elevated` is B6's own named residual, never computed by this module).
+    # T-2213 fix round (D-SLM3787 finding S4): B3's pooled report can no longer produce
+    # `margin_exceeded=True` -- this branch is reached only via `domain_trip` or
+    # `saturation_elevated`. `domain_trip` is a per-pair boolean, OR-accumulated across
+    # `build_runtime_additive_sections`'s own loop over every adapted pair -- a PARTIAL domain
+    # trip (some pairs trip, others do not) still leaves `verdict["pooled"]` a full report over
+    # every pair that did not trip; only a domain trip on EVERY pair leaves it `None`. The
+    # previous comment here claimed a domain trip always means no pair was pooled, which is true
+    # only when every pair trips. `saturation_elevated` is B6's own named residual, hardcoded
+    # `False` and never computed by this module, so it is not a live route to this branch today.
     print(f"REJECTED: {branch.name} -- no runtime-additive artifact emitted (domain_trip="
          f"{verdict['domain_trip']} margin_exceeded={verdict['margin_exceeded']} "
          f"saturation_elevated={verdict['saturation_elevated']})", file=sys.stderr)
+    # A partial domain trip still leaves a pooled report over the pairs that did not trip -- print
+    # it here so a consumer refused an artifact is not shown nothing about the pairs that were
+    # fine.
+    _print_pooled_b3_report(verdict["pooled"], file=sys.stderr)
 
     if outcome == ArtifactOutcome.NO_ARTIFACT_EMITTED:
         if out_path.exists():
