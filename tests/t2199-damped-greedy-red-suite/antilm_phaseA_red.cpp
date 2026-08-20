@@ -317,21 +317,132 @@ static void TestPhaseA_MemoryGrowth_BoundedByDistinctNgrams() {
 }
 
 // ===========================================================================================
-// Phase A2 (Sec8): "a cross-reference cell against Loftus's own repaired driver's behavior at
-// the paper's default hyperparameters (behavioral parity, not bit parity)."
-// ROUTED AS A COVERAGE MODEL GAP, not authored: the plan's own Sec7.2 citation names Loftus's
-// verified reference driver (t2190-s1-fsd-prosecution-2026-08-19.md Sec3) as this cell's
-// comparison target, but does not itself carry the reference driver's own numeric output at
-// any specific fixture (mixing weights beta=0.9 applied to which construction, what its
-// reported p_omega values were). This suite is scoped to realize the Coverage Model from the
-// plan's own text (Curie's jurisdiction, per her spec's Sec "Realize the model; a gap in it is
-// a finding, not an invention") -- fabricating Loftus's reference numbers here would be
-// inventing coverage, not deriving it. Filed as a finding in this campaign's own test-design
-// record (Claude/Curie/t2199-red-suite-2026-08-20.md), routed to whoever prosecutes Phase A:
-// pull the exact fixture and expected p_omega readings from
-// t2190-s1-fsd-prosecution-2026-08-19.md Sec3 (or the Loftus driver's own source) before this
-// cell can be authored as a red test rather than left as this routing note.
+// Phase A2 (Sec8), Sec9 dim7 -- the Loftus cross-reference cell. FILLED 2026-08-20 (Mendeleev's
+// pre-build audit, Finding 1, `Claude/Mendeleev/t2199-red-suite-coverage-audit-2026-08-20.md`):
+// the plan folded to `925ea281e3` and now carries a concrete, executed, reviewed fixture
+// (Sec8 Phase A2) that did not exist when this suite was first authored against `5a7f80e251` --
+// the routing note this comment used to carry is stale and is replaced by the cell itself.
+//
+// Reference: `NGram(input_ids=[5,12,7,5,12,9], n=3, vocab_size=50, beta=0.9, sw_coeff=0.0)`
+// (plan Sec8 Phase A2, `925ea281e3`), three steps:
+//   Step 1  penalize({5,12,7,5,12,9}, [5,12,7,9,3]) -- no update() yet:
+//           5: 0.3333333432674408   12: 0.3333333432674408   7: 0.1666666716337204
+//           9: 0.1666666716337204   3: 0.0
+//   Step 2  update(7), penalize({5,12,7,5,12,9,7}, [5,12,7,9,3]):
+//           5: 0.47857141494750977 12: 0.2857142984867096   7: 0.2857142984867096
+//           9: 0.1428571492433548  3: 0.0
+//   Step 3  determinism: a fresh instance, same construction + the same single update(7), same
+//           penalize call -- must match step 2 exactly.
+//
+// BEHAVIORAL PARITY, NOT BIT PARITY, per the plan's own explicit framing (Sec8 Phase A2) --
+// stated here as an engineering finding, not merely a disclaimer: this engine's own design
+// (Sec7.2) states mixing weights are normalized "for each order i" but does not state whether
+// the normalization denominator (`sum w_i`) runs over ALL orders 1..max_order unconditionally
+// or is RE-normalized over only the orders with an observed context at the current query --
+// the two conventions give numerically different results whenever some order is unobserved
+// (exactly the shape both fixture steps exercise). Working the reference's own step-1 numbers
+// backward (pure unigram, no scaling by any fractional order-1 weight) shows the REFERENCE
+// algorithm renormalizes over active orders only; working step 2 backward (candidates 12/7/9/3
+// landing at their EXACT raw unigram value while candidate 5 alone gains a boost from the
+// bigram term) shows a mixing shape this suite's own header does not fully pin either. Rather
+// than guess which convention this engine's own build will choose (inventing a precision
+// the plan never specified would violate Curie's own "pin the documented claim, not invent"
+// discipline), this cell checks the properties EVERY faithful implementation of "a smoothed
+// n-gram mixture that gives more weight to higher, more specific orders when they have data"
+// must satisfy, regardless of the exact normalization convention -- the same behavioral-parity
+// standard the plan's own text names for this cell.
 // ===========================================================================================
+static void TestPhaseA_LoftusCrossReference_BehavioralParity() {
+	const int32_t C5 = 5, C12 = 12, C7 = 7, C9 = 9, C3 = 3;
+	const int32_t cands[5] = {C5, C12, C7, C9, C3};
+
+	AntiLmState* alm = AntiLmCreate(/*max_order=*/3);  // matches the fixture's own n=3
+	for (int32_t t : {5, 12, 7, 5, 12, 9}) AntiLmUpdate(alm, t);  // NGram's own input_ids
+
+	// --- Step 1: no higher-order context has EVER been observed (neither (12,9) for the
+	// trigram nor (9,) for the bigram was ever inserted as a context key by the six updates
+	// above -- confirmed by hand-trace against this suite's own update() semantics, matching
+	// Mendeleev's own independent re-derivation, task 2 of the audit). Every faithful mixture
+	// therefore reduces to pure unigram counts (5:2, 12:2, 7:1, 9:1, 3:0 over 6 tokens) --
+	// these tie/order relationships hold under ANY consistent weighting scheme, since a single
+	// active order scales every candidate's own ratio by the identical factor. ---
+	int64_t out1[5];
+	AntiLmPenalize(alm, cands, 5, out1);
+	CHECK_MSG(out1[0] == out1[1],
+	          "step1: p_omega(5)=%lld != p_omega(12)=%lld -- both have unigram count 2 and no "
+	          "order has ever seen higher-order context, so they must tie",
+	          (long long)out1[0], (long long)out1[1]);
+	CHECK_MSG(out1[2] == out1[3],
+	          "step1: p_omega(7)=%lld != p_omega(9)=%lld -- both have unigram count 1, no "
+	          "higher-order context observed, must tie",
+	          (long long)out1[2], (long long)out1[3]);
+	CHECK_MSG(out1[4] == 0, "step1: p_omega(3)=%lld, want exactly 0 -- candidate 3 is never "
+	                         "observed at any order",
+	          (long long)out1[4]);
+	CHECK_MSG(out1[0] > out1[2],
+	          "step1: the {5,12} group (count 2) must outrank the {7,9} group (count 1) -- "
+	          "got p_omega(5)=%lld, p_omega(7)=%lld",
+	          (long long)out1[0], (long long)out1[2]);
+	CHECK_MSG(out1[2] > out1[4],
+	          "step1: the {7,9} group (count 1) must outrank candidate 3 (count 0) -- got "
+	          "p_omega(7)=%lld, p_omega(3)=%lld",
+	          (long long)out1[2], (long long)out1[4]);
+
+	// --- Step 2: update(7) makes bigram context (7,) active with exactly one completion, to
+	// candidate 5 (the only (context, candidate) pair with any bigram evidence -- confirmed by
+	// hand-trace: context (7,) was inserted once, from the original prefix's own token index 2
+	// ("7" followed by "5"), and the newly appended token 7 only inserts a NEW context (9,)->7,
+	// which does not touch this query). Candidates 12/7/9/3 gain NO bigram evidence (their own
+	// bigram ratio is exactly 0 under context (7,) regardless of normalization), so they must
+	// still tie/rank purely by their unigram counts (12:2, 7:2, 9:1, 3:0 over 7 tokens) --
+	// EXACTLY the step-1 shape, one level shifted. Candidate 5 alone must rank STRICTLY above
+	// its own unigram-only peers, because it is the only candidate any active higher order
+	// favors -- this is the discriminating assertion: an implementation that dropped order>1
+	// mixing entirely (collapsing to pure unigram always) would make candidate 5 tie with
+	// {12,7} instead of beating them, failing this check for exactly the reason this cell
+	// exists to catch. ---
+	AntiLmUpdate(alm, 7);
+	int64_t out2[5];
+	AntiLmPenalize(alm, cands, 5, out2);
+	CHECK_MSG(out2[1] == out2[2],
+	          "step2: p_omega(12)=%lld != p_omega(7)=%lld -- both have unigram count 2 and "
+	          "zero bigram evidence (context (7,) never completed to either), must tie",
+	          (long long)out2[1], (long long)out2[2]);
+	CHECK_MSG(out2[4] == 0, "step2: p_omega(3)=%lld, want exactly 0", (long long)out2[4]);
+	CHECK_MSG(out2[0] > out2[1],
+	          "step2: p_omega(5)=%lld must STRICTLY exceed p_omega(12)=%lld -- candidate 5 is "
+	          "the sole beneficiary of the newly active bigram context (7,)->5; a build that "
+	          "ignores order>1 evidence entirely would tie them instead",
+	          (long long)out2[0], (long long)out2[1]);
+	CHECK_MSG(out2[1] > out2[3],
+	          "step2: the {12,7} group (unigram count 2) must outrank candidate 9 (count 1) -- "
+	          "got p_omega(12)=%lld, p_omega(9)=%lld",
+	          (long long)out2[1], (long long)out2[3]);
+	CHECK_MSG(out2[0] > out2[3], "step2: p_omega(5)=%lld must exceed p_omega(9)=%lld",
+	          (long long)out2[0], (long long)out2[3]);
+
+	// --- Step 3: the determinism cross-check the fixture itself specifies -- a FRESH instance,
+	// built with the identical construction (the same six-token prefix) plus the identical
+	// single update(7), must match step 2's own reading EXACTLY. Unlike steps 1/2 above (which
+	// compare against an EXTERNAL reference under an admittedly different, unpinned
+	// normalization convention), this is a same-engine, same-construction comparison -- bit-
+	// exact equality is the correct standard here, matching this suite's own
+	// TestPhaseA_SameSequenceTwiceIdenticalState cell, now anchored to the SAME real fixture
+	// data Mendeleev's audit reviewed rather than an arbitrary sequence. ---
+	AntiLmState* fresh = AntiLmCreate(3);
+	for (int32_t t : {5, 12, 7, 5, 12, 9}) AntiLmUpdate(fresh, t);
+	AntiLmUpdate(fresh, 7);
+	int64_t out3[5];
+	AntiLmPenalize(fresh, cands, 5, out3);
+	for (int i = 0; i < 5; ++i)
+		CHECK_MSG(out2[i] == out3[i],
+		          "step3 determinism: candidate index %d: accumulated=%lld fresh-replay=%lld -- "
+		          "must match exactly",
+		          i, (long long)out2[i], (long long)out3[i]);
+
+	AntiLmDestroy(alm);
+	AntiLmDestroy(fresh);
+}
 
 int main() {
 	TestPhaseA_KnownAnswer_Order1();
@@ -344,8 +455,7 @@ int main() {
 	TestPhaseA_Dim7_DeterminismAcrossInsertionOrder();
 	TestPhaseA_SameSequenceTwiceIdenticalState();
 	TestPhaseA_MemoryGrowth_BoundedByDistinctNgrams();
+	TestPhaseA_LoftusCrossReference_BehavioralParity();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
-	std::printf("[gap, not authored] Phase A2 Loftus cross-reference cell -- see this file's "
-	            "own trailing comment; routed to the planner/Phase-A prosecutor.\n");
 	return GFailures ? 1 : 0;
 }

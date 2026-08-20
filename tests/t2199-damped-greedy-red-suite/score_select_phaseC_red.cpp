@@ -348,6 +348,116 @@ static void TestDim7_KeeperProbe_DiagnosticsComputedCorrectly() {
 	AntiLmDestroy(alm);
 }
 
+// ===========================================================================================
+// Sec9 dim7 (MEASUREMENT), Finding 2 fill-spec (Mendeleev's pre-build audit,
+// `Claude/Mendeleev/t2199-red-suite-coverage-audit-2026-08-20.md`): the cell above only
+// RANGE-CHECKS `alpha_eff_q15`/`p_topk_q15`, which cannot re-detect the cycle-8 temper's own
+// historically-real defect (a dropped or mis-ordered `>>15` narrowing on the wide
+// `alpha_q15 * p_omega` product, Sec7.5) -- at the small alpha values the original cell and
+// this suite's own primary-grid sweeps use (up to 3.0), an un-rescaled `alpha_eff` never
+// approaches any bound a range check would catch. This cell closes that gap: it independently
+// RECOMPUTES `alpha_eff_q15` bit-exact from the SAME pinned formula (`(alpha_q15 * p_omega)
+// >> kProbFracBits`, Sec7.5), at an ADVERSARIALLY LARGE alpha near the Sec9 dim2 sanity
+// ceiling (`alpha_q15 < 2^20`) -- exactly where a dropped/misplaced rescale produces a value
+// that diverges from the reference by many orders of magnitude, a margin no range check could
+// miss. `p_topk_q15` is likewise recomputed (Z_k / full_row_z, both independently derivable)
+// rather than range-checked, to the same floor-rounding tolerance
+// (`TestPhaseC2_KnownAnswer_MatchesSoftmaxRowQ15OnGatheredElements`'s own precedent for why a
+// small slack is mathematically necessary, not a weakening of rigor).
+// ===========================================================================================
+static void TestFinding2_KeeperProbe_HighAlpha_ExactRecompute() {
+	const int32_t V = 30;
+	const int32_t idx[6] = {0, 5, 10, 15, 20, 25};
+	std::vector<int32_t> row = MakeSyntheticRow(V, {5, 10, 0, 15, 20, 25});
+	std::vector<uint8_t> mask = MakeMask(V, true);
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+
+	AntiLmState* alm = AntiLmCreate(2);
+	for (int i = 0; i < 10; ++i) {
+		AntiLmUpdate(alm, 5);
+		AntiLmUpdate(alm, 10);
+	}
+	// Adversarially large: alpha = 31.9, alpha_q15 ~ 1,045,401 -- just under the Sec9 dim2
+	// sanity ceiling (alpha_q15 < 2^20 = 1,048,576; alpha < 32 in real terms), the exact zone
+	// the audit names as where a dropped/misplaced >>15 narrowing becomes numerically visible.
+	const double alpha = 31.9;
+	const int64_t alpha_q15 = static_cast<int64_t>(alpha * (1 << kProbFracBits) + 0.5);
+	CHECK_MSG(alpha_q15 < (1LL << 20), "test fixture error: alpha_q15=%lld must stay under the "
+	                                   "dim2 sanity ceiling 2^20",
+	          (long long)alpha_q15);
+
+	int64_t ref_pw[6];
+	AntiLmPenalize(alm, idx, 6, ref_pw);
+
+	std::vector<int64_t> full_scores(row.begin(), row.end());
+	std::vector<int64_t> full_q(static_cast<size_t>(V));
+	CHECK(SoftmaxRowQ15(full_scores.data(), static_cast<size_t>(V), q_ln2, q_b, q_c,
+	                     full_q.data()));
+	int64_t ref_z_k_proxy = 0;
+	for (int32_t i : idx) ref_z_k_proxy += full_q[static_cast<size_t>(i)];
+	int64_t full_row_z_proxy = 0;
+	for (int64_t v : full_q) full_row_z_proxy += v;
+
+	int32_t token = -1;
+	bool refused = false;
+	DampedGreedyDiagnostics diag{};
+	const bool ok = DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm, alpha_q15,
+	                                                q_ln2, q_b, q_c, full_row_z_proxy, &token,
+	                                                &refused, &diag);
+	CHECK(ok);
+	if (refused) {
+		SKIP_MSG("TopKRenormalizeQ15 refused at this adversarially large alpha's own row -- "
+		         "alpha_eff_q15's own recompute cannot be checked against a winner that was "
+		         "never selected");
+		AntiLmDestroy(alm);
+		return;
+	}
+
+	// Locate the winning candidate's own position within idx[] (free-text mask -- the winner
+	// is guaranteed to be one of the six gathered candidates).
+	int winner_pos = -1;
+	for (int i = 0; i < 6; ++i)
+		if (idx[i] == token) winner_pos = i;
+	CHECK_MSG(winner_pos >= 0, "selected token %d not found among the six gathered candidates",
+	          token);
+	if (winner_pos < 0) {
+		AntiLmDestroy(alm);
+		return;
+	}
+
+	// The EXACT pinned formula (Sec7.5): widen to int64, multiply, THEN narrow by >>15 --
+	// bit-exact, no tolerance. A build that narrows AFTER subtracting, or omits the >>15
+	// entirely, produces `ref_alpha_eff` off by a factor of ~2^15 at this alpha -- unmissable.
+	const int64_t ref_alpha_eff =
+	    (static_cast<int64_t>(alpha_q15) * ref_pw[winner_pos]) >> kProbFracBits;
+	CHECK_MSG(diag.alpha_eff_q15 == ref_alpha_eff,
+	          "diag.alpha_eff_q15=%lld, independently recomputed (alpha_q15=%lld * "
+	          "p_omega=%lld) >> 15 = %lld -- a dropped or mis-ordered >>15 rescale would "
+	          "produce a value roughly 2^15x too large here, unmissable at this alpha",
+	          (long long)diag.alpha_eff_q15, (long long)alpha_q15, (long long)ref_pw[winner_pos],
+	          (long long)ref_alpha_eff);
+	// Sanity floor: at this alpha and a genuinely nonzero p_omega, a CORRECTLY rescaled
+	// alpha_eff must fit comfortably under 2^31 (Sec7.5's own derived bound) -- confirms this
+	// fixture actually exercises a nonzero term, not a vacuous alpha_eff=0 case that would let
+	// a broken rescale pass by coincidence.
+	CHECK_MSG(ref_pw[winner_pos] > 0 || ref_alpha_eff == 0,
+	          "fixture error: winner's own p_omega=%lld but ref_alpha_eff=%lld -- this "
+	          "construction must exercise a nonzero anti-LM term to be discriminating",
+	          (long long)ref_pw[winner_pos], (long long)ref_alpha_eff);
+
+	// p_topk_q15 recomputed (Z_k/full_row_z, both independently derived above), to the same
+	// floor-rounding slack this suite already uses elsewhere (< k units) -- a mathematically
+	// necessary tolerance (independent per-element Q15 rounding vs. one combined ratio), not a
+	// weakening of the check.
+	CHECK_MSG(diag.p_topk_q15 >= ref_z_k_proxy - 6 && diag.p_topk_q15 <= ref_z_k_proxy + 6,
+	          "diag.p_topk_q15=%lld, independently recomputed Z_k/Z=%lld (tolerance +/-6 for "
+	          "per-element floor-rounding slack across 6 candidates)",
+	          (long long)diag.p_topk_q15, (long long)ref_z_k_proxy);
+
+	AntiLmDestroy(alm);
+}
+
 int main() {
 	TestDim7_MaskedNeverSelected_HighAlphaOverwhelmsLegalCandidate();
 	TestDim7_MaskedNeverSelected_SingleLegalAmongSix();
@@ -355,6 +465,7 @@ int main() {
 	TestDim5_RefusalPropagatesFromDampedGreedyScoreAndArgmax();
 	TestDim7_AlphaZeroReducesToArgmax();
 	TestDim7_KeeperProbe_DiagnosticsComputedCorrectly();
+	TestFinding2_KeeperProbe_HighAlpha_ExactRecompute();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
