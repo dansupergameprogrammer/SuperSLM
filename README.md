@@ -247,10 +247,10 @@ design and review loop when scheduled:
   closing that gap is a named follow-on campaign.
 - **Launch-floor reduction.** The fixed per-call GPU launch overhead has an
   identified, not-yet-built optimization path.
-- **AVX-512 dedicated throughput measurement.** The AVX-512 tier's
-  bit-identity is proven on real hardware (full forced suite, digest
-  matching every other tier); a tokens/second figure alongside the SSE2 and
-  AVX2 measurements is the remaining item — see
+- **AVX-512 on full-width silicon.** The tier is proven and measured on
+  Zen 4 (about 1.18x over AVX2, bounded by that microarchitecture's
+  double-pumped 512-bit execution); measuring on full-width datapaths
+  (Zen 5, server Intel) is open — see
   [Known gaps](docs/platform-support.md#known-gaps).
 - **Flat-batch dispatch fusion and the remaining single-group tail sites.**
   Two named, scoped opportunities to close the gap between batched and

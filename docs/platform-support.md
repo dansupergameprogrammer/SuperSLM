@@ -49,16 +49,23 @@ happens to support.
 | Scalar | Certified | Every platform's default build; also independently force-selectable |
 | SSE2 | Certified | The x86-64 architectural floor; force-selectable; forced full-suite and digest CI legs executed hosted 2026-08-20 (run 32336576519), green, digest matching |
 | AVX2 | Certified, measured | Force-selectable; forced full-suite and digest CI legs executed hosted 2026-08-20, green, digest matching; throughput measured on real hardware (below) |
-| AVX-512 | Certified (bit-identity) | Force-selectable; full forced suite executed on real AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, cross-tier digest matching every other tier. Dedicated throughput measurement still open (known gap below). CI leg probes and reports SKIPPED honestly on runners without the hardware |
+| AVX-512 | Certified (bit-identity) | Force-selectable; full forced suite executed on real AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, cross-tier digest matching every other tier; throughput measured (below). CI leg probes and reports SKIPPED honestly on runners without the hardware |
 
 **Measured, real 1.5B-parameter model artifact, batched prefill, SSE2 to
 AVX2, this project's own reference AMD hardware (Zen 2, no AVX-512):
 about 1.68x-1.72x faster**, two independent runs, each its own paired
 SSE2/AVX2 baseline: run 1 at 6.93 → 11.68 tok/s (1.68x), run 2 at
 6.60 → 11.33 tok/s (1.72x) — within the 2-5% run-to-run noise this
-project measured on this machine. AVX-512's own throughput is not yet
-measured on real hardware — tracked as a known gap below, not assumed
-from the AVX2 figure.
+project measured on this machine.
+
+**Measured, same artifact, AVX2 to AVX-512, on AVX-512-capable hardware
+(Zen 4): about 1.18x faster** — AVX2-forced 20.15–20.33 tok/s, AVX-512-forced
+23.83–23.95 tok/s, batched prefill, two reps each. The gain is modest by
+design of the silicon: Zen 4 executes 512-bit operations double-pumped
+through 256-bit units, so the wider tier buys a denser instruction stream
+rather than a wider datapath. Every rep also re-proved chunk-boundary
+split bit-identity on the AVX-512 tier — the first such execution on
+AVX-512 silicon.
 
 ## GPU inference
 
@@ -198,14 +205,15 @@ measured through — a number without that context is not included here.
 
 ## Known gaps
 
-- **AVX-512 bit-identity is proven on real hardware; its dedicated
-  throughput figure is not yet published.** The full forced-AVX-512 suite
-  has executed on AVX-512 silicon (Zen 4): 34,174 checks, 0 failures, with
-  the cross-tier digest matching every other tier exactly. What remains
-  open is a tokens/second measurement for the AVX-512 tier alongside the
-  SSE2 and AVX2 figures above, and a hosted-runner execution of the CI leg
-  (which probes and reports SKIPPED honestly until the scheduler provides
-  capable hardware).
+- **The AVX-512 CI leg has not yet executed on a hosted runner** — it
+  probes and reports SKIPPED honestly until the scheduler provides capable
+  hardware. The tier itself is fully proven off-CI: bit-identity (34,174
+  checks, 0 failures, digest matching) and throughput (about 1.18x over
+  AVX2) both measured on real AVX-512 silicon, above.
+- **The AVX-512 measurement is one microarchitecture.** The 1.18x figure
+  is Zen 4, whose double-pumped 512-bit execution bounds the gain; silicon
+  with full-width datapaths (Zen 5, server Intel) would measure
+  differently and has not been measured.
 
 ## What's next
 

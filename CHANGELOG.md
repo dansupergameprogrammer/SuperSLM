@@ -98,11 +98,11 @@ for every measured number and where it was measured.
 
 ### Known gaps, tracked
 
-- The AVX-512 tier is proven bit-identical on real AVX-512 silicon (full
-  forced suite, cross-tier digest match); a dedicated tokens/second
-  measurement for it, alongside the published SSE2 and AVX2 figures, is
-  still open. Its CI leg probes for hardware and reports SKIPPED honestly
-  on runners without AVX-512.
+- The AVX-512 tier is proven bit-identical AND measured on real AVX-512
+  silicon (full forced suite, cross-tier digest match; about 1.18x over
+  AVX2 on Zen 4's double-pumped units — see
+  [docs/platform-support.md](docs/platform-support.md)). Its CI leg probes
+  for hardware and reports SKIPPED honestly on runners without AVX-512.
 
 ## [1.0.0] - 2026-08-18
 
