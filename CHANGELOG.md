@@ -18,10 +18,12 @@ for every measured number and where it was measured.
   runtime-dispatched, three-tier kernel: SSE2 (the unconditional
   architectural floor), AVX2, and AVX-512, selected once per process by a
   CPUID+XGETBV probe, with SSE2 as the automatic fallback on hardware
-  lacking the wider tiers. Every tier is proven bit-identical to the
-  scalar reference — the same determinism guarantee 1.0 established, now
-  carried across three additional dispatch paths rather than weakened by
-  them.
+  lacking the wider tiers. SSE2 and AVX2 are proven bit-identical to the
+  scalar reference on executed hardware — the same determinism guarantee
+  1.0 established, carried across the new dispatch paths. The AVX-512
+  tier compiles and dispatches correctly but has not yet executed on
+  AVX-512 silicon; its bit-identity run is pending and tracked in
+  [docs/platform-support.md](docs/platform-support.md).
 - Measured on a real 1.5B-parameter model artifact, batched prefill,
   SSE2 to AVX2: **about 1.68x-1.72x faster**, two independent runs. This is
   the CPU-side answer to the lever 1.0's own changelog named but did not
@@ -57,7 +59,8 @@ for every measured number and where it was measured.
   and `SslmGpuSeqPrefillSchemaContentForG5Bridge` now catch the fault at
   its own source and return `SSLM_DEVICE_LOST`; the context stays usable
   after a caught fault (a second call on the same context is proven bit-
-  identical to a never-faulted reference) except when the device is
+  identical to a never-faulted reference on the certified NVIDIA adapter;
+  the AMD run of the same cells is pending) except when the device is
   genuinely, confirmably removed, which remains terminal for that context.
   `SSLM_DEVICE_LOST` carries two dispositions at these entry points — see
   [include/superslm/gpu_1p0.h](include/superslm/gpu_1p0.h) for which is
