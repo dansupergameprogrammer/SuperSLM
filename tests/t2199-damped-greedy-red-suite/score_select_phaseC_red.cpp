@@ -729,6 +729,162 @@ static void TestC1_DomainRejection_BothEntryPoints_VocabAndKOversizedShapes() {
 	AntiLmDestroy(alm);
 }
 
+// ===========================================================================================
+// Fold 21, 2026-08-20 -- S7 (`Claude/Poirot/927bbda-t2199-confirmation.md`): the O2 revert's
+// own pin. `DampedGreedyDiagnostics::pomspread_q15` is defined "over k" -- max/min of p_omega
+// across ALL k gathered picks, masked included (plan Sec9 dim8's own open question (a),
+// RULED, fold 21) -- not over the unmasked subset alone. The casebook's own executed
+// construction (a masked pick holding an outlier p_omega genuinely different from every
+// unmasked pick's): "picks: 3(p=3276,legal) 15(p=0,legal) 0(p=29491,MASKED) 1(p=0) 2(p=0)
+// 4(p=0)) -- spread over all k (documented): 29491, REPORTED pomspread_q15 under O2: 3276 (9x
+// low)." This cell reproduces that shape with its own real anti-LM history (not the
+// casebook's own literal numbers, which came from a different scratch fixture never
+// committed) and asserts the reported spread equals an INDEPENDENTLY computed "over k"
+// reference, bit-exact -- discriminating O2-active (would narrow to the unmasked pair, both
+// near/at zero here, reading far below the true spread) from O2-reverted (reads the true
+// spread, including the masked outlier's own real contribution).
+//
+// RED-FIRST: EXECUTED against this suite's own immediate parent, `927bbda` (O2 still active).
+// See this campaign's own test-design record for the transcript.
+// ===========================================================================================
+static void TestS7_PomspreadOverAllK_MaskedOutlierDiscriminates() {
+	const int32_t V = 20;
+	const int32_t LEGAL_A = 3, LEGAL_B = 15;
+	const int32_t MASKED_OUTLIER = 0, MASKED_B = 1, MASKED_C = 2, MASKED_D = 4;
+	const int32_t idx[6] = {LEGAL_A, LEGAL_B, MASKED_OUTLIER, MASKED_B, MASKED_C, MASKED_D};
+
+	std::vector<int32_t> row(static_cast<std::size_t>(V), -2000);
+	row[static_cast<std::size_t>(LEGAL_A)] = 20000;
+	row[static_cast<std::size_t>(LEGAL_B)] = 19000;
+	row[static_cast<std::size_t>(MASKED_OUTLIER)] = 18000;
+	row[static_cast<std::size_t>(MASKED_B)] = 17000;
+	row[static_cast<std::size_t>(MASKED_C)] = 16000;
+	row[static_cast<std::size_t>(MASKED_D)] = 15000;
+
+	std::vector<uint8_t> mask = MakeMask(V, false);
+	SetLegal(mask, LEGAL_A);
+	SetLegal(mask, LEGAL_B);
+	// MASKED_OUTLIER/B/C/D stay masked.
+
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+
+	// The anti-LM's own history is built ENTIRELY from MASKED_OUTLIER -- so its own real
+	// p_omega is large and genuinely distinct from every other candidate's (all unseen, 0).
+	// This is the exact shape the casebook's own row names: a masked pick, not an unmasked
+	// one, is the one carrying the discriminating signal.
+	AntiLmState* alm = AntiLmCreate(2);
+	for (int i = 0; i < 20; ++i) AntiLmUpdate(alm, MASKED_OUTLIER);
+
+	int32_t token = -1;
+	bool refused = false;
+	DampedGreedyDiagnostics diag{};
+	const bool ok = DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm,
+	                                                /*alpha_q15=*/0, q_ln2, q_b, q_c,
+	                                                /*full_row_z=*/1, &token, &refused, &diag);
+	CHECK(ok);
+	if (!refused) {
+		// Independent reference: AntiLmPenalize over ALL SIX gathered candidates directly
+		// (never through ScoreAndSelect's own sparse-vs-dense array), so this reference is
+		// unaffected by whether O2 is active or reverted -- exactly what makes it a valid
+		// oracle for detecting the difference.
+		int64_t ref_pw[6];
+		AntiLmPenalize(alm, idx, 6, ref_pw);
+		int64_t ref_max = ref_pw[0], ref_min = ref_pw[0];
+		for (int i = 1; i < 6; ++i) {
+			ref_max = std::max(ref_max, ref_pw[i]);
+			ref_min = std::min(ref_min, ref_pw[i]);
+		}
+		const int64_t ref_spread = ref_max - ref_min;
+		CHECK_MSG(ref_spread > 0,
+		          "fixture error: reference spread=%lld, want > 0 (the masked outlier must "
+		          "genuinely differ from the unmasked picks' own p_omega for this "
+		          "construction to discriminate anything)",
+		          (long long)ref_spread);
+		CHECK_MSG(diag.pomspread_q15 == ref_spread,
+		          "diag.pomspread_q15=%lld, independently recomputed over ALL k (masked "
+		          "included)=%lld -- if this narrows to the unmasked-only spread instead, O2 "
+		          "(reverted, fold 21) has regressed",
+		          (long long)diag.pomspread_q15, (long long)ref_spread);
+		// The masked outlier's own real p_omega, specifically, must be one of the two
+		// extremes the spread was computed from -- ruling out a construction that happens to
+		// pass by coincidence (e.g. every candidate reading 0).
+		CHECK_MSG(ref_pw[2] == ref_max || ref_pw[2] == ref_min,
+		          "fixture error: the masked outlier (index 2 in idx[]) does not carry either "
+		          "extreme (p_omega=%lld, max=%lld, min=%lld) -- construction does not "
+		          "isolate what this cell claims to test",
+		          (long long)ref_pw[2], (long long)ref_max, (long long)ref_min);
+	}
+	AntiLmDestroy(alm);
+}
+
+// ===========================================================================================
+// M6 (`Claude/Poirot/927bbda-t2199-confirmation.md`): the refusal-propagation cell through a
+// PUBLIC ENTRY POINT, not stopped one call short of it. `TestM2_TopKRenormalizeQ15_
+// WidthDomainGateActuallyInvoked` (renormalize_phaseC_red.cpp) already confirms
+// `TopKRenormalizeQ15` itself refuses at `q_c < 0`; this cell drives the SAME construction
+// through `DampedGreedyScoreAndArgmax`/`Diag`, confirming Sec7.5's own refusal-propagation
+// policy (abort the sequence, `*out_refused = true`, never a silent fallback to plain greedy)
+// actually executes end to end -- the one behavior in this feature that, per the casebook's
+// own O1 finding, "has never executed" through a public entry point before this cell.
+//
+// RED-FIRST: not meaningfully constructible as a pre-fix/post-fix differential -- M2 (the
+// remedy this cell's own construction depends on) already shipped in the fix round this
+// suite's own `927bbda` includes; there is no PRIOR commit in this suite's own history where
+// `q_c<0` was constructible against a caller-facing entry point and DIDN'T refuse (before
+// M2, `TopKRenormalizeQ15` computed instead of refusing, so the failure mode would have been
+// "silently returns a token" rather than "the refusal never fires" -- a different cell, not
+// this one). PINNED-GREEN, verified by execution against `b1dffd7` only.
+// ===========================================================================================
+static void TestM6_RefusalPropagatesThroughPublicEntryPoints() {
+	int64_t q_ln2, q_b, q_c;
+	CHECK(DeriveDefaultScaleConstants(&q_ln2, &q_b, &q_c));
+	q_c = -1;  // CheckSoftmaxRowWidthDomain's own unconditional first rejection.
+
+	const int32_t V = 20;
+	std::vector<int32_t> row = MakeSyntheticRow(V, {3, 5, 7, 9, 11, 13});
+	std::vector<uint8_t> mask = MakeMask(V, true);
+	AntiLmState* alm = AntiLmCreate(1);
+	AntiLmUpdate(alm, 3);
+
+	// Non-Diag.
+	int32_t out_token = -424242;
+	bool out_refused = false;
+	const bool ok = DampedGreedyScoreAndArgmax(row.data(), mask.data(), V, 6, alm, 0, q_ln2, q_b,
+	                                            q_c, &out_token, &out_refused);
+	CHECK_MSG(ok, "DampedGreedyScoreAndArgmax must return true (the call is well-formed; the "
+	              "refusal travels on *out_refused, not the return value)");
+	CHECK_MSG(out_refused, "*out_refused must be true -- Sec7.5's own refusal-propagation "
+	                       "policy, now executable through this public entry point");
+	CHECK_MSG(out_token == -424242, "*out_token must stay untouched on a numeric refusal");
+
+	// Diag.
+	int32_t d_token = -424242;
+	bool d_refused = false;
+	DampedGreedyDiagnostics diag{};
+	diag.z_k_q0 = -13;
+	diag.p_topk_q15 = -13;
+	diag.alpha_eff_q15 = -13;
+	diag.qspread_q15 = -13;
+	diag.pomspread_q15 = -13;
+	const bool d_ok = DampedGreedyScoreAndArgmaxDiag(row.data(), mask.data(), V, 6, alm, 0, q_ln2,
+	                                                  q_b, q_c, /*full_row_z=*/1, &d_token,
+	                                                  &d_refused, &diag);
+	CHECK_MSG(d_ok, "DampedGreedyScoreAndArgmaxDiag must return true on a numeric refusal");
+	CHECK_MSG(d_refused, "*out_refused must be true (Diag entry point)");
+	CHECK_MSG(d_token == -424242, "*out_token must stay untouched (Diag entry point)");
+	CHECK_MSG(diag.z_k_q0 == 0 && diag.p_topk_q15 == 0 && diag.alpha_eff_q15 == 0 &&
+	              diag.qspread_q15 == 0 && diag.pomspread_q15 == 0,
+	          "*out_diag must be ZERO-FILLED on a numeric refusal (the memset that runs before "
+	          "ScoreAndSelect, never overwritten since ScoreAndSelect returns false before any "
+	          "diagnostics are computed) -- got z_k_q0=%lld p_topk_q15=%lld "
+	          "alpha_eff_q15=%lld qspread_q15=%lld pomspread_q15=%lld",
+	          (long long)diag.z_k_q0, (long long)diag.p_topk_q15, (long long)diag.alpha_eff_q15,
+	          (long long)diag.qspread_q15, (long long)diag.pomspread_q15);
+
+	AntiLmDestroy(alm);
+}
+
 int main() {
 	TestC1_DomainRejection_BothEntryPoints_VocabAndKOversizedShapes();
 	TestDim7_MaskedNeverSelected_HighAlphaOverwhelmsLegalCandidate();
@@ -739,6 +895,8 @@ int main() {
 	TestDim7_KeeperProbe_DiagnosticsComputedCorrectly();
 	TestFinding2_KeeperProbe_HighAlpha_ExactRecompute();
 	TestS1S6_PTopkQ15_ExactIntegerAndHonestDenominator();
+	TestS7_PomspreadOverAllK_MaskedOutlierDiscriminates();
+	TestM6_RefusalPropagatesThroughPublicEntryPoints();
 	std::printf("checks=%d failures=%d skips=%d\n", GChecks, GFailures, GSkips);
 	return GFailures ? 1 : 0;
 }
