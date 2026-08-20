@@ -917,13 +917,22 @@ static void TestGuard_ContextReusableAfterCaughtTailFaultWarmArm(SslmGpuContext*
 //         fault never injected, AND this call's own produced token (a decode step's own
 //         `out_token` -- no separate following call is needed, unlike the chunk pin's own prefill
 //         arms) must match the reference's.
-//     (b) the D3D12 debug layer's validation-message drain, scoped to exactly this call -- the
-//         SAME must-reject oracle `TestGuard_ContextReusableAfterCaughtTailFaultWarmArm` already
-//         commissions for the chunk-path site (StandardsDocument.md Sec5.4's must-reject); this
-//         cell is a SECOND, independently-producible construction of the identical defect class,
-//         reached through a different public entry point and a different internal call site, so
-//         it strengthens rather than repeats that commissioning. Only meaningful with
-//         SSLM_GPU_ENABLE_DEBUG_LAYER=1 set (returns 0 unconditionally otherwise).
+//     (b) the D3D12 debug layer's validation-message drain, scoped to exactly this call -- a
+//         SECOND, independently-producible construction of the identical defect class the
+//         chunk-path sibling `TestGuard_ContextReusableAfterCaughtTailFaultWarmArm` drives,
+//         reached through a different public entry point and a different internal call site.
+//         Per `d3d12_harness.h`'s own `DrainDebugLayerMessages()` header comment (T-2195's
+//         DEMONSTRATED LIMIT paragraph), the drain itself is alive on this device/driver (it
+//         reliably scores 0 on a clean call and prints real messages when the debug layer has
+//         something to report), but its must-reject construction for THIS defect class -- a
+//         resume-barrier transition recorded against the wrong prior state -- FAILED TO FIRE on
+//         the RTX 2080 SUPER (driver 560.94): the sibling cell drove a source-confirmed reachable
+//         instance of the exact defect through this exact drain and it returned 0. This cell's own
+//         zero here is therefore quarantined on the same defect class, not a second commissioning:
+//         it is read as "no message from this construction on this device," never as "no defect,"
+//         until a device/driver pairing is found where the construction produces a WARNING-or-worse
+//         message. Only meaningful with SSLM_GPU_ENABLE_DEBUG_LAYER=1 set (returns 0
+//         unconditionally otherwise).
 static void TestGuard_ContextReusableAfterCaughtTailFaultPerTokenWarmArm(SslmGpuContext* ctx,
                                                                            SslmGpuModelHandle* model) {
 	const int64_t kContextCap = 64;
@@ -1000,10 +1009,13 @@ static void TestGuard_ContextReusableAfterCaughtTailFaultPerTokenWarmArm(SslmGpu
 	          "returned %s instead of SSLM_OK",
 	          GpuStatusName(third_call_status));
 
-	// Oracle (b) -- S1's predicted defect (a resume barrier recorded with the wrong StateBefore)
-	// must surface as a WARNING-or-worse D3D12 validation message if it fires; the commissioning
-	// must-reject construction, independently producible through this different public entry
-	// point and internal call site than the chunk-path sibling's own.
+	// Oracle (b) -- the drain is alive on this device/driver (its must-accept side stands: a
+	// clean, correctly-handled call reliably scores 0 here), but per d3d12_harness.h's own
+	// DEMONSTRATED LIMIT paragraph, its must-reject construction for THIS defect class (a resume
+	// barrier recorded with the wrong StateBefore) FAILED TO FIRE on the RTX 2080 SUPER -- so a 0
+	// return here is read as "no message from this construction on this device," never as "no
+	// defect," and this class's verdicts from this drain stay quarantined until a device/driver
+	// pairing is found where the construction produces a WARNING-or-worse message.
 	const size_t third_call_validation_messages =
 	    superslm_gpu::harness::GetDevice().DrainDebugLayerMessages();
 	CHECK_MSG(third_call_validation_messages == 0,
