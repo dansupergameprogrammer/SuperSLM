@@ -286,6 +286,47 @@ foreach(_sslm_tier SSE2 AVX2 AVX512)
 	endif()
 endforeach()
 
+# T-2200 (post-1.1 errand: does the AVX-512 tier actually run faster than AVX2 on real
+# AVX-512 silicon -- CHANGELOG's own "Known gaps" entry for 1.1). tools/t2147_chunk_batched_pins.cpp
+# already carries the real-artifact --speedup mode T-2159's own achievement measurement used
+# (Claude/Brunel/t2159-t2149-avx-build-2026-08-18.md §12): one sslm_prefill call at
+# chunk_budget=1 (per-token) vs one call at chunk_budget=N (batched), same prompt, same
+# artifact. That measurement was taken via two disposable, uncommitted direct `cl`
+# invocations against SUPERSLM_FORCE_SSE2_MATMUL / SUPERSLM_FORCE_AVX2_MATMUL (build log §12's
+# own note: "disposable, not committed to CMakeLists.txt"). sslm_bench_prefill and its
+# forced-tier pair below commit that same measurement as ordinary build targets so it is
+# repeatable without a hand-built binary.
+#
+# sslm_bench_prefill links the clean, dispatch-live `superslm` -- the production path, which
+# auto-selects AVX-512 on capable hardware and falls back to AVX2/SSE2 elsewhere (the number a
+# real consumer actually gets). sslm_bench_prefill_avx2_forced / sslm_bench_prefill_avx512_forced
+# mirror the superslm_tests_${tier}_forced / sslm_axis_digest_${tier}_forced pair above exactly:
+# EXCLUDE_FROM_ALL, linked against the same tier-forced library (no second compile of the core
+# sources), same MSVC/Wall-Wextra option split. Only AVX2 and AVX-512 are built here -- unlike
+# the full-suite/digest pair, this bench has no scalar/SSE2 arm; the throughput question this
+# errand asks is specifically "AVX-512 vs AVX2." A compiled AVX-512-forced bench runs clean on
+# any x64 target (MSVC does not gate _mm512_* intrinsics behind /arch) and SIGILLs at runtime
+# (STATUS_ILLEGAL_INSTRUCTION) on hardware lacking AVX-512F/BW -- the same documented, expected
+# outcome as this project's forced-suite/digest AVX-512 pair (F:\t2149-avx512-run\README.txt).
+add_executable(sslm_bench_prefill tools/t2147_chunk_batched_pins.cpp)
+target_link_libraries(sslm_bench_prefill PRIVATE superslm)
+if(MSVC)
+	target_compile_options(sslm_bench_prefill PRIVATE /W4 /fp:precise)
+else()
+	target_compile_options(sslm_bench_prefill PRIVATE -Wall -Wextra -ffp-contract=off)
+endif()
+
+foreach(_sslm_bench_tier AVX2 AVX512)
+	string(TOLOWER "${_sslm_bench_tier}" _sslm_bench_tier_lower)
+	add_executable(sslm_bench_prefill_${_sslm_bench_tier_lower}_forced EXCLUDE_FROM_ALL tools/t2147_chunk_batched_pins.cpp)
+	target_link_libraries(sslm_bench_prefill_${_sslm_bench_tier_lower}_forced PRIVATE superslm_${_sslm_bench_tier_lower}_forced)
+	if(MSVC)
+		target_compile_options(sslm_bench_prefill_${_sslm_bench_tier_lower}_forced PRIVATE /W4 /fp:precise)
+	else()
+		target_compile_options(sslm_bench_prefill_${_sslm_bench_tier_lower}_forced PRIVATE -Wall -Wextra -ffp-contract=off)
+	endif()
+endforeach()
+
 # T-2158 dimension 7 item (d) (design §10, D-SLM3510): a persisted CI guard for the
 # AVX-isolation claim (design §6.4) -- no construct in this file, in
 # .github/workflows/tests.yml's cmake/environment invocations, or in any file under
