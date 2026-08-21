@@ -186,6 +186,19 @@ typedef enum sslm_span_kind {
 
 typedef struct sslm_decode_params {
     int32_t layer_budget;
+    /* T-2199 Phase D1 (D-SLM3794, additive-field ruling): mirrored here in lockstep with the
+     * production struct (include/superslm/sslm_abi.h) -- this mirror's own field ORDER, WIDTH,
+     * and COUNT must match exactly, since tools/t2141_gate_c_t2138_suite_side_check.cpp now
+     * static_asserts sizeof/alignof/offsetof identity against the REAL production header
+     * directly (conductor's dispute-resolution commission, mirror-copy defect class closure,
+     * 2026-08-20). */
+    int32_t mode;
+    int64_t alpha_q15;
+    int32_t anti_lm_max_order;
+    int32_t top_k;
+    int64_t q_ln2;
+    int64_t q_b;
+    int64_t q_c;
 } sslm_decode_params;
 
 typedef struct sslm_stats_out {

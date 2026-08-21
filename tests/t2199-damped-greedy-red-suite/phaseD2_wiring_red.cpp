@@ -28,6 +28,7 @@
 //         contract itself. The decode digest covers the damped-greedy-selected token stream --
 //         TestD2_TokenDigest_CoversDampedGreedyTokens.
 #include "sslm_phaseD_stub.h"
+#include "sslm_phaseD_fixture.h"
 #include "sslm_damped_greedy.h"
 #include "superslm/decode_digest.h"
 #include "superslm/sha256.h"
@@ -159,7 +160,14 @@ static bool LoadRealModel(RealModelFixture* out, std::string* err) {
 		if (err) *err = "sslm_model_map failed";
 		return false;
 	}
-	const uint32_t block_count = 1;
+	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 2): was hardcoded to
+	// 1, but TestD2_GreedyMode_BitUnchangedRegression (below) creates TWO sequences (seq_old,
+	// seq_new) against this SAME shared fixture's pool -- sslm_seq_create for the second
+	// sequence failed on pool exhaustion before either decode-step call ever ran, and every
+	// downstream failure in that cell was a cascade from that one root cause (build log
+	// Claude/Brunel/t2199-phaseD-build-2026-08-20.md Sec4). 2 blocks covers every cell in this
+	// file (the single-sequence cells simply do not use the second block).
+	const uint32_t block_count = 2;
 	const size_t block_bytes = sslm_kv_block_size(out->model);
 	const size_t overhead = sslm_kv_pool_overhead_size(out->model, block_count);
 	out->pool_buf = std::make_unique<AlignedBuffer>(block_count * block_bytes + overhead);
@@ -412,7 +420,15 @@ static void TestD2_TokenDigest_CoversDampedGreedyTokens() {
 	params.alpha_q15 = int64_t{1} << 14;
 	params.anti_lm_max_order = 2;
 	params.top_k = 6;
-	params.q_ln2 = 493;
+	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): was
+	// `params.q_ln2 = 493;` alone, leaving q_b/q_c at their zero-init default. (q_b=0, q_c=0)
+	// derives M = q_b^2 + q_c = 0, which fails CheckSoftmaxRowWidthDomain's own M >= 1
+	// requirement, so every call below correctly REFUSED (SSLM_ARTIFACT_REJECTED, plan Sec7.5's
+	// own adopted policy) instead of running to completion -- a fixture defect, not a code
+	// defect (build log Sec4). Now derives the SAME real triple the sibling cell
+	// TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep already gets right,
+	// via the shared helper (sslm_phaseD_fixture.h).
+	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&params.q_ln2, &params.q_b, &params.q_c));
 	sslm_seq batch[1] = {seq};
 	std::vector<int32_t> produced_tokens;
 	for (int i = 0; i < kSteps; ++i) {

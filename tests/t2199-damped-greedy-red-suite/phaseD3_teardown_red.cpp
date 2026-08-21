@@ -22,6 +22,7 @@
 // call returns a defined status (never garbage), and no trial reports a status this cell did
 // not anticipate. Needs a real base artifact (--model=PATH); SKIPs honestly otherwise.
 #include "sslm_phaseD_stub.h"
+#include "sslm_phaseD_fixture.h"
 
 #include <atomic>
 #include <cstdio>
@@ -127,6 +128,16 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 	sslm_model model = nullptr;
 	CHECK(sslm_model_map(bytes.data(), bytes.size(), &model) == SSLM_OK);
 
+	// FIXED 2026-08-20 (conductor's dispute-resolution commission, dispute 3): derived ONCE,
+	// outside the trial loop -- the same real (q_ln2, q_b, q_c) triple every trial reuses.
+	// Previously `params.q_ln2 = 493;` alone (q_b/q_c left at zero-init) made every one of the
+	// 200 batched calls correctly REFUSE (SSLM_ARTIFACT_REJECTED) before the concurrency-safety
+	// machinery this cell exists to exercise ever ran to completion -- a fixture defect, not a
+	// code defect (build log Sec4); the concurrency-safety PRIMARY assertion (no crash across
+	// 200 racing trials) held regardless, since it never depended on the calls succeeding.
+	int64_t shared_q_ln2 = 0, shared_q_b = 0, shared_q_c = 0;
+	CHECK(t2199phaseD::DeriveDefaultScaleConstants(&shared_q_ln2, &shared_q_b, &shared_q_c));
+
 	constexpr int kTrials = 200;
 	std::atomic<int> surviving_ok_count{0};
 	std::atomic<int> surviving_bad_status_count{0};
@@ -149,7 +160,9 @@ static void TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor(
 		params.alpha_q15 = int64_t{1} << 14;
 		params.anti_lm_max_order = 2;
 		params.top_k = 6;
-		params.q_ln2 = 493;
+		params.q_ln2 = shared_q_ln2;
+		params.q_b = shared_q_b;
+		params.q_c = shared_q_c;
 		sslm_seq batch[2] = {seq_a, seq_b};
 		int32_t out_tokens[2] = {-1, -1};
 

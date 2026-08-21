@@ -34,13 +34,35 @@ for %%f in (phaseD1_artifact_flag_red phaseD2_wiring_red phaseD2a_cost_ratio_red
         set OVERALL_OK=0
     ) else (
         "obj_green_D\%%f.exe" %MODELARG% > "obj_green_D\%%f.runlog" 2>&1
+        set RUN_EC=!errorlevel!
         type "obj_green_D\%%f.runlog"
+        rem CURIE FIX, 2026-08-20 (conductor's dispute-resolution commission): this script
+        rem previously always exited 0 regardless of a crashing .exe -- a nonzero RUN_EC with no
+        rem "checks=.. failures=.. skips=.." summary line in the runlog is a CRASH (matching
+        rem build_green.bat's own established convention for Phase A/C), and was silently
+        rem swallowed here. Executed finding this exact gap would have hidden:
+        rem TestD3_TeardownDuringFlight_ConcurrentReleaseDoesNotCorruptSurvivor crashes
+        rem (0xC0000005/0xC0000409, reproduced 5/5 at kTrials=1) against a real checkpoint --
+        rem see Claude/Curie/t2199-phaseD-red-2026-08-20.md for the full reproduction.
+        findstr /R "^checks=[0-9]* failures=[0-9]* skips=[0-9]*$" "obj_green_D\%%f.runlog" >nul
+        if errorlevel 1 (
+            if not "!RUN_EC!"=="0" (
+                echo    CRASHED -- exit code !RUN_EC!, no checks=/failures=/skips= summary line
+                set OVERALL_OK=0
+            )
+        )
     )
 )
 
 echo.
 echo Per-cell checks=/failures=/skips= lines are above; obj_green_D\*.runlog carries each
-echo transcript. This script does NOT gate on failures=0 (unlike build_green.bat for Phase
-echo A/C) -- Phase D's own known, routed-not-fixed fixture disputes (build log Sec4) make a
-echo hard pass/fail exit code misleading here; read the transcripts.
-exit /b 0
+echo transcript. This script does NOT gate on a nonzero failures= count (unlike build_green.bat
+echo for Phase A/C) -- Phase D's own known, routed-not-fixed fixture disputes (build log Sec4)
+echo make a hard pass/fail exit code misleading here; read the transcripts. It DOES gate on a
+echo crash (a nonzero process exit with no checks=/failures=/skips= summary line) -- that is
+echo never a fixture dispute, always a real defect.
+if !OVERALL_OK! == 1 (
+    exit /b 0
+) else (
+    exit /b 1
+)
