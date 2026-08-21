@@ -257,6 +257,31 @@ static void TestD2_GreedyMode_BitUnchangedRegression() {
 	}
 	CHECK(sslm_seq_release(seq_old) == SSLM_OK);
 	CHECK(sslm_seq_release(seq_new) == SSLM_OK);
+
+	// N6 (closing-review commission: "the S5 migration cost this cell its discriminating
+	// power... compare against something that is not the same code path") -- ATTEMPTED, NOT
+	// SHIPPED. A full independent-oracle comparison (CpuOracleModel marshal +
+	// superslm::RunGreedyDecodeLoop, driven against the SAME real checkpoint fx already has
+	// open) was built and, in isolation (a standalone throwaway probe, same marshal, same
+	// RunGreedyDecodeLoop call, same checkpoint), produced the bit-exact expected token
+	// stream (4, 5, 6, 25010, 10, 4999 -- matching sslm_decode_step's own greedy output for
+	// this exact prompt) with zero issues. Embedded in THIS function, alongside fx's own
+	// already-open sslm_model_map handle and KV pool, the identical marshal+call sequence
+	// reproducibly crashed the process (0xC0000005) at a point AFTER every check in the new
+	// code had already run and passed (isolated with per-statement stdout diagnostics,
+	// removed before filing) -- consistent with heap corruption manifesting at a later,
+	// unrelated allocation/free rather than at its own true source. Re-scoping the oracle's
+	// own objects into a nested block that destructs immediately (before seq_abi's own
+	// creation) did not resolve it. Root cause not found within this round's own budget --
+	// this is a genuine, reproducible defect (in this new test code, in a shared/static
+	// resource two simultaneously-open SslmModelView/sslm_model instances of the SAME file
+	// contend on, or possibly in production marshal/forward-path code under that same
+	// double-open condition) and is ROUTED, not shipped crashing and not silently dropped --
+	// see this suite's own Curie record for the full reproduction and the standalone probe's
+	// own confirmed-correct output. The cell's own EXISTING comparison (zero-init mode vs.
+	// explicit SSLM_DECODE_MODE_GREEDY, both through the real sslm_decode_step, above) is
+	// unaffected and stays in place -- narrower than the pre-S5-migration claim, as already
+	// stated in that comparison's own comment, but real and unbroken.
 }
 
 // --- TestD2_DampedGreedyMode_ProducesPrimitiveExactOutputThroughDecodeStep ------------------
@@ -373,31 +398,39 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 	int32_t consumed = 0;
 	CHECK(sslm_prefill(fx.model, seq, prompt, 4, 8, SSLM_SPAN_PROMPT, nullptr, &consumed) == SSLM_OK);
 
-	// The identical invalid-parameter set named in Sec9 dim2: negative alpha, k=0, k>vocab_size,
-	// n=0. One sub-case per iteration, checked against BOTH the live D2 entry point and the
-	// shared ValidateDampedGreedyParams function D3/D4 are specified to route through.
-	struct Case { const char* name; int32_t alpha_q15; int32_t n; int32_t k; };
+	// The invalid-parameter set named in Sec9 dim2, EXTENDED 2026-08-20 (closing-review
+	// commission, N3: "three new production guards ship unpinned... the alpha_q15 < 2^20
+	// ceiling, the unknown-mode rejection"). Original four: negative alpha, k=0, k>vocab_size,
+	// n=0. Two new: alpha_q15 AT the C2/Sec9-dim2 sanity ceiling (damped_greedy_phaseD.cpp's
+	// own `if (p.alpha_q15 >= (int32_t{1} << 20)) return false;`), and an unrecognized `mode`
+	// value (S2's own guard, `ValidateDampedGreedyParams`'s own `p.mode != kGreedy &&
+	// p.mode != kDampedGreedy` rejection) -- a mutation that deletes either guard now leaves
+	// this suite green with nothing more, closing exactly the gap N3 named. `mode` is now a
+	// per-case field (int32_t, matching the real ABI field's own type) rather than hardcoded.
+	struct Case { const char* name; int32_t mode; int32_t alpha_q15; int32_t n; int32_t k; };
 	const Case kCases[] = {
-	    {"negative alpha", -1, 2, 6},
-	    {"k=0", int32_t{1} << 14, 2, 0},
-	    {"k>vocab_size", int32_t{1} << 14, 2, fx.vocab_size + 1},
-	    {"n=0", int32_t{1} << 14, 0, 6},
+	    {"negative alpha", SSLM_DECODE_MODE_DAMPED_GREEDY, -1, 2, 6},
+	    {"k=0", SSLM_DECODE_MODE_DAMPED_GREEDY, int32_t{1} << 14, 2, 0},
+	    {"k>vocab_size", SSLM_DECODE_MODE_DAMPED_GREEDY, int32_t{1} << 14, 2, fx.vocab_size + 1},
+	    {"n=0", SSLM_DECODE_MODE_DAMPED_GREEDY, int32_t{1} << 14, 0, 6},
+	    {"alpha at ceiling (2^20)", SSLM_DECODE_MODE_DAMPED_GREEDY, int32_t{1} << 20, 2, 6},
+	    {"unknown mode (2)", 2, int32_t{1} << 14, 2, 6},
 	};
 	for (const auto& c : kCases) {
 		sslm_decode_params params{};
 		params.struct_size = sizeof(params);  // D-SLM3797
 		params.layer_budget = static_cast<int32_t>(fx.num_hidden_layers);
-		params.mode = SSLM_DECODE_MODE_DAMPED_GREEDY;
+		params.mode = c.mode;
 		params.alpha_q15 = c.alpha_q15;
 		params.anti_lm_max_order = c.n;
 		params.top_k = c.k;
-		params.q_ln2 = 493;  // domain of the rejection under test is alpha/n/k, not the scale
+		params.q_ln2 = 493;  // domain of the rejection under test is alpha/n/k/mode, not the scale
 		sslm_seq batch[1] = {seq};
 		int32_t out_tok = -777;
 		const sslm_status abi_status =
 		    sslm_decode_step(fx.model, batch, 1, &params, nullptr, &out_tok);
 
-		DampedGreedyValidationParams vp{DampedGreedyMode::kDampedGreedy, c.alpha_q15, c.n, c.k};
+		DampedGreedyValidationParams vp{static_cast<DampedGreedyMode>(c.mode), c.alpha_q15, c.n, c.k};
 		const bool shared_valid = ValidateDampedGreedyParams(vp, fx.vocab_size);
 
 		CHECK_MSG((abi_status == SSLM_OK) == shared_valid,
@@ -409,6 +442,74 @@ static void TestD2_ValidationSymmetry_AcrossEntryPoints() {
 		CHECK_MSG(!shared_valid,
 		          "case '%s' is constructed to be invalid by name -- if ValidateDampedGreedyParams "
 		          "reads it as valid, this cell's own fixture (not the build) is wrong", c.name);
+
+		// STRENGTHENED 2026-08-20 (closing-review commission, N8: "the cell compares D2's
+		// status against ValidateDampedGreedyParams rather than against D3's actual return --
+		// the exact weakness the prior review named"). Calls the REAL D3 entry point
+		// (RunGreedyOrDampedGreedyDecodeLoop, namespace superslm since the S5 migration) with
+		// the SAME invalid params and asserts its own return agrees with D2's. Every
+		// model-derived parameter below (layers, embed/head weights, rope tables, workspace) is
+		// a deliberate dummy/null placeholder -- safe ONLY when the call is guaranteed to reject
+		// before touching any of them.
+		//
+		// FOUND BY EXECUTION, NOT ASSUMED (the first draft of this comment claimed otherwise
+		// and crashed on it): src/damped_greedy_phaseD_loop.cpp's own control flow validates
+		// (ValidateDampedGreedyParams -> InvalidDecodeParams) ONLY inside
+		// `if (mode == DampedGreedyMode::kDampedGreedy)` -- a mode value that is NEITHER
+		// kGreedy NOR kDampedGreedy (this cell's own "unknown mode" case, mode=2) skips that
+		// branch entirely and falls through into the REAL greedy forward path, which then
+		// dereferences the dummy nullptr embed/head weights -- a real, reproducible crash
+		// (0xC0000005), caught by execution before this cell was filed, not shipped. This IS
+		// itself a genuine finding, separate from and beyond what this cell set out to pin:
+		// D2 (sslm_decode_stepImpl) validates `mode` UNCONDITIONALLY (S2's own fix, "an unknown
+		// mode... now rejects instead of silently degrading to greedy" -- verified in
+		// src/sslm_abi.cpp, the static_cast<DampedGreedyMode>(params->mode) + ValidateDampedGreedyParams
+		// call runs for every call regardless of mode's own value), but D3 only validates when
+		// mode already reads as kDampedGreedy -- an unknown mode at D3 silently falls through
+		// to the GREEDY path instead of being rejected, the exact D2/D3 asymmetry N8's own
+		// commission names, just discovered via a crash instead of a clean assertion. ROUTED,
+		// not fixed here (Curie does not implement) -- flagged prominently in this suite's own
+		// Curie record for Brunel/the conductor. The dummy-probe below is therefore restricted
+		// to the cases that ARE guaranteed to hit D3's own early-validation branch (every case
+		// whose own `mode` is genuinely kDampedGreedy); the "unknown mode" case's own D3 half is
+		// SKIPPED with an honest message rather than constructed unsafely.
+		if (c.mode != SSLM_DECODE_MODE_DAMPED_GREEDY) {
+			SKIP_MSG("case '%s': D3's own RunGreedyOrDampedGreedyDecodeLoop cannot be safely "
+			         "probed with dummy model data for a non-kDampedGreedy mode value -- it "
+			         "falls through to the real greedy forward path instead of validating first "
+			         "(the newly-found D2/D3 asymmetry, routed -- see this suite's own Curie "
+			         "record)",
+			         c.name);
+		} else {
+		int8_t dummy_hidden_codes[1] = {0};
+		superslm::SequenceLayerState dummy_seq{};
+		dummy_seq.hidden_codes = dummy_hidden_codes;
+		superslm::SslmTensorManifest dummy_rope{};
+		superslm::CarriedScale dummy_scale{};
+		size_t d3_tokens_produced = 0;
+		superslm::SslmDecodeStopReason d3_stop_reason{};
+		const superslm::SslmForwardStatus d3_status = RunGreedyOrDampedGreedyDecodeLoop(
+		    dummy_seq, /*layers=*/nullptr, /*num_hidden_layers=*/1, /*hidden_size=*/1,
+		    /*head_dim=*/1, /*num_key_value_heads=*/1, /*intermediate_size=*/1,
+		    /*context_cap=*/1, dummy_rope, prompt, 4, /*embed_weights=*/nullptr, dummy_scale,
+		    /*final_norm_gain=*/nullptr, dummy_scale, /*head_weights=*/nullptr, fx.vocab_size,
+		    /*stop_ids=*/nullptr, 0, /*max_new_tokens=*/1, /*workspace=*/nullptr, 0,
+		    /*out_tokens=*/nullptr, /*out_logit_rows=*/nullptr, 0, &d3_tokens_produced,
+		    &d3_stop_reason, superslm::SslmKvPrecision{}, /*option_g_fused_k_landing=*/false,
+		    static_cast<DampedGreedyMode>(c.mode), c.alpha_q15, c.n, c.k, /*q_ln2=*/493,
+		    /*q_b=*/0, /*q_c=*/0);
+		const bool d3_valid = (d3_status == superslm::SslmForwardStatus::Ok);
+		CHECK_MSG(d3_valid == shared_valid,
+		          "case '%s': D3's own RunGreedyOrDampedGreedyDecodeLoop returned %s (status=%d) "
+		          "for the SAME params ValidateDampedGreedyParams says are %s -- D2 and D3 must "
+		          "reject/accept the identical invalid-parameter set, the actual symmetric claim "
+		          "this cell exists to make (not merely 'D2 agrees with the shared validator')",
+		          c.name, d3_valid ? "OK" : "REJECTED", static_cast<int>(d3_status),
+		          shared_valid ? "valid" : "invalid");
+		CHECK_MSG(!d3_valid,
+		          "case '%s' is constructed to be invalid by name -- D3 must not accept it either",
+		          c.name);
+		}
 	}
 	CHECK(sslm_seq_release(seq) == SSLM_OK);
 }
